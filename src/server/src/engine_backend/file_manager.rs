@@ -9,6 +9,8 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
+const HISTORY_LIMIT: usize = 200;
+
 /// Present stored UTC seconds in the same whole-second UTC form as body
 /// versions. This changes the read projection, never the persisted timestamp.
 fn utc_timestamp(seconds: u64) -> Result<String, ApiError> {
@@ -30,6 +32,18 @@ fn utc_event_timestamp(event: &mut Value) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Source maps use opaque IDs, not sequence order. Only a strictly older
+/// sequence cannot displace a full page; ties still compete by event ID.
+fn history_sequence_may_fit(
+    events: &BTreeMap<(Reverse<u64>, String), Value>,
+    sequence: u64,
+) -> bool {
+    events.len() < HISTORY_LIMIT
+        || events
+            .last_key_value()
+            .is_some_and(|((Reverse(oldest), _), _)| sequence >= *oldest)
+}
+
 /// Keep the newest 200 audit rows while scanning, rather than allocating the
 /// complete history and discarding all but one page afterward.
 fn record_event(events: &mut BTreeMap<(Reverse<u64>, String), Value>, event: Value) {
@@ -40,7 +54,7 @@ fn record_event(events: &mut BTreeMap<(Reverse<u64>, String), Value>, event: Val
         .unwrap_or(0);
     let id = event["event_id"].as_str().unwrap_or("").to_string();
     events.insert((Reverse(sequence), id), event);
-    if events.len() > 200 {
+    if events.len() > HISTORY_LIMIT {
         events.pop_last();
     }
 }
@@ -716,6 +730,9 @@ pub(super) fn read(
         crate::BackendAction::FileManagerHistory => {
             let mut events = BTreeMap::new();
             for commit in engine.state().commits.values() {
+                if !history_sequence_may_fit(&events, commit.sequence) {
+                    continue;
+                }
                 let Ok(repo) = repo_for_history(engine, &commit.history_tree_id) else {
                     continue;
                 };
@@ -846,6 +863,9 @@ pub(super) fn read(
                         | "file.tags.update"
                 ) && op.result.get("no_change").and_then(Value::as_bool) != Some(true)
             }) {
+                if !history_sequence_may_fit(&events, operation.sequence) {
+                    continue;
+                }
                 let Some(file) = operation.result.get("file_id").and_then(Value::as_str) else {
                     continue;
                 };
@@ -898,6 +918,9 @@ pub(super) fn read(
                         | "directory.scope.initialize"
                 ) && op.result.get("no_change").and_then(Value::as_bool) != Some(true)
             }) {
+                if !history_sequence_may_fit(&events, operation.sequence) {
+                    continue;
+                }
                 let Some(id) = operation
                     .result
                     .get("directory_branch_id")
@@ -941,6 +964,9 @@ pub(super) fn read(
                 .values()
                 .filter(|op| op.kind == "backup.configure")
             {
+                if !history_sequence_may_fit(&events, operation.sequence) {
+                    continue;
+                }
                 let Some(repo) = operation
                     .result
                     .get("history_tree_id")
@@ -966,6 +992,9 @@ pub(super) fn read(
                 );
             }
             for node in engine.state().file_path_nodes.values() {
+                if !history_sequence_may_fit(&events, node.sequence) {
+                    continue;
+                }
                 let Ok(repo) = repo_for_history(engine, &node.history_tree_id) else {
                     continue;
                 };
@@ -982,13 +1011,19 @@ pub(super) fn read(
                     "file_id":node.file_id,"version_id":node.version_id,"branch_id":node.branch_id,"message":""}),
                 );
             }
+            // The full page's oldest sequence can only rise, so older
+            // operation metadata cannot be needed by a retained tree below.
             let operations_by_sequence = engine
                 .state()
                 .operations
                 .values()
+                .filter(|operation| history_sequence_may_fit(&events, operation.sequence))
                 .map(|operation| (operation.sequence, operation))
                 .collect::<BTreeMap<_, _>>();
             for tree in engine.state().directory_trees.values() {
+                if !history_sequence_may_fit(&events, tree.sequence) {
+                    continue;
+                }
                 let Some(operation) = operations_by_sequence.get(&tree.sequence) else {
                     continue;
                 };
@@ -1046,7 +1081,7 @@ pub(super) fn read(
                     Ok(event)
                 })
                 .collect::<Result<Vec<_>, ApiError>>()?;
-            Ok(json!({"events":events,"limit":200}))
+            Ok(json!({"events":events,"limit":HISTORY_LIMIT}))
         }
         crate::BackendAction::FileManagerBackupConfiguration => {
             let repo = field(&input, "repository_id")?;
@@ -1430,3 +1465,7 @@ mod request_tests;
 #[cfg(test)]
 #[path = "../../../../test/server/unit/engine_backend/file_manager/time_tests.rs"]
 mod time_tests;
+
+#[cfg(test)]
+#[path = "../../../../test/server/unit/engine_backend/file_manager/history_retention_tests.rs"]
+mod history_retention_tests;
