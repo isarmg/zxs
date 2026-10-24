@@ -2733,7 +2733,7 @@
     "/api/file-manager/history": {
       "get": {
         "operationId": "listFileManagerHistory",
-        "description": "返回账号可读范围内最近200条已提交文件操作，按审计sequence倒序有界保留；不包含认证秘密。旧时间缺失为null。目录批量操作展开成实际受影响文件的记录，内部同步提交不重复显示。",
+        "description": "返回账号可读范围内最近的已提交文件活动记录（最多200条），按审计sequence倒序有界保留；不包含认证秘密。旧时间缺失为null。记录包括文件路径及目录分支、子树活动，单次操作可能产生多条记录；内部同步提交不重复显示。",
         "parameters": [],
         "responses": {
           "200": {

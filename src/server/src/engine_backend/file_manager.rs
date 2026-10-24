@@ -801,7 +801,7 @@ pub(super) fn read(
                     } else {
                         format!("{}/{}", repo.name, entry.path)
                     };
-                    let mut event = json!({"event_id":format!("{}:{}",commit.commit_id,entry.entry_id),"timestamp":timestamp,"sequence":commit.sequence.to_string(),"slot_id":repo.primary_slot_id,"path":display,"action":action,"principal":commit.author,"version_id":entry.version_id,"file_id":entry.file_id,"message":commit.message});
+                    let mut event = json!({"event_id":format!("{}:{}:{}",commit.commit_id,entry.entry_id,entry.path),"timestamp":timestamp,"sequence":commit.sequence.to_string(),"slot_id":repo.primary_slot_id,"path":display,"action":action,"principal":commit.author,"version_id":entry.version_id,"file_id":entry.file_id,"message":commit.message});
                     if entry.kind == "file" {
                         event.as_object_mut().unwrap().extend(
                             content_wire(
@@ -829,7 +829,7 @@ pub(super) fn read(
                         if !commit.entries.iter().any(|e| e.entry_id == entry.entry_id) {
                             record_event(
                                 &mut events,
-                                json!({"event_id":format!("{}:{}:deleted",commit.commit_id,entry.entry_id),"timestamp":timestamp,"sequence":commit.sequence.to_string(),"slot_id":repo.primary_slot_id,"path":if repo.file_manager_root{entry.path.clone()}else{format!("{}/{}",repo.name,entry.path)},"action":"delete","principal":commit.author,"version_id":entry.version_id,"file_id":entry.file_id,"message":commit.message}),
+                                json!({"event_id":format!("{}:{}:{}:deleted",commit.commit_id,entry.entry_id,entry.path),"timestamp":timestamp,"sequence":commit.sequence.to_string(),"slot_id":repo.primary_slot_id,"path":if repo.file_manager_root{entry.path.clone()}else{format!("{}/{}",repo.name,entry.path)},"action":"delete","principal":commit.author,"version_id":entry.version_id,"file_id":entry.file_id,"message":commit.message}),
                             );
                         }
                     }

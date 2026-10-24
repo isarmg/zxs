@@ -20,6 +20,8 @@ mod backup_namespace;
 mod daily_management;
 #[path = "http_engine/file_metadata_operations.rs"]
 mod file_metadata_operations;
+#[path = "http_engine/history_alias_operations.rs"]
+mod history_alias_operations;
 #[path = "http_engine/optional_identities.rs"]
 mod optional_identities;
 
