@@ -247,3 +247,91 @@ fn frozen_batch_read_only_parent_scope_does_not_block_child_copy() {
     assert_eq!(pool.bytes(&copied.version_id), b"source");
     assert_eq!(pool.current_entry("d/a.txt").file_id, original.file_id);
 }
+
+#[test]
+fn frozen_batch_deletes_distinct_same_directory_aliases_but_rejects_duplicate_source() {
+    let mut pool = Pool::new();
+    pool.save("a/report.txt", b"source");
+    pool.save("b/stay.txt", b"untouched");
+    let first_source = pool.register("a", "first");
+    let second_source = pool.register("a", "second");
+    let retained_source = pool.register("a", "retained");
+    let target = pool.register("b", "target");
+    let original = pool.entry(&first_source, "a/report.txt");
+    for (source, destination) in [
+        (&first_source, "b/first.txt"),
+        (&second_source, "b/second.txt"),
+    ] {
+        let item = pool.mapping(source, "a/report.txt", &target, destination);
+        pool.batch("move", vec![item]);
+    }
+    pool.select("b", "target");
+    assert_eq!(
+        pool.current_entry("b/first.txt").entry_id,
+        original.entry_id
+    );
+    assert_eq!(
+        pool.current_entry("b/second.txt").entry_id,
+        original.entry_id
+    );
+    let first = DirectoryNamespaceItem {
+        source: pool.source(&target, "b/first.txt"),
+        target: None,
+    };
+    let second = DirectoryNamespaceItem {
+        source: pool.source(&target, "b/second.txt"),
+        target: None,
+    };
+    let before = storage_engine::canonical_json(pool.engine.state()).unwrap();
+    let duplicate = DirectoryNamespaceBatch {
+        kind: "delete".into(),
+        items: vec![first.clone(), first.clone()],
+    };
+    assert_eq!(
+        pool.engine
+            .directory_namespace_batch(
+                &pool.repo.repository_id,
+                &duplicate,
+                "admin",
+                &new_id("op"),
+            )
+            .unwrap_err()
+            .code(),
+        "BATCH_MAPPING_CONFLICT"
+    );
+    assert_eq!(
+        storage_engine::canonical_json(pool.engine.state()).unwrap(),
+        before
+    );
+    let request = DirectoryNamespaceBatch {
+        kind: "delete".into(),
+        items: vec![first, second],
+    };
+    let operation = new_id("op");
+    let receipt = pool
+        .engine
+        .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", &operation)
+        .unwrap();
+    assert_eq!(
+        pool.engine
+            .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", &operation)
+            .unwrap()
+            .result,
+        receipt.result
+    );
+    let target_after = pool.branch(&target);
+    assert_eq!(target_after.entries.len(), 1);
+    assert_eq!(target_after.entries[0].path, "b/stay.txt");
+    assert_eq!(
+        pool.entry(&retained_source, "a/report.txt").file_id,
+        original.file_id
+    );
+    assert_eq!(pool.bytes(&original.version_id), b"source");
+    let after = storage_engine::canonical_json(pool.engine.state()).unwrap();
+    pool.reopen(|engine| {
+        assert_eq!(
+            storage_engine::canonical_json(engine.state()).unwrap(),
+            after
+        );
+    });
+}

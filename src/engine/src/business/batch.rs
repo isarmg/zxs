@@ -340,6 +340,7 @@ fn apply(
         if !mappings.insert((
             source_scope.directory_branch_id.clone(),
             source.entry_id.clone(),
+            source.lookup_key.clone(),
             target_key,
         )) {
             return Err(Error::new(
