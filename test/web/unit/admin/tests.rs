@@ -224,3 +224,76 @@ fn management_selection_does_not_bypass_session_busy_or_uncertainty_guards() {
         );
     });
 }
+
+#[test]
+fn storage_action_controls_reenable_after_busy_request_completes() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            ..Default::default()
+        });
+        state.update(|s| {
+            s.management.storage = Storage::Ready;
+            s.admin_console.acknowledged = true;
+        });
+        // Save/Create preview and Cancel share this disabled binding.
+        let write = Memo::new(move |_| {
+            state.with(|s| !permitted(s, true) || !s.admin_console.uncertain_operation.is_empty())
+        });
+        let commit = Memo::new(move |_| {
+            state.with(|s| {
+                !permitted(s, true)
+                    || !s.admin_console.acknowledged
+                    || !s.admin_console.uncertain_operation.is_empty()
+            })
+        });
+        let poll = Memo::new(move |_| {
+            state.with(|s| !permitted(s, false) || s.admin_console.uncertain_operation == "unknown")
+        });
+        let controls = [write, commit, poll];
+        for busy in [false, true, false, true, false] {
+            state.update(|s| s.admin_console.busy = busy);
+            assert_eq!(allowed(state, true), !busy);
+            for disabled in controls {
+                assert_eq!(
+                    disabled.get_untracked(),
+                    busy,
+                    "the control must keep observing every busy transition"
+                );
+            }
+        }
+        state.update(|s| s.admin_console.uncertain_operation = "original".into());
+        assert!(write.get_untracked());
+        assert!(commit.get_untracked());
+        assert!(!poll.get_untracked());
+        state.update(|s| s.admin_console.uncertain_operation = "unknown".into());
+        assert!(poll.get_untracked());
+        state.update(|s| {
+            s.admin_console.uncertain_operation.clear();
+            s.admin_console.acknowledged = false;
+        });
+        assert!(!write.get_untracked());
+        assert!(commit.get_untracked());
+        assert!(!poll.get_untracked());
+    });
+}
+
+#[test]
+fn storage_action_controls_observe_initial_readiness_changes() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            ..Default::default()
+        });
+        let disabled = Memo::new(move |_| {
+            state.with(|s| !permitted(s, true) || !s.admin_console.uncertain_operation.is_empty())
+        });
+        assert!(disabled.get_untracked());
+        state.update(|s| s.management.storage = Storage::Ready);
+        assert!(allowed(state, true), "event admission should be ready");
+        assert!(
+            !disabled.get_untracked(),
+            "the control must observe storage becoming writable"
+        );
+    });
+}
