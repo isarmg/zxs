@@ -3,20 +3,12 @@ use crate::BackendAction;
 use storage_contract::{CommitRequest, Config, FileTagTarget, new_id};
 
 #[test]
-fn utc_history_projection_formats_seconds_and_preserves_missing_times() {
+fn utc_history_timestamp_formats_seconds() {
     for (seconds, expected) in [
         (0, "1970-01-01T00:00:00Z"),
         (1_792_803_600, "2026-10-24T01:00:00Z"),
     ] {
         assert_eq!(utc_timestamp(seconds).unwrap(), expected);
-        let mut event = json!({"timestamp":seconds.to_string(),"event_id":"original"});
-        utc_event_timestamp(&mut event).unwrap();
-        assert_eq!(event, json!({"timestamp":expected,"event_id":"original"}));
-    }
-    for mut event in [json!({"timestamp":null}), json!({"event_id":"missing"})] {
-        let before = event.clone();
-        utc_event_timestamp(&mut event).unwrap();
-        assert_eq!(event, before);
     }
 }
 

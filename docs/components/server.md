@@ -16,6 +16,7 @@ Axum HTTP 服务、持久会话认证及受保护的 Samba 本机桥接。业务
 | `transfer` / `uploads` | HTTP 内容流/范围/读租约；上传进度的有界读取与持久化 |
 | `web_assets` | 静态资源准入和 ETag，保留 `/api` API 命名空间 |
 | `engine_backend` / `file_manager` | 核心业务约束、业务动作和文件管理响应适配 |
+| `engine_backend/file_manager/activity` | 以只读 `&Engine` 汇总提交、文件元数据操作、目录分支操作、备份配置、路径节点及目录树六类活动；按序号降序和事件 ID 保留最新 200 行，仅在响应中规范化 UTC 时间 |
 | `telemetry` | 有界可重建的主机采样和历史，不参与存储提交真相 |
 | `smb_rpc` | 本机 Samba 会话、句柄与工作区发布，不创建账户或仓库权限 |
 

@@ -1,4 +1,6 @@
-use super::*;
+use super::{HISTORY_LIMIT, history_sequence_may_fit, record_event, utc_event_timestamp};
+use json_codec::{Value, json};
+use std::{cmp::Reverse, collections::BTreeMap};
 
 fn project_history_sources(
     sources: &[(u64, Vec<String>)],
@@ -111,4 +113,21 @@ fn history_sequence_cutoff_skips_older_projection_without_stopping_the_scan() {
     assert_eq!(full_projection, HISTORY_LIMIT + 10_000 + 1);
     assert_eq!(limited_projection, HISTORY_LIMIT + 1);
     assert_eq!(actual.first_key_value().unwrap().0.0, Reverse(2000));
+}
+
+#[test]
+fn utc_history_projection_formats_seconds_and_preserves_missing_times() {
+    for (seconds, expected) in [
+        (0, "1970-01-01T00:00:00Z"),
+        (1_792_803_600, "2026-10-24T01:00:00Z"),
+    ] {
+        let mut event = json!({"timestamp":seconds.to_string(),"event_id":"original"});
+        utc_event_timestamp(&mut event).unwrap();
+        assert_eq!(event, json!({"timestamp":expected,"event_id":"original"}));
+    }
+    for mut event in [json!({"timestamp":null}), json!({"event_id":"missing"})] {
+        let before = event.clone();
+        utc_event_timestamp(&mut event).unwrap();
+        assert_eq!(event, before);
+    }
 }
