@@ -1,6 +1,8 @@
 //! Namespace changes preserve stable identity and path invariants.
 use super::*;
 use std::collections::BTreeMap;
+mod draft;
+pub(crate) use draft::NamespaceDraft;
 
 /// Change only the display location of an existing entry. Stable entry/file/
 /// version identities and content metadata survive moves, case-only renames,

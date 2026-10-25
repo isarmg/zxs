@@ -1170,9 +1170,13 @@ impl Engine {
                     .ok_or_else(|| Error::new("STATE_INVALID", "workspace base missing"))?;
                 let repo = engine.repository_for_branch(&w.branch_id)?;
 
+                // One explicit mutation-local index serves both conflict checks
+                // and staged replacements. It accepts unsorted input but rejects
+                // malformed source keys instead of silently dropping aliases.
+                let mut draft = namespace::NamespaceDraft::new(current.entries.clone())?;
                 for file in w.files.values() {
                     validate_directory_selection(state, &w, &file.path)?;
-                    let existing = find(&current.entries, &file.path);
+                    let existing = draft.get(&file.path);
                     if existing.map(|entry| &entry.version_id) != file.base_version_id.as_ref() {
                         return Err(Error::new("FILE_VERSION_CONFLICT", "file changed after this workspace began"));
                     }
@@ -1197,12 +1201,11 @@ impl Engine {
                         }
                     }
                 }
-                let mut entries = current.entries.clone();
                 let commit_id = new_id("commit");
                 let mut written_files = Vec::new();
                 let mut written_paths = Vec::new();
                 for file in w.files.values() {
-                    let existing = find(&entries, &file.path).cloned();
+                    let existing = draft.get(&file.path).cloned();
                     // An insensitive lookup is not a rename. Keep the existing
                     // display path; explicit namespace operations own renames.
                     let path = existing.as_ref().map(|entry| entry.path.as_str()).unwrap_or(&file.path);
@@ -1220,7 +1223,7 @@ impl Engine {
                     }) {
                         continue;
                     }
-                    ensure_parents(&mut entries, path)?;
+                    draft.ensure_parents(path)?;
                     let source_ids:Vec<String> = pending_source.as_ref().cloned()
                         .or_else(|| existing.as_ref().map(|entry| entry.version_id.clone()))
                         .into_iter().collect();
@@ -1246,12 +1249,12 @@ impl Engine {
                         lookup_key: name_policy::path_key(path), kind: "file".into(),
                         file_id: file_id.clone(), version_id: version.version_id, size: version.logical_size,
                     };
-                    entries.retain(|previous| previous.lookup_key != entry.lookup_key);
-                    entries.push(entry);
+                    draft.replace(entry)?;
                     state.file_locations.entry(file_id.clone()).or_insert_with(||path.to_owned());
                     state.file_names.entry(file_id.clone()).or_insert_with(||path.rsplit('/').next().unwrap_or("").into());
                     written_files.push(file_id);
                 }
+                let mut entries = draft.into_entries();
                 let renamed_directories=directory::prepare_renamed_directories(state,&repo.repository_id,&current.entries,&w.namespace_operations)?;
                 let deleted = apply_workspace_namespace(&mut entries, &current.entries, &w.namespace_operations)?;
                 super::directory::namespace_locations(state,&repo.repository_id,&current.entries,&entries,&w.namespace_operations,&request.principal,&request.operation_id)?;
