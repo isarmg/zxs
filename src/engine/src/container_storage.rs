@@ -104,17 +104,9 @@ pub(crate) fn version_identity(
     state: &State,
     file_id: &str,
     path: &str,
-    hash: &str,
+    hash: &blake3::Hash,
 ) -> Result<(String, String)> {
     validate_id(file_id, "file")?;
-    name_policy::validate_path(path)?;
-    if hash.len() != 64
-        || !hash
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(invalid("content digest is invalid"));
-    }
     let mut maximum = 0;
     for version in state
         .versions
@@ -152,7 +144,7 @@ pub(crate) fn version_identity(
         .and_then(|name| name.to_str())
         .map(|name| format!(".{name}"))
         .unwrap_or_default();
-    let name = format!("v{number:06}_{stamp}_{}{extension}", &hash[..8]);
+    let name = format!("v{number:06}_{stamp}_{}{extension}", &hash.to_hex()[..8]);
     name_policy::validate_name(&name)?;
     Ok((name, timestamp))
 }
@@ -476,27 +468,26 @@ pub(crate) fn install_version_content(directory: &Path, version: &FileVersion) -
 /// branch aliases never retarget an existing container; actual namespace edits
 /// update these fields explicitly, and deletion retains the last owner.
 pub(crate) fn capture_names(state: &mut State) {
-    let names = state
-        .repositories
+    let State {
+        repositories,
+        branches,
+        commits,
+        file_names,
+        file_locations,
+        ..
+    } = state;
+    let entries = repositories
         .values()
-        .filter_map(|repository| state.branches.get(&repository.main_branch_id))
-        .filter_map(|branch| state.commits.get(&branch.head_commit_id))
+        .filter_map(|repository| branches.get(&repository.main_branch_id))
+        .filter_map(|branch| commits.get(&branch.head_commit_id))
         .flat_map(|commit| &commit.entries)
-        .filter(|entry| entry.kind == "file")
-        .map(|entry| {
-            (
-                entry.file_id.clone(),
-                entry.name.clone(),
-                entry.path.clone(),
-            )
-        })
-        .collect::<Vec<_>>();
-    for (file, name, path) in names {
-        if !state.file_names.contains_key(&file) {
-            state.file_names.insert(file.clone(), name);
+        .filter(|entry| entry.kind == "file");
+    for entry in entries {
+        if !file_names.contains_key(&entry.file_id) {
+            file_names.insert(entry.file_id.clone(), entry.name.clone());
         }
-        if !state.file_locations.contains_key(&file) {
-            state.file_locations.insert(file, path);
+        if !file_locations.contains_key(&entry.file_id) {
+            file_locations.insert(entry.file_id.clone(), entry.path.clone());
         }
     }
 }

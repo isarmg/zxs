@@ -2,7 +2,7 @@ use super::*;
 use std::{collections::BTreeMap, os::unix::fs::symlink};
 
 fn version(state: &State, history: &str, file: &str, name: &str, bytes: &[u8]) -> FileVersion {
-    let hash = blake3::hash(bytes).to_hex().to_string();
+    let hash = blake3::hash(bytes);
     let (storage_name, created_at) = version_identity(state, file, name, &hash).unwrap();
     FileVersion {
         history_tree_id: history.into(),
@@ -11,7 +11,7 @@ fn version(state: &State, history: &str, file: &str, name: &str, bytes: &[u8]) -
         creation_primary_slot_id: "P01".into(),
         logical_size: bytes.len() as u64,
         version_sequence: 900,
-        content_hash: hash,
+        content_hash: hash.to_hex().to_string(),
         checksum_chunk_bytes: 262_144,
         checksum_manifest_hash: "0".repeat(64),
         creation_name: name.into(),
@@ -605,7 +605,10 @@ fn identity_counts_each_file_independently_with_required_numbered_names() {
     state.versions.insert(old.version_id.clone(), old);
     let next = version(&state, &history, &file, "报告.txt", b"next");
     assert_eq!(sequence(&next.storage_name).unwrap(), 2);
-    assert!(next.storage_name.ends_with(".txt"));
+    assert!(
+        next.storage_name
+            .ends_with(&format!("_{}.txt", &blake3::hash(b"next").to_hex()[..8]))
+    );
     assert!(next.created_at.ends_with('Z'));
     assert_eq!(next.created_at.len(), 20);
     state.versions.insert(next.version_id.clone(), next);
@@ -633,7 +636,15 @@ fn identity_counts_each_file_independently_with_required_numbered_names() {
         .unwrap(),
         1
     );
-    assert!(version_identity(&state, &file, "../bad", &"0".repeat(64)).is_err());
+    assert!(
+        version_identity(
+            &state,
+            "invalid-file-id",
+            "valid.txt",
+            &blake3::hash(b"body")
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -794,4 +805,85 @@ fn empty_name_projection_has_no_staging_file() {
     for disk in &config.disks {
         assert!(!disk.root.exists());
     }
+}
+
+fn capture_fixture() -> (State, String, String) {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &temporary.path().join("system"),
+        Config::development([temporary.path().join("disk")]),
+    )
+    .unwrap();
+    let repo = engine
+        .create_repository("Names", "P01", 1, "owner", &new_id("op"))
+        .unwrap();
+    let mut state = engine.state().clone();
+    let head = state.branches[&repo.main_branch_id].head_commit_id.clone();
+    let file = new_id("file");
+    state.commits.get_mut(&head).unwrap().entries = ["first.txt", "alias.txt"]
+        .into_iter()
+        .map(|name| Entry {
+            entry_id: new_id("entry"),
+            path: format!("folder/{name}"),
+            name: name.into(),
+            lookup_key: name_policy::path_key(&format!("folder/{name}")),
+            kind: "file".into(),
+            file_id: file.clone(),
+            version_id: new_id("ver"),
+            size: 1,
+        })
+        .collect();
+    (state, repo.main_branch_id, file)
+}
+
+#[test]
+fn capture_names_only_inserts_missing_fields_and_keeps_first_alias() {
+    let (mut state, _, file) = capture_fixture();
+    capture_names(&mut state);
+    assert_eq!(state.file_names[&file], "first.txt");
+    assert_eq!(state.file_locations[&file], "folder/first.txt");
+
+    state.file_names.insert(file.clone(), "retained.txt".into());
+    state.file_locations.remove(&file);
+    capture_names(&mut state);
+    assert_eq!(state.file_names[&file], "retained.txt");
+    assert_eq!(state.file_locations[&file], "folder/first.txt");
+
+    state.file_names.remove(&file);
+    state
+        .file_locations
+        .insert(file.clone(), "retained/location.txt".into());
+    capture_names(&mut state);
+    assert_eq!(state.file_names[&file], "first.txt");
+    assert_eq!(state.file_locations[&file], "retained/location.txt");
+
+    let before = state.clone();
+    state.begin_tracking();
+    capture_names(&mut state);
+    assert!(
+        state
+            .file_names
+            .changes_since(&before.file_names)
+            .is_empty()
+    );
+    assert!(
+        state
+            .file_locations
+            .changes_since(&before.file_locations)
+            .is_empty()
+    );
+}
+
+#[test]
+fn identity_preserves_generated_storage_name_limit() {
+    let name = format!("x.{}", "字".repeat(75));
+    name_policy::validate_path(&name).unwrap();
+    let error = version_identity(
+        &State::default(),
+        &new_id("file"),
+        &name,
+        &blake3::hash(b"body"),
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::NameTooLong);
 }

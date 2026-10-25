@@ -1519,7 +1519,8 @@ impl Engine {
             logical_size: size,
             chunks,
         };
-        let content_hash = full.finalize().to_hex().to_string();
+        let digest = full.finalize();
+        let content_hash = digest.to_hex().to_string();
         if expected.is_some_and(|original| {
             original.logical_size != size || original.content_hash != content_hash
         }) {
@@ -1529,7 +1530,7 @@ impl Engine {
             ));
         }
         let (storage_name, created_at) =
-            crate::container_storage::version_identity(state, file_id, path, &content_hash)?;
+            crate::container_storage::version_identity(state, file_id, path, &digest)?;
         let version = FileVersion {
             history_tree_id: history.into(),
             version_id: new_id("ver"),
