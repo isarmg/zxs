@@ -192,10 +192,11 @@ pub(crate) fn publish_selected_file_at(
                 .file_locations
                 .get(file_id)
                 .filter(|p| {
+                    let key = name_policy::path_key(p);
                     current
                         .entries
                         .iter()
-                        .any(|e| e.file_id == file_id && e.lookup_key == name_policy::path_key(p))
+                        .any(|e| e.file_id == file_id && e.lookup_key == key)
                 })
                 .cloned()
         })
@@ -207,6 +208,7 @@ pub(crate) fn publish_selected_file_at(
                 .map(|e| e.path.clone())
         })
         .ok_or_else(|| Error::new("FILE_NOT_FOUND", "file is absent from current composition"))?;
+    let selected_key = name_policy::path_key(&selected_path);
     let context = directory::context_at(state, &repository.repository_id, &selected_path);
     let inherited = context.as_ref().is_some_and(|c| c.inherited_from.is_some());
     state.file_write_origins.remove(file_id);
@@ -215,9 +217,7 @@ pub(crate) fn publish_selected_file_at(
         && context.as_ref().and_then(|c| c.node_id.as_ref()) == branch.file_node_id.as_ref()
         && already_selected
         && current.entries.iter().any(|e| {
-            e.kind == "file"
-                && e.lookup_key == name_policy::path_key(&selected_path)
-                && e.version_id == source.version_id
+            e.kind == "file" && e.lookup_key == selected_key && e.version_id == source.version_id
         })
     {
         return Ok(current.commit_id);
@@ -225,11 +225,7 @@ pub(crate) fn publish_selected_file_at(
     let mut entries = current.entries.clone();
     let target = entries
         .iter_mut()
-        .find(|e| {
-            e.file_id == file_id
-                && e.lookup_key == name_policy::path_key(&selected_path)
-                && e.kind == "file"
-        })
+        .find(|e| e.file_id == file_id && e.lookup_key == selected_key && e.kind == "file")
         .ok_or_else(|| Error::new("FILE_NOT_FOUND", "file was deleted from its directory"))?;
     target.version_id = source.version_id;
     target.size = source.size;
@@ -625,7 +621,7 @@ impl Engine {
                     .ok_or_else(|| Error::new("STATE_INVALID", "repository main branch missing"))?;
                 let current = state.commits.get(&main.head_commit_id)
                     .ok_or_else(|| Error::new("STATE_INVALID", "repository head missing"))?;
-                if !find(&current.entries, path).is_some_and(|e| e.kind == "file" && e.file_id == file_id) {
+                if !find_unordered(&current.entries, path).is_some_and(|e| e.kind == "file" && e.file_id == file_id) {
                     return Err(Error::new("FILE_NOT_FOUND", "file/path identity differs"));
                 }
                 let branch = state.branches.get(branch_id).cloned()

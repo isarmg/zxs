@@ -432,7 +432,8 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
     if let Some(path) = requested_path {
         name_policy::validate_lookup_path(path).map_err(ApiError::invalid)?;
     }
-    let entries = engine.list_tree_ref(&repo.main_branch_id).map_err(error)?;
+    let tree = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
+    let entries = tree.entries();
     let current = if let Some(path) = requested_path {
         if requested_repo != Some(repo.repository_id.as_str()) {
             return Err(ApiError::new(
@@ -441,13 +442,9 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
                 "file is not present in this repository context",
             ));
         }
-        let key = name_policy::path_key(path);
         Some(
-            entries
-                .iter()
-                .find(|entry| {
-                    entry.kind == "file" && entry.file_id == file && entry.lookup_key == key
-                })
+            tree.get(path)
+                .filter(|entry| entry.kind == "file" && entry.file_id == file)
                 .cloned()
                 .ok_or_else(|| {
                     ApiError::new(
@@ -461,12 +458,7 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
         state
             .file_locations
             .get(file)
-            .and_then(|path| {
-                let key = name_policy::path_key(path);
-                entries
-                    .iter()
-                    .find(|entry| entry.file_id == file && entry.lookup_key == key)
-            })
+            .and_then(|path| tree.get(path).filter(|entry| entry.file_id == file))
             .cloned()
             .or_else(|| entries.iter().find(|entry| entry.file_id == file).cloned())
     };
@@ -628,14 +620,10 @@ pub(super) fn read(
                 ));
             }
             let entry = engine
-                .list_tree(&repo.main_branch_id)
+                .namespace_tree(&repo.main_branch_id)
                 .map_err(error)?
-                .into_iter()
-                .find(|entry| {
-                    entry.kind == "file"
-                        && entry.file_id == version.file_id
-                        && entry.lookup_key == name_policy::path_key(path)
-                })
+                .get(path)
+                .filter(|entry| entry.kind == "file" && entry.file_id == version.file_id)
                 .ok_or_else(|| {
                     ApiError::new(
                         404,
@@ -753,10 +741,8 @@ pub(super) fn call(
             if relative.is_empty() {
                 return Err(ApiError::invalid("cannot upload over a disk directory"));
             }
-            let tree = engine.list_tree(&repo.main_branch_id).map_err(error)?;
-            let existing = tree
-                .iter()
-                .find(|e| e.lookup_key == name_policy::path_key(&relative));
+            let tree = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
+            let existing = tree.get(&relative);
             if let Some(context) =
                 existing.and_then(|entry| engine.file_context(&repo.repository_id, &entry.path))
                 && context.inherited_from.is_none()

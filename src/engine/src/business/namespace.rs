@@ -2,7 +2,9 @@
 use super::*;
 use std::collections::BTreeMap;
 mod draft;
+mod query;
 pub(crate) use draft::NamespaceDraft;
+pub use query::NamespaceTree;
 
 /// Change only the display location of an existing entry. Stable entry/file/
 /// version identities and content metadata survive moves, case-only renames,
@@ -20,7 +22,11 @@ pub(crate) fn relocate_entry(entry: &mut Entry, path: String) -> Result<()> {
 pub(crate) fn sorted(entries: &mut [Entry]) {
     entries.sort_by(|a, b| a.lookup_key.as_bytes().cmp(b.lookup_key.as_bytes()));
 }
-pub(crate) fn find<'a>(entries: &'a [Entry], path: &str) -> Option<&'a Entry> {
+/// Mutation buffers are deliberately unordered until `validate_entries`.
+/// Retain/push and subtree renames preserve operation/deletion ordering; sorting
+/// between operations would change that observable order. Published reads use
+/// `NamespaceTree` instead, and indexed upload construction uses `NamespaceDraft`.
+pub(crate) fn find_unordered<'a>(entries: &'a [Entry], path: &str) -> Option<&'a Entry> {
     let key = name_policy::path_key(path);
     entries.iter().find(|e| e.lookup_key == key)
 }
@@ -70,7 +76,7 @@ pub(crate) fn ensure_parents(entries: &mut Vec<Entry>, path: &str) -> Result<()>
             p.push('/');
         }
         p.push_str(c);
-        if let Some(existing) = find(entries, &p) {
+        if let Some(existing) = find_unordered(entries, &p) {
             if existing.kind != "directory" {
                 return Err(Error::new(
                     "PARENT_NOT_DIRECTORY",
@@ -104,8 +110,8 @@ pub(crate) fn apply_workspace_namespace(
         // explicit mkdir for that new parent belongs to the same workspace.
         let key = name_policy::path_key(&op.path);
         if op.kind == "mkdir"
-            && find(base, &op.path).is_none()
-            && find(entries, &op.path).is_some_and(|e| e.kind == "directory")
+            && find_unordered(base, &op.path).is_none()
+            && find_unordered(entries, &op.path).is_some_and(|e| e.kind == "directory")
             && explicit_directories.insert(key)
         {
             continue;
@@ -176,7 +182,7 @@ pub(crate) fn apply_namespace(
     let mut deleted = Vec::new();
     match op.kind.as_str() {
         "mkdir" => {
-            if find(entries, &op.path).is_some() {
+            if find_unordered(entries, &op.path).is_some() {
                 return Err(Error::new("NAME_COLLISION", "directory target exists"));
             }
             ensure_parents(entries, &op.path)?;
@@ -192,7 +198,7 @@ pub(crate) fn apply_namespace(
             });
         }
         "delete" | "delete_tree" => {
-            if find(entries, &op.path).is_none() {
+            if find_unordered(entries, &op.path).is_none() {
                 return Err(Error::new("ENTRY_NOT_FOUND", "delete target missing"));
             }
             if op.kind == "delete" && entries.iter().any(|e| is_descendant(&e.lookup_key, &key)) {
@@ -220,7 +226,7 @@ pub(crate) fn apply_namespace(
                 .as_ref()
                 .ok_or_else(|| Error::new("INVALID_REQUEST", "rename needs destination"))?;
             let to_key = name_policy::path_key(target);
-            let original = find(entries, &op.path)
+            let original = find_unordered(entries, &op.path)
                 .cloned()
                 .ok_or_else(|| Error::new("ENTRY_NOT_FOUND", "rename source missing"))?;
             if is_descendant(&to_key, &key) {
@@ -229,7 +235,7 @@ pub(crate) fn apply_namespace(
                     "cannot move a directory into itself",
                 ));
             }
-            if key != to_key && find(entries, target).is_some() {
+            if key != to_key && find_unordered(entries, target).is_some() {
                 return Err(Error::new("NAME_COLLISION", "rename destination exists"));
             }
             ensure_parents(entries, target)?;

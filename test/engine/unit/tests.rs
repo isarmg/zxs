@@ -68,7 +68,7 @@ fn normalized_directory_rename_and_file_branch_keep_parent_closure_after_restart
         b"second",
     );
     let original = engine.list_tree(&repo.main_branch_id).unwrap();
-    let file = crate::business::find(&original, "strasse/two.txt")
+    let file = crate::business::find_unordered(&original, "strasse/two.txt")
         .unwrap()
         .clone();
     let branch = engine
@@ -87,7 +87,7 @@ fn normalized_directory_rename_and_file_branch_keep_parent_closure_after_restart
         2,
         "file branches retain their normalized parent directory"
     );
-    assert!(crate::business::find(&snapshot, "STRASSE").is_some());
+    assert!(crate::business::find_unordered(&snapshot, "STRASSE").is_some());
     engine
         .file_namespace(
             &repo.repository_id,
@@ -103,10 +103,10 @@ fn normalized_directory_rename_and_file_branch_keep_parent_closure_after_restart
     drop(engine);
     let engine = Engine::open(&fixture.root).unwrap();
     let entries = engine.list_tree(&repo.main_branch_id).unwrap();
-    let moved = crate::business::find(&entries, "Moved/two.txt").unwrap();
+    let moved = crate::business::find_unordered(&entries, "Moved/two.txt").unwrap();
     assert_eq!(moved.file_id, file.file_id);
     assert_eq!(bytes(&engine, &moved.version_id), b"second");
-    assert!(crate::business::find(&entries, "Moved/one.txt").is_some());
+    assert!(crate::business::find_unordered(&entries, "Moved/one.txt").is_some());
     assert_eq!(engine.list_tree(&branch_id).unwrap().len(), 2);
     assert!(engine.check().unwrap().issues.is_empty());
 }

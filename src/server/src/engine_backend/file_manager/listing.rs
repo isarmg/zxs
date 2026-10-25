@@ -47,12 +47,13 @@ pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError>
     };
     if let Some((repo, within)) = &resolved {
         default_branch_scope = within.is_empty();
-        let tree = engine.list_tree_ref(&repo.main_branch_id).map_err(error)?;
+        let namespace = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
+        let tree = namespace.entries();
         let within_key = name_policy::path_key(within);
         if !within.is_empty()
-            && !tree
-                .iter()
-                .any(|entry| entry.lookup_key == within_key && entry.kind == "directory")
+            && !namespace
+                .get_key(&within_key)
+                .is_some_and(|entry| entry.kind == "directory")
         {
             return Err(ApiError::new(
                 404,

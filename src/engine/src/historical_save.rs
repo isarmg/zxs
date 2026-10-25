@@ -1,8 +1,8 @@
 //! Historical branch records retain lineage; only staged writes gain content.
 use crate::{
     business::{
-        apply_workspace_namespace, deletion_record, ensure_parents, find, now, validate_entries,
-        validate_workspace_dependencies,
+        apply_workspace_namespace, deletion_record, ensure_parents, find_unordered, now,
+        validate_entries, validate_workspace_dependencies,
     },
     disk::*,
     *,
@@ -75,7 +75,7 @@ fn final_entries(
     let mut entries = source.entries.clone();
     if let Some(workspace) = workspace {
         for staged in workspace.files.values() {
-            let previous = find(&entries, &staged.path).cloned();
+            let previous = find_unordered(&entries, &staged.path).cloned();
             if previous.as_ref().is_some_and(|entry| entry.kind != "file") {
                 return Err(Error::new(
                     "IS_DIRECTORY",

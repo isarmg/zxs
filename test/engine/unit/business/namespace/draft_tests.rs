@@ -37,7 +37,10 @@ fn unsorted_sources_and_replacements_preserve_legacy_order_and_aliases() {
     let mut draft = NamespaceDraft::new(original.clone()).unwrap();
     for path in ["STRASSE.TXT", "z.TXT", "straße.txt"] {
         let mut replacement = draft.get(path).unwrap().clone();
-        assert_eq!(Some(&replacement), super::super::find(&legacy, path));
+        assert_eq!(
+            Some(&replacement),
+            super::super::find_unordered(&legacy, path)
+        );
         replacement.version_id.push_str("-new");
         legacy.retain(|entry| entry.lookup_key != replacement.lookup_key);
         legacy.push(replacement.clone());

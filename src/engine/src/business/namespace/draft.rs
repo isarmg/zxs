@@ -139,6 +139,8 @@ impl NamespaceDraft {
         Ok(())
     }
 
+    /// Preserve mutation order, not lookup-key order. These entries must pass
+    /// `validate_entries` before becoming a published `NamespaceTree`.
     pub(crate) fn into_entries(self) -> Vec<Entry> {
         #[cfg(test)]
         self.record(|work| work.flattened_slots += self.slots.len());

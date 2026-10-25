@@ -396,8 +396,8 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
                 .collect::<Vec<_>>(),
             ["Folderish", "Moved", "Moved/Child", "Moved/Child/file.txt"]
         );
-        let moved = find(&committed.entries, "Moved/Child/file.txt").unwrap();
-        let original = find(&source.entries, "Folder/Child/file.txt").unwrap();
+        let moved = find_unordered(&committed.entries, "Moved/Child/file.txt").unwrap();
+        let original = find_unordered(&source.entries, "Folder/Child/file.txt").unwrap();
         if inherited {
             assert!(source.pending_file_versions.contains_key(&original.file_id));
         }

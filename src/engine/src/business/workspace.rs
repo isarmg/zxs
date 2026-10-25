@@ -433,10 +433,8 @@ impl Engine {
         let workspace = self.workspace(workspace)?;
         validate_directory_selection(&self.state, &workspace, path)?;
         let mut entry = self
-            .state
-            .commits
-            .get(&workspace.base_head)
-            .and_then(|c| find(&c.entries, path));
+            .commit_namespace(&workspace.base_head)
+            .and_then(|tree| tree.get(path));
         // First-created files are absent from the original base, but completion
         // records their published destination. The current entry supplies only
         // its identity; the saved context still decides whether it is writable.
@@ -452,8 +450,8 @@ impl Engine {
                 self.state
                     .branches
                     .get(&workspace.branch_id)
-                    .and_then(|branch| self.state.commits.get(&branch.head_commit_id))
-                    .and_then(|commit| find(&commit.entries, path))
+                    .and_then(|branch| self.commit_namespace(&branch.head_commit_id))
+                    .and_then(|tree| tree.get(path))
                     .ok_or_else(|| {
                         Error::new("FILE_NOT_FOUND", "published workspace file is absent")
                     })?,
@@ -610,11 +608,9 @@ impl Engine {
         // Otherwise an IS_DIRECTORY failure leaves {item}-{generation}.full
         // behind and a subsequent valid retry collides with those orphan bytes.
         let base = self
-            .state
-            .commits
-            .get(&w.base_head)
+            .commit_namespace(&w.base_head)
             .ok_or_else(|| Error::new("STATE_INVALID", "workspace base is absent"))?;
-        let base_entry = find(&base.entries, path).cloned();
+        let base_entry = base.get(path).cloned();
         if w.purpose == "normal"
             && let Some(entry) = base_entry.as_ref().filter(|e| e.kind == "file")
         {
@@ -932,25 +928,18 @@ impl Engine {
             return Err(Error::new("FILE_TOO_LARGE", "range exceeds file budget"));
         }
         let base = self
-            .state
-            .commits
-            .get(&w.base_head)
+            .commit_namespace(&w.base_head)
             .ok_or_else(|| Error::new("STATE_INVALID", "workspace base missing"))?;
         if w.purpose == "normal"
-            && let Some(entry) = find(&base.entries, path)
+            && let Some(entry) = base.get(path)
         {
             validate_file_context(&self.state, &w, &entry.file_id, path)?;
             let current = self
                 .state
                 .branches
                 .get(&w.branch_id)
-                .and_then(|branch| self.state.commits.get(&branch.head_commit_id))
-                .and_then(|commit| {
-                    commit
-                        .entries
-                        .iter()
-                        .find(|current| current.lookup_key == entry.lookup_key)
-                });
+                .and_then(|branch| self.commit_namespace(&branch.head_commit_id))
+                .and_then(|tree| tree.get_key(&entry.lookup_key));
             if current.is_none_or(|current| current.version_id != entry.version_id) {
                 return Err(Error::new(
                     "FILE_VERSION_CONFLICT",
@@ -967,7 +956,7 @@ impl Engine {
                 &mut temporary,
             )?;
             Some((previous.size, previous.content_hash.clone()))
-        } else if let Some(entry) = find(&base.entries, path) {
+        } else if let Some(entry) = base.get(path) {
             let source = self.open_content(&entry.version_id)?;
             std::io::copy(
                 &mut (&source.file).take(source.size.saturating_add(1)),

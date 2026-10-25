@@ -40,7 +40,7 @@ fn published_new_file_context_fences_same_version_branch_switch() {
         let workspace = save(&mut engine, &repo.main_branch_id, b"old");
         let key = directory::context_key(&repo.repository_id, "fresh.txt");
         assert!(
-            find(
+            find_unordered(
                 &engine.state().commits[&workspace.base_head].entries,
                 "fresh.txt"
             )

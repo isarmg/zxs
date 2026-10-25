@@ -668,41 +668,75 @@ fn directory_byte_bound_applies_to_utf8_and_long_paths_before_the_count_limit() 
 }
 
 #[test]
-fn smb_lookup_preserves_path_first_match_without_serializing_the_tree() {
-    let (_root, engine, repo, _) = fixture();
-    let mut commit = synthetic_commit(&engine, &repo, 10_000);
-    let mut first = commit.entries[0].clone();
-    first.path = "Straße/内容.txt".into();
-    first.lookup_key = "deliberately-unrelated-key".into();
-    let mut duplicate = first.clone();
-    duplicate.version_id = "later-duplicate".into();
-    commit.entries.insert(7, first.clone());
-    commit.entries.push(duplicate);
-    commit.entries.swap(0, 5);
-    for path in [
-        "STRASSE/内容.txt",
-        "straße/内容.txt",
-        "file-09999.txt",
-        "absent",
-    ] {
-        let key = name_policy::path_key(path);
-        let legacy = commit
-            .entries
-            .clone()
-            .into_iter()
-            .find(|entry| name_policy::path_key(&entry.path) == key);
-        let projected = SmbLookup::find(&commit.entries, path);
-        assert_eq!(projected.0, legacy);
-        assert_eq!(
-            encode(projected).unwrap(),
-            json_codec::to_value(legacy).unwrap()
-        );
+fn smb_lookup_matches_legacy_on_published_and_reopened_unicode_trees() {
+    let (root, mut engine, repo, _) = fixture();
+    save_projection_file(
+        &mut engine,
+        &repo.main_branch_id,
+        "Straße/Café.txt",
+        b"content",
+    );
+    save_projection_file(&mut engine, &repo.main_branch_id, "Zed.txt", b"last");
+    let expected = engine
+        .namespace_tree(&repo.main_branch_id)
+        .unwrap()
+        .get("strasse/CAFÉ.TXT")
+        .unwrap()
+        .clone();
+    for reopened in [false, true] {
+        if reopened {
+            drop(engine);
+            engine = Engine::open(&root.path().join("system")).unwrap();
+        }
+        for path in [
+            "STRASSE/CAFE\u{301}.TXT",
+            "straße/Café.txt",
+            "zed.TXT",
+            "absent",
+            "",
+        ] {
+            let key = name_policy::path_key(path);
+            // Exact former lookup; only canonical published entries enter the
+            // new view. Engine boundary tests reject bad keys/order/collisions.
+            let legacy = engine
+                .list_tree_ref(&repo.main_branch_id)
+                .unwrap()
+                .iter()
+                .find(|entry| name_policy::path_key(&entry.path) == key)
+                .cloned();
+            let projected = SmbLookup::capture(
+                &engine,
+                &json!({
+                    "branch_id":repo.main_branch_id,"path":path
+                }),
+            );
+            // An empty transport path is rejected before lookup, as before.
+            if path.is_empty() {
+                assert!(projected.is_err());
+                continue;
+            }
+            let projected = projected.unwrap();
+            assert_eq!(projected.0, legacy);
+            assert_eq!(
+                encode(projected).unwrap(),
+                json_codec::to_value(legacy).unwrap()
+            );
+        }
+        let projected = encode(
+            SmbLookup::capture(
+                &engine,
+                &json!({
+                    "branch_id":repo.main_branch_id,"path":"strasse/CAFÉ.TXT"
+                }),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(projected["version_id"], expected.version_id);
+        assert!(projected.get("entries").is_none());
+        assert!(projected.get("pending_file_versions").is_none());
+        assert!(json_codec::to_vec(&projected).unwrap().len() < 1024);
     }
-    let projected = encode(SmbLookup::find(&commit.entries, "strasse/内容.txt")).unwrap();
-    assert_eq!(projected["version_id"], first.version_id);
-    assert!(projected.get("entries").is_none());
-    assert!(projected.get("pending_file_versions").is_none());
-    assert!(json_codec::to_vec(&projected).unwrap().len() < 1024);
 }
 
 #[test]

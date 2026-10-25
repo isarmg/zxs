@@ -313,7 +313,7 @@ fn apply(
                 "source path outside selected scope",
             ));
         }
-        let source = namespace::find(&source_scope.entries, &item.source.path)
+        let source = namespace::find_unordered(&source_scope.entries, &item.source.path)
             .cloned()
             .filter(|e| e.entry_id == item.source.entry_id)
             .ok_or_else(|| {
@@ -431,13 +431,13 @@ fn apply(
         let entries = projected
             .get_mut(&target.directory_branch_id)
             .expect("checked");
-        if namespace::find(entries, &target.path).is_some() {
+        if namespace::find_unordered(entries, &target.path).is_some() {
             return Err(Error::new("NAME_COLLISION", "batch destination exists"));
         }
         // A destination must have a real parent after all sources are removed.
         if let Some((parent, _)) = target.path.rsplit_once('/')
             && name_policy::path_key(parent) != name_policy::path_key(&target_scope.path)
-            && !namespace::find(entries, parent).is_some_and(|e| e.kind == "directory")
+            && !namespace::find_unordered(entries, parent).is_some_and(|e| e.kind == "directory")
         {
             return Err(Error::new(
                 "DIRECTORY_NOT_FOUND",
@@ -483,7 +483,7 @@ fn apply(
             {
                 return None;
             }
-            let entry = find(&current.entries, &item.source.path)?;
+            let entry = find_unordered(&current.entries, &item.source.path)?;
             if entry.entry_id != item.source.entry_id {
                 return None;
             }
@@ -530,7 +530,7 @@ fn apply(
                 if name_policy::path_key(parent) == name_policy::path_key(&target_draft.path) {
                     target_draft.directory_id.clone()
                 } else {
-                    find(&target_draft.entries, parent)
+                    find_unordered(&target_draft.entries, parent)
                         .map(|e| e.entry_id.clone())
                         .ok_or_else(|| {
                             Error::new("DIRECTORY_NOT_FOUND", "destination parent missing")
@@ -849,7 +849,7 @@ fn apply(
     affected.extend(ancestors);
     let changes=affected.iter().map(|id| {let b=&state.directory_branches[id];json!({"directory_branch_id":id,"previous_tree_id":baseline_heads.get(id),"head_tree_id":b.head_tree_id,"path":b.path})}).collect::<Vec<_>>();
     let transfers=request.items.iter().map(|item| {
-        let source=&originals[&item.source.directory_branch_id];let e=namespace::find(&source.entries,&item.source.path).expect("source checked");
+        let source=&originals[&item.source.directory_branch_id];let e=namespace::find_unordered(&source.entries,&item.source.path).expect("source checked");
         json!({"source":item.source,"target":item.target,"file_id":e.file_id,"version_id":e.version_id,"physical_path":state.file_locations.get(&e.file_id)})
     }).collect::<Vec<_>>();
     Ok(

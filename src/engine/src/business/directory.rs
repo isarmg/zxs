@@ -60,7 +60,7 @@ pub(crate) fn context_at(state: &State, repository: &str, path: &str) -> Option<
     let commit = state
         .commits
         .get(&state.branches.get(&repo.main_branch_id)?.head_commit_id)?;
-    let entry = find(&commit.entries, path).filter(|e| e.kind == "file")?;
+    let entry = find_unordered(&commit.entries, path).filter(|e| e.kind == "file")?;
     Some(context_for_entry(state, repo, entry))
 }
 
@@ -651,7 +651,7 @@ pub(crate) fn unwritten_source_at<'a>(
     branch_context_at(state, branch, path)?
         .inherited_from
         .as_ref()?;
-    find(
+    find_unordered(
         &state
             .commits
             .get(&state.branches.get(branch)?.head_commit_id)?
@@ -684,13 +684,14 @@ pub(crate) fn prepare_file_write(
         return Ok(());
     };
     let head = required(state.branches.get(branch), "repository main branch missing")?;
+    let key = name_policy::path_key(path);
     let original = required(
         state.commits.get(&head.head_commit_id),
         "repository head commit missing",
     )?
     .entries
     .iter()
-    .find(|e| e.lookup_key == name_policy::path_key(path) && e.kind == "file")
+    .find(|e| e.lookup_key == key && e.kind == "file")
     .cloned()
     .ok_or_else(|| Error::new("FILE_NOT_FOUND", "inherited file missing"))?;
     let origin_name = state

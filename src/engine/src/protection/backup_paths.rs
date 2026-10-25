@@ -1,7 +1,7 @@
 //! Stable backup roots and immediate re-protection reuse immutable file bodies.
 use super::*;
 use crate::{
-    business::{find, now},
+    business::{find_unordered, now},
     engine::Prepared,
 };
 use json_codec::Value;
@@ -96,7 +96,7 @@ pub(super) fn effective_policy<'a>(
     let file = file.or_else(|| {
         namespace(state, repository)
             .ok()
-            .and_then(|commit| find(&commit.entries, path))
+            .and_then(|commit| find_unordered(&commit.entries, path))
             .filter(|entry| entry.kind == "file")
             .map(|entry| entry.file_id.as_str())
     });
@@ -147,7 +147,7 @@ fn source_scope(state: &State, repository: &str, path: &str) -> Result<Scope> {
             files: BTreeMap::new(),
         }
     } else {
-        let entry = find(&commit.entries, path)
+        let entry = find_unordered(&commit.entries, path)
             .ok_or_else(|| Error::new("ENTRY_NOT_FOUND", "backup scope no longer exists"))?;
         Scope {
             id: if entry.kind == "file" {

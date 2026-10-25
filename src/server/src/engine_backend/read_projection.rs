@@ -81,7 +81,7 @@ impl SmbReadAuthorization {
     }
 }
 
-/// One current SMB entry, retaining the existing path-based first-match rule.
+/// One current SMB entry from the engine's canonical published namespace.
 /// The projection owns only its match, never the whole namespace or pending map.
 #[derive(Serialize)]
 #[serialization(transparent)]
@@ -98,18 +98,8 @@ impl SmbLookup {
             .get(&branch_info.head_commit_id)
             .filter(|commit| commit.history_tree_id == branch_info.history_tree_id)
             .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "commit not found"))?;
-        let entries = engine.list_tree_ref(branch).map_err(error)?;
-        Ok(Self::find(entries, field(input, "path")?))
-    }
-
-    fn find(entries: &[storage_contract::Entry], path: &str) -> Self {
-        let key = name_policy::path_key(path);
-        Self(
-            entries
-                .iter()
-                .find(|entry| name_policy::path_key(&entry.path) == key)
-                .cloned(),
-        )
+        let tree = engine.namespace_tree(branch).map_err(error)?;
+        Ok(Self(tree.get(field(input, "path")?).cloned()))
     }
 }
 
@@ -136,6 +126,7 @@ impl SmbDirectory {
             .get(commit)
             .filter(|snapshot| snapshot.history_tree_id == branch_info.history_tree_id)
             .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "directory snapshot missing"))?;
+        let tree = engine.namespace_tree_at(branch, commit).map_err(error)?;
         // The synthetic share root has an intentionally empty path.
         let path = input
             .get("path")
@@ -149,11 +140,7 @@ impl SmbDirectory {
             }
         } else {
             name_policy::validate_path(path).map_err(ApiError::invalid)?;
-            let directory = snapshot
-                .entries
-                .binary_search_by(|entry| entry.lookup_key.cmp(&key))
-                .ok()
-                .and_then(|index| snapshot.entries.get(index));
+            let directory = tree.get_key(&key);
             if directory.is_none_or(|entry| entry.kind != "directory" || entry.entry_id != entry_id)
             {
                 return Err(ApiError::new(
@@ -172,7 +159,7 @@ impl SmbDirectory {
         }
         Self::page(
             &snapshot.commit_id,
-            &snapshot.entries,
+            tree.entries(),
             &key,
             input.get("after").and_then(Value::as_str),
         )

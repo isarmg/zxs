@@ -91,10 +91,12 @@ fn directory_rename_follows_normalized_ancestry_without_slicing_utf8_by_key_leng
         .unwrap();
         validate_entries(&mut entries, 10).unwrap();
         assert_eq!(
-            find(&entries, "Moved/文档/报告.txt").unwrap().file_id,
+            find_unordered(&entries, "Moved/文档/报告.txt")
+                .unwrap()
+                .file_id,
             file_id
         );
-        assert!(find(&entries, &format!("{source}-other")).is_some());
+        assert!(find_unordered(&entries, &format!("{source}-other")).is_some());
     }
 }
 
