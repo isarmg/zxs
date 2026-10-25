@@ -56,11 +56,16 @@ impl Drop for ReadLease {
             .reads
             .lock()
             .expect("invariant: read lease lock poisoned");
-        if let Some(count) = reads.get_mut(&self.version) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                reads.remove(&self.version);
-            }
+        let count = reads
+            .get_mut(&self.version)
+            .expect("invariant: every read lease has a registered count");
+        assert!(
+            *count > 0,
+            "invariant: a live read lease has a positive count"
+        );
+        *count -= 1;
+        if *count == 0 {
+            reads.remove(&self.version);
         }
     }
 }

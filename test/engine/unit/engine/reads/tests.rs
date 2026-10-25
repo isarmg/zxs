@@ -176,3 +176,97 @@ fn copy_build_rejects_replacement_after_replica_verification_before_candidate_mu
         assert!(pending.is_empty());
     }
 }
+
+#[test]
+fn read_leases_release_once_across_plan_moves_and_engine_drop() {
+    let (_temp, mut engine, workspace) = fixture();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: new_id("op"),
+            principal: "admin".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: "save".into(),
+            request_digest: None,
+        })
+        .unwrap();
+    let id = engine.list_tree(&workspace.branch_id).unwrap()[0]
+        .version_id
+        .clone();
+    let reads = Arc::clone(&engine.reads);
+    let full = engine.open_content(&id).unwrap();
+    let plan = engine.prepare_content(&id).unwrap();
+    assert_eq!(reads.lock().unwrap()[&id], 2);
+    let range = plan.open().unwrap();
+    assert_eq!(reads.lock().unwrap()[&id], 2);
+    let checksums = engine.prepare_content(&id).unwrap();
+    assert_eq!(reads.lock().unwrap()[&id], 3);
+    assert!(!checksums.checksums().unwrap().is_empty());
+    assert_eq!(reads.lock().unwrap()[&id], 2);
+    drop(engine);
+    drop(full);
+    assert_eq!(reads.lock().unwrap()[&id], 1);
+    drop(range);
+    assert!(reads.lock().unwrap().is_empty());
+}
+
+#[test]
+fn workspace_read_leases_release_cancelled_and_opened_plans_independently() {
+    let (_temp, engine, workspace) = fixture();
+    let staged = engine.workspace(&workspace.workspace_id).unwrap();
+    let item = staged.files.keys().next().unwrap();
+    let plan = engine
+        .prepare_workspace_content(&workspace.workspace_id, item, "admin")
+        .unwrap();
+    let cancelled = engine
+        .prepare_workspace_content(&workspace.workspace_id, item, "admin")
+        .unwrap();
+    let key = plan.0.lease.version.clone();
+    assert_eq!(engine.reads.lock().unwrap()[&key], 2);
+    drop(cancelled);
+    let opened = plan.open().unwrap();
+    assert_eq!(engine.reads.lock().unwrap()[&key], 1);
+    drop(opened);
+    assert!(engine.reads.lock().unwrap().is_empty());
+    assert_eq!(
+        engine
+            .prepare_workspace_content(&workspace.workspace_id, item, "other")
+            .err()
+            .unwrap()
+            .code(),
+        storage_contract::ErrorCode::PermissionDenied
+    );
+    assert!(engine.reads.lock().unwrap().is_empty());
+}
+
+#[test]
+#[should_panic(expected = "invariant: every read lease has a registered count")]
+fn read_lease_drop_exposes_missing_registration() {
+    let (_temp, engine, workspace) = fixture();
+    let staged = engine.workspace(&workspace.workspace_id).unwrap();
+    let item = staged.files.keys().next().unwrap();
+    let plan = engine
+        .prepare_workspace_content(&workspace.workspace_id, item, "admin")
+        .unwrap();
+    engine.reads.lock().unwrap().remove(&plan.0.lease.version);
+    drop(plan);
+}
+
+#[test]
+#[should_panic(expected = "invariant: a live read lease has a positive count")]
+fn read_lease_drop_exposes_zero_registration() {
+    let (_temp, engine, workspace) = fixture();
+    let staged = engine.workspace(&workspace.workspace_id).unwrap();
+    let item = staged.files.keys().next().unwrap();
+    let plan = engine
+        .prepare_workspace_content(&workspace.workspace_id, item, "admin")
+        .unwrap();
+    *engine
+        .reads
+        .lock()
+        .unwrap()
+        .get_mut(&plan.0.lease.version)
+        .unwrap() = 0;
+    drop(plan);
+}
