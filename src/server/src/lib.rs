@@ -992,7 +992,7 @@ read_handler!(
 );
 id_post_handler!(
     query_directory_branch_scopes,
-    crate::BackendAction::DirectoryBranchScopes,
+    crate::BackendAction::DirectoryBranchSelection,
     "repository_id"
 );
 post_handler!(create_repository, crate::BackendAction::CreateRepository);

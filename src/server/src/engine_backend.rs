@@ -363,34 +363,34 @@ impl Backend for EngineBackend {
                     "directory_branch_id":selected,"name":name,"directory_branches":branches}),
                 )
             }
+            crate::BackendAction::DirectoryBranchSelection => {
+                file_manager::query_directory_branch_scopes(&engine, &input)
+            }
             crate::BackendAction::DirectoryBranchScopes => {
-                if input.get("query").is_none() {
-                    file_manager::query_directory_branch_scopes(&engine, &input)
-                } else {
-                    let query = &input["query"];
-                    keys(query, &["path", "summary"])?;
-                    let path = query
-                        .get("path")
-                        .map(|path| {
-                            path.as_str()
-                                .ok_or_else(|| ApiError::invalid("path must be a string"))
-                        })
-                        .transpose()?;
-                    match query.get("summary") {
-                        Some(Value::String(summary)) if summary == "true" => {
-                            file_manager::directory_branch_summaries(
-                                &engine,
-                                field(&input, "repository_id")?,
-                                path,
-                            )
-                        }
-                        None => file_manager::directory_branch_scopes(
+                let empty_query = json!({});
+                let query = input.get("query").unwrap_or(&empty_query);
+                keys(query, &["path", "summary"])?;
+                let path = query
+                    .get("path")
+                    .map(|path| {
+                        path.as_str()
+                            .ok_or_else(|| ApiError::invalid("path must be a string"))
+                    })
+                    .transpose()?;
+                match query.get("summary") {
+                    Some(Value::String(summary)) if summary == "true" => {
+                        file_manager::directory_branch_summaries(
                             &engine,
                             field(&input, "repository_id")?,
                             path,
-                        ),
-                        _ => Err(ApiError::invalid("summary must be true when supplied")),
+                        )
                     }
+                    None => file_manager::directory_branch_scopes(
+                        &engine,
+                        field(&input, "repository_id")?,
+                        path,
+                    ),
+                    _ => Err(ApiError::invalid("summary must be true when supplied")),
                 }
             }
             crate::BackendAction::InitializeDirectoryScope => {
@@ -1201,3 +1201,7 @@ mod readiness_tests;
 #[cfg(test)]
 #[path = "../../../test/server/unit/engine_backend/revocation_tests.rs"]
 mod revocation_tests;
+
+#[cfg(test)]
+#[path = "../../../test/server/unit/engine_backend/scope_dispatch_tests.rs"]
+mod scope_dispatch_tests;

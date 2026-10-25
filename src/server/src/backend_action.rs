@@ -34,6 +34,7 @@ actions! {
     CreateWorkspace => "create_workspace",
     DefaultBranch => "default_branch",
     DirectoryBranchScopes => "directory_branch_scopes",
+    DirectoryBranchSelection => "directory_branch_selection",
     Disks => "disks",
     Events => "events",
     FileManagerBackupConfiguration => "file_manager_backup_configuration",

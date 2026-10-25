@@ -31,6 +31,9 @@ impl Backend for TestBackend {
             | crate::BackendAction::UploadAuthorize
             | crate::BackendAction::WorkspaceAuthorize
             | crate::BackendAction::CreateRepository => Ok(json!({"accepted":true})),
+            BackendAction::DirectoryBranchScopes | BackendAction::DirectoryBranchSelection => {
+                Ok(json!({"action":action.as_str()}))
+            }
             _ => Err(ApiError::unsupported()),
         }
     }
@@ -807,4 +810,56 @@ async fn workspace_capacity_requires_authentication_and_preserves_unsupported_ba
         app.oneshot(request).await.unwrap().status(),
         StatusCode::UNAUTHORIZED
     );
+}
+
+#[tokio::test]
+async fn directory_scope_routes_select_distinct_actions_and_preserve_csrf() {
+    let root = private_tempdir();
+    let app = application(root.path());
+    let (_, csrf, cookie) = authenticated(&app).await;
+    let uri = "/api/repositories/repo/directory-branches";
+    for (method, expected) in [
+        ("GET", BackendAction::DirectoryBranchScopes),
+        ("POST", BackendAction::DirectoryBranchSelection),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header(header::COOKIE, &cookie)
+                    .header(header::HOST, "127.0.0.1:7400")
+                    .header(header::ORIGIN, "http://127.0.0.1:7400")
+                    .header("x-csrf-token", &csrf)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = json_codec::from_slice(
+            &http_routing::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["action"], expected.as_str());
+    }
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::COOKIE, cookie)
+                .header(header::HOST, "127.0.0.1:7400")
+                .header(header::ORIGIN, "http://127.0.0.1:7400")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
