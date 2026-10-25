@@ -316,3 +316,108 @@ fn workspace_capture_matches_path_lookup_for_bootstrap_and_inherited_contexts() 
         );
     }
 }
+
+#[test]
+fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
+    for inherited in [false, true] {
+        let (_temporary, mut engine, repo) = fixture();
+        if inherited {
+            engine
+                .create_directory_branches(
+                    &repo.repository_id,
+                    "Folder",
+                    "draft",
+                    "admin",
+                    &new_id("op"),
+                )
+                .unwrap();
+            engine
+                .select_directory_branches(
+                    &repo.repository_id,
+                    "Folder",
+                    "draft",
+                    "admin",
+                    &new_id("op"),
+                )
+                .unwrap();
+        }
+        let workspace = engine
+            .create_workspace(&repo.main_branch_id, "admin")
+            .unwrap();
+        for operation in [
+            NamespaceOperation {
+                kind: "rename".into(),
+                path: "FOLDER".into(),
+                destination: Some("Moved".into()),
+            },
+            NamespaceOperation {
+                kind: "delete".into(),
+                path: "Folderish/file.txt".into(),
+                destination: None,
+            },
+        ] {
+            engine
+                .namespace_operation(&workspace.workspace_id, operation)
+                .unwrap();
+        }
+        let before = canonical_json(engine.state()).unwrap();
+        let source = &engine.state().commits[&workspace.base_head];
+        let plan = engine
+            .plan_workspace_commit_inner(
+                CommitRequest {
+                    workspace_id: workspace.workspace_id,
+                    operation_id: new_id("op"),
+                    principal: "admin".into(),
+                    expected_head: workspace.base_head.clone(),
+                    fencing_token: workspace.fencing_token,
+                    message: "plan ordered namespace changes".into(),
+                    request_digest: None,
+                },
+                None,
+            )
+            .unwrap();
+        let MutationPlan::Prepared { next, result, .. } = plan.mutation else {
+            panic!("new namespace operation must produce a candidate");
+        };
+        if !inherited {
+            assert!(
+                next.commits.len() > engine.state().commits.len() + 1,
+                "directory preparation must insert commits before the final namespace commit"
+            );
+        }
+        assert!(std::ptr::eq(&next.commits[&workspace.base_head], source));
+        let committed = &next.commits[result.commit_id.as_ref().unwrap()];
+        assert_eq!(committed.parent_commit_ids, [workspace.base_head]);
+        assert_eq!(
+            committed
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["Folderish", "Moved", "Moved/Child", "Moved/Child/file.txt"]
+        );
+        let moved = find(&committed.entries, "Moved/Child/file.txt").unwrap();
+        let original = find(&source.entries, "Folder/Child/file.txt").unwrap();
+        if inherited {
+            assert!(source.pending_file_versions.contains_key(&original.file_id));
+        }
+        assert_eq!(moved.entry_id, original.entry_id);
+        assert_eq!(moved.file_id, original.file_id);
+        assert_eq!(moved.version_id, original.version_id);
+        assert_eq!(
+            committed.pending_file_versions,
+            source
+                .pending_file_versions
+                .iter()
+                .filter(|(file, _)| **file == original.file_id)
+                .map(|(file, version)| (file.clone(), version.clone()))
+                .collect()
+        );
+        let deleted = &committed.namespace_deletions.as_ref().unwrap().paths;
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0].path, "Folderish/file.txt");
+        assert_eq!(canonical_json(engine.state()).unwrap(), before);
+        drop(next);
+        assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    }
+}

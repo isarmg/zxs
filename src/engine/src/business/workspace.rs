@@ -1164,7 +1164,11 @@ impl Engine {
                 if branch.state != "active" {
                     return Err(Error::new("BRANCH_ARCHIVED", "branch is not writable"));
                 }
-                let current = state.commits.get(&branch.head_commit_id).cloned()
+                // Freeze the source records without copying the current Commit.
+                // Helpers may insert candidate commits before namespace replay;
+                // the draft below still owns its one mutable entries copy.
+                let source_commits = state.commits.clone();
+                let current = source_commits.get(&branch.head_commit_id)
                     .ok_or_else(|| Error::new("STATE_INVALID", "branch HEAD missing"))?;
                 let base = state.commits.get(&w.base_head)
                     .ok_or_else(|| Error::new("STATE_INVALID", "workspace base missing"))?;
@@ -1269,7 +1273,7 @@ impl Engine {
                 state.commits.insert(commit_id.clone(), Commit {
                     namespace_deletions: namespace::deletion_record(deleted, now()),
                     commit_id: commit_id.clone(), history_tree_id: branch.history_tree_id.clone(),
-                    kind: "content".into(), parent_commit_ids: vec![current.commit_id],
+                    kind: "content".into(), parent_commit_ids: vec![current.commit_id.clone()],
                     tree_id: new_id("tree"), sequence: state.sequence, operation_id: request.operation_id.clone(),
                     author: request.principal.clone(), message: request.message.clone(), entries, pending_file_versions: snapshot_pending, provenance: None,
                 });
