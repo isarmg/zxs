@@ -3,6 +3,7 @@ use crate::business::{validate_branch_name, validate_entries};
 use crate::{Error, ErrorCode, Result};
 use data_serialization::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use storage_contract::NamespaceEntryKind;
 use storage_contract::{
     Branch, Commit, ContentState, DirectoryBranch, DirectoryTree, Entry, FileBranchMerge,
     FileContext, FileMetadataNode, FilePathNode, FileVersion, HistoryBoundary, HistoryTree,
@@ -79,18 +80,18 @@ pub struct HistoryManifest {
 impl HistoryManifest {
     fn validate_entry_envelope(entry: &Entry) -> Result<()> {
         validate_id(&entry.entry_id, "entry")?;
-        match entry.kind.as_str() {
-            "file" => {
+        match entry.kind {
+            NamespaceEntryKind::File => {
                 validate_id(&entry.file_id, "file")?;
                 validate_id(&entry.version_id, "ver")?;
             }
-            "directory"
-                if entry.file_id.is_empty() && entry.version_id.is_empty() && entry.size == 0 => {}
-            _ => {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::HistoryPackageInvalid,
-                    "namespace entry kind or directory payload is invalid",
-                ));
+            NamespaceEntryKind::Directory => {
+                if !entry.file_id.is_empty() || !entry.version_id.is_empty() || entry.size != 0 {
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::HistoryPackageInvalid,
+                        "namespace directory payload is invalid",
+                    ));
+                }
             }
         }
         Ok(())
@@ -122,7 +123,7 @@ impl HistoryManifest {
                 commit
                     .entries
                     .iter()
-                    .filter(|entry| entry.kind == "directory")
+                    .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
                     .map(|entry| entry.entry_id.as_str())
             })
             .chain(std::iter::once(repository_id.as_str()))
@@ -366,7 +367,7 @@ impl HistoryManifest {
             name_policy::validate_path(&branch.path)?;
             validate_id(&branch.directory_id, "entry")?;
             if !commit.entries.iter().any(|entry| {
-                entry.kind == "directory"
+                entry.kind == NamespaceEntryKind::Directory
                     && entry.entry_id == branch.directory_id
                     && entry.lookup_key == scope_key
             }) {
@@ -393,15 +394,15 @@ impl HistoryManifest {
                 ));
             }
             if let Some(previous) = entries.insert(entry.entry_id.as_str(), entry)
-                && (entry.kind != "file"
-                    || previous.kind != "file"
+                && (entry.kind != NamespaceEntryKind::File
+                    || previous.kind != NamespaceEntryKind::File
                     || previous.file_id != entry.file_id)
             {
                 return Err(invalid(
                     "directory composition entry identity is reused by different entities",
                 ));
             }
-            if entry.kind == "file" {
+            if entry.kind == NamespaceEntryKind::File {
                 let version = self
                     .versions
                     .get(&entry.version_id)
@@ -435,7 +436,7 @@ impl HistoryManifest {
         let file_entries = branch
             .entries
             .iter()
-            .filter(|entry| entry.kind == "file")
+            .filter(|entry| entry.kind == NamespaceEntryKind::File)
             .collect::<Vec<_>>();
         if branch.file_contexts.len() != file_entries.len() {
             return Err(invalid("directory path context coverage differs"));
@@ -472,11 +473,9 @@ impl HistoryManifest {
                 .directory_branches
                 .get(&tree.directory_branch_id)
                 .ok_or_else(|| invalid("directory composition child tree owner is missing"))?;
-            if !branch
-                .entries
-                .iter()
-                .any(|entry| entry.kind == "directory" && &entry.entry_id == directory)
-                || selected.directory_id != *directory
+            if !branch.entries.iter().any(|entry| {
+                entry.kind == NamespaceEntryKind::Directory && &entry.entry_id == directory
+            }) || selected.directory_id != *directory
                 || owner.directory_id != *directory
                 || selected.repository_id != branch.repository_id
                 || owner.repository_id != branch.repository_id
@@ -898,7 +897,7 @@ impl HistoryManifest {
             }
             for entry in &commit.entries {
                 Self::validate_entry_envelope(entry)?;
-                if entry.kind != "file" {
+                if entry.kind != NamespaceEntryKind::File {
                     continue;
                 }
                 let version = self
@@ -919,7 +918,7 @@ impl HistoryManifest {
                 if version.file_id != *file
                     || version.history_tree_id != *history
                     || !commit.entries.iter().any(|entry| {
-                        entry.kind == "file"
+                        entry.kind == NamespaceEntryKind::File
                             && entry.file_id == *file
                             && entry.version_id == *source
                     })
@@ -951,11 +950,16 @@ impl HistoryManifest {
             if let Some(file) = branch.file_id.as_deref() {
                 let head = &self.commits[&branch.head_commit_id];
                 if branch.branch_kind != "file"
-                    || head.entries.iter().filter(|e| e.kind == "file").count() != 1
+                    || head
+                        .entries
+                        .iter()
+                        .filter(|e| e.kind == NamespaceEntryKind::File)
+                        .count()
+                        != 1
                     || !head
                         .entries
                         .iter()
-                        .any(|e| e.kind == "file" && e.file_id == file)
+                        .any(|e| e.kind == NamespaceEntryKind::File && e.file_id == file)
                 {
                     return Err(invalid("file branch head escapes its stable file identity"));
                 }
@@ -966,7 +970,10 @@ impl HistoryManifest {
                     || !self.commits[&branch.head_commit_id]
                         .entries
                         .iter()
-                        .any(|entry| entry.kind == "file" && entry.version_id == body.version_id)
+                        .any(|entry| {
+                            entry.kind == NamespaceEntryKind::File
+                                && entry.version_id == body.version_id
+                        })
                 {
                     return Err(invalid("file branch node differs from its HEAD content"));
                 }
@@ -985,7 +992,7 @@ impl HistoryManifest {
                         .entries
                         .iter()
                         .any(|entry| {
-                            entry.kind == "file"
+                            entry.kind == NamespaceEntryKind::File
                                 && entry.file_id == *file
                                 && entry.version_id == *source
                         })
@@ -1189,7 +1196,7 @@ impl HistoryManifest {
                 commit
                     .entries
                     .iter()
-                    .filter(|entry| entry.kind == "directory")
+                    .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
                     .map(|entry| entry.entry_id.as_str())
             })
             .collect::<BTreeSet<_>>();
@@ -1228,7 +1235,7 @@ impl HistoryManifest {
             let entry = live
                 .entries
                 .iter()
-                .find(|entry| entry.kind == "file" && entry.lookup_key == path)
+                .find(|entry| entry.kind == NamespaceEntryKind::File && entry.lookup_key == path)
                 .ok_or_else(|| invalid("current file path context has no namespace entry"))?;
             self.validate_file_context(context, &entry.file_id, &entry.version_id)?;
         }
@@ -1410,7 +1417,10 @@ impl HistoryManifest {
                             .commits
                             .values()
                             .flat_map(|commit| &commit.entries)
-                            .any(|entry| entry.kind == "directory" && entry.entry_id == *directory)
+                            .any(|entry| {
+                                entry.kind == NamespaceEntryKind::Directory
+                                    && entry.entry_id == *directory
+                            })
                 })
             {
                 return Err(invalid("backup policy scope or count differs"));

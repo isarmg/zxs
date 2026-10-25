@@ -34,13 +34,13 @@ fn take_work() -> Work {
     WORK.with(|work| work.replace(Work::default()))
 }
 
-fn entry(path: &str, kind: &str) -> Entry {
+fn entry(path: &str, kind: NamespaceEntryKind) -> Entry {
     Entry {
         entry_id: format!("entry:{path}"),
         path: path.into(),
         name: path.rsplit('/').next().unwrap().into(),
         lookup_key: name_policy::path_key(path),
-        kind: kind.into(),
+        kind,
         file_id: format!("file:{path}"),
         version_id: format!("version:{path}"),
         size: 0,
@@ -59,13 +59,13 @@ fn legacy_lookup<'a>(entries: &'a [Entry], path: &str, visits: &mut usize) -> Op
 #[test]
 fn canonical_lookup_matches_legacy_unicode_case_aliases_and_absence() {
     let mut entries = vec![
-        entry("Straße", "directory"),
-        entry("Straße/Café.txt", "file"),
-        entry("Σ", "directory"),
-        entry("Σ/内容.txt", "file"),
-        entry("Ａ.txt", "file"),
-        entry("A.txt", "file"),
-        entry("𐐀.txt", "file"),
+        entry("Straße", NamespaceEntryKind::Directory),
+        entry("Straße/Café.txt", NamespaceEntryKind::File),
+        entry("Σ", NamespaceEntryKind::Directory),
+        entry("Σ/内容.txt", NamespaceEntryKind::File),
+        entry("Ａ.txt", NamespaceEntryKind::File),
+        entry("A.txt", NamespaceEntryKind::File),
+        entry("𐐀.txt", NamespaceEntryKind::File),
     ];
     let mut alias = entries[1].clone();
     relocate_entry(&mut alias, "Alias.txt".into()).unwrap();
@@ -105,7 +105,7 @@ fn canonical_lookup_matches_legacy_unicode_case_aliases_and_absence() {
 fn lookup_work_is_logarithmic_and_only_normalizes_the_query() {
     for count in [1_000usize, 10_000, 100_000] {
         let entries = (0..count)
-            .map(|index| entry(&format!("file-{index:06}"), "file"))
+            .map(|index| entry(&format!("file-{index:06}"), NamespaceEntryKind::File))
             .collect::<Vec<_>>();
         take_work();
         let tree = NamespaceTree::from_published_entries(&entries);
@@ -142,7 +142,7 @@ fn lookup_work_is_logarithmic_and_only_normalizes_the_query() {
 
 #[test]
 fn temporary_appends_and_renames_stay_unordered_until_validation() {
-    let mut entries = vec![entry("Z", "directory")];
+    let mut entries = vec![entry("Z", NamespaceEntryKind::Directory)];
     ensure_parents(&mut entries, "A/B/file.txt").unwrap();
     assert_eq!(
         entries

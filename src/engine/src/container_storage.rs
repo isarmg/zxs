@@ -481,7 +481,7 @@ pub(crate) fn capture_names(state: &mut State) {
         .filter_map(|repository| branches.get(&repository.main_branch_id))
         .filter_map(|branch| commits.get(&branch.head_commit_id))
         .flat_map(|commit| &commit.entries)
-        .filter(|entry| entry.kind == "file");
+        .filter(|entry| entry.kind == NamespaceEntryKind::File);
     for entry in entries {
         if !file_names.contains_key(&entry.file_id) {
             file_names.insert(entry.file_id.clone(), entry.name.clone());

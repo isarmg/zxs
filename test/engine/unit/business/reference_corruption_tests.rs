@@ -35,7 +35,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry, String) {
     let entry = engine.state.commits[&engine.state.branches[&repo.main_branch_id].head_commit_id]
         .entries
         .iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap()
         .clone();
     let branch = engine

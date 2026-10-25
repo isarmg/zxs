@@ -401,7 +401,7 @@ impl Engine {
                 if branch
                     .entries
                     .iter()
-                    .any(|entry| entry.kind == "file" && entry.version_id == *id)
+                    .any(|entry| entry.kind == NamespaceEntryKind::File && entry.version_id == *id)
                 {
                     return Err(Error::new(
                         storage_contract::ErrorCode::ContentPinned,
@@ -590,7 +590,7 @@ impl Engine {
                     .collect::<Result<Vec<_>>>()?;
                 commits.sort_by_key(|c| c.sequence);
                 let selected_versions = commits.iter().flat_map(|c| &c.entries)
-                    .filter(|e| e.kind == "file").map(|e| e.version_id.clone())
+                    .filter(|e| e.kind == NamespaceEntryKind::File).map(|e| e.version_id.clone())
                     .collect::<BTreeSet<_>>();
                 let reads = engine.reads.lock().expect("invariant: read lease lock poisoned");
                 if selected_versions.iter().any(|id| reads.get(id).copied().unwrap_or(0) != 0) {
@@ -605,7 +605,7 @@ impl Engine {
                 let entry_map = commits.iter().flat_map(|c| &c.entries)
                     .map(|e| e.entry_id.clone()).collect::<BTreeSet<_>>().into_iter()
                     .map(|id| (id, new_id("entry"))).collect::<BTreeMap<_,_>>();
-                let file_map = commits.iter().flat_map(|c| &c.entries).filter(|e| e.kind == "file")
+                let file_map = commits.iter().flat_map(|c| &c.entries).filter(|e| e.kind == NamespaceEntryKind::File)
                     .map(|e| e.file_id.clone()).collect::<BTreeSet<_>>().into_iter()
                     .map(|id| (id, new_id("file"))).collect::<BTreeMap<_,_>>();
                 let source_branches = state.branches.iter().filter(|(_, branch)| branch.history_tree_id == history)
@@ -651,7 +651,7 @@ impl Engine {
                 }
                 let mut version_map = BTreeMap::new();
                 for c in &commits {
-                    for entry in c.entries.iter().filter(|e| e.kind == "file") {
+                    for entry in c.entries.iter().filter(|e| e.kind == NamespaceEntryKind::File) {
                         let old = state.versions.get(&entry.version_id)
                             .filter(|version| version.version_id == entry.version_id
                                 && version.file_id == entry.file_id && version.history_tree_id == history)
@@ -705,7 +705,7 @@ impl Engine {
                     new.provenance = Some(commit.commit_id.clone());
                     for entry in &mut new.entries {
                         entry.entry_id = entry_map[&entry.entry_id].clone();
-                        if entry.kind == "file" {
+                        if entry.kind == NamespaceEntryKind::File {
                             entry.file_id = file_map[&entry.file_id].clone();
                             entry.version_id = version_map[&entry.version_id].clone();
                         }
@@ -851,7 +851,7 @@ impl Engine {
                 let source_directories = state.commits.values()
                     .filter(|commit| commit.history_tree_id == history)
                     .flat_map(|commit| commit.entries.iter())
-                    .filter(|entry| entry.kind == "directory")
+                    .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
                     .map(|entry| entry.entry_id.as_str())
                     .collect::<BTreeSet<_>>();
                 for policy in state.protection_policies.values_mut()

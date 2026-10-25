@@ -457,9 +457,19 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
         "registration does not create or copy a content version"
     );
     let snapshot = engine.list_tree(&branch_id).unwrap();
-    assert_eq!(snapshot.iter().filter(|e| e.kind == "file").count(), 1);
     assert_eq!(
-        snapshot.iter().find(|e| e.kind == "file").unwrap().file_id,
+        snapshot
+            .iter()
+            .filter(|e| e.kind == NamespaceEntryKind::File)
+            .count(),
+        1
+    );
+    assert_eq!(
+        snapshot
+            .iter()
+            .find(|e| e.kind == NamespaceEntryKind::File)
+            .unwrap()
+            .file_id,
         one.file_id
     );
     let scope = engine.create_workspace(&branch_id, "admin").unwrap();
@@ -585,7 +595,7 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
                 .list_tree(&branch_id)
                 .unwrap()
                 .iter()
-                .find(|e| e.kind == "file")
+                .find(|e| e.kind == NamespaceEntryKind::File)
                 .unwrap()
                 .version_id
         ),
@@ -641,7 +651,7 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
                 .list_tree(&branch_id)
                 .unwrap()
                 .iter()
-                .find(|e| e.kind == "file")
+                .find(|e| e.kind == NamespaceEntryKind::File)
                 .unwrap()
                 .version_id
         ),
@@ -768,8 +778,17 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
     for branch in created.result["branches"].as_array().unwrap() {
         let id = branch["branch_id"].as_str().unwrap();
         let files = engine.list_tree(id).unwrap();
-        assert_eq!(files.iter().filter(|e| e.kind == "file").count(), 1);
-        let file = files.iter().find(|e| e.kind == "file").unwrap();
+        assert_eq!(
+            files
+                .iter()
+                .filter(|e| e.kind == NamespaceEntryKind::File)
+                .count(),
+            1
+        );
+        let file = files
+            .iter()
+            .find(|e| e.kind == NamespaceEntryKind::File)
+            .unwrap();
         save(
             &mut engine,
             id,
@@ -793,7 +812,7 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
     assert_eq!(bytes(&engine, &outside.version_id), b"C unchanged");
     for file in tree
         .iter()
-        .filter(|e| e.kind == "file" && e.path.starts_with("inside/"))
+        .filter(|e| e.kind == NamespaceEntryKind::File && e.path.starts_with("inside/"))
     {
         assert_eq!(
             bytes(&engine, &file.version_id),
@@ -953,7 +972,7 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
             .list_tree(&repo.main_branch_id)
             .unwrap()
             .iter()
-            .filter(|entry| entry.kind == "file")
+            .filter(|entry| entry.kind == NamespaceEntryKind::File)
             .all(|entry| !entry.version_id.is_empty()
                 && engine.state().versions.contains_key(&entry.version_id))
     );
@@ -969,7 +988,7 @@ fn full_versions_independent_rebuild_and_offline_export() {
         .list_tree(&r.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|e| e.kind == "file")
+        .find(|e| e.kind == NamespaceEntryKind::File)
         .unwrap();
     save(
         &mut e,
@@ -981,7 +1000,7 @@ fn full_versions_independent_rebuild_and_offline_export() {
         .list_tree(&r.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|e| e.kind == "file")
+        .find(|e| e.kind == NamespaceEntryKind::File)
         .unwrap();
     assert_ne!(first.version_id, second.version_id);
     assert_eq!(bytes(&e, &first.version_id), b"first");
@@ -1567,7 +1586,7 @@ fn mkdir_and_child_upload_publish_together_and_cancellation_never_undoes_executi
         .list_tree(&r.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|e| e.kind == "file")
+        .find(|e| e.kind == NamespaceEntryKind::File)
         .unwrap()
         .version_id;
     save(&mut e, &r.main_branch_id, "文档/说明.txt", b"second");
@@ -1661,7 +1680,7 @@ fn conditional_directory_policies_change_only_future_placements() {
         .list_tree(&r.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|f| f.kind == "file")
+        .find(|f| f.kind == NamespaceEntryKind::File)
         .unwrap()
         .version_id;
     let policy = new_id("policy");
@@ -1754,7 +1773,7 @@ fn conditional_directory_policies_change_only_future_placements() {
         .list_tree(&r.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|f| f.kind == "file")
+        .find(|f| f.kind == NamespaceEntryKind::File)
         .unwrap()
         .version_id;
     assert_eq!(
@@ -2394,7 +2413,7 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .filter(|entry| entry.kind == "file")
+        .filter(|entry| entry.kind == NamespaceEntryKind::File)
         .map(|entry| (entry.path.clone(), entry))
         .collect::<std::collections::BTreeMap<_, _>>();
     let before = engine.state().versions.len();
@@ -2430,7 +2449,7 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .iter()
-        .filter(|entry| entry.kind == "file")
+        .filter(|entry| entry.kind == NamespaceEntryKind::File)
     {
         assert_eq!(entry.version_id, parents[&entry.path].version_id);
         assert_eq!(
@@ -2463,7 +2482,7 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
             .list_tree(&repo.main_branch_id)
             .unwrap()
             .iter()
-            .filter(|entry| entry.kind == "file")
+            .filter(|entry| entry.kind == NamespaceEntryKind::File)
         {
             if entry.path == "folder/a.txt" {
                 assert_ne!(entry.version_id, parents[&entry.path].version_id);

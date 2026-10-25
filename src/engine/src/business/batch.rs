@@ -47,7 +47,10 @@ fn active_scopes(
         } else {
             current
                 .iter()
-                .find(|entry| entry.kind == "directory" && entry.entry_id == branch.directory_id)
+                .find(|entry| {
+                    entry.kind == NamespaceEntryKind::Directory
+                        && entry.entry_id == branch.directory_id
+                })
                 .map(|entry| entry.lookup_key.clone())
                 .ok_or_else(|| {
                     Error::new(
@@ -82,12 +85,12 @@ fn remove(branch: &mut DirectoryBranch, source: &Entry) {
         .entries
         .retain(|e| e.lookup_key != *key && !namespace::is_descendant(&e.lookup_key, key));
     for e in removed {
-        if e.kind == "file" {
+        if e.kind == NamespaceEntryKind::File {
             branch.file_contexts.remove(&e.lookup_key);
             if let Some(remaining) = branch
                 .entries
                 .iter()
-                .find(|entry| entry.kind == "file" && entry.file_id == e.file_id)
+                .find(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == e.file_id)
             {
                 if let Some(context) = branch.file_contexts.get(&remaining.lookup_key) {
                     branch
@@ -125,7 +128,10 @@ fn relocate(entry: &Entry, source: &str, target: &str) -> Entry {
 }
 fn validate_identities(entries: &[Entry]) -> Result<()> {
     let mut dirs = BTreeSet::new();
-    for e in entries.iter().filter(|e| e.kind == "directory") {
+    for e in entries
+        .iter()
+        .filter(|e| e.kind == NamespaceEntryKind::Directory)
+    {
         if !dirs.insert(&e.entry_id) {
             return Err(Error::new(
                 storage_contract::ErrorCode::BatchScopeConflict,
@@ -188,7 +194,7 @@ fn save_inactive(
         base.entries
             .iter()
             .filter(|e| {
-                e.kind == "directory"
+                e.kind == NamespaceEntryKind::Directory
                     && (e.lookup_key == key || namespace::is_descendant(&key, &e.lookup_key))
             })
             .cloned(),
@@ -407,7 +413,7 @@ fn apply(
                 {
                     deleted.push((
                         source_scope.directory_branch_id.clone(),
-                        namespace::deleted_path(entry)?,
+                        namespace::deleted_path(entry),
                     ));
                 }
             }
@@ -439,7 +445,7 @@ fn apply(
                 "rename preserves its directory branch; use move for transfer",
             ));
         }
-        if source.kind == "directory"
+        if source.kind == NamespaceEntryKind::Directory
             && namespace::is_descendant(&name_policy::path_key(&target.path), &source.lookup_key)
         {
             return Err(Error::new(
@@ -473,7 +479,8 @@ fn apply(
         // A destination must have a real parent after all sources are removed.
         if let Some((parent, _)) = target.path.rsplit_once('/')
             && name_policy::path_key(parent) != name_policy::path_key(&target_scope.path)
-            && !namespace::find_unordered(entries, parent).is_some_and(|e| e.kind == "directory")
+            && !namespace::find_unordered(entries, parent)
+                .is_some_and(|e| e.kind == NamespaceEntryKind::Directory)
         {
             return Err(Error::new(
                 storage_contract::ErrorCode::DirectoryNotFound,
@@ -579,7 +586,7 @@ fn apply(
                 target_draft.directory_id.clone()
             };
             if request.kind == "copy" {
-                if moved.kind == "directory" {
+                if moved.kind == NamespaceEntryKind::Directory {
                     let key = (
                         member.entry_id.clone(),
                         parent_id.clone(),
@@ -683,7 +690,7 @@ fn apply(
                         .entry(moved.file_id.clone())
                         .or_insert_with(|| moved.name.clone());
                 }
-            } else if moved.kind == "file" {
+            } else if moved.kind == NamespaceEntryKind::File {
                 let context = file_context(source_scope, &member)?;
                 let context = if member.path != moved.path {
                     file_paths::rename_node(
@@ -724,7 +731,7 @@ fn apply(
                     &source.path,
                     &target.path,
                     &request.kind,
-                    source.kind == "directory",
+                    source.kind == NamespaceEntryKind::Directory,
                 );
                 // set_namespace_location above inserts this exact file identity.
                 let canonical = state.file_locations[&moved.file_id].clone();
@@ -779,7 +786,9 @@ fn apply(
         } else {
             entries
                 .iter()
-                .find(|e| e.kind == "directory" && e.entry_id == draft.directory_id)
+                .find(|e| {
+                    e.kind == NamespaceEntryKind::Directory && e.entry_id == draft.directory_id
+                })
                 .map(|e| e.path.clone())
                 .ok_or_else(|| {
                     Error::new(
@@ -797,14 +806,14 @@ fn apply(
             .collect::<Vec<_>>();
         entries.retain(|e| !key.is_empty() && !namespace::is_descendant(&e.lookup_key, &key));
         for e in &removed {
-            if e.kind == "file" {
+            if e.kind == NamespaceEntryKind::File {
                 state
                     .file_contexts
                     .remove(&directory::context_key(repository, &e.path));
             }
         }
         for e in removed {
-            if e.kind == "file" {
+            if e.kind == NamespaceEntryKind::File {
                 state.file_selections.remove(&e.file_id);
                 state.file_write_origins.remove(&e.file_id);
             }
@@ -814,7 +823,11 @@ fn apply(
             &draft.path,
             &path,
         )?);
-        for e in draft.entries.iter().filter(|e| e.kind == "file") {
+        for e in draft
+            .entries
+            .iter()
+            .filter(|e| e.kind == NamespaceEntryKind::File)
+        {
             let context = file_context(draft, e)?;
             let restored = directory::rebase_entries(std::slice::from_ref(e), &draft.path, &path)?;
             state.file_contexts.insert(
@@ -922,7 +935,7 @@ fn ensure_parents_for_scope(
             .entries
             .iter()
             .filter(|e| {
-                e.kind == "directory"
+                e.kind == NamespaceEntryKind::Directory
                     && (e.lookup_key == key || namespace::is_descendant(&key, &e.lookup_key))
             })
             .cloned(),

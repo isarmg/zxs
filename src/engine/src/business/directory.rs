@@ -60,7 +60,8 @@ pub(crate) fn context_at(state: &State, repository: &str, path: &str) -> Option<
     let commit = state
         .commits
         .get(&state.branches.get(&repo.main_branch_id)?.head_commit_id)?;
-    let entry = find_unordered(&commit.entries, path).filter(|e| e.kind == "file")?;
+    let entry =
+        find_unordered(&commit.entries, path).filter(|e| e.kind == NamespaceEntryKind::File)?;
     Some(context_for_entry(state, repo, entry))
 }
 
@@ -129,7 +130,7 @@ pub(crate) fn scope(
         commit
             .entries
             .iter()
-            .find(|e| e.kind == "directory" && e.lookup_key == key)
+            .find(|e| e.kind == NamespaceEntryKind::Directory && e.lookup_key == key)
             .ok_or_else(|| {
                 Error::new(
                     storage_contract::ErrorCode::DirectoryNotFound,
@@ -198,7 +199,7 @@ fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
         current
             .entries
             .iter()
-            .find(|entry| entry.lookup_key == key && entry.kind == "directory")
+            .find(|entry| entry.lookup_key == key && entry.kind == NamespaceEntryKind::Directory)
             .ok_or_else(|| {
                 Error::new(
                     storage_contract::ErrorCode::DirectoryNotFound,
@@ -209,7 +210,10 @@ fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
             .as_str()
     };
     let mut files = BTreeMap::new();
-    for e in entries.iter().filter(|e| e.kind == "file") {
+    for e in entries
+        .iter()
+        .filter(|e| e.kind == NamespaceEntryKind::File)
+    {
         files.insert(
             e.file_id.clone(),
             file::ensure_shared_file_branch(state, &current, e)?,
@@ -217,7 +221,7 @@ fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
     }
     let file_contexts = entries
         .iter()
-        .filter(|e| e.kind == "file")
+        .filter(|e| e.kind == NamespaceEntryKind::File)
         .map(|e| {
             let branch_id =
                 required(files.get(&e.file_id), "snapshot file branch missing")?.clone();
@@ -240,7 +244,10 @@ fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
         .map(|(id, origin)| (id.clone(), origin.clone()))
         .collect();
     let mut directory_refs = BTreeMap::new();
-    for entry in entries.iter().filter(|e| e.kind == "directory") {
+    for entry in entries
+        .iter()
+        .filter(|e| e.kind == NamespaceEntryKind::Directory)
+    {
         if state.directory_selections.contains_key(&entry.entry_id) {
             let (branch, tree) = selected_tree(state, &entry.entry_id)?;
             directory_refs.insert(
@@ -349,7 +356,7 @@ fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
 pub(crate) fn snapshot_pending(state: &State, entries: &[Entry]) -> BTreeMap<String, String> {
     entries
         .iter()
-        .filter(|e| e.kind == "file")
+        .filter(|e| e.kind == NamespaceEntryKind::File)
         .filter_map(|e| {
             let context = state
                 .repositories
@@ -454,7 +461,10 @@ pub(crate) fn prepare_renamed_directories(
 ) -> Result<Vec<String>> {
     let mut renamed = Vec::new();
     let mut old_paths = Vec::new();
-    for dir in before.iter().filter(|entry| entry.kind == "directory") {
+    for dir in before
+        .iter()
+        .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
+    {
         let mut path = dir.path.clone();
         for change in changes.iter().filter(|change| change.kind == "rename") {
             if let Some(destination) = &change.destination
@@ -536,14 +546,14 @@ pub(crate) fn namespace_locations(
     }
     let original_contexts = before
         .iter()
-        .filter(|e| e.kind == "file")
+        .filter(|e| e.kind == NamespaceEntryKind::File)
         .filter_map(|e| {
             context_at(state, repository, &e.path).map(|c| (context_key(repository, &e.path), c))
         })
         .collect::<BTreeMap<_, _>>();
     let mut physical_outcomes = BTreeMap::<String, String>::new();
     let mut contexts = BTreeMap::new();
-    for old in before.iter().filter(|e| e.kind == "file") {
+    for old in before.iter().filter(|e| e.kind == NamespaceEntryKind::File) {
         // Replay each entry's path independently. Looking only at the first
         // rename loses chained moves; matching by file ID alone confuses aliases.
         let mut moved = old.clone();
@@ -590,7 +600,9 @@ pub(crate) fn namespace_locations(
         }
         if !deleted
             && let Some(current) = after_by_path.get(moved.lookup_key.as_str()).filter(|e| {
-                e.kind == "file" && e.entry_id == old.entry_id && e.file_id == old.file_id
+                e.kind == NamespaceEntryKind::File
+                    && e.entry_id == old.entry_id
+                    && e.file_id == old.file_id
             })
         {
             let context = original_contexts
@@ -634,7 +646,7 @@ pub(crate) fn namespace_locations(
     }
     // Remove old keys together before installing new keys, so a path swap
     // cannot erase the context already installed for the other file.
-    for old in before.iter().filter(|e| e.kind == "file") {
+    for old in before.iter().filter(|e| e.kind == NamespaceEntryKind::File) {
         state
             .file_contexts
             .remove(&context_key(repository, &old.path));
@@ -642,12 +654,12 @@ pub(crate) fn namespace_locations(
     state.file_contexts.extend(contexts);
     let live = after
         .iter()
-        .filter(|e| e.kind == "file")
+        .filter(|e| e.kind == NamespaceEntryKind::File)
         .map(|e| e.file_id.as_str())
         .collect::<BTreeSet<_>>();
     for old in before
         .iter()
-        .filter(|e| e.kind == "file" && !live.contains(e.file_id.as_str()))
+        .filter(|e| e.kind == NamespaceEntryKind::File && !live.contains(e.file_id.as_str()))
     {
         state.file_selections.remove(&old.file_id);
         state.file_write_origins.remove(&old.file_id);
@@ -703,7 +715,7 @@ pub(crate) fn prepare_file_write(
     )?
     .entries
     .iter()
-    .find(|e| e.lookup_key == key && e.kind == "file")
+    .find(|e| e.lookup_key == key && e.kind == NamespaceEntryKind::File)
     .cloned()
     .ok_or_else(|| {
         Error::new(
@@ -907,7 +919,9 @@ pub(crate) fn select_change(
         previous
             .entries
             .iter()
-            .find(|e| e.entry_id == selected.directory_id && e.kind == "directory")
+            .find(|e| {
+                e.entry_id == selected.directory_id && e.kind == NamespaceEntryKind::Directory
+            })
             .ok_or_else(|| {
                 Error::new(
                     storage_contract::ErrorCode::DirectoryNotFound,
@@ -923,7 +937,7 @@ pub(crate) fn select_change(
         .entries
         .iter()
         .zip(&restored)
-        .filter(|(_, e)| e.kind == "file")
+        .filter(|(_, e)| e.kind == NamespaceEntryKind::File)
         .map(|(old, e)| {
             let context = frozen_context(&selected.file_contexts, &selected.file_branches, old)?;
             Ok((context_key(repository, &e.path), context))
@@ -966,7 +980,10 @@ pub(crate) fn select_change(
     entries.extend(restored);
     validate_entries(&mut entries, max_entries)?;
 
-    for e in old_entries.iter().filter(|e| e.kind == "file") {
+    for e in old_entries
+        .iter()
+        .filter(|e| e.kind == NamespaceEntryKind::File)
+    {
         state
             .file_contexts
             .remove(&context_key(repository, &e.path));
@@ -974,14 +991,17 @@ pub(crate) fn select_change(
     state.file_contexts.extend(selected_contexts);
     let old_ids = old_entries
         .iter()
-        .filter(|e| e.kind == "directory")
+        .filter(|e| e.kind == NamespaceEntryKind::Directory)
         .map(|e| e.entry_id.clone())
         .collect::<Vec<_>>();
     for id in old_ids {
         state.directory_selections.remove(&id);
         state.directory_tree_selections.remove(&id);
     }
-    for e in old_entries.iter().filter(|e| e.kind == "file") {
+    for e in old_entries
+        .iter()
+        .filter(|e| e.kind == NamespaceEntryKind::File)
+    {
         state.file_write_origins.remove(&e.file_id);
         state.file_selections.remove(&e.file_id);
     }
@@ -1081,7 +1101,7 @@ impl Engine {
             return Some(std::borrow::Cow::Borrowed(context));
         }
         let repo = self.state.repositories.get(repository)?;
-        (entry.kind == "file")
+        (entry.kind == NamespaceEntryKind::File)
             .then(|| std::borrow::Cow::Owned(context_for_entry(&self.state, repo, entry)))
     }
     /// Explicitly initialize a directory's first composition identity.
@@ -1159,7 +1179,11 @@ impl Engine {
                     .collect();
                 let mut file_contexts = BTreeMap::new();
                 let mut files = Vec::new();
-                for entry in tree.entries.iter().filter(|e| e.kind == "file") {
+                for entry in tree
+                    .entries
+                    .iter()
+                    .filter(|e| e.kind == NamespaceEntryKind::File)
+                {
                     let mut context =
                         frozen_context(&tree.file_contexts, &tree.file_branches, entry)?;
                     context.selection_generation = 0;

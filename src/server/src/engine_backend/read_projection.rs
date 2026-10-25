@@ -159,8 +159,10 @@ impl SmbDirectory {
         } else {
             name_policy::validate_path(path).map_err(ApiError::invalid_source)?;
             let directory = tree.get_key(&key);
-            if directory.is_none_or(|entry| entry.kind != "directory" || entry.entry_id != entry_id)
-            {
+            if directory.is_none_or(|entry| {
+                entry.kind != storage_contract::NamespaceEntryKind::Directory
+                    || entry.entry_id != entry_id
+            }) {
                 return Err(ApiError::new(
                     ::http::StatusCode::CONFLICT,
                     storage_contract::ErrorCode::SmbRebindRequired,

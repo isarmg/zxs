@@ -42,7 +42,7 @@ fn file(engine: &Engine, branch: &str) -> Entry {
         .list_tree(branch)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap()
 }
 
@@ -88,7 +88,7 @@ fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
         changed
             .entries
             .iter_mut()
-            .find(|entry| entry.kind == "file")
+            .find(|entry| entry.kind == NamespaceEntryKind::File)
             .unwrap()
             .version_id = new_id("ver");
         std::sync::Arc::make_mut(&mut engine.state)

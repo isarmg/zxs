@@ -920,7 +920,13 @@ fn different_files_publish_concurrently_and_reopen_workspace_after_unrelated_sav
     one.dirty(first.handle).unwrap();
     one.flush(first.handle).unwrap();
     let entries = one.entries().unwrap();
-    assert_eq!(entries.iter().filter(|e| e.kind == "file").count(), 2);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|e| e.kind == storage_contract::NamespaceEntryKind::File)
+            .count(),
+        2
+    );
     let other = entries.iter().find(|e| e.path == "other.txt").unwrap();
     let content = one
         .shared

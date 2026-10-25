@@ -61,7 +61,7 @@ pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError>
         if !within.is_empty()
             && !namespace
                 .get_key(&within_key)
-                .is_some_and(|entry| entry.kind == "directory")
+                .is_some_and(|entry| entry.kind == storage_contract::NamespaceEntryKind::Directory)
         {
             return Err(ApiError::new(
                 ::http::StatusCode::NOT_FOUND,
@@ -97,7 +97,7 @@ pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError>
             let Some(relative) = entry.lookup_key.strip_prefix(&prefix) else {
                 continue;
             };
-            if entry.kind == "file" {
+            if entry.kind == storage_contract::NamespaceEntryKind::File {
                 directory_file_count += 1;
             }
             if relative.contains('/') {
@@ -110,7 +110,7 @@ pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError>
             };
             page.consider(
                 SortKey::new(
-                    entry.kind == "directory",
+                    entry.kind == storage_contract::NamespaceEntryKind::Directory,
                     &entry.name,
                     &display,
                     &entry.entry_id,
@@ -165,7 +165,7 @@ pub(super) fn branch_summary(branch: &storage_contract::DirectoryBranch, current
         "directory_id":branch.directory_id,"name":branch.name,"parent_branch_id":branch.parent_branch_id,
         "head_tree_id":branch.head_tree_id,"commit_id":branch.commit_id,"path":branch.path,
         "materialized":branch.materialized,"current":current,"sequence":branch.sequence.to_string(),
-        "file_count":branch.entries.iter().filter(|entry|entry.kind=="file").count().to_string()})
+        "file_count":branch.entries.iter().filter(|entry|entry.kind == storage_contract::NamespaceEntryKind::File).count().to_string()})
 }
 #[cfg(test)]
 #[path = "../../../../../test/server/unit/engine_backend/file_manager/listing_tests.rs"]

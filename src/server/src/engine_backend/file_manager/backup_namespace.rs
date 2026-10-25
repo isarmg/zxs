@@ -223,7 +223,8 @@ pub(super) fn entries(
             .iter()
             .enumerate()
             .filter(|(_, entry)| {
-                entry.kind == "file" && latest.contains_key(entry.file_id.as_str())
+                entry.kind == storage_contract::NamespaceEntryKind::File
+                    && latest.contains_key(entry.file_id.as_str())
             })
         {
             let owner = engine

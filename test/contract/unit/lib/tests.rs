@@ -185,3 +185,90 @@ fn content_state_rejects_unknown_tokens_and_non_string_representations() {
         );
     }
 }
+
+#[test]
+fn namespace_entry_kind_preserves_canonical_entries_and_hashes() {
+    for (kind, token, hash) in [
+        (
+            NamespaceEntryKind::File,
+            "file",
+            "7080d878b8aef06b7ab33ad6236896e7b8e53625065cfd6814abdb9f743701a1",
+        ),
+        (
+            NamespaceEntryKind::Directory,
+            "directory",
+            "b9e1e328754d8ef1fe06f1bfddde0d8e93f890ace1774ff9c2066219495a44c9",
+        ),
+    ] {
+        let expected = format!(
+            r#"{{"entry_id":"entry","file_id":"","kind":"{token}","lookup_key":"a","name":"a","path":"a","size":"0","version_id":""}}"#
+        );
+        let entry = Entry {
+            entry_id: "entry".into(),
+            path: "a".into(),
+            name: "a".into(),
+            lookup_key: "a".into(),
+            kind,
+            file_id: String::new(),
+            version_id: String::new(),
+            size: 0,
+        };
+        assert_eq!(canonical_json(&entry).unwrap(), expected.as_bytes());
+        assert_eq!(decode_strict::<Entry>(expected.as_bytes()).unwrap(), entry);
+        assert_eq!(
+            json_codec::from_reader::<_, Entry>(std::io::Cursor::new(expected.as_bytes())).unwrap(),
+            entry
+        );
+        assert_eq!(object_hash("state-page", &entry).unwrap(), hash);
+        let legacy: json_codec::Value = json_codec::from_str(&expected).unwrap();
+        for domain in ["state-page", "history-manifest"] {
+            assert_eq!(
+                object_hash(domain, &entry).unwrap(),
+                object_hash(domain, &legacy).unwrap()
+            );
+        }
+        let deletion = DeletedPath {
+            path: "a".into(),
+            kind,
+        };
+        assert_eq!(
+            canonical_json(&deletion).unwrap(),
+            format!(r#"{{"kind":"{token}","path":"a"}}"#).as_bytes()
+        );
+    }
+}
+
+#[test]
+fn namespace_entry_kind_rejects_invalid_raw_kinds_at_decode_boundary() {
+    for raw in [
+        r#""FILE""#,
+        r#""unknown""#,
+        r#""""#,
+        "null",
+        "0",
+        "true",
+        r#"{"file":null}"#,
+        r#"{"directory":null}"#,
+        r#"["file"]"#,
+    ] {
+        let value: json_codec::Value = json_codec::from_str(raw).unwrap();
+        assert!(
+            json_codec::from_value::<NamespaceEntryKind>(value.clone()).is_err(),
+            "{raw}"
+        );
+        let entry = json_codec::json!({"entry_id":"entry","file_id":"","kind":value,"lookup_key":"a","name":"a","path":"a","size":"0","version_id":""});
+        let bytes = canonical_json(&entry).unwrap();
+        assert!(decode_strict::<Entry>(&bytes).is_err(), "{raw}");
+        assert!(
+            json_codec::from_reader::<_, Entry>(std::io::Cursor::new(&bytes)).is_err(),
+            "{raw}"
+        );
+        assert!(
+            decode_strict::<DeletedPath>(
+                &canonical_json(&json_codec::json!({"path":"a","kind":value})).unwrap()
+            )
+            .is_err(),
+            "{raw}"
+        );
+    }
+}

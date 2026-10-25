@@ -41,7 +41,7 @@ pub(crate) fn advance_branch_node(
     let mut found = false;
     for entry in entries
         .iter_mut()
-        .filter(|entry| entry.kind == "file" && entry.file_id == file)
+        .filter(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file)
     {
         entry.version_id = version.clone();
         entry.size = body.logical_size;
@@ -175,7 +175,7 @@ impl Publication<'_> {
         for entry in tree
             .entries
             .iter_mut()
-            .filter(|entry| entry.kind == "file" && entry.file_id == self.file)
+            .filter(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == self.file)
         {
             let mut context = tree
                 .file_contexts
@@ -213,7 +213,7 @@ impl Publication<'_> {
             if let Some(entry) = tree
                 .entries
                 .iter()
-                .find(|entry| entry.kind == "file" && entry.file_id == self.file)
+                .find(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == self.file)
                 && let Some(context) = tree.file_contexts.get(&entry.lookup_key)
             {
                 tree.file_branches
@@ -242,7 +242,7 @@ impl Publication<'_> {
                     .entries
                     .iter()
                     .filter(|entry| {
-                        entry.kind == "directory"
+                        entry.kind == NamespaceEntryKind::Directory
                             && (entry.lookup_key == key
                                 || namespace::is_descendant(&key, &entry.lookup_key))
                     })
@@ -252,7 +252,7 @@ impl Publication<'_> {
             let id = new_id("commit");
             let pending = full
                 .iter()
-                .filter(|entry| entry.kind == "file")
+                .filter(|entry| entry.kind == NamespaceEntryKind::File)
                 .filter_map(|entry| {
                     let context = tree.file_contexts.get(&entry.lookup_key)?;
                     (context.inherited_from.is_some()
@@ -425,7 +425,7 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
     let mut changed_paths = Vec::new();
     for entry in entries
         .iter_mut()
-        .filter(|entry| entry.kind == "file" && entry.file_id == file)
+        .filter(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file)
     {
         let Some(mut context) = directory::context_at(state, &repo.repository_id, &entry.path)
         else {

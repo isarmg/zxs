@@ -104,7 +104,7 @@ fn split_rejects_broken_persisted_identities_without_partial_migration() {
                 let version = engine.state.commits[&cut]
                     .entries
                     .iter()
-                    .find(|entry| entry.kind == "file")
+                    .find(|entry| entry.kind == NamespaceEntryKind::File)
                     .unwrap()
                     .version_id
                     .clone();
@@ -122,7 +122,7 @@ fn split_rejects_broken_persisted_identities_without_partial_migration() {
                 let version = engine.state.commits[&cut]
                     .entries
                     .iter()
-                    .find(|entry| entry.kind == "file")
+                    .find(|entry| entry.kind == NamespaceEntryKind::File)
                     .unwrap()
                     .version_id
                     .clone();
@@ -132,7 +132,7 @@ fn split_rejects_broken_persisted_identities_without_partial_migration() {
                     .unwrap()
                     .entries
                     .iter_mut()
-                    .find(|entry| entry.kind == "file")
+                    .find(|entry| entry.kind == NamespaceEntryKind::File)
                     .unwrap();
                 entry.version_id = version;
                 entry.file_id = "missing".into();

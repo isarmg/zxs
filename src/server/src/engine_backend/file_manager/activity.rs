@@ -146,10 +146,10 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
                 .pending_file_versions
                 .get(&entry.file_id)
                 .or_else(|| pending_creation.then_some(&entry.version_id));
-            if pending_creation && entry.kind != "file" {
+            if pending_creation && entry.kind != storage_contract::NamespaceEntryKind::File {
                 continue;
             }
-            if !(pending_creation && entry.kind == "file")
+            if !(pending_creation && entry.kind == storage_contract::NamespaceEntryKind::File)
                 && parent.is_some_and(|p| {
                     p.entries.iter().any(|old| {
                         old.entry_id == entry.entry_id
@@ -168,7 +168,7 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
                 format!("{}/{}", repo.name, entry.path)
             };
             let mut event = json!({"timestamp":timestamp,"slot_id":repo.primary_slot_id,"path":display,"action":action,"principal":commit.author,"version_id":entry.version_id,"file_id":entry.file_id,"message":commit.message});
-            if entry.kind == "file" {
+            if entry.kind == storage_contract::NamespaceEntryKind::File {
                 event.as_object_mut().unwrap().extend(
                     content_wire(
                         engine,

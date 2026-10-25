@@ -34,8 +34,8 @@ fn file_snapshot(entries: &[Entry], file: &Entry) -> Vec<Entry> {
     entries
         .iter()
         .filter(|entry| {
-            (entry.kind == "file" && entry.lookup_key == file.lookup_key)
-                || (entry.kind == "directory"
+            (entry.kind == NamespaceEntryKind::File && entry.lookup_key == file.lookup_key)
+                || (entry.kind == NamespaceEntryKind::Directory
                     && super::namespace::is_descendant(&file.lookup_key, &entry.lookup_key))
         })
         .cloned()
@@ -58,7 +58,7 @@ pub(crate) fn synchronize_directory_edits(
     for file in current
         .entries
         .iter()
-        .filter(|e| e.kind == "file" && written_paths.contains(&e.path))
+        .filter(|e| e.kind == NamespaceEntryKind::File && written_paths.contains(&e.path))
     {
         let Some(repo) = state
             .repositories
@@ -236,7 +236,7 @@ pub(crate) fn publish_selected_file_at(
             current
                 .entries
                 .iter()
-                .find(|e| e.file_id == file_id && e.kind == "file")
+                .find(|e| e.file_id == file_id && e.kind == NamespaceEntryKind::File)
                 .map(|e| e.path.clone())
         })
         .ok_or_else(|| {
@@ -254,7 +254,9 @@ pub(crate) fn publish_selected_file_at(
         && context.as_ref().and_then(|c| c.node_id.as_ref()) == branch.file_node_id.as_ref()
         && already_selected
         && current.entries.iter().any(|e| {
-            e.kind == "file" && e.lookup_key == selected_key && e.version_id == source.version_id
+            e.kind == NamespaceEntryKind::File
+                && e.lookup_key == selected_key
+                && e.version_id == source.version_id
         })
     {
         return Ok(current.commit_id);
@@ -262,7 +264,11 @@ pub(crate) fn publish_selected_file_at(
     let mut entries = current.entries.clone();
     let target = entries
         .iter_mut()
-        .find(|e| e.file_id == file_id && e.lookup_key == selected_key && e.kind == "file")
+        .find(|e| {
+            e.file_id == file_id
+                && e.lookup_key == selected_key
+                && e.kind == NamespaceEntryKind::File
+        })
         .ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::FileNotFound,
@@ -484,7 +490,7 @@ pub(crate) fn create_file_branch_change(
     let original = current
         .entries
         .iter()
-        .find(|e| e.file_id == file_id && e.kind == "file")
+        .find(|e| e.file_id == file_id && e.kind == NamespaceEntryKind::File)
         .cloned()
         .ok_or_else(|| {
             Error::new(
@@ -631,10 +637,10 @@ impl Engine {
             validate_entries(&mut entries,engine.config.max_entries)?;
             let renamed_directories=directory::prepare_renamed_directories(state,repository,&previous.entries,std::slice::from_ref(&change))?;
             super::directory::namespace_locations(state,repository,&previous.entries,&entries,std::slice::from_ref(&change),principal,operation)?;
-            let pending_file_versions=previous.pending_file_versions.iter().filter(|(file,_)|entries.iter().any(|entry|entry.kind=="file"&&entry.file_id==file.as_str())).map(|(file,source)|(file.clone(),source.clone())).collect();
+            let pending_file_versions=previous.pending_file_versions.iter().filter(|(file,_)|entries.iter().any(|entry|entry.kind == NamespaceEntryKind::File&&entry.file_id==file.as_str())).map(|(file,source)|(file.clone(),source.clone())).collect();
             let id=new_id("commit");
             state.commits.insert(id.clone(),Commit{ namespace_deletions: namespace::deletion_record(deleted, now()),commit_id:id.clone(),history_tree_id:branch.history_tree_id.clone(),kind:"namespace".into(),parent_commit_ids:vec![previous.commit_id],tree_id:new_id("tree"),sequence:state.sequence,operation_id:operation.into(),author:principal.into(),message:format!("{} {}",change.kind,change.path),entries,pending_file_versions,provenance:None});
-            let live_files=state.commits[&id].entries.iter().filter(|entry|entry.kind=="file").map(|entry|entry.file_id.clone()).collect::<std::collections::BTreeSet<_>>();
+            let live_files=state.commits[&id].entries.iter().filter(|entry|entry.kind == NamespaceEntryKind::File).map(|entry|entry.file_id.clone()).collect::<std::collections::BTreeSet<_>>();
             let branch=state.branches.get_mut(&repo.main_branch_id).expect("checked");branch.head_commit_id=id.clone();branch.generation = branch.generation.checked_add(1).ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "branch generation exhausted"))?;
             branch.pending_file_versions.retain(|file,_|live_files.contains(file));
             let mut changed_paths=vec![change.path.clone()];
@@ -694,7 +700,7 @@ impl Engine {
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "repository main branch missing"))?;
                 let current = state.commits.get(&main.head_commit_id)
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "repository head missing"))?;
-                if !find_unordered(&current.entries, path).is_some_and(|e| e.kind == "file" && e.file_id == file_id) {
+                if !find_unordered(&current.entries, path).is_some_and(|e| e.kind == NamespaceEntryKind::File && e.file_id == file_id) {
                     return Err(Error::new(storage_contract::ErrorCode::FileNotFound, "file/path identity differs"));
                 }
                 let branch = state.branches.get(branch_id).cloned()
@@ -706,7 +712,7 @@ impl Engine {
                 }
                 let selected = state.commits.get(&branch.head_commit_id)
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "file branch head missing"))?
-                    .entries.iter().find(|e| e.kind == "file" && e.file_id == file_id)
+                    .entries.iter().find(|e| e.kind == NamespaceEntryKind::File && e.file_id == file_id)
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "file branch entry missing"))?;
                 // Pending branches retain frozen references rather than requiring
                 // a fresh content replica for their metadata-only selection.
@@ -738,7 +744,7 @@ impl Engine {
                 engine.repository_for_history(&branch.history_tree_id)?;
                 let selected = state.commits.get(&branch.head_commit_id)
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "file branch head missing"))?
-                    .entries.iter().find(|e| e.kind == "file" && e.file_id == file_id)
+                    .entries.iter().find(|e| e.kind == NamespaceEntryKind::File && e.file_id == file_id)
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "file branch entry missing"))?;
                 if !branch.pending_file_versions.contains_key(file_id) {
                     engine.valid_replica(&selected.version_id)?;

@@ -202,7 +202,7 @@ fn disk_root_uses_one_explicit_primary_on_short_and_complete_routes() {
             .list_tree(&repo.main_branch_id)
             .unwrap()
             .into_iter()
-            .find(|entry| entry.kind == "file")
+            .find(|entry| entry.kind == NamespaceEntryKind::File)
             .unwrap();
         let placement = &engine.state().placements[&entry.version_id];
         assert_eq!(placement.target_copies, 1);

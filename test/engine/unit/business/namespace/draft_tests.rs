@@ -1,18 +1,18 @@
 use super::*;
 
-fn entry(path: &str, kind: &str) -> Entry {
+fn entry(path: &str, kind: NamespaceEntryKind) -> Entry {
     Entry {
         entry_id: format!("entry:{path}"),
         path: path.into(),
         name: path.rsplit('/').next().unwrap().into(),
         lookup_key: name_policy::path_key(path),
-        kind: kind.into(),
-        file_id: if kind == "file" {
+        kind,
+        file_id: if kind == NamespaceEntryKind::File {
             format!("file:{path}")
         } else {
             String::new()
         },
-        version_id: if kind == "file" {
+        version_id: if kind == NamespaceEntryKind::File {
             format!("version:{path}")
         } else {
             String::new()
@@ -23,15 +23,15 @@ fn entry(path: &str, kind: &str) -> Entry {
 
 #[test]
 fn unsorted_sources_and_replacements_preserve_legacy_order_and_aliases() {
-    let mut alias = entry("Alias.txt", "file");
-    let source = entry("Straße.txt", "file");
+    let mut alias = entry("Alias.txt", NamespaceEntryKind::File);
+    let source = entry("Straße.txt", NamespaceEntryKind::File);
     alias.file_id = source.file_id.clone();
     alias.version_id = source.version_id.clone();
     let original = vec![
-        entry("Z.txt", "file"),
+        entry("Z.txt", NamespaceEntryKind::File),
         source,
         alias,
-        entry("A.txt", "file"),
+        entry("A.txt", NamespaceEntryKind::File),
     ];
     let mut legacy = original.clone();
     let mut draft = NamespaceDraft::new(original.clone()).unwrap();
@@ -52,11 +52,14 @@ fn unsorted_sources_and_replacements_preserve_legacy_order_and_aliases() {
 
 #[test]
 fn lookup_accepts_equivalent_queries_without_weakening_source_validation() {
-    let original = vec![entry("Café", "directory"), entry("Café/Straße.txt", "file")];
+    let original = vec![
+        entry("Café", NamespaceEntryKind::Directory),
+        entry("Café/Straße.txt", NamespaceEntryKind::File),
+    ];
     let mut draft = NamespaceDraft::new(original.clone()).unwrap();
     assert_eq!(draft.get("Cafe\u{301}/STRASSE.TXT"), Some(&original[1]));
     assert!(draft.get("absent").is_none());
-    let invalid = entry("Cafe\u{301}/new.txt", "file");
+    let invalid = entry("Cafe\u{301}/new.txt", NamespaceEntryKind::File);
     assert_eq!(
         draft.replace(invalid).unwrap_err().code(),
         storage_contract::ErrorCode::StateInvalid
@@ -66,7 +69,10 @@ fn lookup_accepts_equivalent_queries_without_weakening_source_validation() {
 
 #[test]
 fn shared_parent_creation_matches_legacy_order_and_preserves_existing_identity() {
-    let source = vec![entry("Z.txt", "file"), entry("Existing", "directory")];
+    let source = vec![
+        entry("Z.txt", NamespaceEntryKind::File),
+        entry("Existing", NamespaceEntryKind::Directory),
+    ];
     let mut legacy = source.clone();
     let mut draft = NamespaceDraft::new(source).unwrap();
     for path in [
@@ -76,7 +82,7 @@ fn shared_parent_creation_matches_legacy_order_and_preserves_existing_identity()
     ] {
         super::super::ensure_parents(&mut legacy, path).unwrap();
         draft.ensure_parents(path).unwrap();
-        let file = entry(path, "file");
+        let file = entry(path, NamespaceEntryKind::File);
         legacy.retain(|previous| previous.lookup_key != file.lookup_key);
         legacy.push(file.clone());
         draft.replace(file).unwrap();
@@ -85,7 +91,7 @@ fn shared_parent_creation_matches_legacy_order_and_preserves_existing_identity()
     // Newly materialized parent identities are independently random; all other
     // fields and the pre-existing parent identity must match exactly.
     for (actual, expected) in actual.iter_mut().zip(&legacy) {
-        if actual.kind == "directory" && actual.path != "Existing" {
+        if actual.kind == NamespaceEntryKind::Directory && actual.path != "Existing" {
             actual.entry_id = expected.entry_id.clone();
         }
     }
@@ -95,7 +101,7 @@ fn shared_parent_creation_matches_legacy_order_and_preserves_existing_identity()
 
 #[test]
 fn parent_file_errors_do_not_replace_or_drop_the_existing_entry() {
-    let original = vec![entry("File", "file")];
+    let original = vec![entry("File", NamespaceEntryKind::File)];
     let mut draft = NamespaceDraft::new(original.clone()).unwrap();
     assert_eq!(
         draft.ensure_parents("file/child").unwrap_err().code(),
@@ -106,22 +112,25 @@ fn parent_file_errors_do_not_replace_or_drop_the_existing_entry() {
 
 #[test]
 fn malformed_sources_are_rejected_not_normalized_or_deduplicated() {
-    let valid = entry("Straße.txt", "file");
+    let valid = entry("Straße.txt", NamespaceEntryKind::File);
     let mut wrong_key = valid.clone();
     wrong_key.lookup_key = "unrelated".into();
     let mut wrong_name = valid.clone();
     wrong_name.name = "other.txt".into();
-    let mut wrong_kind = valid.clone();
-    wrong_kind.kind = "unknown".into();
     for source in [
         vec![valid.clone(), valid.clone()],
-        vec![valid.clone(), entry("STRASSE.TXT", "file")],
+        vec![
+            valid.clone(),
+            entry("STRASSE.TXT", NamespaceEntryKind::File),
+        ],
         vec![wrong_key],
         vec![wrong_name],
-        vec![wrong_kind],
-        vec![entry("Cafe\u{301}.txt", "file")],
-        vec![entry("missing/child", "file")],
-        vec![entry("parent", "file"), entry("parent/child", "file")],
+        vec![entry("Cafe\u{301}.txt", NamespaceEntryKind::File)],
+        vec![entry("missing/child", NamespaceEntryKind::File)],
+        vec![
+            entry("parent", NamespaceEntryKind::File),
+            entry("parent/child", NamespaceEntryKind::File),
+        ],
     ] {
         let error = match NamespaceDraft::new(source) {
             Ok(_) => panic!("malformed source was accepted"),
@@ -134,9 +143,9 @@ fn malformed_sources_are_rejected_not_normalized_or_deduplicated() {
 #[test]
 fn flattened_draft_keeps_namespace_operations_and_deletion_order_unchanged() {
     let source = vec![
-        entry("Folder", "directory"),
-        entry("Folder/z", "file"),
-        entry("Folder/a", "file"),
+        entry("Folder", NamespaceEntryKind::Directory),
+        entry("Folder/z", NamespaceEntryKind::File),
+        entry("Folder/a", NamespaceEntryKind::File),
     ];
     let mut legacy = source.clone();
     let mut draft = NamespaceDraft::new(source.clone()).unwrap();
@@ -172,7 +181,7 @@ fn thousand_to_hundred_thousand_replacements_have_linear_draft_work() {
     for count in [1_000, 10_000, 100_000] {
         let entries = (0..count)
             .rev()
-            .map(|i| entry(&format!("file-{i:06}"), "file"))
+            .map(|i| entry(&format!("file-{i:06}"), NamespaceEntryKind::File))
             .collect();
         let mut draft = NamespaceDraft::new(entries).unwrap();
         let work = draft.work.clone();
@@ -215,7 +224,9 @@ fn hundred_thousand_shared_parent_writes_do_not_rescan_siblings() {
         let path = format!("Parent/Shared/file-{i:06}");
         assert!(draft.get(&path).is_none());
         draft.ensure_parents(&path).unwrap();
-        draft.replace(entry(&path, "file")).unwrap();
+        draft
+            .replace(entry(&path, NamespaceEntryKind::File))
+            .unwrap();
     }
     let entries = draft.into_entries();
     assert_eq!(entries.len(), count + 2);

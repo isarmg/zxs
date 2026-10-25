@@ -179,7 +179,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
         path: "renamed.txt".into(),
         name: "renamed.txt".into(),
         lookup_key: "renamed.txt".into(),
-        kind: "file".into(),
+        kind: NamespaceEntryKind::File,
         file_id: old_entry.file_id.clone(),
         version_id: version.version_id.clone(),
         size: version.logical_size,

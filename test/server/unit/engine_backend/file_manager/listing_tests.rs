@@ -26,7 +26,7 @@ fn one_branch_summary_does_not_serialize_its_growing_entry_graph() {
                         path: path.clone(),
                         name,
                         lookup_key: path,
-                        kind: "file".into(),
+                        kind: storage_contract::NamespaceEntryKind::File,
                         file_id: format!("file-{index:06}"),
                         version_id: "version-fixture".into(),
                         size: 1024,

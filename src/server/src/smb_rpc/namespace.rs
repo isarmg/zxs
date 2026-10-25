@@ -143,7 +143,7 @@ impl Session {
             };
             let nonempty = |entry: &Entry| {
                 let prefix = format!("{}/", entry.lookup_key);
-                entry.kind == "directory"
+                entry.kind == storage_contract::NamespaceEntryKind::Directory
                     && entries
                         .iter()
                         .any(|child| child.lookup_key.starts_with(&prefix))
@@ -156,14 +156,16 @@ impl Session {
                         "remove target missing",
                     )
                 })?;
-                if kind == "unlink" && entry.kind == "directory" {
+                if kind == "unlink" && entry.kind == storage_contract::NamespaceEntryKind::Directory
+                {
                     return Err(ApiError::new(
                         ::http::StatusCode::CONFLICT,
                         storage_contract::ErrorCode::IsDirectory,
                         "unlink cannot remove a directory",
                     ));
                 }
-                if kind == "rmdir" && entry.kind != "directory" {
+                if kind == "rmdir" && entry.kind != storage_contract::NamespaceEntryKind::Directory
+                {
                     return Err(ApiError::new(
                         ::http::StatusCode::CONFLICT,
                         storage_contract::ErrorCode::NotDirectory,

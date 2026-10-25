@@ -374,19 +374,44 @@ pub struct Entry {
     pub path: String,
     pub name: String,
     pub lookup_key: String,
-    pub kind: String,
+    pub kind: NamespaceEntryKind,
     pub file_id: String,
     pub version_id: String,
     #[serialization(with = "crate::u64_string")]
     pub size: u64,
 }
-/// A logical deletion has no content identity or payload-retention dependency.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serialization(rename_all = "snake_case")]
 pub enum NamespaceEntryKind {
     File,
     Directory,
 }
+impl<'de> Deserialize<'de> for NamespaceEntryKind {
+    fn deserialize<D: data_serialization::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Self, D::Error> {
+        // Stored kinds are strings; a derived enum also accepts {"file": null}.
+        struct KindVisitor;
+        impl data_serialization::de::Visitor<'_> for KindVisitor {
+            type Value = NamespaceEntryKind;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("file or directory as a string")
+            }
+            fn visit_str<E: data_serialization::de::Error>(
+                self,
+                token: &str,
+            ) -> Result<Self::Value, E> {
+                match token {
+                    "file" => Ok(NamespaceEntryKind::File),
+                    "directory" => Ok(NamespaceEntryKind::Directory),
+                    _ => Err(E::unknown_variant(token, &["file", "directory"])),
+                }
+            }
+        }
+        deserializer.deserialize_str(KindVisitor)
+    }
+}
+/// A logical deletion has no content identity or payload-retention dependency.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serialization(deny_unknown_fields)]
 pub struct DeletedPath {

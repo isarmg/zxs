@@ -44,7 +44,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
         .unwrap();
     engine
         .file_namespace(

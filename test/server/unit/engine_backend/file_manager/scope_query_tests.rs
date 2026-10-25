@@ -5,7 +5,7 @@ fn entry(id: &str, path: &str) -> storage_contract::Entry {
         path: path.into(),
         name: path.rsplit('/').next().unwrap().into(),
         lookup_key: name_policy::path_key(path),
-        kind: "file".into(),
+        kind: storage_contract::NamespaceEntryKind::File,
         file_id: "file".into(),
         version_id: "version".into(),
         size: 1,

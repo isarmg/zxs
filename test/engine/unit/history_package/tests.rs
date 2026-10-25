@@ -16,7 +16,7 @@ fn retained_policy_manifests_require_bindings_and_unique_current_scopes() {
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     let configured = engine
         .configure_backups(BackupConfigurationRequest {
@@ -159,7 +159,7 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
             .list_tree(&repo.main_branch_id)
             .unwrap()
             .into_iter()
-            .find(|entry| entry.kind == "file")
+            .find(|entry| entry.kind == NamespaceEntryKind::File)
             .unwrap();
         assert_eq!(
             restored.state.file_backup_paths[&file.file_id]["B01"],
@@ -870,7 +870,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     let proof = canonical_json(&engine.state.versions[&old.version_id]).unwrap();
     let inode = fs::metadata(engine.valid_replica(&old.version_id).unwrap().0)
@@ -946,7 +946,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     assert_eq!(
         engine.state.file_node_parents[&latest.version_id],
@@ -1643,7 +1643,11 @@ fn split_package_restores_full_history_after_all_original_paths_are_removed() {
     assert_eq!(graph.commits.len(), 2);
     let mut contents = Vec::new();
     for commit in &graph.commits {
-        for entry in commit.entries.iter().filter(|e| e.kind == "file") {
+        for entry in commit
+            .entries
+            .iter()
+            .filter(|e| e.kind == NamespaceEntryKind::File)
+        {
             let mut content = restored.open_content(&entry.version_id).unwrap();
             let mut bytes = Vec::new();
             content.file.read_to_end(&mut bytes).unwrap();
@@ -1935,7 +1939,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     let original_proof = fs::read(
         version_dir(
@@ -2196,14 +2200,14 @@ fn commit_namespace_envelope_rejects_malformed_entries() {
             .commits
             .values()
             .flat_map(|commit| &commit.entries)
-            .any(|entry| entry.kind == "directory")
+            .any(|entry| entry.kind == NamespaceEntryKind::Directory)
     );
     assert!(
         manifest
             .commits
             .values()
             .flat_map(|commit| &commit.entries)
-            .any(|entry| entry.kind == "file")
+            .any(|entry| entry.kind == NamespaceEntryKind::File)
     );
     let valid_package = temporary.path().join("valid-package");
     engine
@@ -2211,29 +2215,33 @@ fn commit_namespace_envelope_rejects_malformed_entries() {
         .unwrap();
     offline_check_history_package(&valid_package).unwrap();
 
+    let mut raw = json_codec::to_value(&manifest).unwrap();
+    let entries = raw["commits"][&manifest.history.root_commit_id]["entries"]
+        .as_array_mut()
+        .unwrap();
+    entries.push(json_codec::json!({
+        "entry_id":new_id("entry"), "path":"ghost", "name":"ghost",
+        "lookup_key":"ghost", "kind":"unsupported", "file_id":"",
+        "version_id":"", "size":"0"
+    }));
+    assert!(json_codec::from_value::<HistoryManifest>(raw).is_err());
+
     let version = manifest.versions.values().next().unwrap();
-    for case in [
-        "kind",
-        "entry_id",
-        "file_id",
-        "version_id",
-        "directory_payload",
-    ] {
+    for case in ["entry_id", "file_id", "version_id", "directory_payload"] {
         let mut entry = Entry {
             entry_id: new_id("entry"),
             path: "ghost".into(),
             name: "ghost".into(),
             lookup_key: "ghost".into(),
-            kind: "directory".into(),
+            kind: NamespaceEntryKind::Directory,
             file_id: String::new(),
             version_id: String::new(),
             size: 0,
         };
         match case {
-            "kind" => entry.kind = "unsupported".into(),
             "entry_id" => entry.entry_id = "not-an-entry-id".into(),
             "file_id" | "version_id" => {
-                entry.kind = "file".into();
+                entry.kind = NamespaceEntryKind::File;
                 entry.file_id = version.file_id.clone();
                 entry.version_id = version.version_id.clone();
                 entry.size = version.logical_size;
@@ -2553,10 +2561,7 @@ fn net_zero_namespace_sequence_persists_deletion_once() {
         .unwrap();
     assert_eq!(facts.paths.len(), 1);
     assert_eq!(facts.paths[0].path, "temporary");
-    assert_eq!(
-        facts.paths[0].kind,
-        storage_contract::NamespaceEntryKind::Directory
-    );
+    assert_eq!(facts.paths[0].kind, NamespaceEntryKind::Directory);
     let count = engine.state().commits.len();
     assert_eq!(
         engine.commit_workspace(request).unwrap().commit_id.as_ref(),

@@ -47,7 +47,7 @@ fn generation_first_conflict(state: &State, workspace: &Workspace, path: &str) -
             let relevant = state.repositories.values().any(|repo| {
                 repo.history_tree_id == branch.history_tree_id && repo.repository_id == *id
             }) || base.entries.iter().chain(&current.entries).any(|entry| {
-                entry.kind == "directory"
+                entry.kind == NamespaceEntryKind::Directory
                     && entry.entry_id == *id
                     && (path == entry.lookup_key
                         || path.starts_with(&format!("{}/", entry.lookup_key)))
@@ -68,7 +68,7 @@ fn directory(path: &str) -> Entry {
         path: path.into(),
         name: path.rsplit('/').next().unwrap().into(),
         lookup_key: name_policy::path_key(path),
-        kind: "directory".into(),
+        kind: NamespaceEntryKind::Directory,
         file_id: String::new(),
         version_id: String::new(),
         size: 0,
@@ -277,7 +277,7 @@ fn workspace_capture_matches_path_lookup_for_bootstrap_and_inherited_contexts() 
         let expected = engine.state().commits[head]
             .entries
             .iter()
-            .filter(|entry| entry.kind == "file")
+            .filter(|entry| entry.kind == NamespaceEntryKind::File)
             .map(|entry| {
                 (
                     directory::context_key(&repo.repository_id, &entry.path),

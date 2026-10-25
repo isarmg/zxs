@@ -827,7 +827,7 @@ fn capture_fixture() -> (State, String, String) {
             path: format!("folder/{name}"),
             name: name.into(),
             lookup_key: name_policy::path_key(&format!("folder/{name}")),
-            kind: "file".into(),
+            kind: NamespaceEntryKind::File,
             file_id: file.clone(),
             version_id: new_id("ver"),
             size: 1,

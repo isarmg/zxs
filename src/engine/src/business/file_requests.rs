@@ -2,6 +2,7 @@
 use crate::{Engine, Error, FileMergeInput, FileTagTarget, Result};
 use data_serialization::Serialize;
 use json_codec::{Value, json};
+use storage_contract::NamespaceEntryKind;
 
 /// Current namespace context is a mutation precondition, not stored graph data.
 #[derive(Debug, Clone, Serialize)]
@@ -69,7 +70,11 @@ pub(super) fn validate_location(
         || !engine
             .list_tree_ref(&repo.main_branch_id)?
             .iter()
-            .any(|entry| entry.kind == "file" && entry.file_id == file && entry.lookup_key == key)
+            .any(|entry| {
+                entry.kind == NamespaceEntryKind::File
+                    && entry.file_id == file
+                    && entry.lookup_key == key
+            })
     {
         return Err(Error::new(
             storage_contract::ErrorCode::FileNotFound,

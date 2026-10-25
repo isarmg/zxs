@@ -153,7 +153,7 @@ impl<'a> PendingSources<'a> {
     }
 
     pub(super) fn checked(&self, entry: &storage_contract::Entry) -> Option<&'a str> {
-        if entry.kind != "file" {
+        if entry.kind != storage_contract::NamespaceEntryKind::File {
             return None;
         }
         self.resolve(entry, self.visible(entry)?, CurrentContext::Lookup, None)
@@ -194,7 +194,7 @@ impl<'a> PendingSources<'a> {
         self.commit
             .entries
             .iter()
-            .filter(|entry| entry.kind == "file")
+            .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
             .filter_map(|entry| {
                 let visible = if canonical {
                     entry
@@ -319,7 +319,7 @@ pub(super) fn current_entry_source_at_index<'a>(
     let current = engine.state().branches.get(branch)?;
     let commit = engine.state().commits.get(&current.head_commit_id)?;
     let entry = commit.entries.get(index)?;
-    if entry.kind != "file" {
+    if entry.kind != storage_contract::NamespaceEntryKind::File {
         return None;
     }
     PendingSources::new(engine, branch, commit).resolve(

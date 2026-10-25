@@ -117,7 +117,11 @@ impl Engine {
         };
         let config = Arc::new(self.config.clone());
         let mut selected = BTreeSet::new();
-        for entry in commit.entries.iter().filter(|entry| entry.kind == "file") {
+        for entry in commit
+            .entries
+            .iter()
+            .filter(|entry| entry.kind == NamespaceEntryKind::File)
+        {
             if !selected.insert(&entry.version_id) {
                 continue;
             }

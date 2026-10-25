@@ -139,13 +139,17 @@ fn selection_retarget_alias_sources_and_shared_directory_membership_are_exact() 
     let mut commit = before
         .commits
         .values()
-        .find(|c| c.entries.iter().any(|e| e.kind == "directory"))
+        .find(|c| {
+            c.entries
+                .iter()
+                .any(|e| e.kind == NamespaceEntryKind::Directory)
+        })
         .unwrap()
         .clone();
     let directory = commit
         .entries
         .iter()
-        .find(|e| e.kind == "directory")
+        .find(|e| e.kind == NamespaceEntryKind::Directory)
         .unwrap()
         .entry_id
         .clone();

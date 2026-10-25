@@ -372,7 +372,7 @@ fn validate_directory_selection(state: &State, workspace: &Workspace, path: &str
         .any(|repo| repo.history_tree_id == branch.history_tree_id && changed(&repo.repository_id));
     if root_changed
         || base.entries.iter().chain(&current.entries).any(|entry| {
-            entry.kind == "directory"
+            entry.kind == NamespaceEntryKind::Directory
                 && (path == entry.lookup_key || namespace::is_descendant(&path, &entry.lookup_key))
                 && changed(&entry.entry_id)
         })
@@ -541,7 +541,7 @@ impl Engine {
                 .map(|r| {
                     head.entries
                         .iter()
-                        .filter(|e| e.kind == "file")
+                        .filter(|e| e.kind == NamespaceEntryKind::File)
                         .filter_map(|e| {
                             self.file_context_for_current_entry(&r.repository_id, e)
                                 .map(|c| {
@@ -560,7 +560,7 @@ impl Engine {
             selected_file_branches: head
                 .entries
                 .iter()
-                .filter(|entry| entry.kind == "file")
+                .filter(|entry| entry.kind == NamespaceEntryKind::File)
                 .filter_map(|entry| {
                     super::file::selected_file_branch(&self.state, branch_id, &entry.file_id)
                         .map(|selected| (entry.file_id.clone(), selected.branch_id.clone()))
@@ -657,13 +657,15 @@ impl Engine {
         })?;
         let base_entry = base.get(path).cloned();
         if w.purpose == "normal"
-            && let Some(entry) = base_entry.as_ref().filter(|e| e.kind == "file")
+            && let Some(entry) = base_entry
+                .as_ref()
+                .filter(|e| e.kind == NamespaceEntryKind::File)
         {
             validate_file_context(&self.state, &w, &entry.file_id, path)?;
         }
         if base_entry
             .as_ref()
-            .is_some_and(|entry| entry.kind != "file")
+            .is_some_and(|entry| entry.kind != NamespaceEntryKind::File)
         {
             return Err(Error::new(
                 storage_contract::ErrorCode::IsDirectory,
@@ -1255,7 +1257,7 @@ impl Engine {
                         // version_id, so path/content alone cannot fence it.
                         let selected = |entries: &[Entry]| entries.iter()
                             .filter(|entry| entry.lookup_key == key || entry.lookup_key.starts_with(&prefix))
-                            .map(|entry| (entry.entry_id.clone(), entry.file_id.clone(), entry.kind.clone(), entry.path.clone(), entry.version_id.clone())).collect::<Vec<_>>();
+                            .map(|entry| (entry.entry_id.clone(), entry.file_id.clone(), entry.kind, entry.path.clone(), entry.version_id.clone())).collect::<Vec<_>>();
                         if selected(&current.entries) != selected(&base.entries) {
                             return Err(Error::new(storage_contract::ErrorCode::NamespaceConflict, "namespace changed after the workspace began"));
                         }
@@ -1306,7 +1308,7 @@ impl Engine {
                     let entry = Entry {
                         entry_id: existing.as_ref().map(|entry| entry.entry_id.clone()).unwrap_or_else(|| file.item_id.clone()),
                         path: path.into(), name: path.rsplit('/').next().unwrap_or("").into(),
-                        lookup_key: name_policy::path_key(path), kind: "file".into(),
+                        lookup_key: name_policy::path_key(path), kind: NamespaceEntryKind::File,
                         file_id: file_id.clone(), version_id: version.version_id, size: version.logical_size,
                     };
                     draft.replace(entry)?;
@@ -1322,7 +1324,7 @@ impl Engine {
                 if entries == current.entries && deleted.is_empty() {
                     return Ok(json!({"commit_id":current.commit_id,"branch_id":branch.branch_id,"history_tree_id":branch.history_tree_id,"no_change":true}));
                 }
-                let live_files = entries.iter().filter(|entry| entry.kind == "file")
+                let live_files = entries.iter().filter(|entry| entry.kind == NamespaceEntryKind::File)
                     .map(|entry| entry.file_id.clone()).collect::<std::collections::BTreeSet<_>>();
                 let mut snapshot_pending = current.pending_file_versions.clone();
                 snapshot_pending.retain(|file,_| live_files.contains(file) && !written_files.contains(file));

@@ -67,7 +67,7 @@ impl Session {
         if path.is_empty()
             || existing
                 .as_ref()
-                .is_some_and(|entry| entry.kind == "directory")
+                .is_some_and(|entry| entry.kind == storage_contract::NamespaceEntryKind::Directory)
         {
             if writable || create || truncate {
                 return Err(ApiError::new(
@@ -147,7 +147,7 @@ impl Session {
                         entry.entry_id.clone(),
                         entry.version_id.clone(),
                         entry.path.clone(),
-                        entry.kind.clone(),
+                        entry.kind,
                     )
                 };
                 if existing.as_ref().map(identity) != baseline.map(identity) {

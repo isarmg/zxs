@@ -46,7 +46,7 @@ pub(crate) fn validate_entries(entries: &mut [Entry], maximum: usize) -> Result<
     let mut kinds = BTreeMap::new();
     for entry in entries.iter() {
         if kinds
-            .insert(entry.lookup_key.as_str(), entry.kind.as_str())
+            .insert(entry.lookup_key.as_str(), entry.kind)
             .is_some()
         {
             return Err(Error::new(
@@ -57,7 +57,7 @@ pub(crate) fn validate_entries(entries: &mut [Entry], maximum: usize) -> Result<
     }
     for entry in entries.iter() {
         if let Some((parent, _)) = entry.lookup_key.rsplit_once('/')
-            && kinds.get(parent).copied() != Some("directory")
+            && kinds.get(parent).copied() != Some(NamespaceEntryKind::Directory)
         {
             return Err(Error::new(
                 storage_contract::ErrorCode::ParentNotDirectory,
@@ -77,7 +77,7 @@ pub(crate) fn ensure_parents(entries: &mut Vec<Entry>, path: &str) -> Result<()>
         }
         p.push_str(c);
         if let Some(existing) = find_unordered(entries, &p) {
-            if existing.kind != "directory" {
+            if existing.kind != NamespaceEntryKind::Directory {
                 return Err(Error::new(
                     storage_contract::ErrorCode::ParentNotDirectory,
                     "parent is not a directory",
@@ -89,7 +89,7 @@ pub(crate) fn ensure_parents(entries: &mut Vec<Entry>, path: &str) -> Result<()>
                 path: p.clone(),
                 name: (*c).into(),
                 lookup_key: name_policy::path_key(&p),
-                kind: "directory".into(),
+                kind: NamespaceEntryKind::Directory,
                 file_id: String::new(),
                 version_id: String::new(),
                 size: 0,
@@ -111,7 +111,8 @@ pub(crate) fn apply_workspace_namespace(
         let key = name_policy::path_key(&op.path);
         if op.kind == "mkdir"
             && find_unordered(base, &op.path).is_none()
-            && find_unordered(entries, &op.path).is_some_and(|e| e.kind == "directory")
+            && find_unordered(entries, &op.path)
+                .is_some_and(|e| e.kind == NamespaceEntryKind::Directory)
             && explicit_directories.insert(key)
         {
             continue;
@@ -155,21 +156,11 @@ pub(crate) fn is_descendant(key: &str, ancestor: &str) -> bool {
         .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
-pub(crate) fn deleted_path(entry: &Entry) -> Result<DeletedPath> {
-    let kind = match entry.kind.as_str() {
-        "file" => NamespaceEntryKind::File,
-        "directory" => NamespaceEntryKind::Directory,
-        _ => {
-            return Err(Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "deleted entry kind is invalid",
-            ));
-        }
-    };
-    Ok(DeletedPath {
+pub(crate) fn deleted_path(entry: &Entry) -> DeletedPath {
+    DeletedPath {
         path: entry.path.clone(),
-        kind,
-    })
+        kind: entry.kind,
+    }
 }
 
 pub(crate) fn deletion_record(
@@ -199,7 +190,7 @@ pub(crate) fn apply_namespace(
                 path: op.path.clone(),
                 name: op.path.rsplit('/').next().unwrap_or("").into(),
                 lookup_key: key,
-                kind: "directory".into(),
+                kind: NamespaceEntryKind::Directory,
                 file_id: String::new(),
                 version_id: String::new(),
                 size: 0,
@@ -225,7 +216,7 @@ pub(crate) fn apply_namespace(
                         || (op.kind == "delete_tree" && is_descendant(&e.lookup_key, &key))
                 })
                 .map(deleted_path)
-                .collect::<Result<Vec<_>>>()?;
+                .collect();
             entries.retain(|e| {
                 e.lookup_key != key
                     && !(op.kind == "delete_tree" && is_descendant(&e.lookup_key, &key))

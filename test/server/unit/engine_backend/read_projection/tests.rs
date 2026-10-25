@@ -157,7 +157,7 @@ fn legacy_pending_entry_source<'a>(
     commit: &'a storage_contract::Commit,
     entry: &storage_contract::Entry,
 ) -> Option<&'a str> {
-    if entry.kind != "file" {
+    if entry.kind != storage_contract::NamespaceEntryKind::File {
         return None;
     }
     let state = engine.state();
@@ -222,7 +222,7 @@ fn synthetic_commit(
                 name: path.clone(),
                 lookup_key: path.clone(),
                 path,
-                kind: "file".into(),
+                kind: storage_contract::NamespaceEntryKind::File,
                 file_id: format!("file-{index}"),
                 version_id: format!("version-{index}"),
                 size: index as u64,
@@ -301,7 +301,7 @@ fn checked_entries_and_noncanonical_snapshots_preserve_original_first_match() {
     }
     duplicate.file_id = "absent-file".into();
     assert_eq!(resolver.checked(&duplicate), None);
-    duplicate.kind = "directory".into();
+    duplicate.kind = storage_contract::NamespaceEntryKind::Directory;
     assert_eq!(resolver.checked(&duplicate), None);
     assert!(
         resolver.matching_visits() > 0,
@@ -406,7 +406,7 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
         .unwrap();
     let created = engine
         .create_file_branch(
@@ -503,7 +503,7 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
     let original = commit
         .entries
         .iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
         .unwrap();
     assert!(
         engine
@@ -578,7 +578,7 @@ fn directory_entry(index: usize, path: String) -> storage_contract::Entry {
         name: path.rsplit('/').next().unwrap().into(),
         lookup_key: name_policy::path_key(&path),
         path,
-        kind: "file".into(),
+        kind: storage_contract::NamespaceEntryKind::File,
         file_id: format!("file_{index:032x}"),
         version_id: format!("version_{index:032x}"),
         size: 0,

@@ -375,7 +375,7 @@ fn save_oracle_file(engine: &mut Engine, branch: &str) -> String {
         .list_tree(branch)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap()
         .file_id
 }

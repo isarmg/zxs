@@ -68,14 +68,16 @@ pub(super) fn scope_path<'a>(state: &'a State, policy: &'a ProtectionPolicy) -> 
         return commit
             .entries
             .iter()
-            .find(|entry| entry.kind == "directory" && entry.entry_id == *directory)
+            .find(|entry| {
+                entry.kind == NamespaceEntryKind::Directory && entry.entry_id == *directory
+            })
             .map(|entry| entry.path.as_str());
     }
     if let Some(file) = &policy.scope_file_id {
         return commit
             .entries
             .iter()
-            .find(|entry| entry.kind == "file" && entry.file_id == *file)
+            .find(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == *file)
             .map(|entry| entry.path.as_str());
     }
     Some(&policy.path_prefix)
@@ -104,7 +106,7 @@ pub(super) fn effective_policy<'a>(
         namespace(state, repository)
             .ok()
             .and_then(|commit| find_unordered(&commit.entries, path))
-            .filter(|entry| entry.kind == "file")
+            .filter(|entry| entry.kind == NamespaceEntryKind::File)
             .map(|entry| entry.file_id.as_str())
     });
     if let Some(policy) = file
@@ -137,7 +139,7 @@ pub(super) fn effective_policy<'a>(
 #[derive(Clone)]
 struct Scope {
     id: String,
-    kind: String,
+    kind: NamespaceEntryKind,
     path: String,
     files: BTreeMap<String, Entry>,
 }
@@ -149,7 +151,7 @@ fn source_scope(state: &State, repository: &str, path: &str) -> Result<Scope> {
     let mut scope = if path.is_empty() {
         Scope {
             id: repository.into(),
-            kind: "directory".into(),
+            kind: NamespaceEntryKind::Directory,
             path: String::new(),
             files: BTreeMap::new(),
         }
@@ -161,19 +163,19 @@ fn source_scope(state: &State, repository: &str, path: &str) -> Result<Scope> {
             )
         })?;
         Scope {
-            id: if entry.kind == "file" {
+            id: if entry.kind == NamespaceEntryKind::File {
                 entry.file_id.clone()
             } else {
                 entry.entry_id.clone()
             },
-            kind: entry.kind.clone(),
+            kind: entry.kind,
             path: entry.path.clone(),
             files: BTreeMap::new(),
         }
     };
     for entry in commit.entries.iter().filter(|entry| {
-        entry.kind == "file"
-            && if scope.kind == "file" {
+        entry.kind == NamespaceEntryKind::File
+            && if scope.kind == NamespaceEntryKind::File {
                 entry.file_id == scope.id
             } else {
                 within(&scope.path, &entry.path)
@@ -189,7 +191,7 @@ fn source_scope(state: &State, repository: &str, path: &str) -> Result<Scope> {
     }
     // A configured directory protects files retained by its other named views,
     // including versions absent from the currently selected subtree.
-    if scope.kind == "directory" {
+    if scope.kind == NamespaceEntryKind::Directory {
         for branch in state
             .directory_branches
             .values()
@@ -200,7 +202,11 @@ fn source_scope(state: &State, repository: &str, path: &str) -> Result<Scope> {
             } else {
                 branch.path.split('/').count()
             };
-            for entry in branch.entries.iter().filter(|entry| entry.kind == "file") {
+            for entry in branch
+                .entries
+                .iter()
+                .filter(|entry| entry.kind == NamespaceEntryKind::File)
+            {
                 scope.files.entry(entry.file_id.clone()).or_insert_with(|| {
                     let mut entry = entry.clone();
                     let suffix = entry
@@ -233,7 +239,7 @@ fn exact_policy<'a>(
         .find(|policy| {
             policy.inheritable
                 && policy.repository_id == repository
-                && if scope.kind == "file" {
+                && if scope.kind == NamespaceEntryKind::File {
                     policy.scope_file_id.as_deref() == Some(&scope.id)
                 } else {
                     policy.scope_directory_id.as_deref() == Some(&scope.id)
@@ -270,7 +276,7 @@ fn retain_inherited_files(
     scope: &mut Scope,
     previous: Option<&ProtectionPolicy>,
 ) {
-    if scope.kind != "directory" {
+    if scope.kind != NamespaceEntryKind::Directory {
         return;
     }
     scope.files.retain(|file, entry| {
@@ -289,7 +295,7 @@ fn backup_primaries(engine: &Engine, repository: &str, scope: &Scope) -> Result<
         .0]);
     // Empty and future descendants also inherit this directory's settings.
     // Independent child backup policies do not constrain the parent's routes.
-    if scope.kind == "directory" {
+    if scope.kind == NamespaceEntryKind::Directory {
         let previous = exact_policy(&engine.state, repository, scope);
         for rule in engine.state.placement_rules.values().filter(|rule| {
             rule.repository_id == repository && within(&scope.path, &rule.path_prefix)
@@ -435,7 +441,7 @@ impl Engine {
         let effective = effective_policy(
             &self.state,
             repository,
-            (scope.kind == "file").then_some(scope.id.as_str()),
+            (scope.kind == NamespaceEntryKind::File).then_some(scope.id.as_str()),
             &scope.path,
         );
         let inherited = effective.is_some_and(|policy| {
@@ -444,7 +450,7 @@ impl Engine {
         retain_inherited_files(&self.state, repository, &mut scope, exact);
         let (primary, copies) = self.file_placement_settings(
             repository,
-            (scope.kind == "file").then_some(scope.id.as_str()),
+            (scope.kind == NamespaceEntryKind::File).then_some(scope.id.as_str()),
             &scope.path,
         )?;
         // GET and PUT use the same future and historical source chains.
@@ -482,7 +488,7 @@ impl Engine {
             .cloned()
             .collect::<BTreeSet<_>>();
         Ok(
-            json!({"scope":{"id":scope.id,"kind":scope.kind,"path":scope.path},"policy_id":exact.map(|policy|&policy.policy_id),"effective_policy_id":effective.map(|policy|&policy.policy_id),"generation":exact.map_or(0,|policy|policy.generation).to_string(),"effective_generation":effective.map_or(0,|policy|policy.generation).to_string(),"inherited":inherited,"target_copies":copies,"backup_prefixes":effective.map(|policy|policy.backup_prefixes.clone()).unwrap_or_default(),"route_slot_ids":requested_route,"available_route_slot_ids":available_route,"backup_routes":routes,"backup_slot_ids":backup_slots,"max_copies":maximum,"file_count":scope.files.len().to_string(),"backup_paths":if scope.kind=="file"{self.state.file_backup_paths.get(&scope.id).cloned().unwrap_or_default()}else{BTreeMap::new()}}),
+            json!({"scope":{"id":scope.id,"kind":scope.kind,"path":scope.path},"policy_id":exact.map(|policy|&policy.policy_id),"effective_policy_id":effective.map(|policy|&policy.policy_id),"generation":exact.map_or(0,|policy|policy.generation).to_string(),"effective_generation":effective.map_or(0,|policy|policy.generation).to_string(),"inherited":inherited,"target_copies":copies,"backup_prefixes":effective.map(|policy|policy.backup_prefixes.clone()).unwrap_or_default(),"route_slot_ids":requested_route,"available_route_slot_ids":available_route,"backup_routes":routes,"backup_slot_ids":backup_slots,"max_copies":maximum,"file_count":scope.files.len().to_string(),"backup_paths":if scope.kind == NamespaceEntryKind::File{self.state.file_backup_paths.get(&scope.id).cloned().unwrap_or_default()}else{BTreeMap::new()}}),
         )
     }
 
@@ -571,8 +577,8 @@ impl Engine {
                     policy_id: previous.as_ref().map(|policy| policy.policy_id.clone()).unwrap_or_else(|| new_id("policy")),
                     repository_id: repository.into(), path_prefix: scope.path.clone(), target_copies: copies,
                     inheritable: true,
-                    scope_directory_id: (scope.kind == "directory").then_some(scope.id.clone()),
-                    scope_file_id: (scope.kind == "file").then_some(scope.id.clone()),
+                    scope_directory_id: (scope.kind == NamespaceEntryKind::Directory).then_some(scope.id.clone()),
+                    scope_file_id: (scope.kind == NamespaceEntryKind::File).then_some(scope.id.clone()),
                     backup_prefixes: normalized.clone(),
                     generation: generation.checked_add(1).ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "backup policy generation exhausted"))?,
                 };
@@ -591,7 +597,7 @@ impl Engine {
                     }
                 }
                 for (file, entry) in &scope.files {
-                    let relative = relative_path(&scope.path, &entry.path, scope.kind == "file");
+                    let relative = relative_path(&scope.path, &entry.path, scope.kind == NamespaceEntryKind::File);
                     for (slot, prefix) in &normalized {
                         state.file_backup_paths.entry(file.clone()).or_default()
                             .insert(slot.clone(), backup_path(prefix, &relative)?);

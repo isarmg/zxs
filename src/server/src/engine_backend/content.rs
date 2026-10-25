@@ -29,15 +29,17 @@ impl EngineBackend {
             .file_locations
             .get(&record.file_id)
             .and_then(|path| {
-                tree?
-                    .get(path)
-                    .filter(|entry| entry.kind == "file" && entry.file_id == record.file_id)
+                tree?.get(path).filter(|entry| {
+                    entry.kind == storage_contract::NamespaceEntryKind::File
+                        && entry.file_id == record.file_id
+                })
             });
         let download_name = preferred
             .or_else(|| {
-                entries
-                    .iter()
-                    .find(|entry| entry.kind == "file" && entry.file_id == record.file_id)
+                entries.iter().find(|entry| {
+                    entry.kind == storage_contract::NamespaceEntryKind::File
+                        && entry.file_id == record.file_id
+                })
             })
             .map(|entry| entry.name.clone())
             .or_else(|| engine.state().file_names.get(&record.file_id).cloned())

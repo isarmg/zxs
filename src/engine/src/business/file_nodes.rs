@@ -249,7 +249,7 @@ pub(crate) fn branch_head(state: &State, branch: &str) -> Result<String> {
                 .and_then(|c| {
                     c.entries
                         .iter()
-                        .find(|e| e.kind == "file" && e.file_id == file)
+                        .find(|e| e.kind == NamespaceEntryKind::File && e.file_id == file)
                 })
                 .map(|e| e.version_id.clone())
         })

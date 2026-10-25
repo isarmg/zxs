@@ -76,7 +76,10 @@ fn final_entries(
     if let Some(workspace) = workspace {
         for staged in workspace.files.values() {
             let previous = find_unordered(&entries, &staged.path).cloned();
-            if previous.as_ref().is_some_and(|entry| entry.kind != "file") {
+            if previous
+                .as_ref()
+                .is_some_and(|entry| entry.kind != NamespaceEntryKind::File)
+            {
                 return Err(Error::new(
                     storage_contract::ErrorCode::IsDirectory,
                     "historical upload cannot replace a directory",
@@ -89,7 +92,7 @@ fn final_entries(
                 path: staged.path.clone(),
                 name: staged.path.rsplit('/').next().unwrap_or("").into(),
                 lookup_key: key.clone(),
-                kind: "file".into(),
+                kind: NamespaceEntryKind::File,
                 file_id: previous
                     .as_ref()
                     .map(|entry| entry.file_id.clone())
@@ -264,7 +267,10 @@ impl Engine {
         let mut per_slot = BTreeMap::<String, u64>::new();
         let mut total = 0u64;
         let mut count = 0usize;
-        for entry in entries.iter().filter(|entry| entry.kind == "file") {
+        for entry in entries
+            .iter()
+            .filter(|entry| entry.kind == NamespaceEntryKind::File)
+        {
             if let Some(item) = entry.version_id.strip_prefix("staged:") {
                 let staged = workspace
                     .as_ref()
@@ -328,7 +334,7 @@ impl Engine {
                 ));
             }
         }
-        let input = json!({"history_tree_id":history,"source_commit_id":source.commit_id,"name":options.name,"workspace_id":options.workspace_id,"sealed_manifest_hash":workspace.as_ref().map(workspace_manifest_hash).transpose()?,"workspace_fencing_token":workspace.as_ref().map(|workspace|workspace.fencing_token.to_string()),"expected_topology_generation":self.state.topology_generation.to_string(),"primary_slot_id":options.primary_slot_id,"target_copies":options.target_copies,"branch_creation":"placeholder-until-write","placeholder_files":entries.iter().filter(|entry|entry.kind=="file"&&!entry.version_id.starts_with("staged:")).count(),"full_copy_bytes":total.to_string(),"full_copy_files":count,"required_bytes_by_slot":per_slot.iter().map(|(slot,bytes)|(slot.clone(),bytes.to_string())).collect::<BTreeMap<_,_>>()});
+        let input = json!({"history_tree_id":history,"source_commit_id":source.commit_id,"name":options.name,"workspace_id":options.workspace_id,"sealed_manifest_hash":workspace.as_ref().map(workspace_manifest_hash).transpose()?,"workspace_fencing_token":workspace.as_ref().map(|workspace|workspace.fencing_token.to_string()),"expected_topology_generation":self.state.topology_generation.to_string(),"primary_slot_id":options.primary_slot_id,"target_copies":options.target_copies,"branch_creation":"placeholder-until-write","placeholder_files":entries.iter().filter(|entry|entry.kind == NamespaceEntryKind::File&&!entry.version_id.starts_with("staged:")).count(),"full_copy_bytes":total.to_string(),"full_copy_files":count,"required_bytes_by_slot":per_slot.iter().map(|(slot,bytes)|(slot.clone(),bytes.to_string())).collect::<BTreeMap<_,_>>()});
         let plan = Plan {
             plan_id: new_id("plan"),
             kind: "historical_save".into(),
@@ -467,7 +473,7 @@ impl Engine {
                 let mut pending_file_versions = BTreeMap::new();
                 for entry in &mut entries {
                     entry.entry_id = new_id("entry");
-                    if entry.kind != "file" {
+                    if entry.kind != NamespaceEntryKind::File {
                         continue;
                     }
                     let (source_path, source_versions, expected_hash, expected_size) =

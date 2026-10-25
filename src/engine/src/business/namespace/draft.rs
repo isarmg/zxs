@@ -52,7 +52,7 @@ impl NamespaceDraft {
             if let Some((parent, _)) = entry.lookup_key.rsplit_once('/')
                 && draft
                     .get_key(parent)
-                    .is_none_or(|entry| entry.kind != "directory")
+                    .is_none_or(|entry| entry.kind != NamespaceEntryKind::Directory)
             {
                 return Err(Error::new(
                     storage_contract::ErrorCode::StateInvalid,
@@ -67,11 +67,10 @@ impl NamespaceDraft {
         if name_policy::validate_path(&entry.path).is_err()
             || entry.lookup_key != name_policy::path_key(&entry.path)
             || entry.name != entry.path.rsplit('/').next().unwrap_or("")
-            || !matches!(entry.kind.as_str(), "file" | "directory")
         {
             return Err(Error::new(
                 storage_contract::ErrorCode::StateInvalid,
-                "namespace entry path, key, name or kind is invalid",
+                "namespace entry path, key or name is invalid",
             ));
         }
         Ok(())
@@ -117,7 +116,7 @@ impl NamespaceDraft {
             }
             parent.push_str(component);
             if let Some(existing) = self.get(&parent) {
-                if existing.kind != "directory" {
+                if existing.kind != NamespaceEntryKind::Directory {
                     return Err(Error::new(
                         storage_contract::ErrorCode::ParentNotDirectory,
                         "parent is not a directory",
@@ -129,7 +128,7 @@ impl NamespaceDraft {
                     path: parent.clone(),
                     name: (*component).into(),
                     lookup_key: name_policy::path_key(&parent),
-                    kind: "directory".into(),
+                    kind: NamespaceEntryKind::Directory,
                     file_id: String::new(),
                     version_id: String::new(),
                     size: 0,

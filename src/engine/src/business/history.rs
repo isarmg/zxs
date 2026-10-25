@@ -200,7 +200,7 @@ impl Engine {
                 let mut entries = source.entries.clone();
                 let pending_file_versions: std::collections::BTreeMap<String, String> = entries
                     .iter()
-                    .filter(|entry| entry.kind == "file")
+                    .filter(|entry| entry.kind == NamespaceEntryKind::File)
                     .map(|entry| (entry.file_id.clone(), entry.version_id.clone()))
                     .collect();
                 for entry in &mut entries {
@@ -245,7 +245,7 @@ impl Engine {
                     "created_branch": created_branch,
                     "copied_files": "0",
                     "placeholder_files": source.entries.iter()
-                        .filter(|entry| entry.kind == "file").count().to_string()
+                        .filter(|entry| entry.kind == NamespaceEntryKind::File).count().to_string()
                 }))
             },
         )?;

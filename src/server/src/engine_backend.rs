@@ -545,7 +545,7 @@ impl Backend for EngineBackend {
                         )
                     })?;
                 let mut response = json!({"branch_id":branch_id,"commit_id":commit_id,"entry":entry,"version":engine.state().versions.get(&entry.version_id)});
-                if entry.kind == "file" {
+                if entry.kind == storage_contract::NamespaceEntryKind::File {
                     response.as_object_mut().unwrap().extend(
                         content_wire(
                             &engine,

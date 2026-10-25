@@ -206,7 +206,8 @@ impl HistoryChanges {
             if !changes.directories.is_empty() {
                 for commit in state.commits.values() {
                     if commit.entries.iter().any(|entry| {
-                        entry.kind == "directory" && changes.directories.contains(&entry.entry_id)
+                        entry.kind == NamespaceEntryKind::Directory
+                            && changes.directories.contains(&entry.entry_id)
                     }) {
                         changes.histories.insert(commit.history_tree_id.clone());
                     }

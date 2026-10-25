@@ -49,7 +49,7 @@ fn manifest_limit_rejects_before_any_new_payload_or_decision_and_keeps_published
         path: "pending.txt".into(),
         name: "pending.txt".into(),
         lookup_key: "pending.txt".into(),
-        kind: "file".into(),
+        kind: NamespaceEntryKind::File,
         file_id: version.file_id.clone(),
         version_id: version.version_id.clone(),
         size: version.logical_size,

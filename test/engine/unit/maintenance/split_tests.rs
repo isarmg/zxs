@@ -115,7 +115,7 @@ fn split_closes_source_policy_scopes_without_dropping_valid_empty_rules() {
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     let bound = configure(&mut engine, "资料", 2);
     mkdir(&mut engine, "moved-empty");
@@ -240,7 +240,7 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
             .list_tree(&repo.main_branch_id)
             .unwrap()
             .into_iter()
-            .find(|entry| entry.kind == "file")
+            .find(|entry| entry.kind == NamespaceEntryKind::File)
             .unwrap();
         // Real directory/path-node histories are deliberately not splittable.
         // Publish only the valid binding prerequisite into an ordinary history
@@ -287,7 +287,7 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
             .list_tree(&copied.main_branch_id)
             .unwrap()
             .into_iter()
-            .find(|entry| entry.kind == "file")
+            .find(|entry| entry.kind == NamespaceEntryKind::File)
             .unwrap();
         let bound = engine.state.file_backup_policies[&file.file_id].clone();
         let retained = &engine.state.protection_policies[&bound];
@@ -327,7 +327,7 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
             .list_tree(&copied.main_branch_id)
             .unwrap()
             .into_iter()
-            .find(|entry| entry.kind == "file")
+            .find(|entry| entry.kind == NamespaceEntryKind::File)
             .unwrap();
         assert_eq!(engine.state.placements[&latest.version_id].target_copies, 2);
         assert_graph_closed(&engine, &history);
@@ -363,7 +363,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"current main");
     let shared = engine
@@ -625,7 +625,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
         .list_tree(&shared)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     assert!(engine.open_content(&own.version_id).is_ok());
 }
@@ -638,7 +638,7 @@ fn inherited_branches_and_their_workspaces_pin_sources_until_first_own_content()
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     let pending = engine
         .create_branch(&source, "pending", "alice", &new_id("op"))
@@ -660,7 +660,7 @@ fn inherited_branches_and_their_workspaces_pin_sources_until_first_own_content()
         .list_tree(&pending.branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     assert_eq!(inherited.version_id, old.version_id);
     assert_eq!(inherited.size, old.size);
@@ -687,7 +687,7 @@ fn inherited_branches_and_their_workspaces_pin_sources_until_first_own_content()
         .list_tree(&pending.branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     assert_eq!(
         engine.state.versions[&current.version_id].source_version_ids,
@@ -714,7 +714,7 @@ fn selected_inherited_file_pins_source_through_directory_main_until_materialized
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"owned main body");
     let created = engine
@@ -767,7 +767,7 @@ fn selected_inherited_file_pins_source_through_directory_main_until_materialized
         .list_tree(&branch)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     assert_eq!(
         engine.state.versions[&current.version_id].source_version_ids,
@@ -794,7 +794,7 @@ fn split_remaps_inherited_references_without_creating_placeholder_files() {
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     let pending = engine
         .create_branch(&cut, "pending", "alice", &new_id("op"))
@@ -892,7 +892,7 @@ fn split_keeps_pending_prefix_snapshots_and_remaps_mixed_snapshot_reservations()
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.kind == "file")
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     let pending = engine
         .create_branch(&source, "pending", "alice", &new_id("op"))
@@ -964,7 +964,7 @@ fn split_preserves_identity_per_file_and_requires_explicit_rebinding() {
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|e| e.kind == "file")
+        .find(|e| e.kind == NamespaceEntryKind::File)
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"second");
     let plan = engine
@@ -1005,7 +1005,7 @@ fn split_preserves_identity_per_file_and_requires_explicit_rebinding() {
         .commits
         .iter()
         .flat_map(|c| &c.entries)
-        .filter(|e| e.kind == "file")
+        .filter(|e| e.kind == NamespaceEntryKind::File)
         .collect::<Vec<_>>();
     assert_eq!(files.len(), 2);
     assert_eq!(files[0].entry_id, files[1].entry_id);
@@ -1217,7 +1217,7 @@ fn split_rejects_root_and_rechecks_active_read_before_publication() {
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|e| e.kind == "file")
+        .find(|e| e.kind == NamespaceEntryKind::File)
         .unwrap()
         .version_id;
     let read = engine.open_content(&version).unwrap();

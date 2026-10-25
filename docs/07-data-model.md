@@ -44,7 +44,9 @@
 
 普通后续提交可继续引用本分支已有未变版本。新分支元数据快照可以引用真实来源版本，但 `pending_file_versions` 明确标记这些文件尚无本分支正文，不可将引用解释为已拥有内容。首次实际写入才生成独立 FULL 版本，未写入时从冻结父 version_id 读取；实际写入后的独立 FULL 仅以来源 ID 记谱系，不再依赖父字节。
 
-Branch 与 Commit 的 `pending_file_versions` 采用当前稀疏编码：缺省表示空，空时省略序列化，确定性编码与非空映射往返均须核验；这不是旧格式自动迁移。已物化 FULL 分支不转换为待写入状态。持久 Commit 的文件条目仍引用真实来源版本，不写入空版本 ID；`Engine::list_tree` 和历史视图保留可见真实版本及大小，未写入文件为冻结父版本。文件管理 JSON 附 `materialized:false`、`inherited:true`、`own_version_id:null`、`content_state:"PENDING"` 及实际 `visible_content_state`；泛型 Entry 的字符串类型保持兼容。旧继承快照始终按自身映射读取冻结父内容，不能在当前 Branch 首写后显示新写版本。
+Branch 与 Commit 的 `pending_file_versions` 采用当前稀疏编码：缺省表示空，空时省略序列化，确定性编码与非空映射往返均须核验；这不是旧格式自动迁移。已物化 FULL 分支不转换为待写入状态。持久 Commit 的文件条目仍引用真实来源版本，不写入空版本 ID；`Engine::list_tree` 和历史视图保留可见真实版本及大小，未写入文件为冻结父版本。文件管理 JSON 附 `materialized:false`、`inherited:true`、`own_version_id:null`、`content_state:"PENDING"` 及实际 `visible_content_state`；Entry 的 JSON 字符串编码保持兼容。旧继承快照始终按自身映射读取冻结父内容，不能在当前 Branch 首写后显示新写版本。
+
+`Entry.kind` 与删除事实的 `kind` 在核心中统一使用 `NamespaceEntryKind::{File, Directory}`。信任边界是快照、历史包及 RPC JSON 的反序列化：只接受字符串 `"file"` / `"directory"`，拒绝未知值、非字符串及 `{"file":null}` 枚举对象。内部命名空间构造、查询和删除依赖枚举保证，不再重复验证 kind；目录载荷、路径及引用关系仍在相应边界验证。有效 JSON 的规范字节与哈希不变；历史提交类型、界面展示类型和 SMB OpenResult 不属于此枚举。
 
 `Commit.namespace_deletions` 是与正文独立的命名空间删除事实：无删除时省略；存在时包含 UINT64 十进制字符串 `timestamp` 和非空 `paths`。每项仅含 `path` 与 `kind`（`file` 或 `directory`），按实际操作效果顺序保存；同一路径删除、重建后再次删除是不同效果，不排序或去重。时间必须能表示有效 UTC 时刻，由核心语义校验；UInt64 字段形状不代替此约束。时间随提交持久化，导出、恢复及历史拆分不依赖操作回执补齐。事实不带 entry/file/version ID 或正文引用，不增加正文保留根；纯重命名、移动及目录视图选择不产生删除事实。
 

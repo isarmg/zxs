@@ -478,7 +478,7 @@ fn namespace_bookkeeping_uses_paths_and_keeps_the_first_match_in_unsorted_entrie
             path: path.into(),
             name: path.into(),
             lookup_key: key.clone(),
-            kind: "file".into(),
+            kind: NamespaceEntryKind::File,
             file_id: file.into(),
             version_id: "version".into(),
             size: 1,

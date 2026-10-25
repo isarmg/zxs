@@ -1,18 +1,18 @@
 use super::*;
 
-fn entry(path: &str, kind: &str) -> Entry {
+fn entry(path: &str, kind: NamespaceEntryKind) -> Entry {
     Entry {
         entry_id: new_id("entry"),
         path: path.into(),
         name: path.rsplit('/').next().unwrap().into(),
         lookup_key: name_policy::path_key(path),
-        kind: kind.into(),
-        file_id: if kind == "file" {
+        kind,
+        file_id: if kind == NamespaceEntryKind::File {
             new_id("file")
         } else {
             String::new()
         },
-        version_id: if kind == "file" {
+        version_id: if kind == NamespaceEntryKind::File {
             new_id("ver")
         } else {
             String::new()
@@ -23,7 +23,7 @@ fn entry(path: &str, kind: &str) -> Entry {
 
 #[test]
 fn relocating_entry_updates_path_fields_without_changing_identity_or_body() {
-    let mut file = entry("Old/Document.txt", "file");
+    let mut file = entry("Old/Document.txt", NamespaceEntryKind::File);
     file.size = 123;
     let original = file.clone();
     for path in ["Straße/文档.txt", "STRASSE/文档.txt", "STRASSE/文档.txt"] {
@@ -44,7 +44,7 @@ fn relocating_entry_updates_path_fields_without_changing_identity_or_body() {
 
 #[test]
 fn rebasing_directory_preserves_identity_and_uses_component_depth() {
-    let original = entry("STRASSE/文档.txt", "file");
+    let original = entry("STRASSE/文档.txt", NamespaceEntryKind::File);
     let rebased =
         super::super::directory::rebase_entries(std::slice::from_ref(&original), "Straße", "Moved")
             .unwrap();
@@ -68,15 +68,15 @@ fn directory_rename_follows_normalized_ancestry_without_slicing_utf8_by_key_leng
             _ => "ς",
         };
         let mut entries = vec![
-            entry(source, "directory"),
-            entry(&format!("{alias}/文档"), "directory"),
-            entry(&format!("{alias}/文档/报告.txt"), "file"),
-            entry(&format!("{source}-other"), "directory"),
+            entry(source, NamespaceEntryKind::Directory),
+            entry(&format!("{alias}/文档"), NamespaceEntryKind::Directory),
+            entry(&format!("{alias}/文档/报告.txt"), NamespaceEntryKind::File),
+            entry(&format!("{source}-other"), NamespaceEntryKind::Directory),
         ];
         validate_entries(&mut entries, 10).unwrap();
         let file_id = entries
             .iter()
-            .find(|e| e.kind == "file")
+            .find(|e| e.kind == NamespaceEntryKind::File)
             .unwrap()
             .file_id
             .clone();
@@ -102,7 +102,7 @@ fn directory_rename_follows_normalized_ancestry_without_slicing_utf8_by_key_leng
 
 #[test]
 fn namespace_deletion_facts_follow_operations_not_identity_or_final_paths() {
-    let first = entry("first.txt", "file");
+    let first = entry("first.txt", NamespaceEntryKind::File);
     let mut second = first.clone();
     relocate_entry(&mut second, "second.txt".into()).unwrap();
     let base = vec![first, second];
@@ -126,7 +126,7 @@ fn namespace_deletion_facts_follow_operations_not_identity_or_final_paths() {
     .unwrap();
     assert_eq!(deleted.len(), 1);
     assert_eq!(deleted[0].path, "first.txt");
-    assert_eq!(deleted[0].kind, storage_contract::NamespaceEntryKind::File);
+    assert_eq!(deleted[0].kind, NamespaceEntryKind::File);
     assert_eq!(entries, vec![base[0].clone()]);
     let deleted = apply_namespace(
         &mut entries,
@@ -143,10 +143,10 @@ fn namespace_deletion_facts_follow_operations_not_identity_or_final_paths() {
 #[test]
 fn namespace_deletion_facts_preserve_repeated_intermediate_paths_and_tree_members() {
     let base = vec![
-        entry("a", "file"),
-        entry("b", "file"),
-        entry("tree", "directory"),
-        entry("tree/child", "file"),
+        entry("a", NamespaceEntryKind::File),
+        entry("b", NamespaceEntryKind::File),
+        entry("tree", NamespaceEntryKind::Directory),
+        entry("tree/child", NamespaceEntryKind::File),
     ];
     let mut entries = base.clone();
     let deleted = apply_workspace_namespace(
@@ -193,7 +193,10 @@ fn namespace_deletion_facts_preserve_repeated_intermediate_paths_and_tree_member
 
 #[test]
 fn rejected_namespace_delete_does_not_remove_entries_or_return_facts() {
-    let base = vec![entry("tree", "directory"), entry("tree/child", "file")];
+    let base = vec![
+        entry("tree", NamespaceEntryKind::Directory),
+        entry("tree/child", NamespaceEntryKind::File),
+    ];
     for path in ["tree", "missing"] {
         let mut entries = base.clone();
         assert!(
@@ -218,7 +221,7 @@ fn canonical_equivalent_namespace_sources_preserve_identity_and_strict_destinati
         ("Å.txt", "A\u{30a}.txt"),
         ("가.txt", "\u{1100}\u{1161}.txt"),
     ] {
-        let original = entry(stored, "file");
+        let original = entry(stored, NamespaceEntryKind::File);
         let mut entries = vec![original.clone()];
         let before = json_codec::to_value(&entries).unwrap();
         for operation in [
