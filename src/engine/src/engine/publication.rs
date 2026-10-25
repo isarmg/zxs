@@ -252,7 +252,7 @@ impl Engine {
     fn prepare_payloads(&self, prepared: &[Prepared]) -> Result<()> {
         // Versions of the same file can share a named container. Preserve their
         // order, and each version's route chain, while independent files copy
-        // in bounded parallel batches. No decision is written until all join.
+        // with bounded parallel workers. No decision is written until all join.
         let mut by_file = BTreeMap::<&str, Vec<&Prepared>>::new();
         for payload in prepared {
             by_file
@@ -660,36 +660,86 @@ fn run_payload_groups<T: Sync>(
     work: impl Fn(&T) -> Result<()> + Sync,
 ) -> Result<()> {
     const WORKERS: usize = 4;
-    for batch in groups.chunks(WORKERS) {
-        std::thread::scope(|scope| {
-            let work = &work;
-            let workers: Vec<_> = batch
-                .iter()
-                .map(|group| {
-                    scope.spawn(move || {
-                        for payload in group {
-                            work(payload)?;
-                        }
-                        Ok(())
-                    })
-                })
-                .collect();
-            let mut first_error = None;
-            for worker in workers {
-                let result = worker.join().unwrap_or_else(|_| {
-                    Err(Error::new(
-                        "INTERNAL_ERROR",
-                        "payload preparation worker panicked",
-                    ))
-                });
-                if first_error.is_none() {
-                    first_error = result.err();
-                }
-            }
-            first_error.map_or(Ok(()), Err)
-        })?;
+    struct Queue {
+        next: usize,
+        first_error: Option<(usize, Error)>,
     }
-    Ok(())
+    let queue = std::sync::Mutex::new(Queue {
+        next: 0,
+        first_error: None,
+    });
+    let poisoned = || Error::new("INTERNAL_ERROR", "payload preparation queue poisoned");
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..WORKERS.min(groups.len()))
+            .map(|_| {
+                scope.spawn(|| -> Result<()> {
+                    loop {
+                        let index = {
+                            let mut queue = queue.lock().map_err(|_| poisoned())?;
+                            if queue.first_error.is_some() || queue.next == groups.len() {
+                                return Ok(());
+                            }
+                            let index = queue.next;
+                            queue.next += 1;
+                            index
+                        };
+                        // A claimed file keeps its version order even if another file fails.
+                        // Catch its panic here, not at join, so no worker keeps claiming work
+                        // after the failure is recorded. No payload I/O holds the queue lock.
+                        let outcome =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                for payload in &groups[index] {
+                                    work(payload)?;
+                                }
+                                Ok(())
+                            }));
+                        let (error, panic) = match outcome {
+                            Ok(Ok(())) => continue,
+                            Ok(Err(error)) => (error, None),
+                            Err(panic) => (
+                                Error::new("INTERNAL_ERROR", "payload preparation worker panicked"),
+                                Some(panic),
+                            ),
+                        };
+                        {
+                            let mut queue = queue.lock().map_err(|_| poisoned())?;
+                            // Claiming is ordered, completion is not. Earlier claimed files
+                            // still finish, preserving index-priority error reporting.
+                            if queue
+                                .first_error
+                                .as_ref()
+                                .is_none_or(|(first, _)| index < *first)
+                            {
+                                queue.first_error = Some((index, error));
+                            }
+                        }
+                        // A custom panic payload may run a destructor; close admission first
+                        // and never drop that payload while holding the queue lock.
+                        drop(panic);
+                        return Ok(());
+                    }
+                })
+            })
+            .collect();
+        let mut worker_error = None;
+        for worker in workers {
+            let result = worker.join().unwrap_or_else(|_| {
+                Err(Error::new(
+                    "INTERNAL_ERROR",
+                    "payload preparation scheduler panicked",
+                ))
+            });
+            if worker_error.is_none() {
+                worker_error = result.err();
+            }
+        }
+        worker_error.map_or(Ok(()), Err)
+    })?;
+    queue
+        .into_inner()
+        .map_err(|_| poisoned())?
+        .first_error
+        .map_or(Ok(()), |(_, error)| Err(error))
 }
 
 #[cfg(test)]
