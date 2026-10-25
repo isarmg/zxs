@@ -676,7 +676,7 @@ impl Engine {
                     sorted(&mut new.entries);
                     state.commits.insert(new.commit_id.clone(), new);
                     // Migrated history must not appear as empty-file commits in the old graph.
-                    state.commits.remove(&commit.commit_id);
+                    state.commits.remove_discard(&commit.commit_id);
                 }
                 for branch in &source_branches {
                     let Some(new_id) = branch_map.get(&branch.branch_id) else { continue; };

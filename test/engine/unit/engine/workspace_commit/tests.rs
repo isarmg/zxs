@@ -241,3 +241,113 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
         with_purge_bytes
     );
 }
+
+#[test]
+fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unchanged() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &temp.path().join("state"),
+        Config::development([temp.path().join("primary")]),
+    )
+    .unwrap();
+    let repo = engine
+        .create_repository("record isolation", "P01", 1, "admin", &new_id("op"))
+        .unwrap();
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "nested/file.txt", b"published")
+        .unwrap();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: new_id("op"),
+            principal: "admin".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: "published".into(),
+            request_digest: None,
+        })
+        .unwrap();
+    engine
+        .initialize_directory_scope(&repo.repository_id, "nested", "admin", &new_id("op"))
+        .unwrap();
+    let frozen = Arc::clone(&engine.state);
+    let before = canonical_json(frozen.as_ref()).unwrap();
+    let commit_id = frozen.commits.keys().next().unwrap().clone();
+    let tree_id = frozen.directory_trees.keys().next().unwrap().clone();
+    let mutate_records = |next: &mut State| {
+        next.commits.get_mut(&commit_id).unwrap().message = "private candidate".into();
+        next.directory_trees.get_mut(&tree_id).unwrap().path = "private/candidate".into();
+        let mut commit = next.commits[&commit_id].clone();
+        commit.commit_id = "candidate-only-commit".into();
+        assert!(
+            next.commits
+                .insert(commit.commit_id.clone(), commit)
+                .is_none()
+        );
+        let mut tree = next.directory_trees[&tree_id].clone();
+        tree.tree_id = "candidate-only-tree".into();
+        assert!(
+            next.directory_trees
+                .insert(tree.tree_id.clone(), tree)
+                .is_none()
+        );
+        assert!(next.commits.remove_discard(&commit_id));
+        assert!(next.directory_trees.remove_discard(&tree_id));
+    };
+    let failed_operation = new_id("op");
+    let failed = engine.plan_mutation_digest(
+        "test.record_isolation",
+        "admin",
+        &failed_operation,
+        json_codec::json!({}),
+        None,
+        |_, next, _| {
+            mutate_records(next);
+            Err(Error::new("TEST_ROLLBACK", "abandon mutated metadata"))
+        },
+    );
+    assert!(matches!(failed, Err(ref error) if error.code() == "TEST_ROLLBACK"));
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    assert!(Arc::ptr_eq(&frozen, &engine.state));
+    assert!(!engine.state.operations.contains_key(&failed_operation));
+
+    let operation = new_id("op");
+    let planned = engine
+        .plan_mutation_digest(
+            "test.record_isolation",
+            "admin",
+            &operation,
+            json_codec::json!({}),
+            None,
+            |_, next, _| {
+                mutate_records(next);
+                Ok(json_codec::json!({}))
+            },
+        )
+        .unwrap();
+    let MutationPlan::Prepared { next, prepared, .. } = planned else {
+        panic!("fresh operation must produce an independent candidate");
+    };
+    assert!(prepared.is_empty());
+    assert_eq!(
+        next.commits["candidate-only-commit"].message,
+        "private candidate"
+    );
+    assert_eq!(
+        next.directory_trees["candidate-only-tree"].path,
+        "private/candidate"
+    );
+    assert!(!next.commits.contains_key(&commit_id));
+    assert!(!next.directory_trees.contains_key(&tree_id));
+    assert!(next.operations.contains_key(&operation));
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    drop(next); // A successful plan is not a publication; cancellation discards it.
+    assert_eq!(canonical_json(frozen.as_ref()).unwrap(), before);
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    assert!(Arc::ptr_eq(&frozen, &engine.state));
+    assert!(!engine.state.operations.contains_key(&operation));
+    assert!(!engine.is_read_only());
+}

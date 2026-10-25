@@ -1,3 +1,4 @@
+use crate::SharedRecords;
 use data_serialization::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -654,8 +655,8 @@ pub struct State {
     pub file_selections: BTreeMap<String, String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub directory_branches: BTreeMap<String, DirectoryBranch>,
-    #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub directory_trees: BTreeMap<String, DirectoryTree>,
+    #[serialization(default, skip_serializing_if = "SharedRecords::is_empty")]
+    pub directory_trees: SharedRecords<DirectoryTree>,
     /// Current projection intent, separate from each public file branch HEAD.
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_write_origins: BTreeMap<String, String>,
@@ -704,7 +705,7 @@ pub struct State {
     pub version_notes: BTreeMap<String, String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_names: BTreeMap<String, String>,
-    pub commits: BTreeMap<String, Commit>,
+    pub commits: SharedRecords<Commit>,
     pub versions: BTreeMap<String, FileVersion>,
     pub placements: BTreeMap<String, Placement>,
     pub merge_links: BTreeMap<String, MergeLink>,

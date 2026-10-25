@@ -3,20 +3,17 @@ use super::*;
 use json_codec::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
-fn required<'a, T>(map: &'a BTreeMap<String, T>, id: &str, message: &str) -> Result<&'a T> {
-    map.get(id)
-        .ok_or_else(|| Error::new("STATE_INVALID", message))
+fn required<'a, T>(value: Option<&'a T>, message: &str) -> Result<&'a T> {
+    value.ok_or_else(|| Error::new("STATE_INVALID", message))
 }
 
 fn selected_tree<'a>(state: &'a State, directory: &str) -> Result<(&'a str, &'a DirectoryTree)> {
     let branch_id = required(
-        &state.directory_selections,
-        directory,
+        state.directory_selections.get(directory),
         "directory selection missing",
     )?;
     let branch = required(
-        &state.directory_branches,
-        branch_id,
+        state.directory_branches.get(branch_id),
         "selected directory branch missing",
     )?;
     let tree_id = state
@@ -24,13 +21,11 @@ fn selected_tree<'a>(state: &'a State, directory: &str) -> Result<(&'a str, &'a 
         .get(directory)
         .unwrap_or(&branch.head_tree_id);
     let tree = required(
-        &state.directory_trees,
-        tree_id,
+        state.directory_trees.get(tree_id),
         "selected directory tree missing",
     )?;
     required(
-        &state.commits,
-        &tree.commit_id,
+        state.commits.get(&tree.commit_id),
         "selected directory tree commit missing",
     )?;
     Ok((branch_id, tree))
@@ -44,13 +39,11 @@ fn frozen_context(
     // Exact path context and public branch ownership are independently required.
     // Never manufacture a missing frozen context from another identity map.
     required(
-        branches,
-        &entry.file_id,
+        branches.get(&entry.file_id),
         "snapshot file branch reference missing",
     )?;
     required(
-        contexts,
-        &entry.lookup_key,
+        contexts.get(&entry.lookup_key),
         "snapshot file path context missing",
     )
     .cloned()
@@ -120,13 +113,11 @@ pub(crate) fn scope(
         .get(repository)
         .ok_or_else(|| Error::new("REPOSITORY_NOT_FOUND", "directory repository missing"))?;
     let branch = required(
-        &state.branches,
-        &repo.main_branch_id,
+        state.branches.get(&repo.main_branch_id),
         "repository main branch missing",
     )?;
     let commit = required(
-        &state.commits,
-        &branch.head_commit_id,
+        state.commits.get(&branch.head_commit_id),
         "repository head commit missing",
     )?;
     let key = name_policy::path_key(path);
@@ -187,8 +178,7 @@ pub(crate) fn rebase_entries(entries: &[Entry], from: &str, to: &str) -> Result<
 fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
     let (directory_id, entries, commit_id) = scope(state, repository, path)?;
     let current = required(
-        &state.commits,
-        &commit_id,
+        state.commits.get(&commit_id),
         "directory snapshot commit missing",
     )?
     .clone();
@@ -217,7 +207,8 @@ fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
         .iter()
         .filter(|e| e.kind == "file")
         .map(|e| {
-            let branch_id = required(&files, &e.file_id, "snapshot file branch missing")?.clone();
+            let branch_id =
+                required(files.get(&e.file_id), "snapshot file branch missing")?.clone();
             let context = context_at(state, repository, &e.path).unwrap_or(FileContext {
                 node_id: None,
                 selection_generation: 0,
@@ -692,10 +683,9 @@ pub(crate) fn prepare_file_write(
     let Some(origin) = context_at(state, &repository, path).and_then(|c| c.inherited_from) else {
         return Ok(());
     };
-    let head = required(&state.branches, branch, "repository main branch missing")?;
+    let head = required(state.branches.get(branch), "repository main branch missing")?;
     let original = required(
-        &state.commits,
-        &head.head_commit_id,
+        state.commits.get(&head.head_commit_id),
         "repository head commit missing",
     )?
     .entries
@@ -774,8 +764,7 @@ pub(crate) fn record_directory_edits(
     exclude: Option<&str>,
 ) -> Result<Vec<String>> {
     let repo = required(
-        &state.repositories,
-        repository,
+        state.repositories.get(repository),
         "directory repository missing",
     )?;
     if !repo.file_manager_root
@@ -846,42 +835,35 @@ pub(crate) fn select_change(
             )
         })?;
     let repo = required(
-        &state.repositories,
-        repository,
+        state.repositories.get(repository),
         "directory repository missing",
     )?
     .clone();
     let main = required(
-        &state.branches,
-        &repo.main_branch_id,
+        state.branches.get(&repo.main_branch_id),
         "repository main branch missing",
     )?
     .clone();
     let previous = required(
-        &state.commits,
-        &main.head_commit_id,
+        state.commits.get(&main.head_commit_id),
         "repository head commit missing",
     )?
     .clone();
     required(
-        &state.directory_trees,
-        &selected.head_tree_id,
+        state.directory_trees.get(&selected.head_tree_id),
         "selected directory head tree missing",
     )?;
     required(
-        &state.commits,
-        &selected.commit_id,
+        state.commits.get(&selected.commit_id),
         "selected directory commit missing",
     )?;
     for reference in selected.directory_refs.values() {
         required(
-            &state.directory_branches,
-            &reference.directory_branch_id,
+            state.directory_branches.get(&reference.directory_branch_id),
             "snapshot directory branch missing",
         )?;
         required(
-            &state.directory_trees,
-            &reference.tree_id,
+            state.directory_trees.get(&reference.tree_id),
             "snapshot directory tree missing",
         )?;
     }
@@ -1132,8 +1114,7 @@ impl Engine {
                     context.inherited_from = Some(id.clone());
                     file_contexts.insert(entry.lookup_key.clone(), context);
                     let file_branch = required(
-                        &tree.file_branches,
-                        &entry.file_id,
+                        tree.file_branches.get(&entry.file_id),
                         "snapshot file branch reference missing",
                     )?;
                     files.push(json!({"file_id":entry.file_id,"branch_id":file_branch,
