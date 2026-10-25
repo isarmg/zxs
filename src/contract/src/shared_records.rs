@@ -44,6 +44,13 @@ impl<T> SharedRecords<T> {
         self.records.is_empty()
     }
 
+    /// Whether both containers reference the same backing map allocation.
+    /// False does not imply different contents. This describes storage identity,
+    /// not value immutability for arbitrary T with interior-mutable fields.
+    pub fn shares_storage_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.records, &other.records)
+    }
+
     pub fn get<Q: Ord + ?Sized>(&self, key: &Q) -> Option<&T>
     where
         String: Borrow<Q>,

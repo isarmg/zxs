@@ -2,8 +2,9 @@
 //!
 //! Startup rebuilds from recovered durable evidence, including migration of the
 //! old full-snapshot and generic entity projections. Only file-history candidate
-//! fields and the publication sequence are stored. Comparisons still scan all
-//! versions; this is not an O(delta) CPU claim. Business objects come from State.
+//! fields and the publication sequence are stored. Shared, untouched version
+//! maps need no comparison; changed maps still scan all versions. This is not
+//! an O(delta) CPU claim. Business objects come from State.
 use super::Engine;
 use crate::*;
 use sqlite_access::{Connection, Executor, Row};
@@ -33,20 +34,35 @@ struct HistoryDelta<'a> {
     upserts: Vec<&'a str>,
     deletes: Vec<&'a str>,
 }
+
+#[cfg(test)]
+thread_local! {
+    static HISTORY_DELTA_AFTER_ROWS_COMPARED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl<'a> HistoryDelta<'a> {
     fn between(
-        before: Option<&'a BTreeMap<String, FileVersion>>,
-        after: &'a BTreeMap<String, FileVersion>,
+        before: Option<&'a SharedRecords<FileVersion>>,
+        after: &'a SharedRecords<FileVersion>,
     ) -> Self {
         let mut delta = Self::default();
         let Some(before) = before else {
             delta.upserts.extend(after.keys().map(String::as_str));
             return delta;
         };
+        // FileVersion has no interior mutability. Shared backing therefore
+        // proves these records are unchanged; distinct backing proves nothing.
+        // Only comparison is skipped: the caller still validates and advances
+        // the projection marker and trusted query proof.
+        if before.shares_storage_with(after) {
+            return delta;
+        }
         // Merge the ordered maps once, preserving each output vector's key
         // order without two tree searches per unchanged row.
         let mut before = before.iter().peekable();
-        for (id, value) in after {
+        for (id, value) in after.iter() {
+            #[cfg(test)]
+            HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.set(rows.get() + 1));
             while let Some((old_id, _)) = before.next_if(|(old_id, _)| *old_id < id) {
                 delta.deletes.push(old_id);
             }

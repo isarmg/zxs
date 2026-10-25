@@ -706,7 +706,7 @@ pub struct State {
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_names: BTreeMap<String, String>,
     pub commits: SharedRecords<Commit>,
-    pub versions: BTreeMap<String, FileVersion>,
+    pub versions: SharedRecords<FileVersion>,
     pub placements: BTreeMap<String, Placement>,
     pub merge_links: BTreeMap<String, MergeLink>,
     pub history_boundaries: BTreeMap<String, HistoryBoundary>,

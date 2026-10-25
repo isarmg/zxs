@@ -277,9 +277,13 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
     let before = canonical_json(frozen.as_ref()).unwrap();
     let commit_id = frozen.commits.keys().next().unwrap().clone();
     let tree_id = frozen.directory_trees.keys().next().unwrap().clone();
+    let version_id = frozen.versions.keys().next().unwrap().clone();
     let mutate_records = |next: &mut State| {
+        assert!(next.versions.shares_storage_with(&frozen.versions));
         next.commits.get_mut(&commit_id).unwrap().message = "private candidate".into();
         next.directory_trees.get_mut(&tree_id).unwrap().path = "private/candidate".into();
+        next.versions.get_mut(&version_id).unwrap().creation_name = "private candidate".into();
+        assert!(!next.versions.shares_storage_with(&frozen.versions));
         let mut commit = next.commits[&commit_id].clone();
         commit.commit_id = "candidate-only-commit".into();
         assert!(
@@ -294,8 +298,16 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
                 .insert(tree.tree_id.clone(), tree)
                 .is_none()
         );
+        let mut version = next.versions[&version_id].clone();
+        version.version_id = "candidate-only-version".into();
+        assert!(
+            next.versions
+                .insert(version.version_id.clone(), version)
+                .is_none()
+        );
         assert!(next.commits.remove_discard(&commit_id));
         assert!(next.directory_trees.remove_discard(&tree_id));
+        assert!(next.versions.remove_discard(&version_id));
     };
     let failed_operation = new_id("op");
     let failed = engine.plan_mutation_digest(
@@ -342,6 +354,11 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
     );
     assert!(!next.commits.contains_key(&commit_id));
     assert!(!next.directory_trees.contains_key(&tree_id));
+    assert_eq!(
+        next.versions["candidate-only-version"].creation_name,
+        "private candidate"
+    );
+    assert!(!next.versions.contains_key(&version_id));
     assert!(next.operations.contains_key(&operation));
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     drop(next); // A successful plan is not a publication; cancellation discards it.

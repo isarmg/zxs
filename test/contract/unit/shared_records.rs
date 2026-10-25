@@ -210,13 +210,15 @@ fn deserialization_supports_borrowed_non_clone_payloads() {
 }
 
 #[test]
-fn state_preserves_required_commits_and_sparse_directory_tree_wire_semantics() {
+fn state_preserves_required_record_maps_and_sparse_directory_tree_wire_semantics() {
     let state = crate::State::default();
     let value = json_codec::to_value(&state).unwrap();
     assert_eq!(value.get("commits"), Some(&json_codec::json!({})));
+    assert_eq!(value.get("versions"), Some(&json_codec::json!({})));
     assert!(value.get("directory_trees").is_none());
     let decoded: crate::State = json_codec::from_value(value.clone()).unwrap();
     assert!(decoded.commits.is_empty());
+    assert!(decoded.versions.is_empty());
     assert!(decoded.directory_trees.is_empty());
 
     let mut explicit_empty = value.clone();
@@ -225,15 +227,89 @@ fn state_preserves_required_commits_and_sparse_directory_tree_wire_semantics() {
         json_codec::from_value::<crate::State>(explicit_empty).unwrap(),
         state
     );
-    let mut missing_commits = value;
-    assert!(
-        missing_commits
-            .as_object_mut()
-            .unwrap()
-            .remove("commits")
-            .is_some()
+    for field in ["commits", "versions"] {
+        let mut missing = value.clone();
+        assert!(missing.as_object_mut().unwrap().remove(field).is_some());
+        assert!(json_codec::from_value::<crate::State>(missing).is_err());
+    }
+}
+
+#[test]
+fn file_version_records_preserve_map_bytes_hashes_and_state_roundtrip() {
+    let map: BTreeMap<_, _> = [("version-文件", 0), ("version-z", u64::MAX)]
+        .into_iter()
+        .map(|(id, sequence)| {
+            (
+                id.to_owned(),
+                crate::FileVersion {
+                    history_tree_id: "history".into(),
+                    version_id: id.into(),
+                    file_id: "file".into(),
+                    creation_primary_slot_id: "P01".into(),
+                    logical_size: u64::MAX,
+                    version_sequence: sequence,
+                    content_hash: "a".repeat(64),
+                    checksum_chunk_bytes: 4096,
+                    checksum_manifest_hash: "b".repeat(64),
+                    creation_name: "文件\n\".txt".into(),
+                    storage_name: "stored.txt".into(),
+                    created_at: "2026-10-25T00:00:00Z".into(),
+                    source_version_ids: vec!["source-a".into(), "来源".into()],
+                    created_as_full_checkpoint: true,
+                },
+            )
+        })
+        .collect();
+    let bytes = json_codec::to_vec(&map).unwrap();
+    let records: SharedRecords<crate::FileVersion> = json_codec::from_slice(&bytes).unwrap();
+    assert_eq!(json_codec::to_vec(&records).unwrap(), bytes);
+    assert_eq!(
+        crate::canonical_json(&records).unwrap(),
+        crate::canonical_json(&map).unwrap()
     );
-    assert!(json_codec::from_value::<crate::State>(missing_commits).is_err());
+    assert_eq!(
+        crate::object_hash("versions", &records).unwrap(),
+        crate::object_hash("versions", &map).unwrap()
+    );
+    let state = crate::State {
+        versions: records,
+        ..Default::default()
+    };
+    let mut old_state = json_codec::to_value(crate::State::default()).unwrap();
+    old_state["versions"] = json_codec::to_value(&map).unwrap();
+    assert_eq!(
+        crate::canonical_json(&state).unwrap(),
+        crate::canonical_json(&old_state).unwrap()
+    );
+    let decoded: crate::State =
+        json_codec::from_slice(&crate::canonical_json(&old_state).unwrap()).unwrap();
+    assert_eq!(decoded, state);
+    assert!(!decoded.versions.shares_storage_with(&state.versions));
+}
+
+#[test]
+fn storage_identity_is_one_way_and_mutations_detach_shared_maps() {
+    let original: SharedRecords<_> = [("a".into(), "original".to_owned())].into_iter().collect();
+    let mut candidate = original.clone();
+    assert!(candidate.shares_storage_with(&original));
+    let equal: SharedRecords<_> = original
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    assert_eq!(candidate, equal);
+    assert!(!candidate.shares_storage_with(&equal));
+    // Even mutable access without a value change must stop claiming sameness.
+    assert_eq!(candidate.get_mut("a").unwrap(), "original");
+    assert_eq!(candidate, original);
+    assert!(!candidate.shares_storage_with(&original));
+    candidate.get_mut("a").unwrap().push_str(" changed");
+    assert_eq!(original["a"], "original");
+    let mut inserted = original.clone();
+    inserted.insert("b".into(), "new".into());
+    assert!(!inserted.shares_storage_with(&original));
+    assert!(inserted.remove_discard("b"));
+    assert_eq!(inserted, original);
+    assert!(!inserted.shares_storage_with(&original));
 }
 
 #[test]
@@ -243,15 +319,15 @@ fn no_op_mutations_preserve_shared_map_identity() {
         .into_iter()
         .collect();
     let mut candidate = base.clone();
-    assert!(Arc::ptr_eq(&candidate.records, &base.records));
+    assert!(candidate.shares_storage_with(&base));
     assert!(candidate.get_mut("missing").is_none());
-    assert!(Arc::ptr_eq(&candidate.records, &base.records));
+    assert!(candidate.shares_storage_with(&base));
     assert!(candidate.remove("missing").is_none());
-    assert!(Arc::ptr_eq(&candidate.records, &base.records));
+    assert!(candidate.shares_storage_with(&base));
     assert!(!candidate.remove_discard("missing"));
-    assert!(Arc::ptr_eq(&candidate.records, &base.records));
+    assert!(candidate.shares_storage_with(&base));
     candidate.extend(std::iter::empty());
-    assert!(Arc::ptr_eq(&candidate.records, &base.records));
+    assert!(candidate.shares_storage_with(&base));
     assert_eq!(clone_count(&clones), 0);
 }
 

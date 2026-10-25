@@ -247,7 +247,17 @@ fn successful_delta_does_not_clear_unhealthy_latch() {
     std::sync::Arc::make_mut(&mut engine.state)
         .file_notes
         .insert("file".into(), "changed".into());
+    assert!(
+        previous
+            .versions
+            .shares_storage_with(&engine.state.versions)
+    );
     engine.update_index(&previous).unwrap();
+    assert_eq!(
+        rows(&engine.root.join("index.sqlite")).0,
+        engine.state.sequence.to_string()
+    );
+    assert!(!engine.history_query_proof.lock().unwrap().healthy);
     assert!(engine.indexed_file_history("file").is_none());
     assert_eq!(engine.file_history("file").unwrap(), scan(&engine, "file"));
     engine.rebuild_index().unwrap();
@@ -428,15 +438,68 @@ fn ordered_history_delta_matches_lookup_reference_across_all_small_maps() {
                     map.insert(key.to_owned(), version(key, "file", (choice - 1) as u64));
                 }
             }
-            map
+            let shared = map
+                .iter()
+                .map(|(id, value)| (id.clone(), value.clone()))
+                .collect();
+            (map, shared)
         })
         .collect();
     for before in std::iter::once(None).chain(maps.iter().map(Some)) {
-        for after in &maps {
+        for (after, shared_after) in &maps {
             assert_eq!(
-                HistoryDelta::between(before, after),
-                lookup_delta(before, after),
+                HistoryDelta::between(before.map(|(_, shared)| shared), shared_after),
+                lookup_delta(before.map(|(map, _)| map), after),
                 "{before:?} -> {after:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn shared_versions_skip_comparison_but_distinct_equal_maps_do_not() {
+    for count in [0, 1, 4096] {
+        let previous: SharedRecords<_> = (0..count)
+            .map(|n| {
+                let id = format!("version-{n:04}");
+                (id.clone(), version(&id, "file", n))
+            })
+            .collect();
+        let mut next = previous.clone();
+        assert!(previous.shares_storage_with(&next));
+        HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.set(0));
+        assert_eq!(
+            HistoryDelta::between(Some(&previous), &next),
+            HistoryDelta::default()
+        );
+        assert_eq!(HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.get()), 0);
+
+        next = previous
+            .iter()
+            .map(|(id, value)| (id.clone(), value.clone()))
+            .collect();
+        assert!(!previous.shares_storage_with(&next));
+        HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.set(0));
+        assert_eq!(
+            HistoryDelta::between(Some(&previous), &next),
+            HistoryDelta::default()
+        );
+        assert_eq!(
+            HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.get()),
+            count as usize
+        );
+        if count > 0 {
+            let mut touched = previous.clone();
+            touched.get_mut("version-0000").unwrap().creation_name = "not projected".into();
+            assert!(!previous.shares_storage_with(&touched));
+            HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.set(0));
+            assert_eq!(
+                HistoryDelta::between(Some(&previous), &touched),
+                HistoryDelta::default()
+            );
+            assert_eq!(
+                HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.get()),
+                count as usize
             );
         }
     }
@@ -513,6 +576,86 @@ fn per_change_writes_do_not_grow_with_unchanged_versions() {
         project(&path, Some(&next), &removed).unwrap();
         assert_eq!(writes(&path), (0, 1, 1, 3));
         assert_projection(&path, &removed);
+    }
+}
+
+#[test]
+fn shared_versions_advance_marker_and_proof_without_comparison_or_history_writes() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(&temp);
+    populate(&mut engine);
+    let path = engine.root.join("index.sqlite");
+    let baseline = rows(&path).1;
+    let counts = engine.history_query_proof.lock().unwrap().counts.clone();
+    install_write_audit(&path);
+    let previous = engine.state().clone();
+    let next = std::sync::Arc::make_mut(&mut engine.state);
+    next.sequence += 1;
+    next.file_notes
+        .insert("file".into(), "metadata only".into());
+    assert!(previous.versions.shares_storage_with(&next.versions));
+    HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.set(0));
+    engine.update_index(&previous).unwrap();
+    assert_eq!(HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.get()), 0);
+    assert_eq!(writes(&path), (0, 0, 0, 1));
+    assert_eq!(rows(&path), (engine.state.sequence.to_string(), baseline));
+    let proof = engine.history_query_proof.lock().unwrap();
+    assert!(proof.healthy);
+    assert_eq!(proof.sequence, engine.state.sequence);
+    assert_eq!(proof.counts, counts);
+    drop(proof);
+    assert_eq!(
+        engine.indexed_file_history("file"),
+        Some(scan(&engine, "file"))
+    );
+}
+
+#[test]
+fn shared_versions_still_validate_sql_marker_and_query_proof_sequence() {
+    for stale_sql_marker in [true, false] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut engine = engine(&temp);
+        populate(&mut engine);
+        let path = engine.root.join("index.sqlite");
+        let previous = engine.state().clone();
+        let next = std::sync::Arc::make_mut(&mut engine.state);
+        next.sequence += 1;
+        next.file_notes
+            .insert("file".into(), "metadata only".into());
+        assert!(previous.versions.shares_storage_with(&next.versions));
+        if stale_sql_marker {
+            sql(
+                &path,
+                "UPDATE current_state SET sequence='18446744073709551615'",
+            );
+        } else {
+            engine.history_query_proof.lock().unwrap().sequence = u64::MAX;
+        }
+        let baseline = rows(&path);
+        let proof_sequence = engine.history_query_proof.lock().unwrap().sequence;
+        let counts = engine.history_query_proof.lock().unwrap().counts.clone();
+        install_write_audit(&path);
+        HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.set(0));
+        let result = engine.update_index(&previous);
+        assert_eq!(HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.get()), 0);
+        if stale_sql_marker {
+            assert!(
+                result
+                    .unwrap_err()
+                    .message
+                    .contains("projection sequence mismatch")
+            );
+            assert_eq!(writes(&path), (0, 0, 0, 0));
+            assert_eq!(rows(&path), baseline);
+        } else {
+            result.unwrap();
+            assert_eq!(writes(&path), (0, 0, 0, 1));
+            assert_eq!(rows(&path), (engine.state.sequence.to_string(), baseline.1));
+        }
+        let proof = engine.history_query_proof.lock().unwrap();
+        assert!(!proof.healthy);
+        assert_eq!(proof.sequence, proof_sequence);
+        assert_eq!(proof.counts, counts);
     }
 }
 
