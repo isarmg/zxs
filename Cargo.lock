@@ -1237,6 +1237,7 @@ dependencies = [
  "json-codec",
  "libc",
  "smb-protocol",
+ "storage-contract",
 ]
 
 [[package]]

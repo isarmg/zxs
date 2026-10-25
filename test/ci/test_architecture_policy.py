@@ -45,7 +45,7 @@ class ArchitecturePolicyTests(unittest.TestCase):
             self.check()
 
     def test_repository_inventory(self):
-        self.assertEqual(CHECK.validate(ROOT), (20, 29))
+        self.assertEqual(CHECK.validate(ROOT), (20, 30))
 
     def test_only_engine_dev_self_edge_is_approved(self):
         for scope in ('runtime', 'build', 'dev'):

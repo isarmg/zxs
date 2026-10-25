@@ -73,7 +73,8 @@
     "smb-vfs": {
       "path": "src/smb-vfs",
       "runtime": [
-        "smb-protocol"
+        "smb-protocol",
+        "storage-contract"
       ],
       "build": [],
       "dev": []

@@ -12,6 +12,7 @@ default = ["smb-sdk"]
 smb-sdk = ["dep:bindgen"]
 
 [dependencies]
+storage-contract.workspace = true
 blake3 = {version = "1.8.7", path = "../foundation/cryptography/blake3"}
 libc = {version = "0.2", path = "../foundation/platform/libc"}
 json-codec = {version = "1", path = "../foundation/data-storage/json-codec"}

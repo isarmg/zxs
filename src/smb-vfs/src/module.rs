@@ -23,6 +23,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex, OnceLock},
 };
+use storage_contract::NamespaceEntryKind;
 
 mod sdk {
     // Generated C names/bitfield helpers preserve the pinned SDK ABI. Keep these
@@ -961,10 +962,9 @@ impl Directory {
                 return Err(bad());
             }
             entry.d_ino = inode(&node.entry_id) as _;
-            entry.d_type = if node.kind == "directory" {
-                libc::DT_DIR
-            } else {
-                libc::DT_REG
+            entry.d_type = match node.kind {
+                NamespaceEntryKind::Directory => libc::DT_DIR,
+                NamespaceEntryKind::File => libc::DT_REG,
             };
             entry.d_reclen = std::mem::size_of::<sdk::dirent>() as _;
             for (index, byte) in node.name.bytes().enumerate() {
