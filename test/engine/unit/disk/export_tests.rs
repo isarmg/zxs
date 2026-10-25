@@ -1,5 +1,80 @@
 use super::*;
 
+#[test]
+fn full_copy_publishes_read_only_bytes_with_unchanged_hash_commitments() {
+    let temporary = tempfile::tempdir().unwrap();
+    let source_path = temporary.path().join("source");
+    let chunk_bytes = 64 * 1024;
+    let bytes: Vec<u8> = (0..chunk_bytes * 2 + 17).map(|n| (n % 251) as u8).collect();
+    fs::write(&source_path, &bytes).unwrap();
+    let directory = OpenAt2Root::open(temporary.path(), MountPolicy::SameMount).unwrap();
+    let (size, hash, manifest, held) = full_copy_held(
+        open_regular(&source_path).unwrap(),
+        &directory,
+        &EntryName::new("copy").unwrap(),
+        chunk_bytes,
+        bytes.len() as u64,
+    )
+    .unwrap();
+    let destination = temporary.path().join("copy");
+    assert_eq!(fs::read(&destination).unwrap(), bytes);
+    assert_eq!(size, bytes.len() as u64);
+    assert_eq!(hash, blake3::hash(&bytes).to_hex().as_str());
+    assert_eq!(manifest.chunk_bytes, chunk_bytes);
+    assert_eq!(manifest.logical_size, size);
+    assert_eq!(
+        manifest.chunks,
+        bytes
+            .chunks(chunk_bytes as usize)
+            .map(|chunk| *blake3::hash(chunk).as_bytes())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(held.metadata().unwrap().mode() & 0o777, 0o400);
+    assert_eq!(
+        held.metadata().unwrap().ino(),
+        fs::metadata(destination).unwrap().ino()
+    );
+    assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 2);
+}
+
+#[test]
+fn full_copy_preserves_empty_file_commitments_and_final_mode() {
+    let temporary = tempfile::tempdir().unwrap();
+    let source = temporary.path().join("source");
+    let destination = temporary.path().join("empty-copy");
+    fs::write(&source, []).unwrap();
+    let (size, hash, manifest) = full_copy(&source, &destination, 64 * 1024, 0).unwrap();
+    assert_eq!(size, 0);
+    assert_eq!(hash, blake3::hash(&[]).to_hex().as_str());
+    assert_eq!(manifest.logical_size, 0);
+    assert!(manifest.chunks.is_empty());
+    assert_eq!(fs::metadata(destination).unwrap().mode() & 0o777, 0o400);
+}
+
+#[test]
+fn full_copy_size_failure_never_publishes_or_overwrites() {
+    let temporary = tempfile::tempdir().unwrap();
+    let source = temporary.path().join("source");
+    fs::write(&source, b"larger than the maximum").unwrap();
+    for existing in [false, true] {
+        let destination = temporary.path().join("copy");
+        if existing {
+            fs::write(&destination, b"keep original").unwrap();
+        }
+        let error = full_copy(&source, &destination, 64 * 1024, 1).unwrap_err();
+        assert_eq!(error.code(), "FILE_TOO_LARGE");
+        if existing {
+            assert_eq!(fs::read(&destination).unwrap(), b"keep original");
+        } else {
+            assert!(!destination.exists());
+        }
+        assert_eq!(
+            fs::read_dir(temporary.path()).unwrap().count(),
+            1 + usize::from(existing)
+        );
+    }
+}
+
 fn published_body() -> (tempfile::TempDir, PathBuf, FileVersion) {
     let temporary = tempfile::tempdir().unwrap();
     let config = Config::development([

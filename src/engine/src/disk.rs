@@ -380,8 +380,9 @@ fn full_copy_checked(
                 "exported content differs from the published manifest",
             ));
         }
-        target.sync_all()?;
         target.set_permissions(fs::Permissions::from_mode(0o400))?;
+        // Persist the complete bytes and final mode together before publishing
+        // the name. The rename still needs its own parent-directory barrier.
         target.sync_all()?;
         rustix::fs::renameat_with(
             directory.directory(),

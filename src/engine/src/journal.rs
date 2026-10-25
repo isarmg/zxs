@@ -2,10 +2,10 @@ use crate::{disk::*, *};
 use data_serialization::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::{Read, Write},
+    io::{BufReader, Read, Write},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 pub(crate) const MAX_FRAME: usize = 16 * 1024 * 1024;
 const LOG_MAGIC: &[u8; 8] = b"ZXSLOG\0\0";
@@ -73,7 +73,7 @@ pub(crate) fn scan(d: &DiskConfig) -> Result<Scan> {
     #[cfg(test)]
     SCAN_COUNT.with(|count| count.set(count.get() + 1));
     let path = log_path(d);
-    let Some(mut file) = open_optional_regular(&path)? else {
+    let Some(file) = open_optional_regular(&path)? else {
         return Ok(Scan {
             records: Vec::new(),
             valid_bytes: 0,
@@ -82,6 +82,19 @@ pub(crate) fn scan(d: &DiskConfig) -> Result<Scan> {
         });
     };
     let before = FileStamp::of(&file)?;
+    let mut out = scan_frames(BufReader::new(&file))?;
+    // Bind reuse to the exact descriptor whose bytes were verified, not a new
+    // fingerprint captured later. Torn or concurrently changed logs get no hint.
+    if !out.torn_tail
+        && FileStamp::of(&file)? == before
+        && FileStamp::of(&open_regular(&path)?)? == before
+    {
+        out.stamp = Some(before);
+    }
+    Ok(out)
+}
+
+fn scan_frames(mut reader: impl Read) -> Result<Scan> {
     let mut out = Scan {
         records: Vec::new(),
         valid_bytes: 0,
@@ -94,7 +107,7 @@ pub(crate) fn scan(d: &DiskConfig) -> Result<Scan> {
         let mut header = [0u8; LOG_HEADER_BYTES];
         let mut got = 0;
         while got < LOG_HEADER_BYTES {
-            let n = file.read(&mut header[got..])?;
+            let n = reader.read(&mut header[got..])?;
             if n == 0 {
                 break;
             }
@@ -119,7 +132,7 @@ pub(crate) fn scan(d: &DiskConfig) -> Result<Scan> {
             return Err(Error::new("LOG_CORRUPT", "log frame length exceeds limit"));
         }
         let mut payload = vec![0; len];
-        if let Err(e) = file.read_exact(&mut payload) {
+        if let Err(e) = reader.read_exact(&mut payload) {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
                 out.torn_tail = true;
                 break;
@@ -127,7 +140,7 @@ pub(crate) fn scan(d: &DiskConfig) -> Result<Scan> {
             return Err(e.into());
         }
         let mut digest = [0; 32];
-        if let Err(e) = file.read_exact(&mut digest) {
+        if let Err(e) = reader.read_exact(&mut digest) {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
                 out.torn_tail = true;
                 break;
@@ -164,14 +177,6 @@ pub(crate) fn scan(d: &DiskConfig) -> Result<Scan> {
         out.records.push((record, previous.clone()));
         out.valid_bytes += LOG_HEADER_BYTES as u64 + len as u64 + 32;
     }
-    // Bind reuse to the exact descriptor whose bytes were verified, not a new
-    // fingerprint captured later. Torn or concurrently changed logs get no hint.
-    if !out.torn_tail
-        && FileStamp::of(&file)? == before
-        && FileStamp::of(&open_regular(&path)?)? == before
-    {
-        out.stamp = Some(before);
-    }
     Ok(out)
 }
 // A process-local optimization, never a recovery authority. Keep only the current
@@ -206,6 +211,54 @@ const MAX_CACHED_JOURNALS: usize = 64;
 fn tails() -> &'static Mutex<BTreeMap<PathBuf, VerifiedTail>> {
     static TAILS: OnceLock<Mutex<BTreeMap<PathBuf, VerifiedTail>>> = OnceLock::new();
     TAILS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn writers() -> &'static Mutex<BTreeMap<PathBuf, Arc<Mutex<()>>>> {
+    static WRITERS: OnceLock<Mutex<BTreeMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    WRITERS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+// A lease exists for every holder AND waiter. Cache eviction never removes a
+// writer lock, and the registry owns no paths once their last lease is gone.
+// Configured roots are absolute, traversal-free and symlink-safe, like log I/O.
+struct JournalWriter {
+    path: PathBuf,
+    lock: Option<Arc<Mutex<()>>>,
+}
+impl JournalWriter {
+    fn acquire(path: &Path) -> Result<Self> {
+        let mut writers = writers()
+            .lock()
+            .map_err(|_| Error::new("RECOVERY_REQUIRED", "journal writer registry poisoned"))?;
+        let lock = writers.entry(path.to_path_buf()).or_default().clone();
+        Ok(Self {
+            path: path.to_path_buf(),
+            lock: Some(lock),
+        })
+    }
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, ()>> {
+        self.lock
+            .as_ref()
+            .expect("live journal writer lease")
+            .lock()
+            .map_err(|_| Error::new("RECOVERY_REQUIRED", "journal writer lock poisoned"))
+    }
+}
+impl Drop for JournalWriter {
+    fn drop(&mut self) {
+        let Ok(mut writers) = writers().lock() else {
+            return;
+        };
+        // Release this lease while holding the registry lock too: simultaneous
+        // drops must not each see the other's soon-to-be-released ownership.
+        drop(self.lock.take());
+        if writers
+            .get(&self.path)
+            .is_some_and(|lock| Arc::strong_count(lock) == 1)
+        {
+            writers.remove(&self.path);
+        }
+    }
 }
 
 pub(crate) fn append(
@@ -278,13 +331,16 @@ fn append_with_sync(
     synchronize: impl FnOnce(&std::fs::File, &Path) -> Result<()>,
 ) -> Result<Receipt> {
     let path = log_path(d);
+    let writer = JournalWriter::acquire(&path)?;
+    let _writer_guard = writer.lock()?;
     private_dir(path.parent().expect("log parent"))?;
-    // Serialize cache lookup and append together. A failed operation removes its
-    // entry before touching disk, so retries must verify any partial write.
-    let mut tails = tails()
+    // Only this journal stays locked across I/O. The global cache is held just
+    // for removal/insertion, never for a scan or either durability barrier.
+    // Remove before touching disk so failures force partial writes to be checked.
+    let cached = tails()
         .lock()
-        .map_err(|_| Error::new("RECOVERY_REQUIRED", "journal cache lock poisoned"))?;
-    let cached = tails.remove(&path);
+        .map_err(|_| Error::new("RECOVERY_REQUIRED", "journal cache lock poisoned"))?
+        .remove(&path);
     let mut file = open_append_regular(&path)?;
     let before = FileStamp::of(&file)?;
     if let Some(scanned) = scanned_receipt.filter(|s| *s.stamp == before) {
@@ -339,7 +395,7 @@ fn append_with_sync(
             record: record.clone(),
         };
         if !scanned.torn_tail {
-            cache_tail(&mut tails, path, before, scanned.records);
+            cache_tail(path, before, scanned.records)?;
         }
         return Ok(receipt);
     }
@@ -415,7 +471,7 @@ fn append_with_sync(
     }
     let mut records = scanned.records;
     records.push((record.clone(), digest.to_hex().to_string()));
-    cache_tail(&mut tails, path, stamp, records);
+    cache_tail(path, stamp, records)?;
     Ok(Receipt {
         disk_id: d.disk_id.clone(),
         slot_id: d.slot_id.clone(),
@@ -423,12 +479,7 @@ fn append_with_sync(
         record,
     })
 }
-fn cache_tail(
-    tails: &mut BTreeMap<PathBuf, VerifiedTail>,
-    path: PathBuf,
-    stamp: FileStamp,
-    mut records: Vec<(Record, String)>,
-) {
+fn cache_tail(path: PathBuf, stamp: FileStamp, mut records: Vec<(Record, String)>) -> Result<()> {
     if let Some((last, _)) = records.last() {
         let sequence = last.sequence;
         records.retain(|(r, _)| r.sequence == sequence);
@@ -446,15 +497,19 @@ fn cache_tail(
         })
         .sum::<usize>();
     if records.len() > 64 || retained_bytes > 64 * 1024 {
-        return;
+        return Ok(());
     }
     // Do not retain the allocation of a full historical scan.
     records.shrink_to_fit();
+    let mut tails = tails()
+        .lock()
+        .map_err(|_| Error::new("RECOVERY_REQUIRED", "journal cache lock poisoned"))?;
     // Bound cache size across unrelated engines; eviction only costs a rescan.
     if tails.len() >= MAX_CACHED_JOURNALS {
         tails.pop_first();
     }
     tails.insert(path, VerifiedTail { stamp, records });
+    Ok(())
 }
 
 mod object_storage;
@@ -1117,6 +1172,14 @@ mod replication_tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/journal/tail_cache_tests.rs"]
 mod tail_cache_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/journal/scanner_tests.rs"]
+mod scanner_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/journal/writer_tests.rs"]
+mod writer_tests;
 
 #[cfg(test)]
 #[path = "../../../test/engine/unit/journal/snapshot_partition_tests.rs"]
