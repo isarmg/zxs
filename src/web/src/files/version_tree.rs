@@ -87,18 +87,79 @@ fn inherited_current(model: &Model, version: &str) -> bool {
             .is_some_and(|entry| inherited_content(entry) && history_node_id(entry) == version)
 }
 
-fn reachable(start: &str, goal: &str, children: &BTreeMap<String, BTreeSet<String>>) -> bool {
-    let mut pending = vec![start.to_owned()];
-    let mut seen = BTreeSet::new();
-    while let Some(id) = pending.pop() {
-        if id == goal {
-            return true;
+/// Iterative Kosaraju traversal: each adjacency is visited once in each
+/// direction, without using the browser call stack for long histories.
+fn components(children: &[Vec<usize>], parents: &[Vec<usize>]) -> Vec<usize> {
+    let mut seen = vec![false; children.len()];
+    let mut finished = Vec::with_capacity(children.len());
+    let mut pending = Vec::new();
+    for start in 0..children.len() {
+        if seen[start] {
+            continue;
         }
-        if seen.insert(id.clone()) {
-            pending.extend(children.get(&id).into_iter().flatten().cloned());
+        seen[start] = true;
+        pending.push((start, 0));
+        while let Some((node, next)) = pending.last_mut() {
+            if let Some(&child) = children[*node].get(*next) {
+                *next += 1;
+                #[cfg(test)]
+                LAYOUT_WORK.with(|work| work.borrow_mut().component_edges += 1);
+                if !seen[child] {
+                    seen[child] = true;
+                    pending.push((child, 0));
+                }
+            } else {
+                finished.push(*node);
+                pending.pop();
+                #[cfg(test)]
+                LAYOUT_WORK.with(|work| work.borrow_mut().component_nodes += 1);
+            }
         }
     }
-    false
+    let mut component = vec![usize::MAX; children.len()];
+    let mut pending = Vec::new();
+    for start in finished.into_iter().rev() {
+        if component[start] != usize::MAX {
+            continue;
+        }
+        component[start] = start;
+        pending.push(start);
+        while let Some(node) = pending.pop() {
+            #[cfg(test)]
+            LAYOUT_WORK.with(|work| work.borrow_mut().component_nodes += 1);
+            for &parent in &parents[node] {
+                #[cfg(test)]
+                LAYOUT_WORK.with(|work| work.borrow_mut().component_edges += 1);
+                if component[parent] == usize::MAX {
+                    component[parent] = start;
+                    pending.push(parent);
+                }
+            }
+        }
+    }
+    component
+}
+
+#[cfg(test)]
+#[derive(Debug, Default, PartialEq, Eq)]
+struct LayoutWork {
+    component_nodes: usize,
+    component_edges: usize,
+    candidate_edges: usize,
+    topology_edges: usize,
+    center_edges: usize,
+    ready_pushes: usize,
+    ready_pops: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static LAYOUT_WORK: std::cell::RefCell<LayoutWork> = const {
+        std::cell::RefCell::new(LayoutWork {
+            component_nodes: 0, component_edges: 0, candidate_edges: 0,
+            topology_edges: 0, center_edges: 0, ready_pushes: 0, ready_pops: 0,
+        })
+    };
 }
 
 /// Only declared, visible parents produce edges. Cyclic edges are isolated
@@ -111,107 +172,135 @@ fn layout(versions: &[Version]) -> Layout {
     for version in sorted {
         nodes.entry(version.id.clone()).or_insert(version);
     }
-    let mut children = BTreeMap::<String, BTreeSet<String>>::new();
-    for version in nodes.values() {
+    let nodes = nodes.into_values().collect::<Vec<_>>();
+    let indexes = nodes
+        .iter()
+        .enumerate()
+        .map(|(index, version)| (version.id.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut children = vec![Vec::new(); nodes.len()];
+    for (child, version) in nodes.iter().enumerate() {
         for parent in &version.parents {
-            if parent != &version.id && nodes.contains_key(parent) {
-                children
-                    .entry(parent.clone())
-                    .or_default()
-                    .insert(version.id.clone());
+            if let Some(&parent) = indexes.get(parent.as_str())
+                && parent != child
+                && children[parent].last() != Some(&child)
+            {
+                // Node iteration is in identity order, preserving the original
+                // BTreeSet child order while deduplicating declared parents.
+                children[parent].push(child);
             }
         }
     }
+    let mut parents = vec![Vec::new(); nodes.len()];
+    for (parent, descendants) in children.iter().enumerate() {
+        for &child in descendants {
+            parents[child].push(parent);
+        }
+    }
+    let component = components(&children, &parents);
     let mut edges = Vec::new();
-    for (parent, descendants) in &children {
-        for child in descendants {
-            if !reachable(child, parent, &children) {
-                edges.push((parent.clone(), child.clone()));
+    let mut accepted_children = vec![Vec::new(); nodes.len()];
+    let mut accepted_parents = vec![Vec::new(); nodes.len()];
+    for (parent, descendants) in children.iter().enumerate() {
+        for &child in descendants {
+            #[cfg(test)]
+            LAYOUT_WORK.with(|work| work.borrow_mut().candidate_edges += 1);
+            // With parent -> child already declared, child reaches parent iff
+            // both are in the same SCC. Remove every cyclic edge, not merely
+            // DFS back edges. Redundant acyclic ancestry edges remain visible.
+            if component[parent] != component[child] {
+                edges.push((nodes[parent].id.clone(), nodes[child].id.clone()));
+                accepted_children[parent].push(child);
+                accepted_parents[child].push(parent);
             }
         }
     }
     // Walk from all branch tips towards old ancestors. This is a reverse
     // topological layout, not a visual reversal of the old root-first layers:
     // tips of both short and long branches belong on the first layer.
-    let mut remaining_children = nodes
-        .keys()
-        .map(|id| (id.clone(), 0usize))
-        .collect::<BTreeMap<_, _>>();
-    let mut accepted_parents = BTreeMap::<String, Vec<String>>::new();
-    for (parent, child) in &edges {
-        *remaining_children.get_mut(parent).expect("visible parent") += 1;
-        accepted_parents
-            .entry(child.clone())
-            .or_default()
-            .push(parent.clone());
+    let mut remaining_children = accepted_children.iter().map(Vec::len).collect::<Vec<_>>();
+    let mut by_priority = (0..nodes.len()).collect::<Vec<_>>();
+    by_priority.sort_by(|&a, &b| newer_first(&nodes[a], &nodes[b]));
+    let mut priority = vec![0; nodes.len()];
+    for (rank, &node) in by_priority.iter().enumerate() {
+        priority[node] = rank;
     }
-    let mut ready = nodes
-        .values()
-        .filter(|v| remaining_children[&v.id] == 0)
-        .collect::<Vec<_>>();
-    ready.sort_by(|a, b| newer_first(a, b));
-    let mut depths = BTreeMap::<String, usize>::new();
-    let mut levels = Vec::<Vec<String>>::new();
-    while !ready.is_empty() {
-        let version = ready.remove(0);
-        let depth = depths.get(&version.id).copied().unwrap_or(0);
+    let mut ready = remaining_children
+        .iter()
+        .enumerate()
+        .filter(|(_, count)| **count == 0)
+        .map(|(node, _)| priority[node])
+        .collect::<BTreeSet<_>>();
+    #[cfg(test)]
+    LAYOUT_WORK.with(|work| work.borrow_mut().ready_pushes += ready.len());
+    let mut depths = vec![0; nodes.len()];
+    let mut levels = Vec::<Vec<usize>>::new();
+    while let Some(rank) = ready.pop_first() {
+        let node = by_priority[rank];
+        #[cfg(test)]
+        LAYOUT_WORK.with(|work| work.borrow_mut().ready_pops += 1);
+        let depth = depths[node];
         if levels.len() <= depth {
             levels.resize(depth + 1, Vec::new());
         }
-        levels[depth].push(version.id.clone());
-        for parent in accepted_parents.get(&version.id).into_iter().flatten() {
-            depths
-                .entry(parent.clone())
-                .and_modify(|d| *d = (*d).max(depth + 1))
-                .or_insert(depth + 1);
-            let count = remaining_children.get_mut(parent).expect("visible parent");
-            *count -= 1;
-            if *count == 0 {
-                ready.push(&nodes[parent]);
+        levels[depth].push(node);
+        for &parent in &accepted_parents[node] {
+            #[cfg(test)]
+            LAYOUT_WORK.with(|work| work.borrow_mut().topology_edges += 1);
+            depths[parent] = depths[parent].max(depth + 1);
+            remaining_children[parent] -= 1;
+            if remaining_children[parent] == 0 {
+                ready.insert(priority[parent]);
+                #[cfg(test)]
+                LAYOUT_WORK.with(|work| work.borrow_mut().ready_pushes += 1);
             }
         }
-        ready.sort_by(|a, b| newer_first(a, b));
     }
     if let Some(tips) = levels.first_mut() {
-        tips.sort_by(|a, b| newer_first(&nodes[a], &nodes[b]));
+        tips.sort_unstable_by_key(|&node| priority[node]);
     }
+    let mut positions = vec![0; nodes.len()];
+    let mut centers = vec![(usize::MAX as u128, 1u128, usize::MAX); nodes.len()];
     for depth in 1..levels.len() {
-        let positions = levels[depth - 1]
-            .iter()
-            .enumerate()
-            .map(|(index, id)| (id.as_str(), index))
-            .collect::<BTreeMap<_, _>>();
+        for (index, &node) in levels[depth - 1].iter().enumerate() {
+            positions[node] = index;
+        }
         // Group ancestors by the positions of their newer children on the
         // preceding display layer; all cross-layer source edges remain intact.
-        let centers = levels[depth]
-            .iter()
-            .map(|id| {
-                let children = edges
-                    .iter()
-                    .filter(|(parent, _)| parent == id)
-                    .filter_map(|(_, child)| positions.get(child.as_str()).copied())
-                    .collect::<Vec<_>>();
-                let key = if children.is_empty() {
-                    (usize::MAX as u128, 1u128, usize::MAX)
-                } else {
-                    (
-                        children.iter().map(|index| *index as u128).sum(),
-                        children.len() as u128,
-                        *children.iter().min().expect("nonempty children"),
-                    )
-                };
-                (id.clone(), key)
-            })
-            .collect::<BTreeMap<_, _>>();
-        levels[depth].sort_by(|a, b| {
+        for &node in &levels[depth] {
+            let (mut sum, mut count, mut minimum) = (0u128, 0u128, usize::MAX);
+            for &child in &accepted_children[node] {
+                #[cfg(test)]
+                LAYOUT_WORK.with(|work| work.borrow_mut().center_edges += 1);
+                if depths[child] == depth - 1 {
+                    let position = positions[child];
+                    sum += position as u128;
+                    count += 1;
+                    minimum = minimum.min(position);
+                }
+            }
+            if count != 0 {
+                centers[node] = (sum, count, minimum);
+            }
+        }
+        levels[depth].sort_by(|&a, &b| {
             let (a_sum, a_count, a_min) = centers[a];
             let (b_sum, b_count, b_min) = centers[b];
             (a_sum * b_count)
                 .cmp(&(b_sum * a_count))
                 .then_with(|| a_min.cmp(&b_min))
-                .then_with(|| newer_first(&nodes[a], &nodes[b]))
+                .then_with(|| priority[a].cmp(&priority[b]))
         });
     }
+    let levels = levels
+        .into_iter()
+        .map(|level| {
+            level
+                .into_iter()
+                .map(|node| nodes[node].id.clone())
+                .collect()
+        })
+        .collect();
     Layout { levels, edges }
 }
 

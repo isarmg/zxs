@@ -428,3 +428,368 @@ fn history_identity_indexes_payloads_once_and_preserves_node_keys_on_note_refres
         assert_eq!(INDEX_COPIES.with(|c| c.get()), 2 * count);
     });
 }
+
+// Frozen pre-indexed layout oracle. This implementation is compiled only for tests.
+fn reference_reachable(
+    start: &str,
+    goal: &str,
+    children: &BTreeMap<String, BTreeSet<String>>,
+) -> bool {
+    let mut pending = vec![start.to_owned()];
+    let mut seen = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if id == goal {
+            return true;
+        }
+        if seen.insert(id.clone()) {
+            pending.extend(children.get(&id).into_iter().flatten().cloned());
+        }
+    }
+    false
+}
+
+/// Only declared, visible parents produce edges. Cyclic edges are isolated
+/// rather than inventing chronology or making the traversal recurse forever.
+fn reference_layout(versions: &[Version]) -> Layout {
+    let mut nodes = BTreeMap::<String, Version>::new();
+    // Stable conflict handling also makes duplicate identities harmless.
+    let mut sorted = versions.to_vec();
+    sorted.sort();
+    for version in sorted {
+        nodes.entry(version.id.clone()).or_insert(version);
+    }
+    let mut children = BTreeMap::<String, BTreeSet<String>>::new();
+    for version in nodes.values() {
+        for parent in &version.parents {
+            if parent != &version.id && nodes.contains_key(parent) {
+                children
+                    .entry(parent.clone())
+                    .or_default()
+                    .insert(version.id.clone());
+            }
+        }
+    }
+    let mut edges = Vec::new();
+    for (parent, descendants) in &children {
+        for child in descendants {
+            if !reference_reachable(child, parent, &children) {
+                edges.push((parent.clone(), child.clone()));
+            }
+        }
+    }
+    // Walk from all branch tips towards old ancestors. This is a reverse
+    // topological layout, not a visual reversal of the old root-first layers:
+    // tips of both short and long branches belong on the first layer.
+    let mut remaining_children = nodes
+        .keys()
+        .map(|id| (id.clone(), 0usize))
+        .collect::<BTreeMap<_, _>>();
+    let mut accepted_parents = BTreeMap::<String, Vec<String>>::new();
+    for (parent, child) in &edges {
+        *remaining_children.get_mut(parent).expect("visible parent") += 1;
+        accepted_parents
+            .entry(child.clone())
+            .or_default()
+            .push(parent.clone());
+    }
+    let mut ready = nodes
+        .values()
+        .filter(|v| remaining_children[&v.id] == 0)
+        .collect::<Vec<_>>();
+    ready.sort_by(|a, b| newer_first(a, b));
+    let mut depths = BTreeMap::<String, usize>::new();
+    let mut levels = Vec::<Vec<String>>::new();
+    while !ready.is_empty() {
+        let version = ready.remove(0);
+        let depth = depths.get(&version.id).copied().unwrap_or(0);
+        if levels.len() <= depth {
+            levels.resize(depth + 1, Vec::new());
+        }
+        levels[depth].push(version.id.clone());
+        for parent in accepted_parents.get(&version.id).into_iter().flatten() {
+            depths
+                .entry(parent.clone())
+                .and_modify(|d| *d = (*d).max(depth + 1))
+                .or_insert(depth + 1);
+            let count = remaining_children.get_mut(parent).expect("visible parent");
+            *count -= 1;
+            if *count == 0 {
+                ready.push(&nodes[parent]);
+            }
+        }
+        ready.sort_by(|a, b| newer_first(a, b));
+    }
+    if let Some(tips) = levels.first_mut() {
+        tips.sort_by(|a, b| newer_first(&nodes[a], &nodes[b]));
+    }
+    for depth in 1..levels.len() {
+        let positions = levels[depth - 1]
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (id.as_str(), index))
+            .collect::<BTreeMap<_, _>>();
+        // Group ancestors by the positions of their newer children on the
+        // preceding display layer; all cross-layer source edges remain intact.
+        let centers = levels[depth]
+            .iter()
+            .map(|id| {
+                let children = edges
+                    .iter()
+                    .filter(|(parent, _)| parent == id)
+                    .filter_map(|(_, child)| positions.get(child.as_str()).copied())
+                    .collect::<Vec<_>>();
+                let key = if children.is_empty() {
+                    (usize::MAX as u128, 1u128, usize::MAX)
+                } else {
+                    (
+                        children.iter().map(|index| *index as u128).sum(),
+                        children.len() as u128,
+                        *children.iter().min().expect("nonempty children"),
+                    )
+                };
+                (id.clone(), key)
+            })
+            .collect::<BTreeMap<_, _>>();
+        levels[depth].sort_by(|a, b| {
+            let (a_sum, a_count, a_min) = centers[a];
+            let (b_sum, b_count, b_min) = centers[b];
+            (a_sum * b_count)
+                .cmp(&(b_sum * a_count))
+                .then_with(|| a_min.cmp(&b_min))
+                .then_with(|| newer_first(&nodes[a], &nodes[b]))
+        });
+    }
+    Layout { levels, edges }
+}
+
+#[test]
+fn indexed_layout_matches_reference_for_every_four_node_directed_graph() {
+    let names = ["a", "b", "c", "d"];
+    let candidates = (0..names.len())
+        .flat_map(|parent| {
+            (0..names.len())
+                .filter(move |&child| child != parent)
+                .map(move |child| (parent, child))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(candidates.len(), 12);
+    for mask in 0..1usize << candidates.len() {
+        let mut records = names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| v(name, index as u64, &[]))
+            .collect::<Vec<_>>();
+        for (bit, &(parent, child)) in candidates.iter().enumerate() {
+            if mask & (1 << bit) != 0 {
+                records[child].parents.push(names[parent].into());
+            }
+        }
+        for dates in [
+            ["same", "same", "same", "same"],
+            ["", "later", "earlier", ""],
+            ["z", "c", "b", "a"],
+        ] {
+            for (record, created) in records.iter_mut().zip(dates) {
+                record.created = created.into();
+            }
+            let expected = reference_layout(&records);
+            assert_eq!(layout(&records), expected, "mask {mask}, dates {dates:?}");
+            records.reverse();
+            assert_eq!(layout(&records), expected, "reversed mask {mask}");
+            records.reverse();
+        }
+    }
+}
+
+#[test]
+fn indexed_layout_preserves_conflicting_identity_and_parent_normalization() {
+    let mut records = vec![
+        v("a", 1, &["missing", "a"]),
+        v("b", 2, &["a", "a", "missing", "b"]),
+        v("c", 3, &["b", "a"]),
+        // Whole-Version ordering chooses this duplicate before normalization.
+        v("c", 3, &["a", "b"]),
+        v("c", 4, &["d"]),
+        v("d", 4, &["c"]),
+        v("e", 5, &[]),
+    ];
+    let expected = reference_layout(&records);
+    for _ in 0..records.len() {
+        assert_eq!(layout(&records), expected);
+        records.rotate_left(1);
+    }
+    records.reverse();
+    assert_eq!(layout(&records), expected);
+    assert_eq!(layout(&[]), reference_layout(&[]));
+}
+
+#[test]
+fn indexed_layout_rejects_all_cycle_edges_but_keeps_external_and_transitive_edges() {
+    let records = [
+        v("source", 1, &[]),
+        v("a", 2, &["source", "c"]),
+        v("b", 3, &["a"]),
+        v("c", 4, &["a", "b"]),
+        v("tail", 5, &["b", "c"]),
+        v("tip", 6, &["tail", "source"]),
+    ];
+    let tree = layout(&records);
+    assert_eq!(tree, reference_layout(&records));
+    assert_eq!(
+        tree.edges,
+        vec![
+            ("b".into(), "tail".into()),
+            ("c".into(), "tail".into()),
+            ("source".into(), "a".into()),
+            ("source".into(), "tip".into()),
+            ("tail".into(), "tip".into()),
+        ]
+    );
+    let triangle = [v("a", 1, &[]), v("b", 2, &["a"]), v("c", 3, &["a", "b"])];
+    assert_eq!(layout(&triangle).edges.len(), 3, "not transitive reduction");
+}
+
+fn measured_layout(records: &[Version]) -> (Layout, LayoutWork) {
+    LAYOUT_WORK.with(|work| *work.borrow_mut() = LayoutWork::default());
+    let tree = layout(records);
+    let work = LAYOUT_WORK.with(|work| std::mem::take(&mut *work.borrow_mut()));
+    (tree, work)
+}
+
+fn assert_linear_graph_visits(work: &LayoutWork, nodes: usize, candidates: usize, accepted: usize) {
+    assert_eq!(work.component_nodes, 2 * nodes);
+    assert_eq!(work.component_edges, 2 * candidates);
+    assert_eq!(work.candidate_edges, candidates);
+    assert_eq!(work.topology_edges, accepted);
+    assert_eq!(work.center_edges, accepted);
+    assert_eq!(work.ready_pushes, nodes);
+    assert_eq!(work.ready_pops, nodes);
+}
+
+#[test]
+fn a_long_chain_uses_linear_graph_visits_and_no_recursive_traversal() {
+    for count in [2_048, 4_096, 20_000] {
+        let records = (0..count)
+            .map(|index| Version {
+                id: format!("node-{index:05}"),
+                created: String::new(),
+                parents: if index == 0 {
+                    vec![]
+                } else {
+                    vec![format!("node-{:05}", index - 1)]
+                },
+            })
+            .collect::<Vec<_>>();
+        let (tree, work) = measured_layout(&records);
+        assert_linear_graph_visits(&work, count, count - 1, count - 1);
+        assert_eq!(tree.levels.len(), count);
+        assert_eq!(tree.edges.len(), count - 1);
+        for (depth, level) in tree.levels.iter().enumerate() {
+            assert_eq!(level, &[format!("node-{:05}", count - depth - 1)]);
+        }
+        // The old chain did N(N-1)/2 reachability visits plus (N-1)^2
+        // center predicates. This asserts operation counts, not elapsed time.
+        let old_visits = count * (count - 1) / 2 + (count - 1) * (count - 1);
+        let visits = work.component_nodes
+            + work.component_edges
+            + work.candidate_edges
+            + work.topology_edges
+            + work.center_edges
+            + work.ready_pushes
+            + work.ready_pops;
+        assert!(visits < 10 * count);
+        assert!(old_visits > visits * 100);
+    }
+}
+
+#[test]
+fn wide_layered_dag_visits_each_edge_once_per_layout_stage() {
+    let width = 2_048;
+    let layers = 4;
+    let mut records = Vec::new();
+    for layer in 0..layers {
+        for column in 0..width {
+            records.push(Version {
+                id: format!("node-{layer}-{column:04}"),
+                created: if column % 3 == 0 {
+                    String::new()
+                } else {
+                    format!("date-{:04}", column % 11)
+                },
+                parents: if layer == 0 {
+                    vec![]
+                } else {
+                    vec![
+                        format!("node-{}-{column:04}", layer - 1),
+                        format!("node-{}-{:04}", layer - 1, (column + 1) % width),
+                    ]
+                },
+            });
+        }
+    }
+    let edges = (layers - 1) * width * 2;
+    let (tree, work) = measured_layout(&records);
+    assert_linear_graph_visits(&work, layers * width, edges, edges);
+    assert_eq!(tree.edges.len(), edges);
+    assert_eq!(tree.levels.len(), layers);
+    assert!(tree.levels.iter().all(|level| level.len() == width));
+    assert_eq!(ids(&tree).len(), layers * width);
+    records.reverse();
+    assert_eq!(layout(&records), tree);
+}
+
+#[test]
+fn a_large_cycle_keeps_nodes_without_recursive_or_per_edge_reachability() {
+    let count = 20_000;
+    let records = (0..count)
+        .map(|index| Version {
+            id: format!("node-{index:05}"),
+            created: String::new(),
+            parents: vec![format!("node-{:05}", (index + count - 1) % count)],
+        })
+        .collect::<Vec<_>>();
+    let (tree, work) = measured_layout(&records);
+    assert_linear_graph_visits(&work, count, count, 0);
+    assert!(tree.edges.is_empty());
+    assert_eq!(tree.levels.len(), 1);
+    assert_eq!(
+        tree.levels[0],
+        records
+            .iter()
+            .map(|record| record.id.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn equal_rational_centers_use_minimum_child_then_original_priority() {
+    let different_minimum = [
+        v("outer", 1, &[]),
+        v("middle", 99, &[]),
+        v("tip-0", 30, &["outer"]),
+        v("tip-1", 20, &["middle"]),
+        v("tip-2", 10, &["outer"]),
+    ];
+    let tree = layout(&different_minimum);
+    assert_eq!(tree, reference_layout(&different_minimum));
+    // Both means are one; {0, 2} precedes {1} even with an older timestamp.
+    assert_eq!(
+        tree.levels,
+        vec![vec!["tip-0", "tip-1", "tip-2"], vec!["outer", "middle"]]
+    );
+
+    let different_count = [
+        v("outer", 1, &[]),
+        v("all", 99, &[]),
+        v("tip-0", 30, &["outer", "all"]),
+        v("tip-1", 20, &["all"]),
+        v("tip-2", 10, &["outer", "all"]),
+    ];
+    let tree = layout(&different_count);
+    assert_eq!(tree, reference_layout(&different_count));
+    // 2/2 == 3/3 and both minima are zero, so newer_first breaks the tie.
+    assert_eq!(
+        tree.levels,
+        vec![vec!["tip-0", "tip-1", "tip-2"], vec!["all", "outer"]]
+    );
+}
