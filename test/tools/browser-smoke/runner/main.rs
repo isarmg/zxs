@@ -19,6 +19,7 @@ use std::{
 mod base64_compatibility_tests;
 
 mod accessibility;
+mod contours;
 mod diagnostics;
 mod file_pagination;
 mod file_rows;
@@ -403,6 +404,7 @@ fn exercise(
     println!("PASS uncaught-error and real HTTP/WASM response checks");
     lifecycle::run(browser, origin)?;
     fonts::run(browser, origin)?;
+    contours::run(browser, origin)?;
     Ok(())
 }
 

@@ -16,7 +16,18 @@ fn observer(event: &str) -> String {
     format!(
         r#"
 (() => {{
-  const active = new Set();
+  const active = new Set(), urls = new Set();
+  const nativeCreateURL = URL.createObjectURL, nativeRevokeURL = URL.revokeObjectURL;
+  URL.createObjectURL = function(...args) {{
+    const url = Reflect.apply(nativeCreateURL, this, args);
+    urls.add(url);
+    return url;
+  }};
+  URL.revokeObjectURL = function(...args) {{
+    const result = Reflect.apply(nativeRevokeURL, this, args);
+    urls.delete(args[0]);
+    return result;
+  }};
   const nativeSet = window.setInterval;
   const nativeClear = window.clearInterval;
   window.setInterval = function(...args) {{
@@ -34,11 +45,11 @@ fn observer(event: &str) -> String {
   document.addEventListener('zxs-startup-ready', () => {{
     const record = window.__zxsSmokeLifecycle;
     const root = document.getElementById('root');
-    record.before = {{nodes:root.childNodes.length, intervals:active.size}};
+    record.before = {{nodes:root.childNodes.length, intervals:active.size, urls:urls.size}};
     {action}
-    record.synchronous = {{nodes:root.childNodes.length, intervals:active.size}};
+    record.synchronous = {{nodes:root.childNodes.length, intervals:active.size, urls:urls.size}};
     queueMicrotask(() => {{
-      record.after = {{nodes:root.childNodes.length, intervals:active.size,
+      record.after = {{nodes:root.childNodes.length, intervals:active.size, urls:urls.size,
         phase:document.documentElement.getAttribute('data-zxs-startup')}};
       record.fired = true;
     }});
@@ -78,8 +89,10 @@ pub(super) fn run(browser: &Browser, origin: &str) -> Result<()> {
                 for phase in ["synchronous", "after"] {
                     let state = &record[phase];
                     let retained = state["nodes"].as_u64().unwrap_or(0) > 0
-                        && state["intervals"] == record["before"]["intervals"];
-                    let disposed = state["nodes"] == 0 && state["intervals"] == 0;
+                        && state["intervals"] == 0
+                        && state["urls"] == record["before"]["urls"];
+                    let disposed =
+                        state["nodes"] == 0 && state["intervals"] == 0 && state["urls"] == 0;
                     if !(if event == "cached" {
                         retained
                     } else {
@@ -95,6 +108,12 @@ pub(super) fn run(browser: &Browser, origin: &str) -> Result<()> {
                     // Retention is useful only if real async session restoration
                     // can still finish and present the anonymous application.
                     browser.css("input[autocomplete='current-password']")?;
+                    browser.script("window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true})); window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true})); return true")?;
+                    if browser.script("return window.__zxsSmokeLifecycle.intervals()")?
+                        != record["before"]["intervals"]
+                    {
+                        return Err("cached page did not resume exactly one timer pair".into());
+                    }
                 }
                 let errors = browser.script("return window.__zxsSmokeErrors")?;
                 if errors != json!([]) {
@@ -112,6 +131,7 @@ pub(super) fn run(browser: &Browser, origin: &str) -> Result<()> {
         )?;
         println!("PASS synchronous startup-ready {event} lifecycle and owner timer cleanup");
     }
+    visibility_reads(browser, origin)?;
     pending_session_response(browser, origin)?;
     // Do not leave the browser on the injected failed/disposed page. A normal
     // navigation and reload must still initialize the production application.
@@ -219,5 +239,54 @@ fn pending_session_response(browser: &Browser, origin: &str) -> Result<()> {
         },
     )?;
     println!("PASS original pending session response cannot access a disposed owner");
+    Ok(())
+}
+
+// Deliberate visibility-event injection against the real WASM/timer lifecycle.
+// This tests scheduling deterministically; it is not an OS tab-suspension test.
+fn visibility_reads(browser: &Browser, origin: &str) -> Result<()> {
+    let installed = browser.cdp(
+        "Page.addScriptToEvaluateOnNewDocument",
+        json!({"source":observer("pending")}),
+    )?;
+    let identifier = installed["identifier"]
+        .as_str()
+        .ok_or("missing visibility observer")?;
+    with_cleanup(
+        || {
+            browser.command("POST", "/url", Some(json!({"url":origin})))?;
+            browser.css("input[autocomplete='current-password']")?;
+            let baseline = browser.script("return window.__zxsSmokeLifecycle.intervals()")?;
+            if baseline.as_u64().unwrap_or(0) < 2 {
+                return Err("visible document has no polling timer pair".into());
+            }
+            browser.script("Object.defineProperty(document,'hidden',{configurable:true,value:true}); document.dispatchEvent(new Event('visibilitychange')); document.dispatchEvent(new Event('visibilitychange')); return true")?;
+            if browser.script("return window.__zxsSmokeLifecycle.intervals()")? != 0 {
+                return Err("hidden document retained background intervals".into());
+            }
+            browser.script("Object.defineProperty(document,'hidden',{configurable:true,value:false}); document.dispatchEvent(new Event('visibilitychange')); document.dispatchEvent(new Event('visibilitychange')); return true")?;
+            if browser.script("return window.__zxsSmokeLifecycle.intervals()")? != baseline {
+                return Err("visibility resume duplicated or lost timer ownership".into());
+            }
+            browser.script("window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:false})); document.dispatchEvent(new Event('visibilitychange')); window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true})); return true")?;
+            if browser.script("return window.__zxsSmokeLifecycle.intervals()===0 && document.getElementById('root').childNodes.length===0 && window.__zxsSmokeErrors.length===0")? != true {
+                return Err("disposed document resumed its background reads".into());
+            }
+            Ok(())
+        },
+        || {
+            let restore = browser.script("delete document.hidden; return true");
+            let remove = browser.cdp(
+                "Page.removeScriptToEvaluateOnNewDocument",
+                json!({"identifier":identifier}),
+            );
+            restore?;
+            remove?;
+            Ok(())
+        },
+    )?;
+    println!(
+        "PASS injected visibility pause/repeated resume and disposed-owner timer cleanup in real WASM"
+    );
     Ok(())
 }

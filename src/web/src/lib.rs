@@ -6,6 +6,7 @@ mod history;
 mod icons;
 mod management;
 mod monitor;
+mod polling;
 mod setup;
 mod snapshot;
 mod ui;

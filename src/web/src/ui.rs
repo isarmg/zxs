@@ -169,25 +169,7 @@ pub fn app() -> impl IntoView {
         }),
     ));
     restore_session(state);
-    let poller = gloo_timers::callback::Interval::new(2_000, move || {
-        if state.with_untracked(|s| s.authenticated) {
-            files::poll(state);
-        }
-    });
-    let poller = send_wrapper::SendWrapper::new(poller);
-    on_cleanup(move || drop(poller));
-    let telemetry = gloo_timers::callback::Interval::new(5_000, move || {
-        if state
-            .with_untracked(|s| !s.logout_pending() && !s.logout_unconfirmed() && !s.restoring())
-        {
-            management::load(state);
-        }
-        if state.with_untracked(|s| s.authenticated && s.page == Page::Status) {
-            monitor::load(state);
-        }
-    });
-    let telemetry = send_wrapper::SendWrapper::new(telemetry);
-    on_cleanup(move || drop(telemetry));
+    crate::polling::install(state);
     let session = Memo::new(move |_| state.with(session_view));
     let logout_pending = Memo::new(move |_| state.with(|s| s.logout_pending()));
     let login_pending = Memo::new(move |_| {
