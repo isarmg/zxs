@@ -49,7 +49,7 @@ pub(crate) struct State {
     pub password_change: PasswordChangeState,
     pub password_failure: Option<Feedback>,
     pub page: Page,
-    pub busy: usize,
+    pub login_in_flight: bool,
     pub errors: Vec<Feedback>,
     pub notice: String,
     pub files: files::Model,
@@ -78,7 +78,7 @@ impl State {
 
     /// App-owned reloads must not destroy in-memory operation recovery fences.
     fn reload_blocked(&self) -> bool {
-        self.busy > 0
+        self.login_in_flight
             || self.session_transition != SessionTransition::Idle
             || self.password_change != PasswordChangeState::Idle
             || self.management.retrying
@@ -173,7 +173,9 @@ pub fn app() -> impl IntoView {
     let session = Memo::new(move |_| state.with(session_view));
     let logout_pending = Memo::new(move |_| state.with(|s| s.logout_pending()));
     let login_pending = Memo::new(move |_| {
-        state.with(|s| s.busy > 0 || s.restoring() || s.logout_pending() || s.logout_unconfirmed())
+        state.with(|s| {
+            s.login_in_flight || s.restoring() || s.logout_pending() || s.logout_unconfirmed()
+        })
     });
     let login_failure = Memo::new(move |_| state.with(|s| s.login_failure.clone()));
     let on_login = Callback::new(move |credentials: LoginCredentials| {
@@ -190,14 +192,14 @@ pub fn app() -> impl IntoView {
             match result {
                 Ok(value) => {
                     state.update(|s| {
-                        let busy = s.busy;
+                        let login_in_flight = s.login_in_flight;
                         let session_epoch = s.session_epoch;
                         *s = State {
                             session_epoch,
                             authenticated: true,
                             principal: value.principal,
                             page: Page::Files,
-                            busy,
+                            login_in_flight,
                             ..Default::default()
                         };
                     });
@@ -205,7 +207,7 @@ pub fn app() -> impl IntoView {
                 }
                 Err(error) => state.update(|s| s.login_failure = Some(feedback(&error))),
             }
-            state.update(|s| s.busy = s.busy.saturating_sub(1));
+            state.update(|s| s.login_in_flight = false);
         });
     });
     let login: ChildrenFn = ToChildren::to_children(
@@ -285,17 +287,25 @@ fn session_view(state: &State) -> SessionView {
 // Session transitions own an epoch before their first asynchronous step.
 // Disable duplicate submissions at the action boundary as well as in the view.
 fn begin_login(state: &mut State) -> Option<u64> {
-    if state.busy > 0 || state.restoring() || state.logout_pending() || state.logout_unconfirmed() {
+    if state.login_in_flight
+        || state.restoring()
+        || state.logout_pending()
+        || state.logout_unconfirmed()
+    {
         return None;
     }
-    state.busy = 1;
+    state.login_in_flight = true;
     state.session_epoch += 1;
     state.login_failure = None;
     state.management.loading = false;
     Some(state.session_epoch)
 }
 fn begin_restore(state: &mut State) -> Option<u64> {
-    if state.busy > 0 || state.restoring() || state.logout_pending() || state.logout_unconfirmed() {
+    if state.login_in_flight
+        || state.restoring()
+        || state.logout_pending()
+        || state.logout_unconfirmed()
+    {
         return None;
     }
     state.session_transition = SessionTransition::Restoring;

@@ -10,8 +10,8 @@ fn session_transitions_reject_duplicate_and_overlapping_submissions() {
     assert_eq!(begin_login(&mut state), Some(2));
     assert_eq!(begin_login(&mut state), None);
     assert_eq!(begin_restore(&mut state), None);
-    assert_eq!(state.busy, 1);
-    state.busy = 0;
+    assert!(state.login_in_flight);
+    state.login_in_flight = false;
     state.session_transition = crate::ui::SessionTransition::LoggingOut;
     assert_eq!(begin_login(&mut state), None);
     assert_eq!(begin_restore(&mut state), None);
@@ -66,7 +66,7 @@ fn shell_identity_does_not_change_with_file_progress() {
         ..Default::default()
     };
     let session = session_view(&state);
-    state.busy = 3;
+    state.login_in_flight = true;
     state.password_change = crate::ui::PasswordChangeState::Pending;
     state.notice = "saving".into();
     assert_eq!(session_view(&state), session);
@@ -469,4 +469,23 @@ fn expired_password_change_session_closes_business_admission_without_losing_reco
         state.password_failure.unwrap().request_id.as_deref(),
         Some("req_expired_password")
     );
+}
+
+#[test]
+fn logout_supersedes_pending_login_and_settlement_reopens_admission() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State::default());
+        let login_epoch = state.try_update(begin_login).flatten().unwrap();
+        state.with_untracked(|s| assert!(s.login_in_flight));
+        let logout_epoch = state.try_update(begin_logout).flatten().unwrap();
+        assert!(logout_epoch > login_epoch);
+        state.with_untracked(|s| {
+            assert_ne!(s.session_epoch, login_epoch);
+            assert!(s.logout_pending());
+        });
+        state.update(|s| assert_eq!(begin_login(s), None));
+        end_session(state, String::new());
+        state.with_untracked(|s| assert!(!s.login_in_flight));
+        state.update(|s| assert!(begin_login(s).unwrap() > logout_epoch));
+    });
 }
