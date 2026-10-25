@@ -33,6 +33,12 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 
 ## 15.2 文件管理接口与高级接口基线
 
+文件列表分页使用 `path/query/limit/cursor`；`limit` 默认 200、范围 1–500。`query` 是名称的 Unicode 小写子串，先在完整直接子项集合过滤，再按目录优先、小写名称、规范化名称、原名称、显示路径、身份确定排序。响应 `total_entries` 是匹配直接子项十进制字符串，`directory_file_count` 仍为未过滤后代文件数。`next_cursor/previous_cursor` 为空表示相应方向结束；`snapshot` 绑定业务代数和磁盘配置。改变盘位、目录、搜索或页大小须丢弃游标；业务状态变化返回 `409 LISTING_CHANGED`，不得静默拼接不同快照。认证发布不改变业务代数，每页仍重新校验当前管理员。游标不是授权凭据，不保持服务端大缓存。
+
+成对提供 `selected_path/selected_entry_id` 时，`selected_entry` 独立于页和搜索解析当前目录中的精确身份及显示路径；返回 `null` 才表示不存在，不能根据条目不在当前页推断删除。每次最多增加一项投影。目录分支只返回摘要，不携带 `entries/file_contexts/file_branches/inherited_files/directory_refs`；分支数量本身尚未分页。
+
+批量准备通过只读 `POST /api/repositories/{repo}/directory-branches` 提交 `{path,sources:[{directory_branch_id,expected_tree_id}],entries:[{entry_id,path}]}`。服务器核对捕获的作用域、子树头和直接子项，返回摘要及 `{entry_id,path,selected_path}`；`selected_path` 关联原选择，避免别名子集被误认为唯一身份。源集合为空是权威结果，不得用同路径旧作用域补齐。每个数组最多 500 项、乘积最多 10000，超限明确拒绝；目标选择用 `GET .../directory-branches?path=...&summary=true`。这不是写入授权，最终变更仍重新核对全部身份与树基线，Cookie POST 仍要求 CSRF。
+
 | 接口 | 用途 |
 | --- | --- |
 | `POST /api/auth/login` | 唯一管理员登录；请求 username/password，返回 token/csrf_token/principal/expires_at |
@@ -40,10 +46,11 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `POST /api/auth/logout` | 持久撤销当前会话；返回 logged_out |
 | `POST /api/auth/password` | 验证 current_password 并设置 new_password；返回 changed/reauthentication_required，撤销全部会话 |
 | `GET /api/file-manager/disks` | 可见磁盘目录入口及只读状态 |
-| `GET /api/file-manager/disks/{slot}/entries?path={path}` | 当前目录列表、后代文件数与稳定目录分支的冻结组成 |
+| `GET /api/file-manager/disks/{slot}/entries?path={path}` | 有界当前目录页、后代文件数与稳定目录分支摘要 |
 | `POST /api/file-manager/disks/{slot}/namespace` | 准备并提交当前目录的创建、重命名或删除 |
 | `POST /api/file-manager/disks/{slot}/namespace-batch` | 显式源分支→目标分支映射；移动、复制、删除、重命名整批检查并发布 |
 | `GET /api/repositories/{repo}/directory-branches?path={path}` | 只读查询冻结分支和条目；省略 path 返回所有作用域，不切换默认分支 |
+| `POST /api/repositories/{repo}/directory-branches` | 只读查询捕获分支及已选直接子项的精确身份/路径事实；不创建操作，不修改状态 |
 | `GET/PUT /api/repositories/{repo}/default-branch` | 查询或选择 Web/SMB 共享默认根目录分支 |
 | `PATCH /api/repositories/{repo}/directory-branches/{id}` | 修改分支标签，身份、子树和内容不变 |
 | `POST /api/file-manager/disks/{slot}/write-sessions` | 取得该盘目录当前文件分支的写会话；随后通过通用工作区接口上传 |

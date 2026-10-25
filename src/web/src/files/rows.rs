@@ -1,5 +1,5 @@
-//! Immutable listing projections. Selection and operation state are deliberately
-//! not inputs: they must not rebuild, sort, or filter the listing.
+//! Immutable bounded-page projections. Ordering and filtering belong to the
+//! server before pagination; selection never rebuilds display metadata.
 use super::model::{entry_key, file_kind};
 use crate::ui::{State, text};
 use json_codec::Value;
@@ -25,7 +25,6 @@ pub(super) struct Row {
     pub key: RowKey,
     pub check_id: String,
     pub name: String,
-    normalized_name: String,
     pub directory: bool,
     pub selection_id: String,
     pub size: Option<u64>,
@@ -80,14 +79,13 @@ impl Listing {
     }
     fn project(&self) -> Vec<Arc<Row>> {
         #[cfg(test)]
-        tests::record_sort(self.entries.len());
+        tests::record_project(self.entries.len());
         let context = Arc::new(RowContext {
             epoch: self.epoch,
             slot: self.slot.clone(),
             directory: self.directory.clone(),
         });
-        let mut rows = self
-            .entries
+        self.entries
             .iter()
             .map(|entry| {
                 let check_id = entry_key(entry);
@@ -99,20 +97,13 @@ impl Listing {
                         path: text(entry, &["path"]),
                     },
                     check_id,
-                    normalized_name: name.to_lowercase(),
                     name,
                     directory: !file_kind(entry),
                     selection_id: entry_key(entry),
                     size: crate::format::parse_u64(&entry["size"]),
                 })
             })
-            .collect::<Vec<_>>();
-        // Stable ordering preserves the server order of equal names and keeps
-        // folders before files, exactly as the original file table did.
-        rows.sort_by(|a, b| {
-            (!a.directory, &a.normalized_name).cmp(&(!b.directory, &b.normalized_name))
-        });
-        rows
+            .collect()
     }
 }
 
@@ -120,20 +111,7 @@ pub(super) fn visible_rows(state: RwSignal<State>) -> Memo<Vec<Arc<Row>>> {
     // Arc equality short-circuits identical allocations. An unrelated State
     // notification does not traverse or clone any entry JSON.
     let listing = Memo::new(move |_| state.with(Listing::capture));
-    let sorted = Memo::new(move |_| listing.with(Listing::project));
-    let query = Memo::new(move |_| state.with(|s| s.files.query.to_lowercase()));
-    Memo::new(move |_| {
-        #[cfg(test)]
-        tests::record_filter();
-        query.with(|query| {
-            sorted.with(|rows| {
-                rows.iter()
-                    .filter(|row| row.normalized_name.contains(query))
-                    .cloned()
-                    .collect()
-            })
-        })
-    })
+    Memo::new(move |_| listing.with(Listing::project))
 }
 
 #[cfg(test)]

@@ -1,6 +1,9 @@
 use super::*;
 fn file(id: &str, path: &str, version: &str) -> Value {
-    json!({"entry_id":id,"file_id":id,"path":path,"name":path.rsplit('/').next().unwrap(),"kind":"file","version_id":version})
+    json!({"entry_id":id,"file_id":id,"path":path,"selected_path":path,"name":path.rsplit('/').next().unwrap(),"kind":"file","version_id":version})
+}
+fn resolved(id: &str, path: &str, selected_path: &str) -> Value {
+    json!({"entry_id":id,"path":path,"selected_path":selected_path})
 }
 fn branch(id: &str, path: &str, entries: Vec<Value>) -> Value {
     json!({"directory_branch_id":id,"head_tree_id":format!("tree-{id}"),"name":id,"path":path,"entries":entries})
@@ -25,12 +28,14 @@ fn draft(kind: Kind) -> Draft {
                 "n",
                 "a",
                 vec![
-                    file("f", "a/alias.txt", "F2"),
+                    resolved("f", "a/alias.txt", "a/old.txt"),
                     file("g", "a/data.txt", "G2"),
                 ],
             ),
             branch("r", "a", vec![]),
         ],
+        source_resolved: true,
+        scope_read: None,
         selected_sources: BTreeSet::from(["m".into(), "n".into()]),
         target_path: "b".into(),
         target_resolved: true,
@@ -53,48 +58,94 @@ fn draft(kind: Kind) -> Draft {
     }
 }
 #[test]
-fn rename_and_delete_review_keeps_authoritative_scopes_without_extra_reads() {
+fn reviews_load_only_captured_source_facts_before_submission() {
     Owner::new().with(|| {
-        for kind in [Kind::Rename, Kind::Delete] {
+        for kind in [Kind::Move, Kind::Copy, Kind::Rename, Kind::Delete] {
             let state = RwSignal::new(State {
-                page: crate::ui::Page::Details,
+                authenticated: true,
+                session_epoch: 8,
                 ..Default::default()
             });
-            let captured = draft(kind);
+            let mut captured = draft(kind);
             let expected = request(&captured).unwrap();
+            let facts = captured.sources.clone();
+            for source in &mut captured.sources {
+                source.as_object_mut().unwrap().remove("entries");
+            }
             super::super::actions::open_draft(state, captured);
+            state.with_untracked(|s| {
+                let opened = s.files.batch.as_ref().unwrap();
+                assert!(opened.loading);
+                assert!(!opened.source_resolved);
+                assert!(request(opened).is_err());
+                assert_eq!(s.page, crate::ui::Page::Files);
+            });
+            super::super::actions::complete_source_scopes(
+                state,
+                8,
+                "draft",
+                1,
+                Ok(json!({"repository_id":"repo","directory_branches":facts})),
+            );
             state.with_untracked(|s| {
                 let opened = s.files.batch.as_ref().unwrap();
                 assert!(!opened.loading);
                 assert_eq!(request(opened).unwrap(), expected);
-                assert_eq!(s.page, crate::ui::Page::Files);
             });
         }
     });
 }
 
 #[test]
-fn every_review_uses_the_complete_source_listing_without_an_extra_fetch() {
+fn source_facts_reject_stale_reads_head_changes_and_cancellation() {
     Owner::new().with(|| {
-        for kind in [Kind::Move, Kind::Copy, Kind::Rename, Kind::Delete] {
-            for missing_sources in [false, true] {
-                let state = RwSignal::new(State::default());
-                let mut captured = draft(kind);
-                if missing_sources {
-                    captured.sources.clear();
-                    captured.selected_sources.clear();
-                    captured.mappings.clear();
-                }
-                let expected_sources = captured.sources.clone();
-                super::super::actions::open_draft(state, captured);
-                state.with_untracked(|s| {
-                    let draft = s.files.batch.as_ref().unwrap();
-                    assert!(!draft.loading);
-                    assert_eq!(draft.sources, expected_sources);
-                });
-            }
+        let state = RwSignal::new(State {
+            authenticated: true,
+            session_epoch: 8,
+            ..Default::default()
+        });
+        let captured = draft(Kind::Delete);
+        let facts = captured.sources.clone();
+        super::super::actions::open_draft(state, captured);
+        let value = json!({"repository_id":"repo","directory_branches":facts});
+        for (epoch, id, generation) in [(7, "draft", 1), (8, "replaced", 1), (8, "draft", 0)] {
+            super::super::actions::complete_source_scopes(
+                state,
+                epoch,
+                id,
+                generation,
+                Ok(value.clone()),
+            );
+            assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
         }
+        let mut changed = value.clone();
+        changed["directory_branches"][0]["head_tree_id"] = "new-tree".into();
+        super::super::actions::complete_source_scopes(state, 8, "draft", 1, Ok(changed));
+        assert!(state.with_untracked(|s| !s.files.batch.as_ref().unwrap().source_resolved));
+        super::super::actions::load_sources(state);
+        super::super::actions::complete_source_scopes(state, 8, "draft", 1, Ok(value.clone()));
+        assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
+        state.update(|s| s.files.batch = None);
+        super::super::actions::complete_source_scopes(state, 8, "draft", 2, Ok(value));
+        assert!(state.with_untracked(|s| s.files.batch.is_none()));
     });
+}
+
+#[test]
+fn missing_selected_alias_cannot_resolve_to_another_selected_alias() {
+    let mut draft = draft(Kind::Delete);
+    draft.selected_sources = BTreeSet::from(["m".into()]);
+    draft.entries = vec![file("f", "a/first", "F1"), file("f", "a/second", "F1")];
+    draft.sources[0]["entries"] = json!([resolved("f", "a/first", "a/first")]);
+    assert!(request(&draft).is_err());
+    draft.sources[0]["entries"] = json!([
+        resolved("f", "a/first", "a/first"),
+        resolved("f", "a/second", "a/second")
+    ]);
+    assert_eq!(
+        request(&draft).unwrap()["items"].as_array().unwrap().len(),
+        2
+    );
 }
 
 #[test]
@@ -252,10 +303,10 @@ fn copying_to_multiple_explicit_targets_never_infers_a_cartesian_product() {
 #[test]
 fn an_absent_entry_rejects_the_entire_selected_scope() {
     let mut draft = draft(Kind::Delete);
-    draft.sources[1]["entries"] = json!([file("f", "a/alias.txt", "F2")]);
+    draft.sources[1]["entries"] = json!([resolved("f", "a/alias.txt", "a/old.txt")]);
     assert!(request(&draft).is_err());
     draft.sources[1]["entries"] = json!([
-        file("f", "a/alias.txt", "F2"),
+        resolved("f", "a/alias.txt", "a/old.txt"),
         file("g", "a/data.txt", "G2")
     ]);
     assert_eq!(
@@ -829,4 +880,38 @@ fn confirmed_registration_cannot_be_downgraded_by_late_receipts() {
             }
         }
     });
+}
+
+#[test]
+fn selected_scope_query_carries_only_captured_heads_and_selection_pairs() {
+    let mut draft = draft(Kind::Delete);
+    draft.entries[0]["repository_path"] = "a/logical.txt".into();
+    let body =
+        super::super::actions::selected_scope_body(&draft, &draft.sources, &draft.repository_path);
+    assert_eq!(body["path"], "a");
+    assert_eq!(
+        body["sources"][0],
+        json!({"directory_branch_id":"m","expected_tree_id":"tree-m"})
+    );
+    assert_eq!(
+        body["entries"][0],
+        json!({"entry_id":"f","path":"a/logical.txt"})
+    );
+    assert_eq!(
+        body["entries"].as_array().unwrap().len(),
+        draft.entries.len()
+    );
+    assert!(body["sources"][0].get("entries").is_none());
+}
+
+#[test]
+fn unresolved_sources_never_allow_submission_or_registration() {
+    let mut draft = draft(Kind::Delete);
+    draft.source_resolved = false;
+    assert!(request(&draft).is_err());
+    draft.sources.clear();
+    assert!(
+        super::super::actions::begin_scope_registration(&mut draft, "must-not-write".into(), false)
+            .is_none()
+    );
 }

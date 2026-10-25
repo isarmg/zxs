@@ -149,22 +149,6 @@ impl<'a> PendingSources<'a> {
         self.resolve(entry, self.visible(entry)?, CurrentContext::Lookup, None)
     }
 
-    pub(super) fn checked_with_context(
-        &self,
-        entry: &storage_contract::Entry,
-        context: Option<&storage_contract::FileContext>,
-    ) -> Option<&'a str> {
-        if entry.kind != "file" {
-            return None;
-        }
-        self.resolve(
-            entry,
-            self.visible(entry)?,
-            CurrentContext::Resolved(context),
-            None,
-        )
-    }
-
     pub(super) fn pending_versions(&self) -> std::collections::BTreeMap<String, String> {
         // Published trees are sorted with unique normalized keys. If a caller
         // supplies a noncanonical snapshot, preserve the old first-match rule.
@@ -313,22 +297,29 @@ pub(super) fn current_entry_source<'a>(
     pending_entry_source(engine, branch, commit, entry)
 }
 
-pub(super) fn current_entry_source_with_context<'a>(
+/// The index resolves against this resolver's own current commit. Unlike the
+/// checked external-entry API, callers cannot substitute another snapshot's
+/// entry and no repeated path scan is necessary.
+pub(super) fn current_entry_source_at_index<'a>(
     engine: &'a Engine,
     branch: &'a str,
-    repository: &str,
-    entry: &storage_contract::Entry,
+    index: usize,
     context: Option<&storage_contract::FileContext>,
 ) -> Option<&'a str> {
     let current = engine.state().branches.get(branch)?;
     let commit = engine.state().commits.get(&current.head_commit_id)?;
-    let resolver = PendingSources::new(engine, branch, commit);
-    if resolver.main_repository == Some(repository) {
-        resolver.checked_with_context(entry, context)
-    } else {
-        resolver.checked(entry)
+    let entry = commit.entries.get(index)?;
+    if entry.kind != "file" {
+        return None;
     }
+    PendingSources::new(engine, branch, commit).resolve(
+        entry,
+        entry,
+        CurrentContext::Resolved(context),
+        None,
+    )
 }
+
 pub(super) fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, ApiError> {
     value
         .get(key)

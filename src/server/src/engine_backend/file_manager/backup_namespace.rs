@@ -1,5 +1,6 @@
-//! Read-only logical backup paths over authorized, retained FULL containers.
-//! A backup's user prefix is independent from its live primary namespace.
+//! Logical backup namespace validation stays global so paging cannot hide path
+//! conflicts. Only lightweight nodes are retained; wire metadata is page-local.
+use super::pagination::{PageRequest, PageSelector, SortKey};
 use super::*;
 use storage_engine::{Entry, FileVersion};
 
@@ -29,24 +30,65 @@ fn conflict() -> ApiError {
         "authorized backup containers have conflicting logical paths; choose distinct backup prefixes",
     )
 }
-fn retain_node(
-    nodes: &mut BTreeMap<String, Value>,
-    value: Value,
+#[derive(Clone)]
+enum Node<'a> {
+    Directory {
+        display: String,
+    },
+    File {
+        repository: &'a Repository,
+        current: Option<(usize, &'a Entry)>,
+        version: &'a FileVersion,
+        display: String,
+    },
+}
+impl Node<'_> {
+    fn display(&self) -> &str {
+        match self {
+            Self::Directory { display } | Self::File { display, .. } => display,
+        }
+    }
+    fn directory(&self) -> bool {
+        matches!(self, Self::Directory { .. })
+    }
+    fn identity(&self, slot: &str) -> String {
+        match self {
+            Self::Directory { display } => format!(
+                "backupdir_{}",
+                blake3::hash(format!("{slot}/{}", name_policy::path_key(display)).as_bytes())
+                    .to_hex()
+            ),
+            Self::File {
+                current, version, ..
+            } => current
+                .map(|(_, entry)| entry.entry_id.clone())
+                .unwrap_or_else(|| version.file_id.clone()),
+        }
+    }
+}
+fn retain_node<'a>(
+    nodes: &mut BTreeMap<String, Node<'a>>,
+    value: Node<'a>,
     maximum: usize,
 ) -> Result<(), ApiError> {
-    let key = name_policy::path_key(value["path"].as_str().unwrap_or_default());
+    let key = name_policy::path_key(value.display());
     if let Some(existing) = nodes.get(&key) {
-        if existing["kind"] == "directory" && value["kind"] == "directory" {
-            return Ok(());
+        match (existing, &value) {
+            (Node::Directory { .. }, Node::Directory { .. }) => return Ok(()),
+            (
+                Node::File {
+                    repository: a,
+                    version: av,
+                    ..
+                },
+                Node::File {
+                    repository: b,
+                    version: bv,
+                    ..
+                },
+            ) if a.repository_id == b.repository_id && av.file_id == bv.file_id => return Ok(()),
+            _ => return Err(conflict()),
         }
-        if existing["kind"] == "file"
-            && value["kind"] == "file"
-            && existing["file_id"] == value["file_id"]
-            && existing["repository_id"] == value["repository_id"]
-        {
-            return Ok(());
-        }
-        return Err(conflict());
     }
     if nodes.len() >= maximum {
         return Err(ApiError::new(
@@ -59,26 +101,21 @@ fn retain_node(
     Ok(())
 }
 fn parents(
-    nodes: &mut BTreeMap<String, Value>,
-    slot: &str,
+    nodes: &mut BTreeMap<String, Node<'_>>,
     path: &str,
     maximum: usize,
 ) -> Result<(), ApiError> {
-    let components = path.split('/').collect::<Vec<_>>();
-    for length in 1..components.len() {
-        let display = components[..length].join("/");
-        let id = format!(
-            "backupdir_{}",
-            blake3::hash(format!("{slot}/{}", name_policy::path_key(&display)).as_bytes()).to_hex()
-        );
-        let mut entry = directory(components[length - 1], &display, &id);
-        entry["read_only"] = true.into();
-        entry["backup"] = true.into();
-        retain_node(nodes, entry, maximum)?;
+    for (index, _) in path.match_indices('/') {
+        retain_node(
+            nodes,
+            Node::Directory {
+                display: path[..index].into(),
+            },
+            maximum,
+        )?;
     }
     Ok(())
 }
-// Default namespace for current files without an explicit per-slot backup path.
 fn default_backup_path(
     repo: &Repository,
     entry: Option<&Entry>,
@@ -101,58 +138,66 @@ fn default_backup_path(
         format!("{}/{}/{relative}", repo.primary_slot_id, repo.name)
     }
 }
-fn file_entry(
-    engine: &Engine,
-    repo: &Repository,
-    current: Option<&Entry>,
-    version: &FileVersion,
-    display: &str,
-) -> Value {
-    let matches_current = current.is_some_and(|entry| entry.version_id == version.version_id);
-    let mut entry = if let Some(current) = current {
-        let mut frozen = current.clone();
-        frozen.version_id = version.version_id.clone();
-        frozen.size = version.logical_size;
-        listed_entry(engine, repo, &frozen, "")
-    } else {
-        json!({"entry_id":version.file_id,"kind":"file","repository_id":repo.repository_id,"repository_path":null,"container":true,"file_id":version.file_id,"selected_branch_id":null})
+fn project(engine: &Engine, slot: &str, node: &Node<'_>) -> Result<Value, ApiError> {
+    let display = node.display();
+    let name = display.rsplit('/').next().unwrap_or(display);
+    let mut entry = match node {
+        Node::Directory { .. } => directory(name, display, &node.identity(slot)),
+        Node::File {
+            repository: repo,
+            current,
+            version,
+            ..
+        } => {
+            // Resolve context against the actual current entry, never a frozen
+            // copy with a substituted version. Historical content is overlaid
+            // only after that validated projection.
+            let mut value = if let Some((index, _)) = current {
+                listed_current_entry(engine, repo, *index, "")?
+            } else {
+                json!({"entry_id":version.file_id,"kind":"file","repository_id":repo.repository_id,"repository_path":null,"container":true,"file_id":version.file_id,"selected_branch_id":null})
+            };
+            if !current.is_some_and(|(_, entry)| entry.version_id == version.version_id) {
+                value["node_id"] = version.version_id.clone().into();
+                value.as_object_mut().expect("file wire object").extend(
+                    content_wire(engine, Some(&version.version_id), None)
+                        .as_object()
+                        .expect("content wire object")
+                        .clone(),
+                );
+            }
+            value["size"] = version.logical_size.to_string().into();
+            value["version_id"] = version.version_id.clone().into();
+            value["note"] = engine
+                .state()
+                .file_notes
+                .get(&version.file_id)
+                .cloned()
+                .unwrap_or_default()
+                .into();
+            value["historical_only"] = current.is_none().into();
+            value
+        }
     };
-    if !matches_current {
-        entry["node_id"] = version.version_id.clone().into();
-        entry.as_object_mut().expect("file wire object").extend(
-            content_wire(engine, Some(&version.version_id), None)
-                .as_object()
-                .expect("content wire object")
-                .clone(),
-        );
-    }
     entry["path"] = display.into();
-    entry["name"] = display.rsplit('/').next().unwrap_or(display).into();
-    entry["size"] = version.logical_size.to_string().into();
-    entry["version_id"] = version.version_id.clone().into();
-    entry["note"] = engine
-        .state()
-        .file_notes
-        .get(&version.file_id)
-        .cloned()
-        .unwrap_or_default()
-        .into();
+    entry["name"] = name.into();
     entry["read_only"] = true.into();
     entry["backup"] = true.into();
-    entry["historical_only"] = current.is_none().into();
-    entry
+    Ok(entry)
 }
 
-pub(super) fn entries(engine: &Engine, slot: &str, path: &str) -> Result<Value, ApiError> {
+pub(super) fn entries(
+    engine: &Engine,
+    slot: &str,
+    path: &str,
+    request: PageRequest,
+) -> Result<Value, ApiError> {
     let repositories = engine
         .state()
         .repositories
         .values()
         .map(|repo| (repo.history_tree_id.as_str(), repo))
         .collect::<BTreeMap<_, _>>();
-    // Keep one file container, including retained files absent from the live
-    // namespace. A visible canonical alias chooses its body when stored here;
-    // otherwise the newest AVAILABLE body on this slot is displayed.
     let mut latest = BTreeMap::<&str, (&Repository, &FileVersion)>::new();
     for version in engine
         .state()
@@ -172,31 +217,34 @@ pub(super) fn entries(engine: &Engine, slot: &str, path: &str) -> Result<Value, 
             }
         }
     }
-    let mut canonical = BTreeMap::<String, Entry>::new();
+    let mut canonical = BTreeMap::<&str, (usize, &Entry)>::new();
     for repo in repositories.values() {
-        for entry in engine
-            .list_tree(&repo.main_branch_id)
+        for (index, entry) in engine
+            .list_tree_ref(&repo.main_branch_id)
             .map_err(error)?
-            .into_iter()
-            .filter(|entry| entry.kind == "file" && latest.contains_key(entry.file_id.as_str()))
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                entry.kind == "file" && latest.contains_key(entry.file_id.as_str())
+            })
         {
             let owner = engine
                 .state()
                 .file_locations
                 .get(&entry.file_id)
                 .is_some_and(|owner| name_policy::path_key(owner) == entry.lookup_key);
-            if owner || !canonical.contains_key(&entry.file_id) {
-                canonical.insert(entry.file_id.clone(), entry);
+            if owner || !canonical.contains_key(entry.file_id.as_str()) {
+                canonical.insert(&entry.file_id, (index, entry));
             }
         }
     }
     let maximum = engine.config().max_entries;
     let mut nodes = BTreeMap::new();
     for (file, (repo, newest)) in latest {
-        let current = canonical.get(file);
+        let current = canonical.get(file).copied();
         let version = current
-            .filter(|entry| available_on(engine, slot, &entry.version_id))
-            .and_then(|entry| engine.state().versions.get(&entry.version_id))
+            .filter(|(_, entry)| available_on(engine, slot, &entry.version_id))
+            .and_then(|(_, entry)| engine.state().versions.get(&entry.version_id))
             .unwrap_or(newest);
         let display = engine
             .state()
@@ -204,22 +252,24 @@ pub(super) fn entries(engine: &Engine, slot: &str, path: &str) -> Result<Value, 
             .get(file)
             .and_then(|paths| paths.get(slot))
             .cloned()
-            .unwrap_or_else(|| default_backup_path(repo, current, version, engine));
-        // State values are validated again at this filesystem-facing boundary.
+            .unwrap_or_else(|| {
+                default_backup_path(repo, current.map(|(_, entry)| entry), version, engine)
+            });
         name_policy::validate_path(&display).map_err(ApiError::invalid)?;
-        parents(&mut nodes, slot, &display, maximum)?;
+        parents(&mut nodes, &display, maximum)?;
         retain_node(
             &mut nodes,
-            file_entry(engine, repo, current, version, &display),
+            Node::File {
+                repository: repo,
+                current,
+                version,
+                display,
+            },
             maximum,
         )?;
     }
     let key = name_policy::path_key(path);
-    if !path.is_empty()
-        && !nodes
-            .get(&key)
-            .is_some_and(|entry| entry["kind"] == "directory")
-    {
+    if !path.is_empty() && !nodes.get(&key).is_some_and(Node::directory) {
         return Err(ApiError::new(
             404,
             "DIRECTORY_NOT_FOUND",
@@ -231,24 +281,40 @@ pub(super) fn entries(engine: &Engine, slot: &str, path: &str) -> Result<Value, 
     } else {
         format!("{key}/")
     };
-    let file_count = nodes
+    let mut file_count = 0;
+    let mut page = PageSelector::new(request);
+    for (key, node) in &nodes {
+        let Some(relative) = key.strip_prefix(&prefix) else {
+            continue;
+        };
+        if !node.directory() {
+            file_count += 1;
+        }
+        if relative.contains('/') {
+            continue;
+        }
+        let display = node.display();
+        page.consider(
+            SortKey::new(
+                node.directory(),
+                display.rsplit('/').next().unwrap_or(display),
+                display,
+                &node.identity(slot),
+            ),
+            node,
+        );
+    }
+    let page = page.finish()?;
+    let values = page
+        .values
         .iter()
-        .filter(|(key, entry)| key.starts_with(&prefix) && entry["kind"] == "file")
-        .count();
-    let mut values = nodes
-        .into_iter()
-        .filter(|(key, _)| key.starts_with(&prefix) && !key[prefix.len()..].contains('/'))
-        .map(|(_, entry)| entry)
-        .collect::<Vec<_>>();
-    values.sort_by_cached_key(|entry| {
-        let name = entry["name"].as_str();
-        (
-            entry["kind"] != "directory",
-            name_policy::lookup_key(name.unwrap_or_default()),
-            name.map(str::to_owned),
-        )
-    });
-    Ok(
-        json!({"slot_id":slot,"path":path,"backup":true,"writable":false,"entries":values,"context":null,"directory_file_count":file_count.to_string(),"directory_branches":[],"directory_branches_supported":false,"default_branch_scope":false}),
-    )
+        .map(|node| project(engine, slot, node))
+        .collect::<Result<Vec<_>, _>>()?;
+    let selected_entry = page
+        .selected
+        .map(|node| project(engine, slot, node))
+        .transpose()?;
+    let mut response = json!({"slot_id":slot,"path":path,"backup":true,"writable":false,"entries":values,"selected_entry":selected_entry,"context":null,"directory_file_count":file_count.to_string(),"directory_branches":[],"directory_branches_supported":false,"default_branch_scope":false});
+    page.metadata(&mut response);
+    Ok(response)
 }

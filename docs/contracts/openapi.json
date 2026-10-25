@@ -736,7 +736,7 @@
     "/api/file-manager/disks/{slot}/entries": {
       "get": {
         "operationId": "listFileManagerEntries",
-        "description": "主盘列出当前命名空间；备份盘按授权过滤后，使用每个文件已配置的该slot用户逻辑路径直接浏览，不强制P01前缀。备份条目只读，不提供目录分支操作；优先显示实际在该槽AVAILABLE的当前正文，否则显示该槽最新AVAILABLE正文。backup.version_id是固定读取依据，不得被主盘当前head替换；主路径改名不改变用户备份路径。无live alias时historical_only=true、repository_path=null，历史和下载仍按稳定file/version授权。未配置用户路径的旧容器保留primary/repository前缀兼容。",
+        "description": "主盘列出当前命名空间；备份盘按授权过滤后，使用每个文件已配置的该slot用户逻辑路径直接浏览，不强制P01前缀。备份条目只读，不提供目录分支操作；优先显示实际在该槽AVAILABLE的当前正文，否则显示该槽最新AVAILABLE正文。backup.version_id是固定读取依据，不得被主盘当前head替换；主路径改名不改变用户备份路径。无live alias时historical_only=true、repository_path=null，历史和下载仍按稳定file/version授权。未配置用户路径的旧容器保留primary/repository前缀兼容。 分页默认200、最多500条，query在分页前全目录过滤。cursor绑定业务代数、配置、盘位、路径、搜索及limit；认证变更不改变业务快照，但每次请求重新准入。LISTING_CHANGED要求重新加载首页，不拼接不同快照。",
         "parameters": [
           {
             "name": "slot",
@@ -753,6 +753,59 @@
             "schema": {
               "type": "string",
               "description": "受PortablePath约束的磁盘相对路径；空字符串表示当前磁盘根目录。不得传系统绝对路径。"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "description": "直接子项名称的Unicode小写子串搜索；在全目录分页前过滤。",
+            "schema": {
+              "type": "string",
+              "x-maxUtf8Bytes": 1024
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "单页直接子项上限。",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 200
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "不透明、快照和查询绑定的前后翻页位置；不是授权凭据。",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32768
+            }
+          },
+          {
+            "name": "selected_path",
+            "in": "query",
+            "required": false,
+            "description": "与selected_entry_id成对；已选直接子项的磁盘显示路径，独立于当前页及搜索解析。",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "selected_entry_id",
+            "in": "query",
+            "required": false,
+            "description": "与selected_path成对且精确匹配的稳定身份。",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
             }
           }
         ],
@@ -1022,7 +1075,8 @@
                             }
                           }
                         ]
-                      }
+                      },
+                      "maxItems": 500
                     },
                     "context": {
                       "anyOf": [
@@ -1099,39 +1153,6 @@
                           "path": {
                             "type": "string"
                           },
-                          "entries": {
-                            "type": "array",
-                            "items": {
-                              "$ref": "#/components/schemas/Entry"
-                            }
-                          },
-                          "file_branches": {
-                            "type": "object",
-                            "propertyNames": {
-                              "$ref": "#/components/schemas/FileId"
-                            },
-                            "additionalProperties": {
-                              "$ref": "#/components/schemas/BranchId"
-                            }
-                          },
-                          "inherited_files": {
-                            "type": "object",
-                            "propertyNames": {
-                              "$ref": "#/components/schemas/FileId"
-                            },
-                            "additionalProperties": {
-                              "$ref": "#/components/schemas/DirectoryBranchId"
-                            }
-                          },
-                          "directory_refs": {
-                            "type": "object",
-                            "propertyNames": {
-                              "$ref": "#/components/schemas/EntryId"
-                            },
-                            "additionalProperties": {
-                              "$ref": "#/components/schemas/DirectoryReference"
-                            }
-                          },
                           "sequence": {
                             "$ref": "#/components/schemas/UInt64"
                           },
@@ -1140,17 +1161,10 @@
                           },
                           "file_count": {
                             "$ref": "#/components/schemas/UInt64"
-                          },
-                          "file_contexts": {
-                            "type": "object",
-                            "additionalProperties": {
-                              "$ref": "#/components/schemas/FileContext"
-                            },
-                            "description": "键是规范化的仓库相对逻辑路径，随子树冻结。"
                           }
                         },
                         "additionalProperties": false,
-                        "description": "稳定命名目录分支。登记直接引用父子树，不新建文件分支或占位文件。继承写入意图和子目录精确引用随快照固定；真实变更追加子树，分支身份不变。",
+                        "description": "目录分支摘要，不含后代条目、上下文或引用映射；分支数量本身尚未分页。",
                         "required": [
                           "directory_branch_id",
                           "repository_id",
@@ -1160,8 +1174,6 @@
                           "parent_branch_id",
                           "head_tree_id",
                           "commit_id",
-                          "entries",
-                          "file_branches",
                           "materialized",
                           "sequence",
                           "current",
@@ -1178,6 +1190,293 @@
                     "backup": {
                       "type": "boolean",
                       "description": "备份盘的用户逻辑命名空间投影；true时context=null且writable=false。"
+                    },
+                    "selected_entry": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "entry_id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "path": {
+                              "type": "string",
+                              "description": "受PortablePath约束的磁盘相对路径；空字符串表示当前磁盘根目录。不得传系统绝对路径。"
+                            },
+                            "kind": {
+                              "enum": [
+                                "file",
+                                "directory"
+                              ]
+                            },
+                            "container": {
+                              "type": "boolean"
+                            },
+                            "size": {
+                              "$ref": "#/components/schemas/UInt64"
+                            },
+                            "file_id": {
+                              "type": "string"
+                            },
+                            "version_id": {
+                              "type": "string",
+                              "description": "当前可见真实版本ID；未写分支为冻结父版本，已写为自有版本。目录兼容空字符串。"
+                            },
+                            "note": {
+                              "type": "string",
+                              "description": "当前备注最多128个UTF-8字节且不含控制字符，空字符串表示没有备注。响应原样输出已验证备注，不截断；本字符串schema只检查较宽的响应形状，不替代引擎读写校验，也不承诺旧格式可读。",
+                              "maxLength": 4096
+                            },
+                            "materialized": {
+                              "type": "boolean"
+                            },
+                            "content_state": {
+                              "type": "string"
+                            },
+                            "source_version_id": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/VersionId"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "selected_branch_id": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/BranchId"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "inherited": {
+                              "type": "boolean"
+                            },
+                            "own_version_id": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/VersionId"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "visible_content_state": {
+                              "enum": [
+                                "LIVE",
+                                "AVAILABLE",
+                                "PURGED",
+                                "MIGRATED",
+                                "UNAVAILABLE"
+                              ]
+                            },
+                            "repository_id": {
+                              "$ref": "#/components/schemas/RepositoryId"
+                            },
+                            "repository_path": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "description": "真实主命名空间的仓库相对路径，可与backup.path不同；无live alias时为null，历史请求省略repo/path，下载固定entry.version_id。"
+                            },
+                            "node_id": {
+                              "$ref": "#/components/schemas/FileNodeId"
+                            },
+                            "read_only": {
+                              "type": "boolean"
+                            },
+                            "backup": {
+                              "type": "boolean"
+                            },
+                            "historical_only": {
+                              "type": "boolean",
+                              "description": "该文件仍有本槽可用历史正文，但当前主命名空间已无live alias；不能伪造当前路径上下文。"
+                            }
+                          },
+                          "additionalProperties": false,
+                          "required": [
+                            "entry_id",
+                            "name",
+                            "path",
+                            "kind",
+                            "size",
+                            "file_id",
+                            "version_id"
+                          ],
+                          "allOf": [
+                            {
+                              "if": {
+                                "properties": {
+                                  "kind": {
+                                    "const": "file"
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ]
+                              },
+                              "then": {
+                                "required": [
+                                  "container",
+                                  "materialized",
+                                  "content_state",
+                                  "source_version_id",
+                                  "selected_branch_id",
+                                  "inherited",
+                                  "own_version_id",
+                                  "visible_content_state"
+                                ],
+                                "properties": {
+                                  "container": {
+                                    "const": true
+                                  },
+                                  "version_id": {
+                                    "$ref": "#/components/schemas/VersionId"
+                                  }
+                                },
+                                "allOf": [
+                                  {
+                                    "if": {
+                                      "properties": {
+                                        "materialized": {
+                                          "const": false
+                                        }
+                                      }
+                                    },
+                                    "then": {
+                                      "properties": {
+                                        "inherited": {
+                                          "const": true
+                                        },
+                                        "own_version_id": {
+                                          "type": "null"
+                                        },
+                                        "content_state": {
+                                          "const": "PENDING"
+                                        },
+                                        "source_version_id": {
+                                          "$ref": "#/components/schemas/VersionId"
+                                        }
+                                      }
+                                    },
+                                    "else": {
+                                      "properties": {
+                                        "inherited": {
+                                          "const": false
+                                        },
+                                        "own_version_id": {
+                                          "$ref": "#/components/schemas/VersionId"
+                                        },
+                                        "source_version_id": {
+                                          "type": "null"
+                                        },
+                                        "content_state": {
+                                          "not": {
+                                            "const": "PENDING"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "if": {
+                                "properties": {
+                                  "backup": {
+                                    "const": true
+                                  }
+                                },
+                                "required": [
+                                  "backup"
+                                ]
+                              },
+                              "then": {
+                                "required": [
+                                  "read_only"
+                                ],
+                                "properties": {
+                                  "read_only": {
+                                    "const": true
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "if": {
+                                "properties": {
+                                  "historical_only": {
+                                    "const": true
+                                  }
+                                },
+                                "required": [
+                                  "historical_only"
+                                ]
+                              },
+                              "then": {
+                                "required": [
+                                  "backup",
+                                  "repository_path"
+                                ],
+                                "properties": {
+                                  "backup": {
+                                    "const": true
+                                  },
+                                  "repository_path": {
+                                    "type": "null"
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "请求的精确已选条目；null表示未请求或该目录中已不存在此身份和路径，不表示不在当前页。"
+                    },
+                    "total_entries": {
+                      "$ref": "#/components/schemas/UInt64",
+                      "description": "全目录搜索匹配的直接子项总数。"
+                    },
+                    "snapshot": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "next_cursor": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 32768
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "previous_cursor": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 32768
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "additionalProperties": false,
@@ -1186,9 +1485,14 @@
                     "path",
                     "writable",
                     "entries",
-                    "context"
+                    "context",
+                    "selected_entry",
+                    "total_entries",
+                    "snapshot",
+                    "next_cursor",
+                    "previous_cursor"
                   ],
-                  "description": "当前目录直接子项及稳定目录分支的冻结组成；目录分支不是同名文件分支交集。context.repository_path和分支条目path为仓库相对路径。分支列表包括精确entries、head_tree_id和继承写入意图；读取不改变SMB默认选择。",
+                  "description": "有界直接子项页；全局目录优先，随后Unicode小写名称、规范化名称、原名称、显示路径和身份确定排序。分支仅摘要；完整作用域或批量选中事实使用仓库目录分支接口。后代文件计数不受搜索过滤。",
                   "allOf": [
                     {
                       "if": {
@@ -1237,7 +1541,7 @@
             }
           },
           "409": {
-            "description": "NAME_COLLISION：主盘命名仓库与磁盘根顶层条目的规范化名称冲突，拒绝根列表及冲突子路径，显式仓库身份与无冲突路径仍可使用。BACKUP_PATH_CONFLICT：已授权容器的规范化备份逻辑路径冲突（文件/文件或文件/目录），不覆盖任何正文；修改用户prefix后重试。不可访问的仓库先过滤，不因其冲突泄露信息。",
+            "description": "NAME_COLLISION：主盘命名仓库与磁盘根顶层条目的规范化名称冲突，拒绝根列表及冲突子路径，显式仓库身份与无冲突路径仍可使用。BACKUP_PATH_CONFLICT：已授权容器的规范化备份逻辑路径冲突（文件/文件或文件/目录），不覆盖任何正文；修改用户prefix后重试。不可访问的仓库先过滤，不因其冲突泄露信息。 LISTING_CHANGED：业务快照改变，丢弃旧游标并重新加载首页。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3600,6 +3904,17 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "summary",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true"
+              ]
+            },
+            "description": "只返回分支摘要；目标选择使用此模式，不读取冻结后代。"
           }
         ],
         "responses": {
@@ -3615,6 +3930,295 @@
                     },
                     "directory_branches": {
                       "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "directory_branch_id": {
+                                "$ref": "#/components/schemas/DirectoryBranchId"
+                              },
+                              "repository_id": {
+                                "$ref": "#/components/schemas/RepositoryId"
+                              },
+                              "directory_id": {
+                                "$ref": "#/components/schemas/DirectoryId"
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1,
+                                "x-maxUtf8Bytes": 128
+                              },
+                              "parent_branch_id": {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/components/schemas/DirectoryBranchId"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "head_tree_id": {
+                                "$ref": "#/components/schemas/DirectoryTreeId"
+                              },
+                              "materialized": {
+                                "type": "boolean"
+                              },
+                              "commit_id": {
+                                "$ref": "#/components/schemas/CommitId"
+                              },
+                              "path": {
+                                "type": "string"
+                              },
+                              "entries": {
+                                "type": "array",
+                                "items": {
+                                  "$ref": "#/components/schemas/Entry"
+                                }
+                              },
+                              "file_branches": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "$ref": "#/components/schemas/FileId"
+                                },
+                                "additionalProperties": {
+                                  "$ref": "#/components/schemas/BranchId"
+                                }
+                              },
+                              "inherited_files": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "$ref": "#/components/schemas/FileId"
+                                },
+                                "additionalProperties": {
+                                  "$ref": "#/components/schemas/DirectoryBranchId"
+                                }
+                              },
+                              "directory_refs": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "$ref": "#/components/schemas/EntryId"
+                                },
+                                "additionalProperties": {
+                                  "$ref": "#/components/schemas/DirectoryReference"
+                                }
+                              },
+                              "sequence": {
+                                "$ref": "#/components/schemas/UInt64"
+                              },
+                              "current": {
+                                "type": "boolean"
+                              },
+                              "file_count": {
+                                "$ref": "#/components/schemas/UInt64"
+                              },
+                              "file_contexts": {
+                                "type": "object",
+                                "additionalProperties": {
+                                  "$ref": "#/components/schemas/FileContext"
+                                },
+                                "description": "键是规范化的仓库相对逻辑路径，随子树冻结。"
+                              }
+                            },
+                            "additionalProperties": false,
+                            "description": "稳定命名目录分支。登记直接引用父子树，不新建文件分支或占位文件。继承写入意图和子目录精确引用随快照固定；真实变更追加子树，分支身份不变。",
+                            "required": [
+                              "directory_branch_id",
+                              "repository_id",
+                              "directory_id",
+                              "path",
+                              "name",
+                              "parent_branch_id",
+                              "head_tree_id",
+                              "commit_id",
+                              "entries",
+                              "file_branches",
+                              "materialized",
+                              "sequence",
+                              "current",
+                              "file_count"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "directory_branch_id": {
+                                "$ref": "#/components/schemas/DirectoryBranchId"
+                              },
+                              "repository_id": {
+                                "$ref": "#/components/schemas/RepositoryId"
+                              },
+                              "directory_id": {
+                                "$ref": "#/components/schemas/DirectoryId"
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1,
+                                "x-maxUtf8Bytes": 128
+                              },
+                              "parent_branch_id": {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/components/schemas/DirectoryBranchId"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "head_tree_id": {
+                                "$ref": "#/components/schemas/DirectoryTreeId"
+                              },
+                              "materialized": {
+                                "type": "boolean"
+                              },
+                              "commit_id": {
+                                "$ref": "#/components/schemas/CommitId"
+                              },
+                              "path": {
+                                "type": "string"
+                              },
+                              "sequence": {
+                                "$ref": "#/components/schemas/UInt64"
+                              },
+                              "current": {
+                                "type": "boolean"
+                              },
+                              "file_count": {
+                                "$ref": "#/components/schemas/UInt64"
+                              }
+                            },
+                            "additionalProperties": false,
+                            "description": "目录分支摘要，不含后代条目、上下文或引用映射；分支数量本身尚未分页。",
+                            "required": [
+                              "directory_branch_id",
+                              "repository_id",
+                              "directory_id",
+                              "path",
+                              "name",
+                              "parent_branch_id",
+                              "head_tree_id",
+                              "commit_id",
+                              "materialized",
+                              "sequence",
+                              "current",
+                              "file_count"
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "repository_id",
+                    "directory_branches"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；不确定结果使用原 operation_id 查询或重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "queryDirectoryBranchSelection",
+        "description": "只读批量准备查询，不创建操作或更改存储。sources固定捕获的分支身份和expected_tree_id，必须属于请求的稳定目录；变化返回409 LISTING_CHANGED。entries为请求目录的直接子项，最多500；sources最多500且二者数量乘积不超过10000。按原始selected_path关联返回解析事实：单个身份出现时保留其冻结位置，多别名时精确匹配路径；缺失项不返回。每次仍执行管理员和Cookie CSRF准入。",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "sources": {
+                    "type": "array",
+                    "maxItems": 500,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "directory_branch_id": {
+                          "$ref": "#/components/schemas/DirectoryBranchId"
+                        },
+                        "expected_tree_id": {
+                          "$ref": "#/components/schemas/DirectoryTreeId"
+                        }
+                      },
+                      "required": [
+                        "directory_branch_id",
+                        "expected_tree_id"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "entries": {
+                    "type": "array",
+                    "maxItems": 500,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "entry_id": {
+                          "$ref": "#/components/schemas/EntryId"
+                        },
+                        "path": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "entry_id",
+                        "path"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "path",
+                  "sources",
+                  "entries"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "有界选中条目事实。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "repository_id": {
+                      "$ref": "#/components/schemas/RepositoryId"
+                    },
+                    "directory_branches": {
+                      "type": "array",
+                      "maxItems": 500,
                       "items": {
                         "type": "object",
                         "properties": {
@@ -3654,39 +4258,6 @@
                           "path": {
                             "type": "string"
                           },
-                          "entries": {
-                            "type": "array",
-                            "items": {
-                              "$ref": "#/components/schemas/Entry"
-                            }
-                          },
-                          "file_branches": {
-                            "type": "object",
-                            "propertyNames": {
-                              "$ref": "#/components/schemas/FileId"
-                            },
-                            "additionalProperties": {
-                              "$ref": "#/components/schemas/BranchId"
-                            }
-                          },
-                          "inherited_files": {
-                            "type": "object",
-                            "propertyNames": {
-                              "$ref": "#/components/schemas/FileId"
-                            },
-                            "additionalProperties": {
-                              "$ref": "#/components/schemas/DirectoryBranchId"
-                            }
-                          },
-                          "directory_refs": {
-                            "type": "object",
-                            "propertyNames": {
-                              "$ref": "#/components/schemas/EntryId"
-                            },
-                            "additionalProperties": {
-                              "$ref": "#/components/schemas/DirectoryReference"
-                            }
-                          },
                           "sequence": {
                             "$ref": "#/components/schemas/UInt64"
                           },
@@ -3696,16 +4267,33 @@
                           "file_count": {
                             "$ref": "#/components/schemas/UInt64"
                           },
-                          "file_contexts": {
-                            "type": "object",
-                            "additionalProperties": {
-                              "$ref": "#/components/schemas/FileContext"
-                            },
-                            "description": "键是规范化的仓库相对逻辑路径，随子树冻结。"
+                          "entries": {
+                            "type": "array",
+                            "maxItems": 500,
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "entry_id": {
+                                  "$ref": "#/components/schemas/EntryId"
+                                },
+                                "path": {
+                                  "type": "string"
+                                },
+                                "selected_path": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "entry_id",
+                                "path",
+                                "selected_path"
+                              ],
+                              "additionalProperties": false
+                            }
                           }
                         },
                         "additionalProperties": false,
-                        "description": "稳定命名目录分支。登记直接引用父子树，不新建文件分支或占位文件。继承写入意图和子目录精确引用随快照固定；真实变更追加子树，分支身份不变。",
+                        "description": "目录分支摘要，不含后代条目、上下文或引用映射；分支数量本身尚未分页。",
                         "required": [
                           "directory_branch_id",
                           "repository_id",
@@ -3715,21 +4303,20 @@
                           "parent_branch_id",
                           "head_tree_id",
                           "commit_id",
-                          "entries",
-                          "file_branches",
                           "materialized",
                           "sequence",
                           "current",
-                          "file_count"
+                          "file_count",
+                          "entries"
                         ]
                       }
                     }
                   },
-                  "additionalProperties": false,
                   "required": [
                     "repository_id",
                     "directory_branches"
-                  ]
+                  ],
+                  "additionalProperties": false
                 }
               }
             }

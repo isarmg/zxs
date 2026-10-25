@@ -477,7 +477,8 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                 named_name.into(),
                 format!("{root_name}/root-only"),
             ] {
-                let failure = entries(&engine, &json!({"slot_id":"P01","path":path})).unwrap_err();
+                let failure =
+                    listing::entries(&engine, &json!({"slot_id":"P01","path":path})).unwrap_err();
                 assert_eq!(
                     (failure.status, failure.code.as_str()),
                     (409, "NAME_COLLISION")
@@ -524,7 +525,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                     .unwrap()
                     .is_empty()
             );
-            let other = entries(
+            let other = listing::entries(
                 &engine,
                 &json!({"slot_id":"P01","path":format!("{root_name}-other")}),
             )
@@ -543,7 +544,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                     &storage_engine::new_id("op"),
                 )
                 .unwrap();
-            let listing = entries(&engine, &json!({"slot_id":"P01","path":""})).unwrap();
+            let listing = listing::entries(&engine, &json!({"slot_id":"P01","path":""})).unwrap();
             let listed = listing["entries"].as_array().unwrap();
             let keys = listed
                 .iter()

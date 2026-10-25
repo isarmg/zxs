@@ -183,15 +183,42 @@ fn js_error(value: JsValue) -> Error {
     error("TRANSPORT_ERROR", message)
 }
 
+/// Cancellation is shared by the listing owner and the in-flight GET only.
+#[derive(Clone)]
+pub(crate) struct ReadCancellation(
+    std::sync::Arc<send_wrapper::SendWrapper<web_sys::AbortController>>,
+);
+impl ReadCancellation {
+    pub(crate) fn new() -> Result<Self, Error> {
+        web_sys::AbortController::new()
+            .map(|controller| {
+                Self(std::sync::Arc::new(send_wrapper::SendWrapper::new(
+                    controller,
+                )))
+            })
+            .map_err(js_error)
+    }
+    pub(crate) fn abort(&self) {
+        self.0.abort();
+    }
+}
+struct AbortOnDrop(ReadCancellation);
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 struct Fetched {
     response: Response,
     credential_generation: u64,
     revoke_on_unauthorized: bool,
     _timeout: gloo_timers::callback::Timeout,
+    _abort: AbortOnDrop,
 }
 
 async fn fetch(method: &str, path: &str, body: Option<Value>) -> Result<Fetched, Error> {
-    fetch_authorized(method, path, body, None).await
+    fetch_authorized(method, path, body, None, None).await
 }
 
 async fn fetch_authorized(
@@ -199,9 +226,12 @@ async fn fetch_authorized(
     path: &str,
     body: Option<Value>,
     bootstrap: Option<(&str, Option<&str>)>,
+    cancellation: Option<ReadCancellation>,
 ) -> Result<Fetched, Error> {
     validate_path(path)?;
-    let controller = web_sys::AbortController::new().map_err(js_error)?;
+    let cancellation = cancellation.map(Ok).unwrap_or_else(ReadCancellation::new)?;
+    let abort = AbortOnDrop(cancellation.clone());
+    let controller = &*cancellation.0;
     let options = RequestInit::new();
     options.set_method(method);
     options.set_mode(RequestMode::SameOrigin);
@@ -250,7 +280,7 @@ async fn fetch_authorized(
             .set("X-CSRF-Token", token)
             .map_err(js_error)?;
     }
-    let timer = gloo_timers::callback::Timeout::new(120_000, move || controller.abort());
+    let timer = gloo_timers::callback::Timeout::new(120_000, move || cancellation.abort());
     let window = web_sys::window().ok_or_else(|| {
         error(
             "NO_WINDOW",
@@ -265,6 +295,7 @@ async fn fetch_authorized(
         credential_generation: credentials.generation,
         revoke_on_unauthorized: bootstrap.is_none(),
         _timeout: timer,
+        _abort: abort,
     })
 }
 
@@ -349,6 +380,22 @@ pub async fn request(method: &str, path: &str, body: Option<Value>) -> Result<Va
     decode(fetch(method, path, body).await?).await
 }
 
+pub(crate) async fn cancellable_get(
+    path: &str,
+    cancellation: ReadCancellation,
+) -> Result<Value, Error> {
+    cancellable_request("GET", path, None, cancellation).await
+}
+
+pub(crate) async fn cancellable_request(
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+    cancellation: ReadCancellation,
+) -> Result<Value, Error> {
+    decode(fetch_authorized(method, path, body, None, Some(cancellation)).await?).await
+}
+
 /// A bootstrap secret is scoped to the explicit same-origin setup endpoints and never saved.
 pub(crate) async fn setup_request(
     method: &str,
@@ -375,7 +422,7 @@ pub(crate) async fn setup_request(
             ),
         ));
     }
-    decode(fetch_authorized(method, path, body, Some((key, csrf))).await?).await
+    decode(fetch_authorized(method, path, body, Some((key, csrf)), None).await?).await
 }
 
 /// Public session identity. Authentication secrets never enter the UI model.

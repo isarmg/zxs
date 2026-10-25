@@ -1,4 +1,4 @@
-//! Real DOM regression: checkbox state and filtering retain an existing row.
+//! Real DOM regression: checkbox updates retain rows; server queries reset selection.
 use super::*;
 
 struct Probe<'a>(&'a Browser);
@@ -20,29 +20,28 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             Err("checking a file replaced row DOM or lost keyboard focus".into())
         }
     })?;
-    // Changing query performs filtering without removing this matching key.
     let search = browser.css(".zxs-file-search input")?;
     browser.keys(&search, "browser-smoke")?;
-    wait_for("matching filter retains checked row", || {
-        if browser.script("const s=window.__zxsFileRow;return s.row.isConnected&&s.row.querySelector('.zxs-entry-checkbox')===s.check&&s.check.checked&&document.querySelectorAll('.zxs-file-table tbody tr').length===1")? == true {
+    wait_for(
+        "server search resets page-local selection and preserves input focus",
+        || {
+            if browser.script("const input=document.querySelector('.zxs-file-search input');return input.value==='browser-smoke'&&document.activeElement===input&&document.querySelectorAll('.zxs-file-table tbody tr').length===1&&!document.querySelector('.zxs-entry-checkbox').checked&&!window.__zxsFileRow.row.isConnected&&document.querySelector('.zxs-file-name').textContent.trim()==='browser-smoke.txt'")? == true {
             Ok(())
         } else {
-            Err("matching filter replaced row or lost selection".into())
+            Err("server query did not reset selection or retain search focus".into())
         }
-    })?;
-    browser.click(&checkbox)?;
-    if browser.script("const s=window.__zxsFileRow;return s.row.isConnected&&!s.check.checked&&document.activeElement===s.check")? != true {
-        return Err("unchecking a filtered file replaced its DOM or lost focus".into());
-    }
-    // Use the normal input event path, retaining all subsequent smoke fixtures.
+        },
+    )?;
     browser.script("const input=document.querySelector('.zxs-file-search input');input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));return true")?;
-    wait_for("cleared file query", || {
-        if browser.script("return document.querySelector('.zxs-file-search input').value===''&&window.__zxsFileRow.row.isConnected")? == true {
+    wait_for("cleared file query finishes loading", || {
+        if browser.script("return document.querySelector('.zxs-file-search input').value===''&&document.querySelectorAll('.zxs-file-table tbody tr').length===1&&document.querySelector('.zxs-file-name').textContent.trim()==='browser-smoke.txt'&&!document.querySelector('[aria-busy=true]')")? == true {
             Ok(())
         } else {
-            Err("clearing query did not retain the row".into())
+            Err("clearing query has not restored the real row".into())
         }
     })?;
-    println!("PASS keyed file-row DOM, checkbox selection, focus and matching-filter retention");
+    println!(
+        "PASS keyed file-row DOM, checkbox focus, server-query selection reset and input focus"
+    );
     Ok(())
 }

@@ -21,25 +21,16 @@ fn branch_ref(branch: &Value, entry: &Value) -> Result<Value, String> {
 }
 fn find_entry<'a>(branch: &'a Value, chosen: &Value) -> Result<&'a Value, String> {
     let id = entry_id(chosen);
-    let matches = branch["entries"]
+    let logical_path = selected_path(chosen);
+    branch["entries"]
         .as_array()
-        .map(|entries| {
-            entries
+        .and_then(|entries| {
+            let mut matches = entries
                 .iter()
-                .filter(|entry| entry["entry_id"] == id)
-                .collect::<Vec<_>>()
+                .filter(|entry| entry["entry_id"] == id && entry["selected_path"] == logical_path);
+            let first = matches.next()?;
+            matches.next().is_none().then_some(first)
         })
-        .unwrap_or_default();
-    if matches.len() == 1 {
-        return Ok(matches[0]);
-    }
-    let logical_path = chosen["repository_path"]
-        .as_str()
-        .or_else(|| chosen["path"].as_str())
-        .unwrap_or_default();
-    matches
-        .into_iter()
-        .find(|entry| entry["path"] == logical_path)
         .ok_or_else(error_missing)
 }
 fn target_ref(branch: &Value, path: String) -> Result<Value, String> {
@@ -59,6 +50,12 @@ fn target_ref(branch: &Value, path: String) -> Result<Value, String> {
 /// Scope and identity are captured before submission. Never infer all possible
 /// source/target pairs or silently skip an entry absent in another branch.
 pub(super) fn request(draft: &Draft) -> Result<Value, String> {
+    if !draft.source_resolved || draft.loading {
+        return Err(t(
+            "请先读取源目录分支。",
+            "Load the source folder branches first.",
+        ));
+    }
     if draft.selected_sources.is_empty() {
         return Err(t(
             "至少选择一个源分支。",

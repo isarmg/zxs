@@ -6,6 +6,7 @@ mod detail;
 mod inline;
 mod merge;
 mod model;
+mod page;
 mod review;
 mod rows;
 mod tags;

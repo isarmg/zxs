@@ -3,21 +3,16 @@ use json_codec::json;
 use std::cell::Cell;
 
 thread_local! {
-    static SORTS: Cell<usize> = const { Cell::new(0) };
+    static PROJECTIONS: Cell<usize> = const { Cell::new(0) };
     static PROJECTED: Cell<usize> = const { Cell::new(0) };
-    static FILTERS: Cell<usize> = const { Cell::new(0) };
 }
-pub(super) fn record_sort(entries: usize) {
-    SORTS.set(SORTS.get() + 1);
+pub(super) fn record_project(entries: usize) {
+    PROJECTIONS.set(PROJECTIONS.get() + 1);
     PROJECTED.set(PROJECTED.get() + entries);
 }
-pub(super) fn record_filter() {
-    FILTERS.set(FILTERS.get() + 1);
-}
 fn reset_counts() {
-    SORTS.set(0);
+    PROJECTIONS.set(0);
     PROJECTED.set(0);
-    FILTERS.set(0);
 }
 fn state(entries: Vec<Value>) -> State {
     let mut state = State {
@@ -34,13 +29,19 @@ fn entry(id: &str, path: &str, name: &str, kind: &str) -> Value {
     json!({"entry_id":id,"path":path,"name":name,"kind":kind,"version_id":"old","size":1})
 }
 
+// Synthetic response metadata only: these tests neither import real files nor
+// measure DOM rendering, browser memory, or full-directory capacity.
 #[test]
-fn unrelated_updates_do_not_project_sort_or_filter_entries() {
-    for size in [100, 1_000, 10_000] {
+fn unrelated_updates_and_query_changes_do_not_reproject_a_server_page() {
+    for size in [1, 100, 200] {
         let owner = Owner::new();
         owner.with(|| {
             reset_counts();
-            let state = RwSignal::new(state((0..size).map(|i| entry(&i.to_string(), &format!("docs/{i}"), &i.to_string(), "file")).collect()));
+            let state = RwSignal::new(state(
+                (0..size)
+                    .map(|i| entry(&i.to_string(), &format!("docs/{i}"), &i.to_string(), "file"))
+                    .collect(),
+            ));
             let rows = visible_rows(state);
             assert_eq!(rows.with_untracked(Vec::len), size);
             for i in 0..100 {
@@ -52,17 +53,18 @@ fn unrelated_updates_do_not_project_sort_or_filter_entries() {
                 });
                 assert_eq!(rows.with_untracked(Vec::len), size);
             }
-            assert_eq!((SORTS.get(), PROJECTED.get(), FILTERS.get()), (1, size, 1));
-            state.update(|s|s.files.query = "1".into());
-            assert!(!rows.get_untracked().is_empty());
-            assert_eq!((SORTS.get(), PROJECTED.get(), FILTERS.get()), (1, size, 2));
-            println!("entries={size}; unrelated_updates=100; sorts=1; projected={size}; filters_before_query=1; filters_after_query=2");
+            state.update(|s| s.files.query = "does not match this page".into());
+            assert_eq!(rows.with_untracked(Vec::len), size);
+            assert_eq!((PROJECTIONS.get(), PROJECTED.get()), (1, size));
+            println!(
+                "synthetic_page_entries={size}; unrelated_updates=100; projections=1; projected={size}; query_reprojections=0"
+            );
         });
     }
 }
 
 #[test]
-fn ordering_filtering_and_equal_name_server_order_are_preserved() {
+fn server_order_is_preserved_without_local_sorting_or_filtering() {
     let owner = Owner::new();
     owner.with(|| {
         let state = RwSignal::new(state(vec![
@@ -80,13 +82,49 @@ fn ordering_filtering_and_equal_name_server_order_are_preserved() {
                     .collect::<Vec<_>>()
             })
         };
-        assert_eq!(ids(), ["d2", "d1", "f2", "f3", "f1"]);
-        let retained = rows.get_untracked()[2].clone();
-        state.update(|s| s.files.query = "A".into());
-        assert_eq!(ids(), ["f2", "f3"]);
-        assert!(Arc::ptr_eq(&retained, &rows.get_untracked()[0]));
-        state.update(|s| s.files.query = "absent".into());
-        assert!(ids().is_empty());
+        assert_eq!(ids(), ["f1", "f2", "d1", "f3", "d2"]);
+        let retained = rows.get_untracked()[1].clone();
+        for query in ["A", "absent", ""] {
+            state.update(|s| s.files.query = query.into());
+            assert_eq!(ids(), ["f1", "f2", "d1", "f3", "d2"]);
+            assert!(Arc::ptr_eq(&retained, &rows.get_untracked()[1]));
+        }
+    });
+}
+
+#[test]
+fn replacing_pages_drops_old_keys_and_projects_only_the_new_response() {
+    Owner::new().with(|| {
+        reset_counts();
+        let page = |start: usize| {
+            (start..start + 200)
+                .map(|i| entry(&i.to_string(), &format!("docs/{i}"), &i.to_string(), "file"))
+                .collect()
+        };
+        let state = RwSignal::new(state(page(0)));
+        let rows = visible_rows(state);
+        let old = rows.get_untracked()[0].clone();
+        let mut seen = std::collections::HashSet::new();
+        for start in (0..1_000).step_by(200) {
+            if start > 0 {
+                state.update(|s| s.files.entries = page(start).into());
+            }
+            rows.with_untracked(|rows| {
+                assert_eq!(rows.len(), 200);
+                for (offset, row) in rows.iter().enumerate() {
+                    assert_eq!(row.key.entry_id, (start + offset).to_string());
+                    assert!(seen.insert(row.key.clone()), "duplicate across pages");
+                }
+            });
+            if start > 0 {
+                assert!(state.with_untracked(|s| old.current_entry(s).is_none()));
+            }
+        }
+        assert_eq!(seen.len(), 1_000);
+        assert_eq!((PROJECTIONS.get(), PROJECTED.get()), (5, 1_000));
+        state.update(|s| s.files.entries = Default::default());
+        assert!(rows.with_untracked(Vec::is_empty));
+        assert_eq!((PROJECTIONS.get(), PROJECTED.get()), (6, 1_000));
     });
 }
 

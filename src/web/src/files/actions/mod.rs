@@ -4,7 +4,9 @@ mod browse;
 mod mutation;
 mod operation;
 
-pub(crate) use browse::{go_directory, go_root, load_disks, load_entries, open_disk, select_entry};
+pub(crate) use browse::{
+    change_page, go_directory, go_root, load_disks, load_entries, open_disk, search, select_entry,
+};
 pub(crate) use mutation::{
     create_branch, directory_branch, namespace, rename_directory_branch, rename_file_branch,
     select_branch, select_default_branch, update_node_note, update_note,

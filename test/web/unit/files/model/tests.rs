@@ -11,12 +11,12 @@ fn refreshed_selection_invalidates_old_history_only_when_context_changes() {
         history_loading: true,
         ..Default::default()
     };
-    model.reconcile_selection();
+    model.reconcile_selection(model.entries.first().cloned());
     assert_eq!(model.history_generation, 0);
     Arc::make_mut(&mut model.entries)[0]["selected_branch_id"] = "draft".into();
     Arc::make_mut(&mut model.entries)[0]["version_id"] = "v2".into();
     model.checked_nodes.insert("old-node".into());
-    model.reconcile_selection();
+    model.reconcile_selection(model.entries.first().cloned());
     assert_eq!(model.selected.as_ref().unwrap()["version_id"], "v2");
     assert!(model.file_history.is_null());
     assert!(!model.history_loading);
@@ -231,7 +231,7 @@ fn renaming_an_entry_preserves_selection_and_file_history() {
         file_history: json_codec::json!({"versions":[{"version_id":"v1"}]}).into(),
         ..Default::default()
     };
-    model.reconcile_selection();
+    model.reconcile_selection(model.entries.first().cloned());
     assert_eq!(model.selected.unwrap()["name"], "new.txt");
     assert_eq!(model.file_history["versions"][0]["version_id"], "v1");
     assert_eq!(
@@ -271,10 +271,10 @@ fn two_aliases_of_one_file_keep_the_selected_logical_path() {
         .into(),
         ..Default::default()
     };
-    model.reconcile_selection();
+    model.reconcile_selection(model.entries.get(1).cloned());
     assert_eq!(model.selected.as_ref().unwrap()["version_id"], "F2");
     model.selected.as_mut().unwrap()["path"] = "missing/f.txt".into();
-    model.reconcile_selection();
+    model.reconcile_selection(None);
     assert!(model.selected.is_none());
 }
 #[test]
@@ -287,7 +287,7 @@ fn a_removed_entry_discards_metadata() {
 
         ..Default::default()
     };
-    model.reconcile_selection();
+    model.reconcile_selection(model.entries.first().cloned());
     assert!(model.selected.is_none());
     assert!(model.file_history.is_null());
     assert!(!model.history_loading);
@@ -325,7 +325,7 @@ fn refreshed_checked_entries_preserve_exact_alias_paths() {
         entries: vec![kept.clone(), new_alias, unrelated.clone()].into(),
         ..Default::default()
     };
-    model.reconcile_selection();
+    model.reconcile_selection(model.entries.first().cloned());
     assert_eq!(
         model.checked_entries,
         [entry_key(&kept), entry_key(&unrelated)]
@@ -333,7 +333,7 @@ fn refreshed_checked_entries_preserve_exact_alias_paths() {
             .collect()
     );
     model.entries = Default::default();
-    model.reconcile_selection();
+    model.reconcile_selection(model.entries.first().cloned());
     assert!(model.checked_entries.is_empty());
 }
 
@@ -346,8 +346,22 @@ fn empty_checked_entries_still_reconcile_the_detail_selection() {
         entries: vec![renamed.clone()].into(),
         ..Default::default()
     };
-    model.reconcile_selection();
+    model.reconcile_selection(model.entries.first().cloned());
     assert!(model.checked_entries.is_empty());
     assert_eq!(model.selected, Some(renamed));
     assert_eq!(model.history_generation, 1);
+}
+
+#[test]
+fn targeted_refresh_preserves_details_outside_the_loaded_page() {
+    let selected = json!({"entry_id":"outside", "path":"other.txt", "version_id":"v2"});
+    let mut model = Model {
+        selected: Some(selected.clone()),
+        entries: vec![json!({"entry_id":"page", "path":"first.txt"})].into(),
+        ..Default::default()
+    };
+    model.reconcile_selection(Some(selected.clone()));
+    assert_eq!(model.selected, Some(selected));
+    model.reconcile_selection(None);
+    assert!(model.selected.is_none());
 }

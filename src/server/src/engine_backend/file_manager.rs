@@ -4,7 +4,11 @@ use super::*;
 mod activity;
 mod backup_namespace;
 mod history_nodes;
+mod listing;
 mod operations;
+mod pagination;
+mod scope_query;
+pub(super) use scope_query::read as query_directory_branch_scopes;
 use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet},
@@ -227,18 +231,28 @@ fn file_repo<'a>(engine: &'a Engine, file: &str) -> Result<&'a Repository, ApiEr
     let repo = repo_for_history(engine, &version.history_tree_id)?;
     Ok(repo)
 }
-fn listed_entry(
+#[cfg(test)]
+thread_local! { static LISTED_ENTRY_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+fn listed_current_entry(
     engine: &Engine,
     repo: &Repository,
-    entry: &storage_engine::Entry,
+    index: usize,
     prefix: &str,
-) -> Value {
+) -> Result<Value, ApiError> {
+    #[cfg(test)]
+    LISTED_ENTRY_PROJECTIONS.set(LISTED_ENTRY_PROJECTIONS.get() + 1);
+    let entry = engine
+        .list_tree_ref(&repo.main_branch_id)
+        .map_err(error)?
+        .get(index)
+        .ok_or_else(|| ApiError::new(500, "STATE_INVALID", "listing entry index is invalid"))?;
     let display = if prefix.is_empty() {
         entry.path.clone()
     } else {
         format!("{prefix}/{}", entry.path)
     };
-    let context = engine.file_context(&repo.repository_id, &entry.path);
+    let context = engine.file_context_for_current_entry(&repo.repository_id, entry);
     let mut response = json!({"entry_id":entry.entry_id,"name":entry.name,"path":display,"kind":entry.kind,
         "repository_id":repo.repository_id,"repository_path":entry.path,
         "container":entry.kind=="file","size":entry.size.to_string(),"file_id":entry.file_id,
@@ -264,12 +278,11 @@ fn listed_entry(
             content_wire(
                 engine,
                 Some(&entry.version_id),
-                super::wire::current_entry_source_with_context(
+                super::wire::current_entry_source_at_index(
                     engine,
                     &repo.main_branch_id,
-                    &repo.repository_id,
-                    entry,
-                    context.as_ref(),
+                    index,
+                    context.as_deref(),
                 ),
             )
             .as_object()
@@ -277,7 +290,7 @@ fn listed_entry(
             .clone(),
         );
     }
-    response
+    Ok(response)
 }
 fn directory(name: &str, display: &str, id: &str) -> Value {
     json!({"entry_id":id,"name":name,"path":display,"kind":"directory","size":"0","file_id":"","version_id":""})
@@ -286,11 +299,11 @@ fn directory(name: &str, display: &str, id: &str) -> Value {
 /// Read frozen branch scopes without changing the shared SMB/default selection.
 /// A historical branch may retain a directory that is absent from the current
 /// projection, so scope discovery must use stable directory identities.
-pub(super) fn directory_branch_scopes(
-    engine: &Engine,
+fn scoped_directory_branches<'a>(
+    engine: &'a Engine,
     repo: &str,
     requested_path: Option<&str>,
-) -> Result<Value, ApiError> {
+) -> Result<Vec<&'a storage_contract::DirectoryBranch>, ApiError> {
     let repository = repository(engine, repo)?;
     if let Some(path) = requested_path.filter(|path| !path.is_empty()) {
         name_policy::validate_path(path).map_err(ApiError::invalid)?;
@@ -330,6 +343,15 @@ pub(super) fn directory_branch_scopes(
             branch.directory_branch_id.as_str(),
         )
     });
+    Ok(scopes)
+}
+
+pub(super) fn directory_branch_scopes(
+    engine: &Engine,
+    repo: &str,
+    requested_path: Option<&str>,
+) -> Result<Value, ApiError> {
+    let scopes = scoped_directory_branches(engine, repo, requested_path)?;
     let branches = scopes
         .into_iter()
         .map(|branch| {
@@ -353,113 +375,33 @@ pub(super) fn directory_branch_scopes(
     Ok(json!({"repository_id":repo,"directory_branches":branches}))
 }
 
+pub(super) fn directory_branch_summaries(
+    engine: &Engine,
+    repo: &str,
+    path: Option<&str>,
+) -> Result<Value, ApiError> {
+    let branches = scoped_directory_branches(engine, repo, path)?
+        .into_iter()
+        .map(|branch| {
+            listing::branch_summary(
+                branch,
+                engine
+                    .state()
+                    .directory_selections
+                    .get(&branch.directory_id)
+                    == Some(&branch.directory_branch_id),
+            )
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({"repository_id":repo,"directory_branches":branches}))
+}
+
 fn root_has_virtual_directories(engine: &Engine, slot: &str) -> bool {
     engine
         .state()
         .repositories
         .values()
         .any(|repo| repo.primary_slot_id == slot && !repo.file_manager_root)
-}
-fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
-    let slot = field(input, "slot_id")?;
-    let value = path(input)?;
-    let is_primary = disk(engine, slot)?.level == 1;
-    if !is_primary {
-        return backup_namespace::entries(engine, slot, value);
-    }
-    let (primary, relative) = (slot.to_owned(), value);
-    let mut values = Vec::new();
-    let root = relative.is_empty();
-    if root {
-        for repo in engine.state().repositories.values().filter(|r| {
-            r.primary_slot_id == primary && !r.file_manager_root && eligible(engine, slot, r)
-        }) {
-            let display = repo.name.clone();
-            values.push(directory(&repo.name, &display, &repo.repository_id));
-        }
-    }
-    let resolved = resolve_read(engine, slot, value);
-    let mut context = Value::Null;
-    let mut directory_file_count = 0;
-    let mut directory_branches = Vec::new();
-    let mut default_branch_scope = false;
-    let directory_branches_supported = !(root && root_has_virtual_directories(engine, &primary));
-    let writable = true;
-    match resolved {
-        Ok((repo, within)) => {
-            default_branch_scope = within.is_empty();
-            let tree = engine.list_tree_ref(&repo.main_branch_id).map_err(error)?;
-            let within_key = name_policy::path_key(&within);
-            if !within.is_empty()
-                && !tree
-                    .iter()
-                    .any(|e| e.lookup_key == within_key && e.kind == "directory")
-            {
-                return Err(ApiError::new(
-                    404,
-                    "DIRECTORY_NOT_FOUND",
-                    "directory not found",
-                ));
-            }
-            let prefix = if repo.file_manager_root {
-                String::new()
-            } else {
-                repo.name.clone()
-            };
-            if directory_branches_supported {
-                directory_branches = directory_branch_scopes(
-                    engine,
-                    &repo.repository_id,
-                    Some(&within),
-                )?["directory_branches"]
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default();
-            }
-            let selected_prefix = if within.is_empty() {
-                String::new()
-            } else {
-                format!("{within_key}/")
-            };
-            directory_file_count = tree
-                .iter()
-                .filter(|entry| {
-                    entry.kind == "file" && entry.lookup_key.starts_with(&selected_prefix)
-                })
-                .count();
-            for entry in tree.iter().filter(|e| {
-                e.lookup_key.starts_with(&selected_prefix)
-                    && !e.lookup_key[selected_prefix.len()..].contains('/')
-            }) {
-                let mut listed = listed_entry(engine, &repo, entry, &prefix);
-                listed["note"] = engine
-                    .state()
-                    .file_notes
-                    .get(&entry.file_id)
-                    .cloned()
-                    .unwrap_or_default()
-                    .into();
-                values.push(listed);
-            }
-            let branch = &engine.state().branches[&repo.main_branch_id];
-            context = json!({"repository_id":repo.repository_id,"repository_path":within,"branch_id":repo.main_branch_id,"base_head":branch.head_commit_id});
-        }
-        Err(error) if root && matches!(error.status, 403 | 404) => {}
-        Err(error) => return Err(error),
-    }
-    // Preserve directory-first ordering and the exact display-name tiebreaker,
-    // but normalize once per entry rather than on every comparison under the engine lock.
-    values.sort_by_cached_key(|entry| {
-        let name = entry["name"].as_str();
-        (
-            entry["kind"] != "directory",
-            name_policy::lookup_key(name.unwrap_or_default()),
-            name.map(str::to_owned),
-        )
-    });
-    Ok(
-        json!({"slot_id":slot,"path":value,"writable":writable,"entries":values,"context":context,"directory_file_count":directory_file_count.to_string(),"directory_branches":directory_branches,"directory_branches_supported":directory_branches_supported,"default_branch_scope":default_branch_scope}),
-    )
 }
 
 fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
@@ -652,7 +594,7 @@ pub(super) fn read(
     input: Value,
 ) -> Result<Value, ApiError> {
     match action {
-        crate::BackendAction::FileManagerEntries => entries(engine, &input),
+        crate::BackendAction::FileManagerEntries => listing::entries(engine, &input),
         crate::BackendAction::FileManagerFileHistory => file_history(engine, &input),
         crate::BackendAction::FileManagerDownloadContext => {
             keys(&input, &["repository_id", "path", "version_id"])?;
@@ -1072,3 +1014,7 @@ mod request_tests;
 #[cfg(test)]
 #[path = "../../../../test/server/unit/engine_backend/file_manager/time_tests.rs"]
 mod time_tests;
+
+#[cfg(test)]
+#[path = "../../../../test/server/unit/engine_backend/file_manager/listing_integration_tests.rs"]
+mod listing_integration_tests;

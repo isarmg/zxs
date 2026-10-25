@@ -54,6 +54,12 @@ struct ScopeRegistration {
     generation: u64,
     published: bool,
 }
+struct ScopeRead(api::ReadCancellation);
+impl Drop for ScopeRead {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 #[derive(Clone)]
 pub(crate) struct Draft {
     id: String,
@@ -64,6 +70,8 @@ pub(crate) struct Draft {
     entries: Vec<Value>,
     names: BTreeMap<String, String>,
     sources: Vec<Value>,
+    source_resolved: bool,
+    scope_read: Option<std::sync::Arc<ScopeRead>>,
     selected_sources: BTreeSet<String>,
     target_path: String,
     targets: Vec<Value>,
@@ -83,6 +91,12 @@ fn branch_label(branch: &Value) -> String {
 }
 fn entry_id(entry: &Value) -> String {
     text(entry, &["entry_id"])
+}
+fn selected_path(entry: &Value) -> &str {
+    entry["repository_path"]
+        .as_str()
+        .or_else(|| entry["path"].as_str())
+        .unwrap_or_default()
 }
 fn source_branches(model: &Model) -> Vec<Value> {
     model.directory_branches.clone()

@@ -50,8 +50,15 @@ pub(crate) struct Model {
     pub slot: String,
     pub directory: String,
     pub writable: bool,
-    /// Immutable server listing, shared by listing rows.
+    /// One bounded server page, shared by listing rows.
     pub entries: Arc<[Value]>,
+    pub cursor: Option<String>,
+    pub next_cursor: Option<String>,
+    pub previous_cursor: Option<String>,
+    pub total_entries: u64,
+    pub listing_failed: bool,
+    pub listing_cancellation: Option<crate::api::ReadCancellation>,
+    pub search_delay: Option<Arc<send_wrapper::SendWrapper<gloo_timers::callback::Timeout>>>,
     pub directory_branches: Vec<Value>,
     pub directory_file_count: u64,
     pub directory_branches_supported: bool,
@@ -85,6 +92,25 @@ impl Model {
         self.disks_loaded = false;
     }
 
+    /// Page-local selection is never carried to unloaded entries.
+    pub(crate) fn cancel_listing(&mut self) {
+        self.search_delay = None;
+        if let Some(cancellation) = self.listing_cancellation.take() {
+            cancellation.abort();
+        }
+        self.generation += 1;
+        self.loading = false;
+    }
+
+    pub(crate) fn reset_page(&mut self) {
+        self.cursor = None;
+        self.next_cursor = None;
+        self.previous_cursor = None;
+        self.total_entries = 0;
+        self.checked_entries.clear();
+        self.listing_failed = false;
+    }
+
     pub(crate) fn clear_selection(&mut self) {
         self.merge = None;
         self.backup = None;
@@ -96,39 +122,13 @@ impl Model {
         self.history_generation += 1;
     }
 
-    pub(crate) fn reconcile_selection(&mut self) {
-        if !self.checked_entries.is_empty() {
-            let visible = self.entries.iter().map(entry_key).collect::<BTreeSet<_>>();
-            self.checked_entries.retain(|key| visible.contains(key));
-        }
-        let Some(selected) = &self.selected else {
+    pub(crate) fn reconcile_selection(&mut self, entry: Option<Value>) {
+        let visible = self.entries.iter().map(entry_key).collect::<BTreeSet<_>>();
+        self.checked_entries.retain(|key| visible.contains(key));
+        let Some(selected) = self.selected.as_ref() else {
             return;
         };
-        let identity = |entry: &Value| {
-            entry["entry_id"]
-                .as_str()
-                .or_else(|| entry["path"].as_str())
-                .unwrap_or_default()
-                .to_owned()
-        };
-        let id = identity(selected);
-        let candidates = self
-            .entries
-            .iter()
-            .filter(|entry| identity(entry) == id)
-            .collect::<Vec<_>>();
-        let matched = candidates
-            .iter()
-            .find(|entry| entry["path"] == selected["path"])
-            .copied()
-            .or_else(|| {
-                if candidates.len() == 1 {
-                    Some(candidates[0])
-                } else {
-                    None
-                }
-            });
-        if let Some(entry) = matched {
+        if let Some(entry) = entry {
             let content_changed = ["file_id", "version_id", "node_id", "selected_branch_id"]
                 .iter()
                 .any(|key| selected[*key] != entry[*key]);

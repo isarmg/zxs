@@ -106,7 +106,7 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
             <button class="zxs-button" disabled=move ||batch_disabled.get() on:click=move |_|batch::start(state,batch::Kind::Delete,None)><FileIcon name="delete"/>{t("删除","Delete")}</button>
             {branch::control(state,t("创建目录分支","Create folder branch"),branch::Target::CurrentDirectory,create_branch_disabled)}
             <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||actions::pending(s)) on:click=move |_|backup::start_current(state)>{t("备份设置","Backup settings")}</button>
-            <label class="zxs-file-search"><span class="zxs-visually-hidden">{t("搜索当前文件夹","Search this folder")}</span><input class="zxs-input zxs-input--compact" type="search" aria-label=t("搜索当前文件夹","Search this folder") placeholder=t("搜索当前文件夹","Search this folder") prop:value=move ||state.with(|s|s.files.query.clone()) on:input=move |event|state.update(|s|s.files.query=event_target_value(&event))/></label>
+            <label class="zxs-file-search"><span class="zxs-visually-hidden">{t("搜索当前文件夹","Search this folder")}</span><input class="zxs-input zxs-input--compact" type="search" aria-label=t("搜索当前文件夹","Search this folder") placeholder=t("搜索当前文件夹","Search this folder") prop:value=move ||state.with(|s|s.files.query.clone()) on:input=move |event|actions::search(state,event_target_value(&event))/></label>
         </div>
         <div class="zxs-file-toolbar zxs-flow zxs-surface-end">{move ||view!{<Select label=if default_scope.get(){t("当前主分支（SMB 默认）","Current main branch (SMB default)")}else{t("当前目录分支","Current folder branch")} options=folder_options value=folder_value disabled=folder_disabled placeholder=if default_scope.get(){t("主版本","Main")}else{t("尚无目录分支","No folder branches")} on_change=Callback::new(move |value:String|{if state.with_untracked(|s|s.files.default_branch_scope){actions::select_default_branch(state,value)}else{let path=state.with_untracked(|s|s.files.directory.clone());let _=actions::directory_branch(state,path,value,true);}})/>}}
             {move ||rename_branch.get().map(|(repository,branch_id,name)|inline::control(state,t("重命名分支","Rename branch"),Some("rename"),inline::Target::RenameDirectoryBranch{repository,branch_id,name},folder_disabled))}
@@ -126,14 +126,20 @@ fn file_table(state: RwSignal<State>) -> impl IntoView {
     view! {
         <div aria-busy=move ||state.with(|s|s.files.loading).to_string()>
             <Show when=move ||state.with(|s|s.files.loading&&!s.files.loaded)><LoadingState/></Show>
-            <div class="zxs-table-scroll"><table class="zxs-table zxs-file-table"><thead><tr><th scope="col"><label class="zxs-file-check zxs-flow"><input type="checkbox" aria-label=t("选择当前显示的全部条目","Select all visible entries") disabled=move ||disabled.get() prop:checked=move ||rows.with(|rows|!rows.is_empty()&&state.with(|s|rows.iter().all(|row|s.files.checked_entries.contains(&row.check_id)))) on:change=move |event|{
+            <div class="zxs-table-scroll"><table class="zxs-table zxs-file-table" aria-label=t("文件列表：每页最多 200 项","Files: up to 200 entries per page")><thead><tr><th scope="col"><label class="zxs-file-check zxs-flow"><input type="checkbox" aria-label=t("选择本页全部条目（最多 200 项）","Select all entries on this page (up to 200)") disabled=move ||disabled.get() prop:checked=move ||rows.with(|rows|!rows.is_empty()&&state.with(|s|rows.iter().all(|row|s.files.checked_entries.contains(&row.check_id)))) on:change=move |event|{
                 let checked=event_target_checked(&event);
-                rows.with_untracked(|rows|state.update(|s|{for row in rows {if row.current_context(s){if checked{s.files.checked_entries.insert(row.check_id.clone());}else{s.files.checked_entries.remove(&row.check_id);}}}}));
+                rows.with_untracked(|rows|state.update(|s|{for row in rows {if row.current_entry(s).is_some(){if checked{s.files.checked_entries.insert(row.check_id.clone());}else{s.files.checked_entries.remove(&row.check_id);}}}}));
             }/><span>{t("名称","Name")}</span></label></th><th scope="col">{t("类型","Type")}</th><th scope="col">{t("大小","Size")}</th><th scope="col">{t("操作","Actions")}</th></tr></thead>
                 <tbody><ForSnapshot each=move ||rows.get() key=|row|row.key.clone() children=move |row|file_row(state,row,disabled,selected)/></tbody>
             </table></div>
-            <Show when=move ||state.with(|s|s.files.loaded&&s.files.entries.is_empty())><p class="zxs-file-empty">{t("这个文件夹是空的。","This folder is empty.")}</p></Show>
-            <Show when=move ||rows.with(|rows|rows.is_empty())&&state.with(|s|s.files.loaded&&!s.files.entries.is_empty())><p class="zxs-file-empty">{t("没有匹配的文件。","No files match your search.")}</p></Show>
+            <nav class="zxs-file-pagination zxs-flow" aria-label=t("文件列表分页","File list pages")>
+                <button class="zxs-button" disabled=move ||state.with(|s|s.files.loading||actions::pending(s)||s.files.previous_cursor.is_none()) on:click=move |_|actions::change_page(state,false)>{t("上一页","Previous page")}</button>
+                <span role="status" aria-live="polite">{move ||state.with(|s|if s.files.loading{t("正在读取…","Loading…")}else if s.files.listing_failed{t("读取失败，请重试。","Loading failed. Retry the page.")}else{format!("{} {} · {} {} · {}",t("本页","This page"),s.files.entries.len(),t("匹配总数","Total matches"),s.files.total_entries,t("仅选择本页","Selection is page-local"))})}</span>
+                <button class="zxs-button" disabled=move ||state.with(|s|s.files.loading||actions::pending(s)||s.files.next_cursor.is_none()) on:click=move |_|actions::change_page(state,true)>{t("下一页","Next page")}</button>
+                <Show when=move ||state.with(|s|s.files.listing_failed)><button class="zxs-button" on:click=move |_|actions::load_entries(state)>{t("重试","Retry")}</button></Show>
+            </nav>
+            <Show when=move ||state.with(|s|s.files.loaded&&s.files.entries.is_empty()&&s.files.query.is_empty())><p class="zxs-file-empty">{t("这个文件夹是空的。","This folder is empty.")}</p></Show>
+            <Show when=move ||rows.with(|rows|rows.is_empty())&&state.with(|s|s.files.loaded&&!s.files.query.is_empty())><p class="zxs-file-empty">{t("没有匹配的文件。","No files match your search.")}</p></Show>
         </div>
     }
 }

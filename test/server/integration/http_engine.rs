@@ -24,6 +24,8 @@ mod file_metadata_operations;
 mod history_alias_operations;
 #[path = "http_engine/optional_identities.rs"]
 mod optional_identities;
+#[path = "http_engine/paginated_listing.rs"]
+mod paginated_listing;
 
 /// Resolve only fixture payloads for deliberate corruption. Production reads
 /// continue through the engine's verified replica and read-lease interfaces.
@@ -2773,7 +2775,22 @@ async fn manager_namespace_request(
         None,
     )
     .await;
-    let scope = listing["directory_branches"]
+    let repository = listing["context"]["repository_id"].as_str().unwrap();
+    let scope_query = url_encoding::form::Serializer::new(String::new())
+        .append_pair(
+            "path",
+            listing["context"]["repository_path"].as_str().unwrap(),
+        )
+        .finish();
+    let scopes = success(
+        app,
+        token,
+        "GET",
+        &format!("/api/repositories/{repository}/directory-branches?{scope_query}"),
+        None,
+    )
+    .await;
+    let scope = scopes["directory_branches"]
         .as_array()
         .unwrap()
         .iter()

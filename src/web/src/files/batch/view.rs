@@ -1,5 +1,5 @@
 //! Inline operation review using shared rows, frames and selects.
-use super::actions::{initialize_scope, load_target, submit, toggle_source, update};
+use super::actions::{initialize_scope, load_sources, load_target, submit, toggle_source, update};
 use super::*;
 use crate::icons::FileIcon;
 use web_interface::components::{Select, SelectOption};
@@ -51,7 +51,8 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                     view!{<label class="zxs-batch-check zxs-row"><input type="checkbox" disabled=move ||blocked.get() prop:checked=move ||state.with(|s|s.files.batch.as_ref().is_some_and(|draft|draft.selected_sources.contains(&checked_id))) on:change=move |event|toggle_source(state,toggle_id.clone(),event_target_checked(&event))/><span>{branch_label(&branch)}</span></label>}
                 }).collect_view()}
             </fieldset>
-            <Show when=move ||sources.get().is_empty()&&!blocked.get()><button class="zxs-button" on:click=move |_|initialize_scope(state,false)>{t("登记源目录分支记录","Register source folder branch records")}</button></Show>
+            <Show when=move ||sources.get().is_empty()&&!blocked.get()&&state.with(|s|s.files.batch.as_ref().is_some_and(|draft|draft.source_resolved))><button class="zxs-button" on:click=move |_|initialize_scope(state,false)>{t("登记源目录分支记录","Register source folder branch records")}</button></Show>
+            <Show when=move ||state.with(|s|s.files.batch.as_ref().is_some_and(|draft|!draft.source_resolved&&!draft.loading))><button class="zxs-button" disabled=move ||blocked.get() on:click=move |_|load_sources(state)>{t("重试读取源目录分支", "Retry loading source folder branches")}</button></Show>
             <div class="zxs-stack">{move ||entries.get().into_iter().map(move |entry|{
                 let id=entry_key(&entry);let value_id=StoredValue::new(id.clone());let input_id=StoredValue::new(id);let name=text(&entry,&["name"]);let dom_id=StoredValue::new(entry_id(&entry));
                 view!{<label class="zxs-batch-entry zxs-flow"><span class="zxs-row">{name}</span>
@@ -68,7 +69,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
             </Show>
             <Show when=move ||state.with(|s|s.files.batch.as_ref().is_some_and(|draft|draft.registration.as_ref().is_some_and(|registration|registration.published)))><button class="zxs-button" disabled=move ||state.with(|s|!s.session_active()||file_actions::pending(s)||s.files.batch.as_ref().is_none_or(|draft|draft.loading)) on:click=move |_|reload_registered_scope(state)>{t("重试读取目录分支", "Retry loading folder branches")}</button></Show>
             <p class="zxs-row zxs-inline-error" role="status">{move ||state.with(|s|s.files.batch.as_ref().map(|draft|draft.error.clone()).unwrap_or_default())}</p>
-            <div class="zxs-file-toolbar zxs-flow"><button class="zxs-button" disabled=move ||blocked.get() on:click=move |_|submit(state)>{t("执行所选操作","Apply selected operation")}</button></div>
+            <div class="zxs-file-toolbar zxs-flow"><button class="zxs-button" disabled=move ||blocked.get()||state.with(|s|s.files.batch.as_ref().is_none_or(|draft|!draft.source_resolved)) on:click=move |_|submit(state)>{t("执行所选操作","Apply selected operation")}</button></div>
         </section>
     </Show>}
 }

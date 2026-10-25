@@ -1,4 +1,5 @@
-//! Real Chrome/WebDriver smoke test; no mock server or generated application JS.
+//! Real Chrome/WebDriver smoke with the production server/WASM. Explicit
+//! synthetic delivery fixtures test browser lifetimes, not backend correctness.
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use json_codec::{Value, json};
 use std::{
@@ -19,6 +20,7 @@ mod base64_compatibility_tests;
 
 mod accessibility;
 mod diagnostics;
+mod file_pagination;
 mod file_rows;
 mod fixture;
 use fixture::seed_files;
@@ -277,6 +279,7 @@ fn exercise(
     assert_metadata_only(browser)?;
     println!("PASS engine-seeded file browsing in the real server namespace");
     file_rows::run(browser)?;
+    file_pagination::run(browser)?;
     if let Some(path) = screenshot {
         // Save the real regression view without adding presentation-only data.
         wait_for("loaded screenshot fonts", || {

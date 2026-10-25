@@ -1,5 +1,5 @@
 //! Publication receipts and polling of unconfirmed operations.
-use super::browse::load_entries;
+use super::browse::reload_entries;
 use crate::{
     api,
     files::model::{SaveStatus, operation_status, publication_notice},
@@ -45,7 +45,7 @@ pub(crate) fn record_operation(state: RwSignal<State>, value: Value) {
         s.notice = publication_notice(status);
     });
     if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
-        load_entries(state);
+        reload_entries(state);
     }
     if reload_scope {
         crate::files::batch::reload_registered_scope(state);

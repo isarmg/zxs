@@ -639,7 +639,7 @@ fn router_shared(
         )
         .route(
             "/api/repositories/{repo}/directory-branches",
-            get(directory_branch_scopes),
+            get(directory_branch_scopes).post(query_directory_branch_scopes),
         )
         .route(
             "/api/repositories/{repo}/directory-branches/{id}",
@@ -987,6 +987,11 @@ read_handler!(
 );
 read_handler!(
     directory_branch_scopes,
+    crate::BackendAction::DirectoryBranchScopes,
+    "repository_id"
+);
+id_post_handler!(
+    query_directory_branch_scopes,
     crate::BackendAction::DirectoryBranchScopes,
     "repository_id"
 );

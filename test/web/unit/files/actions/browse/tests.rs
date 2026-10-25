@@ -329,3 +329,38 @@ fn an_obsolete_disk_read_waits_for_readable_storage_before_reloading() {
         }
     }
 }
+
+#[test]
+fn page_endpoint_encodes_search_and_opaque_cursor_and_caps_page_size() {
+    let endpoint = page_endpoint("disk", "a/b", "x&y", Some("opaque+/="));
+    assert_eq!(
+        endpoint,
+        "/api/file-manager/disks/disk/entries?path=a%2Fb&query=x%26y&limit=200&cursor=opaque%2B%2F%3D"
+    );
+}
+
+#[test]
+fn query_change_resets_page_local_state_before_any_read() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State::default());
+        state.update(|s| {
+            s.files.cursor = Some("stale".into());
+            s.files.next_cursor = Some("next".into());
+            s.files.previous_cursor = Some("previous".into());
+            s.files.checked_entries.insert("selected".into());
+            s.files.entries = vec![json_codec::json!({"entry_id":"old"})].into();
+            s.files.loaded = true;
+        });
+        search(state, "new query".into());
+        state.with_untracked(|s| {
+            assert_eq!(s.files.query, "new query");
+            assert!(s.files.cursor.is_none());
+            assert!(s.files.next_cursor.is_none());
+            assert!(s.files.previous_cursor.is_none());
+            assert!(s.files.checked_entries.is_empty());
+            assert!(s.files.entries.is_empty());
+            assert!(!s.files.loaded);
+            assert_eq!(s.files.generation, 1);
+        });
+    });
+}

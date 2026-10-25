@@ -65,6 +65,8 @@ pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Value>) {
                 target: String::new(),
             })
             .collect(),
+        source_resolved: sources.is_empty(),
+        scope_read: None,
         sources,
         selected_sources,
         target_path: String::new(),
@@ -79,14 +81,142 @@ pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Value>) {
     open_draft(state, draft);
 }
 pub(super) fn open_draft(state: RwSignal<State>, mut draft: Draft) {
-    // The listing already contains authoritative frozen scopes, including an
-    // authoritative empty set for a newly created directory. Never fill that
-    // set from path matches belonging to a previous directory identity.
+    // Empty scopes in the identity-aware listing remain authoritative. A path
+    // query must never resurrect branches belonging to a replaced directory.
+    draft.source_resolved = draft.sources.is_empty();
     draft.loading = false;
     state.update(|s| {
         s.files.batch = Some(draft);
         s.page = crate::ui::Page::Files;
     });
+    load_sources(state);
+}
+pub(super) fn selected_scope_body(draft: &Draft, sources: &[Value], path: &str) -> Value {
+    let sources = sources
+        .iter()
+        .map(|source| {
+            json!({
+                "directory_branch_id":branch_id(source),
+                "expected_tree_id":text(source, &["head_tree_id"])
+            })
+        })
+        .collect::<Vec<_>>();
+    let entries = draft
+        .entries
+        .iter()
+        .map(|entry| {
+            json!({
+                "entry_id":entry_id(entry), "path":selected_path(entry)
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({"path":path,"sources":sources,"entries":entries})
+}
+fn selected_scope_endpoint(repository: &str) -> String {
+    format!(
+        "/api/repositories/{}/directory-branches",
+        api::segment(repository)
+    )
+}
+pub(super) fn load_sources(state: RwSignal<State>) {
+    let Some((epoch, draft)) = state
+        .try_update(|s| {
+            if !s.session_active() {
+                return None;
+            }
+            let draft = s.files.batch.as_mut()?;
+            if draft.source_resolved || draft.loading || draft.registration.is_some() {
+                return None;
+            }
+            draft.loading = true;
+            draft.error.clear();
+            draft.generation += 1;
+            Some((s.session_epoch, draft.clone()))
+        })
+        .flatten()
+    else {
+        return;
+    };
+    spawn_local(async move {
+        let result = match start_scope_read(state, epoch, &draft.id, draft.generation) {
+            Ok(Some(cancellation)) => {
+                api::cancellable_request(
+                    "POST",
+                    &selected_scope_endpoint(&draft.repository),
+                    Some(selected_scope_body(
+                        &draft,
+                        &draft.sources,
+                        &draft.repository_path,
+                    )),
+                    cancellation,
+                )
+                .await
+            }
+            Ok(None) => return,
+            Err(error) => Err(error),
+        };
+        complete_source_scopes(state, epoch, &draft.id, draft.generation, result);
+    });
+}
+fn start_scope_read(
+    state: RwSignal<State>,
+    epoch: u64,
+    id: &str,
+    generation: u64,
+) -> Result<Option<api::ReadCancellation>, api::Error> {
+    if !current_session(state, epoch) || !current_target(state, id, generation) {
+        return Ok(None);
+    }
+    let cancellation = api::ReadCancellation::new()?;
+    update(state, |draft| {
+        draft.scope_read = Some(std::sync::Arc::new(ScopeRead(cancellation.clone())))
+    });
+    Ok(Some(cancellation))
+}
+pub(super) fn complete_source_scopes(
+    state: RwSignal<State>,
+    epoch: u64,
+    id: &str,
+    generation: u64,
+    result: Result<Value, api::Error>,
+) {
+    if !accept_read_response(state, epoch, &result) || !current_target(state, id, generation) {
+        return;
+    }
+    update(state, |draft| {
+        draft.loading = false;
+        draft.scope_read = None;
+    });
+    match result {
+        Ok(value) => update(state, |draft| {
+            let sources = list(&value, "directory_branches");
+            if value["repository_id"] != draft.repository
+                || !same_source_heads(&draft.sources, &sources)
+            {
+                draft.error = t(
+                    "源目录分支已改变，请取消并刷新后重试。",
+                    "Source folder branches changed. Cancel and refresh before retrying.",
+                );
+                return;
+            }
+            draft.sources = sources;
+            draft.source_resolved = true;
+            draft.error.clear();
+        }),
+        Err(error) => {
+            update(state, |draft| draft.error = error.to_string());
+            fail(state, error);
+        }
+    }
+}
+fn same_source_heads(expected: &[Value], actual: &[Value]) -> bool {
+    let heads = |values: &[Value]| {
+        values
+            .iter()
+            .map(|branch| (branch_id(branch), text(branch, &["head_tree_id"])))
+            .collect::<BTreeSet<_>>()
+    };
+    expected.len() == actual.len() && heads(expected) == heads(actual)
 }
 fn same_draft(state: RwSignal<State>, id: &str) -> bool {
     state.with_untracked(|s| s.files.batch.as_ref().is_some_and(|draft| draft.id == id))
@@ -117,7 +247,7 @@ pub(super) fn toggle_source(state: RwSignal<State>, id: String, checked: bool) {
 }
 fn scope_endpoint(repository: &str, path: &str) -> String {
     format!(
-        "/api/repositories/{}/directory-branches?path={}",
+        "/api/repositories/{}/directory-branches?path={}&summary=true",
         api::segment(repository),
         api::segment(path)
     )
@@ -146,6 +276,7 @@ pub(super) fn complete_target_scopes(
         Ok(value) => {
             let mut needs_directory = false;
             update(state, |draft| {
+                draft.scope_read = None;
                 if value["repository_id"] != draft.repository {
                     draft.loading = false;
                     draft.error = t("目标目录范围无效。", "Invalid destination folder scope.");
@@ -165,6 +296,7 @@ pub(super) fn complete_target_scopes(
         Err(error) => {
             update(state, |draft| {
                 draft.loading = false;
+                draft.scope_read = None;
                 draft.error = error.to_string();
             });
             fail(state, error);
@@ -180,7 +312,7 @@ pub(super) fn load_target(state: RwSignal<State>) {
     let Some(draft) = snapshot.files.batch else {
         return;
     };
-    if draft.registration.is_some() {
+    if draft.registration.is_some() || draft.loading || !draft.source_resolved {
         return;
     }
     let target = draft.target_path.trim_matches('/').to_owned();
@@ -204,25 +336,42 @@ pub(super) fn load_target(state: RwSignal<State>) {
     let generation = draft.generation + 1;
     let scoped_endpoint = scope_endpoint(&draft.repository, &target);
     let entries_endpoint = format!(
-        "/api/file-manager/disks/{}/entries?path={}",
+        "/api/file-manager/disks/{}/entries?path={}&limit=1",
         api::segment(&snapshot.files.slot),
         api::segment(&join_path(&draft.disk_prefix, &target))
     );
     let epoch = snapshot.session_epoch;
     let id = draft.id;
     spawn_local(async move {
-        let result = api::request("GET", &scoped_endpoint, None).await;
+        let cancellation = match start_scope_read(state, epoch, &id, generation) {
+            Ok(Some(value)) => value,
+            Ok(None) => return,
+            Err(error) => {
+                complete_target_scopes(state, epoch, &id, generation, Err(error));
+                return;
+            }
+        };
+        let result = api::cancellable_get(&scoped_endpoint, cancellation.clone()).await;
         if !complete_target_scopes(state, epoch, &id, generation, result) {
             return;
         }
         // No registered scope exists. Verify the live writable directory before
         // offering registration, while leaving historical-only scopes readable.
-        let result = api::request("GET", &entries_endpoint, None).await;
+        let cancellation = match start_scope_read(state, epoch, &id, generation) {
+            Ok(Some(value)) => value,
+            Ok(None) => return,
+            Err(error) => {
+                complete_target_scopes(state, epoch, &id, generation, Err(error));
+                return;
+            }
+        };
+        let result = api::cancellable_get(&entries_endpoint, cancellation).await;
         if !accept_read_response(state, epoch, &result) || !current_target(state, &id, generation) {
             return;
         }
         match result {
             Ok(value) => update(state, |draft| {
+                draft.scope_read = None;
                 draft.loading = false;
                 if value["context"]["repository_id"] != draft.repository
                     || value["context"]["repository_path"] != target
@@ -246,6 +395,7 @@ pub(super) fn load_target(state: RwSignal<State>) {
             Err(error) => {
                 update(state, |draft| {
                     draft.loading = false;
+                    draft.scope_read = None;
                     draft.error = error.to_string();
                 });
                 fail(state, error);
@@ -259,6 +409,7 @@ pub(super) fn begin_scope_registration(
     destination: bool,
 ) -> Option<ScopeRegistration> {
     if draft.loading
+        || !draft.source_resolved
         || draft.registration.is_some()
         || draft.submitted_operation.is_some()
         || (destination && (!draft.target_resolved || !draft.targets.is_empty()))
@@ -363,7 +514,7 @@ pub(crate) fn reload_registered_scope(state: RwSignal<State>) {
     if !state.with_untracked(State::session_active) {
         return;
     }
-    let Some((epoch, id, repository, registration)) = state
+    let Some((epoch, draft, registration)) = state
         .try_update(|s| {
             let draft = s.files.batch.as_mut()?;
             let registration = draft
@@ -376,28 +527,48 @@ pub(crate) fn reload_registered_scope(state: RwSignal<State>) {
             let registration = registration.clone();
             draft.loading = true;
             draft.error.clear();
-            Some((
-                s.session_epoch,
-                draft.id.clone(),
-                draft.repository.clone(),
-                registration,
-            ))
+            Some((s.session_epoch, draft.clone(), registration))
         })
         .flatten()
     else {
         return;
     };
     spawn_local(async move {
-        let result = api::request(
-            "GET",
-            &scope_endpoint(&repository, &registration.path),
-            None,
-        )
+        let result = async {
+            let cancellation = start_scope_read(state, epoch, &draft.id, registration.generation)?
+                .ok_or_else(api::session_changed)?;
+            let value = api::cancellable_get(
+                &scope_endpoint(&draft.repository, &registration.path),
+                cancellation,
+            )
+            .await?;
+            if !current_session(state, epoch)
+                || !current_target(state, &draft.id, registration.generation)
+            {
+                return Err(api::session_changed());
+            }
+            if registration.destination || value["repository_id"] != draft.repository {
+                return Ok(value);
+            }
+            let branches = list(&value, "directory_branches");
+            if branches.is_empty() {
+                return Ok(value);
+            }
+            let cancellation = start_scope_read(state, epoch, &draft.id, registration.generation)?
+                .ok_or_else(api::session_changed)?;
+            api::cancellable_request(
+                "POST",
+                &selected_scope_endpoint(&draft.repository),
+                Some(selected_scope_body(&draft, &branches, &registration.path)),
+                cancellation,
+            )
+            .await
+        }
         .await;
         complete_registered_scope(
             state,
             epoch,
-            &id,
+            &draft.id,
             &registration.operation_id,
             registration.generation,
             result,
@@ -429,6 +600,7 @@ pub(super) fn complete_registered_scope(
     match result {
         Ok(value) => update(state, |draft| {
             draft.loading = false;
+            draft.scope_read = None;
             let branches = list(&value, "directory_branches");
             if value["repository_id"] != draft.repository || branches.is_empty() {
                 draft.error = t(
@@ -442,6 +614,7 @@ pub(super) fn complete_registered_scope(
                 draft.target_resolved = true;
             } else {
                 draft.sources = branches;
+                draft.source_resolved = true;
                 draft.selected_sources = draft
                     .sources
                     .iter()
@@ -463,6 +636,7 @@ pub(super) fn complete_registered_scope(
         Err(error) => {
             update(state, |draft| {
                 draft.loading = false;
+                draft.scope_read = None;
                 draft.error = error.to_string();
             });
             fail(state, error);

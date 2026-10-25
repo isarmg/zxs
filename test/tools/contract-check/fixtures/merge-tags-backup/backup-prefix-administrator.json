@@ -29,7 +29,12 @@
       "version_id": ""
     }
   ],
+  "next_cursor": null,
   "path": "",
+  "previous_cursor": null,
+  "selected_entry": null,
   "slot_id": "C01",
+  "snapshot": "71d605ac2496737e8135fae5e3fe4b0fec0c40838668d826bb607a6ddbf6bec4",
+  "total_entries": "2",
   "writable": false
 }
