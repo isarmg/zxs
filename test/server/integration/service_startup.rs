@@ -187,8 +187,20 @@ fn daemon_serves_web_and_liveness_with_missing_or_corrupt_pool() {
         if auxiliary_failure {
             assert!(page.starts_with("HTTP/1.1 503"), "{page}");
             assert!(page.contains("WEB_ASSETS_UNAVAILABLE"));
-            let status = response(port, "/api/management/status").unwrap();
-            assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+            // Health/Web admission no longer waits for optional spool inventory.
+            let status = loop {
+                let status = response(port, "/api/management/status").unwrap();
+                assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+                if !status.contains("\"http_uploads\":\"pending\"") {
+                    break status;
+                }
+                assert!(child.0.try_wait().unwrap().is_none());
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "HTTP spool inventory did not finish"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            };
             assert!(status.contains("\"http_uploads\":\"unavailable\""));
             assert!(status.contains("\"web_assets\":\"unavailable\""));
             assert_eq!(

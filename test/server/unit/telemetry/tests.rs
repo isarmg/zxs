@@ -142,7 +142,7 @@ async fn telemetry_admission_survives_cancellation_without_consuming_management_
     let mut auth =
         crate::auth::AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
     let token = auth.login("admin", "a-long-test-password").unwrap().token;
-    let spool_budget = config.open_http_spool();
+    let spool_budget = crate::http_spool::HttpSpool::open_blocking(&config);
     let app = crate::router_shared(
         backend,
         Arc::new(Mutex::new(auth)),

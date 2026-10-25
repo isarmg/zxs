@@ -6,6 +6,7 @@ mod file_manager;
 mod http_auth;
 mod http_boundary;
 mod http_shutdown;
+mod http_spool;
 #[cfg(feature = "core")]
 pub mod management;
 mod service_lifecycle;
@@ -498,20 +499,14 @@ struct AppState {
     upload_slots: Arc<transfer_limits::Admission>,
     read_slots: Arc<transfer_limits::Admission>,
     upload_claims: Arc<Mutex<std::collections::BTreeSet<String>>>,
-    spool_budget: Option<Arc<spool_budget::SpoolBudget>>,
+    spool_budget: Arc<http_spool::HttpSpool>,
     static_etags: Arc<BTreeMap<String, String>>,
     web_assets_available: bool,
     telemetry: Arc<telemetry::Telemetry>,
 }
 impl AppState {
-    fn http_spool(&self) -> Result<&Arc<spool_budget::SpoolBudget>, ApiError> {
-        self.spool_budget.as_ref().ok_or_else(|| {
-            ApiError::new(
-                503,
-                "HTTP_UPLOADS_UNAVAILABLE",
-                "HTTP upload staging is unavailable; repair the local spool and restart",
-            )
-        })
+    fn http_spool(&self) -> Result<Arc<spool_budget::SpoolBudget>, ApiError> {
+        self.spool_budget.budget()
     }
 }
 fn lock<T>(value: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, ApiError> {
@@ -520,13 +515,16 @@ fn lock<T>(value: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, ApiError> {
         .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "service state requires restart"))
 }
 
+/// Construct an embedded router synchronously, including complete HTTP spool
+/// inventory. Network serving uses pending staging and inventories in the owned
+/// auxiliary startup future instead; neither path admits unaccounted uploads.
 pub fn router(
     backend: Arc<dyn Backend>,
     auth: AuthStore,
     config: ServerConfig,
 ) -> Result<Router, ApiError> {
     config.validate()?;
-    let spool_budget = config.open_http_spool();
+    let spool_budget = http_spool::HttpSpool::open_blocking(&config);
     let runtime = ManagementRuntime::start(backend, auth, &config)?;
     router_shared(
         runtime.backend,
@@ -577,7 +575,7 @@ fn router_shared(
     auth: Arc<Mutex<AuthStore>>,
     config: ServerConfig,
     telemetry: Arc<telemetry::Telemetry>,
-    spool_budget: Option<Arc<spool_budget::SpoolBudget>>,
+    spool_budget: Arc<http_spool::HttpSpool>,
 ) -> Result<Router, ApiError> {
     let static_etags = config.web_dir.as_ref().and_then(|root| {
         match web_assets::static_etags(root) {
@@ -774,7 +772,7 @@ pub async fn serve_with_shutdown(
         return Ok(());
     }
     config.validate()?;
-    let spool_budget = config.open_http_spool();
+    let (spool_budget, spool_startup) = http_spool::HttpSpool::pending();
     // Skip further startup if the runtime has already delivered a stop signal.
     // Signals still awaiting reactor dispatch are handled by shutdown.wait()
     // below; this snapshot is not an atomic cutoff at OS signal arrival.
@@ -792,6 +790,7 @@ pub async fn serve_with_shutdown(
     let smb = config.smb.clone();
     let smb_max_file_bytes = config.max_upload_bytes;
     let bridge_auth = auth.clone();
+    let spool_config = config.clone();
     let app = router_shared(backend.clone(), auth, config, telemetry, spool_budget)?;
     let http = |stopped| http_shutdown::serve(listener, app, stopped);
     let bridge = async move {
@@ -806,7 +805,13 @@ pub async fn serve_with_shutdown(
             }
         }
     };
-    service_lifecycle::run_with_management(http, bridge, shutdown.wait(), management_shutdown)
+    // One owned auxiliary future: no detached async readiness publisher. On
+    // shutdown, dropping it closes SMB and abandons late spool publication;
+    // started blocking inventory remains joined by runtime teardown.
+    let auxiliary = async move {
+        tokio::join!(spool_startup.run(spool_config), bridge);
+    };
+    service_lifecycle::run_with_management(http, auxiliary, shutdown.wait(), management_shutdown)
         .await?;
     Ok(())
 }
@@ -1103,7 +1108,7 @@ async fn management_status(State(state): State<AppState>) -> Json<Value> {
         json!({"management":"alive", "authentication":authentication,
         "storage":state.backend.management_status(),
         "auxiliary": {
-            "http_uploads": if state.spool_budget.is_some() { "ready" } else { "unavailable" },
+            "http_uploads": state.spool_budget.status(),
             "web_assets": if state.config.web_dir.is_none() { "not_configured" }
                 else if state.web_assets_available { "ready" } else { "unavailable" }
         }}),

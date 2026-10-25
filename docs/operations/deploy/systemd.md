@@ -29,7 +29,7 @@ ExecStart=/opt/zxs/bin/zxs --root /var/lib/zxs/state --management-root /var/lib/
 
 SMB spool 与 socket 目录分离，守护进程固定使用 `--management-root/smb-spool`，本样例为 `/var/lib/zxs/management/smb-spool`。完整工作文件、未确认操作证据和预算记录都留在系统盘，不能放入 `RuntimeDirectory=`、`/run` 或临时文件系统；模板的 `/run/zxs` 只保存可丢弃的 socket 运行状态。现有 `ReadWritePaths=/var/lib/zxs ...` 已覆盖该持久目录，路径单独按服务身份及 `0700` 校验，不安全或无法盘点只停止 SMB，不阻止管理 HTTP。无需用 `RuntimeDirectoryPreserve=` 保存工作数据，该选项也不能使 `/run` 跨重启持久化。旧 socket 邻接 spool 不自动迁移，升级前的留存材料处理边界见[SMB 集成](../../components/smb.md#smb-local-rpc)。
 
-服务在启动状态 I/O 前注册 `SIGINT` 和 `SIGTERM`，模板使用 `SIGINT` 请求正常退出。处理停止请求时立即关闭新请求准入，SMB 空闲连接随即关闭；已接纳的 HTTP 连接有五秒网络宽限，届满后断开仍未结束的客户端连接。五秒不是整个停服过程的期限：已经接纳的阻塞持久化、发布及管理工作仍须等待完成，不能因客户端断开就释放其许可、删除恢复证据或强行宣称失败。启动期或运行期的内核文件系统调用也不能被信号安全取消。
+服务在启动状态 I/O 前注册 `SIGINT` 和 `SIGTERM`，模板使用 `SIGINT` 请求正常退出。服务观察并处理停止请求时关闭新请求准入，SMB 空闲连接随即关闭；已接纳的 HTTP 连接有五秒网络宽限，届满后断开仍未结束的客户端连接。五秒不是整个停服过程的期限：已经接纳的阻塞持久化、发布及管理工作仍须等待完成，不能因客户端断开就释放其许可、删除恢复证据或强行宣称失败。提前注册可保留启动期间收到的信号，但运行时分派是异步的，不承诺信号刚到达就阻止所有监听器打开；启动期或运行期的内核文件系统调用也不能被信号安全取消。
 
 模板保持 `TimeoutStopSec=infinity`，不会因网络宽限结束而强杀仍在排空的服务。若内核 I/O 持续卡住，管理员可明确决定强制终止；这属于崩溃处理，而不是正常排空，下次启动必须完成恢复。停服前后未收到成功响应不等于操作未持久化；重启后先核对原操作号或上传状态，不换新操作号盲目重做。未成功保存的完整工作文件及恢复记录保留。崩溃遗留的 socket 不自动删除，管理员确认路径身份和无存活服务后再清理；不要配置无条件删除 socket 或清空暂存目录的启动脚本。
 
@@ -41,7 +41,7 @@ SMB spool 与 socket 目录分离，守护进程固定使用 `--management-root/
 
 监控历史缓存属于可重建的辅助状态。缓存无法打开时（包括缓存目录是被拒绝的符号链接）退回有界内存历史，不因此阻止 Web、登录、健康检查或实时监控。服务不会跟随该缓存目录符号链接、修改其目标权限或清理目标内容；修复前内存中的新历史不跨进程重启保留。不要通过放宽路径安全检查恢复缓存。
 
-Web 静态目录无效或缺少 `index.html` 时，页面返回 `503 WEB_ASSETS_UNAVAILABLE`，但管理 HTTP API 继续可用；HTTP 暂存不可用只阻止上传，不阻止登录和管理。通过 `GET /api/management/status` 的 `auxiliary.web_assets` 与 `auxiliary.http_uploads` 分别核对，不把 `/healthz` 成功视为全部能力正常。修复目录、权限或发行件后重启服务；不要清空暂存和恢复证据来掩盖故障。
+Web 静态目录无效或缺少 `index.html` 时，页面返回 `503 WEB_ASSETS_UNAVAILABLE`，但管理 HTTP API 继续可用；HTTP 暂存在一次性后台任务中完整清点，期间 `auxiliary.http_uploads` 为 `pending`，上传和上传状态返回 `503 HTTP_UPLOADS_PENDING`，但不等待清点才开放管理 HTTP/Web。清点成功后为 `ready`，失败后为 `unavailable`；失败只阻止上传暂存，不阻止登录和管理，不自动循环重试或清空材料。通过 `GET /api/management/status` 的 `auxiliary.web_assets` 与 `auxiliary.http_uploads` 分别核对，不把 `/healthz` 成功视为全部能力正常。修复目录、权限或发行件后重启服务；不要清空暂存和恢复证据来掩盖故障。
 
 `--web-dir` 及其所有祖先必须是真实目录，资源树也不能包含符号链接。升级时正常停服后，把参数直接改为新版本的 `public/` 实目录；不要使用 `current` 等符号链接切换 Web 版本，否则静态资源准入会拒绝并返回上述 503。
 

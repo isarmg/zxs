@@ -297,7 +297,7 @@ async fn upload_inner(
     let path = spool.join(&data_file);
     let create_path = path.clone();
     let create_admission = admission.clone();
-    let budget = state.http_spool()?.clone();
+    let budget = state.http_spool()?;
     let principal = identity.principal.clone();
     let name = data_file.clone();
     let retry = retry.is_some();
