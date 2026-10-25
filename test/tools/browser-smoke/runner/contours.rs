@@ -44,10 +44,35 @@ const done=arguments[arguments.length-1];
   const reset=()=>{scans=0;decoyReads=0;stableReads=0;activeReads=0;};
   const counts=()=>({scans,decoyReads,stableReads,activeReads});
   const check=(ok,label)=>{if(!ok)throw new Error(label+' '+JSON.stringify(counts()));};
+  // CSSOM expands `border` into border-image defaults (often `initial`), so
+  // restoration must compare the browser's original values, not assumed ''.
+  const paintProperty=name=>/^(background(?:-|$)|border(?:-|$)|mask(?:-|$))/.test(name) || ['box-shadow','backdrop-filter'].includes(name);
+  const originalPaint=node=>{
+    const computed=Reflect.apply(originalStyle,window,[node]);
+    const properties=[...new Set([...computed,...node.style,'border-image-source'].filter(paintProperty))].sort();
+    return {
+      inline:Object.fromEntries(properties.map(name=>[name,[node.style.getPropertyValue(name),node.style.getPropertyPriority(name)]])),
+      computed:Object.fromEntries(properties.map(name=>[name,computed.getPropertyValue(name)])),
+      markers:Object.fromEntries(['data-zxs-contour-state','data-zxs-contour-reason'].map(name=>[name,node.getAttribute(name)]))
+    };
+  };
+  const restoredPaint=(node,expected,label,connected)=>{
+    const computed=connected?Reflect.apply(originalStyle,window,[node]):null;
+    for(const [name,value] of Object.entries(expected.inline)) {
+      const actual=[node.style.getPropertyValue(name),node.style.getPropertyPriority(name)];
+      check(JSON.stringify(actual)===JSON.stringify(value),`${label}: inline ${name} expected=${JSON.stringify(value)} actual=${JSON.stringify(actual)}`);
+    }
+    for(const [name,value] of Object.entries(expected.markers))
+      check(node.getAttribute(name)===value,`${label}: ${name} expected=${JSON.stringify(value)} actual=${JSON.stringify(node.getAttribute(name))}`);
+    if(computed)for(const [name,value] of Object.entries(expected.computed))
+      check(computed.getPropertyValue(name)===value,`${label}: computed ${name} expected=${JSON.stringify(value)} actual=${JSON.stringify(computed.getPropertyValue(name))}`);
+  };
   window.getComputedStyle=function(node,...rest){if(decoys.has(node))decoyReads++;if(node===stable)stableReads++;if(node===active)activeReads++;return Reflect.apply(originalStyle,this,[node,...rest]);};
   Document.prototype.querySelectorAll=function(selector){if(selector==='*')scans++;return Reflect.apply(originalQuery,this,[selector]);};
   try {
     document.body.appendChild(host);
+    // Read synchronously before the controller's first scheduled paint.
+    const dormantOriginal=originalPaint(dormant), stableOriginal=originalPaint(stable);
     await frames(6);
     check(active.dataset.zxsContourState==='paint' && stable.dataset.zxsContourState==='paint','initial arbitrary CSS candidates');
     const stableImage=Reflect.apply(originalStyle,window,[stable]).borderImageSource;
@@ -127,9 +152,11 @@ const done=arguments[arguments.length-1];
     dormant.setAttribute('data-zxs-contour-extent','18');await frames(4);
     check(dormant.dataset.zxsContourState==='paint','attribute activates previously zero extent');
     dormant.removeAttribute('data-zxs-contour-extent');await frames(4);
-    check(!dormant.hasAttribute('data-zxs-contour-state') && dormant.style.borderImageSource==='','attribute removal restores original paint');
+    restoredPaint(dormant,dormantOriginal,'attribute removal restores original paint',true);
     stable.remove();await frames(4);
-    check(!stable.hasAttribute('data-zxs-contour-state') && stable.style.borderImageSource==='','detached record restores paint and marker');
+    // Computed styles depend on document attachment; only authored inline
+    // values/priorities and original markers are comparable after detachment.
+    restoredPaint(stable,stableOriginal,'detached record restores paint and marker',false);
     return {passed:true,decoys:decoys.size,animation,textUpdate};
   } finally {
     window.getComputedStyle=originalStyle;Document.prototype.querySelectorAll=originalQuery;
