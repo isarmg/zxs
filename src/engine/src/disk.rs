@@ -11,7 +11,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-fn fs_error(e: platform_io::fs_safety::Error) -> Error {
+pub(crate) fn fs_error(e: platform_io::fs_safety::Error) -> Error {
     match e {
         platform_io::fs_safety::Error::Io(e) if matches!(e.raw_os_error(), Some(20 | 40)) => {
             Error::new("UNSAFE_PATH", e.to_string())
@@ -160,7 +160,10 @@ pub(crate) fn open_append_regular(path: &Path) -> Result<File> {
     Ok(file)
 }
 pub(crate) fn read_bytes(path: &Path, maximum: usize) -> Result<Vec<u8>> {
-    let mut f = open_regular(path)?;
+    read_file_bytes(open_regular(path)?, maximum)
+}
+/// Apply the same metadata bound to an already validated, held regular file.
+pub(crate) fn read_file_bytes(mut f: File, maximum: usize) -> Result<Vec<u8>> {
     let size = f.metadata()?.len();
     if size > maximum as u64 {
         return Err(Error::new("RESOURCE_LIMIT", "metadata input exceeds limit"));

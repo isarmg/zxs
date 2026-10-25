@@ -214,7 +214,26 @@ impl Engine {
         let plan = if let Some(plan) = self.state.plans.get(id) {
             plan.clone()
         } else {
-            read_json::<Plan>(&self.root.join("plans").join(format!("{id}.json")))?
+            use platform_io::fs_safety::{
+                RelativePath,
+                linux::{MountPolicy, OpenAt2Root},
+            };
+            // Only a missing descendant of a verified system root is absence.
+            // A fresh pool need not have created its optional plans directory.
+            let private = existing_private_dir(&self.root)?;
+            let root =
+                OpenAt2Root::open(private.path(), MountPolicy::SameMount).map_err(fs_error)?;
+            let relative = RelativePath::new(format!("plans/{id}.json")).map_err(fs_error)?;
+            let file = match root.open_file(&relative, false) {
+                Ok(file) => file,
+                Err(platform_io::fs_safety::Error::Io(error))
+                    if error.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    return Err(Error::new("PLAN_NOT_FOUND", "plan not found"));
+                }
+                Err(error) => return Err(fs_error(error)),
+            };
+            decode_strict::<Plan>(&read_file_bytes(file, MAX_METADATA)?)?
         };
         // Every plan kind must execute exactly the input that was previewed.
         // Checking only the stored digest field would accept a stale digest

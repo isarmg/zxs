@@ -28,6 +28,10 @@ mod history_query;
 mod optional_identities;
 #[path = "http_engine/paginated_listing.rs"]
 mod paginated_listing;
+#[path = "http_engine/plan_lookup.rs"]
+mod plan_lookup;
+#[path = "http_engine/strict_objects.rs"]
+mod strict_objects;
 
 /// Resolve only fixture payloads for deliberate corruption. Production reads
 /// continue through the engine's verified replica and read-lease interfaces.

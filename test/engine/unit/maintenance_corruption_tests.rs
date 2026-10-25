@@ -261,3 +261,143 @@ fn split_generation_overflow_does_not_wrap_or_publish_migration() {
         assert_eq!(engine.plan(&plan.plan_id).unwrap().state, "ready");
     }
 }
+
+#[test]
+fn absent_plan_is_not_found_below_an_existing_system_root() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("system");
+    let engine =
+        Engine::initialize(&root, Config::development([temporary.path().join("disk")])).unwrap();
+    let id = new_id("plan");
+    assert_eq!(engine.plan(&id).unwrap_err().code(), "PLAN_NOT_FOUND");
+    private_dir(&root.join("plans")).unwrap();
+    assert_eq!(engine.plan(&id).unwrap_err().code(), "PLAN_NOT_FOUND");
+    assert_eq!(engine.plan("../escape").unwrap_err().code(), "INVALID_ID");
+}
+
+#[test]
+fn plan_lookup_preserves_io_corruption_limits_and_link_rejections() {
+    use std::os::unix::fs::symlink;
+    for case in [
+        "json",
+        "oversized",
+        "leaf-link",
+        "leaf-directory",
+        "leaf-fifo",
+        "parent-link",
+        "parent-file",
+        "hard-link",
+        "missing-root",
+        "linked-root",
+    ] {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("system");
+        let engine =
+            Engine::initialize(&root, Config::development([temporary.path().join("disk")]))
+                .unwrap();
+        let id = new_id("plan");
+        let plans = root.join("plans");
+        private_dir(&plans).unwrap();
+        let file = plans.join(format!("{id}.json"));
+        let expected = match case {
+            "json" => {
+                fs::write(&file, b"{").unwrap();
+                "INVALID_JSON"
+            }
+            "oversized" => {
+                fs::File::create(&file)
+                    .unwrap()
+                    .set_len(MAX_METADATA as u64 + 1)
+                    .unwrap();
+                "RESOURCE_LIMIT"
+            }
+            "leaf-link" => {
+                symlink(temporary.path().join("absent"), &file).unwrap();
+                "UNSAFE_PATH"
+            }
+            "leaf-directory" => {
+                fs::create_dir(&file).unwrap();
+                "UNSAFE_PATH"
+            }
+            "leaf-fifo" => {
+                rustix::fs::mkfifoat(
+                    rustix::fs::CWD,
+                    &file,
+                    rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+                )
+                .unwrap();
+                "UNSAFE_PATH"
+            }
+            "parent-link" => {
+                fs::remove_dir(&plans).unwrap();
+                symlink(temporary.path().join("absent"), &plans).unwrap();
+                "UNSAFE_PATH"
+            }
+            "parent-file" => {
+                fs::remove_dir(&plans).unwrap();
+                fs::write(&plans, b"not a directory").unwrap();
+                "UNSAFE_PATH"
+            }
+            "hard-link" => {
+                let other = temporary.path().join("other.json");
+                fs::write(&other, b"{}").unwrap();
+                fs::hard_link(&other, &file).unwrap();
+                "UNSAFE_PATH"
+            }
+            "missing-root" => {
+                fs::rename(&root, temporary.path().join("moved-system")).unwrap();
+                "IO_ERROR"
+            }
+            "linked-root" => {
+                let moved = temporary.path().join("moved-system");
+                fs::rename(&root, &moved).unwrap();
+                symlink(&moved, &root).unwrap();
+                "UNSAFE_PATH"
+            }
+            _ => unreachable!(),
+        };
+        let error = engine.plan(&id).unwrap_err();
+        if case == "linked-root" {
+            fs::remove_file(&root).unwrap();
+        }
+        if matches!(case, "missing-root" | "linked-root") {
+            fs::rename(temporary.path().join("moved-system"), &root).unwrap();
+        }
+        assert_eq!(error.code(), expected, "{case}: {error}");
+    }
+}
+
+#[test]
+fn plan_lookup_keeps_persisted_identity_and_digest_validation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("system");
+    let mut engine =
+        Engine::initialize(&root, Config::development([temporary.path().join("disk")])).unwrap();
+    let expected = engine
+        .save_plan(
+            "split",
+            "admin",
+            json!({"history_tree_id":new_id("history")}),
+        )
+        .unwrap();
+    std::sync::Arc::make_mut(&mut engine.state)
+        .plans
+        .remove(&expected.plan_id);
+    assert_eq!(
+        canonical_json(&engine.plan(&expected.plan_id).unwrap()).unwrap(),
+        canonical_json(&expected).unwrap()
+    );
+    let path = root
+        .join("plans")
+        .join(format!("{}.json", expected.plan_id));
+    for field in ["plan_id", "digest"] {
+        let mut malformed = json_codec::to_value(&expected).unwrap();
+        malformed[field] = "incorrect".into();
+        write_json(&path, &malformed, true).unwrap();
+        assert_eq!(
+            engine.plan(&expected.plan_id).unwrap_err().code(),
+            "PLAN_INVALID",
+            "{field}"
+        );
+    }
+}
