@@ -93,6 +93,63 @@ fn verified_ranges_read_only_touched_chunks_and_fallback_without_exposing_corrup
     assert_eq!(tail_count.load(Ordering::SeqCst), 7);
 }
 
+#[test]
+fn verified_ranges_prefer_last_verified_replica_without_discarding_others() {
+    let bytes = vec![42; 65536 * 3];
+    let mut first = bytes.clone();
+    first[0] = 0;
+    let mut second = bytes.clone();
+    second[65536 * 2] = 0;
+    let first_reads = Arc::new(AtomicUsize::new(0));
+    let second_reads = Arc::new(AtomicUsize::new(0));
+    let mut reader = VerifiedRange::new(
+        counted(first, first_reads.clone()),
+        vec![counted(second, second_reads.clone())],
+        manifest(&bytes),
+        0,
+        bytes.len() as u64,
+    )
+    .unwrap();
+    assert_eq!(reader.next_chunk().unwrap().unwrap(), bytes[..65536]);
+    assert_eq!(first_reads.load(Ordering::SeqCst), 65536);
+    assert_eq!(second_reads.load(Ordering::SeqCst), 65536);
+    // The successful source remains preferred for the next authenticated block.
+    assert_eq!(reader.next_chunk().unwrap().unwrap(), bytes[65536..131072]);
+    assert_eq!(first_reads.load(Ordering::SeqCst), 65536);
+    assert_eq!(second_reads.load(Ordering::SeqCst), 131072);
+    // Corruption is per block: the original source must remain eligible.
+    assert_eq!(reader.next_chunk().unwrap().unwrap(), bytes[131072..]);
+    assert_eq!(first_reads.load(Ordering::SeqCst), 131072);
+    assert_eq!(second_reads.load(Ordering::SeqCst), 196608);
+    assert!(reader.next_chunk().unwrap().is_none());
+}
+
+#[test]
+fn verified_ranges_promote_later_fallback_after_corrupt_and_short_replicas() {
+    let bytes = vec![42; 65536 * 2];
+    let bad_reads = Arc::new(AtomicUsize::new(0));
+    let short_reads = Arc::new(AtomicUsize::new(0));
+    let good_reads = Arc::new(AtomicUsize::new(0));
+    let mut reader = VerifiedRange::new(
+        counted(vec![0; bytes.len()], bad_reads.clone()),
+        vec![
+            counted(vec![42; 7], short_reads.clone()),
+            counted(bytes.clone(), good_reads.clone()),
+        ],
+        manifest(&bytes),
+        0,
+        bytes.len() as u64,
+    )
+    .unwrap();
+    for expected in bytes.chunks(65536) {
+        assert_eq!(reader.next_chunk().unwrap().unwrap(), expected);
+    }
+    assert!(reader.next_chunk().unwrap().is_none());
+    assert_eq!(bad_reads.load(Ordering::SeqCst), 65536);
+    assert_eq!(short_reads.load(Ordering::SeqCst), 7);
+    assert_eq!(good_reads.load(Ordering::SeqCst), bytes.len());
+}
+
 struct ReadLease(Arc<AtomicUsize>);
 impl Drop for ReadLease {
     fn drop(&mut self) {

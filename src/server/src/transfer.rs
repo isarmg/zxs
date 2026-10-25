@@ -883,21 +883,30 @@ impl<R: std::io::Read + Seek> VerifiedRange<R> {
         let count = chunk_bytes.min(self.manifest.logical_size - base) as usize;
         let mut buffer = vec![0; count];
         let expected = &self.manifest.chunks[index as usize];
-        let mut verified = false;
-        for file in std::iter::once(&mut self.file).chain(self.fallbacks.iter_mut()) {
+        let mut verified_source = None;
+        for (source, file) in std::iter::once(&mut self.file)
+            .chain(self.fallbacks.iter_mut())
+            .enumerate()
+        {
             if file.seek(SeekFrom::Start(base)).is_ok()
                 && file.read_exact(&mut buffer).is_ok()
                 && blake3::hash(&buffer).as_bytes() == expected
             {
-                verified = true;
+                verified_source = Some(source);
                 break;
             }
         }
-        if !verified {
+        let Some(source) = verified_source else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "CHECKSUM_MISMATCH: no replica has a verified payload chunk",
             ));
+        };
+        if source != 0 {
+            // Prefer the last successful source, but retain every other replica:
+            // corruption can affect different chunks on different members.
+            // This is only read ordering, never evidence for the next chunk.
+            std::mem::swap(&mut self.file, &mut self.fallbacks[source - 1]);
         }
         let from = (self.position - base) as usize;
         let to = (self.end - base).min(count as u64) as usize;
