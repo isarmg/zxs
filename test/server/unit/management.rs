@@ -143,7 +143,11 @@ fn replica_failure_cannot_roll_back_revocation_or_password_change() {
         AuthStore::initialize_management(root.path(), "admin", "a-long-test-password").unwrap();
     let old = auth.login("admin", "a-long-test-password").unwrap();
     auth.attach_replica(std::sync::Arc::new(|_| {
-        Err(crate::ApiError::new(503, "DISK_OFFLINE", "disk offline"))
+        Err(crate::ApiError::new(
+            503,
+            storage_contract::ErrorCode::InjectedFailure,
+            "disk offline",
+        ))
     }));
     auth.change_password(&old.token, "a-long-test-password", "a-new-test-password")
         .unwrap();
@@ -224,7 +228,10 @@ async fn blocked_replication_never_blocks_login_and_queued_sessions_revalidate()
     release_tx.send(()).unwrap();
     hold.join().unwrap();
     assert_eq!(login.unwrap().0, StatusCode::OK);
-    assert_eq!(queued.join().unwrap().unwrap_err().code, "UNAUTHORIZED");
+    assert_eq!(
+        queued.join().unwrap().unwrap_err().code,
+        storage_contract::ErrorCode::Unauthorized
+    );
     assert_eq!(
         request(&app, "/api/auth/me", Some(&session.token), None)
             .await
@@ -491,7 +498,7 @@ fn managed_admission_never_falls_back_to_stale_disaster_recovery_identity() {
             .call(crate::BackendAction::Repositories, &caller, json!({}))
             .unwrap_err()
             .code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
     let admin = primary
         .lock()
@@ -504,7 +511,7 @@ fn managed_admission_never_falls_back_to_stale_disaster_recovery_identity() {
             .call(crate::BackendAction::Repositories, &admin, json!({}))
             .unwrap_err()
             .code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
 }
 
@@ -533,7 +540,7 @@ fn stale_readiness_retry_waits_for_existing_engine_holders() {
     }
     assert_eq!(backend.management_status()["state"], "unavailable");
     let error = backend.inner.start_recovery(true).unwrap_err();
-    assert_eq!(error.code, "STORAGE_DRAINING");
+    assert_eq!(error.code, storage_contract::ErrorCode::StorageDraining);
     assert!(error.retryable);
     assert!(
         !backend
@@ -647,12 +654,12 @@ async fn web_completion_requires_bound_pristine_pre_authority_setup_proof() {
                 .initialize(&permit, request, |_engine, _, _| {
                     Err(crate::ApiError::new(
                         500,
-                        "TEST_INSTALL_FAILURE",
+                        storage_contract::ErrorCode::InjectedFailure,
                         "injected failure before authority publication",
                     ))
                 })
                 .unwrap_err();
-            assert_eq!(error.code, "TEST_INSTALL_FAILURE");
+            assert_eq!(error.code, storage_contract::ErrorCode::InjectedFailure);
         } else {
             drop(
                 storage_engine::Engine::initialize(
@@ -1069,7 +1076,7 @@ async fn background_reopen_uses_local_workspace_limits_and_authenticated_capacit
             .call(crate::BackendAction::WorkspaceCapacity, &forged, json!({}))
             .unwrap_err()
             .code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
     assert_eq!(std::fs::read(data.join("config.json")).unwrap(), persisted);
     backend.drain_management().unwrap();

@@ -212,7 +212,9 @@ fn restore_rejects_two_independently_agreed_pool_configurations() {
     drop(first);
     drop(second);
     let restored = Engine::restore_from_disks(&root, &disks);
-    assert!(matches!(restored, Err(ref error) if error.code() == "CONFIG_CONFLICT"));
+    assert!(
+        matches!(restored, Err(ref error) if error.code() == storage_contract::ErrorCode::ConfigConflict)
+    );
     assert!(!root.join("config.json").exists());
     drop(second_temp);
 }
@@ -257,7 +259,9 @@ fn local_proof_recovery_rejects_symlinks_without_touching_targets() {
     drop(engine);
     fs::rename(&proof, &target).unwrap();
     std::os::unix::fs::symlink(&target, &proof).unwrap();
-    assert!(matches!(Engine::open(&root), Err(error) if error.code() == "UNSAFE_PATH"));
+    assert!(
+        matches!(Engine::open(&root), Err(error) if error.code() == storage_contract::ErrorCode::UnsafePath)
+    );
     assert_eq!(fs::read(target).unwrap(), original);
     assert!(
         fs::symlink_metadata(proof)
@@ -281,7 +285,7 @@ fn restore_accepts_one_agreed_pool_and_rejects_foreign_extra_input() {
     drop(engine);
     drop(foreign);
     assert!(
-        matches!(Engine::restore_from_disks(&root, &disks), Err(error) if error.code() == "CONFIG_CONFLICT")
+        matches!(Engine::restore_from_disks(&root, &disks), Err(error) if error.code() == storage_contract::ErrorCode::ConfigConflict)
     );
     assert!(!root.join("config.json").exists());
     disks.pop();

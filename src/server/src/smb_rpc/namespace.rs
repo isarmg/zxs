@@ -9,13 +9,16 @@ struct OperationReservation {
 }
 impl OperationReservation {
     fn acquire(shared: &Arc<Shared>, operation_id: &str) -> Result<Self, ApiError> {
-        let mut operations = shared
-            .namespace_operations
-            .lock()
-            .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "SMB operation registry poisoned"))?;
+        let mut operations = shared.namespace_operations.lock().map_err(|_| {
+            ApiError::new(
+                500,
+                storage_contract::ErrorCode::InternalError,
+                "SMB operation registry poisoned",
+            )
+        })?;
         if !operations.insert(operation_id.to_owned()) {
             return Err(ApiError::conflict(
-                "RECOVERY_REQUIRED",
+                storage_contract::ErrorCode::RecoveryRequired,
                 "namespace operation is already active; query it instead of replaying",
             ));
         }
@@ -71,11 +74,13 @@ impl Session {
         ) {
             Ok(_) => {
                 return Err(ApiError::conflict(
-                    "OPERATION_ID_CONFLICT",
+                    storage_contract::ErrorCode::OperationIdConflict,
                     "query the existing operation instead of replaying namespace",
                 ));
             }
-            Err(error) if error.code == "NOT_FOUND" || error.code == "OPERATION_NOT_FOUND" => {}
+            Err(error)
+                if error.code == storage_contract::ErrorCode::NotFound
+                    || error.code == storage_contract::ErrorCode::OperationNotFound => {}
             Err(error) => return Err(error),
         }
         let record = self
@@ -85,7 +90,7 @@ impl Session {
         match fs::symlink_metadata(&record) {
             Ok(_) => {
                 return Err(ApiError::conflict(
-                    "RECOVERY_REQUIRED",
+                    storage_contract::ErrorCode::RecoveryRequired,
                     "namespace recovery evidence already exists for this operation",
                 ));
             }
@@ -147,26 +152,31 @@ impl Session {
                         .any(|child| child.lookup_key.starts_with(&prefix))
             };
             if kind == "unlink" || kind == "rmdir" {
-                let entry = find(&path)
-                    .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "remove target missing"))?;
+                let entry = find(&path).ok_or_else(|| {
+                    ApiError::new(
+                        404,
+                        storage_contract::ErrorCode::NotFound,
+                        "remove target missing",
+                    )
+                })?;
                 if kind == "unlink" && entry.kind == "directory" {
                     return Err(ApiError::new(
                         409,
-                        "IS_DIRECTORY",
+                        storage_contract::ErrorCode::IsDirectory,
                         "unlink cannot remove a directory",
                     ));
                 }
                 if kind == "rmdir" && entry.kind != "directory" {
                     return Err(ApiError::new(
                         409,
-                        "NOT_DIRECTORY",
+                        storage_contract::ErrorCode::NotDirectory,
                         "rmdir requires a directory",
                     ));
                 }
                 if nonempty(entry) {
                     return Err(ApiError::new(
                         409,
-                        "DIRECTORY_NOT_EMPTY",
+                        storage_contract::ErrorCode::DirectoryNotEmpty,
                         "SMB directory removal requires an empty directory",
                     ));
                 }
@@ -176,8 +186,13 @@ impl Session {
                 && let Some(target) = destination.as_deref()
                 && let Some(target_entry) = find(target)
             {
-                let source = find(&path)
-                    .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "rename source missing"))?;
+                let source = find(&path).ok_or_else(|| {
+                    ApiError::new(
+                        404,
+                        storage_contract::ErrorCode::NotFound,
+                        "rename source missing",
+                    )
+                })?;
                 if source.kind != target_entry.kind {
                     return Err(ApiError::invalid(
                         "rename replacement requires matching entry kinds",
@@ -188,7 +203,7 @@ impl Session {
                     if nonempty(target_entry) {
                         return Err(ApiError::new(
                             409,
-                            "DIRECTORY_NOT_EMPTY",
+                            storage_contract::ErrorCode::DirectoryNotEmpty,
                             "rename replacement directory is not empty",
                         ));
                     }

@@ -62,7 +62,7 @@ pub(super) fn validate_location(
         .versions
         .values()
         .find(|version| version.file_id == file)
-        .ok_or_else(|| Error::new("FILE_NOT_FOUND", "file not found"))?;
+        .ok_or_else(|| Error::new(storage_contract::ErrorCode::FileNotFound, "file not found"))?;
     let repo = engine.repository_for_history(&version.history_tree_id)?;
     let key = name_policy::path_key(&location.path);
     if location.repository_id != repo.repository_id
@@ -72,7 +72,7 @@ pub(super) fn validate_location(
             .any(|entry| entry.kind == "file" && entry.file_id == file && entry.lookup_key == key)
     {
         return Err(Error::new(
-            "FILE_NOT_FOUND",
+            storage_contract::ErrorCode::FileNotFound,
             "file is not present at this logical path",
         ));
     }

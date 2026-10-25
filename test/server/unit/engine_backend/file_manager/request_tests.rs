@@ -249,7 +249,7 @@ fn baseline_name_and_used_operation_are_rejected_before_root_initialization() {
     for name in ["main", "MAIN"] {
         let before = disk_files(&disks);
         let error = call(&mut engine, &identity, BackendAction::FileManagerDirectoryBranches, json!({"slot_id":"P01","path":"","name":name,"operation_id":storage_engine::new_id("op")})).unwrap_err();
-        assert_eq!(error.code, "NAME_COLLISION");
+        assert_eq!(error.code, storage_contract::ErrorCode::NameCollision);
         assert_eq!(engine.state().sequence, 0);
         assert_eq!(disk_files(&disks), before);
     }
@@ -266,7 +266,10 @@ fn baseline_name_and_used_operation_are_rejected_before_root_initialization() {
         json!({"slot_id":"P01","path":"fresh","kind":"mkdir","operation_id":used}),
     )
     .unwrap_err();
-    assert_eq!(error.code, "IDEMPOTENCY_KEY_REUSED");
+    assert_eq!(
+        error.code,
+        storage_contract::ErrorCode::IdempotencyKeyReused
+    );
     assert_eq!(json_codec::to_value(engine.state()).unwrap(), before);
     assert_eq!(disk_files(&disks), bytes);
 }
@@ -480,8 +483,8 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                 let failure =
                     listing::entries(&engine, &json!({"slot_id":"P01","path":path})).unwrap_err();
                 assert_eq!(
-                    (failure.status, failure.code.as_str()),
-                    (409, "NAME_COLLISION")
+                    (failure.status, failure.code),
+                    (409, storage_contract::ErrorCode::NameCollision)
                 );
             }
             for (action, input) in [
@@ -504,8 +507,8 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
             ] {
                 let failure = call(&mut engine, &identity, action, input).unwrap_err();
                 assert_eq!(
-                    (failure.status, failure.code.as_str()),
-                    (409, "NAME_COLLISION")
+                    (failure.status, failure.code),
+                    (409, storage_contract::ErrorCode::NameCollision)
                 );
                 assert_eq!(engine.state(), &before);
                 assert_eq!(engine.workspace_capacity("owner"), capacity);

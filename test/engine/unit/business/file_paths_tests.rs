@@ -181,7 +181,7 @@ fn path_node_note_and_new_branch_are_metadata_and_preserve_the_named_source_node
         )
         .unwrap_err()
         .code(),
-        "INVALID_REQUEST"
+        storage_contract::ErrorCode::InvalidRequest
     );
     let branch = e
         .create_file_branch_from_node(
@@ -258,7 +258,7 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
         e.select_file_branch(&original.file_id, &original_branch, "admin", &new_id("op"))
             .unwrap_err()
             .code(),
-        "CONTENT_UNAVAILABLE"
+        storage_contract::ErrorCode::ContentUnavailable
     );
     assert_eq!(
         e.select_file_branch_at(
@@ -271,7 +271,7 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
         )
         .unwrap_err()
         .code(),
-        "CONTENT_UNAVAILABLE"
+        storage_contract::ErrorCode::ContentUnavailable
     );
     assert_eq!(canonical_json(e.state()).unwrap(), before);
     assert_eq!(

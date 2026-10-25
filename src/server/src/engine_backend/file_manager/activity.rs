@@ -15,7 +15,13 @@ fn utc_event_timestamp(event: &mut Value) -> Result<(), ApiError> {
         let seconds = event["timestamp"]
             .as_str()
             .and_then(|value| storage_contract::parse_u64_decimal(value).ok())
-            .ok_or_else(|| ApiError::new(500, "STATE_INVALID", "history timestamp is invalid"))?;
+            .ok_or_else(|| {
+                ApiError::new(
+                    500,
+                    storage_contract::ErrorCode::StateInvalid,
+                    "history timestamp is invalid",
+                )
+            })?;
         event["timestamp"] = utc_timestamp(seconds)?.into();
     }
     Ok(())

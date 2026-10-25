@@ -34,7 +34,7 @@ pub(crate) fn parse_disks(value: &Value) -> Result<Vec<Disk>, crate::api::Error>
         });
     parsed.ok_or_else(|| crate::api::Error {
         status: 200,
-        code: "INVALID_DISK_LIST".into(),
+        code: storage_contract::ErrorCode::InvalidDiskList,
         message: "The disk listing did not match the server contract.".into(),
         retryable: false,
         request_id: None,

@@ -88,7 +88,7 @@ fn failed_login_password_rotation_and_logout_restore_exact_sessions() {
         let disk = fs::read(root.path().join("auth.json")).unwrap();
         store.backup = Some(Arc::new(|_| {
             Err(ApiError::conflict(
-                "COMMIT_PREPARATION_BUSY",
+                storage_contract::ErrorCode::CommitPreparationBusy,
                 "injected persistence failure",
             ))
         }));
@@ -104,7 +104,10 @@ fn failed_login_password_rotation_and_logout_restore_exact_sessions() {
             "logout" => store.logout(&active.token).unwrap_err(),
             _ => unreachable!(),
         };
-        assert_eq!(error.code, "COMMIT_PREPARATION_BUSY");
+        assert_eq!(
+            error.code,
+            storage_contract::ErrorCode::CommitPreparationBusy
+        );
         assert_eq!(store.snapshot().unwrap(), before);
         assert_eq!(fs::read(root.path().join("auth.json")).unwrap(), disk);
         assert!(store.authenticate(&active.token).is_ok());

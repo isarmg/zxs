@@ -194,7 +194,7 @@ fn historical_placeholders_need_no_old_payload_and_written_replacements_material
             .err()
             .unwrap()
             .code(),
-        "CONTENT_PURGED"
+        storage_contract::ErrorCode::ContentPurged
     );
     let workspace = engine
         .create_historical_workspace(&repo.main_branch_id, &commits[0], "admin")

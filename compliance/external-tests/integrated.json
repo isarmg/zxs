@@ -103,13 +103,13 @@
       "files": [
         {
           "path": "test/naming/unit/key_tests.rs",
-          "sha256": "4f88df587f6f945e694224d9d571f016d64f3dc1af4782eb9ea4e6b6ecc46d63",
+          "sha256": "e83109d09a5c1a3557a5a9d07cfb17b1a5814e97e628083bb68f3cedb30a5d5a",
           "source": "src/naming/src/key_tests.rs",
           "source_sha256_before": "b7769845ea159b121934cd4e721d445177731fe90df5fd6ba8ae20c9093dd75d"
         },
         {
           "path": "test/naming/unit/lib/tests.rs",
-          "sha256": "1eac93b4307fd3b12e6552b83d964cc15cd9807d8be3674258bc3b4daf76fb61",
+          "sha256": "afebf9194054bfd4a0cee6b5c31e3ed3ab6e2919c975cdd78ad6a52e35bf9ca8",
           "source": "src/naming/src/lib.rs",
           "source_sha256_before": "619a98004dc108746a51157455bbf031c0f2c7112946e04b535b7391f87d20ad"
         },

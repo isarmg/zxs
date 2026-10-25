@@ -32,7 +32,7 @@ pub(super) fn selected(
         }
         _ => Err(api::Error {
             status: 200,
-            code: "INVALID_DIRECTORY_PAGE".into(),
+            code: storage_contract::ErrorCode::InvalidDirectoryPage,
             message: "The selected entry did not match the requested identity.".into(),
             retryable: false,
             request_id: None,
@@ -44,7 +44,7 @@ impl Page {
     pub fn parse(value: &Value) -> Result<Self, api::Error> {
         let invalid = || api::Error {
             status: 200,
-            code: "INVALID_DIRECTORY_PAGE".into(),
+            code: storage_contract::ErrorCode::InvalidDirectoryPage,
             message: "The directory page did not match the server contract.".into(),
             retryable: false,
             request_id: None,

@@ -205,7 +205,7 @@ fn failed_completion_preserves_the_original_unknown_reload_fence() {
     finish_initialization(
         &mut model,
         Err(api::Error {
-            code: "INVALID_REQUEST".into(),
+            code: storage_contract::ErrorCode::InvalidRequest,
             message: "rejected".into(),
             retryable: false,
             status: 400,
@@ -338,7 +338,7 @@ fn an_empty_key_cannot_accept_authorization_but_still_reports_input_errors() {
         7,
         "",
         Err(api::Error {
-            code: "INVALID_SETUP_REQUEST".into(),
+            code: storage_contract::ErrorCode::InvalidSetupRequest,
             message: "Enter the authorization key".into(),
             retryable: false,
             status: 0,

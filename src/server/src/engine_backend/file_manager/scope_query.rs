@@ -23,7 +23,7 @@ pub(in crate::engine_backend) fn read(engine: &Engine, input: &Value) -> Result<
     {
         return Err(ApiError::new(
             429,
-            "RESOURCE_LIMIT_EXCEEDED",
+            storage_contract::ErrorCode::ResourceLimitExceeded,
             "scope query exceeds the bounded selection limit",
         ));
     }
@@ -70,7 +70,7 @@ pub(in crate::engine_backend) fn read(engine: &Engine, input: &Value) -> Result<
             .filter(|branch| branch.head_tree_id == head)
             .ok_or_else(|| {
                 ApiError::conflict(
-                    "LISTING_CHANGED",
+                    storage_contract::ErrorCode::ListingChanged,
                     "source scope changed; refresh before preparing a batch",
                 )
             })?;

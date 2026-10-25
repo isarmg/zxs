@@ -50,7 +50,10 @@ fn active_scopes(
                 .find(|entry| entry.kind == "directory" && entry.entry_id == branch.directory_id)
                 .map(|entry| entry.lookup_key.clone())
                 .ok_or_else(|| {
-                    Error::new("DIRECTORY_BRANCH_CONFLICT", "active directory is missing")
+                    Error::new(
+                        storage_contract::ErrorCode::DirectoryBranchConflict,
+                        "active directory is missing",
+                    )
                 })?
         };
         if paths
@@ -58,7 +61,7 @@ fn active_scopes(
             .any(|other| path == *other || contains(other, &path) || contains(&path, other))
         {
             return Err(Error::new(
-                "BATCH_SCOPE_CONFLICT",
+                storage_contract::ErrorCode::BatchScopeConflict,
                 "overlapping active directory scopes must use one common ancestor composition",
             ));
         }
@@ -125,7 +128,7 @@ fn validate_identities(entries: &[Entry]) -> Result<()> {
     for e in entries.iter().filter(|e| e.kind == "directory") {
         if !dirs.insert(&e.entry_id) {
             return Err(Error::new(
-                "BATCH_SCOPE_CONFLICT",
+                storage_contract::ErrorCode::BatchScopeConflict,
                 "duplicate directory identity in composed namespace",
             ));
         }
@@ -135,15 +138,22 @@ fn validate_identities(entries: &[Entry]) -> Result<()> {
 
 // Frozen compositions require exact path context, not a reconstructed owner.
 fn file_context(branch: &DirectoryBranch, entry: &Entry) -> Result<FileContext> {
-    branch
-        .file_branches
-        .get(&entry.file_id)
-        .ok_or_else(|| Error::new("STATE_INVALID", "source public file branch missing"))?;
+    branch.file_branches.get(&entry.file_id).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "source public file branch missing",
+        )
+    })?;
     branch
         .file_contexts
         .get(&entry.lookup_key)
         .cloned()
-        .ok_or_else(|| Error::new("STATE_INVALID", "source path write context missing"))
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "source path write context missing",
+            )
+        })
 }
 
 fn save_inactive(
@@ -158,14 +168,21 @@ fn save_inactive(
         .directory_branches
         .get(&branch.directory_branch_id)
         .cloned()
-        .ok_or_else(|| Error::new("STATE_INVALID", "directory branch missing"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "directory branch missing",
+            )
+        })?;
     let mut entries = branch.entries.clone();
     // Snapshot commits include real ancestor identities so the normal namespace
     // validator and portable history export do not need a second path model.
-    let base = state
-        .commits
-        .get(&previous.commit_id)
-        .ok_or_else(|| Error::new("STATE_INVALID", "directory branch commit missing"))?;
+    let base = state.commits.get(&previous.commit_id).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "directory branch commit missing",
+        )
+    })?;
     let key = name_policy::path_key(&branch.path);
     entries.extend(
         base.entries
@@ -181,7 +198,12 @@ fn save_inactive(
     let repo = state
         .repositories
         .get(&branch.repository_id)
-        .ok_or_else(|| Error::new("STATE_INVALID", "directory repository missing"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "directory repository missing",
+            )
+        })?;
     state.commits.insert(
         commit_id.clone(),
         Commit {
@@ -237,18 +259,19 @@ fn apply(
     principal: &str,
     operation: &str,
 ) -> Result<Value> {
-    let repo = state
-        .repositories
-        .get(repository)
-        .cloned()
-        .ok_or_else(|| Error::new("REPOSITORY_NOT_FOUND", "repository missing"))?;
+    let repo = state.repositories.get(repository).cloned().ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::RepositoryNotFound,
+            "repository missing",
+        )
+    })?;
 
     if !["move", "copy", "delete", "rename"].contains(&request.kind.as_str())
         || request.items.is_empty()
         || request.items.len() > engine.config.max_entries
     {
         return Err(Error::new(
-            "INVALID_REQUEST",
+            storage_contract::ErrorCode::InvalidRequest,
             "batch requires supported kind and a bounded nonempty item list",
         ));
     }
@@ -265,7 +288,7 @@ fn apply(
         }
         if (request.kind == "delete") != item.target.is_none() {
             return Err(Error::new(
-                "INVALID_REQUEST",
+                storage_contract::ErrorCode::InvalidRequest,
                 "only delete omits a destination",
             ));
         }
@@ -276,13 +299,13 @@ fn apply(
                 .filter(|b| b.repository_id == repository)
                 .ok_or_else(|| {
                     Error::new(
-                        "DIRECTORY_BRANCH_NOT_FOUND",
+                        storage_contract::ErrorCode::DirectoryBranchNotFound,
                         "batch branch missing from repository",
                     )
                 })?;
             if &branch.head_tree_id != expected {
                 return Err(Error::new(
-                    "DIRECTORY_BRANCH_CONFLICT",
+                    storage_contract::ErrorCode::DirectoryBranchConflict,
                     "batch subtree baseline changed; no item was published",
                 ));
             }
@@ -293,12 +316,22 @@ fn apply(
         .branches
         .get(&repo.main_branch_id)
         .cloned()
-        .ok_or_else(|| Error::new("STATE_INVALID", "repository main branch missing"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "repository main branch missing",
+            )
+        })?;
     let current = state
         .commits
         .get(&main.head_commit_id)
         .cloned()
-        .ok_or_else(|| Error::new("STATE_INVALID", "repository head missing"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "repository head missing",
+            )
+        })?;
     let mut drafts = originals.clone();
     let mut touched = BTreeSet::new();
     let mut source_ranges = BTreeMap::<String, Vec<String>>::new();
@@ -309,7 +342,7 @@ fn apply(
         let source_scope = &originals[&item.source.directory_branch_id];
         if !contains(&source_scope.path, &item.source.path) {
             return Err(Error::new(
-                "DIRECTORY_BRANCH_SCOPE",
+                storage_contract::ErrorCode::DirectoryBranchScope,
                 "source path outside selected scope",
             ));
         }
@@ -318,7 +351,7 @@ fn apply(
             .filter(|e| e.entry_id == item.source.entry_id)
             .ok_or_else(|| {
                 Error::new(
-                    "ENTRY_NOT_FOUND",
+                    storage_contract::ErrorCode::EntryNotFound,
                     "source identity/path does not match frozen subtree",
                 )
             })?;
@@ -331,7 +364,7 @@ fn apply(
                     || namespace::is_descendant(&source.lookup_key, key))
         }) {
             return Err(Error::new(
-                "BATCH_SCOPE_CONFLICT",
+                storage_contract::ErrorCode::BatchScopeConflict,
                 "overlapping source entries must be selected once",
             ));
         }
@@ -354,7 +387,7 @@ fn apply(
             target_key,
         )) {
             return Err(Error::new(
-                "BATCH_MAPPING_CONFLICT",
+                storage_contract::ErrorCode::BatchMappingConflict,
                 "duplicate batch mapping",
             ));
         }
@@ -394,7 +427,7 @@ fn apply(
         let target_original = &originals[&target.directory_branch_id];
         if !contains(&target_original.path, &target.path) {
             return Err(Error::new(
-                "DIRECTORY_BRANCH_SCOPE",
+                storage_contract::ErrorCode::DirectoryBranchScope,
                 "destination outside selected scope",
             ));
         }
@@ -402,7 +435,7 @@ fn apply(
             && target.directory_branch_id != source_scope.directory_branch_id
         {
             return Err(Error::new(
-                "INVALID_REQUEST",
+                storage_contract::ErrorCode::InvalidRequest,
                 "rename preserves its directory branch; use move for transfer",
             ));
         }
@@ -410,7 +443,7 @@ fn apply(
             && namespace::is_descendant(&name_policy::path_key(&target.path), &source.lookup_key)
         {
             return Err(Error::new(
-                "INVALID_MOVE",
+                storage_contract::ErrorCode::InvalidMove,
                 "cannot move/copy directory inside itself",
             ));
         }
@@ -432,7 +465,10 @@ fn apply(
             .get_mut(&target.directory_branch_id)
             .expect("checked");
         if namespace::find_unordered(entries, &target.path).is_some() {
-            return Err(Error::new("NAME_COLLISION", "batch destination exists"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::NameCollision,
+                "batch destination exists",
+            ));
         }
         // A destination must have a real parent after all sources are removed.
         if let Some((parent, _)) = target.path.rsplit_once('/')
@@ -440,7 +476,7 @@ fn apply(
             && !namespace::find_unordered(entries, parent).is_some_and(|e| e.kind == "directory")
         {
             return Err(Error::new(
-                "DIRECTORY_NOT_FOUND",
+                storage_contract::ErrorCode::DirectoryNotFound,
                 "destination parent missing in selected subtree",
             ));
         }
@@ -533,7 +569,10 @@ fn apply(
                     find_unordered(&target_draft.entries, parent)
                         .map(|e| e.entry_id.clone())
                         .ok_or_else(|| {
-                            Error::new("DIRECTORY_NOT_FOUND", "destination parent missing")
+                            Error::new(
+                                storage_contract::ErrorCode::DirectoryNotFound,
+                                "destination parent missing",
+                            )
                         })?
                 }
             } else {
@@ -607,7 +646,10 @@ fn apply(
                         .get(&source_scope.commit_id)
                         .cloned()
                         .ok_or_else(|| {
-                            Error::new("STATE_INVALID", "source directory commit missing")
+                            Error::new(
+                                storage_contract::ErrorCode::StateInvalid,
+                                "source directory commit missing",
+                            )
                         })?;
                     // The source snapshot supplies ancestry, not authorship:
                     // initializing this independent file belongs to this copy.
@@ -663,7 +705,10 @@ fn apply(
                     .file_branches
                     .get(&member.file_id)
                     .ok_or_else(|| {
-                        Error::new("STATE_INVALID", "source public file branch missing")
+                        Error::new(
+                            storage_contract::ErrorCode::StateInvalid,
+                            "source public file branch missing",
+                        )
                     })?;
                 target_draft
                     .file_branches
@@ -687,7 +732,7 @@ fn apply(
                     && name_policy::path_key(&previous) != name_policy::path_key(&canonical)
                 {
                     return Err(Error::new(
-                        "BATCH_MAPPING_CONFLICT",
+                        storage_contract::ErrorCode::BatchMappingConflict,
                         "one physical file cannot have two move/rename outcomes",
                     ));
                 }
@@ -738,7 +783,7 @@ fn apply(
                 .map(|e| e.path.clone())
                 .ok_or_else(|| {
                     Error::new(
-                        "DIRECTORY_BRANCH_CONFLICT",
+                        storage_contract::ErrorCode::DirectoryBranchConflict,
                         "active directory was removed by overlapping mapping",
                     )
                 })?
@@ -823,10 +868,12 @@ fn apply(
             .get_mut(&repo.main_branch_id)
             .expect("checked");
         target.head_commit_id = id.clone();
-        target.generation = target
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| Error::new("RESOURCE_LIMIT", "branch generation exhausted"))?;
+        target.generation = target.generation.checked_add(1).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::ResourceLimit,
+                "branch generation exhausted",
+            )
+        })?;
         Some(id)
     } else {
         None
@@ -866,7 +913,12 @@ fn ensure_parents_for_scope(
         state
             .commits
             .get(&branch.commit_id)
-            .ok_or_else(|| Error::new("STATE_INVALID", "directory branch commit missing"))?
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::StateInvalid,
+                    "directory branch commit missing",
+                )
+            })?
             .entries
             .iter()
             .filter(|e| {

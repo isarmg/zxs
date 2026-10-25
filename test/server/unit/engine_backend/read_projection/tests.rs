@@ -105,7 +105,7 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
         .err()
         .unwrap()
         .code,
-        "NOT_FOUND"
+        storage_contract::ErrorCode::NotFound
     );
     assert_eq!(encode(projection).unwrap(), expected);
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
@@ -124,7 +124,7 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
             .call(BackendAction::Tree, &denied, input.clone())
             .unwrap_err()
             .code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
     let frozen = {
         let mut engine = backend.engine.lock().unwrap();
@@ -146,7 +146,7 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
             .call(BackendAction::Tree, &identity, input)
             .unwrap_err()
             .code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
 }
 
@@ -776,7 +776,7 @@ fn smb_lookup_rechecks_admission_and_returns_only_current_entry() {
             .call(BackendAction::SmbLookup, &denied, input.clone())
             .unwrap_err()
             .code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
     {
         let mut engine = backend.engine.lock().unwrap();
@@ -801,7 +801,7 @@ fn smb_lookup_rechecks_admission_and_returns_only_current_entry() {
             .call(BackendAction::SmbLookup, &identity, input)
             .unwrap_err()
             .code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
 }
 
@@ -831,7 +831,7 @@ fn namespace_reads_preserve_migrated_branch_error() {
                 .call(action, &identity, input.clone())
                 .unwrap_err()
                 .code,
-            "TREE_MOVED"
+            storage_contract::ErrorCode::TreeMoved
         );
     }
 }

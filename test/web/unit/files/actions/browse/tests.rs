@@ -110,7 +110,7 @@ fn a_failed_disk_refresh_invalidates_readiness_without_discarding_cached_rows() 
 fn disk_read_error(status: u16) -> api::Error {
     api::Error {
         status,
-        code: "UNAVAILABLE".into(),
+        code: storage_contract::ErrorCode::InjectedFailure,
         message: "Delayed disk listing failure".into(),
         retryable: true,
         request_id: None,

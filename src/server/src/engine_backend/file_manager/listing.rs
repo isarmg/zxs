@@ -57,7 +57,7 @@ pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError>
         {
             return Err(ApiError::new(
                 404,
-                "DIRECTORY_NOT_FOUND",
+                storage_contract::ErrorCode::DirectoryNotFound,
                 "directory not found",
             ));
         }

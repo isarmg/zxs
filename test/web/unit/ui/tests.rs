@@ -83,7 +83,7 @@ fn wrong_password_does_not_discard_pending_file_saves() {
     reject_password_change(
         &mut state,
         &api::Error {
-            code: "CURRENT_PASSWORD_INVALID".into(),
+            code: storage_contract::ErrorCode::CurrentPasswordInvalid,
             message: "Incorrect password".into(),
             status: 403,
             retryable: false,
@@ -275,7 +275,7 @@ fn uncertain_password_change_blocks_resubmission_and_reload_without_discarding_w
             &mut state,
             &api::Error {
                 status,
-                code: "UNCONFIRMED".into(),
+                code: storage_contract::ErrorCode::InjectedFailure,
                 message: "Outcome unknown".into(),
                 retryable: true,
                 request_id: Some("req_password".into()),
@@ -353,7 +353,7 @@ fn exact_password_confirmation_and_unauthorized_logout_settle_the_session() {
         complete_logout(
             state,
             Err(api::Error {
-                code: "UNAUTHORIZED".into(),
+                code: storage_contract::ErrorCode::Unauthorized,
                 message: "Session expired".into(),
                 status: 401,
                 retryable: false,
@@ -376,7 +376,7 @@ fn known_password_rejection_allows_correction_but_never_erases_an_existing_fence
     };
     let error = api::Error {
         status: 403,
-        code: "CURRENT_PASSWORD_INVALID".into(),
+        code: storage_contract::ErrorCode::CurrentPasswordInvalid,
         message: "Incorrect password".into(),
         retryable: false,
         request_id: None,
@@ -448,7 +448,7 @@ fn expired_password_change_session_closes_business_admission_without_losing_reco
         &mut state,
         &api::Error {
             status: 401,
-            code: "UNAUTHORIZED".into(),
+            code: storage_contract::ErrorCode::Unauthorized,
             message: "Session expired".into(),
             retryable: false,
             request_id: Some("req_expired_password".into()),

@@ -71,14 +71,14 @@ fn generic_policy_collisions_follow_the_current_directory_or_file_scope_path() {
             0,
         )
         .unwrap_err();
-        assert_eq!(error.code(), "NAME_COLLISION");
+        assert_eq!(error.code(), storage_contract::ErrorCode::NameCollision);
         assert_eq!(canonical_json(engine.state()).unwrap(), before);
 
         // A moved stable scope no longer reserves its old spelling.
         path_policy(&mut engine, &repo, &generic, source, 1, 0).unwrap();
         let before = canonical_json(engine.state()).unwrap();
         let error = path_policy(&mut engine, &repo, &generic, destination, 1, 1).unwrap_err();
-        assert_eq!(error.code(), "NAME_COLLISION");
+        assert_eq!(error.code(), storage_contract::ErrorCode::NameCollision);
         assert_eq!(canonical_json(engine.state()).unwrap(), before);
         let read = engine
             .backup_configuration(&repo.repository_id, destination)
@@ -180,7 +180,7 @@ fn root_scope_adopts_existing_path_rule_and_rejects_parallel_rules() {
         }
         assert_eq!(engine.state.protection_policies.len(), 1);
         let error = path_policy(&mut engine, &repo, &new_id("policy"), "", 1, 0).unwrap_err();
-        assert_eq!(error.code(), "NAME_COLLISION");
+        assert_eq!(error.code(), storage_contract::ErrorCode::NameCollision);
         let read = engine
             .backup_configuration(&repo.repository_id, "")
             .unwrap();

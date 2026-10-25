@@ -82,16 +82,18 @@ impl Session {
                 || left.starts_with(&format!("{right}/"))
                 || right.starts_with(&format!("{left}/"))
         };
-        let mut writers = self
-            .shared
-            .file_writers
-            .lock()
-            .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "SMB lock registry poisoned"))?;
+        let mut writers = self.shared.file_writers.lock().map_err(|_| {
+            ApiError::new(
+                500,
+                storage_contract::ErrorCode::InternalError,
+                "SMB lock registry poisoned",
+            )
+        })?;
         if writers.iter().any(|(branch, existing)| {
             branch == &self.branch && keys.iter().any(|key| overlaps(existing, key))
         }) {
             return Err(ApiError::conflict(
-                "FILE_WRITE_BUSY",
+                storage_contract::ErrorCode::FileWriteBusy,
                 "an affected SMB file has an active write handle",
             ));
         }
@@ -194,10 +196,9 @@ impl Session {
                     json!({"path":"","kind":"directory","size":"0","entry_id":self.branch})
                 } else {
                     name_policy::validate_lookup_path(&path).map_err(contract)?;
-                    json_codec::to_value(
-                        self.find(&path)?
-                            .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "entry missing"))?,
-                    )
+                    json_codec::to_value(self.find(&path)?.ok_or_else(|| {
+                        ApiError::new(404, storage_contract::ErrorCode::NotFound, "entry missing")
+                    })?)
                     .map_err(ApiError::invalid)?
                 }
             }

@@ -13,11 +13,17 @@ impl Session {
             Some(_) => {
                 return Err(ApiError::new(
                     409,
-                    "NOT_DIRECTORY",
+                    storage_contract::ErrorCode::NotDirectory,
                     "handle is not a directory",
                 ));
             }
-            None => return Err(ApiError::new(404, "NOT_FOUND", "SMB handle missing")),
+            None => {
+                return Err(ApiError::new(
+                    404,
+                    storage_contract::ErrorCode::NotFound,
+                    "SMB handle missing",
+                ));
+            }
         };
         let mut input = json!({"branch_id":self.branch,"entry_id":entry_id,"path":path});
         if let Some(cursor) = &cursor {

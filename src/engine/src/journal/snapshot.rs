@@ -118,7 +118,7 @@ impl SnapshotBuilder {
         };
         if max_page_bytes > self.maximum {
             return Err(Error::new(
-                "RESOURCE_LIMIT",
+                storage_contract::ErrorCode::ResourceLimit,
                 format!(
                     "serialized metadata exceeds {} byte reader limit",
                     self.maximum
@@ -264,7 +264,7 @@ pub(super) fn reconstruct_field(
                 $(stringify!($optional) => encode_map(field,state.$optional.iter(),maximum,emit),)*
                 "directory_selection_generations" => encode_map(field,state.directory_selection_generations.iter().map(|(k,v)|(k,v.to_string())),maximum,emit),
                 "file_selection_generations" => encode_map(field,state.file_selection_generations.iter().map(|(k,v)|(k,v.to_string())),maximum,emit),
-                _ => Err(Error::new("STATE_INVALID","snapshot field is not eligible for reference reconstruction")),
+                _ => Err(Error::new(storage_contract::ErrorCode::StateInvalid,"snapshot field is not eligible for reference reconstruction")),
             }
         };
     }

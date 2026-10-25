@@ -477,7 +477,7 @@ fn live_writer_cannot_prepare_or_publish_after_disable_and_failed_close_retains_
     assert_eq!(shared.backend.call(crate::BackendAction::UpdateSmbBinding, &administrator, json!({
         "repository_id":repository,"branch_id":branch,"enabled":false,
         "expected_history_generation":binding["history_generation"],"operation_id":new_id("op"),
-    })).unwrap_err().code, "WORKSPACE_BUSY");
+    })).unwrap_err().code, storage_contract::ErrorCode::WorkspaceBusy);
     assert!(matches!(
         exchange(
             &mut wire,

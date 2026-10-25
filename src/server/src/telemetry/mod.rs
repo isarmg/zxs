@@ -234,7 +234,11 @@ impl Telemetry {
 }
 
 fn unavailable(message: &str) -> ApiError {
-    ApiError::new(503, "MONITOR_UNAVAILABLE", message)
+    ApiError::new(
+        503,
+        storage_contract::ErrorCode::MonitorUnavailable,
+        message,
+    )
 }
 
 fn timestamp(unix_seconds: i64) -> Result<String, ApiError> {

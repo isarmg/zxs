@@ -25,9 +25,12 @@ pub fn commit_request_digest(workspace: &str, body: &Value) -> Result<String> {
     )
 }
 fn text<'a>(body: &'a Value, key: &str) -> Result<&'a str> {
-    body.get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new("INVALID_REQUEST", format!("missing string {key}")))
+    body.get(key).and_then(Value::as_str).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::InvalidRequest,
+            format!("missing string {key}"),
+        )
+    })
 }
 impl Engine {
     pub fn seal_workspace(&mut self, id: &str, principal: &str) -> Result<Value> {
@@ -35,12 +38,15 @@ impl Engine {
         let mut w = self.workspace(id)?;
         if w.principal != principal {
             return Err(Error::new(
-                "PERMISSION_DENIED",
+                storage_contract::ErrorCode::PermissionDenied,
                 "workspace belongs to another principal",
             ));
         }
         if !["open", "sealed"].contains(&w.state.as_str()) {
-            return Err(Error::new("WORKSPACE_CLOSED", "workspace cannot be sealed"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::WorkspaceClosed,
+                "workspace cannot be sealed",
+            ));
         }
         self.repository_for_branch(&w.branch_id)?;
         let repository = self.repository_for_branch(&w.branch_id)?.clone();
@@ -99,12 +105,15 @@ impl Engine {
             "sealed_manifest_hash",
             "request_digest",
         ];
-        let object = body
-            .as_object()
-            .ok_or_else(|| Error::new("INVALID_REQUEST", "commit body must be an object"))?;
+        let object = body.as_object().ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::InvalidRequest,
+                "commit body must be an object",
+            )
+        })?;
         if object.len() != fields.len() || object.keys().any(|k| !fields.contains(&k.as_str())) {
             return Err(Error::new(
-                "INVALID_REQUEST",
+                storage_contract::ErrorCode::InvalidRequest,
                 "commit body has missing or unknown fields",
             ));
         }
@@ -116,7 +125,7 @@ impl Engine {
                     != Some(&request.principal))
         {
             return Err(Error::new(
-                "IDEMPOTENCY_KEY_REUSED",
+                storage_contract::ErrorCode::IdempotencyKeyReused,
                 "completed wire request differs from its registered digest",
             ));
         }
@@ -133,7 +142,7 @@ impl Engine {
             || text(&body, "message")? != request.message
         {
             return Err(Error::new(
-                "REQUEST_BINDING_MISMATCH",
+                storage_contract::ErrorCode::RequestBindingMismatch,
                 "wire request differs from authenticated workspace input",
             ));
         }
@@ -150,7 +159,7 @@ impl Engine {
         }
         if text(&body, "requested_protection")? != "strict" {
             return Err(Error::new(
-                "SAVE_MODE_UNSUPPORTED",
+                storage_contract::ErrorCode::SaveModeUnsupported,
                 "only strict full-file saves are supported",
             ));
         }
@@ -158,48 +167,57 @@ impl Engine {
             != self.state.topology_generation.to_string()
         {
             return Err(Error::new(
-                "TOPOLOGY_GENERATION_MISMATCH",
+                storage_contract::ErrorCode::TopologyGenerationMismatch,
                 "topology changed after request preparation",
             ));
         }
         if text(&body, "sealed_manifest_hash")? != manifest_hash(&w)? {
             return Err(Error::new(
-                "SEALED_MANIFEST_MISMATCH",
+                storage_contract::ErrorCode::SealedManifestMismatch,
                 "workspace bytes or namespace order differ from the sealed request",
             ));
         }
         let digest = commit_request_digest(&w.workspace_id, &body)?;
         if text(&body, "request_digest")? != digest {
             return Err(Error::new(
-                "REQUEST_DIGEST_MISMATCH",
+                storage_contract::ErrorCode::RequestDigestMismatch,
                 "server canonical request digest differs",
             ));
         }
         let mut placements = BTreeMap::new();
-        let requested = body["file_placement"]
-            .as_object()
-            .ok_or_else(|| Error::new("INVALID_REQUEST", "file placement must be an object"))?;
+        let requested = body["file_placement"].as_object().ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::InvalidRequest,
+                "file placement must be an object",
+            )
+        })?;
         if requested.len() != w.files.len() {
             return Err(Error::new(
-                "PLACEMENT_INVALID",
+                storage_contract::ErrorCode::PlacementInvalid,
                 "placement must name every sealed item exactly once",
             ));
         }
         for (item, p) in requested {
             if !w.files.contains_key(item) {
                 return Err(Error::new(
-                    "PLACEMENT_INVALID",
+                    storage_contract::ErrorCode::PlacementInvalid,
                     "placement contains an unknown item",
                 ));
             }
             let obj = p.as_object().ok_or_else(|| {
-                Error::new("PLACEMENT_INVALID", "placement entry is not an object")
+                Error::new(
+                    storage_contract::ErrorCode::PlacementInvalid,
+                    "placement entry is not an object",
+                )
             })?;
             if obj.len() != 2
                 || !obj.contains_key("primary_slot_id")
                 || !obj.contains_key("target_copies")
             {
-                return Err(Error::new("PLACEMENT_INVALID", "invalid placement fields"));
+                return Err(Error::new(
+                    storage_contract::ErrorCode::PlacementInvalid,
+                    "invalid placement fields",
+                ));
             }
             let primary = text(p, "primary_slot_id")?;
             let copies = p["target_copies"]
@@ -207,7 +225,7 @@ impl Engine {
                 .and_then(|n| u32::try_from(n).ok())
                 .ok_or_else(|| {
                     Error::new(
-                        "PLACEMENT_INVALID",
+                        storage_contract::ErrorCode::PlacementInvalid,
                         "target copies must be a positive bounded integer",
                     )
                 })?;
@@ -216,7 +234,7 @@ impl Engine {
         }
         if w.state != "sealed" && !self.state.operations.contains_key(&request.operation_id) {
             return Err(Error::new(
-                "WORKSPACE_NOT_SEALED",
+                storage_contract::ErrorCode::WorkspaceNotSealed,
                 "seal the immutable upload manifest before commit",
             ));
         }
@@ -231,21 +249,23 @@ impl Engine {
         )
     }
     pub fn version_health(&self, version: &str) -> Result<String> {
-        let v = self
-            .state
-            .versions
-            .get(version)
-            .ok_or_else(|| Error::new("VERSION_NOT_FOUND", "version not found"))?;
+        let v = self.state.versions.get(version).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::VersionNotFound,
+                "version not found",
+            )
+        })?;
         if let Some(state) = self.state.content_states.get(version)
             && (*state == ContentState::Purged || *state == ContentState::Migrated)
         {
             return Ok("PURGED".into());
         }
-        let p = self
-            .state
-            .placements
-            .get(version)
-            .ok_or_else(|| Error::new("PLACEMENT_NOT_FOUND", "placement not found"))?;
+        let p = self.state.placements.get(version).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::PlacementNotFound,
+                "placement not found",
+            )
+        })?;
         let mut healthy = 0;
         for slot in &p.route_slot_ids {
             let d = self.disk(slot)?;

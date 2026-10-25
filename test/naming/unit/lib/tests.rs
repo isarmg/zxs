@@ -34,7 +34,7 @@ fn normalized_and_folded() {
     assert_eq!(lookup_key("e\u{301}"), lookup_key("é"));
     assert_eq!(
         validate_name("e\u{301}").unwrap_err().code(),
-        "NAME_NOT_NORMALIZED"
+        storage_contract::ErrorCode::NameNotNormalized
     );
     assert_eq!(unicode::UNICODE_VERSION, (16, 0, 0));
 }
@@ -58,7 +58,7 @@ fn lookup_paths_accept_canonical_equivalence_without_relaxing_new_names() {
         assert_eq!(path_key(query), path_key(stored));
         assert_eq!(
             validate_path(query).unwrap_err().code(),
-            "NAME_NOT_NORMALIZED"
+            storage_contract::ErrorCode::NameNotNormalized
         );
     }
     validate_lookup_path("STRASSE/ς.txt").unwrap();
@@ -106,7 +106,7 @@ fn lookup_leaf_names_keep_name_budget_separate_from_repository_path_budget() {
     validate_lookup_name(&"a".repeat(240)).unwrap();
     assert_eq!(
         validate_lookup_name(&"a".repeat(241)).unwrap_err().code(),
-        "NAME_TOO_LONG"
+        storage_contract::ErrorCode::NameTooLong
     );
     for (stored, query) in [
         ("é", "e\u{301}"),
@@ -117,7 +117,7 @@ fn lookup_leaf_names_keep_name_budget_separate_from_repository_path_budget() {
         assert_eq!(lookup_key(query), lookup_key(stored));
         assert_eq!(
             validate_name(query).unwrap_err().code(),
-            "NAME_NOT_NORMALIZED"
+            storage_contract::ErrorCode::NameNotNormalized
         );
     }
     for name in [".", "..", "CON", "a/b", "a\\b", "a\u{200d}b"] {

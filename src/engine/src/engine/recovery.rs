@@ -42,12 +42,12 @@ impl Engine {
                 verify_publication_seal(&candidate, &publication, &seal)?;
                 if candidate.pool_id != self.config.pool_id {
                     return Err(Error::new(
-                        "PUBLICATION_INVALID",
+                        storage_contract::ErrorCode::PublicationInvalid,
                         "publication seal belongs to another pool",
                     ));
                 }
                 return Err(Error::new(
-                    "RECOVERY_REQUIRED",
+                    storage_contract::ErrorCode::RecoveryRequired,
                     "journal history omits a sealed publication; restore the missing journal evidence before recovery",
                 ));
             }
@@ -96,7 +96,10 @@ impl Engine {
             for (r, _) in scanned.records {
                 self.next_slot =
                     self.next_slot.max(r.sequence.checked_add(1).ok_or_else(|| {
-                        Error::new("RECOVERY_REQUIRED", "journal decision sequence exhausted")
+                        Error::new(
+                            storage_contract::ErrorCode::RecoveryRequired,
+                            "journal decision sequence exhausted",
+                        )
                     })?);
                 records
                     .entry(r.sequence)
@@ -109,7 +112,7 @@ impl Engine {
         }
         if online.len() < self.config.metadata_quorum() {
             return Err(Error::new(
-                "METADATA_QUORUM_UNAVAILABLE",
+                storage_contract::ErrorCode::MetadataQuorumUnavailable,
                 "online service requires a majority of the configured metadata members; use offline recovery",
             ));
         }
@@ -151,7 +154,7 @@ impl Engine {
                 .collect::<Vec<_>>();
             if active.len() > 1 {
                 return Err(Error::new(
-                    "LOG_FORK",
+                    storage_contract::ErrorCode::LogFork,
                     "different accepted candidates occupy the same slot",
                 ));
             }
@@ -164,7 +167,7 @@ impl Engine {
                 || candidate.previous_snapshot != self.snapshot
             {
                 return Err(Error::new(
-                    "LOG_FORK",
+                    storage_contract::ErrorCode::LogFork,
                     "candidate does not extend the verified publication prefix",
                 ));
             }
@@ -183,7 +186,10 @@ impl Engine {
                 .filter(|c| candidate.sequence <= c.sequence)
             {
                 let publication = publication.as_ref().ok_or_else(|| {
-                    Error::new("CHECKPOINT_INVALID", "covered publication is absent")
+                    Error::new(
+                        storage_contract::ErrorCode::CheckpointInvalid,
+                        "covered publication is absent",
+                    )
                 })?;
                 // Recheck the publication barrier independently of the checkpoint.
                 // Coverage established that all historical repair artifacts remain
@@ -199,7 +205,7 @@ impl Engine {
                         || candidate.snapshot_hash != checkpoint.snapshot_hash
                     {
                         return Err(Error::new(
-                            "CHECKPOINT_INVALID",
+                            storage_contract::ErrorCode::CheckpointInvalid,
                             "checkpoint boundary differs from journal",
                         ));
                     }
@@ -224,7 +230,12 @@ impl Engine {
                 let result = next
                     .operations
                     .get(&candidate.operation_id)
-                    .ok_or_else(|| Error::new("STATE_INVALID", "candidate result is absent"))?;
+                    .ok_or_else(|| {
+                        Error::new(
+                            storage_contract::ErrorCode::StateInvalid,
+                            "candidate result is absent",
+                        )
+                    })?;
                 crate::metadata_budget::preflight_bound_publication(
                     self,
                     &candidate,
@@ -299,7 +310,7 @@ impl Engine {
             } else if let Some(p) = publication {
                 if p.candidate_hash != hash || p.result.operation_id != candidate.operation_id {
                     return Err(Error::new(
-                        "PUBLICATION_INVALID",
+                        storage_contract::ErrorCode::PublicationInvalid,
                         "publication differs from candidate",
                     ));
                 }

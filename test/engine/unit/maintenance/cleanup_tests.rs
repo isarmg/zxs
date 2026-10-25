@@ -91,7 +91,7 @@ fn published_maintenance_retry_finishes_cleanup_without_republishing() {
                 .commit_plan(&plan.plan_id, "admin", &operation)
                 .unwrap_err()
                 .code(),
-            "UNSAFE_PATH",
+            storage_contract::ErrorCode::UnsafePath,
             "{kind}"
         );
         let receipt = engine.operation(&operation).unwrap();
@@ -110,7 +110,7 @@ fn published_maintenance_retry_finishes_cleanup_without_republishing() {
                     .commit_plan(&id, actor, &operation)
                     .unwrap_err()
                     .code(),
-                "IDEMPOTENCY_KEY_REUSED"
+                storage_contract::ErrorCode::IdempotencyKeyReused
             );
         }
         assert_eq!(
@@ -118,7 +118,7 @@ fn published_maintenance_retry_finishes_cleanup_without_republishing() {
                 .commit_plan(&plan.plan_id, "admin", &operation)
                 .unwrap_err()
                 .code(),
-            "UNSAFE_PATH",
+            storage_contract::ErrorCode::UnsafePath,
             "a retry must not report cleanup success while the fault remains: {kind}"
         );
         fs::remove_dir(&blocker).unwrap();
@@ -189,7 +189,7 @@ fn purge_retry_preserves_active_workspace_and_respects_detached_preparation() {
             .commit_plan(&plan.plan_id, "admin", &operation)
             .unwrap_err()
             .code(),
-        "COMMIT_PREPARATION_BUSY"
+        storage_contract::ErrorCode::CommitPreparationBusy
     );
     assert!(payloads.iter().all(|path| path.exists()));
     drop(preparation);

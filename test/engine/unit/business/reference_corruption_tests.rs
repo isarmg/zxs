@@ -104,7 +104,9 @@ fn file_selection_rejects_missing_heads_without_publication() {
             assert!(
                 matches!(
                     error.code(),
-                    "STATE_INVALID" | "BRANCH_NOT_FOUND" | "HISTORY_NOT_FOUND"
+                    storage_contract::ErrorCode::StateInvalid
+                        | storage_contract::ErrorCode::BranchNotFound
+                        | storage_contract::ErrorCode::HistoryNotFound
                 ),
                 "{missing}/{scoped}: {error}"
             );
@@ -133,7 +135,7 @@ fn workspace_missing_head_returns_error_without_creating_workspace() {
     let error = engine
         .create_workspace(&repo.main_branch_id, "admin")
         .unwrap_err();
-    assert_eq!(error.code(), "STATE_INVALID");
+    assert_eq!(error.code(), storage_contract::ErrorCode::StateInvalid);
     assert_eq!(engine.workspaces.len(), workspaces);
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     drop(engine);
@@ -226,7 +228,11 @@ fn batch_rejects_missing_references_without_publication() {
         let error = engine
             .directory_namespace_batch(&repo.repository_id, &request, "admin", &new_id("op"))
             .unwrap_err();
-        assert_eq!(error.code(), "STATE_INVALID", "{missing}");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::StateInvalid,
+            "{missing}"
+        );
         assert_eq!(canonical_json(engine.state()).unwrap(), before, "{missing}");
     }
 }
@@ -267,7 +273,11 @@ fn file_node_publication_rejects_missing_main_without_leaking_new_nodes() {
                 operation_id: &new_id("op"),
             })
             .unwrap_err();
-        assert_eq!(error.code(), "STATE_INVALID", "{missing}");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::StateInvalid,
+            "{missing}"
+        );
         assert_eq!(canonical_json(engine.state()).unwrap(), before, "{missing}");
     }
 }
@@ -331,7 +341,11 @@ fn file_node_publication_requires_frozen_path_contexts_without_publication() {
                 operation_id: &operation,
             })
             .unwrap_err();
-        assert_eq!(error.code(), "STATE_INVALID", "{missing}");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::StateInvalid,
+            "{missing}"
+        );
         assert_eq!(canonical_json(engine.state()).unwrap(), before, "{missing}");
         assert_eq!(engine.state.sequence, sequence, "{missing}");
         assert_eq!(engine.next_slot, slot, "{missing}");
@@ -400,7 +414,11 @@ fn missing_file_nodes_and_bodies_return_errors_without_publication() {
             })
             .unwrap_err();
         assert!(
-            matches!(error.code(), "STATE_INVALID" | "FILE_NODE_NOT_FOUND"),
+            matches!(
+                error.code(),
+                storage_contract::ErrorCode::StateInvalid
+                    | storage_contract::ErrorCode::FileNodeNotFound
+            ),
             "{missing}: {error}"
         );
         assert_eq!(canonical_json(engine.state()).unwrap(), before, "{missing}");
@@ -417,9 +435,9 @@ fn missing_file_nodes_and_bodies_return_errors_without_publication() {
         assert_eq!(
             error.code(),
             if missing == "body" {
-                "STATE_INVALID"
+                storage_contract::ErrorCode::StateInvalid
             } else {
-                "FILE_NODE_NOT_FOUND"
+                storage_contract::ErrorCode::FileNodeNotFound
             }
         );
         assert_eq!(
@@ -518,7 +536,11 @@ fn exhausted_branch_generations_reject_metadata_mutations_atomically() {
             }
             _ => unreachable!(),
         };
-        assert_eq!(result.unwrap_err().code(), "RESOURCE_LIMIT", "{action}");
+        assert_eq!(
+            result.unwrap_err().code(),
+            storage_contract::ErrorCode::ResourceLimit,
+            "{action}"
+        );
         assert_eq!(canonical_json(engine.state()).unwrap(), before, "{action}");
     }
 }
@@ -555,7 +577,11 @@ fn exhausted_workspace_generations_reject_candidate_without_publication() {
                 request_digest: None,
             })
             .unwrap_err();
-        assert_eq!(error.code(), "RESOURCE_LIMIT", "owner={saturated_owner}");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::ResourceLimit,
+            "owner={saturated_owner}"
+        );
         assert_eq!(
             canonical_json(engine.state()).unwrap(),
             before,
@@ -604,7 +630,7 @@ fn exhausted_main_generation_rejects_active_namespace_batch() {
     let error = engine
         .directory_namespace_batch(&repo.repository_id, &request, "admin", &new_id("op"))
         .unwrap_err();
-    assert_eq!(error.code(), "RESOURCE_LIMIT");
+    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
 }
 
@@ -660,7 +686,11 @@ fn frozen_directory_compositions_reject_missing_path_contexts() {
                 )
                 .unwrap_err()
         };
-        assert_eq!(error.code(), "STATE_INVALID", "{action}");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::StateInvalid,
+            "{action}"
+        );
         assert_eq!(canonical_json(engine.state()).unwrap(), before, "{action}");
     }
 }

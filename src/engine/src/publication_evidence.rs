@@ -22,7 +22,12 @@ pub(crate) fn verified_object<
             }
         }
     }
-    Err(first_error.unwrap_or_else(|| Error::new("RECOVERY_REQUIRED", "no trusted object replica")))
+    Err(first_error.unwrap_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::RecoveryRequired,
+            "no trusted object replica",
+        )
+    }))
 }
 
 // A candidate binds one exact root and every referenced page digest. Resolve
@@ -56,8 +61,12 @@ pub(crate) fn verified_publication_seal(
             }
         }
     }
-    Err(first_error
-        .unwrap_or_else(|| Error::new("RECOVERY_REQUIRED", "no trusted publication seal replica")))
+    Err(first_error.unwrap_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::RecoveryRequired,
+            "no trusted publication seal replica",
+        )
+    }))
 }
 
 pub(crate) fn repair_object_copies<T: data_serialization::Serialize>(
@@ -67,7 +76,10 @@ pub(crate) fn repair_object_copies<T: data_serialization::Serialize>(
     value: &T,
 ) -> Result<()> {
     if object_hash(kind, value)? != hash {
-        return Err(Error::new("OBJECT_CORRUPT", "repair object digest differs"));
+        return Err(Error::new(
+            storage_contract::ErrorCode::ObjectCorrupt,
+            "repair object digest differs",
+        ));
     }
     let bytes = encode_metadata(value, MAX_METADATA)?;
     for member in members {
@@ -92,7 +104,7 @@ pub(crate) fn repair_object_copies<T: data_serialization::Serialize>(
                 Err(e) => return Err(e.into()),
                 Ok(_) => {
                     return Err(Error::new(
-                        "UNSAFE_PATH",
+                        storage_contract::ErrorCode::UnsafePath,
                         "object repair target is not a regular file",
                     ));
                 }

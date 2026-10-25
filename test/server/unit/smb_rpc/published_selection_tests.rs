@@ -31,7 +31,7 @@ fn first_save(
         backend.fail.store(true, Ordering::SeqCst);
         assert_eq!(
             client.flush(opened.handle).unwrap_err().code,
-            "RESPONSE_LOST"
+            storage_contract::ErrorCode::InjectedFailure
         );
     }
     let uploads = backend.uploads.load(Ordering::SeqCst);
@@ -99,13 +99,13 @@ fn new_file_published_handle_rejects_same_version_file_branch_switch() {
                 })
                 .unwrap_err()
                 .code,
-            "FILE_BRANCH_CONFLICT"
+            storage_contract::ErrorCode::FileBranchConflict
         );
         // An already admitted FD write still has to fail the Dirty boundary.
         file.write_all_at(b"bad", 0).unwrap();
         assert_eq!(
             client.dirty(opened.handle).unwrap_err().code,
-            "FILE_BRANCH_CONFLICT"
+            storage_contract::ErrorCode::FileBranchConflict
         );
         assert_eq!(backend.uploads.load(Ordering::SeqCst), uploads);
         let writer = match &client.handles[&opened.handle] {

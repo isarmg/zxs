@@ -12,7 +12,7 @@ use std::{
 };
 
 fn invalid(message: &str) -> Error {
-    Error::new("CONTAINER_LAYOUT_INVALID", message)
+    Error::new(storage_contract::ErrorCode::ContainerLayoutInvalid, message)
 }
 
 fn sequence(name: &str) -> Result<u64> {
@@ -117,9 +117,12 @@ pub(crate) fn version_identity(
         validate_version(version)?;
         maximum = maximum.max(sequence(&version.storage_name)?);
     }
-    let number = maximum
-        .checked_add(1)
-        .ok_or_else(|| Error::new("RESOURCE_LIMIT", "file version sequence exhausted"))?;
+    let number = maximum.checked_add(1).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::ResourceLimit,
+            "file version sequence exhausted",
+        )
+    })?;
     let now = OffsetDateTime::now_utc()
         .replace_nanosecond(0)
         .map_err(|error| invalid(&error.to_string()))?;
@@ -201,7 +204,7 @@ fn reject_unsupported_container(named: &Path) -> Result<()> {
             Err(error) => return Err(error.into()),
             Ok(_) => {
                 return Err(Error::new(
-                    "FORMAT_UNSUPPORTED",
+                    storage_contract::ErrorCode::FormatUnsupported,
                     "legacy container storage is not supported",
                 ));
             }
@@ -246,7 +249,7 @@ fn named_containers(
             }
             if selected.replace(path).is_some() {
                 return Err(Error::new(
-                    "CONTAINER_AMBIGUOUS",
+                    storage_contract::ErrorCode::ContainerAmbiguous,
                     "stable file identity has more than one named container",
                 ));
             }
@@ -294,7 +297,7 @@ fn container(history: &Path, file_id: &str) -> Result<Option<PathBuf>> {
         reject_unsupported_container(&entry.path())?;
         if selected.replace(entry.path()).is_some() {
             return Err(Error::new(
-                "CONTAINER_AMBIGUOUS",
+                storage_contract::ErrorCode::ContainerAmbiguous,
                 "stable file identity has more than one named container",
             ));
         }
@@ -347,16 +350,22 @@ pub(crate) fn content_path(directory: &Path, version: &FileVersion) -> Result<Pa
 fn held_directory(path: &Path) -> Result<OpenAt2Root> {
     let private = existing_private_dir(path)?;
     OpenAt2Root::open(private.path(), MountPolicy::SameMount)
-        .map_err(|error| Error::new("UNSAFE_PATH", error.to_string()))
+        .map_err(|error| Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string()))
 }
 
 fn verify_body(path: &Path, version: &FileVersion) -> Result<()> {
     if !file_exists(path)? {
-        return Err(Error::new("CONTENT_MISSING", "version body is missing"));
+        return Err(Error::new(
+            storage_contract::ErrorCode::ContentMissing,
+            "version body is missing",
+        ));
     }
     let mut file = open_regular(path)?;
     if file.metadata()?.len() != version.logical_size {
-        return Err(Error::new("CONTENT_CORRUPT", "version body length differs"));
+        return Err(Error::new(
+            storage_contract::ErrorCode::ContentCorrupt,
+            "version body length differs",
+        ));
     }
     let mut digest = blake3::Hasher::new();
     let mut size = 0u64;
@@ -368,13 +377,13 @@ fn verify_body(path: &Path, version: &FileVersion) -> Result<()> {
         }
         size = size.checked_add(count as u64).ok_or_else(|| {
             Error::new(
-                "CONTENT_CORRUPT",
+                storage_contract::ErrorCode::ContentCorrupt,
                 "version body grew beyond its declared size",
             )
         })?;
         if size > version.logical_size {
             return Err(Error::new(
-                "CONTENT_CORRUPT",
+                storage_contract::ErrorCode::ContentCorrupt,
                 "version body grew beyond its declared size",
             ));
         }
@@ -382,7 +391,7 @@ fn verify_body(path: &Path, version: &FileVersion) -> Result<()> {
     }
     if size != version.logical_size || digest.finalize().to_hex().as_str() != version.content_hash {
         return Err(Error::new(
-            "CONTENT_CORRUPT",
+            storage_contract::ErrorCode::ContentCorrupt,
             "version body content differs",
         ));
     }
@@ -857,7 +866,12 @@ impl PreparedNames {
                 .disks
                 .iter()
                 .find(|disk| disk.slot_id == item.slot)
-                .ok_or_else(|| Error::new("DISK_NOT_FOUND", "container slot disappeared"))?;
+                .ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::DiskNotFound,
+                        "container slot disappeared",
+                    )
+                })?;
             if self.historical && disk_unavailable(disk)? {
                 continue;
             }
@@ -960,7 +974,7 @@ fn validate_new_projection_path(location: Option<&String>) -> Result<()> {
             .is_some_and(|first| name_policy::lookup_key(first) == NAMESPACE_MARKER)
     }) {
         return Err(Error::new(
-            "NAME_COLLISION",
+            storage_contract::ErrorCode::NameCollision,
             format!("{NAMESPACE_MARKER} is reserved as the first primary or backup path component"),
         ));
     }
@@ -1014,7 +1028,7 @@ fn prepare_names_inner(
                 .find(|disk| disk.slot_id == slot)
                 .ok_or_else(|| {
                     Error::new(
-                        "DISK_NOT_FOUND",
+                        storage_contract::ErrorCode::DiskNotFound,
                         "container placement references an absent slot",
                     )
                 })?;

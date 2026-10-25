@@ -80,7 +80,7 @@ fn encoded_object_preserves_canonical_bytes_and_domain_digest() {
     assert_ne!(object_hash("snapshot", &value).unwrap(), hash);
     assert_eq!(
         encode_hashed_object("Invalid", &value).unwrap_err().code(),
-        "INVALID_OBJECT_TYPE"
+        crate::ErrorCode::InvalidObjectType
     );
     assert!(encode_hashed_object("state-page", &json_codec::json!({"n": u64::MAX})).is_err());
 }
@@ -214,7 +214,7 @@ fn checksum_header_is_semantic_and_rejects_tagged_or_truncated_inputs() {
     unsupported.extend_from_slice(&bytes[8..]);
     assert_eq!(
         ChecksumManifest::decode(&unsupported).unwrap_err().code(),
-        "CHECKSUM_FORMAT_INVALID"
+        crate::ErrorCode::ChecksumFormatInvalid
     );
     let mut wrong_algorithm = bytes.clone();
     wrong_algorithm[8..10].copy_from_slice(&2u16.to_le_bytes());
@@ -292,18 +292,18 @@ fn borrowed_value_encoding_preserves_validation_errors_and_domain_priority() {
     ] {
         let old = canonical_json(&value).unwrap_err();
         let new = canonical_json_value(&value).unwrap_err();
-        assert_eq!((&new.code, &new.message), (&old.code, &old.message));
+        assert_eq!((&new.code(), &new.message()), (&old.code(), &old.message()));
         for kind in ["state-page", "", "Invalid", "bad_domain"] {
             let old = encode_hashed_object(kind, &value).unwrap_err();
             let new = encode_hashed_value(kind, &value).unwrap_err();
-            assert_eq!((&new.code, &new.message), (&old.code, &old.message));
+            assert_eq!((&new.code(), &new.message()), (&old.code(), &old.message()));
             let hash_error = object_hash_value(kind, &value).unwrap_err();
             assert_eq!(
-                (&hash_error.code, &hash_error.message),
-                (&old.code, &old.message)
+                (&hash_error.code(), &hash_error.message()),
+                (&old.code(), &old.message())
             );
             if kind != "state-page" {
-                assert_eq!(new.code, "INVALID_OBJECT_TYPE");
+                assert_eq!(new.code(), crate::ErrorCode::InvalidObjectType);
             }
         }
     }

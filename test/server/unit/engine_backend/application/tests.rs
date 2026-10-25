@@ -133,7 +133,7 @@ fn protection_commands_preserve_core_replay_and_transport_contract() {
         changed["path_prefix"] = json!("Other");
         assert_eq!(
             backend.call(action, &owner, changed).unwrap_err().code,
-            "IDEMPOTENCY_KEY_REUSED"
+            storage_contract::ErrorCode::IdempotencyKeyReused
         );
         let mut extra = input.clone();
         extra["unexpected"] = json!(true);
@@ -190,7 +190,7 @@ fn protection_commands_preserve_core_replay_and_transport_contract() {
         assert_eq!(applied["result"][record]["generation"], "2");
         update["operation_id"] = json!(new_id("op"));
         let stale = backend.call(action, &owner, update).unwrap_err();
-        assert_eq!(stale.code, "CONFIG_CONFLICT");
+        assert_eq!(stale.code, storage_contract::ErrorCode::ConfigConflict);
         assert_eq!(stale.status, 409);
     }
 }
@@ -254,7 +254,10 @@ fn workspace_ownership_and_session_admission_apply_to_typed_and_wire_paths() {
             destination: None,
         },
     });
-    assert_eq!(result.unwrap_err().code, "FORBIDDEN");
+    assert_eq!(
+        result.unwrap_err().code,
+        storage_contract::ErrorCode::Forbidden
+    );
     let unadmitted_owner = Identity {
         admission_session: Some("unknown-session".into()),
         ..owner.clone()
@@ -267,7 +270,10 @@ fn workspace_ownership_and_session_admission_apply_to_typed_and_wire_paths() {
         message: String::new(),
         request_digest: None,
     });
-    assert_eq!(result.unwrap_err().code, "FORBIDDEN");
+    assert_eq!(
+        result.unwrap_err().code,
+        storage_contract::ErrorCode::Forbidden
+    );
     let backend = EngineBackend::new(engine);
     for identity in [&intruder, &unadmitted_owner] {
         let result = backend.call(
@@ -276,7 +282,10 @@ fn workspace_ownership_and_session_admission_apply_to_typed_and_wire_paths() {
             json!({"workspace_id":workspace.workspace_id,
                 "kind":"mkdir", "path":"WireDenied"}),
         );
-        assert_eq!(result.unwrap_err().code, "UNAUTHORIZED");
+        assert_eq!(
+            result.unwrap_err().code,
+            storage_contract::ErrorCode::Unauthorized
+        );
     }
     let engine = backend.engine.lock().unwrap();
     assert!(
@@ -336,7 +345,10 @@ fn typed_branch_rejects_cross_repository_source() {
         name: "Cross scope".into(),
         operation_id: new_id("op"),
     });
-    assert_eq!(result.unwrap_err().code, "HISTORY_NODE_NOT_FOUND");
+    assert_eq!(
+        result.unwrap_err().code,
+        storage_contract::ErrorCode::HistoryNodeNotFound
+    );
 }
 
 #[test]
@@ -414,7 +426,7 @@ fn creation_replays_keep_public_response_shapes_after_archive_binding_change_and
             changed["name"] = "Different request".into();
             assert_eq!(
                 backend.call(action, &owner, changed).unwrap_err().code,
-                "IDEMPOTENCY_KEY_REUSED"
+                storage_contract::ErrorCode::IdempotencyKeyReused
             );
         }
         assert_eq!(
@@ -489,7 +501,7 @@ fn merge_link_retry_replays_original_scope_after_split_and_restart() {
                 .merge_link(changed)
                 .unwrap_err()
                 .code,
-            "IDEMPOTENCY_KEY_REUSED"
+            storage_contract::ErrorCode::IdempotencyKeyReused
         );
         let mut wrong_history = command.clone();
         wrong_history.history_tree_id = split.history_tree_id.clone().unwrap();
@@ -505,7 +517,7 @@ fn merge_link_retry_replays_original_scope_after_split_and_restart() {
                 .merge_link(new_request)
                 .unwrap_err()
                 .code,
-            "TREE_MOVED"
+            storage_contract::ErrorCode::TreeMoved
         );
         assert_eq!(
             storage_engine::canonical_json(engine.state()).unwrap(),
@@ -559,7 +571,10 @@ fn upload_finalization_rechecks_completed_session_revocation() {
             &workspace.workspace_id,
             prepared,
         );
-        assert_eq!(result.unwrap_err().code, "UNAUTHORIZED");
+        assert_eq!(
+            result.unwrap_err().code,
+            storage_contract::ErrorCode::Unauthorized
+        );
         assert!(
             engine
                 .workspace(&workspace.workspace_id)
@@ -633,7 +648,10 @@ fn commit_preparation_releases_engine_and_rechecks_completed_revocation() {
                     &owner,
                     input,
                 );
-                assert_eq!(result.unwrap_err().code, "UNAUTHORIZED");
+                assert_eq!(
+                    result.unwrap_err().code,
+                    storage_contract::ErrorCode::Unauthorized
+                );
                 let engine = backend.engine.lock().unwrap();
                 assert!(!engine.state().operations.contains_key(&operation));
                 assert!(engine.list_tree(&repo.main_branch_id).unwrap().is_empty());
@@ -689,7 +707,10 @@ fn commit_preparation_releases_engine_and_rechecks_completed_revocation() {
                     "new-integration-test-password",
                 )
                 .unwrap_err();
-            assert_eq!(busy.code, "COMMIT_PREPARATION_BUSY");
+            assert_eq!(
+                busy.code,
+                storage_contract::ErrorCode::CommitPreparationBusy
+            );
             assert!(busy.retryable);
             assert_eq!(auth.snapshot().unwrap(), before_busy);
             assert!(auth.authenticate(&token).is_ok());

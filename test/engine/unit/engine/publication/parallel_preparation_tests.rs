@@ -152,7 +152,10 @@ fn assert_failure_stops_new_groups_and_joins_claimed_groups(panics: bool) {
                         if panics {
                             panic!("injected payload preparation panic");
                         }
-                        return Err(Error::new("SOURCE_CHANGED", "injected payload failure"));
+                        return Err(Error::new(
+                            storage_contract::ErrorCode::SourceChanged,
+                            "injected payload failure",
+                        ));
                     }
                     finish.wait();
                 }
@@ -174,9 +177,9 @@ fn assert_failure_stops_new_groups_and_joins_claimed_groups(panics: bool) {
         assert_eq!(
             error.code(),
             if panics {
-                "INTERNAL_ERROR"
+                storage_contract::ErrorCode::InternalError
             } else {
-                "SOURCE_CHANGED"
+                storage_contract::ErrorCode::SourceChanged
             }
         );
     });
@@ -221,11 +224,18 @@ fn lower_group_error_wins_over_already_observed_higher_error_or_panic() {
                         if higher_panics {
                             panic!("injected higher-index panic");
                         }
-                        return Err(Error::new("OBJECT_COLLISION", "higher-index failure"));
+                        return Err(Error::new(
+                            storage_contract::ErrorCode::ObjectCollision,
+                            "higher-index failure",
+                        ));
                     }
                     finish.wait();
                     if file == 0 {
-                        Err(Error::new("SOURCE_CHANGED", "lower-index failure").retryable())
+                        Err(Error::new(
+                            storage_contract::ErrorCode::SourceChanged,
+                            "lower-index failure",
+                        )
+                        .retryable())
                     } else {
                         Ok(())
                     }
@@ -235,9 +245,9 @@ fn lower_group_error_wins_over_already_observed_higher_error_or_panic() {
             finish.release();
             let error = scheduler.join().unwrap().unwrap_err();
             higher_finished.unwrap();
-            assert_eq!(error.code(), "SOURCE_CHANGED");
-            assert_eq!(error.message, "lower-index failure");
-            assert!(error.retryable);
+            assert_eq!(error.code(), storage_contract::ErrorCode::SourceChanged);
+            assert_eq!(error.message(), "lower-index failure");
+            assert!(error.is_retryable());
         });
     }
 }

@@ -22,7 +22,7 @@ fn checked_metadata_charge(actual: usize, reserved: usize) -> Result<u64> {
     let charge = actual.max(reserved);
     if charge > crate::disk::MAX_METADATA {
         return Err(Error::new(
-            "RESOURCE_LIMIT",
+            storage_contract::ErrorCode::ResourceLimit,
             "workspace lifecycle metadata exceeds the durable manifest limit",
         ));
     }
@@ -180,7 +180,7 @@ impl Engine {
         let old = budget.records.get(&candidate.workspace_id);
         if old.is_some_and(|(owner, _)| owner != &candidate.principal) {
             return Err(Error::new(
-                "STATE_INVALID",
+                storage_contract::ErrorCode::StateInvalid,
                 "retained workspace owner cannot change",
             ));
         }
@@ -218,7 +218,7 @@ impl Engine {
         };
         if let Some(dimension) = exhausted {
             return Err(Error::new(
-                "RESOURCE_LIMIT",
+                storage_contract::ErrorCode::ResourceLimit,
                 format!(
                     "retained workspace evidence {dimension} budget exhausted; terminal records still count and recovery evidence is preserved"
                 ),

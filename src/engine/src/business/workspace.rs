@@ -25,12 +25,15 @@ fn upload_fingerprint_file(input: std::fs::File, maximum: u64) -> Result<(u64, S
         if n == 0 {
             break;
         }
-        size = size
-            .checked_add(n as u64)
-            .ok_or_else(|| Error::new("RESOURCE_LIMIT", "upload length overflow"))?;
+        size = size.checked_add(n as u64).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::ResourceLimit,
+                "upload length overflow",
+            )
+        })?;
         if size > maximum {
             return Err(Error::new(
-                "RESOURCE_LIMIT",
+                storage_contract::ErrorCode::ResourceLimit,
                 "upload grew beyond file budget",
             ));
         }
@@ -40,7 +43,7 @@ fn upload_fingerprint_file(input: std::fs::File, maximum: u64) -> Result<(u64, S
 }
 
 fn preparation_fs_error(error: platform_io::fs_safety::Error) -> Error {
-    Error::new("UNSAFE_PATH", error.to_string())
+    Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string())
 }
 fn retained_upload_usage(directory: &OpenAt2Root) -> Result<(u64, usize)> {
     let mut retained = 0u64;
@@ -58,7 +61,10 @@ fn retained_upload_usage(directory: &OpenAt2Root) -> Result<(u64, usize)> {
             || entry.file_name().to_bytes().starts_with(b".zxs-full-")
         {
             generations = generations.checked_add(1).ok_or_else(|| {
-                Error::new("RESOURCE_LIMIT", "retained generation count overflow")
+                Error::new(
+                    storage_contract::ErrorCode::ResourceLimit,
+                    "retained generation count overflow",
+                )
             })?;
             let relative = RelativePath::new(path).map_err(preparation_fs_error)?;
             retained = retained
@@ -70,7 +76,10 @@ fn retained_upload_usage(directory: &OpenAt2Root) -> Result<(u64, usize)> {
                         .len(),
                 )
                 .ok_or_else(|| {
-                    Error::new("RESOURCE_LIMIT", "retained workspace byte count overflow")
+                    Error::new(
+                        storage_contract::ErrorCode::ResourceLimit,
+                        "retained workspace byte count overflow",
+                    )
                 })?;
         }
     }
@@ -175,7 +184,7 @@ impl UploadPreparation {
         let actual = upload_fingerprint_file(file.try_clone()?, self.max_file_bytes)?;
         if actual.0 != size || actual.1 != hash || UploadFileStamp::of(&file)? != stamp {
             return Err(Error::new(
-                "CHECKSUM_MISMATCH",
+                storage_contract::ErrorCode::ChecksumMismatch,
                 "retained upload generation no longer matches its receipt",
             ));
         }
@@ -191,7 +200,7 @@ impl UploadPreparation {
             })
         {
             return Err(Error::new(
-                "CHECKSUM_MISMATCH",
+                storage_contract::ErrorCode::ChecksumMismatch,
                 "staged bytes differ from the verified upload",
             ));
         }
@@ -211,13 +220,13 @@ impl UploadPreparation {
             self.verify_content(size, &hash)?;
             if size != old.size || hash != old.content_hash {
                 return Err(Error::new(
-                    "UPLOAD_GENERATION_CONFLICT",
+                    storage_contract::ErrorCode::UploadGenerationConflict,
                     "one upload generation cannot name different bytes",
                 ));
             }
             if old.source_path != self.target {
                 return Err(Error::new(
-                    "WORKSPACE_CHANGED",
+                    storage_contract::ErrorCode::WorkspaceChanged,
                     "retained upload path differs from its generation",
                 ));
             }
@@ -236,9 +245,9 @@ impl UploadPreparation {
             let retained = self
                 .verify_retained(incoming.0, &incoming.1)
                 .map_err(|error| {
-                    if error.code() == "CHECKSUM_MISMATCH" {
+                    if error.code() == storage_contract::ErrorCode::ChecksumMismatch {
                         Error::new(
-                            "UPLOAD_GENERATION_CONFLICT",
+                            storage_contract::ErrorCode::UploadGenerationConflict,
                             "one upload generation cannot name different bytes",
                         )
                     } else {
@@ -317,18 +326,24 @@ pub(crate) fn native_commit_digest(
 }
 
 fn validate_directory_selection(state: &State, workspace: &Workspace, path: &str) -> Result<()> {
-    let branch = state
-        .branches
-        .get(&workspace.branch_id)
-        .ok_or_else(|| Error::new("BRANCH_NOT_FOUND", "workspace branch missing"))?;
-    let base = state
-        .commits
-        .get(&workspace.base_head)
-        .ok_or_else(|| Error::new("STATE_INVALID", "workspace base missing"))?;
-    let current = state
-        .commits
-        .get(&branch.head_commit_id)
-        .ok_or_else(|| Error::new("STATE_INVALID", "current namespace missing"))?;
+    let branch = state.branches.get(&workspace.branch_id).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::BranchNotFound,
+            "workspace branch missing",
+        )
+    })?;
+    let base = state.commits.get(&workspace.base_head).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "workspace base missing",
+        )
+    })?;
+    let current = state.commits.get(&branch.head_commit_id).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "current namespace missing",
+        )
+    })?;
     if state.directory_selection_generations.is_empty() {
         return Ok(());
     }
@@ -361,7 +376,7 @@ fn validate_directory_selection(state: &State, workspace: &Workspace, path: &str
         })
     {
         return Err(Error::new(
-            "DIRECTORY_BRANCH_CONFLICT",
+            storage_contract::ErrorCode::DirectoryBranchConflict,
             "directory branch changed after the workspace began; staged bytes are preserved",
         ));
     }
@@ -375,8 +390,13 @@ fn validate_file_context(
     file: &str,
     path: &str,
 ) -> Result<()> {
-    let selected = directory::branch_context_at(state, &workspace.branch_id, path)
-        .ok_or_else(|| Error::new("FILE_NOT_FOUND", "file context no longer exists"))?;
+    let selected =
+        directory::branch_context_at(state, &workspace.branch_id, path).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::FileNotFound,
+                "file context no longer exists",
+            )
+        })?;
     if selected.inherited_from.is_none()
         && (state.file_branch_aliases.contains_key(&selected.branch_id)
             || state
@@ -385,7 +405,7 @@ fn validate_file_context(
                 .is_none_or(|branch| branch.state != "active"))
     {
         return Err(Error::new(
-            "BRANCH_NOT_ACTIVE",
+            storage_contract::ErrorCode::BranchNotActive,
             "selected file branch is not active; select a writable branch",
         ));
     }
@@ -408,7 +428,7 @@ fn validate_file_context(
     };
     if changed {
         return Err(Error::new(
-            "FILE_BRANCH_CONFLICT",
+            storage_contract::ErrorCode::FileBranchConflict,
             "file path branch or write intent changed after workspace began; staged bytes are preserved",
         ));
     }
@@ -453,7 +473,10 @@ impl Engine {
                     .and_then(|branch| self.commit_namespace(&branch.head_commit_id))
                     .and_then(|tree| tree.get(path))
                     .ok_or_else(|| {
-                        Error::new("FILE_NOT_FOUND", "published workspace file is absent")
+                        Error::new(
+                            storage_contract::ErrorCode::FileNotFound,
+                            "published workspace file is absent",
+                        )
                     })?,
             );
         }
@@ -474,23 +497,32 @@ impl Engine {
             >= self.config.max_workspaces
         {
             return Err(Error::new(
-                "RESOURCE_LIMIT",
+                storage_contract::ErrorCode::ResourceLimit,
                 "workspace count budget exhausted",
             ));
         }
-        let branch = self
-            .state
-            .branches
-            .get(branch_id)
-            .ok_or_else(|| Error::new("BRANCH_NOT_FOUND", "branch missing"))?;
+        let branch = self.state.branches.get(branch_id).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::BranchNotFound,
+                "branch missing",
+            )
+        })?;
         if branch.state != "active" {
-            return Err(Error::new("BRANCH_ARCHIVED", "branch is not writable"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::BranchArchived,
+                "branch is not writable",
+            ));
         }
         let head = self
             .state
             .commits
             .get(&branch.head_commit_id)
-            .ok_or_else(|| Error::new("STATE_INVALID", "branch HEAD missing"))?;
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::StateInvalid,
+                    "branch HEAD missing",
+                )
+            })?;
         let w = Workspace {
             workspace_id: new_id("ws"),
             purpose: "normal".into(),
@@ -544,11 +576,14 @@ impl Engine {
         self.require_write()?;
         let w = self.workspace(id)?;
         if w.state != "open" {
-            return Err(Error::new("WORKSPACE_CLOSED", "workspace is not open"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::WorkspaceClosed,
+                "workspace is not open",
+            ));
         }
         if now().saturating_sub(w.created_at) > self.config.workspace_ttl_seconds {
             return Err(Error::new(
-                "FENCING_TOKEN_EXPIRED",
+                storage_contract::ErrorCode::FencingTokenExpired,
                 "workspace lease expired; pending bytes are preserved",
             ));
         }
@@ -578,7 +613,12 @@ impl Engine {
             .get(item)
             .map(|f| f.dirty_generation.checked_add(1))
             .unwrap_or(Some(1))
-            .ok_or_else(|| Error::new("RESOURCE_LIMIT", "upload generation exhausted"))?;
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::ResourceLimit,
+                    "upload generation exhausted",
+                )
+            })?;
         self.stage_upload(workspace, item, path, source, generation)
     }
     /// Persist an explicitly numbered HTTP upload generation. Retrying the same
@@ -593,7 +633,7 @@ impl Engine {
     ) -> Result<(Workspace, Option<Entry>)> {
         if generation == 0 {
             return Err(Error::new(
-                "INVALID_REQUEST",
+                storage_contract::ErrorCode::InvalidRequest,
                 "upload generation starts at one",
             ));
         }
@@ -607,9 +647,12 @@ impl Engine {
         // Reject invalid targets before publishing an immutable generation.
         // Otherwise an IS_DIRECTORY failure leaves {item}-{generation}.full
         // behind and a subsequent valid retry collides with those orphan bytes.
-        let base = self
-            .commit_namespace(&w.base_head)
-            .ok_or_else(|| Error::new("STATE_INVALID", "workspace base is absent"))?;
+        let base = self.commit_namespace(&w.base_head).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "workspace base is absent",
+            )
+        })?;
         let base_entry = base.get(path).cloned();
         if w.purpose == "normal"
             && let Some(entry) = base_entry.as_ref().filter(|e| e.kind == "file")
@@ -620,7 +663,10 @@ impl Engine {
             .as_ref()
             .is_some_and(|entry| entry.kind != "file")
         {
-            return Err(Error::new("IS_DIRECTORY", "cannot upload over a directory"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::IsDirectory,
+                "cannot upload over a directory",
+            ));
         }
         if let Some(file_id) = self
             .state
@@ -635,7 +681,7 @@ impl Engine {
                 .and_then(|c| c.entries.iter().find(|e| e.file_id == file_id));
             if current.is_none_or(|entry| entry.lookup_key != key) {
                 return Err(Error::new(
-                    "FILE_BRANCH_SCOPE",
+                    storage_contract::ErrorCode::FileBranchScope,
                     "a file branch can only edit its own file",
                 ));
             }
@@ -649,14 +695,17 @@ impl Engine {
                     .values()
                     .any(|f| name_policy::path_key(&f.path) == key)
         }) {
-            return Err(Error::new("FILE_BUSY", "another workspace owns this file"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::FileBusy,
+                "another workspace owns this file",
+            ));
         }
         if w.files
             .values()
             .any(|f| f.item_id != item && name_policy::path_key(&f.path) == key)
         {
             return Err(Error::new(
-                "NAME_COLLISION",
+                storage_contract::ErrorCode::NameCollision,
                 "workspace contains an equivalent file name",
             ));
         }
@@ -666,7 +715,7 @@ impl Engine {
             .is_some_and(|f| name_policy::path_key(&f.path) != key)
         {
             return Err(Error::new(
-                "ITEM_PATH_MISMATCH",
+                storage_contract::ErrorCode::ItemPathMismatch,
                 "upload item is bound to a different path",
             ));
         }
@@ -727,7 +776,7 @@ impl Engine {
         let expected = source.metadata()?.len();
         if expected > self.config.max_file_bytes {
             return Err(Error::new(
-                "RESOURCE_LIMIT",
+                storage_contract::ErrorCode::ResourceLimit,
                 "workspace or file byte budget exceeded",
             ));
         }
@@ -737,18 +786,20 @@ impl Engine {
             .is_some_and(|old| generation < old.dirty_generation)
         {
             return Err(Error::new(
-                "STALE_UPLOAD_GENERATION",
+                storage_contract::ErrorCode::StaleUploadGeneration,
                 "upload generation is older than staged bytes",
             ));
         }
         let directory = self.workspace_data_directory(&w)?;
-        let mut claims = self
-            .upload_preparations
-            .lock()
-            .map_err(|_| Error::new("INTERNAL_ERROR", "upload preparation lock poisoned"))?;
+        let mut claims = self.upload_preparations.lock().map_err(|_| {
+            Error::new(
+                storage_contract::ErrorCode::InternalError,
+                "upload preparation lock poisoned",
+            )
+        })?;
         if !claims.insert(workspace.into()) {
             return Err(Error::new(
-                "FILE_WRITE_BUSY",
+                storage_contract::ErrorCode::FileWriteBusy,
                 "another upload is preparing this workspace",
             ));
         }
@@ -768,7 +819,7 @@ impl Engine {
             || (!existing && retained.saturating_add(expected) > self.config.max_workspace_bytes)
         {
             return Err(Error::new(
-                "RESOURCE_LIMIT",
+                storage_contract::ErrorCode::ResourceLimit,
                 "new upload and retained generations exceed the workspace byte or count budget",
             ));
         }
@@ -814,13 +865,13 @@ impl Engine {
             || self.config.checksum_chunk_bytes != plan.chunk_bytes
         {
             return Err(Error::new(
-                "WORKSPACE_CHANGED",
+                storage_contract::ErrorCode::WorkspaceChanged,
                 "workspace changed during upload preparation; retry with current state",
             ));
         }
         if self.workspace_data_directory(&w)? != plan.directory {
             return Err(Error::new(
-                "WORKSPACE_CHANGED",
+                storage_contract::ErrorCode::WorkspaceChanged,
                 "workspace storage changed during upload preparation",
             ));
         }
@@ -828,7 +879,7 @@ impl Engine {
             .map_err(preparation_fs_error)?;
         if current_directory.identity() != plan.directory_handle.identity() {
             return Err(Error::new(
-                "UNSAFE_PATH",
+                storage_contract::ErrorCode::UnsafePath,
                 "workspace data directory identity changed during preparation",
             ));
         }
@@ -850,7 +901,7 @@ impl Engine {
                 || UploadFileStamp::of(&current)? != verified.stamp
             {
                 return Err(Error::new(
-                    "CHECKSUM_MISMATCH",
+                    storage_contract::ErrorCode::ChecksumMismatch,
                     "upload generation changed during preparation",
                 ));
             }
@@ -865,7 +916,7 @@ impl Engine {
         let (retained, generations) = retained_upload_usage(&plan.directory_handle)?;
         if retained > self.config.max_workspace_bytes || generations > self.config.max_entries {
             return Err(Error::new(
-                "RESOURCE_LIMIT",
+                storage_contract::ErrorCode::ResourceLimit,
                 "retained generations exceed the workspace byte or count budget",
             ));
         }
@@ -919,17 +970,23 @@ impl Engine {
         if w.purpose == "normal" {
             validate_directory_selection(&self.state, &w, path)?;
         }
-        let end = offset
-            .checked_add(bytes.len() as u64)
-            .ok_or_else(|| Error::new("FILE_TOO_LARGE", "range overflow"))?;
+        let end = offset.checked_add(bytes.len() as u64).ok_or_else(|| {
+            Error::new(storage_contract::ErrorCode::FileTooLarge, "range overflow")
+        })?;
         if end > self.config.max_file_bytes
             || truncate_to.is_some_and(|n| n > self.config.max_file_bytes)
         {
-            return Err(Error::new("FILE_TOO_LARGE", "range exceeds file budget"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::FileTooLarge,
+                "range exceeds file budget",
+            ));
         }
-        let base = self
-            .commit_namespace(&w.base_head)
-            .ok_or_else(|| Error::new("STATE_INVALID", "workspace base missing"))?;
+        let base = self.commit_namespace(&w.base_head).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "workspace base missing",
+            )
+        })?;
         if w.purpose == "normal"
             && let Some(entry) = base.get(path)
         {
@@ -942,7 +999,7 @@ impl Engine {
                 .and_then(|tree| tree.get_key(&entry.lookup_key));
             if current.is_none_or(|current| current.version_id != entry.version_id) {
                 return Err(Error::new(
-                    "FILE_VERSION_CONFLICT",
+                    storage_contract::ErrorCode::FileVersionConflict,
                     "file changed before range staging; no source bytes were copied",
                 ));
             }
@@ -967,8 +1024,12 @@ impl Engine {
             None
         };
         if let Some((size, hash)) = expected {
-            let digest = blake3::Hash::from_hex(&hash)
-                .map_err(|_| Error::new("CHECKSUM_MISMATCH", "invalid staged content digest"))?;
+            let digest = blake3::Hash::from_hex(&hash).map_err(|_| {
+                Error::new(
+                    storage_contract::ErrorCode::ChecksumMismatch,
+                    "invalid staged content digest",
+                )
+            })?;
             // Verify the copied snapshot before applying edits, so corruption
             // (including changes during copying) cannot become authenticated
             // untouched bytes in a new staged generation.
@@ -979,7 +1040,12 @@ impl Engine {
                     blake3: Some(digest),
                 },
             )
-            .map_err(|error| Error::new("CHECKSUM_MISMATCH", error.to_string()))?;
+            .map_err(|error| {
+                Error::new(
+                    storage_contract::ErrorCode::ChecksumMismatch,
+                    error.to_string(),
+                )
+            })?;
         }
         temporary.seek(SeekFrom::Start(offset))?;
         temporary.write_all(bytes)?;
@@ -1004,7 +1070,7 @@ impl Engine {
         }
         if !["mkdir", "rename", "delete", "delete_tree"].contains(&operation.kind.as_str()) {
             return Err(Error::new(
-                "OPERATION_UNSUPPORTED",
+                storage_contract::ErrorCode::OperationUnsupported,
                 "namespace operation is not supported",
             ));
         }
@@ -1016,7 +1082,7 @@ impl Engine {
             .is_some_and(|b| b.file_id.is_some())
         {
             return Err(Error::new(
-                "FILE_BRANCH_SCOPE",
+                storage_contract::ErrorCode::FileBranchScope,
                 "directory operations belong to the disk namespace",
             ));
         }
@@ -1029,13 +1095,13 @@ impl Engine {
         let mut w = self.workspace(id)?;
         if w.principal != principal {
             return Err(Error::new(
-                "PERMISSION_DENIED",
+                storage_contract::ErrorCode::PermissionDenied,
                 "workspace belongs to another principal",
             ));
         }
         if self.blocked {
             return Err(Error::new(
-                "IN_DOUBT",
+                storage_contract::ErrorCode::InDoubt,
                 "cannot abort while a decision is unresolved",
             ));
         }
@@ -1088,37 +1154,40 @@ impl Engine {
         let w = self.workspace(&request.workspace_id)?;
         if w.purpose == "historical_branch" {
             return Err(Error::new(
-                "HISTORICAL_SAVE_REQUIRES_BRANCH",
+                storage_contract::ErrorCode::HistoricalSaveRequiresBranch,
                 "commit a historical-save plan to create a full branch",
             ));
         }
         validate_workspace_dependencies(&w)?;
         self.require_write()?;
         if !["open", "sealed"].contains(&w.state.as_str()) {
-            return Err(Error::new("WORKSPACE_CLOSED", "workspace is not writable"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::WorkspaceClosed,
+                "workspace is not writable",
+            ));
         }
         if now().saturating_sub(w.created_at) > self.config.workspace_ttl_seconds {
             return Err(Error::new(
-                "FENCING_TOKEN_EXPIRED",
+                storage_contract::ErrorCode::FencingTokenExpired,
                 "workspace lease expired",
             ));
         }
         self.repository_for_branch(&w.branch_id)?;
         if w.principal != request.principal {
             return Err(Error::new(
-                "PERMISSION_DENIED",
+                storage_contract::ErrorCode::PermissionDenied,
                 "workspace belongs to another principal",
             ));
         }
         if w.fencing_token != request.fencing_token {
             return Err(Error::new(
-                "FENCING_TOKEN_INVALID",
+                storage_contract::ErrorCode::FencingTokenInvalid,
                 "workspace fencing token differs",
             ));
         }
         if request.expected_head != w.base_head {
             return Err(Error::new(
-                "BASE_HEAD_MISMATCH",
+                storage_contract::ErrorCode::BaseHeadMismatch,
                 "request does not identify the workspace base",
             ));
         }
@@ -1140,7 +1209,7 @@ impl Engine {
             .is_some_and(|d| d != &digest)
         {
             return Err(Error::new(
-                "REQUEST_DIGEST_MISMATCH",
+                storage_contract::ErrorCode::RequestDigestMismatch,
                 "server request digest differs",
             ));
         }
@@ -1149,18 +1218,18 @@ impl Engine {
             wire.as_ref().map(|wire| wire.digest.clone()),
             |engine, state, pending| {
                 let branch = state.branches.get(&w.branch_id).cloned()
-                    .ok_or_else(|| Error::new("BRANCH_NOT_FOUND", "branch disappeared"))?;
+                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::BranchNotFound, "branch disappeared"))?;
                 if branch.state != "active" {
-                    return Err(Error::new("BRANCH_ARCHIVED", "branch is not writable"));
+                    return Err(Error::new(storage_contract::ErrorCode::BranchArchived, "branch is not writable"));
                 }
                 // Freeze the source records without copying the current Commit.
                 // Helpers may insert candidate commits before namespace replay;
                 // the draft below still owns its one mutable entries copy.
                 let source_commits = state.commits.clone();
                 let current = source_commits.get(&branch.head_commit_id)
-                    .ok_or_else(|| Error::new("STATE_INVALID", "branch HEAD missing"))?;
+                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "branch HEAD missing"))?;
                 let base = state.commits.get(&w.base_head)
-                    .ok_or_else(|| Error::new("STATE_INVALID", "workspace base missing"))?;
+                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "workspace base missing"))?;
                 let repo = engine.repository_for_branch(&w.branch_id)?;
 
                 // One explicit mutation-local index serves both conflict checks
@@ -1171,7 +1240,7 @@ impl Engine {
                     validate_directory_selection(state, &w, &file.path)?;
                     let existing = draft.get(&file.path);
                     if existing.map(|entry| &entry.version_id) != file.base_version_id.as_ref() {
-                        return Err(Error::new("FILE_VERSION_CONFLICT", "file changed after this workspace began"));
+                        return Err(Error::new(storage_contract::ErrorCode::FileVersionConflict, "file changed after this workspace began"));
                     }
                     if let Some(entry) = existing {
                         validate_file_context(state, &w, &entry.file_id,&file.path)?;
@@ -1190,7 +1259,7 @@ impl Engine {
                             .filter(|entry| entry.lookup_key == key || entry.lookup_key.starts_with(&prefix))
                             .map(|entry| (entry.entry_id.clone(), entry.file_id.clone(), entry.kind.clone(), entry.path.clone(), entry.version_id.clone())).collect::<Vec<_>>();
                         if selected(&current.entries) != selected(&base.entries) {
-                            return Err(Error::new("NAMESPACE_CONFLICT", "namespace changed after the workspace began"));
+                            return Err(Error::new(storage_contract::ErrorCode::NamespaceConflict, "namespace changed after the workspace began"));
                         }
                     }
                 }
@@ -1229,7 +1298,7 @@ impl Engine {
                         state, pending, crate::business::VersionBuild { history: &branch.history_tree_id, file_id: &file_id, path, source: &file.source_path, primary: &primary, copies, source_ids: source_ids.clone(), checkpoint: pending_source.is_some() },
                     )?;
                     if version.logical_size != file.size || version.content_hash != file.content_hash {
-                        return Err(Error::new("CHECKSUM_MISMATCH", "workspace source changed after sealing"));
+                        return Err(Error::new(storage_contract::ErrorCode::ChecksumMismatch, "workspace source changed after sealing"));
                     }
                     if let Some(node)=file_context.as_ref().and_then(|c|c.node_id.as_ref()) {
                         file_paths::source_node(state,&file_id,source_ids.first().map(String::as_str).unwrap_or(""),node)?;
@@ -1268,7 +1337,7 @@ impl Engine {
                 });
                 let target = state.branches.get_mut(&w.branch_id).expect("branch checked");
                 target.head_commit_id = commit_id.clone();
-                target.generation = target.generation.checked_add(1).ok_or_else(|| Error::new("RESOURCE_LIMIT", "branch generation exhausted"))?;
+                target.generation = target.generation.checked_add(1).ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "branch generation exhausted"))?;
                 target.pending_file_versions.retain(|file, _| live_files.contains(file) && !written_files.contains(file));
                 if !written_files.is_empty(){target.file_node_id=None;}
                 if branch.file_id.is_some() {
@@ -1405,7 +1474,10 @@ impl Engine {
         let mut file = open_regular(source)?;
         let size = file.metadata()?.len();
         if size > self.config.max_file_bytes {
-            return Err(Error::new("FILE_TOO_LARGE", "file exceeds limit"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::FileTooLarge,
+                "file exceeds limit",
+            ));
         }
         let mut full = blake3::Hasher::new();
         let mut chunks = Vec::new();
@@ -1423,18 +1495,24 @@ impl Engine {
             if used == 0 {
                 break;
             }
-            read = read
-                .checked_add(used as u64)
-                .ok_or_else(|| Error::new("SOURCE_CHANGED", "source length overflow"))?;
+            read = read.checked_add(used as u64).ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::SourceChanged,
+                    "source length overflow",
+                )
+            })?;
             if read > size || read > self.config.max_file_bytes {
-                return Err(Error::new("SOURCE_CHANGED", "source grew while sealing"));
+                return Err(Error::new(
+                    storage_contract::ErrorCode::SourceChanged,
+                    "source grew while sealing",
+                ));
             }
             full.update(&buf[..used]);
             chunks.push(*blake3::hash(&buf[..used]).as_bytes());
         }
         if read != size {
             return Err(Error::new(
-                "SOURCE_CHANGED",
+                storage_contract::ErrorCode::SourceChanged,
                 "source length changed while sealing",
             ));
         }
@@ -1448,7 +1526,7 @@ impl Engine {
             original.logical_size != size || original.content_hash != content_hash
         }) {
             return Err(Error::new(
-                "SOURCE_CHANGED",
+                storage_contract::ErrorCode::SourceChanged,
                 "copied content differs from the published source version",
             ));
         }

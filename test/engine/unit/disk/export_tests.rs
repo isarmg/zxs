@@ -62,7 +62,7 @@ fn full_copy_size_failure_never_publishes_or_overwrites() {
             fs::write(&destination, b"keep original").unwrap();
         }
         let error = full_copy(&source, &destination, 64 * 1024, 1).unwrap_err();
-        assert_eq!(error.code(), "FILE_TOO_LARGE");
+        assert_eq!(error.code(), storage_contract::ErrorCode::FileTooLarge);
         if existing {
             assert_eq!(fs::read(&destination).unwrap(), b"keep original");
         } else {
@@ -130,7 +130,7 @@ fn verified_export_rejects_truncated_and_changed_bytes_before_publication() {
             verified_full_copy(source, &destination, &version)
                 .unwrap_err()
                 .code(),
-            "SOURCE_CHANGED"
+            storage_contract::ErrorCode::SourceChanged
         );
         assert!(
             !destination.exists(),
@@ -173,7 +173,7 @@ fn verified_export_compares_checksum_commitment_before_publication() {
         verified_full_copy(source, &destination, &version)
             .unwrap_err()
             .code(),
-        "SOURCE_CHANGED"
+        storage_contract::ErrorCode::SourceChanged
     );
     assert!(!destination.exists());
     assert_eq!(
@@ -254,7 +254,7 @@ fn offline_tombstones_bind_retained_version_metadata_and_directory() {
             offline_export(&disk.root, &version.version_id, &destination)
                 .unwrap_err()
                 .code(),
-            "CONTENT_PURGED"
+            storage_contract::ErrorCode::ContentPurged
         );
         assert!(!destination.exists());
 

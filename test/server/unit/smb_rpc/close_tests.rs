@@ -50,7 +50,7 @@ impl Backend for CloseFailure {
             {
                 return Err(ApiError::new(
                     503,
-                    "RECOVERY_REQUIRED",
+                    storage_contract::ErrorCode::RecoveryRequired,
                     "original operation outcome is unavailable",
                 ));
             }
@@ -59,7 +59,7 @@ impl Backend for CloseFailure {
             {
                 return Err(ApiError::new(
                     503,
-                    "WORKSPACE_BUSY",
+                    storage_contract::ErrorCode::WorkspaceBusy,
                     "injected abort failure",
                 ));
             }
@@ -319,7 +319,7 @@ fn lost_close_reply_retains_original_published_operation_without_resubmitting() 
         .to_owned();
     backend.fail.store(true, Ordering::SeqCst);
     let error = close_vfs(&client, &opened, fd).unwrap_err();
-    assert_eq!(remote(&error).code, "RESPONSE_LOST");
+    assert_eq!(remote(&error).code, "INJECTED_FAILURE");
     assert_eq!(
         remote(&error).operation_id.as_deref(),
         Some(operation.as_str())

@@ -17,7 +17,13 @@ use std::{
 /// Present stored UTC seconds in the same whole-second UTC form as body
 /// versions. This changes the read projection, never the persisted timestamp.
 fn utc_timestamp(seconds: u64) -> Result<String, ApiError> {
-    let invalid = || ApiError::new(500, "STATE_INVALID", "history timestamp is invalid");
+    let invalid = || {
+        ApiError::new(
+            500,
+            storage_contract::ErrorCode::StateInvalid,
+            "history timestamp is invalid",
+        )
+    };
     date_time::OffsetDateTime::from_unix_timestamp(i64::try_from(seconds).map_err(|_| invalid())?)
         .map_err(|_| invalid())?
         .format(&date_time::format_description::well_known::Rfc3339)
@@ -66,7 +72,13 @@ fn disk<'a>(engine: &'a Engine, slot: &str) -> Result<&'a storage_engine::DiskCo
         .disks
         .iter()
         .find(|d| d.slot_id == slot)
-        .ok_or_else(|| ApiError::new(404, "DISK_NOT_FOUND", "disk not found"))
+        .ok_or_else(|| {
+            ApiError::new(
+                404,
+                storage_contract::ErrorCode::DiskNotFound,
+                "disk not found",
+            )
+        })
 }
 fn eligible(engine: &Engine, slot: &str, repo: &Repository) -> bool {
     repo.primary_slot_id == slot
@@ -103,7 +115,7 @@ fn admit_root_operation(
 ) -> Result<(), ApiError> {
     if needs_disk_root(engine, slot, path) && engine.state().operations.contains_key(operation) {
         return Err(ApiError::conflict(
-            "IDEMPOTENCY_KEY_REUSED",
+            storage_contract::ErrorCode::IdempotencyKeyReused,
             "operation is already bound to another request",
         ));
     }
@@ -136,7 +148,7 @@ fn ensure_unambiguous_disk_path(
             .any(|entry| names.contains(&entry.lookup_key))
     {
         return Err(ApiError::conflict(
-            "NAME_COLLISION",
+            storage_contract::ErrorCode::NameCollision,
             "a named repository conflicts with a disk-root entry; use an explicit repository identity to rename the entry",
         ));
     }
@@ -153,7 +165,7 @@ fn resolve_existing(
     if write && disk(engine, slot)?.level != 1 {
         return Err(ApiError::new(
             403,
-            "DISK_READ_ONLY",
+            storage_contract::ErrorCode::DiskReadOnly,
             "backup disks are read only",
         ));
     }
@@ -182,7 +194,7 @@ fn resolve_existing(
         if !eligible(engine, slot, &repo) {
             return Err(ApiError::new(
                 404,
-                "DIRECTORY_NOT_FOUND",
+                storage_contract::ErrorCode::DirectoryNotFound,
                 "directory is not stored on this disk",
             ));
         }
@@ -201,7 +213,11 @@ fn resolve_existing(
     Ok(Some((repo, relative.into())))
 }
 fn empty_directory() -> ApiError {
-    ApiError::new(404, "DIRECTORY_NOT_FOUND", "disk directory is empty")
+    ApiError::new(
+        404,
+        storage_contract::ErrorCode::DirectoryNotFound,
+        "disk directory is empty",
+    )
 }
 
 fn resolve_read(
@@ -238,7 +254,13 @@ fn file_repo<'a>(engine: &'a Engine, file: &str) -> Result<&'a Repository, ApiEr
         .versions
         .values()
         .find(|v| v.file_id == file)
-        .ok_or_else(|| ApiError::new(404, "FILE_NOT_FOUND", "file not found"))?;
+        .ok_or_else(|| {
+            ApiError::new(
+                404,
+                storage_contract::ErrorCode::FileNotFound,
+                "file not found",
+            )
+        })?;
     let repo = repo_for_history(engine, &version.history_tree_id)?;
     Ok(repo)
 }
@@ -257,7 +279,13 @@ fn listed_current_entry(
         .list_tree_ref(&repo.main_branch_id)
         .map_err(error)?
         .get(index)
-        .ok_or_else(|| ApiError::new(500, "STATE_INVALID", "listing entry index is invalid"))?;
+        .ok_or_else(|| {
+            ApiError::new(
+                500,
+                storage_contract::ErrorCode::StateInvalid,
+                "listing entry index is invalid",
+            )
+        })?;
     let display = if prefix.is_empty() {
         entry.path.clone()
     } else {
@@ -438,7 +466,7 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
         if requested_repo != Some(repo.repository_id.as_str()) {
             return Err(ApiError::new(
                 404,
-                "FILE_NOT_FOUND",
+                storage_contract::ErrorCode::FileNotFound,
                 "file is not present in this repository context",
             ));
         }
@@ -449,7 +477,7 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
                 .ok_or_else(|| {
                     ApiError::new(
                         404,
-                        "FILE_NOT_FOUND",
+                        storage_contract::ErrorCode::FileNotFound,
                         "file is not present at this logical path",
                     )
                 })?,
@@ -620,11 +648,17 @@ pub(super) fn read(
                 .state()
                 .versions
                 .get(field(&input, "version_id")?)
-                .ok_or_else(|| ApiError::new(404, "VERSION_NOT_FOUND", "version missing"))?;
+                .ok_or_else(|| {
+                    ApiError::new(
+                        404,
+                        storage_contract::ErrorCode::VersionNotFound,
+                        "version missing",
+                    )
+                })?;
             if version.history_tree_id != repo.history_tree_id {
                 return Err(ApiError::new(
                     404,
-                    "FILE_NOT_FOUND",
+                    storage_contract::ErrorCode::FileNotFound,
                     "version is not in this repository context",
                 ));
             }
@@ -636,7 +670,7 @@ pub(super) fn read(
                 .ok_or_else(|| {
                     ApiError::new(
                         404,
-                        "FILE_NOT_FOUND",
+                        storage_contract::ErrorCode::FileNotFound,
                         "version file is not present at this logical path",
                     )
                 })?;
@@ -678,7 +712,7 @@ pub(super) fn call(
             if display.is_empty() && root_has_virtual_directories(engine, slot) {
                 return Err(ApiError::new(
                     409,
-                    "DIRECTORY_SCOPE_REQUIRED",
+                    storage_contract::ErrorCode::DirectoryScopeRequired,
                     "select a specific folder before branching this disk root",
                 ));
             }
@@ -694,7 +728,7 @@ pub(super) fn call(
                 if needs_disk_root(engine, slot, display) && name_policy::lookup_key(name) == "main"
                 {
                     return Err(ApiError::conflict(
-                        "NAME_COLLISION",
+                        storage_contract::ErrorCode::NameCollision,
                         "directory baseline branch already uses this name",
                     ));
                 }
@@ -762,7 +796,7 @@ pub(super) fn call(
                     .is_some_and(|branch| branch.state != "active")
             {
                 return Err(ApiError::conflict(
-                    "BRANCH_NOT_ACTIVE",
+                    storage_contract::ErrorCode::BranchNotActive,
                     "the selected file branch is read-only; select an active branch before writing",
                 ));
             }
@@ -777,7 +811,7 @@ pub(super) fn call(
                     });
                 if selected.as_deref() != Some(requested) {
                     return Err(ApiError::conflict(
-                        "FILE_BRANCH_CONFLICT",
+                        storage_contract::ErrorCode::FileBranchConflict,
                         "select this file branch before starting an upload",
                     ));
                 }
@@ -869,7 +903,13 @@ pub(super) fn call(
                     .state()
                     .versions
                     .get(id)
-                    .ok_or_else(|| ApiError::new(404, "VERSION_NOT_FOUND", "version not found"))?
+                    .ok_or_else(|| {
+                        ApiError::new(
+                            404,
+                            storage_contract::ErrorCode::VersionNotFound,
+                            "version not found",
+                        )
+                    })?
                     .file_id
                     .clone()
             } else {
@@ -974,7 +1014,7 @@ pub(super) fn call(
                 if field(&input, "repository_id")? != repo {
                     return Err(ApiError::new(
                         404,
-                        "FILE_NOT_FOUND",
+                        storage_contract::ErrorCode::FileNotFound,
                         "file is not in this repository",
                     ));
                 }

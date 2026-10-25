@@ -351,7 +351,11 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 .join()
                 .unwrap()
                 .expect_err("revoked request must be rejected");
-            assert_eq!(error.code, "UNAUTHORIZED", "{revocation:?}: {request:?}");
+            assert_eq!(
+                error.code,
+                storage_contract::ErrorCode::Unauthorized,
+                "{revocation:?}: {request:?}"
+            );
         }
         assert!(
             fixture.snapshot() == before,
@@ -395,7 +399,7 @@ fn revoked_session_cannot_turn_public_probes_into_data_admission() {
                 .call(action, &fixture.identity, json!({}))
                 .unwrap_err()
                 .code,
-            "UNAUTHORIZED"
+            storage_contract::ErrorCode::Unauthorized
         );
     }
     let anonymous = Identity {
@@ -412,7 +416,7 @@ fn revoked_session_cannot_turn_public_probes_into_data_admission() {
             .call(BackendAction::Repositories, &anonymous, json!({}))
             .unwrap_err()
             .code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
 }
 
@@ -448,7 +452,7 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
                 .execute(&fixture, fixture.backend.as_ref())
                 .unwrap_err()
                 .code,
-            "UNAUTHORIZED"
+            storage_contract::ErrorCode::Unauthorized
         );
     }
     assert_eq!(fixture.snapshot(), before);
@@ -476,7 +480,7 @@ fn private_disk_sampling_cannot_grant_public_monitoring_access() {
             .call(BackendAction::MonitorDisks, &synthetic, json!({}))
             .unwrap_err()
             .code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
     fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
     assert_eq!(
@@ -485,7 +489,7 @@ fn private_disk_sampling_cannot_grant_public_monitoring_access() {
             .call(BackendAction::MonitorDisks, &fixture.identity, json!({}))
             .unwrap_err()
             .code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
     let before = fixture.snapshot();
     assert!(
@@ -527,7 +531,10 @@ fn both_upload_adapters_bind_the_copied_snapshot_before_acceptance() {
                 &source,
             )
         };
-        assert_eq!(result.unwrap_err().code, "CHECKSUM_MISMATCH");
+        assert_eq!(
+            result.unwrap_err().code,
+            storage_contract::ErrorCode::ChecksumMismatch
+        );
         assert_eq!(fixture.snapshot(), before);
     }
 }

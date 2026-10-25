@@ -51,16 +51,22 @@ pub fn validate_lookup_name(name: &str) -> Result<()> {
     validate_name_inner(name, false)
 }
 fn validate_name_inner(name: &str, require_nfc: bool) -> Result<()> {
-    let err = |code: &str, message: &str| Error::new(code, message);
+    let err = |code: storage_contract::ErrorCode, message: &str| Error::new(code, message);
     if name.is_empty() || [".", ".."].contains(&name) {
-        return Err(err("NAME_INVALID_CHARACTER", "名称不能为空或点路径"));
+        return Err(err(
+            storage_contract::ErrorCode::NameInvalidCharacter,
+            "名称不能为空或点路径",
+        ));
     }
     if name.len() > 240 || name.encode_utf16().count() > 240 {
-        return Err(err("NAME_TOO_LONG", "名称超过240字节或UTF-16代码单元"));
+        return Err(err(
+            storage_contract::ErrorCode::NameTooLong,
+            "名称超过240字节或UTF-16代码单元",
+        ));
     }
     if name.starts_with(' ') || name.ends_with([' ', '.']) {
         return Err(err(
-            "NAME_INVALID_CHARACTER",
+            storage_contract::ErrorCode::NameInvalidCharacter,
             "名称不能以空格开头或以空格、句点结尾",
         ));
     }
@@ -72,7 +78,7 @@ fn validate_name_inner(name: &str, require_nfc: bool) -> Result<()> {
             || (!in_ranges(cp, unicode16::ALLOWED) && !ascii.contains(c) && !cjk.contains(c))
         {
             return Err(Error::new(
-                "NAME_INVALID_CHARACTER",
+                storage_contract::ErrorCode::NameInvalidCharacter,
                 format!("名称包含不支持的字符 U+{cp:04X}"),
             ));
         }
@@ -91,11 +97,14 @@ fn validate_name_inner(name: &str, require_nfc: bool) -> Result<()> {
         .or_else(|| stem.strip_prefix("lpt"))
         .is_some_and(|s| s.chars().count() == 1 && "0123456789¹²³".contains(s));
     if reserved.contains(&stem.as_str()) || numeric {
-        return Err(err("NAME_RESERVED", "名称属于设备保留名"));
+        return Err(err(
+            storage_contract::ErrorCode::NameReserved,
+            "名称属于设备保留名",
+        ));
     }
     if require_nfc && !unicode::is_nfc(name) {
         return Err(Error::new(
-            "NAME_NOT_NORMALIZED",
+            storage_contract::ErrorCode::NameNotNormalized,
             format!(
                 "名称须明确确认为NFC形式：{}",
                 name.nfc().collect::<String>()
@@ -121,13 +130,16 @@ fn validate_path_inner(path: &str, require_nfc: bool) -> Result<()> {
         || path.encode_utf16().count() > 200
     {
         return Err(Error::new(
-            "PATH_INVALID",
+            storage_contract::ErrorCode::PathInvalid,
             "路径不是允许的仓库相对路径或超过长度预算",
         ));
     }
     let components = path.split('/').collect::<Vec<_>>();
     if components.len() > 32 {
-        return Err(Error::new("PATH_TOO_DEEP", "目录层级超过32"));
+        return Err(Error::new(
+            storage_contract::ErrorCode::PathTooDeep,
+            "目录层级超过32",
+        ));
     }
     for c in components {
         validate_name_inner(c, require_nfc)?;
@@ -155,7 +167,7 @@ pub fn validate_slot(slot: &str) -> Result<()> {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
     {
         return Err(Error::new(
-            "INVALID_SLOT_ID",
+            storage_contract::ErrorCode::InvalidSlotId,
             "盘位标识须为字母开头的ASCII字母数字、下划线或连字符，最多64字节",
         ));
     }

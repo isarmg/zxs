@@ -30,7 +30,7 @@ fn the_initialized_username_is_the_only_identity_and_cannot_be_reinitialized() {
             .err()
             .unwrap()
             .code,
-        "AUTH_ALREADY_INITIALIZED"
+        storage_contract::ErrorCode::AuthAlreadyInitialized
     );
     assert_eq!(fs::read(root.path().join("auth.json")).unwrap(), before);
 }
@@ -51,7 +51,10 @@ fn password_rotation_preserves_the_single_identity_revokes_every_session_and_sur
         )
         .unwrap();
     for token in [&first.token, &second.token] {
-        assert_eq!(store.authenticate(token).unwrap_err().code, "UNAUTHORIZED");
+        assert_eq!(
+            store.authenticate(token).unwrap_err().code,
+            storage_contract::ErrorCode::Unauthorized
+        );
     }
     assert!(store.revalidate_identity(&queued).is_err());
     assert!(store.login("owner", "administrator-old-password").is_err());
@@ -74,7 +77,7 @@ fn rejected_password_rotation_keeps_credentials_and_session_intact() {
             .change_password(&login.token, "incorrect-password", "a-new-test-password")
             .unwrap_err()
             .code,
-        "CURRENT_PASSWORD_INVALID"
+        storage_contract::ErrorCode::CurrentPasswordInvalid
     );
     assert!(
         store
@@ -209,7 +212,7 @@ fn uncertain_backup_blocks_authentication_and_queued_password_changes_until_reco
             } else {
                 Err(ApiError::new(
                     503,
-                    "COMMIT_IN_DOUBT",
+                    storage_contract::ErrorCode::CommitInDoubt,
                     "publication interrupted",
                 ))
             }
@@ -218,7 +221,7 @@ fn uncertain_backup_blocks_authentication_and_queued_password_changes_until_reco
     assert!(store.login("admin", "a-long-test-password").is_err());
     assert_eq!(
         store.identity_for_principal("admin").unwrap_err().code,
-        "RECOVERY_REQUIRED"
+        storage_contract::ErrorCode::RecoveryRequired
     );
     let before = store.snapshot().unwrap();
     assert_eq!(
@@ -226,7 +229,7 @@ fn uncertain_backup_blocks_authentication_and_queued_password_changes_until_reco
             .change_password(&login.token, "a-long-test-password", "a-new-test-password")
             .unwrap_err()
             .code,
-        "RECOVERY_REQUIRED"
+        storage_contract::ErrorCode::RecoveryRequired
     );
     assert_eq!(store.snapshot().unwrap(), before);
 }
@@ -258,7 +261,7 @@ fn detached_login_verification_cannot_cross_password_changes_or_recovery() {
     store.blocked.store(true, Ordering::SeqCst);
     assert_eq!(
         store.finish_login(proof).err().unwrap().code,
-        "RECOVERY_REQUIRED"
+        storage_contract::ErrorCode::RecoveryRequired
     );
     assert!(store.db.as_ref().unwrap().sessions.is_empty());
 }

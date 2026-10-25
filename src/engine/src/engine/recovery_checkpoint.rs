@@ -35,7 +35,10 @@ fn path(d: &DiskConfig) -> std::path::PathBuf {
     d.root.join("metadata/replay-checkpoint.json")
 }
 fn invalid() -> Error {
-    Error::new("CHECKPOINT_INVALID", "replay checkpoint coverage differs")
+    Error::new(
+        storage_contract::ErrorCode::CheckpointInvalid,
+        "replay checkpoint coverage differs",
+    )
 }
 
 // Read every repair-relevant byte, not metadata timestamps. Installed named

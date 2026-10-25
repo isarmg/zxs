@@ -648,7 +648,7 @@ fn scope_receipt() -> Value {
 fn scope_read_error(status: u16) -> api::Error {
     api::Error {
         status,
-        code: "SCOPE_READ_FAILED".into(),
+        code: storage_contract::ErrorCode::InjectedFailure,
         message: "Scope read failed".into(),
         retryable: true,
         request_id: None,

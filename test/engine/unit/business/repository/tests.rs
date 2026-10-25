@@ -48,7 +48,7 @@ fn disk_root_creation_replay_checks_owner_input_and_returns_original_binding() {
                     .create_disk_root(slot, principal, operation)
                     .unwrap_err()
                     .code(),
-                "IDEMPOTENCY_KEY_REUSED"
+                storage_contract::ErrorCode::IdempotencyKeyReused
             );
         }
         assert_eq!(
@@ -56,14 +56,14 @@ fn disk_root_creation_replay_checks_owner_input_and_returns_original_binding() {
                 .create_disk_root("P01", "admin", "not-an-operation")
                 .unwrap_err()
                 .code(),
-            "INVALID_ID"
+            storage_contract::ErrorCode::InvalidId
         );
         assert_eq!(
             engine
                 .create_disk_root("P01", "", &new_id("op"))
                 .unwrap_err()
                 .code(),
-            "UNAUTHENTICATED"
+            storage_contract::ErrorCode::Unauthenticated
         );
         assert_eq!(
             engine
@@ -133,7 +133,7 @@ fn repository_creation_replay_returns_original_binding_after_changes_and_reopen(
                     .create_repository(name, "P01", 1, principal, &operation)
                     .unwrap_err()
                     .code(),
-                "IDEMPOTENCY_KEY_REUSED"
+                storage_contract::ErrorCode::IdempotencyKeyReused
             );
         }
         assert_eq!(canonical_json(engine.state()).unwrap(), before);

@@ -87,7 +87,7 @@ fn preparation_and_indeterminate_failure_never_advance_the_baseline() {
             .persist_auth_state(json!({"auth":"accepted"}), "alice", &new_id("op"))
             .unwrap_err()
             .code(),
-        "IN_DOUBT"
+        storage_contract::ErrorCode::InDoubt
     );
     assert!(engine.blocked);
     assert!(Arc::ptr_eq(

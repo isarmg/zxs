@@ -57,7 +57,10 @@ fn lookup_accepts_equivalent_queries_without_weakening_source_validation() {
     assert_eq!(draft.get("Cafe\u{301}/STRASSE.TXT"), Some(&original[1]));
     assert!(draft.get("absent").is_none());
     let invalid = entry("Cafe\u{301}/new.txt", "file");
-    assert_eq!(draft.replace(invalid).unwrap_err().code(), "STATE_INVALID");
+    assert_eq!(
+        draft.replace(invalid).unwrap_err().code(),
+        storage_contract::ErrorCode::StateInvalid
+    );
     assert_eq!(draft.into_entries(), original);
 }
 
@@ -96,7 +99,7 @@ fn parent_file_errors_do_not_replace_or_drop_the_existing_entry() {
     let mut draft = NamespaceDraft::new(original.clone()).unwrap();
     assert_eq!(
         draft.ensure_parents("file/child").unwrap_err().code(),
-        "PARENT_NOT_DIRECTORY"
+        storage_contract::ErrorCode::ParentNotDirectory
     );
     assert_eq!(draft.into_entries(), original);
 }
@@ -124,7 +127,7 @@ fn malformed_sources_are_rejected_not_normalized_or_deduplicated() {
             Ok(_) => panic!("malformed source was accepted"),
             Err(error) => error,
         };
-        assert_eq!(error.code(), "STATE_INVALID");
+        assert_eq!(error.code(), storage_contract::ErrorCode::StateInvalid);
     }
 }
 
@@ -284,7 +287,7 @@ fn workspace_commit_rejects_duplicate_source_without_publishing_or_losing_staged
             request_digest: None,
         })
         .unwrap_err();
-    assert_eq!(error.code(), "STATE_INVALID");
+    assert_eq!(error.code(), storage_contract::ErrorCode::StateInvalid);
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     assert_eq!(
         canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),

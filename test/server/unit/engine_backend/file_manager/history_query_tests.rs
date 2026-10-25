@@ -64,7 +64,11 @@ fn history_query_rejects_unknown_fields_without_changing_context_or_admission() 
             let input = json!({"file_id":entry.file_id,"query":query});
             let error = read(input.clone()).unwrap_err();
             assert_eq!(error.status, 400, "{input}");
-            assert_eq!(error.code, "INVALID_REQUEST", "{input}");
+            assert_eq!(
+                error.code,
+                storage_contract::ErrorCode::InvalidRequest,
+                "{input}"
+            );
             assert_eq!(error.message, format!("unknown field {field}"));
         }
     }
@@ -74,7 +78,7 @@ fn history_query_rejects_unknown_fields_without_changing_context_or_admission() 
     ] {
         let error = read(json!({"file_id":entry.file_id,"query":query})).unwrap_err();
         assert_eq!(error.status, 400);
-        assert_eq!(error.code, "INVALID_REQUEST");
+        assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
         assert_eq!(
             error.message,
             "repository_id and path must be supplied together"
@@ -86,12 +90,12 @@ fn history_query_rejects_unknown_fields_without_changing_context_or_admission() 
     ] {
         let error = read(json!({"file_id":entry.file_id,"query":query})).unwrap_err();
         assert_eq!(error.status, 404);
-        assert_eq!(error.code, "FILE_NOT_FOUND");
+        assert_eq!(error.code, storage_contract::ErrorCode::FileNotFound);
     }
     assert_eq!(read(plain).unwrap(), expected);
 
     auth.logout(&token).unwrap();
     let error = read(json!({"file_id":entry.file_id,"query":{"limit":"1"}})).unwrap_err();
     assert_eq!(error.status, 401);
-    assert_eq!(error.code, "UNAUTHORIZED");
+    assert_eq!(error.code, storage_contract::ErrorCode::Unauthorized);
 }

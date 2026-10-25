@@ -147,13 +147,18 @@ pub(super) fn call(
                     operation_id: operation(input)?,
                 })
                 .map_err(|failure| match failure.code() {
-                    "ROUTE_INCOMPLETE" | "SCOPE_CHANGED" => {
-                        ApiError::conflict(failure.code(), &failure.message)
+                    storage_contract::ErrorCode::RouteIncomplete
+                    | storage_contract::ErrorCode::ScopeChanged => {
+                        ApiError::conflict(failure.code(), &failure.message())
                     }
                     _ => error(failure),
                 })?;
             operation_wire(result)
         }
-        _ => Err(ApiError::new(404, "NOT_FOUND", "operation not found")),
+        _ => Err(ApiError::new(
+            404,
+            storage_contract::ErrorCode::NotFound,
+            "operation not found",
+        )),
     }
 }

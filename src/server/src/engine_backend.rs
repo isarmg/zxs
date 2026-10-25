@@ -50,15 +50,24 @@ impl EngineBackend {
     ) -> Result<(), ApiError> {
         self.engine
             .lock()
-            .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart"))?
+            .map_err(|_| {
+                ApiError::new(
+                    500,
+                    storage_contract::ErrorCode::InternalError,
+                    "storage engine requires restart",
+                )
+            })?
             .set_management_auth(auth);
         Ok(())
     }
     pub(crate) fn replicate_auth(&self, snapshot: Value) -> Result<(), ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart"))?;
+        let mut engine = self.engine.lock().map_err(|_| {
+            ApiError::new(
+                500,
+                storage_contract::ErrorCode::InternalError,
+                "storage engine requires restart",
+            )
+        })?;
         if engine.auth_state_ref() == Some(&snapshot) {
             return Ok(());
         }
@@ -70,7 +79,13 @@ impl EngineBackend {
         Ok(self
             .engine
             .lock()
-            .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart"))?
+            .map_err(|_| {
+                ApiError::new(
+                    500,
+                    storage_contract::ErrorCode::InternalError,
+                    "storage engine requires restart",
+                )
+            })?
             .is_read_only())
     }
     pub fn protect_auth(
@@ -80,7 +95,11 @@ impl EngineBackend {
         let backend = self.clone();
         auth.attach_backup(std::sync::Arc::new(move |snapshot| {
             let mut engine = backend.engine.lock().map_err(|_| {
-                ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart")
+                ApiError::new(
+                    500,
+                    storage_contract::ErrorCode::InternalError,
+                    "storage engine requires restart",
+                )
             })?;
             if engine.auth_state_ref() == Some(&snapshot) {
                 return Ok(());
@@ -98,7 +117,13 @@ impl EngineBackend {
         let snapshot = self
             .engine
             .lock()
-            .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart"))?
+            .map_err(|_| {
+                ApiError::new(
+                    500,
+                    storage_contract::ErrorCode::InternalError,
+                    "storage engine requires restart",
+                )
+            })?
             .auth_state();
         self.protect_auth(crate::auth::AuthStore::open_with_snapshot(root, snapshot)?)
     }
@@ -128,10 +153,13 @@ fn repository_in_state<'a>(
     state: &'a storage_contract::State,
     id: &str,
 ) -> Result<&'a Repository, ApiError> {
-    state
-        .repositories
-        .get(id)
-        .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "repository not found"))
+    state.repositories.get(id).ok_or_else(|| {
+        ApiError::new(
+            404,
+            storage_contract::ErrorCode::NotFound,
+            "repository not found",
+        )
+    })
 }
 /// Publications append increasing sequences; snapshot recovery preserves their
 /// vector order. Seek directly to the unseen suffix for resumed event polls.
@@ -145,10 +173,13 @@ fn repo_for_history_in_state<'a>(
     state: &'a storage_contract::State,
     id: &str,
 ) -> Result<&'a Repository, ApiError> {
-    let history = state
-        .histories
-        .get(id)
-        .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "history not found"))?;
+    let history = state.histories.get(id).ok_or_else(|| {
+        ApiError::new(
+            404,
+            storage_contract::ErrorCode::NotFound,
+            "history not found",
+        )
+    })?;
     repository_in_state(state, &history.repository_id)
 }
 fn repo_for_branch<'a>(engine: &'a Engine, id: &str) -> Result<&'a Repository, ApiError> {
@@ -158,14 +189,17 @@ fn repo_for_branch_in_state<'a>(
     state: &'a storage_contract::State,
     id: &str,
 ) -> Result<&'a Repository, ApiError> {
-    let branch = state
-        .branches
-        .get(id)
-        .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "branch not found"))?;
+    let branch = state.branches.get(id).ok_or_else(|| {
+        ApiError::new(
+            404,
+            storage_contract::ErrorCode::NotFound,
+            "branch not found",
+        )
+    })?;
     if branch.state == "migrated" {
         return Err(ApiError::new(
             409,
-            "TREE_MOVED",
+            storage_contract::ErrorCode::TreeMoved,
             "branch has moved to an independent history domain",
         ));
     }
@@ -203,7 +237,7 @@ fn current_protected_identity(
         }) {
             return Err(ApiError::new(
                 409,
-                "SMB_REBIND_REQUIRED",
+                storage_contract::ErrorCode::SmbRebindRequired,
                 "SMB share binding changed; reconnect before starting another operation",
             ));
         }
@@ -229,10 +263,13 @@ impl Backend for EngineBackend {
         identity: &Identity,
         input: Value,
     ) -> Result<Value, ApiError> {
-        let mut engine = self
-            .engine
-            .lock()
-            .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart"))?;
+        let mut engine = self.engine.lock().map_err(|_| {
+            ApiError::new(
+                500,
+                storage_contract::ErrorCode::InternalError,
+                "storage engine requires restart",
+            )
+        })?;
         let current = if matches!(
             action,
             crate::BackendAction::Capabilities | crate::BackendAction::Ready
@@ -293,7 +330,7 @@ impl Backend for EngineBackend {
                 if engine.is_read_only() {
                     return Err(ApiError::new(
                         503,
-                        "RECOVERY_REQUIRED",
+                        storage_contract::ErrorCode::RecoveryRequired,
                         "storage is open for verified recovery reads only",
                     ));
                 }
@@ -316,7 +353,7 @@ impl Backend for EngineBackend {
                 if members != configured_members {
                     return Err(ApiError::new(
                         503,
-                        "METADATA_UNAVAILABLE",
+                        storage_contract::ErrorCode::MetadataUnavailable,
                         "all configured metadata members are required for normal writes",
                     ));
                 }
@@ -362,7 +399,11 @@ impl Backend for EngineBackend {
                     .histories
                     .get(&repo.history_tree_id)
                     .ok_or_else(|| {
-                        ApiError::new(500, "STATE_INVALID", "repository history is missing")
+                        ApiError::new(
+                            500,
+                            storage_contract::ErrorCode::StateInvalid,
+                            "repository history is missing",
+                        )
                     })?;
                 Ok(
                     json!({"repository_id":repo.repository_id,"branch_id":repo.main_branch_id,"enabled":repo.smb_enabled,"history_generation":history.generation.to_string()}),
@@ -518,7 +559,13 @@ impl Backend for EngineBackend {
                     .commits
                     .get(commit_id)
                     .filter(|commit| commit.history_tree_id == branch.history_tree_id)
-                    .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "commit not found"))?;
+                    .ok_or_else(|| {
+                        ApiError::new(
+                            404,
+                            storage_contract::ErrorCode::NotFound,
+                            "commit not found",
+                        )
+                    })?;
                 let key = name_policy::path_key(path);
                 let entries = engine
                     .list_tree_at_ref(branch_id, commit_id)
@@ -526,7 +573,13 @@ impl Backend for EngineBackend {
                 let entry = entries
                     .iter()
                     .find(|entry| entry.lookup_key == key)
-                    .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "entry not found"))?;
+                    .ok_or_else(|| {
+                        ApiError::new(
+                            404,
+                            storage_contract::ErrorCode::NotFound,
+                            "entry not found",
+                        )
+                    })?;
                 let mut response = json!({"branch_id":branch_id,"commit_id":commit_id,"entry":entry,"version":engine.state().versions.get(&entry.version_id)});
                 if entry.kind == "file" {
                     response.as_object_mut().unwrap().extend(
@@ -594,7 +647,11 @@ impl Backend for EngineBackend {
                 let right = field(&input, "right_commit_id")?;
                 for id in [left, right] {
                     let commit = engine.state().commits.get(id).ok_or_else(|| {
-                        ApiError::new(404, "NOT_FOUND", "comparison commit not found")
+                        ApiError::new(
+                            404,
+                            storage_contract::ErrorCode::NotFound,
+                            "comparison commit not found",
+                        )
                     })?;
                     repo_for_history(&engine, &commit.history_tree_id)?;
                 }
@@ -638,11 +695,13 @@ impl Backend for EngineBackend {
                 repo_for_branch(&engine, id)?;
                 branch_wire(
                     &engine,
-                    engine
-                        .state()
-                        .branches
-                        .get(id)
-                        .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "branch not found"))?,
+                    engine.state().branches.get(id).ok_or_else(|| {
+                        ApiError::new(
+                            404,
+                            storage_contract::ErrorCode::NotFound,
+                            "branch not found",
+                        )
+                    })?,
                 )
             }
             crate::BackendAction::HistoricalSavePlan => {
@@ -690,7 +749,7 @@ impl Backend for EngineBackend {
                     .map_err(ApiError::invalid)?;
                 if workspace.state != "open" {
                     return Err(ApiError::conflict(
-                        "WORKSPACE_CLOSED",
+                        storage_contract::ErrorCode::WorkspaceClosed,
                         "workspace is no longer open for upload",
                     ));
                 }
@@ -701,7 +760,7 @@ impl Backend for EngineBackend {
                 if now.saturating_sub(workspace.created_at) > engine.config().workspace_ttl_seconds
                 {
                     return Err(ApiError::conflict(
-                        "LEASE_EXPIRED",
+                        storage_contract::ErrorCode::LeaseExpired,
                         "workspace lease expired; retained data remains available",
                     ));
                 }
@@ -713,7 +772,7 @@ impl Backend for EngineBackend {
                     {
                         return Err(ApiError::new(
                             413,
-                            "RESOURCE_LIMIT_EXCEEDED",
+                            storage_contract::ErrorCode::ResourceLimitExceeded,
                             "declared upload exceeds the pool file or workspace limit",
                         ));
                     }
@@ -724,10 +783,13 @@ impl Backend for EngineBackend {
                 let workspace =
                     workspace_authorize(&engine, identity, field(&input, "workspace_id")?)?;
                 let item = field(&input, "item_id")?;
-                let staged = workspace
-                    .files
-                    .get(item)
-                    .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "upload item not found"))?;
+                let staged = workspace.files.get(item).ok_or_else(|| {
+                    ApiError::new(
+                        404,
+                        storage_contract::ErrorCode::NotFound,
+                        "upload item not found",
+                    )
+                })?;
                 let sealed = matches!(workspace.state.as_str(), "sealed" | "committed");
                 let manifest = if sealed {
                     Some(storage_engine::workspace_manifest_hash(workspace).map_err(error)?)
@@ -842,7 +904,11 @@ impl Backend for EngineBackend {
                 }
                 let prepared = plan.execute().map_err(error)?;
                 let mut engine = self.engine.lock().map_err(|_| {
-                    ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart")
+                    ApiError::new(
+                        500,
+                        storage_contract::ErrorCode::InternalError,
+                        "storage engine requires restart",
+                    )
                 })?;
                 let current = current_protected_identity(&engine, identity)?;
                 let result = Application::new(&mut engine, &current)
@@ -895,7 +961,11 @@ impl Backend for EngineBackend {
                     .filter(|version| repo_for_history(&engine, &version.history_tree_id).is_ok())
                     .collect::<Vec<_>>();
                 if visible.is_empty() {
-                    return Err(ApiError::new(404, "NOT_FOUND", "file history not found"));
+                    return Err(ApiError::new(
+                        404,
+                        storage_contract::ErrorCode::NotFound,
+                        "file history not found",
+                    ));
                 }
                 Ok(json!({"file_id":file,"versions":visible}))
             }
@@ -909,17 +979,25 @@ impl Backend for EngineBackend {
                     .state()
                     .commits
                     .get(field(&input, "commit_id")?)
-                    .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "commit not found"))?;
+                    .ok_or_else(|| {
+                        ApiError::new(
+                            404,
+                            storage_contract::ErrorCode::NotFound,
+                            "commit not found",
+                        )
+                    })?;
                 repo_for_history(&engine, &commit.history_tree_id)?;
                 encode(commit)
             }
             crate::BackendAction::Version | crate::BackendAction::Placement => {
                 let id = field(&input, "version_id")?;
-                let version = engine
-                    .state()
-                    .versions
-                    .get(id)
-                    .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "version not found"))?;
+                let version = engine.state().versions.get(id).ok_or_else(|| {
+                    ApiError::new(
+                        404,
+                        storage_contract::ErrorCode::NotFound,
+                        "version not found",
+                    )
+                })?;
                 repo_for_history(&engine, &version.history_tree_id)?;
                 if action == crate::BackendAction::Version {
                     let mut value = encode(version)?;
@@ -928,11 +1006,13 @@ impl Backend for EngineBackend {
                             .into();
                     Ok(value)
                 } else {
-                    encode(
-                        engine.state().placements.get(id).ok_or_else(|| {
-                            ApiError::new(404, "NOT_FOUND", "placement not found")
-                        })?,
-                    )
+                    encode(engine.state().placements.get(id).ok_or_else(|| {
+                        ApiError::new(
+                            404,
+                            storage_contract::ErrorCode::NotFound,
+                            "placement not found",
+                        )
+                    })?)
                 }
             }
             crate::BackendAction::Operation => {
@@ -954,7 +1034,11 @@ impl Backend for EngineBackend {
                 }
                 let record = plan.check();
                 let engine = self.engine.lock().map_err(|_| {
-                    ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart")
+                    ApiError::new(
+                        500,
+                        storage_contract::ErrorCode::InternalError,
+                        "storage engine requires restart",
+                    )
                 })?;
                 let current = current_protected_identity(&engine, identity)?;
                 operations::authorize_record(&engine, &current, &record)?;
@@ -1005,7 +1089,11 @@ impl Backend for EngineBackend {
                     .protection_policies
                     .get(field(&input, "policy_id")?)
                     .ok_or_else(|| {
-                        ApiError::new(404, "NOT_FOUND", "protection policy not found")
+                        ApiError::new(
+                            404,
+                            storage_contract::ErrorCode::NotFound,
+                            "protection policy not found",
+                        )
                     })?;
                 repository(&engine, &policy.repository_id)?;
                 encode(policy)
@@ -1015,7 +1103,13 @@ impl Backend for EngineBackend {
                     .state()
                     .placement_rules
                     .get(field(&input, "rule_id")?)
-                    .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "placement rule not found"))?;
+                    .ok_or_else(|| {
+                        ApiError::new(
+                            404,
+                            storage_contract::ErrorCode::NotFound,
+                            "placement rule not found",
+                        )
+                    })?;
                 repository(&engine, &rule.repository_id)?;
                 encode(rule)
             }
@@ -1082,7 +1176,7 @@ impl Backend for EngineBackend {
                 if after > engine.state().sequence {
                     return Err(ApiError::new(
                         400,
-                        "INVALID_CURSOR",
+                        storage_contract::ErrorCode::InvalidCursor,
                         "event cursor is ahead of the published sequence",
                     ));
                 }
@@ -1099,7 +1193,7 @@ impl Backend for EngineBackend {
             }
             crate::BackendAction::RegisterDisk => Err(ApiError::new(
                 409,
-                "OFFLINE_CONFIGURATION_REQUIRED",
+                storage_contract::ErrorCode::OfflineConfigurationRequired,
                 "disk registration requires an explicit offline configuration and topology migration",
             )),
         }
@@ -1112,10 +1206,13 @@ impl Backend for EngineBackend {
         path: &str,
         source: &crate::UploadSource,
     ) -> Result<Value, ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart"))?;
+        let engine = self.engine.lock().map_err(|_| {
+            ApiError::new(
+                500,
+                storage_contract::ErrorCode::InternalError,
+                "storage engine requires restart",
+            )
+        })?;
         let current = current_protected_identity(&engine, identity)?;
         let workspace_record = workspace_authorize(&engine, &current, workspace)?;
         let generation = workspace_record
@@ -1125,7 +1222,7 @@ impl Backend for EngineBackend {
             .unwrap_or(Some(1))
             .ok_or_else(|| {
                 error(storage_engine::Error::new(
-                    "RESOURCE_LIMIT",
+                    storage_contract::ErrorCode::ResourceLimit,
                     "upload generation exhausted",
                 ))
             })?;
@@ -1141,10 +1238,13 @@ impl Backend for EngineBackend {
             .map_err(error)?;
         drop(engine);
         let prepared = plan.execute().map_err(error)?;
-        let mut engine = self
-            .engine
-            .lock()
-            .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart"))?;
+        let mut engine = self.engine.lock().map_err(|_| {
+            ApiError::new(
+                500,
+                storage_contract::ErrorCode::InternalError,
+                "storage engine requires restart",
+            )
+        })?;
         finish_authorized_upload(&mut engine, identity, workspace, prepared)
     }
     fn upload_generation(
@@ -1156,10 +1256,13 @@ impl Backend for EngineBackend {
         source: &crate::UploadSource,
         generation: u64,
     ) -> Result<Value, ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart"))?;
+        let engine = self.engine.lock().map_err(|_| {
+            ApiError::new(
+                500,
+                storage_contract::ErrorCode::InternalError,
+                "storage engine requires restart",
+            )
+        })?;
         let current = current_protected_identity(&engine, identity)?;
         workspace_authorize(&engine, &current, workspace)?;
         let plan = engine
@@ -1174,10 +1277,13 @@ impl Backend for EngineBackend {
             .map_err(error)?;
         drop(engine);
         let prepared = plan.execute().map_err(error)?;
-        let mut engine = self
-            .engine
-            .lock()
-            .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart"))?;
+        let mut engine = self.engine.lock().map_err(|_| {
+            ApiError::new(
+                500,
+                storage_contract::ErrorCode::InternalError,
+                "storage engine requires restart",
+            )
+        })?;
         // The session or SMB binding may have changed while bytes were copied.
         finish_authorized_upload(&mut engine, identity, workspace, prepared)
     }
@@ -1201,7 +1307,11 @@ impl Backend for EngineBackend {
     fn observe_disks(&self, _: &crate::InternalDiskObservation) -> Result<Value, ApiError> {
         let observation = {
             let engine = self.engine.lock().map_err(|_| {
-                ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart")
+                ApiError::new(
+                    500,
+                    storage_contract::ErrorCode::InternalError,
+                    "storage engine requires restart",
+                )
             })?;
             engine.prepare_disk_observation()
         };

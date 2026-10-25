@@ -13,14 +13,15 @@ pub(crate) fn advance_branch_node(
     principal: &str,
     operation: &str,
 ) -> Result<()> {
-    let previous = state
-        .branches
-        .get(branch)
-        .cloned()
-        .ok_or_else(|| Error::new("FILE_BRANCH_NOT_FOUND", "file branch missing"))?;
+    let previous = state.branches.get(branch).cloned().ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::FileBranchNotFound,
+            "file branch missing",
+        )
+    })?;
     let file = previous.file_id.as_deref().ok_or_else(|| {
         Error::new(
-            "FILE_BRANCH_REQUIRED",
+            storage_contract::ErrorCode::FileBranchRequired,
             "an independent file branch is required",
         )
     })?;
@@ -30,7 +31,12 @@ pub(crate) fn advance_branch_node(
         .commits
         .get(&previous.head_commit_id)
         .cloned()
-        .ok_or_else(|| Error::new("STATE_INVALID", "file branch snapshot missing"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "file branch snapshot missing",
+            )
+        })?;
     let mut entries = current.entries.clone();
     let mut found = false;
     for entry in entries
@@ -42,7 +48,10 @@ pub(crate) fn advance_branch_node(
         found = true;
     }
     if !found {
-        return Err(Error::new("STATE_INVALID", "file branch body missing"));
+        return Err(Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "file branch body missing",
+        ));
     }
     let pending = if materialize {
         BTreeMap::new()
@@ -72,10 +81,12 @@ pub(crate) fn advance_branch_node(
     target.head_commit_id = id;
     target.file_node_id = Some(node.into());
     target.pending_file_versions = pending;
-    target.generation = target
-        .generation
-        .checked_add(1)
-        .ok_or_else(|| Error::new("RESOURCE_LIMIT", "branch generation exhausted"))?;
+    target.generation = target.generation.checked_add(1).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::ResourceLimit,
+            "branch generation exhausted",
+        )
+    })?;
     Ok(())
 }
 
@@ -95,10 +106,13 @@ fn advance(context: &mut FileContext, branch: &str, node: &str, materialize: boo
     if materialize {
         context.inherited_from = None;
     }
-    context.selection_generation = context
-        .selection_generation
-        .checked_add(1)
-        .ok_or_else(|| Error::new("RESOURCE_LIMIT", "file context generation exhausted"))?;
+    context.selection_generation =
+        context.selection_generation.checked_add(1).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::ResourceLimit,
+                "file context generation exhausted",
+            )
+        })?;
     Ok(())
 }
 
@@ -137,15 +151,16 @@ impl Publication<'_> {
         }
         if !self.visiting.insert(cache_key.clone()) {
             return Err(Error::new(
-                "STATE_INVALID",
+                storage_contract::ErrorCode::StateInvalid,
                 "directory references contain a cycle",
             ));
         }
-        let mut tree = state
-            .directory_trees
-            .get(tree_id)
-            .cloned()
-            .ok_or_else(|| Error::new("STATE_INVALID", "frozen child subtree missing"))?;
+        let mut tree = state.directory_trees.get(tree_id).cloned().ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "frozen child subtree missing",
+            )
+        })?;
         if let Some(branch) = projection.filter(|branch| !branch.materialized) {
             // Pending scopes reuse an ancestor tree with their own inheritance
             // intent. Only a changed projection acquires its own subtree.
@@ -166,7 +181,12 @@ impl Publication<'_> {
                 .file_contexts
                 .get(&entry.lookup_key)
                 .cloned()
-                .ok_or_else(|| Error::new("STATE_INVALID", "frozen file path context missing"))?;
+                .ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::StateInvalid,
+                        "frozen file path context missing",
+                    )
+                })?;
             if !matches(&context, entry, self.branches, self.source) {
                 continue;
             }
@@ -209,7 +229,12 @@ impl Publication<'_> {
                 .commits
                 .get(&original.commit_id)
                 .cloned()
-                .ok_or_else(|| Error::new("STATE_INVALID", "frozen directory commit missing"))?;
+                .ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::StateInvalid,
+                        "frozen directory commit missing",
+                    )
+                })?;
             let mut full = tree.entries.clone();
             let key = name_policy::path_key(&tree.path);
             full.extend(
@@ -304,7 +329,12 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
         .values()
         .find(|repo| repo.history_tree_id == body.history_tree_id)
         .cloned()
-        .ok_or_else(|| Error::new("REPOSITORY_NOT_FOUND", "file repository missing"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::RepositoryNotFound,
+                "file repository missing",
+            )
+        })?;
     let originals = state
         .directory_branches
         .values()
@@ -375,12 +405,22 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
         .branches
         .get(&repo.main_branch_id)
         .cloned()
-        .ok_or_else(|| Error::new("STATE_INVALID", "repository main branch missing"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "repository main branch missing",
+            )
+        })?;
     let previous = state
         .commits
         .get(&main.head_commit_id)
         .cloned()
-        .ok_or_else(|| Error::new("STATE_INVALID", "repository head missing"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "repository head missing",
+            )
+        })?;
     let mut entries = previous.entries.clone();
     let mut changed_paths = Vec::new();
     for entry in entries
@@ -435,10 +475,12 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
             .get_mut(&repo.main_branch_id)
             .expect("checked namespace");
         main.head_commit_id = id;
-        main.generation = main
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| Error::new("RESOURCE_LIMIT", "branch generation exhausted"))?;
+        main.generation = main.generation.checked_add(1).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::ResourceLimit,
+                "branch generation exhausted",
+            )
+        })?;
         if matching_node.is_none() {
             main.pending_file_versions.remove(file);
         }

@@ -32,20 +32,22 @@ impl Engine {
             .is_some_and(|s| *s != ContentState::Available)
         {
             return Err(Error::new(
-                "CONTENT_PURGED",
+                storage_contract::ErrorCode::ContentPurged,
                 "version content is no longer available in this history",
             ));
         }
-        let version = self
-            .state
-            .versions
-            .get(version_id)
-            .ok_or_else(|| Error::new("VERSION_NOT_FOUND", "version does not exist"))?;
-        let placement = self
-            .state
-            .placements
-            .get(version_id)
-            .ok_or_else(|| Error::new("PLACEMENT_NOT_FOUND", "version placement missing"))?;
+        let version = self.state.versions.get(version_id).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::VersionNotFound,
+                "version does not exist",
+            )
+        })?;
+        let placement = self.state.placements.get(version_id).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::PlacementNotFound,
+                "version placement missing",
+            )
+        })?;
         for slot in &placement.route_slot_ids {
             let d = self.disk(slot)?;
             if validate_seal(&self.config, d).is_err() {
@@ -63,16 +65,18 @@ impl Engine {
             }
         }
         Err(Error::new(
-            "CONTENT_UNAVAILABLE",
+            storage_contract::ErrorCode::ContentUnavailable,
             "no verified complete replica is available",
         ))
     }
     pub fn open_content(&self, version_id: &str) -> Result<OpenedContent> {
         let (file, version, _) = self.verified_replica(version_id)?;
-        let mut reads = self
-            .reads
-            .lock()
-            .map_err(|_| Error::new("INTERNAL_ERROR", "read lease lock poisoned"))?;
+        let mut reads = self.reads.lock().map_err(|_| {
+            Error::new(
+                storage_contract::ErrorCode::InternalError,
+                "read lease lock poisoned",
+            )
+        })?;
         *reads.entry(version_id.into()).or_default() += 1;
         drop(reads);
         Ok(OpenedContent {
@@ -94,15 +98,17 @@ impl Engine {
         let w = self.workspace(workspace)?;
         if w.principal != principal {
             return Err(Error::new(
-                "PERMISSION_DENIED",
+                storage_contract::ErrorCode::PermissionDenied,
                 "workspace belongs to another principal",
             ));
         }
         self.repository_for_branch(&w.branch_id)?;
-        let staged = w
-            .files
-            .get(item)
-            .ok_or_else(|| Error::new("ITEM_NOT_FOUND", "workspace item not found"))?;
+        let staged = w.files.get(item).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::ItemNotFound,
+                "workspace item not found",
+            )
+        })?;
         let file = open_regular(&staged.source_path)?;
         let key = staged
             .base_version_id
@@ -111,7 +117,12 @@ impl Engine {
         *self
             .reads
             .lock()
-            .map_err(|_| Error::new("INTERNAL_ERROR", "read lease lock poisoned"))?
+            .map_err(|_| {
+                Error::new(
+                    storage_contract::ErrorCode::InternalError,
+                    "read lease lock poisoned",
+                )
+            })?
             .entry(key.clone())
             .or_default() += 1;
         Ok(WorkspaceReadPlan(OpenedContent {
@@ -139,7 +150,7 @@ impl Engine {
         // Bind the returned bytes too, not an earlier read of this pathname.
         if blake3::hash(&checks).to_hex().as_str() != version.checksum_manifest_hash {
             return Err(Error::new(
-                "CHECKSUM_MISMATCH",
+                storage_contract::ErrorCode::ChecksumMismatch,
                 "checksum manifest digest differs",
             ));
         }
@@ -210,7 +221,7 @@ impl Engine {
             .is_some_and(|s| *s != ContentState::Available)
         {
             return Err(Error::new(
-                "CONTENT_PURGED",
+                storage_contract::ErrorCode::ContentPurged,
                 "version content is no longer available in this history",
             ));
         }
@@ -218,13 +229,19 @@ impl Engine {
             .state
             .versions
             .get(version_id)
-            .ok_or_else(|| Error::new("VERSION_NOT_FOUND", "version does not exist"))?
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::VersionNotFound,
+                    "version does not exist",
+                )
+            })?
             .clone();
-        let placement = self
-            .state
-            .placements
-            .get(version_id)
-            .ok_or_else(|| Error::new("PLACEMENT_NOT_FOUND", "version placement missing"))?;
+        let placement = self.state.placements.get(version_id).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::PlacementNotFound,
+                "version placement missing",
+            )
+        })?;
         let disks = placement
             .route_slot_ids
             .iter()
@@ -233,7 +250,12 @@ impl Engine {
         *self
             .reads
             .lock()
-            .map_err(|_| Error::new("INTERNAL_ERROR", "read lease lock poisoned"))?
+            .map_err(|_| {
+                Error::new(
+                    storage_contract::ErrorCode::InternalError,
+                    "read lease lock poisoned",
+                )
+            })?
             .entry(version_id.into())
             .or_default() += 1;
         Ok(ContentReadPlan {
@@ -289,7 +311,7 @@ impl ContentReadPlan {
                 let checks = read_bytes(&dir.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
                 if blake3::hash(&checks).to_hex().as_str() != self.version.checksum_manifest_hash {
                     return Err(Error::new(
-                        "CHECKSUM_MISMATCH",
+                        storage_contract::ErrorCode::ChecksumMismatch,
                         "checksum manifest digest differs",
                     ));
                 }
@@ -298,7 +320,7 @@ impl ContentReadPlan {
                     || manifest.chunk_bytes != self.version.checksum_chunk_bytes
                 {
                     return Err(Error::new(
-                        "CHECKSUM_MISMATCH",
+                        storage_contract::ErrorCode::ChecksumMismatch,
                         "checksum header differs from version",
                     ));
                 }
@@ -307,7 +329,10 @@ impl ContentReadPlan {
                     &self.version,
                 )?)?;
                 if file.metadata()?.len() != self.version.logical_size {
-                    return Err(Error::new("CHECKSUM_MISMATCH", "payload length differs"));
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::ChecksumMismatch,
+                        "payload length differs",
+                    ));
                 }
                 Ok((file, checks, manifest))
             })();
@@ -317,7 +342,7 @@ impl ContentReadPlan {
         }
         if replicas.is_empty() {
             Err(Error::new(
-                "CONTENT_UNAVAILABLE",
+                storage_contract::ErrorCode::ContentUnavailable,
                 "no authenticated replica is available",
             ))
         } else {
@@ -359,13 +384,16 @@ impl WorkspaceReadPlan {
                 break;
             }
             remaining = remaining.checked_sub(count as u64).ok_or_else(|| {
-                Error::new("CHECKSUM_MISMATCH", "workspace full file length differs")
+                Error::new(
+                    storage_contract::ErrorCode::ChecksumMismatch,
+                    "workspace full file length differs",
+                )
             })?;
             hash.update(&buffer[..count]);
         }
         if remaining != 0 || hash.finalize().to_hex().as_str() != self.0.content_hash {
             return Err(Error::new(
-                "CHECKSUM_MISMATCH",
+                storage_contract::ErrorCode::ChecksumMismatch,
                 "workspace full file was modified outside the engine",
             ));
         }

@@ -40,7 +40,7 @@ impl NamespaceDraft {
                 .is_some()
             {
                 return Err(Error::new(
-                    "STATE_INVALID",
+                    storage_contract::ErrorCode::StateInvalid,
                     "namespace source has duplicate lookup keys",
                 ));
             }
@@ -55,7 +55,7 @@ impl NamespaceDraft {
                     .is_none_or(|entry| entry.kind != "directory")
             {
                 return Err(Error::new(
-                    "STATE_INVALID",
+                    storage_contract::ErrorCode::StateInvalid,
                     "namespace source parent is missing or is not a directory",
                 ));
             }
@@ -70,7 +70,7 @@ impl NamespaceDraft {
             || !matches!(entry.kind.as_str(), "file" | "directory")
         {
             return Err(Error::new(
-                "STATE_INVALID",
+                storage_contract::ErrorCode::StateInvalid,
                 "namespace entry path, key, name or kind is invalid",
             ));
         }
@@ -119,7 +119,7 @@ impl NamespaceDraft {
             if let Some(existing) = self.get(&parent) {
                 if existing.kind != "directory" {
                     return Err(Error::new(
-                        "PARENT_NOT_DIRECTORY",
+                        storage_contract::ErrorCode::ParentNotDirectory,
                         "parent is not a directory",
                     ));
                 }

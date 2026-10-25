@@ -75,7 +75,7 @@ fn failed_editor_requests_record_only_their_original_outcome() {
                 "original",
                 api::Error {
                     status,
-                    code: "FAILURE".into(),
+                    code: storage_contract::ErrorCode::InjectedFailure,
                     message: "request failed".into(),
                     retryable: false,
                     request_id: None,

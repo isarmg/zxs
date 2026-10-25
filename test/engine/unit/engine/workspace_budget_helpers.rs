@@ -36,11 +36,11 @@ fn lifecycle_reservation_cannot_mask_the_durable_manifest_boundary() {
     );
     assert_eq!(
         checked_metadata_charge(1, limit + 1).unwrap_err().code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     assert_eq!(
         checked_metadata_charge(limit + 1, 1).unwrap_err().code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     let config = Config::development(["/draft/only".into()]);
     assert!(config.max_retained_workspace_metadata_bytes_per_principal >= limit as u64);

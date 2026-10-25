@@ -20,7 +20,7 @@ fn superseded_history_read_revokes_authentication_without_settling_the_new_read(
             1,
             "1min",
             Err(api::Error {
-                code: "UNAUTHORIZED".into(),
+                code: storage_contract::ErrorCode::Unauthorized,
                 message: "Session expired".into(),
                 status: 401,
                 retryable: false,
@@ -59,7 +59,7 @@ fn superseded_history_data_and_prior_session_errors_leave_current_state_unchange
                 1,
                 "1min",
                 Err(api::Error {
-                    code: "STALE".into(),
+                    code: storage_contract::ErrorCode::InjectedFailure,
                     message: "Old request".into(),
                     status,
                     retryable: false,

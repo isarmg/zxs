@@ -49,12 +49,12 @@ impl HttpSpool {
             Ok(State::Ready(budget)) => Ok(budget.clone()),
             Ok(State::Pending) => Err(ApiError::new(
                 503,
-                "HTTP_UPLOADS_PENDING",
+                storage_contract::ErrorCode::HttpUploadsPending,
                 "HTTP upload staging inventory is still running; retry after it completes",
             )),
             Ok(State::Unavailable) | Err(_) => Err(ApiError::new(
                 503,
-                "HTTP_UPLOADS_UNAVAILABLE",
+                storage_contract::ErrorCode::HttpUploadsUnavailable,
                 "HTTP upload staging is unavailable; repair the local spool and restart",
             )),
         }

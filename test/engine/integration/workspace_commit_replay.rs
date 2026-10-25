@@ -37,7 +37,7 @@ fn native_commit_replay_rejects_a_different_operation_actor() {
     request.principal = "different-actor".into();
     assert_eq!(
         engine.commit_workspace(request).unwrap_err().code(),
-        "PERMISSION_DENIED"
+        storage_contract::ErrorCode::PermissionDenied
     );
 }
 
@@ -96,7 +96,7 @@ fn native_commit_replay_uses_only_exact_bound_request_copies() {
         fs::write(&paths[1], &bad).unwrap();
         assert_eq!(
             engine.commit_workspace(request.clone()).unwrap_err().code(),
-            "RECOVERY_REQUIRED"
+            storage_contract::ErrorCode::RecoveryRequired
         );
         assert_eq!(fs::read(&paths[0]).unwrap(), bad);
         assert_eq!(fs::read(&paths[1]).unwrap(), bad);
@@ -114,7 +114,7 @@ fn native_commit_replay_does_not_trust_matching_but_unbound_saved_json() {
     }
     assert_eq!(
         engine.commit_workspace(request).unwrap_err().code(),
-        "IDEMPOTENCY_KEY_REUSED"
+        storage_contract::ErrorCode::IdempotencyKeyReused
     );
 }
 
@@ -206,7 +206,7 @@ fn wire_commit_reconciles_after_publication_and_system_disk_loss() {
                 .commit_workspace_wire(request.clone(), body.clone())
                 .unwrap_err()
                 .code(),
-            "IN_DOUBT"
+            storage_contract::ErrorCode::InDoubt
         );
         let disks = engine
             .config()
@@ -258,7 +258,7 @@ fn native_commit_replay_never_follows_unsafe_request_copy() {
     std::os::unix::fs::symlink(&external, &local).unwrap();
     assert_eq!(
         engine.commit_workspace(request).unwrap_err().code(),
-        "UNSAFE_PATH"
+        storage_contract::ErrorCode::UnsafePath
     );
     assert_eq!(fs::read(external).unwrap(), b"untouched");
 }
@@ -360,7 +360,10 @@ fn assert_wire_request_binding(detached: bool) {
         } else {
             engine.commit_workspace_wire(request, body).unwrap_err()
         };
-        assert_eq!(error.code(), "REQUEST_BINDING_MISMATCH");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::RequestBindingMismatch
+        );
     }
 }
 
@@ -433,7 +436,7 @@ fn workspace_mirrors_reject_both_corrupt_and_preserve_them() {
     }
     assert_eq!(
         Engine::open(&root).err().unwrap().code(),
-        "RECOVERY_REQUIRED"
+        storage_contract::ErrorCode::RecoveryRequired
     );
     for path in paths {
         assert_eq!(fs::read(path).unwrap(), b"{truncated");
@@ -464,7 +467,7 @@ fn workspace_mirrors_never_select_newest_or_first_conflicting_manifest() {
             let before = paths.clone().map(|p| fs::read(p).unwrap());
             assert_eq!(
                 Engine::open(&root).err().unwrap().code(),
-                "RECOVERY_REQUIRED",
+                storage_contract::ErrorCode::RecoveryRequired,
                 "{changed} {field}"
             );
             assert_eq!(paths.map(|p| fs::read(p).unwrap()), before);
@@ -507,7 +510,10 @@ fn workspace_mirrors_reject_unsafe_mirror_instead_of_falling_back() {
         std::os::unix::fs::symlink(&external, &paths[linked]).unwrap();
         let root = engine.root().to_owned();
         drop(engine);
-        assert_eq!(Engine::open(&root).err().unwrap().code(), "UNSAFE_PATH");
+        assert_eq!(
+            Engine::open(&root).err().unwrap().code(),
+            storage_contract::ErrorCode::UnsafePath
+        );
         assert!(
             fs::symlink_metadata(&paths[linked])
                 .unwrap()
@@ -532,7 +538,7 @@ fn workspace_mirrors_require_content_evidence_for_degraded_recovery() {
     drop(engine);
     assert_eq!(
         Engine::open(&root).err().unwrap().code(),
-        "RECOVERY_REQUIRED"
+        storage_contract::ErrorCode::RecoveryRequired
     );
     assert_eq!(fs::read(&paths[0]).unwrap(), b"{truncated");
 }
@@ -558,7 +564,7 @@ fn workspace_mirrors_reject_unsafe_staging_paths_and_request_copies() {
         drop(engine);
         assert_eq!(
             Engine::open(&root).err().unwrap().code(),
-            "UNSAFE_PATH",
+            storage_contract::ErrorCode::UnsafePath,
             "{target}"
         );
         assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
@@ -582,7 +588,7 @@ fn workspace_mirrors_do_not_resolve_unpublished_state_transition_by_fence() {
     fs::write(&paths[0], json_codec::to_vec(&changed).unwrap()).unwrap();
     assert_eq!(
         Engine::open(&root).err().unwrap().code(),
-        "RECOVERY_REQUIRED"
+        storage_contract::ErrorCode::RecoveryRequired
     );
 }
 
@@ -605,7 +611,7 @@ fn degraded_committed_workspace_requires_authoritative_receipt_binding() {
         fs::write(&paths[1], json_codec::to_vec(&workspace).unwrap()).unwrap();
         assert_eq!(
             Engine::open(&root).err().unwrap().code(),
-            "RECOVERY_REQUIRED",
+            storage_contract::ErrorCode::RecoveryRequired,
             "{field}"
         );
     }
@@ -756,7 +762,7 @@ fn partial_workspace_completion_uses_original_published_file_contexts() {
             if forged {
                 assert_eq!(
                     Engine::open(&root).err().unwrap().code(),
-                    "RECOVERY_REQUIRED"
+                    storage_contract::ErrorCode::RecoveryRequired
                 );
             } else {
                 let mut engine = Engine::open(&root).unwrap();

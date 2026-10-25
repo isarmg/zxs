@@ -14,7 +14,7 @@ use json_codec::json;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
-    pub code: String,
+    pub code: storage_contract::ErrorCode,
     pub message: String,
     pub retryable: bool,
     pub request_id: String,
@@ -22,46 +22,66 @@ pub struct ApiError {
     pub status: u16,
 }
 impl ApiError {
-    pub fn new(status: u16, code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(status: u16, code: storage_contract::ErrorCode, message: impl Into<String>) -> Self {
         Self {
             status,
-            code: code.into(),
+            code,
             message: message.into(),
             retryable: (status >= 500 && status != 501) || status == 429,
             request_id: storage_contract::new_id("req"),
         }
     }
     pub fn invalid(error: impl std::fmt::Display) -> Self {
-        Self::new(400, "INVALID_REQUEST", error.to_string())
+        Self::new(
+            400,
+            storage_contract::ErrorCode::InvalidRequest,
+            error.to_string(),
+        )
     }
     pub(crate) fn join(error: tokio::task::JoinError) -> Self {
         tracing::error!(%error, "blocking request task failed");
-        Self::new(500, "INTERNAL_ERROR", "request task failed")
+        Self::new(
+            500,
+            storage_contract::ErrorCode::InternalError,
+            "request task failed",
+        )
     }
     pub fn io(error: std::io::Error) -> Self {
         tracing::error!(%error, "local I/O failed");
-        Self::new(500, "IO_ERROR", "local storage operation failed")
+        Self::new(
+            500,
+            storage_contract::ErrorCode::IoError,
+            "local storage operation failed",
+        )
     }
     pub fn unauthorized() -> Self {
         Self::new(
             401,
-            "UNAUTHORIZED",
+            storage_contract::ErrorCode::Unauthorized,
             "authentication required or session expired",
         )
     }
     pub fn forbidden() -> Self {
-        Self::new(403, "FORBIDDEN", "permission denied")
+        Self::new(
+            403,
+            storage_contract::ErrorCode::Forbidden,
+            "permission denied",
+        )
     }
-    pub fn conflict(code: &str, message: &str) -> Self {
+    pub fn conflict(code: storage_contract::ErrorCode, message: &str) -> Self {
         Self::new(409, code, message)
     }
     pub fn limit(message: &str) -> Self {
-        Self::new(429, "RESOURCE_LIMIT_EXCEEDED", message)
+        Self::new(
+            429,
+            storage_contract::ErrorCode::ResourceLimitExceeded,
+            message,
+        )
     }
     pub fn unsupported() -> Self {
         Self::new(
             501,
-            "UNSUPPORTED_OPERATION",
+            storage_contract::ErrorCode::UnsupportedOperation,
             "operation is not supported by this build",
         )
     }
@@ -123,7 +143,11 @@ where
             .map_err(|error| {
                 if error.status().is_server_error() {
                     tracing::error!(%error, "request path extraction failed");
-                    ApiError::new(500, "INTERNAL_ERROR", "request routing failed")
+                    ApiError::new(
+                        500,
+                        storage_contract::ErrorCode::InternalError,
+                        "request routing failed",
+                    )
                 } else {
                     ApiError::invalid(error.body_text())
                 }
@@ -145,10 +169,20 @@ pub(crate) async fn read_body_with_timeout(
     DefaultBodyLimit::max(limit).apply(&mut request);
     tokio::time::timeout(timeout, Bytes::from_request(request, &()))
         .await
-        .map_err(|_| ApiError::new(408, "REQUEST_TIMEOUT", "request body deadline exceeded"))?
+        .map_err(|_| {
+            ApiError::new(
+                408,
+                storage_contract::ErrorCode::RequestTimeout,
+                "request body deadline exceeded",
+            )
+        })?
         .map_err(|error| {
             if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
-                ApiError::new(413, "PAYLOAD_TOO_LARGE", "request body exceeds limit")
+                ApiError::new(
+                    413,
+                    storage_contract::ErrorCode::PayloadTooLarge,
+                    "request body exceeds limit",
+                )
             } else {
                 ApiError::invalid("failed to read request body")
             }
@@ -183,14 +217,18 @@ pub(crate) async fn admit_request(
 }
 
 pub(crate) async fn not_found() -> ApiError {
-    ApiError::new(404, "NOT_FOUND", "route not found")
+    ApiError::new(
+        404,
+        storage_contract::ErrorCode::NotFound,
+        "route not found",
+    )
 }
 
 pub(crate) async fn method_not_allowed() -> ApiError {
     // Axum adds the matched route's Allow header to this fallback response.
     ApiError::new(
         405,
-        "METHOD_NOT_ALLOWED",
+        storage_contract::ErrorCode::MethodNotAllowed,
         "method not allowed for this route",
     )
 }

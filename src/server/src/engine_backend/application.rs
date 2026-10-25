@@ -299,7 +299,7 @@ impl<'a> Application<'a> {
         {
             return Err(ApiError::new(
                 404,
-                "HISTORY_NODE_NOT_FOUND",
+                storage_contract::ErrorCode::HistoryNodeNotFound,
                 "source commit is outside the repository",
             ));
         }
@@ -380,11 +380,17 @@ impl<'a> Application<'a> {
             .disks
             .iter()
             .find(|disk| disk.slot_id == command.slot_id)
-            .ok_or_else(|| ApiError::new(404, "DISK_NOT_FOUND", "disk not found"))?;
+            .ok_or_else(|| {
+                ApiError::new(
+                    404,
+                    storage_contract::ErrorCode::DiskNotFound,
+                    "disk not found",
+                )
+            })?;
         if disk.level != 1 {
             return Err(ApiError::new(
                 403,
-                "DISK_READ_ONLY",
+                storage_contract::ErrorCode::DiskReadOnly,
                 "backup disks are read only",
             ));
         }
@@ -403,7 +409,7 @@ impl<'a> Application<'a> {
                     .ok_or_else(|| {
                         ApiError::new(
                             404,
-                            "DIRECTORY_BRANCH_NOT_FOUND",
+                            storage_contract::ErrorCode::DirectoryBranchNotFound,
                             "directory branch missing",
                         )
                     })?;
@@ -443,7 +449,13 @@ impl<'a> Application<'a> {
             .versions
             .values()
             .find(|version| version.file_id == file)
-            .ok_or_else(|| ApiError::new(404, "FILE_NOT_FOUND", "file not found"))?;
+            .ok_or_else(|| {
+                ApiError::new(
+                    404,
+                    storage_contract::ErrorCode::FileNotFound,
+                    "file not found",
+                )
+            })?;
         repo_for_history(self.engine, &version.history_tree_id)?;
         Ok(())
     }
@@ -484,9 +496,9 @@ impl<'a> Application<'a> {
         if command.plan_digest != plan.digest {
             return Err(ApiError::conflict(
                 if plan.kind == "split" {
-                    "SPLIT_PLAN_STALE"
+                    storage_contract::ErrorCode::SplitPlanStale
                 } else {
-                    "PLAN_STALE"
+                    storage_contract::ErrorCode::PlanStale
                 },
                 "plan digest does not match",
             ));

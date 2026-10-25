@@ -143,7 +143,7 @@ fn invalid_success_and_early_not_found_preserve_review_and_uncertainty() {
     // The operation may not be indexed yet. A lookup error is not evidence of
     // rejection and never enters the success reducer.
     let error = api::Error {
-        code: "NOT_FOUND".into(),
+        code: storage_contract::ErrorCode::NotFound,
         message: "not indexed".into(),
         status: 404,
         retryable: false,

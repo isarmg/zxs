@@ -125,7 +125,7 @@ fn adopting_an_arbitrary_third_node_creates_one_metadata_node_and_only_participa
                 })
                 .unwrap_err()
                 .code(),
-            "IDEMPOTENCY_KEY_REUSED"
+            storage_contract::ErrorCode::IdempotencyKeyReused
         );
         assert_eq!(
             storage_engine::canonical_json(p.engine.state()).unwrap(),
@@ -165,7 +165,7 @@ fn reused_ancestor_head_omits_cycle_edges_and_stale_merges_publish_nothing() {
             })
             .unwrap_err()
             .code(),
-        "FILE_BRANCH_CONFLICT"
+        storage_contract::ErrorCode::FileBranchConflict
     );
     assert_eq!(
         storage_engine::canonical_json(p.engine.state()).unwrap(),

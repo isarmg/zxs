@@ -80,7 +80,7 @@ fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
                 .stage_bytes(&workspace.workspace_id, "report.txt", b"must not publish")
                 .unwrap_err()
                 .code(),
-            "BRANCH_NOT_ACTIVE"
+            storage_contract::ErrorCode::BranchNotActive
         );
         let current = engine.state.commits[&workspace.base_head].clone();
         let mut changed = current.clone();
@@ -104,7 +104,7 @@ fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
             )
             .unwrap_err()
             .code(),
-            "BRANCH_NOT_ACTIVE"
+            storage_contract::ErrorCode::BranchNotActive
         );
         assert_eq!(engine.state.branches[&branch].head_commit_id, before);
     }
@@ -150,7 +150,10 @@ fn inherited_range_fences_selection_and_preserves_parent_bytes() {
             None,
         )
         .unwrap_err();
-    assert_eq!(error.code(), "FILE_BRANCH_CONFLICT");
+    assert_eq!(
+        error.code(),
+        storage_contract::ErrorCode::FileBranchConflict
+    );
     assert!(
         engine
             .workspace(&old_workspace.workspace_id)

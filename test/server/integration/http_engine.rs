@@ -135,7 +135,7 @@ async fn reopen_after_router_drop(system: &Path) -> Engine {
     loop {
         match Engine::open(system) {
             Ok(engine) => return engine,
-            Err(error) if error.code() == "WRITER_ALREADY_ACTIVE" => {
+            Err(error) if error.code() == storage_contract::ErrorCode::WriterAlreadyActive => {
                 let remaining = deadline.saturating_duration_since(std::time::Instant::now());
                 assert!(
                     !remaining.is_zero(),

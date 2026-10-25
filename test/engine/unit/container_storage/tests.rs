@@ -101,7 +101,7 @@ fn version_creation_time_requires_the_current_whole_second_utc_form() {
         item.created_at = invalid.into();
         assert_eq!(
             validate_version(&item).unwrap_err().code(),
-            "CONTAINER_LAYOUT_INVALID"
+            storage_contract::ErrorCode::ContainerLayoutInvalid
         );
         assert_eq!(
             item.created_at, invalid,
@@ -177,19 +177,19 @@ fn unsupported_legacy_containers_are_rejected_without_cleanup_or_migration() {
                 .insert(item.file_id.clone(), "renamed.txt".into());
             assert_eq!(
                 content_path(&directory, &item).unwrap_err().code(),
-                "FORMAT_UNSUPPORTED"
+                storage_contract::ErrorCode::FormatUnsupported
             );
             assert_eq!(
                 install_version_content(&directory, &item)
                     .unwrap_err()
                     .code(),
-                "FORMAT_UNSUPPORTED"
+                storage_contract::ErrorCode::FormatUnsupported
             );
             assert_eq!(
                 synchronize_names(&config, &previous, &next)
                     .unwrap_err()
                     .code(),
-                "FORMAT_UNSUPPORTED"
+                storage_contract::ErrorCode::FormatUnsupported
             );
             assert_eq!(fs::read(&retained).unwrap(), bytes);
             assert_eq!(fs::read(&body).unwrap(), b"body");
@@ -435,7 +435,7 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
                 .directory_namespace_batch(&repo.repository_id, &request, "alice", &operation)
                 .unwrap_err()
                 .code(),
-            "IN_DOUBT"
+            storage_contract::ErrorCode::InDoubt
         );
         drop(engine);
         let mut engine = Engine::open(&root).unwrap();
@@ -548,7 +548,7 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
 
     assert!(matches!(
         prepare_names(&config, &previous, &published, MAX_METADATA),
-        Err(error) if error.code() == "NAME_COLLISION"
+        Err(error) if error.code() == storage_contract::ErrorCode::NameCollision
     ));
     // The same physical spelling is valid for replay of an immutable decision.
     // This is the existing publication phase boundary, not a second disk format.
@@ -570,7 +570,7 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
     assert!(
         matches!(
             prepare_names(&config, &published, &renamed, MAX_METADATA),
-            Err(error) if error.code() == "NAME_COLLISION"
+            Err(error) if error.code() == storage_contract::ErrorCode::NameCollision
         ),
         "case-only changes are new admissions, not publication replay"
     );
@@ -585,7 +585,7 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
     let evidence = fs::read(&marker).unwrap();
     assert!(matches!(
         prepare_names_inner(&config, &previous, &published, MAX_METADATA, true),
-        Err(error) if error.code() == "CONTAINER_LAYOUT_INVALID"
+        Err(error) if error.code() == storage_contract::ErrorCode::ContainerLayoutInvalid
     ));
     assert_eq!(
         fs::read(marker).unwrap(),
@@ -674,7 +674,7 @@ fn installation_moves_one_ordinary_inode_and_missing_paths_remain_classifiable()
     symlink("/does-not-exist", &target).unwrap();
     assert_eq!(
         content_path(&directory, &item).unwrap_err().code(),
-        "CONTAINER_LAYOUT_INVALID"
+        storage_contract::ErrorCode::ContainerLayoutInvalid
     );
 }
 
@@ -763,7 +763,7 @@ fn rename_and_note_projection_replays_without_changing_body_identity() {
     .unwrap();
     assert_eq!(
         content_path(&directory, &item).unwrap_err().code(),
-        "CONTAINER_AMBIGUOUS"
+        storage_contract::ErrorCode::ContainerAmbiguous
     );
 }
 

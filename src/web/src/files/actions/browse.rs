@@ -263,7 +263,9 @@ fn request_page(state: RwSignal<State>, restarted: bool) {
         {
             return;
         }
-        if !restarted && matches!(&result, Err(error) if error.code == "LISTING_CHANGED") {
+        if !restarted
+            && matches!(&result, Err(error) if error.code == storage_contract::ErrorCode::ListingChanged)
+        {
             state.update(|s| {
                 s.files.reset_page();
                 s.files.entries = Default::default();

@@ -37,7 +37,7 @@ fn duplicate_keys_are_rejected_at_every_depth_including_escaped_aliases() {
         br#"{"items":[{"code":"first","co\u0064e":"second"}]}"#,
     ] {
         let error = decode(200, bytes).unwrap_err();
-        assert_eq!(error.code, "INVALID_RESPONSE");
+        assert_eq!(error.code, storage_contract::ErrorCode::InvalidResponse);
         assert_eq!(error.status, 200);
     }
 }
@@ -54,7 +54,7 @@ fn malformed_json_and_non_finite_numbers_are_rejected_without_exposing_body() {
         b"<html>private-token</html>",
     ] {
         let error = decode(502, bytes).unwrap_err();
-        assert_eq!(error.code, "INVALID_RESPONSE");
+        assert_eq!(error.code, storage_contract::ErrorCode::InvalidResponse);
         assert_eq!(error.status, 502);
         assert!(!error.message.contains("private-token"));
         assert!(!error.message.contains("HTML"));
@@ -63,10 +63,10 @@ fn malformed_json_and_non_finite_numbers_are_rejected_without_exposing_body() {
 
 #[test]
 fn json_errors_keep_actual_status_code_retryability_and_request_id() {
-    let bytes = br#"{"error":{"code":"DISK_OFFLINE","message":"A disk is offline","retryable":true,"request_id":"req_test"}}"#;
+    let bytes = br#"{"error":{"code":"DISK_UNAVAILABLE","message":"A disk is offline","retryable":true,"request_id":"req_test"}}"#;
     let error = decode(503, bytes).unwrap_err();
     assert_eq!(error.status, 503);
-    assert_eq!(error.code, "DISK_OFFLINE");
+    assert_eq!(error.code, storage_contract::ErrorCode::DiskUnavailable);
     assert_eq!(error.message, "A disk is offline");
     assert!(error.retryable);
     assert_eq!(error.request_id.as_deref(), Some("req_test"));
@@ -76,5 +76,5 @@ fn json_errors_keep_actual_status_code_retryability_and_request_id() {
 fn empty_http_errors_keep_their_status() {
     let error = decode(404, b"").unwrap_err();
     assert_eq!(error.status, 404);
-    assert_eq!(error.code, "HTTP_ERROR");
+    assert_eq!(error.code, storage_contract::ErrorCode::HttpError);
 }

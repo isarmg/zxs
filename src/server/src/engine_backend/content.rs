@@ -10,16 +10,21 @@ impl EngineBackend {
         identity: &Identity,
         version: &str,
     ) -> Result<Content, ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart"))?;
+        let engine = self.engine.lock().map_err(|_| {
+            ApiError::new(
+                500,
+                storage_contract::ErrorCode::InternalError,
+                "storage engine requires restart",
+            )
+        })?;
         current_protected_identity(&engine, identity)?;
-        let record = engine
-            .state()
-            .versions
-            .get(version)
-            .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "version not found"))?;
+        let record = engine.state().versions.get(version).ok_or_else(|| {
+            ApiError::new(
+                404,
+                storage_contract::ErrorCode::NotFound,
+                "version not found",
+            )
+        })?;
         repo_for_history(&engine, &record.history_tree_id)?;
         let plan = engine.prepare_content(version).map_err(error)?;
         let repo = repo_for_history(&engine, &record.history_tree_id)?;
@@ -61,10 +66,13 @@ impl EngineBackend {
         workspace: &str,
         item: &str,
     ) -> Result<Content, ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart"))?;
+        let engine = self.engine.lock().map_err(|_| {
+            ApiError::new(
+                500,
+                storage_contract::ErrorCode::InternalError,
+                "storage engine requires restart",
+            )
+        })?;
         let current = current_protected_identity(&engine, identity)?;
         let workspace_record = workspace_authorize(&engine, &current, workspace)?;
         let plan = engine
@@ -87,16 +95,21 @@ impl EngineBackend {
         identity: &Identity,
         version: &str,
     ) -> Result<Vec<u8>, ApiError> {
-        let engine = self
-            .engine
-            .lock()
-            .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "storage engine requires restart"))?;
+        let engine = self.engine.lock().map_err(|_| {
+            ApiError::new(
+                500,
+                storage_contract::ErrorCode::InternalError,
+                "storage engine requires restart",
+            )
+        })?;
         current_protected_identity(&engine, identity)?;
-        let record = engine
-            .state()
-            .versions
-            .get(version)
-            .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "version not found"))?;
+        let record = engine.state().versions.get(version).ok_or_else(|| {
+            ApiError::new(
+                404,
+                storage_contract::ErrorCode::NotFound,
+                "version not found",
+            )
+        })?;
         repo_for_history(&engine, &record.history_tree_id)?;
         let plan = engine.prepare_content(version).map_err(error)?;
         drop(engine);

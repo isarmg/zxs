@@ -129,7 +129,7 @@ impl From<&str> for ProjectionFailure {
 }
 impl From<ProjectionFailure> for Error {
     fn from(error: ProjectionFailure) -> Self {
-        Self::new("INDEX_REBUILD_FAILED", error.message)
+        Self::new(ErrorCode::IndexRebuildFailed, error.message)
     }
 }
 
@@ -267,19 +267,19 @@ fn quarantine_corrupt_index(root: &Path) -> Result<()> {
     use platform_io::fs_safety::linux::{FileIdentity, MountPolicy, OpenAt2Root};
     let files = checked_index_files(root)?;
     let source = OpenAt2Root::open(root, MountPolicy::SameMount)
-        .map_err(|error| Error::new("UNSAFE_PATH", error.to_string()))?;
+        .map_err(|error| Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string()))?;
     // Keep from the outset: even a partial move must never be auto-deleted.
     let quarantine = tempfile::Builder::new()
         .prefix("index-corrupt-")
         .tempdir_in(root)?
         .keep();
     let destination = OpenAt2Root::open(&quarantine, MountPolicy::SameMount)
-        .map_err(|error| Error::new("UNSAFE_PATH", error.to_string()))?;
+        .map_err(|error| Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string()))?;
     for (name, file) in files {
         let current = crate::disk::open_regular(&root.join(name))?;
         if FileIdentity::from_fd(&file)? != FileIdentity::from_fd(&current)? {
             return Err(Error::new(
-                "UNSAFE_PATH",
+                storage_contract::ErrorCode::UnsafePath,
                 "index identity changed before quarantine",
             ));
         }
@@ -294,7 +294,7 @@ fn quarantine_corrupt_index(root: &Path) -> Result<()> {
         let moved = crate::disk::open_regular(&quarantine.join(name))?;
         if FileIdentity::from_fd(&file)? != FileIdentity::from_fd(&moved)? {
             return Err(Error::new(
-                "UNSAFE_PATH",
+                storage_contract::ErrorCode::UnsafePath,
                 "index identity changed during quarantine",
             ));
         }

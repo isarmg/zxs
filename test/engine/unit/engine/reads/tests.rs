@@ -67,7 +67,10 @@ fn workspace_read_rejects_length_mismatch_even_when_hash_matches() {
             .prepare_workspace_content(&workspace.workspace_id, item, "admin")
             .unwrap();
         plan.0.size = size;
-        assert_eq!(plan.open().err().unwrap().code(), "CHECKSUM_MISMATCH");
+        assert_eq!(
+            plan.open().err().unwrap().code(),
+            storage_contract::ErrorCode::ChecksumMismatch
+        );
         assert!(engine.reads.lock().unwrap().is_empty());
     }
 }
@@ -86,7 +89,7 @@ fn partial_write_does_not_authenticate_corrupted_staging_bytes() {
                 .stage_range(&workspace.workspace_id, item, "body", 7, b"!", None)
                 .unwrap_err()
                 .code(),
-            "CHECKSUM_MISMATCH"
+            storage_contract::ErrorCode::ChecksumMismatch
         );
         assert_eq!(
             canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),
@@ -168,7 +171,7 @@ fn copy_build_rejects_replacement_after_replica_verification_before_candidate_mu
                 &original,
             )
             .unwrap_err();
-        assert_eq!(error.code(), "SOURCE_CHANGED");
+        assert_eq!(error.code(), storage_contract::ErrorCode::SourceChanged);
         assert_eq!(canonical_json(&candidate).unwrap(), before);
         assert!(pending.is_empty());
     }

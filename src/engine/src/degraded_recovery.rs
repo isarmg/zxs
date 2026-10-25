@@ -42,7 +42,7 @@ pub(crate) struct RecoveryProof {
     pub reprotect: Vec<Receipt>,
 }
 fn required(message: impl Into<String>) -> Error {
-    Error::new("RECOVERY_REQUIRED", message)
+    Error::new(storage_contract::ErrorCode::RecoveryRequired, message)
 }
 fn plan_digest(plan: &RecoveryPlan) -> Result<String> {
     let mut plan = plan.clone();
@@ -212,7 +212,7 @@ impl RecoveryProof {
     pub(crate) fn verify(&self, c: &Candidate, p: &Publication) -> Result<()> {
         let bad = || {
             Error::new(
-                "PUBLICATION_INVALID",
+                storage_contract::ErrorCode::PublicationInvalid,
                 "degraded publication recovery evidence is invalid",
             )
         };
@@ -492,7 +492,7 @@ impl Engine {
     ) -> Result<RecoveryPlan> {
         if principal.is_empty() || reason.trim().is_empty() || reason.len() > 4096 {
             return Err(Error::new(
-                "INVALID_REQUEST",
+                storage_contract::ErrorCode::InvalidRequest,
                 "recovery requires a principal and a bounded explicit permanent-loss reason",
             ));
         }
@@ -575,7 +575,7 @@ impl Engine {
             }
             let recovered = found.ok_or_else(|| {
                 Error::new(
-                    "RECOVERY_PLAN_NOT_FOUND",
+                    storage_contract::ErrorCode::RecoveryPlanNotFound,
                     "no member holds this recovery plan",
                 )
             })?;
@@ -601,13 +601,13 @@ impl Engine {
         let plan = self.recovery_plan(id)?;
         if plan.digest != digest || plan.principal != principal {
             return Err(Error::new(
-                "PERMISSION_DENIED",
+                storage_contract::ErrorCode::PermissionDenied,
                 "recovery plan binding differs",
             ));
         }
         if !accept_permanent_loss {
             return Err(Error::new(
-                "PERMANENT_LOSS_NOT_ACKNOWLEDGED",
+                storage_contract::ErrorCode::PermanentLossNotAcknowledged,
                 "explicit permanent-loss acknowledgement is required",
             ));
         }
@@ -628,7 +628,7 @@ impl Engine {
             || canonical_json(&loss_details)? != canonical_json(&plan.loss_details)?
         {
             return Err(Error::new(
-                "PLAN_STALE",
+                storage_contract::ErrorCode::PlanStale,
                 "recovery evidence changed after preview",
             ));
         }

@@ -52,7 +52,10 @@ fn unnumbered_frame_header_binds_length_payload_and_receipt() {
     let mut invalid = bytes;
     invalid[..8].copy_from_slice(b"ZXSLOG2\0");
     std::fs::write(log_path(&d), &invalid).unwrap();
-    assert_eq!(scan(&d).err().unwrap().code(), "LOG_CORRUPT");
+    assert_eq!(
+        scan(&d).err().unwrap().code(),
+        storage_contract::ErrorCode::LogCorrupt
+    );
     invalid[..8].copy_from_slice(LOG_MAGIC);
     invalid[8..12].copy_from_slice(&((MAX_FRAME + 1) as u32).to_le_bytes());
     std::fs::write(log_path(&d), invalid).unwrap();
@@ -77,8 +80,8 @@ fn latest_receipts_are_idempotent_and_old_retries_rescan() {
     assert_eq!(
         append(&d, "FINALIZE", 1, &format!("{:064x}", 1), &"b".repeat(64))
             .unwrap_err()
-            .code,
-        "LOG_FORK"
+            .code(),
+        storage_contract::ErrorCode::LogFork
     );
 }
 
@@ -90,11 +93,14 @@ fn visible_publication_retry_repeats_failed_durability_barrier() {
     let object = "b".repeat(64);
     let failure = append_with_sync(&d, "PUBLICATION", 1, &candidate, &object, None, |_, _| {
         Err(Error::new(
-            "INJECTED_SYNC_FAILURE",
+            storage_contract::ErrorCode::InjectedFailure,
             "frame written, file sync failed",
         ))
     });
-    assert_eq!(failure.unwrap_err().code(), "INJECTED_SYNC_FAILURE");
+    assert_eq!(
+        failure.unwrap_err().code(),
+        storage_contract::ErrorCode::InjectedFailure
+    );
     assert_eq!(scan(&d).unwrap().records.len(), 1);
     let length = std::fs::metadata(log_path(&d)).unwrap().len();
 
@@ -109,11 +115,17 @@ fn visible_publication_retry_repeats_failed_durability_barrier() {
         |file, _| {
             repeated = true;
             file.sync_all()?;
-            Err(Error::new("INJECTED_SYNC_FAILURE", "parent sync failed"))
+            Err(Error::new(
+                storage_contract::ErrorCode::InjectedFailure,
+                "parent sync failed",
+            ))
         },
     );
     assert!(repeated, "visible matching frames must still synchronize");
-    assert_eq!(failure.unwrap_err().code(), "INJECTED_SYNC_FAILURE");
+    assert_eq!(
+        failure.unwrap_err().code(),
+        storage_contract::ErrorCode::InjectedFailure
+    );
     assert!(!tails().lock().unwrap().contains_key(&log_path(&d)));
 
     let receipt = append(&d, "PUBLICATION", 1, &candidate, &object).unwrap();
@@ -139,8 +151,8 @@ fn cached_append_detects_same_length_prefix_corruption() {
     assert_eq!(
         append(&d, "ACCEPT", 2, &format!("{:064x}", 2), &"b".repeat(64))
             .unwrap_err()
-            .code,
-        "LOG_CORRUPT"
+            .code(),
+        storage_contract::ErrorCode::LogCorrupt
     );
 }
 
@@ -436,7 +448,10 @@ fn replay_receipt_revalidates_replaced_truncated_and_rewritten_journals() {
             scanned_receipt(&scanned, &hashes, &scanned.records[0].0),
         );
         if change == 2 {
-            assert_eq!(result.unwrap_err().code(), "LOG_CORRUPT");
+            assert_eq!(
+                result.unwrap_err().code(),
+                storage_contract::ErrorCode::LogCorrupt
+            );
         } else {
             assert_eq!(result.unwrap().frame_hash, expected.frame_hash);
         }
@@ -465,18 +480,27 @@ fn replay_receipt_repeats_both_durability_barriers_after_failures() {
             |file, parent| {
                 synchronized = true;
                 if stage == 0 {
-                    return Err(Error::new("INJECTED_SYNC_FAILURE", "file sync failed"));
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::InjectedFailure,
+                        "file sync failed",
+                    ));
                 }
                 file.sync_all()?;
                 if stage == 1 {
-                    return Err(Error::new("INJECTED_SYNC_FAILURE", "directory sync failed"));
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::InjectedFailure,
+                        "directory sync failed",
+                    ));
                 }
                 sync_dir(parent)
             },
         );
         assert!(synchronized);
         if stage < 2 {
-            assert_eq!(result.unwrap_err().code(), "INJECTED_SYNC_FAILURE");
+            assert_eq!(
+                result.unwrap_err().code(),
+                storage_contract::ErrorCode::InjectedFailure
+            );
         } else {
             assert_eq!(result.unwrap().frame_hash, expected.frame_hash);
         }
@@ -514,7 +538,10 @@ fn replay_receipt_rechecks_descriptor_and_path_after_synchronization() {
                 Ok(())
             },
         );
-        assert_eq!(result.unwrap_err().code(), "RECOVERY_REQUIRED");
+        assert_eq!(
+            result.unwrap_err().code(),
+            storage_contract::ErrorCode::RecoveryRequired
+        );
         assert!(!tails().lock().unwrap().contains_key(&path));
     }
 }

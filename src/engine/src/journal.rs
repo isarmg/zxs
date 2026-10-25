@@ -121,7 +121,10 @@ fn scan_frames(mut reader: impl Read) -> Result<Scan> {
             break;
         }
         if &header[..8] != LOG_MAGIC {
-            return Err(Error::new("LOG_CORRUPT", "invalid log frame header"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::LogCorrupt,
+                "invalid log frame header",
+            ));
         }
         let len = u32::from_le_bytes(
             header[8..LOG_HEADER_BYTES]
@@ -129,7 +132,10 @@ fn scan_frames(mut reader: impl Read) -> Result<Scan> {
                 .expect("fixed header"),
         ) as usize;
         if len > MAX_FRAME {
-            return Err(Error::new("LOG_CORRUPT", "log frame length exceeds limit"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::LogCorrupt,
+                "log frame length exceeds limit",
+            ));
         }
         let mut payload = vec![0; len];
         if let Err(e) = reader.read_exact(&mut payload) {
@@ -151,7 +157,10 @@ fn scan_frames(mut reader: impl Read) -> Result<Scan> {
         h.update(&header);
         h.update(&payload);
         if h.finalize().as_bytes() != &digest {
-            return Err(Error::new("LOG_CORRUPT", "log frame checksum differs"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::LogCorrupt,
+                "log frame checksum differs",
+            ));
         }
         let record: Record = decode_strict(&payload)?;
         if !matches!(
@@ -159,7 +168,7 @@ fn scan_frames(mut reader: impl Read) -> Result<Scan> {
             "PREPARE" | "ACCEPT" | "FINALIZE" | "PUBLICATION" | "REPROTECT"
         ) {
             return Err(Error::new(
-                "LOG_FORMAT_UNSUPPORTED",
+                storage_contract::ErrorCode::LogFormatUnsupported,
                 "unknown journal record type",
             ));
         }
@@ -168,7 +177,7 @@ fn scan_frames(mut reader: impl Read) -> Result<Scan> {
             || record.sequence < last_sequence
         {
             return Err(Error::new(
-                "LOG_CORRUPT",
+                storage_contract::ErrorCode::LogCorrupt,
                 "log chain or canonical encoding differs",
             ));
         }
@@ -227,9 +236,12 @@ struct JournalWriter {
 }
 impl JournalWriter {
     fn acquire(path: &Path) -> Result<Self> {
-        let mut writers = writers()
-            .lock()
-            .map_err(|_| Error::new("RECOVERY_REQUIRED", "journal writer registry poisoned"))?;
+        let mut writers = writers().lock().map_err(|_| {
+            Error::new(
+                storage_contract::ErrorCode::RecoveryRequired,
+                "journal writer registry poisoned",
+            )
+        })?;
         let lock = writers.entry(path.to_path_buf()).or_default().clone();
         Ok(Self {
             path: path.to_path_buf(),
@@ -241,7 +253,12 @@ impl JournalWriter {
             .as_ref()
             .expect("live journal writer lease")
             .lock()
-            .map_err(|_| Error::new("RECOVERY_REQUIRED", "journal writer lock poisoned"))
+            .map_err(|_| {
+                Error::new(
+                    storage_contract::ErrorCode::RecoveryRequired,
+                    "journal writer lock poisoned",
+                )
+            })
     }
 }
 impl Drop for JournalWriter {
@@ -307,14 +324,14 @@ fn sync_existing(
 ) -> Result<()> {
     if FileStamp::of(file)? != *before || FileStamp::of(&open_regular(path)?)? != *before {
         return Err(Error::new(
-            "RECOVERY_REQUIRED",
+            storage_contract::ErrorCode::RecoveryRequired,
             "journal changed during verification",
         ));
     }
     synchronize(file, path.parent().expect("log parent"))?;
     if FileStamp::of(file)? != *before || FileStamp::of(&open_regular(path)?)? != *before {
         return Err(Error::new(
-            "RECOVERY_REQUIRED",
+            storage_contract::ErrorCode::RecoveryRequired,
             "journal changed during synchronization",
         ));
     }
@@ -339,7 +356,12 @@ fn append_with_sync(
     // Remove before touching disk so failures force partial writes to be checked.
     let cached = tails()
         .lock()
-        .map_err(|_| Error::new("RECOVERY_REQUIRED", "journal cache lock poisoned"))?
+        .map_err(|_| {
+            Error::new(
+                storage_contract::ErrorCode::RecoveryRequired,
+                "journal cache lock poisoned",
+            )
+        })?
         .remove(&path);
     let mut file = open_append_regular(&path)?;
     let before = FileStamp::of(&file)?;
@@ -403,7 +425,7 @@ fn append_with_sync(
     // serialize supported writers; this also catches accidental outside writes.
     if FileStamp::of(&file)? != before || FileStamp::of(&open_regular(&path)?)? != before {
         return Err(Error::new(
-            "RECOVERY_REQUIRED",
+            storage_contract::ErrorCode::RecoveryRequired,
             "journal changed during verification",
         ));
     }
@@ -413,7 +435,7 @@ fn append_with_sync(
         .any(|(r, _)| r.sequence == sequence && r.candidate_hash != candidate)
     {
         return Err(Error::new(
-            "LOG_FORK",
+            storage_contract::ErrorCode::LogFork,
             "two candidates occupy one decision slot",
         ));
     }
@@ -423,7 +445,7 @@ fn append_with_sync(
         .is_some_and(|(r, _)| r.sequence > sequence)
     {
         return Err(Error::new(
-            "LOG_FORK",
+            storage_contract::ErrorCode::LogFork,
             "cannot append an older decision slot",
         ));
     }
@@ -441,7 +463,7 @@ fn append_with_sync(
     let bytes = canonical_json(&record)?;
     if bytes.len() > MAX_FRAME {
         return Err(Error::new(
-            "RESOURCE_LIMIT",
+            storage_contract::ErrorCode::ResourceLimit,
             "log record exceeds frame limit",
         ));
     }
@@ -465,7 +487,7 @@ fn append_with_sync(
         || FileStamp::of(&open_regular(&path)?)? != stamp
     {
         return Err(Error::new(
-            "RECOVERY_REQUIRED",
+            storage_contract::ErrorCode::RecoveryRequired,
             "journal changed during append",
         ));
     }
@@ -501,9 +523,12 @@ fn cache_tail(path: PathBuf, stamp: FileStamp, mut records: Vec<(Record, String)
     }
     // Do not retain the allocation of a full historical scan.
     records.shrink_to_fit();
-    let mut tails = tails()
-        .lock()
-        .map_err(|_| Error::new("RECOVERY_REQUIRED", "journal cache lock poisoned"))?;
+    let mut tails = tails().lock().map_err(|_| {
+        Error::new(
+            storage_contract::ErrorCode::RecoveryRequired,
+            "journal cache lock poisoned",
+        )
+    })?;
     // Bound cache size across unrelated engines; eviction only costs a rescan.
     if tails.len() >= MAX_CACHED_JOURNALS {
         tails.pop_first();
@@ -553,7 +578,7 @@ impl PreparedMetadataObject {
         let (bytes, hash) = encode_hashed_object(kind, value)?;
         if bytes.len() > maximum {
             return Err(Error::new(
-                "RESOURCE_LIMIT",
+                storage_contract::ErrorCode::ResourceLimit,
                 format!("serialized metadata exceeds {maximum} byte reader limit"),
             ));
         }
@@ -562,7 +587,7 @@ impl PreparedMetadataObject {
     pub(crate) fn store(&self, members: &[DiskConfig]) -> Result<String> {
         if !members.is_empty() && self.bytes.len() > MAX_METADATA {
             return Err(Error::new(
-                "RESOURCE_LIMIT",
+                storage_contract::ErrorCode::ResourceLimit,
                 "serialized metadata exceeds reader limit",
             ));
         }
@@ -581,7 +606,7 @@ pub(crate) fn load_object<T: data_serialization::de::DeserializeOwned + Serializ
     let value = decode_strict(&read_object_bytes(d, kind, hash)?)?;
     if object_hash(kind, &value)? != hash {
         return Err(Error::new(
-            "OBJECT_CORRUPT",
+            storage_contract::ErrorCode::ObjectCorrupt,
             "immutable object digest differs",
         ));
     }
@@ -674,9 +699,12 @@ pub(crate) fn prepare_snapshot_incremental(
 #[cfg(test)]
 fn prepare_snapshot_reference(state: &State, maximum: usize) -> Result<PreparedSnapshot> {
     let value = json_codec::to_value(state)?;
-    let obj = value
-        .as_object()
-        .ok_or_else(|| Error::new("STATE_INVALID", "state is not an object"))?;
+    let obj = value.as_object().ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "state is not an object",
+        )
+    })?;
     let mut pages = BTreeMap::new();
     let mut scalars = json_codec::Map::new();
     let mut objects = Vec::new();
@@ -753,13 +781,13 @@ pub(crate) fn resolve_snapshot(
     SNAPSHOT_LOAD_COUNT.with(|count| count.set(count.get() + 1));
     if snapshot.scalars.contains_key("events") && snapshot.pages.contains_key("events") {
         return Err(Error::new(
-            "OBJECT_CORRUPT",
+            storage_contract::ErrorCode::ObjectCorrupt,
             "snapshot events are both scalar and paged",
         ));
     }
     if !snapshot.pages.contains_key("events") {
         return Err(Error::new(
-            "FORMAT_UNSUPPORTED",
+            storage_contract::ErrorCode::FormatUnsupported,
             "snapshot events must use the current paged representation",
         ));
     }
@@ -769,13 +797,16 @@ pub(crate) fn resolve_snapshot(
         for h in hashes {
             for (k, v) in page(&h)? {
                 if map.insert(k, v).is_some() {
-                    return Err(Error::new("OBJECT_CORRUPT", "duplicate snapshot entity"));
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::ObjectCorrupt,
+                        "duplicate snapshot entity",
+                    ));
                 }
             }
         }
         if out.contains_key(&field) {
             return Err(Error::new(
-                "OBJECT_CORRUPT",
+                storage_contract::ErrorCode::ObjectCorrupt,
                 "snapshot field is both scalar and paged",
             ));
         }
@@ -784,7 +815,7 @@ pub(crate) fn resolve_snapshot(
             for (index, (key, value)) in map.into_iter().enumerate() {
                 if key != format!("{index:020}") {
                     return Err(Error::new(
-                        "OBJECT_CORRUPT",
+                        storage_contract::ErrorCode::ObjectCorrupt,
                         "snapshot event indexes are not contiguous",
                     ));
                 }
@@ -798,7 +829,10 @@ pub(crate) fn resolve_snapshot(
     }
     let state: State = json_codec::from_value(json_codec::Value::Object(out))?;
     if state.sequence != snapshot.sequence {
-        return Err(Error::new("OBJECT_CORRUPT", "snapshot sequence differs"));
+        return Err(Error::new(
+            storage_contract::ErrorCode::ObjectCorrupt,
+            "snapshot sequence differs",
+        ));
     }
     Ok(state)
 }
@@ -916,7 +950,7 @@ pub(crate) fn verify_publication_seal(
                 || p.finalize.recovery_id.is_some()))
     {
         return Err(Error::new(
-            "PUBLICATION_INVALID",
+            storage_contract::ErrorCode::PublicationInvalid,
             "synchronized publication receipts from every configured member are required",
         ));
     }
@@ -938,7 +972,7 @@ pub(crate) fn verify_publication_seal(
                 .expect("recovery member sets checked");
             if fence.slot_id != r.slot_id {
                 return Err(Error::new(
-                    "PUBLICATION_INVALID",
+                    storage_contract::ErrorCode::PublicationInvalid,
                     "recovery fence slot differs",
                 ));
             }
@@ -953,7 +987,10 @@ pub(crate) fn verify_publication_seal(
             if accept.slot_id != r.slot_id
                 || !receipt_binds(accept, "ACCEPT", c.sequence, &candidate, &candidate)?
             {
-                return Err(Error::new("PUBLICATION_INVALID", "ACCEPT receipt differs"));
+                return Err(Error::new(
+                    storage_contract::ErrorCode::PublicationInvalid,
+                    "ACCEPT receipt differs",
+                ));
             }
             accept.frame_hash.as_str()
         };
@@ -964,13 +1001,13 @@ pub(crate) fn verify_publication_seal(
             || !receipt_binds(f, "FINALIZE", c.sequence, &candidate, &finalize)?
         {
             return Err(Error::new(
-                "PUBLICATION_INVALID",
+                storage_contract::ErrorCode::PublicationInvalid,
                 "member synchronized chain is invalid",
             ));
         }
         if !receipt_binds(r, "PUBLICATION", c.sequence, &candidate, &publication)? {
             return Err(Error::new(
-                "PUBLICATION_INVALID",
+                storage_contract::ErrorCode::PublicationInvalid,
                 "publication frame receipt is invalid",
             ));
         }
@@ -1022,7 +1059,7 @@ fn verify_local_membership(root: &Path, candidate: &Candidate, seal: &DiskSeal) 
         })
     {
         return Err(Error::new(
-            "PUBLICATION_INVALID",
+            storage_contract::ErrorCode::PublicationInvalid,
             "local proof differs from saved pool membership",
         ));
     }
@@ -1035,10 +1072,12 @@ pub(crate) fn verify_tombstone(directory: &Path, version: &FileVersion) -> Resul
     verify_local_version_publication(directory, version)?;
     let t: ContentTombstone = read_json(&directory.join("purged.json"))?;
     verify_publication_seal(&t.candidate, &t.publication, &t.publication_seal)?;
-    let root = directory
-        .ancestors()
-        .nth(4)
-        .ok_or_else(|| Error::new("PUBLICATION_INVALID", "invalid version location"))?;
+    let root = directory.ancestors().nth(4).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::PublicationInvalid,
+            "invalid version location",
+        )
+    })?;
     let seal: DiskSeal = read_json(&root.join("disk.json"))?;
     verify_local_membership(root, &t.candidate, &seal)?;
     if t.version_id != version.version_id
@@ -1056,7 +1095,7 @@ pub(crate) fn verify_tombstone(directory: &Path, version: &FileVersion) -> Resul
         })
     {
         return Err(Error::new(
-            "TOMBSTONE_INVALID",
+            storage_contract::ErrorCode::TombstoneInvalid,
             "content tombstone is not covered by a published state",
         ));
     }
@@ -1080,7 +1119,7 @@ pub(crate) fn verify_local_publication(directory: &Path, version: &FileVersion) 
     verify_local_version_publication(directory, version)?;
     if directory.join("purged.json").exists() {
         return Err(Error::new(
-            "CONTENT_PURGED",
+            storage_contract::ErrorCode::ContentPurged,
             "this version has a local content tombstone",
         ));
     }
@@ -1110,7 +1149,7 @@ fn verify_local_version_publication(directory: &Path, version: &FileVersion) -> 
             != Some("histories")
     {
         return Err(Error::new(
-            "PUBLICATION_INVALID",
+            storage_contract::ErrorCode::PublicationInvalid,
             "version directory identity differs from its descriptor",
         ));
     }
@@ -1128,10 +1167,12 @@ fn verify_local_version_publication(directory: &Path, version: &FileVersion) -> 
             receipts: local.publication_receipts.clone(),
         },
     )?;
-    let root = directory
-        .ancestors()
-        .nth(4)
-        .ok_or_else(|| Error::new("PUBLICATION_INVALID", "version is outside disk layout"))?;
+    let root = directory.ancestors().nth(4).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::PublicationInvalid,
+            "version is outside disk layout",
+        )
+    })?;
     let seal: DiskSeal = read_json(&root.join("disk.json"))?;
     verify_local_membership(root, c, &seal)?;
     let finalize_hash = object_hash("finalize", &p.finalize)?;
@@ -1145,7 +1186,7 @@ fn verify_local_version_publication(directory: &Path, version: &FileVersion) -> 
         || object_hash("finalize", &proof.finalize)? != finalize_hash
     {
         return Err(Error::new(
-            "PUBLICATION_INVALID",
+            storage_contract::ErrorCode::PublicationInvalid,
             "local proof does not bind the version",
         ));
     }
@@ -1153,12 +1194,17 @@ fn verify_local_version_publication(directory: &Path, version: &FileVersion) -> 
         .versions
         .iter()
         .find(|e| e.version.version_id == version.version_id)
-        .ok_or_else(|| Error::new("PUBLICATION_INVALID", "version is absent from candidate"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::PublicationInvalid,
+                "version is absent from candidate",
+            )
+        })?;
     if object_hash("version", &evidence.version)? != object_hash("version", version)?
         || evidence.placement.route_slot_ids != proof.route_slot_ids
     {
         return Err(Error::new(
-            "PUBLICATION_INVALID",
+            storage_contract::ErrorCode::PublicationInvalid,
             "candidate placement mismatch",
         ));
     }
@@ -1170,10 +1216,15 @@ fn verify_local_version_publication(directory: &Path, version: &FileVersion) -> 
                 && r.disk_id == proof.disk_id
                 && r.slot_id == proof.slot_id
         })
-        .ok_or_else(|| Error::new("PUBLICATION_INVALID", "local payload receipt absent"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::PublicationInvalid,
+                "local payload receipt absent",
+            )
+        })?;
     if receipt.proof_hash != object_hash("commit-proof", &proof)? {
         return Err(Error::new(
-            "PUBLICATION_INVALID",
+            storage_contract::ErrorCode::PublicationInvalid,
             "local receipt digest differs",
         ));
     }
@@ -1184,7 +1235,7 @@ fn verify_local_version_publication(directory: &Path, version: &FileVersion) -> 
             .any(|r| r.version_id == version.version_id && &r.slot_id == slot)
         {
             return Err(Error::new(
-                "PUBLICATION_INVALID",
+                storage_contract::ErrorCode::PublicationInvalid,
                 "a required route receipt is absent",
             ));
         }

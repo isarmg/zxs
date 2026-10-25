@@ -91,7 +91,7 @@ pub(crate) fn prepare_history_manifests_incremental(
 ) -> Result<(BTreeMap<String, String>, Vec<PreparedMetadataObject>)> {
     if previous_roots.keys().ne(before.histories.keys()) {
         return Err(Error::new(
-            "STATE_INVALID",
+            storage_contract::ErrorCode::StateInvalid,
             "published history baseline coverage differs",
         ));
     }
@@ -116,7 +116,7 @@ pub(crate) fn prepare_history_manifests_incremental(
                     let (rebuilt_hash, rebuilt) = graph::prepare(&manifest, maximum)?;
                     if &rebuilt_hash != hash {
                         return Err(Error::new(
-                            "OBJECT_CORRUPT",
+                            storage_contract::ErrorCode::ObjectCorrupt,
                             "reconstructed history differs from published baseline",
                         ));
                     }
@@ -127,7 +127,7 @@ pub(crate) fn prepare_history_manifests_incremental(
             };
             if manifest.history.history_tree_id != *id {
                 return Err(Error::new(
-                    "OBJECT_CORRUPT",
+                    storage_contract::ErrorCode::ObjectCorrupt,
                     "published history baseline identity differs",
                 ));
             }
@@ -138,7 +138,7 @@ pub(crate) fn prepare_history_manifests_incremental(
                     "history-manifest" => "history-manifest",
                     _ => {
                         return Err(Error::new(
-                            "OBJECT_CORRUPT",
+                            storage_contract::ErrorCode::ObjectCorrupt,
                             "unexpected history dependency domain",
                         ));
                     }
@@ -146,7 +146,7 @@ pub(crate) fn prepare_history_manifests_incremental(
                 let object = PreparedMetadataObject::new(kind, &value, maximum)?;
                 if object.hash != expected_hash {
                     return Err(Error::new(
-                        "OBJECT_CORRUPT",
+                        storage_contract::ErrorCode::ObjectCorrupt,
                         "history dependency identity changed",
                     ));
                 }
@@ -189,7 +189,7 @@ pub(crate) fn bound_history_objects(
             .ne(state.histories.keys())
     {
         return Err(Error::new(
-            "OBJECT_CORRUPT",
+            storage_contract::ErrorCode::ObjectCorrupt,
             "candidate history set differs",
         ));
     }
@@ -207,7 +207,7 @@ pub(crate) fn bound_history_objects(
                 .is_some_and(|expected| expected != manifest_bytes)
         {
             return Err(Error::new(
-                "OBJECT_CORRUPT",
+                storage_contract::ErrorCode::ObjectCorrupt,
                 "bound history projection differs",
             ));
         }
@@ -250,7 +250,7 @@ fn package_object(package: &Path, kind: &str, hash: &str) -> Result<PathBuf> {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     {
         return Err(Error::new(
-            "HISTORY_PACKAGE_INVALID",
+            storage_contract::ErrorCode::HistoryPackageInvalid,
             "invalid graph object address",
         ));
     }
@@ -282,7 +282,7 @@ fn load_package(package: &Path) -> Result<(HistoryManifest, PackageProof, Histor
             != Some(&hash)
     {
         return Err(Error::new(
-            "HISTORY_PACKAGE_INVALID",
+            storage_contract::ErrorCode::HistoryPackageInvalid,
             "manifest is not bound by the published candidate",
         ));
     }
@@ -295,7 +295,7 @@ fn load_package(package: &Path) -> Result<(HistoryManifest, PackageProof, Histor
             let metadata: FileVersion = read_json(&directory.join("version.json"))?;
             if object_hash("version", &metadata)? != object_hash("version", version)? {
                 return Err(Error::new(
-                    "HISTORY_PACKAGE_INVALID",
+                    storage_contract::ErrorCode::HistoryPackageInvalid,
                     "packaged version metadata differs",
                 ));
             }
@@ -303,7 +303,12 @@ fn load_package(package: &Path) -> Result<(HistoryManifest, PackageProof, Histor
             full_files += 1;
             full_bytes = full_bytes
                 .checked_add(version.logical_size)
-                .ok_or_else(|| Error::new("RESOURCE_LIMIT", "package byte count overflow"))?;
+                .ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::ResourceLimit,
+                        "package byte count overflow",
+                    )
+                })?;
         } else {
             tombstones += 1;
         }
@@ -352,7 +357,7 @@ impl Engine {
                 if candidate.pool_id != self.config.pool_id || candidate.sequence != record.sequence
                 {
                     return Err(Error::new(
-                        "PUBLICATION_INVALID",
+                        storage_contract::ErrorCode::PublicationInvalid,
                         "candidate differs from journal or pool",
                     ));
                 }
@@ -389,7 +394,7 @@ impl Engine {
         }
         let proof = proof.ok_or_else(|| {
             Error::new(
-                "RECOVERY_REQUIRED",
+                storage_contract::ErrorCode::RecoveryRequired,
                 "no published manifest matches the current history",
             )
         })?;
@@ -420,7 +425,7 @@ impl Engine {
                         != version.checksum_manifest_hash
                 {
                     return Err(Error::new(
-                        "SOURCE_CHANGED",
+                        storage_contract::ErrorCode::SourceChanged,
                         "exported content differs from the published manifest",
                     ));
                 }
@@ -473,7 +478,7 @@ impl Engine {
                 || version.logical_size > self.config.max_file_bytes
             {
                 return Err(Error::new(
-                    "FORMAT_UNSUPPORTED",
+                    storage_contract::ErrorCode::FormatUnsupported,
                     "restore requires compatible checksum chunks and file size limits",
                 ));
             }
@@ -498,7 +503,7 @@ impl Engine {
                     .is_some_and(|prior| prior != *new)
                 {
                     return Err(Error::new(
-                        "RESTORE_BACKUP_CONFLICT",
+                        storage_contract::ErrorCode::RestoreBackupConflict,
                         "source backup slots cannot be rebound unambiguously",
                     ));
                 }
@@ -522,14 +527,14 @@ impl Engine {
                         .is_some_and(|prior| prior != *path)
                 {
                     return Err(Error::new(
-                        "RESTORE_BACKUP_CONFLICT",
+                        storage_contract::ErrorCode::RestoreBackupConflict,
                         "backup prefixes collide after route rebinding",
                     ));
                 }
             }
             if !paths.is_empty() && route.iter().skip(1).any(|slot| !rebound.contains_key(slot)) {
                 return Err(Error::new(
-                    "BACKUP_PREFIX_REQUIRED",
+                    storage_contract::ErrorCode::BackupPrefixRequired,
                     "the restored route has a backup slot without a user prefix",
                 ));
             }
@@ -545,10 +550,12 @@ impl Engine {
             .iter()
             .map(|(id, policy)| Ok((id.clone(), remap_paths(&policy.backup_prefixes)?)))
             .collect::<Result<BTreeMap<_, _>>>()?;
-        let after_source =
-            proof.candidate.sequence.checked_add(1).ok_or_else(|| {
-                Error::new("RESOURCE_LIMIT", "source publication sequence exhausted")
-            })?;
+        let after_source = proof.candidate.sequence.checked_add(1).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::ResourceLimit,
+                "source publication sequence exhausted",
+            )
+        })?;
         self.mutate("history.restore",principal,operation,json!({"manifest_hash":report.manifest_hash,"primary_slot_id":primary,"target_copies":copies}),|engine,state,pending| {
             if state.histories.contains_key(&manifest.history.history_tree_id) || state.repositories.contains_key(&manifest.repository.repository_id)
                 || manifest.commits.keys().any(|id| state.commits.contains_key(id))
@@ -576,10 +583,10 @@ impl Engine {
                 || manifest.boundary_marks.keys().any(|id| state.history_boundaries.contains_key(id))
                 || manifest.placement_rules.keys().any(|id| state.placement_rules.contains_key(id))
                 || manifest.protection_policies.keys().any(|id| state.protection_policies.contains_key(id)) {
-                return Err(Error::new("OBJECT_COLLISION","package identities already exist in the destination pool"));
+                return Err(Error::new(storage_contract::ErrorCode::ObjectCollision,"package identities already exist in the destination pool"));
             }
             if state.repositories.values().any(|r| name_policy::lookup_key(&r.name) == name_policy::lookup_key(&manifest.repository.name)) {
-                return Err(Error::new("NAME_COLLISION","restored repository name already exists"));
+                return Err(Error::new(storage_contract::ErrorCode::NameCollision,"restored repository name already exists"));
             }
             state.sequence = state.sequence.max(after_source);
             let mut repository = manifest.repository.clone();

@@ -184,7 +184,7 @@ fn temporary_appends_and_renames_stay_unordered_until_validation() {
         )
         .unwrap_err()
         .code(),
-        "NAME_COLLISION"
+        storage_contract::ErrorCode::NameCollision
     );
     let mutation_order = entries
         .iter()
@@ -319,7 +319,7 @@ fn published_and_reopened_trees_preserve_unicode_identity_and_historical_lookup(
             &new_id("op"),
         )
         .unwrap_err();
-    assert_eq!(collision.code(), "NAME_COLLISION");
+    assert_eq!(collision.code(), storage_contract::ErrorCode::NameCollision);
     drop(engine);
     let engine = Engine::open(&temporary.path().join("system")).unwrap();
     assert_published_matches_legacy(&engine, branch);
@@ -397,11 +397,11 @@ fn publication_rejects_bad_keys_unsorted_entries_and_normalized_collisions() {
             },
         );
         let expected = if corruption.contains("duplicate") {
-            "NAME_COLLISION"
+            storage_contract::ErrorCode::NameCollision
         } else if corruption == "nfd_display" {
-            "NAME_NOT_NORMALIZED"
+            storage_contract::ErrorCode::NameNotNormalized
         } else {
-            "HISTORY_PACKAGE_INVALID"
+            storage_contract::ErrorCode::HistoryPackageInvalid
         };
         assert_eq!(result.unwrap_err().code(), expected, "{corruption}");
         assert_eq!(canonical_json(engine.state()).unwrap(), before);
@@ -446,6 +446,6 @@ fn query_views_keep_missing_foreign_and_migrated_branch_errors() {
         .state = "migrated".into();
     let old = engine.list_tree_ref(&repo.main_branch_id).err().unwrap();
     let new = engine.namespace_tree(&repo.main_branch_id).err().unwrap();
-    assert_eq!(new.code(), "TREE_MOVED");
+    assert_eq!(new.code(), storage_contract::ErrorCode::TreeMoved);
     assert_eq!(new.to_string(), old.to_string());
 }

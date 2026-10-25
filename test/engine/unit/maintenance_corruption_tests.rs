@@ -150,7 +150,11 @@ fn split_rejects_broken_persisted_identities_without_partial_migration() {
         let error = engine
             .commit_plan(&plan.plan_id, "admin", &new_id("op"))
             .unwrap_err();
-        assert_eq!(error.code(), "STATE_INVALID", "{corruption}");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::StateInvalid,
+            "{corruption}"
+        );
         assert_eq!(
             canonical_json(engine.state()).unwrap(),
             before,
@@ -223,7 +227,11 @@ fn split_rejects_broken_crossing_merge_endpoints_without_publication() {
         let error = engine
             .commit_plan(&plan.plan_id, "admin", &new_id("op"))
             .unwrap_err();
-        assert_eq!(error.code(), "STATE_INVALID", "{corruption}");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::StateInvalid,
+            "{corruption}"
+        );
         assert_eq!(
             canonical_json(engine.state()).unwrap(),
             before,
@@ -256,7 +264,11 @@ fn split_generation_overflow_does_not_wrap_or_publish_migration() {
         let error = engine
             .commit_plan(&plan.plan_id, "admin", &new_id("op"))
             .unwrap_err();
-        assert_eq!(error.code(), "RESOURCE_LIMIT", "{counter}");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::ResourceLimit,
+            "{counter}"
+        );
         assert_eq!(canonical_json(engine.state()).unwrap(), before, "{counter}");
         assert_eq!(engine.plan(&plan.plan_id).unwrap().state, "ready");
     }
@@ -269,10 +281,19 @@ fn absent_plan_is_not_found_below_an_existing_system_root() {
     let engine =
         Engine::initialize(&root, Config::development([temporary.path().join("disk")])).unwrap();
     let id = new_id("plan");
-    assert_eq!(engine.plan(&id).unwrap_err().code(), "PLAN_NOT_FOUND");
+    assert_eq!(
+        engine.plan(&id).unwrap_err().code(),
+        storage_contract::ErrorCode::PlanNotFound
+    );
     private_dir(&root.join("plans")).unwrap();
-    assert_eq!(engine.plan(&id).unwrap_err().code(), "PLAN_NOT_FOUND");
-    assert_eq!(engine.plan("../escape").unwrap_err().code(), "INVALID_ID");
+    assert_eq!(
+        engine.plan(&id).unwrap_err().code(),
+        storage_contract::ErrorCode::PlanNotFound
+    );
+    assert_eq!(
+        engine.plan("../escape").unwrap_err().code(),
+        storage_contract::ErrorCode::InvalidId
+    );
 }
 
 #[test]
@@ -302,22 +323,22 @@ fn plan_lookup_preserves_io_corruption_limits_and_link_rejections() {
         let expected = match case {
             "json" => {
                 fs::write(&file, b"{").unwrap();
-                "INVALID_JSON"
+                storage_contract::ErrorCode::InvalidJson
             }
             "oversized" => {
                 fs::File::create(&file)
                     .unwrap()
                     .set_len(MAX_METADATA as u64 + 1)
                     .unwrap();
-                "RESOURCE_LIMIT"
+                storage_contract::ErrorCode::ResourceLimit
             }
             "leaf-link" => {
                 symlink(temporary.path().join("absent"), &file).unwrap();
-                "UNSAFE_PATH"
+                storage_contract::ErrorCode::UnsafePath
             }
             "leaf-directory" => {
                 fs::create_dir(&file).unwrap();
-                "UNSAFE_PATH"
+                storage_contract::ErrorCode::UnsafePath
             }
             "leaf-fifo" => {
                 rustix::fs::mkfifoat(
@@ -326,33 +347,33 @@ fn plan_lookup_preserves_io_corruption_limits_and_link_rejections() {
                     rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
                 )
                 .unwrap();
-                "UNSAFE_PATH"
+                storage_contract::ErrorCode::UnsafePath
             }
             "parent-link" => {
                 fs::remove_dir(&plans).unwrap();
                 symlink(temporary.path().join("absent"), &plans).unwrap();
-                "UNSAFE_PATH"
+                storage_contract::ErrorCode::UnsafePath
             }
             "parent-file" => {
                 fs::remove_dir(&plans).unwrap();
                 fs::write(&plans, b"not a directory").unwrap();
-                "UNSAFE_PATH"
+                storage_contract::ErrorCode::UnsafePath
             }
             "hard-link" => {
                 let other = temporary.path().join("other.json");
                 fs::write(&other, b"{}").unwrap();
                 fs::hard_link(&other, &file).unwrap();
-                "UNSAFE_PATH"
+                storage_contract::ErrorCode::UnsafePath
             }
             "missing-root" => {
                 fs::rename(&root, temporary.path().join("moved-system")).unwrap();
-                "IO_ERROR"
+                storage_contract::ErrorCode::IoError
             }
             "linked-root" => {
                 let moved = temporary.path().join("moved-system");
                 fs::rename(&root, &moved).unwrap();
                 symlink(&moved, &root).unwrap();
-                "UNSAFE_PATH"
+                storage_contract::ErrorCode::UnsafePath
             }
             _ => unreachable!(),
         };
@@ -396,7 +417,7 @@ fn plan_lookup_keeps_persisted_identity_and_digest_validation() {
         write_json(&path, &malformed, true).unwrap();
         assert_eq!(
             engine.plan(&expected.plan_id).unwrap_err().code(),
-            "PLAN_INVALID",
+            storage_contract::ErrorCode::PlanInvalid,
             "{field}"
         );
     }

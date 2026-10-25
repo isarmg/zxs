@@ -46,7 +46,10 @@ impl Backend for BackendProbe {
         drop(self.gate.changed.wait_while(open, |open| !*open).unwrap());
         self.gate.finished.add_permits(1);
         match self.outcome {
-            1 => Err(ApiError::conflict("TEST_CONFLICT", "backend error")),
+            1 => Err(ApiError::conflict(
+                storage_contract::ErrorCode::InjectedFailure,
+                "backend error",
+            )),
             2 => panic!("test backend panic"),
             _ => Ok(json!({})),
         }

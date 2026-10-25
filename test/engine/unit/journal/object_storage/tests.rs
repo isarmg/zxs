@@ -47,13 +47,19 @@ fn matching_object_retry_cannot_bypass_a_failed_publication_barrier() {
     let failure = write_object_bytes_with(disk, "publication", &hash, &bytes, |_, actual| {
         reached = true;
         assert_eq!(actual, bytes);
-        Err(Error::new("INJECTED_SYNC_FAILURE", "parent sync failed"))
+        Err(Error::new(
+            storage_contract::ErrorCode::InjectedFailure,
+            "parent sync failed",
+        ))
     });
     assert!(
         reached,
         "existing bytes cannot replace the publication barrier"
     );
-    assert_eq!(failure.unwrap_err().code(), "INJECTED_SYNC_FAILURE");
+    assert_eq!(
+        failure.unwrap_err().code(),
+        storage_contract::ErrorCode::InjectedFailure
+    );
     assert_eq!(store_object(disk, "publication", &value).unwrap(), hash);
     assert_eq!(
         load_object::<Value>(disk, "publication", &hash).unwrap(),
@@ -79,17 +85,17 @@ fn flat_objects_are_rejected_without_migration_or_deletion() {
             load_object::<Value>(disk, "publication", &hash)
                 .unwrap_err()
                 .code(),
-            "FORMAT_UNSUPPORTED"
+            storage_contract::ErrorCode::FormatUnsupported
         );
         assert_eq!(
             store_object(disk, "publication", &value)
                 .unwrap_err()
                 .code(),
-            "FORMAT_UNSUPPORTED"
+            storage_contract::ErrorCode::FormatUnsupported
         );
         assert_eq!(
             list_object_hashes(disk, "publication").unwrap_err().code(),
-            "FORMAT_UNSUPPORTED"
+            storage_contract::ErrorCode::FormatUnsupported
         );
         assert_eq!(fs::read(flat).unwrap(), bytes);
         assert_eq!(

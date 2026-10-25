@@ -46,7 +46,7 @@ impl HeldFile {
         let current = open_regular(path)?;
         if Stamp::of(&self.file)? != self.stamp || Stamp::of(&current)? != self.stamp {
             return Err(Error::new(
-                "PREPARATION_STALE",
+                storage_contract::ErrorCode::PreparationStale,
                 "verified payload or metadata changed after preparation",
             ));
         }
@@ -121,7 +121,12 @@ impl PayloadPreparation {
             .try_fold(0usize, |count, evidence| {
                 count
                     .checked_add(evidence.placement.route_slot_ids.len())
-                    .ok_or_else(|| Error::new("RESOURCE_LIMIT", "payload proof count overflow"))
+                    .ok_or_else(|| {
+                        Error::new(
+                            storage_contract::ErrorCode::ResourceLimit,
+                            "payload proof count overflow",
+                        )
+                    })
             })?;
         let full_revalidation = replicas > MAX_HELD_PAYLOAD_FILES / 4;
         let mut entries = Vec::new();
@@ -154,7 +159,12 @@ fn verify_replica(config: &Config, version: &FileVersion, slot: &str) -> Result<
         .disks
         .iter()
         .find(|disk| disk.slot_id == slot)
-        .ok_or_else(|| Error::new("SLOT_NOT_FOUND", "prepared payload slot disappeared"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::SlotNotFound,
+                "prepared payload slot disappeared",
+            )
+        })?;
     validate_seal(config, disk)?;
     let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
     let mut metadata = Vec::new();
@@ -166,14 +176,14 @@ fn verify_replica(config: &Config, version: &FileVersion, slot: &str) -> Result<
     let version_hash = object_hash("version", version)?;
     if object_hash("version", &recorded)? != version_hash {
         return Err(Error::new(
-            "OBJECT_COLLISION",
+            storage_contract::ErrorCode::ObjectCollision,
             "prepared version metadata differs",
         ));
     }
     let checks = read_bytes(&directory.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
     if blake3::hash(&checks).to_hex().as_str() != version.checksum_manifest_hash {
         return Err(Error::new(
-            "CHECKSUM_MISMATCH",
+            storage_contract::ErrorCode::ChecksumMismatch,
             "checksum manifest digest differs",
         ));
     }
@@ -182,14 +192,17 @@ fn verify_replica(config: &Config, version: &FileVersion, slot: &str) -> Result<
         || manifest.chunk_bytes != version.checksum_chunk_bytes
     {
         return Err(Error::new(
-            "CHECKSUM_MISMATCH",
+            storage_contract::ErrorCode::ChecksumMismatch,
             "checksum header differs from version",
         ));
     }
     let path = crate::container_storage::content_path(&directory, version)?;
     let mut body = HeldFile::open(&path)?;
     if body.stamp.size != version.logical_size {
-        return Err(Error::new("CHECKSUM_MISMATCH", "payload length differs"));
+        return Err(Error::new(
+            storage_contract::ErrorCode::ChecksumMismatch,
+            "payload length differs",
+        ));
     }
     let mut full = blake3::Hasher::new();
     let mut buffer = vec![0; manifest.chunk_bytes as usize];
@@ -203,14 +216,17 @@ fn verify_replica(config: &Config, version: &FileVersion, slot: &str) -> Result<
             cost.set((replicas, bytes + n as u64));
         });
         if blake3::hash(&buffer[..n]).as_bytes() != &expected {
-            return Err(Error::new("CHECKSUM_MISMATCH", "payload chunk differs"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::ChecksumMismatch,
+                "payload chunk differs",
+            ));
         }
         full.update(&buffer[..n]);
         remaining -= n as u64;
     }
     if remaining != 0 || full.finalize().to_hex().as_str() != version.content_hash {
         return Err(Error::new(
-            "CHECKSUM_MISMATCH",
+            storage_contract::ErrorCode::ChecksumMismatch,
             "complete payload hash differs",
         ));
     }
@@ -245,7 +261,7 @@ impl VerifiedPayloadSet {
                 || held.ino() != disk.inode
             {
                 return Err(Error::new(
-                    "PREPARATION_STALE",
+                    storage_contract::ErrorCode::PreparationStale,
                     "prepared disk directory identity changed",
                 ));
             }
@@ -264,7 +280,7 @@ impl VerifiedPayloadSet {
             || (self.full_revalidation && !self.entries.is_empty())
         {
             return Err(Error::new(
-                "PREPARATION_STALE",
+                storage_contract::ErrorCode::PreparationStale,
                 "payload proof count differs",
             ));
         }
@@ -300,18 +316,28 @@ impl VerifiedPayloadSet {
             .entries
             .iter()
             .find(|entry| entry.version_id == version.version_id && entry.slot_id == slot)
-            .ok_or_else(|| Error::new("PREPARATION_STALE", "payload proof missing"))?;
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::PreparationStale,
+                    "payload proof missing",
+                )
+            })?;
         let disk = config
             .disks
             .iter()
             .find(|disk| disk.slot_id == slot)
-            .ok_or_else(|| Error::new("PREPARATION_STALE", "payload slot changed"))?;
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::PreparationStale,
+                    "payload slot changed",
+                )
+            })?;
         validate_seal(config, disk)?;
         if entry.directory != version_dir(disk, &version.history_tree_id, &version.version_id)
             || entry.version_hash != object_hash("version", version)?
         {
             return Err(Error::new(
-                "PREPARATION_STALE",
+                storage_contract::ErrorCode::PreparationStale,
                 "payload proof identity differs",
             ));
         }

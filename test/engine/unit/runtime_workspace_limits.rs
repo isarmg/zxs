@@ -48,14 +48,14 @@ fn runtime_limits_validate_each_dimension_before_initialization_or_restore_write
             assert_eq!(invalid.validate().is_err(), zero);
             assert_eq!(
                 invalid.validate_for(&f.config).unwrap_err().code(),
-                "CONFIG_INVALID"
+                storage_contract::ErrorCode::ConfigInvalid
             );
             assert_eq!(
                 Engine::initialize_with_workspace_limits(&f.root, f.config.clone(), Some(invalid))
                     .err()
                     .unwrap()
                     .code(),
-                "CONFIG_INVALID"
+                storage_contract::ErrorCode::ConfigInvalid
             );
             assert!(!f.root.exists());
             assert!(f.config.disks.iter().all(|disk| !disk.root.exists()));
@@ -67,7 +67,10 @@ fn runtime_limits_validate_each_dimension_before_initialization_or_restore_write
                 } else {
                     Engine::open_with_workspace_limits(&f.root, Some(invalid))
                 };
-                assert_eq!(result.err().unwrap().code(), "CONFIG_INVALID");
+                assert_eq!(
+                    result.err().unwrap().code(),
+                    storage_contract::ErrorCode::ConfigInvalid
+                );
                 assert_eq!(files(f.temp.path()), before);
             }
             let restored = f.temp.path().join("restored");
@@ -82,7 +85,7 @@ fn runtime_limits_validate_each_dimension_before_initialization_or_restore_write
                     .err()
                     .unwrap()
                     .code(),
-                "CONFIG_INVALID"
+                storage_contract::ErrorCode::ConfigInvalid
             );
             assert!(!restored.exists());
             assert_eq!(files(f.temp.path()), before);
@@ -137,7 +140,7 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
             .create_workspace(&repo.main_branch_id, "admin")
             .unwrap_err()
             .code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     let config_bytes = fs::read(f.root.join("config.json")).unwrap();
     let anchors: Vec<_> = f
@@ -206,7 +209,10 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
         } else {
             Engine::open(&f.root)
         };
-        assert_eq!(result.err().unwrap().code(), "RESOURCE_LIMIT");
+        assert_eq!(
+            result.err().unwrap().code(),
+            storage_contract::ErrorCode::ResourceLimit
+        );
         assert_eq!(
             files(f.temp.path()),
             before,
@@ -230,7 +236,7 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
             .err()
             .unwrap()
             .code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     assert!(!restored.join("config.json").exists());
     let mut insufficient = raised;
@@ -240,7 +246,7 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
             .err()
             .unwrap()
             .code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     assert!(!restored.join("config.json").exists());
     assert!(
@@ -319,7 +325,7 @@ fn raised_runtime_metadata_limits_still_enforce_each_finite_dimension() {
                     assert!(accepted < 100);
                 }
                 Err(error) => {
-                    assert_eq!(error.code(), "RESOURCE_LIMIT");
+                    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
                     assert!(error.to_string().contains(if principal {
                         "principal metadata bytes"
                     } else {
@@ -340,7 +346,7 @@ fn raised_runtime_metadata_limits_still_enforce_each_finite_dimension() {
         let before = files(f.temp.path());
         assert_eq!(
             Engine::open(&f.root).err().unwrap().code(),
-            "RESOURCE_LIMIT"
+            storage_contract::ErrorCode::ResourceLimit
         );
         assert_eq!(files(f.temp.path()), before);
         let engine = Engine::open_with_workspace_limits(&f.root, Some(raised)).unwrap();
@@ -363,7 +369,7 @@ fn raised_runtime_metadata_limits_still_enforce_each_finite_dimension() {
                 .err()
                 .unwrap()
                 .code(),
-            "RESOURCE_LIMIT"
+            storage_contract::ErrorCode::ResourceLimit
         );
         assert!(!restored.join("config.json").exists());
         assert!(

@@ -360,14 +360,17 @@ async fn upload_sends_raw_bytes_with_matching_length_hash_and_bearer() {
 
 #[tokio::test]
 async fn upload_integrity_rejections_preserve_server_error_details() {
-    for code in ["SIZE_MISMATCH", "CHECKSUM_MISMATCH"] {
+    for code in [
+        storage_contract::ErrorCode::UploadIncomplete,
+        storage_contract::ErrorCode::ChecksumMismatch,
+    ] {
         let body = json_codec::json!({"error":{"code":code,"message":"upload rejected","retryable":false,"request_id":"req_synthetic"}}).to_string();
         let (client, server) = reply(format!("HTTP/1.1 422 Unprocessable Entity\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).into_bytes()).await;
         let source = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(source.path(), b"source is preserved").unwrap();
         assert!(
             matches!(client.upload_file("workspace_test", "item_test", "file", source.path()).await,
-            Err(Error::Api {status:422, code:actual, message, retryable:false})
+            Err(Error::Api {status:422, code:actual, message, retryable:false, ..})
             if actual == code && message == "upload rejected (request req_synthetic)")
         );
         assert_eq!(
@@ -430,6 +433,7 @@ async fn response_adapter_enforces_shared_duplicate_key_and_status_rules() {
                 code,
                 message,
                 retryable,
+                ..
             } => {
                 assert_eq!(status, expected.status);
                 assert_eq!(code, expected.code);

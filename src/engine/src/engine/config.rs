@@ -34,11 +34,11 @@ pub(super) fn acquire_locks(
             .map_err(std::io::Error::from)?,
         );
         platform_io::fs_safety::linux::SingleLinkRequirement::check(&f)
-            .map_err(|e| Error::new("UNSAFE_PATH", e.to_string()))?;
+            .map_err(|e| Error::new(storage_contract::ErrorCode::UnsafePath, e.to_string()))?;
         rustix::fs::flock(&f, rustix::fs::FlockOperation::NonBlockingLockExclusive).map_err(
             |_| {
                 Error::new(
-                    "WRITER_ALREADY_ACTIVE",
+                    storage_contract::ErrorCode::WriterAlreadyActive,
                     "another process owns this pool or disk",
                 )
             },
@@ -62,14 +62,14 @@ pub(super) fn validate_config(c: &Config) -> Result<()> {
         || !SUPPORTED_CHECKSUM_CHUNK_BYTES.contains(&c.checksum_chunk_bytes)
     {
         return Err(Error::new(
-            "CONFIG_INVALID",
+            storage_contract::ErrorCode::ConfigInvalid,
             "invalid metadata membership, resource limits or checksum size",
         ));
     }
     let chunks = c.max_file_bytes.div_ceil(c.checksum_chunk_bytes as u64);
     if chunks > (MAX_CHECKSUM_MANIFEST as u64 - CHECKSUM_HEADER_BYTES as u64) / 32 {
         return Err(Error::new(
-            "CONFIG_INVALID",
+            storage_contract::ErrorCode::ConfigInvalid,
             "file limit exceeds the bounded checksum manifest capacity",
         ));
     }
@@ -86,7 +86,7 @@ pub(super) fn validate_config(c: &Config) -> Result<()> {
                 .any(|part| part == std::path::Component::ParentDir)
         {
             return Err(Error::new(
-                "CONFIG_INVALID",
+                storage_contract::ErrorCode::ConfigInvalid,
                 "disk roots must be absolute and contain no parent traversal",
             ));
         }
@@ -97,31 +97,38 @@ pub(super) fn validate_config(c: &Config) -> Result<()> {
             || d.binding_generation == 0
         {
             return Err(Error::new(
-                "CONFIG_INVALID",
+                storage_contract::ErrorCode::ConfigInvalid,
                 "duplicate disk, path or slot identity",
             ));
         }
         if d.level == 1 && d.upstream_slot_id.is_some() {
             return Err(Error::new(
-                "TOPOLOGY_INVALID",
+                storage_contract::ErrorCode::TopologyInvalid,
                 "primary cannot have an upstream",
             ));
         }
         if d.level > 1 {
-            let up = d
-                .upstream_slot_id
-                .as_ref()
-                .ok_or_else(|| Error::new("TOPOLOGY_INVALID", "backup lacks upstream"))?;
+            let up = d.upstream_slot_id.as_ref().ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::TopologyInvalid,
+                    "backup lacks upstream",
+                )
+            })?;
             let source = c
                 .disks
                 .iter()
                 .find(|s| s.slot_id.eq_ignore_ascii_case(up))
-                .ok_or_else(|| Error::new("TOPOLOGY_INVALID", "upstream slot missing"))?;
+                .ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::TopologyInvalid,
+                        "upstream slot missing",
+                    )
+                })?;
             if source.level.checked_add(1) != Some(d.level)
                 || !successors.insert(up.to_ascii_lowercase())
             {
                 return Err(Error::new(
-                    "TOPOLOGY_INVALID",
+                    storage_contract::ErrorCode::TopologyInvalid,
                     "route skips a level or source has multiple successors",
                 ));
             }
@@ -133,7 +140,10 @@ pub(super) fn validate_config(c: &Config) -> Result<()> {
             .skip(i + 1)
             .any(|other| disk.root.starts_with(&other.root) || other.root.starts_with(&disk.root))
         {
-            return Err(Error::new("CONFIG_INVALID", "disk roots must not overlap"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::ConfigInvalid,
+                "disk roots must not overlap",
+            ));
         }
     }
     Ok(())

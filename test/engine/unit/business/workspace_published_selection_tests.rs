@@ -101,7 +101,7 @@ fn published_new_file_context_fences_same_version_branch_switch() {
                 .validate_workspace_file_selection(&workspace.workspace_id, "fresh.txt")
                 .unwrap_err()
                 .code(),
-            "FILE_BRANCH_CONFLICT"
+            storage_contract::ErrorCode::FileBranchConflict
         );
         assert_eq!(
             engine
@@ -191,7 +191,7 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
             .validate_workspace_file_selection(&completed.workspace_id, "fresh.txt")
             .unwrap_err()
             .code(),
-        "FILE_BRANCH_CONFLICT"
+        storage_contract::ErrorCode::FileBranchConflict
     );
 }
 
@@ -247,7 +247,10 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
         } else {
             engine.commit_workspace(request.clone())
         };
-        assert_eq!(result.unwrap_err().code(), "IN_DOUBT");
+        assert_eq!(
+            result.unwrap_err().code(),
+            storage_contract::ErrorCode::InDoubt
+        );
         assert_eq!(
             manifests.clone().map(|path| std::fs::read(path).unwrap()),
             original_manifests
@@ -309,7 +312,7 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
                 .validate_workspace_file_selection(&workspace.workspace_id, "fresh.txt")
                 .unwrap_err()
                 .code(),
-            "FILE_BRANCH_CONFLICT"
+            storage_contract::ErrorCode::FileBranchConflict
         );
         let replayed = if let Some(body) = body {
             engine.commit_workspace_wire(request.clone(), body)

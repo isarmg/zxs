@@ -57,7 +57,11 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
                 request_digest: None,
             })
             .unwrap_err();
-        assert_eq!(error.code(), "NAMESPACE_CONFLICT", "{kind}");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::NamespaceConflict,
+            "{kind}"
+        );
         let current = engine.list_tree(&repo.main_branch_id).unwrap();
         assert_eq!(current.len(), 1);
         assert_eq!(current[0].entry_id, replacement.entry_id);
@@ -107,7 +111,7 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
                 .file_namespace(&repo.repository_id, operation, "admin", &new_id("op"))
                 .unwrap_err()
                 .code(),
-            "NAME_NOT_NORMALIZED"
+            storage_contract::ErrorCode::NameNotNormalized
         );
         assert_eq!(
             storage_engine::canonical_json(&engine.list_tree(&repo.main_branch_id).unwrap())

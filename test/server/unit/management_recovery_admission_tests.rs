@@ -188,7 +188,8 @@ fn offline_recovery_revalidates_after_open_before_new_plan_or_publication() {
                 .setup_operation(action, f.input.clone(), None, Some(&identity))
                 .unwrap_err();
             assert_eq!(
-                error.code, "UNAUTHORIZED",
+                error.code,
+                storage_contract::ErrorCode::Unauthorized,
                 "{action}, password change: {change_password}"
             );
             let before = before

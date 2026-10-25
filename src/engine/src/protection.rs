@@ -59,11 +59,12 @@ impl Engine {
         file_id: Option<&str>,
         path: &str,
     ) -> Result<(String, u32)> {
-        let repo = self
-            .state
-            .repositories
-            .get(repository)
-            .ok_or_else(|| Error::new("REPOSITORY_NOT_FOUND", "repository does not exist"))?;
+        let repo = self.state.repositories.get(repository).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::RepositoryNotFound,
+                "repository does not exist",
+            )
+        })?;
         let primary = self
             .state
             .placement_rules
@@ -95,14 +96,14 @@ impl Engine {
             name_policy::validate_path(path_prefix)?;
         }
         self.mutate("placement-rule.update",principal,operation,json!({"rule_id":id,"repository_id":repository,"path_prefix":path_prefix,"primary_slot_id":primary,"expected_generation":expected_generation.to_string()}),|engine,state,_|{
-            engine.state.repositories.get(repository).ok_or_else(||Error::new("REPOSITORY_NOT_FOUND","repository does not exist"))?;
+            engine.state.repositories.get(repository).ok_or_else(||Error::new(storage_contract::ErrorCode::RepositoryNotFound,"repository does not exist"))?;
 
             let actual=state.placement_rules.get(id).map_or(0,|r|r.generation);
-            if actual!=expected_generation { return Err(Error::new("GENERATION_MISMATCH","placement rule changed; reread before updating")); }
-            if state.placement_rules.get(id).is_some_and(|r|r.repository_id!=repository) { return Err(Error::new("REQUEST_BINDING_MISMATCH","rule is bound to another repository")); }
-            if state.placement_rules.values().any(|r|r.rule_id!=id&&r.repository_id==repository&&name_policy::path_key(&r.path_prefix)==name_policy::path_key(path_prefix)) { return Err(Error::new("NAME_COLLISION","an equivalent placement prefix already has a rule")); }
+            if actual!=expected_generation { return Err(Error::new(storage_contract::ErrorCode::GenerationMismatch,"placement rule changed; reread before updating")); }
+            if state.placement_rules.get(id).is_some_and(|r|r.repository_id!=repository) { return Err(Error::new(storage_contract::ErrorCode::RequestBindingMismatch,"rule is bound to another repository")); }
+            if state.placement_rules.values().any(|r|r.rule_id!=id&&r.repository_id==repository&&name_policy::path_key(&r.path_prefix)==name_policy::path_key(path_prefix)) { return Err(Error::new(storage_contract::ErrorCode::NameCollision,"an equivalent placement prefix already has a rule")); }
             engine.route(primary,engine.file_placement_settings(repository,None,path_prefix)?.1)?;
-            let rule=PlacementRule{rule_id:id.into(),repository_id:repository.into(),path_prefix:path_prefix.into(),primary_slot_id:engine.disk(primary)?.slot_id.clone(),generation:actual.checked_add(1).ok_or_else(||Error::new("RESOURCE_LIMIT","rule generation exhausted"))?};
+            let rule=PlacementRule{rule_id:id.into(),repository_id:repository.into(),path_prefix:path_prefix.into(),primary_slot_id:engine.disk(primary)?.slot_id.clone(),generation:actual.checked_add(1).ok_or_else(||Error::new(storage_contract::ErrorCode::ResourceLimit,"rule generation exhausted"))?};
             state.placement_rules.insert(id.into(),rule.clone());
             Ok(json!({"rule":rule}))
         })
@@ -125,16 +126,16 @@ impl Engine {
             name_policy::validate_path(path_prefix)?;
         }
         self.mutate("protection-policy.update",principal,operation,json!({"policy_id":id,"repository_id":repository,"path_prefix":path_prefix,"target_copies":copies,"expected_generation":expected_generation.to_string()}),|engine,state,_|{
-            engine.state.repositories.get(repository).ok_or_else(||Error::new("REPOSITORY_NOT_FOUND","repository does not exist"))?;
+            engine.state.repositories.get(repository).ok_or_else(||Error::new(storage_contract::ErrorCode::RepositoryNotFound,"repository does not exist"))?;
 
             let actual=state.protection_policies.get(id).map_or(0,|p|p.generation);
-            if actual!=expected_generation { return Err(Error::new("GENERATION_MISMATCH","protection policy changed; reread before updating")); }
-            if state.protection_policies.get(id).is_some_and(|p|p.repository_id!=repository) { return Err(Error::new("REQUEST_BINDING_MISMATCH","policy is bound to another repository")); }
-            if state.protection_policies.get(id).is_some_and(|p|!p.inheritable||p.scope_directory_id.is_some()||p.scope_file_id.is_some()) { return Err(Error::new("BACKUP_CONFIGURATION_REQUIRED","scoped and retained settings must be changed through file or directory backup configuration")); }
-            if state.protection_policies.values().any(|p|p.inheritable&&p.policy_id!=id&&p.repository_id==repository&&backup_paths::scope_path(state,p).is_some_and(|path|name_policy::path_key(path)==name_policy::path_key(path_prefix))) { return Err(Error::new("NAME_COLLISION","an equivalent protection prefix already has a policy")); }
+            if actual!=expected_generation { return Err(Error::new(storage_contract::ErrorCode::GenerationMismatch,"protection policy changed; reread before updating")); }
+            if state.protection_policies.get(id).is_some_and(|p|p.repository_id!=repository) { return Err(Error::new(storage_contract::ErrorCode::RequestBindingMismatch,"policy is bound to another repository")); }
+            if state.protection_policies.get(id).is_some_and(|p|!p.inheritable||p.scope_directory_id.is_some()||p.scope_file_id.is_some()) { return Err(Error::new(storage_contract::ErrorCode::BackupConfigurationRequired,"scoped and retained settings must be changed through file or directory backup configuration")); }
+            if state.protection_policies.values().any(|p|p.inheritable&&p.policy_id!=id&&p.repository_id==repository&&backup_paths::scope_path(state,p).is_some_and(|path|name_policy::path_key(path)==name_policy::path_key(path_prefix))) { return Err(Error::new(storage_contract::ErrorCode::NameCollision,"an equivalent protection prefix already has a policy")); }
             engine.route(&engine.file_placement_settings(repository,None,path_prefix)?.0,copies)?;
             let previous=state.protection_policies.get(id);
-            let policy=ProtectionPolicy{policy_id:id.into(),repository_id:repository.into(),path_prefix:path_prefix.into(),target_copies:copies,inheritable:true,scope_directory_id:None,scope_file_id:None,backup_prefixes:previous.map(|policy|policy.backup_prefixes.clone()).unwrap_or_default(),generation:actual.checked_add(1).ok_or_else(||Error::new("RESOURCE_LIMIT","policy generation exhausted"))?};
+            let policy=ProtectionPolicy{policy_id:id.into(),repository_id:repository.into(),path_prefix:path_prefix.into(),target_copies:copies,inheritable:true,scope_directory_id:None,scope_file_id:None,backup_prefixes:previous.map(|policy|policy.backup_prefixes.clone()).unwrap_or_default(),generation:actual.checked_add(1).ok_or_else(||Error::new(storage_contract::ErrorCode::ResourceLimit,"policy generation exhausted"))?};
             state.protection_policies.insert(id.into(),policy.clone());
             Ok(json!({"policy":policy}))
         })

@@ -306,7 +306,11 @@ impl SetupRecovery {
         }
         for (id, path) in &self.disks {
             let expected = self.identities.get(id).ok_or_else(|| {
-                ApiError::new(503, "DISK_UNAVAILABLE", "a configured disk is unavailable")
+                ApiError::new(
+                    503,
+                    storage_contract::ErrorCode::DiskUnavailable,
+                    "a configured disk is unavailable",
+                )
             })?;
             if checked_directory(path)? != *path || directory_identity(path)? != *expected {
                 return Ok(false);
@@ -371,7 +375,7 @@ impl SetupRecovery {
         if age.is_none_or(|age| age > std::time::Duration::from_secs(30 * 60)) {
             return Err(ApiError::new(
                 401,
-                "BOOTSTRAP_EXPIRED",
+                storage_contract::ErrorCode::BootstrapExpired,
                 "local bootstrap authorization has expired",
             ));
         }
@@ -399,14 +403,14 @@ impl SetupRecovery {
         // Deployment provisions the system directory; HTTP never chooses it.
         if checked_directory(&self.data_root)? != self.data_root {
             return Err(ApiError::conflict(
-                "SYSTEM_ROOT_CHANGED",
+                storage_contract::ErrorCode::SystemRootChanged,
                 "system directory changed",
             ));
         }
         let file = private_file(&self.data_root.join("setup.lock"), true)?;
         file.try_lock().map_err(|_| {
             ApiError::conflict(
-                "SETUP_BUSY",
+                storage_contract::ErrorCode::SetupBusy,
                 "another setup or recovery operation is active",
             )
         })?;
@@ -425,7 +429,11 @@ impl SetupRecovery {
                     .get(id)
                     .ok_or_else(|| ApiError::invalid("disk is not locally authorized"))?;
                 let expected = self.identities.get(id).ok_or_else(|| {
-                    ApiError::new(503, "DISK_UNAVAILABLE", "selected disk is unavailable")
+                    ApiError::new(
+                        503,
+                        storage_contract::ErrorCode::DiskUnavailable,
+                        "selected disk is unavailable",
+                    )
                 })?;
                 // Check only selected usable roots: unavailable unrelated descriptors
                 // cannot block management or recovery from healthy survivors.
@@ -438,7 +446,10 @@ impl SetupRecovery {
                     ));
                 }
                 if checked_directory(path)? != *path || directory_identity(path)? != *expected {
-                    return Err(ApiError::conflict("DISK_CHANGED", "disk identity changed"));
+                    return Err(ApiError::conflict(
+                        storage_contract::ErrorCode::DiskChanged,
+                        "disk identity changed",
+                    ));
                 }
                 Ok(path.clone())
             })
@@ -466,7 +477,7 @@ impl SetupRecovery {
         self.verify_permit(permit)?;
         if self.status().state != InstallationState::Empty {
             return Err(ApiError::conflict(
-                "RECOVERY_REQUIRED",
+                storage_contract::ErrorCode::RecoveryRequired,
                 "only a verified empty installation can be initialized",
             ));
         }
@@ -612,14 +623,14 @@ impl SetupRecovery {
         self.verify_permit(permit)?;
         if self.status().state != InstallationState::Empty {
             return Err(ApiError::conflict(
-                "RECOVERY_REQUIRED",
+                storage_contract::ErrorCode::RecoveryRequired,
                 "only a verified empty installation can be initialized",
             ));
         }
         let (config, ids) = self.preset(&request.preset_id)?;
         if request.config_digest != value_digest(&config)? {
             return Err(ApiError::conflict(
-                "SETUP_PRESET_CHANGED",
+                storage_contract::ErrorCode::SetupPresetChanged,
                 "review the current setup preset before applying it",
             ));
         }
@@ -680,7 +691,7 @@ impl SetupRecovery {
             match path.symlink_metadata() {
                 Ok(_) => {
                     return Err(ApiError::conflict(
-                        "AUTHORITY_RECOVERY_REQUIRED",
+                        storage_contract::ErrorCode::AuthorityRecoveryRequired,
                         "existing authority or credentials prohibit initialization completion",
                     ));
                 }
@@ -695,7 +706,7 @@ impl SetupRecovery {
             || ready.intent_digest != value_digest(&intent)?
         {
             return Err(ApiError::conflict(
-                "SETUP_PROOF_INVALID",
+                storage_contract::ErrorCode::SetupProofInvalid,
                 "no matching protected initialization intent",
             ));
         }
@@ -704,7 +715,7 @@ impl SetupRecovery {
             || ready.disk_digests.len() != intent.disk_ids.len()
         {
             return Err(ApiError::conflict(
-                "SETUP_PROOF_INVALID",
+                storage_contract::ErrorCode::SetupProofInvalid,
                 "initialized configuration differs from its bound intent",
             ));
         }
@@ -726,14 +737,14 @@ impl SetupRecovery {
                 .any(|(disk, path)| disk.root != *path)
         {
             return Err(ApiError::conflict(
-                "SETUP_PROOF_INVALID",
+                storage_contract::ErrorCode::SetupProofInvalid,
                 "initialized disks differ from their bound intent",
             ));
         }
         for (id, path) in intent.disk_ids.iter().zip(paths) {
             if ready.disk_digests.get(id) != Some(&tree_digest(&path)?) {
                 return Err(ApiError::conflict(
-                    "SETUP_CONTENT_CHANGED",
+                    storage_contract::ErrorCode::SetupContentChanged,
                     "disk contents changed since interrupted initialization",
                 ));
             }
@@ -748,7 +759,7 @@ impl SetupRecovery {
             .is_some()
         {
             return Err(ApiError::conflict(
-                "SETUP_CONTENT_CHANGED",
+                storage_contract::ErrorCode::SetupContentChanged,
                 "existing workspaces prohibit initialization completion",
             ));
         }
@@ -787,7 +798,7 @@ impl SetupRecovery {
             || value_digest(engine.state())? != value_digest(&pristine)?
         {
             return Err(ApiError::conflict(
-                "SETUP_CONTENT_CHANGED",
+                storage_contract::ErrorCode::SetupContentChanged,
                 "only a pristine unpublished installation can be completed",
             ));
         }
@@ -890,7 +901,7 @@ impl SetupRecovery {
             .is_ok()
         {
             return Err(ApiError::conflict(
-                "SYSTEM_AUTH_REQUIRED",
+                storage_contract::ErrorCode::SystemAuthRequired,
                 "use existing system administrator credentials",
             ));
         }
@@ -937,7 +948,7 @@ impl SetupRecovery {
             .is_ok()
         {
             return Err(ApiError::conflict(
-                "ALREADY_INITIALIZED",
+                storage_contract::ErrorCode::AlreadyInitialized,
                 "configuration exists; use diagnostic recovery",
             ));
         }
@@ -950,7 +961,7 @@ impl SetupRecovery {
         .map_err(engine_error)?;
         if engine.auth_state().is_none() {
             return Err(ApiError::conflict(
-                "AUTH_RECOVERY_REQUIRED",
+                storage_contract::ErrorCode::AuthRecoveryRequired,
                 "storage configuration was restored but authoritative credentials are absent; initialization remains blocked and explicit local recovery is required",
             ));
         }
@@ -1034,7 +1045,7 @@ fn require_mountpoint(path: &Path) -> Result<(), ApiError> {
     });
     if !mounted {
         return Err(ApiError::conflict(
-            "DISK_NOT_MOUNTED",
+            storage_contract::ErrorCode::DiskNotMounted,
             "production setup requires each configured disk root to be an active mountpoint",
         ));
     }
@@ -1077,7 +1088,7 @@ fn tree_digest(root: &Path) -> Result<String, ApiError> {
             .map_err(ApiError::io)?;
         if entries.len().saturating_add(*count) > 128 {
             return Err(ApiError::conflict(
-                "SETUP_CONTENT_CHANGED",
+                storage_contract::ErrorCode::SetupContentChanged,
                 "initialization tree no longer pristine",
             ));
         }
@@ -1086,7 +1097,7 @@ fn tree_digest(root: &Path) -> Result<String, ApiError> {
             *count += 1;
             if *count > 128 {
                 return Err(ApiError::conflict(
-                    "SETUP_CONTENT_CHANGED",
+                    storage_contract::ErrorCode::SetupContentChanged,
                     "initialization tree no longer pristine",
                 ));
             }
@@ -1105,7 +1116,7 @@ fn tree_digest(root: &Path) -> Result<String, ApiError> {
             } else if metadata.is_file() {
                 if metadata.len() > MAX_LOCAL_CONFIG_BYTES as u64 {
                     return Err(ApiError::conflict(
-                        "SETUP_CONTENT_CHANGED",
+                        storage_contract::ErrorCode::SetupContentChanged,
                         "initialization tree contains unexpected data",
                     ));
                 }
@@ -1117,7 +1128,7 @@ fn tree_digest(root: &Path) -> Result<String, ApiError> {
                     .map_err(ApiError::io)?;
                 if bytes.len() > MAX_LOCAL_CONFIG_BYTES {
                     return Err(ApiError::conflict(
-                        "SETUP_CONTENT_CHANGED",
+                        storage_contract::ErrorCode::SetupContentChanged,
                         "initialization file changed",
                     ));
                 }

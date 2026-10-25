@@ -106,7 +106,11 @@ pub(super) struct Lease {
     principal: String,
 }
 fn invalid(message: &str) -> ApiError {
-    ApiError::new(503, "SMB_SPOOL_UNAVAILABLE", message)
+    ApiError::new(
+        503,
+        storage_contract::ErrorCode::SmbSpoolUnavailable,
+        message,
+    )
 }
 fn record_path(source: &Path) -> PathBuf {
     source.with_extension("budget.json")

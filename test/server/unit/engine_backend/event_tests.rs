@@ -59,7 +59,7 @@ fn event_cursor_preserves_singleton_visibility_progress_and_recovery_order() {
     );
     assert_eq!(
         poll(&backend, &identity, baseline + 1).unwrap_err().code,
-        "INVALID_CURSOR"
+        storage_contract::ErrorCode::InvalidCursor
     );
     let (first, last) = {
         let mut engine = backend.engine.lock().unwrap();
@@ -83,7 +83,7 @@ fn event_cursor_preserves_singleton_visibility_progress_and_recovery_order() {
     );
     assert_eq!(
         poll(&backend, &identity, last + 1).unwrap_err().code,
-        "INVALID_CURSOR"
+        storage_contract::ErrorCode::InvalidCursor
     );
     let stranger = Identity {
         principal: "other".into(),
@@ -91,7 +91,7 @@ fn event_cursor_preserves_singleton_visibility_progress_and_recovery_order() {
     };
     assert_eq!(
         poll(&backend, &stranger, 0).unwrap_err().code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
     drop(backend);
     let backend = EngineBackend::new(Engine::open(&root).unwrap());

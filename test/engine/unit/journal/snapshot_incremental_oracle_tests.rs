@@ -617,7 +617,7 @@ fn incremental_snapshot_middle_and_final_missing_pages_are_visited_once_in_origi
                 Ok(())
             })
             .unwrap_err();
-        assert_eq!(error.code(), "OBJECT_CORRUPT");
+        assert_eq!(error.code(), storage_contract::ErrorCode::ObjectCorrupt);
         assert_eq!(visited_before_error, expected[..missing_index]);
         // Restore through the full immutable writer before moving the hole to
         // the final page; otherwise a previous middle hole would mask it.
@@ -653,10 +653,13 @@ fn incremental_snapshot_callback_errors_are_not_retried_as_source_failures() {
         let error = actual
             .visit_field_pages("file_notes", &config.disks, &after, |_, _| {
                 visits += 1;
-                Err(Error::new("VISITOR_FAILED", "stop at the first callback"))
+                Err(Error::new(
+                    storage_contract::ErrorCode::InjectedFailure,
+                    "stop at the first callback",
+                ))
             })
             .unwrap_err();
-        assert_eq!(error.code(), "VISITOR_FAILED");
+        assert_eq!(error.code(), storage_contract::ErrorCode::InjectedFailure);
         assert_eq!(visits, 1, "callback failure must not trigger any retry");
         let counts = snapshot::take_encoding_counts();
         assert_eq!(counts.get("file_notes").copied().unwrap_or(0) > 0, missing);

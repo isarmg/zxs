@@ -24,34 +24,40 @@ impl Engine {
                 "expected_generation": expected_generation.to_string()
             }),
             |engine, state, _| {
-                let repo =
-                    state.repositories.get(repository).cloned().ok_or_else(|| {
-                        Error::new("REPOSITORY_NOT_FOUND", "repository not found")
-                    })?;
+                let repo = state.repositories.get(repository).cloned().ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::RepositoryNotFound,
+                        "repository not found",
+                    )
+                })?;
 
-                let history = state
-                    .histories
-                    .get(&repo.history_tree_id)
-                    .ok_or_else(|| Error::new("STATE_INVALID", "repository history missing"))?;
+                let history = state.histories.get(&repo.history_tree_id).ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::StateInvalid,
+                        "repository history missing",
+                    )
+                })?;
                 if history.generation != expected_generation {
                     return Err(Error::new(
-                        "GENERATION_MISMATCH",
+                        storage_contract::ErrorCode::GenerationMismatch,
                         "share binding history changed",
                     ));
                 }
-                let branch = state
-                    .branches
-                    .get(branch_id)
-                    .ok_or_else(|| Error::new("BRANCH_NOT_FOUND", "share branch missing"))?;
+                let branch = state.branches.get(branch_id).ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::BranchNotFound,
+                        "share branch missing",
+                    )
+                })?;
                 if branch.history_tree_id != history.history_tree_id || branch.state != "active" {
                     return Err(Error::new(
-                        "BRANCH_NOT_ACTIVE",
+                        storage_contract::ErrorCode::BranchNotActive,
                         "share binding requires a live branch in this repository",
                     ));
                 }
                 if branch.file_id.is_some() {
                     return Err(Error::new(
-                        "FILE_BRANCH_SCOPE",
+                        storage_contract::ErrorCode::FileBranchScope,
                         "a file branch cannot replace a directory or SMB namespace",
                     ));
                 }
@@ -63,7 +69,7 @@ impl Engine {
                             .is_some_and(|b| b.history_tree_id == history.history_tree_id)
                 }) {
                     return Err(Error::new(
-                        "WORKSPACE_BUSY",
+                        storage_contract::ErrorCode::WorkspaceBusy,
                         "close affected write workspaces before rebinding the share",
                     ));
                 }
@@ -74,7 +80,10 @@ impl Engine {
                     .expect("repository checked");
                 repo.smb_binding_generation =
                     repo.smb_binding_generation.checked_add(1).ok_or_else(|| {
-                        Error::new("RESOURCE_LIMIT", "SMB binding generation exhausted")
+                        Error::new(
+                            storage_contract::ErrorCode::ResourceLimit,
+                            "SMB binding generation exhausted",
+                        )
                     })?;
                 repo.main_branch_id = branch_id.into();
                 repo.smb_enabled = enabled;
@@ -84,10 +93,12 @@ impl Engine {
                     .get_mut(&history_id)
                     .expect("history checked");
                 history.main_branch_id = Some(branch_id.into());
-                history.generation = history
-                    .generation
-                    .checked_add(1)
-                    .ok_or_else(|| Error::new("RESOURCE_LIMIT", "history generation exhausted"))?;
+                history.generation = history.generation.checked_add(1).ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::ResourceLimit,
+                        "history generation exhausted",
+                    )
+                })?;
                 Ok(json!({
                     "repository_id": repository,
                     "branch_id": branch_id,
@@ -167,7 +178,7 @@ impl Engine {
                     .any(|r| name_policy::lookup_key(&r.name) == name_policy::lookup_key(name))
                 {
                     return Err(Error::new(
-                        "NAME_COLLISION",
+                        storage_contract::ErrorCode::NameCollision,
                         "repository name already exists",
                     ));
                 }
@@ -248,8 +259,12 @@ impl Engine {
         )?;
         // Later SMB binding changes do not change a creation response. Do not
         // substitute the live repository when replaying its original receipt.
-        json_codec::from_value(result.result["created_repository"].clone())
-            .map_err(|_| Error::new("STATE_INVALID", "created repository receipt is invalid"))
+        json_codec::from_value(result.result["created_repository"].clone()).map_err(|_| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "created repository receipt is invalid",
+            )
+        })
     }
 }
 

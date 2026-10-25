@@ -122,7 +122,11 @@ fn missing_directory_selection_references_return_errors_without_publication() {
                 &new_id("op"),
             )
             .unwrap_err();
-        assert_eq!(error.code(), "STATE_INVALID", "{corruption}");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::StateInvalid,
+            "{corruption}"
+        );
         assert_eq!(
             canonical_json(engine.state()).unwrap(),
             before,
@@ -151,7 +155,7 @@ fn missing_baseline_branch_or_tree_cannot_initialize_or_fork() {
         let error = engine
             .initialize_directory_scope(&repo.repository_id, "folder", "admin", &new_id("op"))
             .unwrap_err();
-        assert_eq!(error.code(), "STATE_INVALID");
+        assert_eq!(error.code(), storage_contract::ErrorCode::StateInvalid);
         let error = engine
             .create_directory_branches(
                 &repo.repository_id,
@@ -161,7 +165,7 @@ fn missing_baseline_branch_or_tree_cannot_initialize_or_fork() {
                 &new_id("op"),
             )
             .unwrap_err();
-        assert_eq!(error.code(), "STATE_INVALID");
+        assert_eq!(error.code(), storage_contract::ErrorCode::StateInvalid);
         assert_eq!(canonical_json(engine.state()).unwrap(), before);
     }
 }
@@ -197,6 +201,9 @@ fn unchanged_selection_still_rejects_unavailable_file_branch() {
             &new_id("op"),
         )
         .unwrap_err();
-    assert_eq!(error.code(), "FILE_BRANCH_NOT_FOUND");
+    assert_eq!(
+        error.code(),
+        storage_contract::ErrorCode::FileBranchNotFound
+    );
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
 }

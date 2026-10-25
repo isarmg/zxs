@@ -417,7 +417,7 @@ fn checkpoint_never_hides_corrupt_journal_prefix() {
     let error = Engine::open(&root)
         .err()
         .expect("corrupt authoritative journal must fail");
-    assert_eq!(error.code, "LOG_CORRUPT");
+    assert_eq!(error.code(), storage_contract::ErrorCode::LogCorrupt);
 }
 #[test]
 fn checkpoint_survives_system_disk_loss_without_becoming_authority() {

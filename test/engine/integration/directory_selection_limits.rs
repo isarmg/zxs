@@ -161,14 +161,14 @@ fn oversized_sibling_selection_preserves_state_journals_and_operation_id() {
                 &operation,
             )
             .unwrap_err();
-        assert_eq!(error.code(), "RESOURCE_LIMIT");
+        assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
         // Includes commits, branch heads, file contexts, directory selections,
         // generations, events, operation receipts, and request bindings.
         assert_eq!(pool.state_bytes(), before);
         assert_eq!(pool.journals(), journals);
         assert_eq!(
             pool.engine.operation(&operation).unwrap_err().code(),
-            "OPERATION_NOT_FOUND"
+            storage_contract::ErrorCode::OperationNotFound
         );
         assert_eq!(pool.engine.operation_owner(&operation), None);
     }

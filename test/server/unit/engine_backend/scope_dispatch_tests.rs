@@ -69,7 +69,7 @@ fn scope_reads_dispatch_by_action_without_changing_state() {
     ] {
         assert_eq!(
             backend.call(action, &stranger, json!({})).unwrap_err().code,
-            "UNAUTHORIZED"
+            storage_contract::ErrorCode::Unauthorized
         );
     }
     assert_eq!(

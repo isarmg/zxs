@@ -57,7 +57,7 @@ impl Engine {
             || remove.len() > MAX_FILE_TAGS
         {
             return Err(Error::new(
-                "INVALID_REQUEST",
+                storage_contract::ErrorCode::InvalidRequest,
                 "a bounded nonempty tag target list is required",
             ));
         }
@@ -68,7 +68,7 @@ impl Engine {
         let removed: BTreeSet<_> = remove.iter().cloned().collect();
         if !added.is_disjoint(&removed) {
             return Err(Error::new(
-                "INVALID_TAG",
+                storage_contract::ErrorCode::InvalidTag,
                 "a tag cannot be added and removed in one operation",
             ));
         }
@@ -82,28 +82,28 @@ impl Engine {
                 let mut changes = Vec::new();
                 for target in targets {
                     if !seen.insert((target.branch_id.clone(),target.source_node_id.clone())) {
-                        return Err(Error::new("INVALID_REQUEST", "duplicate tag target"));
+                        return Err(Error::new(storage_contract::ErrorCode::InvalidRequest, "duplicate tag target"));
                     }
                     let branch = state.branches.get(&target.branch_id)
                         .filter(|b| b.file_id.as_deref() == Some(file))
-                        .ok_or_else(|| Error::new("FILE_BRANCH_NOT_FOUND", "tag target branch missing"))?;
+                        .ok_or_else(|| Error::new(storage_contract::ErrorCode::FileBranchNotFound, "tag target branch missing"))?;
                     engine.repository_for_history(&branch.history_tree_id)?;
                     if branch.state != "active" || state.file_branch_aliases.contains_key(&target.branch_id) {
-                        return Err(Error::new("BRANCH_NOT_ACTIVE", "merged aliases are read-only"));
+                        return Err(Error::new(storage_contract::ErrorCode::BranchNotActive, "merged aliases are read-only"));
                     }
                     let head = file_nodes::branch_head(state,&target.branch_id)?;
                     if head != target.expected_node_id {
-                        return Err(Error::new("FILE_BRANCH_CONFLICT", "tag target head changed"));
+                        return Err(Error::new(storage_contract::ErrorCode::FileBranchConflict, "tag target head changed"));
                     }
                     let version = file_nodes::node_version(state,file,&target.source_node_id)?;
                     if !belongs_to_branch(state,&target.branch_id,&head,&target.source_node_id) {
-                        return Err(Error::new("FILE_NODE_NOT_FOUND", "tag target node is outside the selected branch"));
+                        return Err(Error::new(storage_contract::ErrorCode::FileNodeNotFound, "tag target node is outside the selected branch"));
                     }
                     let old = file_nodes::node_tags(state,&target.source_node_id);
                     let mut tags = old.clone();
                     tags.retain(|tag| !removed.contains(tag));
                     tags.extend(added.clone());
-                    if tags.len() > MAX_FILE_TAGS { return Err(Error::new("TAG_LIMIT_EXCEEDED", "a file node supports at most 16 tags")); }
+                    if tags.len() > MAX_FILE_TAGS { return Err(Error::new(storage_contract::ErrorCode::TagLimitExceeded, "a file node supports at most 16 tags")); }
                     changes.push(TagChange {
                         target: target.clone(),
                         history: branch.history_tree_id.clone(),

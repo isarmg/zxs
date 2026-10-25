@@ -33,7 +33,7 @@ fn pending() -> (tempfile::TempDir, PathBuf, Config, String, String) {
             })
             .unwrap_err()
             .code(),
-        "IN_DOUBT"
+        storage_contract::ErrorCode::InDoubt
     );
     drop(engine);
     (temp, root, config, repo.main_branch_id, operation)

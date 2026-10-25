@@ -218,7 +218,7 @@ fn preflight_inner(
             planned
                 .ok_or_else(|| {
                     Error::new(
-                        "STATE_INVALID",
+                        storage_contract::ErrorCode::StateInvalid,
                         "normal publication lacks a prepared snapshot",
                     )
                 })?
@@ -281,7 +281,7 @@ fn preflight_inner(
             planned
                 .ok_or_else(|| {
                     Error::new(
-                        "STATE_INVALID",
+                        storage_contract::ErrorCode::StateInvalid,
                         "normal publication lacks a prepared snapshot",
                     )
                 })?

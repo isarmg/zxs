@@ -6,7 +6,7 @@ pub(crate) fn source_node(state: &State, file: &str, version: &str, node: &str) 
     let valid = file_nodes::node_version(state, file, node)? == version;
     if !valid {
         return Err(Error::new(
-            "FILE_NODE_NOT_FOUND",
+            storage_contract::ErrorCode::FileNodeNotFound,
             "node does not describe the selected file body",
         ));
     }
@@ -22,20 +22,28 @@ pub(crate) fn rename_node(
     principal: &str,
     operation: &str,
 ) -> Result<FileContext> {
-    let repo = state
-        .repositories
-        .get(repository)
-        .cloned()
-        .ok_or_else(|| Error::new("STATE_INVALID", "file repository missing"))?;
-    let main = state
-        .branches
-        .get(&repo.main_branch_id)
-        .ok_or_else(|| Error::new("STATE_INVALID", "repository main branch missing"))?;
+    let repo = state.repositories.get(repository).cloned().ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "file repository missing",
+        )
+    })?;
+    let main = state.branches.get(&repo.main_branch_id).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "repository main branch missing",
+        )
+    })?;
     let current = state
         .commits
         .get(&main.head_commit_id)
         .cloned()
-        .ok_or_else(|| Error::new("STATE_INVALID", "repository head missing"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "repository head missing",
+            )
+        })?;
     let mut context = if let Some(c) = context {
         c
     } else {
@@ -141,7 +149,10 @@ impl Engine {
                             .map(|n| n.history_tree_id.clone())
                     })
                     .ok_or_else(|| {
-                        Error::new("FILE_NODE_NOT_FOUND", "file metadata node missing")
+                        Error::new(
+                            storage_contract::ErrorCode::FileNodeNotFound,
+                            "file metadata node missing",
+                        )
                     })?;
                 engine.repository_for_history(&history)?;
                 if note.is_empty() {
@@ -173,9 +184,12 @@ impl Engine {
                 let mut result = file::create_file_branch_change(
                     engine, state, file, version, name, principal, operation,
                 )?;
-                let branch = result["branch_id"]
-                    .as_str()
-                    .ok_or_else(|| Error::new("STATE_INVALID", "branch receipt missing"))?;
+                let branch = result["branch_id"].as_str().ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::StateInvalid,
+                        "branch receipt missing",
+                    )
+                })?;
                 state
                     .branches
                     .get_mut(branch)

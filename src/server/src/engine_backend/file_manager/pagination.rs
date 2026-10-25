@@ -134,7 +134,7 @@ impl PageRequest {
             }
             if cursor.snapshot != snapshot {
                 return Err(ApiError::conflict(
-                    "LISTING_CHANGED",
+                    storage_contract::ErrorCode::ListingChanged,
                     "directory listing changed; restart from the first page",
                 ));
             }
@@ -177,7 +177,7 @@ impl PageRequest {
         if encoded.len() > MAX_CURSOR_BYTES {
             return Err(ApiError::new(
                 500,
-                "STATE_INVALID",
+                storage_contract::ErrorCode::StateInvalid,
                 "listing cursor exceeds its bounded representation",
             ));
         }

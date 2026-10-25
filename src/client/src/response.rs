@@ -13,6 +13,7 @@ fn protocol_error(error: ResponseError) -> Error {
             None => error.message,
         },
         retryable: error.retryable,
+        source: error.source,
     }
 }
 

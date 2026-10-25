@@ -61,8 +61,12 @@ fn unlink_and_rmdir_preserve_targets_of_the_wrong_kind() {
         })
         .unwrap();
     for (kind, path, expected) in [
-        ("rmdir", "report.txt", "NOT_DIRECTORY"),
-        ("unlink", "empty", "IS_DIRECTORY"),
+        (
+            "rmdir",
+            "report.txt",
+            storage_contract::ErrorCode::NotDirectory,
+        ),
+        ("unlink", "empty", storage_contract::ErrorCode::IsDirectory),
     ] {
         let error = session
             .dispatch(Request::Namespace {
@@ -113,7 +117,7 @@ impl Backend for NamespaceFailure {
             }
             return Err(ApiError::new(
                 503,
-                "RESPONSE_LOST",
+                storage_contract::ErrorCode::InjectedFailure,
                 "injected uncertain publication outcome",
             ));
         }
@@ -177,7 +181,7 @@ fn namespace_submission_errors_retain_original_operation_without_abort() {
         else {
             panic!("expected an error response");
         };
-        assert_eq!(code, "RESPONSE_LOST");
+        assert_eq!(code, "INJECTED_FAILURE");
         assert!(
             !retryable,
             "namespace must not suggest replaying an unknown outcome"
@@ -262,7 +266,7 @@ fn uncertain_namespace_dispatch_never_aborts_its_workspace() {
                 replace: false,
             })
             .unwrap_err();
-        assert_eq!(error.code, "RESPONSE_LOST");
+        assert_eq!(error.code, storage_contract::ErrorCode::InjectedFailure);
         let commit = backend.commits.lock().unwrap()[0].clone();
         assert_eq!(
             error.operation_id.as_deref(),
@@ -439,7 +443,7 @@ fn write_through_dirty_error_identifies_the_new_submitted_generation() {
             handle: opened.handle,
         })
         .unwrap_err();
-    assert_eq!(error.code, "RESPONSE_LOST");
+    assert_eq!(error.code, storage_contract::ErrorCode::InjectedFailure);
     let current = match &session.handles[&opened.handle] {
         Handle::Write(writer) => writer.operation_id.clone(),
         _ => unreachable!(),
@@ -477,13 +481,17 @@ impl Backend for PreparationFailure {
         if action == crate::BackendAction::AbortWorkspace {
             self.aborts.fetch_add(1, Ordering::SeqCst);
             if self.abort_fails {
-                return Err(ApiError::new(503, "ABORT_FAILED", "injected abort failure"));
+                return Err(ApiError::new(
+                    503,
+                    storage_contract::ErrorCode::InjectedFailure,
+                    "injected abort failure",
+                ));
             }
         }
         if Some(action) == self.failure {
             return Err(ApiError::new(
                 503,
-                "PREPARATION_FAILED",
+                storage_contract::ErrorCode::InvalidRequest,
                 "injected staging failure",
             ));
         }
@@ -549,9 +557,9 @@ fn preparation_and_record_sync_failures_keep_unresolved_recovery_evidence() {
             assert_eq!(
                 error.code,
                 if failure.is_none() {
-                    "IO_ERROR"
+                    storage_contract::ErrorCode::IoError
                 } else {
-                    "PREPARATION_FAILED"
+                    storage_contract::ErrorCode::InvalidRequest
                 }
             );
             assert_eq!(error.operation_id.as_deref(), Some(operation_id.as_str()));
@@ -664,7 +672,7 @@ fn namespace_identity_validation_and_replay_admission_precede_workspace_creation
         "op_0123456789ABCDEF0123456789ABCDEF",
     ] {
         let error = session.dispatch(request(operation_id.into())).unwrap_err();
-        assert_eq!(error.code, "INVALID_REQUEST");
+        assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
         assert!(error.operation_id.is_none());
     }
     let retained_operation = new_id("op");
@@ -677,7 +685,7 @@ fn namespace_identity_validation_and_replay_admission_precede_workspace_creation
             .dispatch(request(retained_operation))
             .unwrap_err()
             .code,
-        "RECOVERY_REQUIRED"
+        storage_contract::ErrorCode::RecoveryRequired
     );
     assert_eq!(
         fs::read(record).unwrap(),
@@ -694,7 +702,7 @@ fn namespace_identity_validation_and_replay_admission_precede_workspace_creation
             .dispatch(request(active_operation.clone()))
             .unwrap_err()
             .code,
-        "RECOVERY_REQUIRED"
+        storage_contract::ErrorCode::RecoveryRequired
     );
     assert!(
         shared
@@ -724,7 +732,7 @@ fn namespace_identity_validation_and_replay_admission_precede_workspace_creation
             .dispatch(request(published_operation))
             .unwrap_err()
             .code,
-        "OPERATION_ID_CONFLICT"
+        storage_contract::ErrorCode::OperationIdConflict
     );
     assert!(backend.change_before_workspace.load(Ordering::SeqCst));
     assert!(shared.namespace_operations.lock().unwrap().is_empty());

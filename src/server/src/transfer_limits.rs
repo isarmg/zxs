@@ -74,7 +74,7 @@ impl Drop for Permit {
 pub(crate) fn timeout_error() -> ApiError {
     ApiError::new(
         408,
-        "TRANSFER_TIMEOUT",
+        storage_contract::ErrorCode::TransferTimeout,
         "HTTP transfer deadline exceeded; durable work data is retained",
     )
 }

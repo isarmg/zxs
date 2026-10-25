@@ -96,7 +96,12 @@ impl Engine {
                     .copied()
                     .unwrap_or(0)
                     .checked_add(p.version.logical_size)
-                    .ok_or_else(|| Error::new("RESOURCE_LIMIT", "admission bytes overflow"))?;
+                    .ok_or_else(|| {
+                        Error::new(
+                            storage_contract::ErrorCode::ResourceLimit,
+                            "admission bytes overflow",
+                        )
+                    })?;
             }
         }
         for (slot, bytes) in &required {
@@ -109,7 +114,7 @@ impl Engine {
                 .unwrap_or(u64::MAX);
             if bytes.saturating_add(self.config.metadata_reserve_bytes) > free || *bytes > budget {
                 return Err(Error::new(
-                    "NO_SPACE",
+                    storage_contract::ErrorCode::NoSpace,
                     format!("fixed route slot {slot} cannot reserve the complete payload"),
                 ));
             }
@@ -228,7 +233,7 @@ impl Engine {
             || object_hash("publication-config", &self.config)? != detached.config_hash
         {
             return Err(Error::new(
-                "PREPARATION_STALE",
+                storage_contract::ErrorCode::PreparationStale,
                 "engine changed during detached publication preparation",
             )
             .retryable());
@@ -246,7 +251,7 @@ impl Engine {
             .validate(&self.config, &candidate)
             .map_err(|error| {
                 Error::new(
-                    "PREPARATION_STALE",
+                    storage_contract::ErrorCode::PreparationStale,
                     format!("prepared payload identity changed: {error}"),
                 )
                 .retryable()
@@ -262,7 +267,7 @@ impl Engine {
                 && available(&disk.root)? < self.config.metadata_reserve_bytes
             {
                 return Err(Error::new(
-                    "NO_SPACE",
+                    storage_contract::ErrorCode::NoSpace,
                     "metadata reserve was consumed during payload preparation",
                 ));
             }
@@ -274,10 +279,12 @@ impl Engine {
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_payloads")?;
         let hash = object_hash("candidate", &candidate)?;
-        self.next_slot = candidate
-            .sequence
-            .checked_add(1)
-            .ok_or_else(|| Error::new("RESOURCE_LIMIT", "decision sequence exhausted"))?;
+        self.next_slot = candidate.sequence.checked_add(1).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::ResourceLimit,
+                "decision sequence exhausted",
+            )
+        })?;
         #[cfg(feature = "fault-injection")]
         let mut prepared = 0;
         for d in &members {
@@ -307,7 +314,7 @@ impl Engine {
         );
         if let Err(e) = finish {
             return Err(Error::new(
-                "IN_DOUBT",
+                storage_contract::ErrorCode::InDoubt,
                 format!("{}; query operation {} and recover", e, result.operation_id),
             )
             .retryable());
@@ -351,7 +358,7 @@ impl Engine {
                 let existing: FileVersion = read_json(&directory.join("version.json"))?;
                 if object_hash("version", &existing)? != object_hash("version", &p.version)? {
                     return Err(Error::new(
-                        "OBJECT_COLLISION",
+                        storage_contract::ErrorCode::ObjectCollision,
                         "version identity already exists with different bytes",
                     ));
                 }
@@ -372,7 +379,7 @@ impl Engine {
                         != p.version.checksum_manifest_hash
                 {
                     return Err(Error::new(
-                        "SOURCE_CHANGED",
+                        storage_contract::ErrorCode::SourceChanged,
                         "prepared full file differs from the sealed input",
                     ));
                 }
@@ -389,12 +396,16 @@ impl Engine {
                     staging.parent().expect("staging parent"),
                     platform_io::fs_safety::linux::MountPolicy::SameMount,
                 )
-                .map_err(|error| Error::new("UNSAFE_PATH", error.to_string()))?;
+                .map_err(|error| {
+                    Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string())
+                })?;
                 let version_parent = platform_io::fs_safety::linux::OpenAt2Root::open(
                     directory.parent().expect("version parent"),
                     platform_io::fs_safety::linux::MountPolicy::SameMount,
                 )
-                .map_err(|error| Error::new("UNSAFE_PATH", error.to_string()))?;
+                .map_err(|error| {
+                    Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string())
+                })?;
                 rustix::fs::renameat_with(
                     staging_parent.directory(),
                     staging.file_name().expect("staging name"),
@@ -436,7 +447,7 @@ impl Engine {
             || publication.finalize_receipts.len() != c.metadata_disk_ids.len()
         {
             return Err(Error::new(
-                "PUBLICATION_INVALID",
+                storage_contract::ErrorCode::PublicationInvalid,
                 "stored publication does not bind this candidate",
             ));
         }
@@ -496,13 +507,13 @@ impl Engine {
                         continue;
                     }
                     return Err(Error::new(
-                        "PUBLICATION_INVALID",
+                        storage_contract::ErrorCode::PublicationInvalid,
                         "stored local receipt missing",
                     ));
                 };
                 if expected.proof_hash != object_hash("commit-proof", &proof)? {
                     return Err(Error::new(
-                        "PUBLICATION_INVALID",
+                        storage_contract::ErrorCode::PublicationInvalid,
                         "stored local receipt differs",
                     ));
                 }
@@ -631,7 +642,12 @@ impl Engine {
                 .operations
                 .get(&c.operation_id)
                 .cloned()
-                .ok_or_else(|| Error::new("STATE_INVALID", "candidate result is absent"))?,
+                .ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::StateInvalid,
+                        "candidate result is absent",
+                    )
+                })?,
         };
         let pub_hash = object_hash("publication", &publication)?;
         let mut publication_receipts = Vec::new();
@@ -699,19 +715,19 @@ fn repair_local_proof<T: data_serialization::Serialize>(
     match read_bytes(path, MAX_METADATA) {
         Ok(bytes) if bytes == expected => return Ok(()),
         Ok(_) => {}
-        Err(error) if error.code() == "RESOURCE_LIMIT" => {}
+        Err(error) if error.code() == storage_contract::ErrorCode::ResourceLimit => {}
         Err(error) => return Err(error),
     }
     let parent = path.parent().expect("proof parent");
     let quarantine = parent.join("proof-quarantine");
     private_dir(&quarantine)?;
     let source = OpenAt2Root::open(parent, MountPolicy::SameMount)
-        .map_err(|error| Error::new("UNSAFE_PATH", error.to_string()))?;
+        .map_err(|error| Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string()))?;
     let destination = OpenAt2Root::open(&quarantine, MountPolicy::SameMount)
-        .map_err(|error| Error::new("UNSAFE_PATH", error.to_string()))?;
+        .map_err(|error| Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string()))?;
     if FileIdentity::from_fd(&original)? != FileIdentity::from_fd(open_regular(path)?)? {
         return Err(Error::new(
-            "UNSAFE_PATH",
+            storage_contract::ErrorCode::UnsafePath,
             "local proof identity changed before repair",
         ));
     }
@@ -734,7 +750,7 @@ fn repair_local_proof<T: data_serialization::Serialize>(
         != FileIdentity::from_fd(open_regular(&quarantine.join(name))?)?
     {
         return Err(Error::new(
-            "UNSAFE_PATH",
+            storage_contract::ErrorCode::UnsafePath,
             "local proof identity changed during repair",
         ));
     }
@@ -756,7 +772,12 @@ fn run_payload_groups<T: Sync>(
         next: 0,
         first_error: None,
     });
-    let poisoned = || Error::new("INTERNAL_ERROR", "payload preparation queue poisoned");
+    let poisoned = || {
+        Error::new(
+            storage_contract::ErrorCode::InternalError,
+            "payload preparation queue poisoned",
+        )
+    };
     std::thread::scope(|scope| {
         let workers: Vec<_> = (0..WORKERS.min(groups.len()))
             .map(|_| {
@@ -785,7 +806,10 @@ fn run_payload_groups<T: Sync>(
                             Ok(Ok(())) => continue,
                             Ok(Err(error)) => (error, None),
                             Err(panic) => (
-                                Error::new("INTERNAL_ERROR", "payload preparation worker panicked"),
+                                Error::new(
+                                    storage_contract::ErrorCode::InternalError,
+                                    "payload preparation worker panicked",
+                                ),
                                 Some(panic),
                             ),
                         };
@@ -813,7 +837,7 @@ fn run_payload_groups<T: Sync>(
         for worker in workers {
             let result = worker.join().unwrap_or_else(|_| {
                 Err(Error::new(
-                    "INTERNAL_ERROR",
+                    storage_contract::ErrorCode::InternalError,
                     "payload preparation scheduler panicked",
                 ))
             });

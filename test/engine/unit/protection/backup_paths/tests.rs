@@ -281,10 +281,34 @@ fn prefix_changes_reuse_verified_payloads_at_capacity_and_failures_are_atomic() 
     );
     let before = canonical_json(engine.state()).unwrap();
     for (copies, prefixes, generation, scope, code) in [
-        (4, config.clone(), 1, None, "ROUTE_INCOMPLETE"),
-        (3, BTreeMap::new(), 1, None, "BACKUP_PREFIX_REQUIRED"),
-        (3, config.clone(), 0, None, "GENERATION_MISMATCH"),
-        (3, config.clone(), 1, Some("file_wrong"), "SCOPE_CHANGED"),
+        (
+            4,
+            config.clone(),
+            1,
+            None,
+            storage_contract::ErrorCode::RouteIncomplete,
+        ),
+        (
+            3,
+            BTreeMap::new(),
+            1,
+            None,
+            storage_contract::ErrorCode::BackupPrefixRequired,
+        ),
+        (
+            3,
+            config.clone(),
+            0,
+            None,
+            storage_contract::ErrorCode::GenerationMismatch,
+        ),
+        (
+            3,
+            config.clone(),
+            1,
+            Some("file_wrong"),
+            storage_contract::ErrorCode::ScopeChanged,
+        ),
     ] {
         assert_eq!(
             engine
@@ -338,7 +362,7 @@ fn backup_projection_recovers_without_copying_or_renaming_primary() {
                 })
                 .unwrap_err()
                 .code(),
-            "IN_DOUBT"
+            storage_contract::ErrorCode::InDoubt
         );
         drop(engine);
         let mut engine = Engine::open(&temp.path().join("state")).unwrap();
@@ -494,7 +518,7 @@ fn configuration_exposes_all_historical_primary_chains_before_collecting_prefixe
             })
             .unwrap_err()
             .code(),
-        "BACKUP_PREFIX_REQUIRED"
+        storage_contract::ErrorCode::BackupPrefixRequired
     );
     assert_eq!(before, canonical_json(engine.state()).unwrap());
     engine

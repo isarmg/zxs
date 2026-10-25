@@ -52,7 +52,7 @@ fn upload_fs_error(error: platform_io::fs_safety::Error) -> ApiError {
     tracing::error!(%error, "upload filesystem boundary rejected");
     ApiError::new(
         500,
-        "UPLOAD_STATE_INVALID",
+        storage_contract::ErrorCode::UploadStateInvalid,
         "local upload staging is unsafe or changed",
     )
 }
@@ -119,7 +119,7 @@ impl Content {
             let Some(next) = self.fallback_files.pop() else {
                 return Err(ApiError::new(
                     503,
-                    "CONTENT_UNAVAILABLE",
+                    storage_contract::ErrorCode::ContentUnavailable,
                     "no fully verified content replica is available",
                 ));
             };
@@ -513,9 +513,13 @@ impl AppState {
     }
 }
 fn lock<T>(value: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, ApiError> {
-    value
-        .lock()
-        .map_err(|_| ApiError::new(500, "INTERNAL_ERROR", "service state requires restart"))
+    value.lock().map_err(|_| {
+        ApiError::new(
+            500,
+            storage_contract::ErrorCode::InternalError,
+            "service state requires restart",
+        )
+    })
 }
 
 /// Construct an embedded router synchronously, including complete HTTP spool
@@ -801,7 +805,13 @@ pub async fn serve_with_shutdown(
             let run = async move {
                 smb_rpc::serve(smb, bridge_auth, backend, smb_max_file_bytes)
                     .await
-                    .map_err(|_| ApiError::new(503, "SMB_UNAVAILABLE", "SMB bridge stopped"))
+                    .map_err(|_| {
+                        ApiError::new(
+                            503,
+                            storage_contract::ErrorCode::SmbUnavailable,
+                            "SMB bridge stopped",
+                        )
+                    })
             };
             if let Err(error) = run.await {
                 tracing::error!(%error, "SMB bridge stopped; management HTTP remains available");

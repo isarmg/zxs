@@ -14,7 +14,7 @@ pub fn validate_api_path(value: &str) -> Result<()> {
         });
     if invalid {
         Err(Error::new(
-            "INVALID_API_PATH",
+            crate::ErrorCode::InvalidApiPath,
             "expected a service-local /api/ API route",
         ))
     } else {

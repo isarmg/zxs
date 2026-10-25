@@ -42,13 +42,21 @@ pub(crate) fn node_version(state: &State, file: &str, node: &str) -> Result<Stri
                 .filter(|n| n.file_id == file)
                 .map(|n| n.version_id.clone())
         })
-        .ok_or_else(|| Error::new("FILE_NODE_NOT_FOUND", "node does not belong to this file"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::FileNodeNotFound,
+                "node does not belong to this file",
+            )
+        })?;
     if !state
         .versions
         .get(&version)
         .is_some_and(|v| v.file_id == file)
     {
-        return Err(Error::new("STATE_INVALID", "file node body is missing"));
+        return Err(Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "file node body is missing",
+        ));
     }
     Ok(version)
 }
@@ -219,13 +227,15 @@ impl<'a> NodeProjection<'a> {
 }
 
 pub(crate) fn branch_head(state: &State, branch: &str) -> Result<String> {
-    let branch = state
-        .branches
-        .get(branch)
-        .ok_or_else(|| Error::new("FILE_BRANCH_NOT_FOUND", "file branch missing"))?;
+    let branch = state.branches.get(branch).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::FileBranchNotFound,
+            "file branch missing",
+        )
+    })?;
     let file = branch.file_id.as_deref().ok_or_else(|| {
         Error::new(
-            "FILE_BRANCH_REQUIRED",
+            storage_contract::ErrorCode::FileBranchRequired,
             "an independent file branch is required",
         )
     })?;
@@ -243,7 +253,12 @@ pub(crate) fn branch_head(state: &State, branch: &str) -> Result<String> {
                 })
                 .map(|e| e.version_id.clone())
         })
-        .ok_or_else(|| Error::new("STATE_INVALID", "file branch head is missing"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "file branch head is missing",
+            )
+        })?;
     node_version(state, file, &node)?;
     Ok(node)
 }

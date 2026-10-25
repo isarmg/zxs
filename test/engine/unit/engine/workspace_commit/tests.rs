@@ -190,14 +190,14 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
             .create_purge_plan(&repo.history_tree_id, vec![old_version.clone()], "admin")
             .unwrap_err()
             .code(),
-        "COMMIT_PREPARATION_BUSY"
+        storage_contract::ErrorCode::CommitPreparationBusy
     );
     assert_eq!(
         engine
             .create_historical_save_plan(&repo.history_tree_id, options.clone(), "admin")
             .unwrap_err()
             .code(),
-        "COMMIT_PREPARATION_BUSY"
+        storage_contract::ErrorCode::CommitPreparationBusy
     );
     assert!(Arc::ptr_eq(&frozen, &engine.state));
     assert_eq!(canonical_json(engine.state()).unwrap(), frozen_bytes);
@@ -318,10 +318,15 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
         None,
         |_, next, _| {
             mutate_records(next);
-            Err(Error::new("TEST_ROLLBACK", "abandon mutated metadata"))
+            Err(Error::new(
+                storage_contract::ErrorCode::InjectedFailure,
+                "abandon mutated metadata",
+            ))
         },
     );
-    assert!(matches!(failed, Err(ref error) if error.code() == "TEST_ROLLBACK"));
+    assert!(
+        matches!(failed, Err(ref error) if error.code() == storage_contract::ErrorCode::InjectedFailure)
+    );
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     assert!(Arc::ptr_eq(&frozen, &engine.state));
     assert!(!engine.state.operations.contains_key(&failed_operation));

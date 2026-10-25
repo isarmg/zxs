@@ -101,7 +101,7 @@ async fn map_query_rejects_duplicate_decoded_fields_without_overwriting() {
             Err(error) => error,
         };
         assert_eq!(error.status, 400);
-        assert_eq!(error.code, "INVALID_REQUEST");
+        assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
     }
 }
 
@@ -415,7 +415,7 @@ async fn ordinary_body_deadline_rejects_a_stalled_sender() {
     .await
     .unwrap_err();
     assert_eq!(error.status, 408);
-    assert_eq!(error.code, "REQUEST_TIMEOUT");
+    assert_eq!(error.code, storage_contract::ErrorCode::RequestTimeout);
 }
 
 #[tokio::test]
@@ -579,4 +579,18 @@ async fn password_change_rejects_positional_fields_without_revoking_the_session(
     assert_eq!(response.status(), StatusCode::OK);
     // Rejection must not change the password, as well as not revoking the token.
     let (_, _, _) = authenticated(&app).await;
+}
+
+#[test]
+fn api_error_codes_keep_wire_spelling_and_reject_unknown_boundary_values() {
+    let error = ApiError::conflict(
+        storage_contract::ErrorCode::FileWriteBusy,
+        "another writer owns this file",
+    );
+    let mut wire = json_codec::to_value(&error).unwrap();
+    assert_eq!(wire["code"], "FILE_WRITE_BUSY");
+    let decoded: ApiError = json_codec::from_value(wire.clone()).unwrap();
+    assert_eq!(decoded.code, storage_contract::ErrorCode::FileWriteBusy);
+    wire["code"] = json!("UNRECOGNIZED_EXTERNAL_CODE");
+    assert!(json_codec::from_value::<ApiError>(wire).is_err());
 }

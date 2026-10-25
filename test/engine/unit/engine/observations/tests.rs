@@ -47,7 +47,7 @@ fn observation_owns_snapshot_and_probes_without_engine() {
     );
     assert_eq!(
         engine.disk_capacity("missing").unwrap_err().code(),
-        "SLOT_NOT_FOUND"
+        storage_contract::ErrorCode::SlotNotFound
     );
     drop(engine);
     let observed = plan.sample();

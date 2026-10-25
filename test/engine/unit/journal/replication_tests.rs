@@ -67,7 +67,7 @@ fn replicated_metadata_matches_original_bytes_and_hash_with_less_serialization()
         store_object_replicas_bounded(&config.disks, "state-page", &value, MAX_METADATA)
             .unwrap_err()
             .code(),
-        "OBJECT_COLLISION"
+        storage_contract::ErrorCode::ObjectCollision
     );
     assert_eq!(std::fs::read(path).unwrap(), damaged);
 }
@@ -121,6 +121,6 @@ fn replicated_metadata_rejects_oversize_before_creating_any_object() {
     let bytes = canonical_json(&value).unwrap();
     let error = store_object_replicas_bounded(&config.disks, "snapshot", &value, bytes.len() - 1)
         .unwrap_err();
-    assert_eq!(error.code(), "RESOURCE_LIMIT");
+    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
     assert!(config.disks.iter().all(|disk| !disk.root.exists()));
 }

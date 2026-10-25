@@ -85,7 +85,7 @@ fn retained_workspace_limits_default_for_legacy_configuration_and_reject_zero() 
         }
         assert_eq!(
             validate_config(&invalid).unwrap_err().code(),
-            "CONFIG_INVALID"
+            storage_contract::ErrorCode::ConfigInvalid
         );
     }
 }

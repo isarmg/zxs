@@ -177,12 +177,20 @@ fn metadata<T: data_serialization::de::DeserializeOwned>(path: &Path) -> Option<
     storage_contract::decode_strict(&bytes).ok()
 }
 fn charge_bytes(bytes: u64) -> Result<u64, ApiError> {
-    bytes
-        .checked_add(METADATA_ALLOWANCE)
-        .ok_or_else(|| ApiError::new(500, "UPLOAD_STATE_INVALID", "spool accounting overflow"))
+    bytes.checked_add(METADATA_ALLOWANCE).ok_or_else(|| {
+        ApiError::new(
+            500,
+            storage_contract::ErrorCode::UploadStateInvalid,
+            "spool accounting overflow",
+        )
+    })
 }
 fn invalid_state(message: &str) -> ApiError {
-    ApiError::new(500, "UPLOAD_STATE_INVALID", message)
+    ApiError::new(
+        500,
+        storage_contract::ErrorCode::UploadStateInvalid,
+        message,
+    )
 }
 fn set_owner(
     owners: &mut BTreeMap<String, String>,

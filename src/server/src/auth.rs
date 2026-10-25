@@ -238,7 +238,7 @@ impl PasswordChangeChallenge {
         if !primitives::verify_password(current_password, &self.previous.password_hash) {
             return Err(ApiError::new(
                 403,
-                "CURRENT_PASSWORD_INVALID",
+                storage_contract::ErrorCode::CurrentPasswordInvalid,
                 "current password is incorrect",
             ));
         }
@@ -322,7 +322,7 @@ impl AuthStore {
         if self.blocked.load(Ordering::SeqCst) {
             Err(ApiError::new(
                 503,
-                "RECOVERY_REQUIRED",
+                storage_contract::ErrorCode::RecoveryRequired,
                 "authentication publication must be recovered before serving requests",
             ))
         } else {
@@ -340,7 +340,7 @@ impl AuthStore {
     fn missing_authority() -> ApiError {
         ApiError::new(
             503,
-            "AUTH_RECOVERY_REQUIRED",
+            storage_contract::ErrorCode::AuthRecoveryRequired,
             "administrator credentials are unavailable",
         )
     }
@@ -380,7 +380,7 @@ impl AuthStore {
         AdvisoryLock::acquire(&directory, &RelativePath::new("auth.lock").map_err(ApiError::invalid)?)
             .map_err(|error| match error {
                 platform_io::fs_safety::Error::AlreadyLocked(_) => ApiError::conflict(
-                    "AUTH_STORE_BUSY",
+                    storage_contract::ErrorCode::AuthStoreBusy,
                     "another process owns the credential store; use its authenticated administration API",
                 ),
                 other => ApiError::invalid(other),
@@ -413,7 +413,7 @@ impl AuthStore {
         });
         if path.symlink_metadata().is_ok() {
             return Err(ApiError::conflict(
-                "AUTH_ALREADY_INITIALIZED",
+                storage_contract::ErrorCode::AuthAlreadyInitialized,
                 "credentials already exist",
             ));
         }
@@ -520,7 +520,7 @@ impl AuthStore {
             None => storage_contract::strict_json(&local.ok_or_else(|| {
                 ApiError::new(
                     503,
-                    "AUTH_RECOVERY_REQUIRED",
+                    storage_contract::ErrorCode::AuthRecoveryRequired,
                     "credential store is missing and no authoritative backup is available",
                 )
             })?)
@@ -575,14 +575,14 @@ impl AuthStore {
                 && let Err(error) = backup(self.snapshot()?)
             {
                 // Admission rejected before any decision or auth publication.
-                if error.code != "COMMIT_PREPARATION_BUSY" {
+                if error.code != storage_contract::ErrorCode::CommitPreparationBusy {
                     self.blocked.store(true, Ordering::SeqCst);
                 }
                 return Err(error);
             }
             if initial && self.path.symlink_metadata().is_ok() {
                 return Err(ApiError::conflict(
-                    "AUTH_ALREADY_INITIALIZED",
+                    storage_contract::ErrorCode::AuthAlreadyInitialized,
                     "credentials already exist",
                 ));
             }
@@ -600,10 +600,9 @@ impl AuthStore {
         if result.is_err() {
             if self.local_authority
                 || self.backup.is_some()
-                    && result
-                        .as_ref()
-                        .err()
-                        .is_none_or(|error| error.code != "COMMIT_PREPARATION_BUSY")
+                    && result.as_ref().err().is_none_or(|error| {
+                        error.code != storage_contract::ErrorCode::CommitPreparationBusy
+                    })
             {
                 self.blocked.store(true, Ordering::SeqCst);
             }

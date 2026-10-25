@@ -90,7 +90,7 @@ fn unauthorized_operations_never_start_payload_observation() {
                 .call(BackendAction::Operation, denied, input.clone())
                 .unwrap_err()
                 .code,
-            "UNAUTHORIZED"
+            storage_contract::ErrorCode::Unauthorized
         );
     }
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -103,7 +103,7 @@ fn unauthorized_operations_never_start_payload_observation() {
             )
             .unwrap_err()
             .code,
-        "OPERATION_NOT_FOUND"
+        storage_contract::ErrorCode::OperationNotFound
     );
     // Account admission does not waive durable operation ownership. This is a
     // storage fixture owned by another principal, not a second login account.
@@ -123,7 +123,7 @@ fn unauthorized_operations_never_start_payload_observation() {
             )
             .unwrap_err()
             .code,
-        "FORBIDDEN"
+        storage_contract::ErrorCode::Forbidden
     );
     auth.logout(&token).unwrap();
     assert_eq!(
@@ -131,7 +131,7 @@ fn unauthorized_operations_never_start_payload_observation() {
             .call(BackendAction::Operation, &identity, input)
             .unwrap_err()
             .code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
@@ -163,7 +163,10 @@ fn slow_operation_health_releases_engine_and_rechecks_logged_out_session() {
         let revoked = auth.logout(&token);
         release.send(()).unwrap();
         revoked.unwrap();
-        assert_eq!(request.join().unwrap().unwrap_err().code, "UNAUTHORIZED");
+        assert_eq!(
+            request.join().unwrap().unwrap_err().code,
+            storage_contract::ErrorCode::Unauthorized
+        );
     });
     *backend.operation_health_hook.lock().unwrap() = None;
     let login = auth.login("owner", PASSWORD).unwrap();
@@ -208,12 +211,18 @@ fn health_observation_rechecks_password_generation_after_unlocked_io() {
         );
         release.send(()).unwrap();
         revoked.unwrap();
-        assert_eq!(request.join().unwrap().unwrap_err().code, "UNAUTHORIZED");
+        assert_eq!(
+            request.join().unwrap().unwrap_err().code,
+            storage_contract::ErrorCode::Unauthorized
+        );
     });
-    assert_eq!(auth.authenticate(&token).unwrap_err().code, "UNAUTHORIZED");
+    assert_eq!(
+        auth.authenticate(&token).unwrap_err().code,
+        storage_contract::ErrorCode::Unauthorized
+    );
     assert_eq!(
         auth.authenticate(&rotating_session.token).unwrap_err().code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
     *backend.operation_health_hook.lock().unwrap() = None;
     let login = auth

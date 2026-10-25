@@ -47,7 +47,7 @@ thread_local! { static CREDENTIALS: RefCell<Credentials> = RefCell::new(Credenti
 
 #[derive(Clone, Debug)]
 pub struct Error {
-    pub code: String,
+    pub code: storage_contract::ErrorCode,
     pub message: String,
     pub retryable: bool,
     pub status: u16,
@@ -73,12 +73,12 @@ impl std::fmt::Display for Error {
             f,
             "{} · {}{}",
             self.code,
-            match self.code.as_str() {
-                "DIRECTORY_SCOPE_REQUIRED" => t(
+            match self.code {
+                storage_contract::ErrorCode::DirectoryScopeRequired => t(
                     "请选择具体文件夹；此硬盘根目录包含多个已有目录。",
                     "Select a specific folder; this disk root contains multiple existing namespaces."
                 ),
-                "DIRECTORY_BRANCH_INCOMPLETE" => t(
+                storage_contract::ErrorCode::DirectoryBranchIncomplete => t(
                     "所选目录分支的引用不完整，未发布此次切换。",
                     "The selected folder branch has incomplete references. The switch was not published."
                 ),
@@ -96,9 +96,9 @@ impl std::fmt::Display for Error {
     }
 }
 
-fn error(code: &str, message: impl Into<String>) -> Error {
+fn error(code: storage_contract::ErrorCode, message: impl Into<String>) -> Error {
     Error {
-        code: code.into(),
+        code,
         message: message.into(),
         retryable: false,
         status: 0,
@@ -108,7 +108,7 @@ fn error(code: &str, message: impl Into<String>) -> Error {
 
 pub fn session_changed() -> Error {
     error(
-        "SESSION_CHANGED",
+        storage_contract::ErrorCode::SessionChanged,
         t(
             "会话已改变，操作已停止。",
             "The session changed, so the operation was stopped.",
@@ -164,7 +164,7 @@ pub fn segment(value: &str) -> String {
 fn validate_path(path: &str) -> Result<(), Error> {
     storage_contract::validate_api_path(path).map_err(|_| {
         error(
-            "INVALID_API_PATH",
+            storage_contract::ErrorCode::InvalidApiPath,
             t(
                 "仅允许本服务的 /api/ 业务接口",
                 "Only this service’s /api/ API is allowed",
@@ -180,7 +180,7 @@ fn js_error(value: JsValue) -> Error {
             "The connection was interrupted. Check whether the save completed.",
         )
     });
-    error("TRANSPORT_ERROR", message)
+    error(storage_contract::ErrorCode::TransportError, message)
 }
 
 /// Cancellation is shared by the listing owner and the in-flight GET only.
@@ -283,7 +283,7 @@ async fn fetch_authorized(
     let timer = gloo_timers::callback::Timeout::new(120_000, move || cancellation.abort());
     let window = web_sys::window().ok_or_else(|| {
         error(
-            "NO_WINDOW",
+            storage_contract::ErrorCode::NoWindow,
             t("浏览器窗口不可用", "The browser window is unavailable"),
         )
     })?;
@@ -327,7 +327,7 @@ async fn read_body_inner(response: &Response, limit: usize) -> Result<Vec<u8>, E
         if bytes.len().saturating_add(chunk.length() as usize) > limit {
             let _ = JsFuture::from(reader.cancel()).await;
             return Err(error(
-                "RESPONSE_TOO_LARGE",
+                storage_contract::ErrorCode::ResponseTooLarge,
                 t(
                     "响应超过界面安全上限，请缩小查询范围",
                     "The response is too large. Narrow the query.",
@@ -364,7 +364,7 @@ async fn decode(fetched: Fetched) -> Result<Value, Error> {
     )
     .await
     .map_err(|error| {
-        if error.code == "RESPONSE_TOO_LARGE" {
+        if error.code == storage_contract::ErrorCode::ResponseTooLarge {
             response::from_protocol(storage_contract::client_protocol::response_too_large(
                 status,
             ))
@@ -415,7 +415,7 @@ pub(crate) async fn setup_request(
         || !key.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         return Err(error(
-            "INVALID_SETUP_REQUEST",
+            storage_contract::ErrorCode::InvalidSetupRequest,
             t(
                 "请输入服务器本地提供的 64 位授权密钥。",
                 "Enter the 64-character authorization key provided locally on the server.",
@@ -472,7 +472,7 @@ fn validate_session(value: &Value, login: bool) -> Result<Authenticated, Error> 
 
 fn invalid_session() -> Error {
     error(
-        "INVALID_SESSION",
+        storage_contract::ErrorCode::InvalidSession,
         t(
             "认证响应未确认完整的会话，请重试登录。",
             "The authentication response did not confirm a complete session. Try signing in again.",

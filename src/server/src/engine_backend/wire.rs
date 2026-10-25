@@ -15,8 +15,8 @@ pub(crate) fn error(error: storage_engine::Error) -> ApiError {
             "storage operation could not be completed; administrator inspection is required",
         )
     } else {
-        let mut mapped = ApiError::new(status, code, error.message.clone());
-        mapped.retryable |= error.retryable;
+        let mut mapped = ApiError::new(status, code, error.message());
+        mapped.retryable |= error.is_retryable();
         mapped
     }
 }
@@ -424,7 +424,7 @@ pub(super) fn operation_wire(op: storage_engine::OperationResult) -> Result<Valu
                 .ok_or_else(|| {
                     ApiError::new(
                         500,
-                        "STATE_INVALID",
+                        storage_contract::ErrorCode::StateInvalid,
                         "frozen publication protection evidence is missing",
                     )
                 })?;
@@ -434,7 +434,7 @@ pub(super) fn operation_wire(op: storage_engine::OperationResult) -> Result<Valu
         };
         let error = if op.commit_state == storage_contract::CommitState::Aborted {
             encode(ApiError::conflict(
-                "OPERATION_ABORTED",
+                storage_contract::ErrorCode::OperationAborted,
                 "the operation was aborted before publication",
             ))?
         } else {

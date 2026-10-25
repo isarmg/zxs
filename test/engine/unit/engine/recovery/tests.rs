@@ -44,7 +44,7 @@ fn recovery_rejects_lost_published_journals_before_rewriting_projection() {
                 };
                 assert_eq!(
                     opened.err().map(|error| error.code().to_owned()),
-                    Some("RECOVERY_REQUIRED".into()),
+                    Some(storage_contract::ErrorCode::RecoveryRequired),
                     "{disks} disks, {damage}, readonly={readonly}"
                 );
                 assert_eq!(
@@ -129,7 +129,7 @@ fn recovery_rejects_dangling_journal_paths_instead_of_an_empty_history() {
             Engine::open(&root)
                 .err()
                 .map(|error| error.code().to_owned()),
-            Some("UNSAFE_PATH".into()),
+            Some(storage_contract::ErrorCode::UnsafePath),
             "an unsafe journal cannot be interpreted as a never-written pool"
         );
         assert!(!missing.exists());
@@ -286,7 +286,10 @@ fn recovery_rejects_all_digest_mismatched_object_replicas_without_rewriting_them
         for member in &members {
             std::fs::write(object_path(member, kind, &hash), &wrong).unwrap();
         }
-        assert_eq!(Engine::open(&root).err().unwrap().code, "OBJECT_CORRUPT");
+        assert_eq!(
+            Engine::open(&root).err().unwrap().code(),
+            storage_contract::ErrorCode::ObjectCorrupt
+        );
         for (member, journal) in members.iter().zip(journals) {
             assert_eq!(
                 std::fs::read(object_path(member, kind, &hash)).unwrap(),
@@ -329,7 +332,7 @@ fn recovery_rejects_flat_objects_without_repair_or_deletion() {
     drop(engine);
     assert_eq!(
         Engine::open(&root).err().unwrap().code(),
-        "FORMAT_UNSUPPORTED"
+        storage_contract::ErrorCode::FormatUnsupported
     );
     assert_eq!(std::fs::read(flat).unwrap(), b"{}");
     assert_eq!(
@@ -469,8 +472,8 @@ fn failed_replica_repair_does_not_cache_page_success() {
     assert_eq!(
         repair_snapshot_copies(&members, &members, &hash, &mut repaired)
             .unwrap_err()
-            .code,
-        "UNSAFE_PATH"
+            .code(),
+        storage_contract::ErrorCode::UnsafePath
     );
     assert!(!repaired.contains(page));
     std::fs::remove_dir(&target).unwrap();
@@ -663,7 +666,10 @@ fn configured_metadata_majority_does_not_shrink_when_disks_disappear() {
             }
             Err(error) => {
                 assert!(!expected_available);
-                assert_eq!(error.code(), "METADATA_QUORUM_UNAVAILABLE");
+                assert_eq!(
+                    error.code(),
+                    storage_contract::ErrorCode::MetadataQuorumUnavailable
+                );
             }
         }
         if !expected_available && count > 1 {
@@ -784,7 +790,7 @@ fn self_consistent_one_member_seal_cannot_downgrade_configured_three_members() {
             .verify_candidate_membership(&candidate)
             .unwrap_err()
             .code(),
-        "PUBLICATION_INVALID"
+        storage_contract::ErrorCode::PublicationInvalid
     );
     let target = engine.members().remove(0);
     store_object(&target, "candidate", &candidate).unwrap();
@@ -800,7 +806,7 @@ fn self_consistent_one_member_seal_cannot_downgrade_configured_three_members() {
     drop(engine);
     assert_eq!(
         Engine::open(&root).err().unwrap().code(),
-        "PUBLICATION_INVALID"
+        storage_contract::ErrorCode::PublicationInvalid
     );
 }
 
@@ -896,7 +902,10 @@ fn empty_unmounted_root_is_unavailable_without_writes() {
                 assert!(engine.blocked);
                 assert!(engine.state.repositories.contains_key(&repo.repository_id));
             } else {
-                assert_eq!(opened.err().unwrap().code(), "METADATA_QUORUM_UNAVAILABLE");
+                assert_eq!(
+                    opened.err().unwrap().code(),
+                    storage_contract::ErrorCode::MetadataQuorumUnavailable
+                );
             }
             for disk in config.disks.iter().rev().take(lost) {
                 assert_eq!(std::fs::read_dir(&disk.root).unwrap().count(), 0);
@@ -1036,7 +1045,7 @@ fn missing_payload_only_replica_preserves_history_but_not_new_copy_admission() {
                         request_digest: None,
                     })
                     .unwrap_err();
-                assert_ne!(error.code(), "IN_DOUBT");
+                assert_ne!(error.code(), storage_contract::ErrorCode::InDoubt);
                 engine
                     .abort_workspace(&workspace.workspace_id, "admin")
                     .unwrap();

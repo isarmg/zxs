@@ -2,7 +2,7 @@ use super::*;
 
 fn unauthorized() -> api::Error {
     api::Error {
-        code: "UNAUTHORIZED".into(),
+        code: storage_contract::ErrorCode::Unauthorized,
         message: "Session expired".into(),
         status: 401,
         retryable: false,

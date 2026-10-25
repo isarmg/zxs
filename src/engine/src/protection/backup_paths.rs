@@ -33,15 +33,22 @@ pub struct ScopedBackupConfigurationRequest<'a> {
 }
 
 fn namespace<'a>(state: &'a State, repository: &str) -> Result<&'a Commit> {
-    let repo = state
-        .repositories
-        .get(repository)
-        .ok_or_else(|| Error::new("REPOSITORY_NOT_FOUND", "backup repository missing"))?;
+    let repo = state.repositories.get(repository).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::RepositoryNotFound,
+            "backup repository missing",
+        )
+    })?;
     state
         .branches
         .get(&repo.main_branch_id)
         .and_then(|branch| state.commits.get(&branch.head_commit_id))
-        .ok_or_else(|| Error::new("STATE_INVALID", "backup namespace missing"))
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "backup namespace missing",
+            )
+        })
 }
 fn within(root: &str, path: &str) -> bool {
     let root = name_policy::path_key(root);
@@ -147,8 +154,12 @@ fn source_scope(state: &State, repository: &str, path: &str) -> Result<Scope> {
             files: BTreeMap::new(),
         }
     } else {
-        let entry = find_unordered(&commit.entries, path)
-            .ok_or_else(|| Error::new("ENTRY_NOT_FOUND", "backup scope no longer exists"))?;
+        let entry = find_unordered(&commit.entries, path).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::EntryNotFound,
+                "backup scope no longer exists",
+            )
+        })?;
         Scope {
             id: if entry.kind == "file" {
                 entry.file_id.clone()
@@ -314,7 +325,12 @@ fn backup_primaries(engine: &Engine, repository: &str, scope: &Scope) -> Result<
             .state
             .placements
             .get(&version.version_id)
-            .ok_or_else(|| Error::new("PLACEMENT_NOT_FOUND", "backup source placement missing"))?;
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::PlacementNotFound,
+                    "backup source placement missing",
+                )
+            })?;
         primaries.insert(placement.primary_slot_id.clone());
     }
     Ok(primaries)
@@ -390,7 +406,7 @@ pub(crate) fn apply_backup_paths(
         .map(|slot| {
             let prefix = policy.backup_prefixes.get(slot).ok_or_else(|| {
                 Error::new(
-                    "BACKUP_PREFIX_REQUIRED",
+                    storage_contract::ErrorCode::BackupPrefixRequired,
                     format!("backup slot {slot} requires a user-chosen prefix"),
                 )
             })?;
@@ -439,7 +455,9 @@ impl Engine {
             while route.len() < self.config.disks.len() {
                 match self.route(&source, route.len() as u32 + 1) {
                     Ok(next) => route = next,
-                    Err(error) if error.code() == "ROUTE_INCOMPLETE" => break,
+                    Err(error) if error.code() == storage_contract::ErrorCode::RouteIncomplete => {
+                        break;
+                    }
                     Err(error) => return Err(error),
                 }
             }
@@ -453,7 +471,9 @@ impl Engine {
         let maximum = routes.iter().map(Vec::len).min().unwrap_or(1);
         let requested_route = match self.route(&primary, copies) {
             Ok(route) => route,
-            Err(error) if error.code() == "ROUTE_INCOMPLETE" => Vec::new(),
+            Err(error) if error.code() == storage_contract::ErrorCode::RouteIncomplete => {
+                Vec::new()
+            }
             Err(error) => return Err(error),
         };
         let backup_slots = routes
@@ -509,16 +529,16 @@ impl Engine {
             json!({"repository_id":repository,"path":path,"expected_scope_id":expected_scope_id,"target_copies":copies,"backup_prefixes":prefixes,"expected_generation":expected_generation.to_string()}),
             |engine, state, pending| {
                 let repo = state.repositories.get(repository).cloned()
-                    .ok_or_else(|| Error::new("REPOSITORY_NOT_FOUND", "backup repository missing"))?;
+                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::RepositoryNotFound, "backup repository missing"))?;
 
                 let mut scope = source_scope(state, repository, path)?;
                 if expected_scope_id.is_some_and(|expected| expected != scope.id) {
-                    return Err(Error::new("SCOPE_CHANGED", "backup path now describes a different file or directory"));
+                    return Err(Error::new(storage_contract::ErrorCode::ScopeChanged, "backup path now describes a different file or directory"));
                 }
                 let previous = exact_policy(state, repository, &scope).cloned();
                 let generation = previous.as_ref().map_or(0, |policy| policy.generation);
                 if generation != expected_generation {
-                    return Err(Error::new("GENERATION_MISMATCH", "backup configuration changed; reread before updating"));
+                    return Err(Error::new(storage_contract::ErrorCode::GenerationMismatch, "backup configuration changed; reread before updating"));
                 }
                 // An ancestor cannot silently replace independent child rules
                 // or the binding of a file moved from another protected scope.
@@ -527,11 +547,11 @@ impl Engine {
                 for (slot, prefix) in prefixes {
                     let disk = engine.disk(slot)?;
                     if disk.level <= 1 {
-                        return Err(Error::new("INVALID_BACKUP_PREFIX", "backup prefixes may only target backup slots"));
+                        return Err(Error::new(storage_contract::ErrorCode::InvalidBackupPrefix, "backup prefixes may only target backup slots"));
                     }
                     if !prefix.is_empty() { name_policy::validate_path(prefix)?; }
                     if normalized.insert(disk.slot_id.clone(), prefix.clone()).is_some() {
-                        return Err(Error::new("INVALID_BACKUP_PREFIX", "backup slot is listed more than once"));
+                        return Err(Error::new(storage_contract::ErrorCode::InvalidBackupPrefix, "backup slot is listed more than once"));
                     }
                 }
                 let mut required = BTreeSet::new();
@@ -544,7 +564,7 @@ impl Engine {
                 }).cloned().collect::<Vec<_>>();
                 for slot in required {
                     if !normalized.contains_key(&slot) {
-                        return Err(Error::new("BACKUP_PREFIX_REQUIRED", format!("backup slot {slot} requires a user-chosen prefix")));
+                        return Err(Error::new(storage_contract::ErrorCode::BackupPrefixRequired, format!("backup slot {slot} requires a user-chosen prefix")));
                     }
                 }
                 let policy = ProtectionPolicy {
@@ -554,7 +574,7 @@ impl Engine {
                     scope_directory_id: (scope.kind == "directory").then_some(scope.id.clone()),
                     scope_file_id: (scope.kind == "file").then_some(scope.id.clone()),
                     backup_prefixes: normalized.clone(),
-                    generation: generation.checked_add(1).ok_or_else(|| Error::new("RESOURCE_LIMIT", "backup policy generation exhausted"))?,
+                    generation: generation.checked_add(1).ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "backup policy generation exhausted"))?,
                 };
                 if let Some(previous) = previous {
                     let detached = state.file_backup_policies.iter()

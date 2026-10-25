@@ -114,7 +114,7 @@ impl Engine {
             || actual.len() != candidate.metadata_disk_ids.len()
         {
             return Err(Error::new(
-                "PUBLICATION_INVALID",
+                storage_contract::ErrorCode::PublicationInvalid,
                 "candidate membership differs from configured metadata members",
             ));
         }
@@ -133,7 +133,7 @@ impl Engine {
     ) -> Result<Self> {
         if root.join("config.json").exists() {
             return Err(Error::new(
-                "ALREADY_INITIALIZED",
+                storage_contract::ErrorCode::AlreadyInitialized,
                 "configuration already exists; use open/recovery",
             ));
         }
@@ -148,7 +148,7 @@ impl Engine {
             d.root = d.root.canonicalize()?;
             if d.root.join("disk.json").exists() {
                 return Err(Error::new(
-                    "DISK_ALREADY_ENROLLED",
+                    storage_contract::ErrorCode::DiskAlreadyEnrolled,
                     "disk already contains a managed identity",
                 ));
             }
@@ -159,7 +159,7 @@ impl Engine {
             let seal = identity(&config, d)?;
             if !physical.insert(seal.physical_device.clone()) {
                 return Err(Error::new(
-                    "DISK_NOT_INDEPENDENT",
+                    storage_contract::ErrorCode::DiskNotIndependent,
                     "two slots reference one physical disk",
                 ));
             }
@@ -302,13 +302,13 @@ impl Engine {
     ) -> Result<Self> {
         if root.join("config.json").exists() {
             return Err(Error::new(
-                "ALREADY_INITIALIZED",
+                storage_contract::ErrorCode::AlreadyInitialized,
                 "restore requires a new system state directory",
             ));
         }
         if disks.is_empty() {
             return Err(Error::new(
-                "METADATA_QUORUM_UNAVAILABLE",
+                storage_contract::ErrorCode::MetadataQuorumUnavailable,
                 "restore requires trusted old metadata members",
             ));
         }
@@ -325,7 +325,7 @@ impl Engine {
                 .cloned()
                 .ok_or_else(|| {
                     Error::new(
-                        "CONFIG_CONFLICT",
+                        storage_contract::ErrorCode::ConfigConflict,
                         "recovery input is not a metadata member of its saved configuration",
                     )
                 })?;
@@ -338,7 +338,7 @@ impl Engine {
                 .or_insert((config, 1));
             if seals.insert(seal.disk_id, path.canonicalize()?).is_some() {
                 return Err(Error::new(
-                    "DISK_NOT_INDEPENDENT",
+                    storage_contract::ErrorCode::DiskNotIndependent,
                     "duplicate disk id in recovery input",
                 ));
             }
@@ -349,7 +349,7 @@ impl Engine {
             .map(|(c, _)| c);
         let mut config = agreed.next().ok_or_else(|| {
             Error::new(
-                "CONFIG_CONFLICT",
+                storage_contract::ErrorCode::ConfigConflict,
                 "a configured metadata majority does not agree on pool configuration",
             )
         })?;
@@ -362,7 +362,7 @@ impl Engine {
             })
         {
             return Err(Error::new(
-                "CONFIG_CONFLICT",
+                storage_contract::ErrorCode::ConfigConflict,
                 "recovery inputs identify more than one pool configuration or membership",
             ));
         }
@@ -396,7 +396,7 @@ impl Engine {
     pub(crate) fn require_recovery_locks(&self) -> Result<()> {
         if self._locks.len() != self.config.disks.len() + 1 {
             return Err(Error::new(
-                "RECOVERY_REQUIRED",
+                storage_contract::ErrorCode::RecoveryRequired,
                 "recovery requires every original disk and its exclusive OS writer lock",
             ));
         }
@@ -434,7 +434,7 @@ impl Engine {
     ) -> Result<()> {
         if !snapshot.is_object() || canonical_json(&snapshot)?.len() > 4 * 1024 * 1024 {
             return Err(Error::new(
-                "AUTH_STATE_INVALID",
+                storage_contract::ErrorCode::AuthStateInvalid,
                 "authentication snapshot is not a bounded object",
             ));
         }
@@ -458,9 +458,12 @@ impl Engine {
     /// Inspect a workspace without copying its staged-file and namespace records.
     /// The view cannot outlive the engine borrow or span a mutation.
     pub fn workspace_ref(&self, id: &str) -> Result<&Workspace> {
-        self.workspaces
-            .get(id)
-            .ok_or_else(|| Error::new("WORKSPACE_NOT_FOUND", "workspace does not exist"))
+        self.workspaces.get(id).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::WorkspaceNotFound,
+                "workspace does not exist",
+            )
+        })
     }
     /// Deterministic injection only, never enabled by network or environment input.
     #[cfg(feature = "fault-injection")]
@@ -472,7 +475,7 @@ impl Engine {
         if self.fault.as_deref() == Some(point) {
             self.fault = None;
             return Err(Error::new(
-                "INJECTED_FAILURE",
+                storage_contract::ErrorCode::InjectedFailure,
                 format!("interrupted at {point}"),
             ));
         }
@@ -500,13 +503,18 @@ impl Engine {
             .disks
             .iter()
             .find(|d| d.slot_id.eq_ignore_ascii_case(slot))
-            .ok_or_else(|| Error::new("SLOT_NOT_FOUND", "storage slot is not registered"))
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::SlotNotFound,
+                    "storage slot is not registered",
+                )
+            })
     }
     pub(crate) fn route(&self, primary: &str, copies: u32) -> Result<Vec<String>> {
         let first = self.disk(primary)?;
         if first.level != 1 || copies == 0 {
             return Err(Error::new(
-                "PLACEMENT_INVALID",
+                storage_contract::ErrorCode::PlacementInvalid,
                 "placement requires a primary slot and at least one copy",
             ));
         }
@@ -525,7 +533,7 @@ impl Engine {
                 })
                 .ok_or_else(|| {
                     Error::new(
-                        "ROUTE_INCOMPLETE",
+                        storage_contract::ErrorCode::RouteIncomplete,
                         "requested copies exceed the configured fixed route",
                     )
                 })?;
@@ -540,7 +548,7 @@ impl Engine {
             .load(std::sync::atomic::Ordering::Acquire)
         {
             return Err(Error::new(
-                "COMMIT_PREPARATION_BUSY",
+                storage_contract::ErrorCode::CommitPreparationBusy,
                 "workspace payload preparation temporarily fences other writes",
             )
             .retryable());
@@ -551,7 +559,7 @@ impl Engine {
         self.require_no_commit_preparation()?;
         if self.blocked {
             return Err(Error::new(
-                "RECOVERY_REQUIRED",
+                storage_contract::ErrorCode::RecoveryRequired,
                 "an unresolved decision or unavailable metadata member blocks writes",
             )
             .retryable());
@@ -566,28 +574,38 @@ impl Engine {
     /// Authentication is performed by the server before calling this trusted API.
     pub(crate) fn require_actor(principal: &str) -> Result<()> {
         if principal.is_empty() {
-            return Err(Error::new("UNAUTHENTICATED", "operation actor is required"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::Unauthenticated,
+                "operation actor is required",
+            ));
         }
         Ok(())
     }
 
     pub(crate) fn repository_for_history(&self, history: &str) -> Result<&Repository> {
-        let h = self
-            .state
-            .histories
-            .get(history)
-            .ok_or_else(|| Error::new("HISTORY_NOT_FOUND", "history tree does not exist"))?;
+        let h = self.state.histories.get(history).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::HistoryNotFound,
+                "history tree does not exist",
+            )
+        })?;
         self.state
             .repositories
             .get(&h.repository_id)
-            .ok_or_else(|| Error::new("STATE_INVALID", "history has no repository"))
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::StateInvalid,
+                    "history has no repository",
+                )
+            })
     }
     pub(crate) fn repository_for_branch(&self, branch: &str) -> Result<&Repository> {
-        let b = self
-            .state
-            .branches
-            .get(branch)
-            .ok_or_else(|| Error::new("BRANCH_NOT_FOUND", "branch does not exist"))?;
+        let b = self.state.branches.get(branch).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::BranchNotFound,
+                "branch does not exist",
+            )
+        })?;
         self.repository_for_history(&b.history_tree_id)
     }
     pub(crate) fn mutate<F>(
@@ -661,7 +679,7 @@ impl Engine {
                 return self.operation(operation_id).map(MutationPlan::Existing);
             }
             return Err(Error::new(
-                "IDEMPOTENCY_KEY_REUSED",
+                storage_contract::ErrorCode::IdempotencyKeyReused,
                 "operation id is already bound to different input",
             ));
         }
@@ -673,10 +691,13 @@ impl Engine {
         crate::container_storage::capture_names(&mut next);
         next.sequence = self.next_slot;
         if !kind.starts_with("auth.") {
-            next.business_generation = next
-                .business_generation
-                .checked_add(1)
-                .ok_or_else(|| Error::new("RESOURCE_LIMIT", "business generation exhausted"))?;
+            next.business_generation =
+                next.business_generation.checked_add(1).ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::ResourceLimit,
+                        "business generation exhausted",
+                    )
+                })?;
         }
         let mut prepared = Vec::new();
         let mut result = change(self, &mut next, &mut prepared)?;

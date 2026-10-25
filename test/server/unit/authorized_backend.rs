@@ -20,7 +20,7 @@ struct RecordingBackend {
 fn sentinel_error(method: &str) -> ApiError {
     ApiError {
         status: 409,
-        code: "FORWARDING_SENTINEL".into(),
+        code: storage_contract::ErrorCode::InjectedFailure,
         message: method.into(),
         retryable: true,
         request_id: format!("req_{method}"),
@@ -333,7 +333,11 @@ fn revoked_sessions_never_reach_protected_backend_methods() {
     for (method, result) in fixture.protected_calls() {
         let error = result.unwrap_err();
         assert_eq!(error.status, 401, "{method}");
-        assert_eq!(error.code, "UNAUTHORIZED", "{method}");
+        assert_eq!(
+            error.code,
+            storage_contract::ErrorCode::Unauthorized,
+            "{method}"
+        );
     }
     assert!(fixture.probe.calls.lock().unwrap().is_empty());
 }
@@ -397,7 +401,7 @@ fn lifecycle_delegation_preserves_errors_and_private_hook_boundaries() {
             .observe_disks(&InternalDiskObservation(()))
             .unwrap_err()
             .code,
-        "UNSUPPORTED_OPERATION"
+        storage_contract::ErrorCode::UnsupportedOperation
     );
     assert!(fixture.probe.calls.lock().unwrap().is_empty());
     fixture.backend.stop_management();

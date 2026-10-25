@@ -70,7 +70,7 @@ fn stop_drains_owned_recovery_and_fences_generation_reenqueue() {
     backend.stop_management();
     assert_eq!(
         backend.inner.recover().unwrap_err().code,
-        "SERVICE_STOPPING"
+        storage_contract::ErrorCode::ServiceStopping
     );
     let (draining, started) = mpsc::channel();
     let (done, finished) = mpsc::channel();
@@ -113,7 +113,7 @@ fn native_recovery_handle_is_retained_until_explicit_drain() {
     assert!(backend.inner.recovery_worker.lock().unwrap().is_none());
     assert_eq!(
         backend.inner.start_recovery(true).unwrap_err().code,
-        "SERVICE_STOPPING"
+        storage_contract::ErrorCode::ServiceStopping
     );
     backend.drain_management().unwrap();
 }

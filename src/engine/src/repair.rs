@@ -10,7 +10,7 @@ use std::{
 };
 
 fn required(message: impl Into<String>) -> Error {
-    Error::new("RECOVERY_REQUIRED", message)
+    Error::new(storage_contract::ErrorCode::RecoveryRequired, message)
 }
 fn matching(path: &Path, version: &FileVersion) -> Result<bool> {
     match fs::symlink_metadata(path) {

@@ -81,7 +81,12 @@ fn read(root: Value, values: &BTreeMap<(String, String), Value>) -> Result<Resol
         values
             .get(&(kind.to_owned(), hash.to_owned()))
             .cloned()
-            .ok_or_else(|| Error::new("OBJECT_CORRUPT", "missing test graph object"))
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::ObjectCorrupt,
+                    "missing test graph object",
+                )
+            })
     })
 }
 
@@ -164,7 +169,7 @@ fn singleton_over_page_target_retains_existing_entity_ceiling() {
         Err(error) => error,
         Ok(_) => panic!("a caller's smaller reader limit must still apply"),
     };
-    assert_eq!(error.code, "RESOURCE_LIMIT");
+    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
     assert_eq!(hash, prepare(&manifest, MAX_METADATA / 2).unwrap().0);
 }
 
@@ -178,8 +183,8 @@ fn truly_oversized_singleton_fails_before_any_object_can_be_installed() {
         Err(error) => error,
         Ok(_) => panic!("a caller cannot enlarge the immutable object reader limit"),
     };
-    assert_eq!(error.code, "RESOURCE_LIMIT");
-    assert!(error.message.contains("one history entity"));
+    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
+    assert!(error.message().contains("one history entity"));
 }
 
 /// This is a codec capacity test, not a semantic notes-policy or an
@@ -205,7 +210,10 @@ fn distributed_history_larger_than_real_reader_limit_roundtrips() {
         Err(error) => error,
         Ok(_) => panic!("a single object must reject the oversized expanded manifest"),
     };
-    assert_eq!(flat_error.code, "RESOURCE_LIMIT");
+    assert_eq!(
+        flat_error.code(),
+        storage_contract::ErrorCode::ResourceLimit
+    );
 
     let temp = tempfile::tempdir().unwrap();
     let config = Config::development([
@@ -281,7 +289,7 @@ fn expanded_logical_model_is_not_a_paged_root() {
     })
     .err()
     .unwrap();
-    assert_eq!(error.code(), "INVALID_JSON");
+    assert_eq!(error.code(), storage_contract::ErrorCode::InvalidJson);
 }
 
 #[test]
@@ -327,7 +335,7 @@ fn root_requires_the_fixed_complete_schema_and_typed_references() {
 fn loader_cannot_substitute_another_valid_object() {
     let (_, root, _) = encoded(&manifest(), MAX_METADATA);
     let error = resolve(root, |_, _| Ok(json!({"unexpected": "entity"}))).unwrap_err();
-    assert_eq!(error.code, "OBJECT_CORRUPT");
+    assert_eq!(error.code(), storage_contract::ErrorCode::ObjectCorrupt);
 }
 
 #[test]
@@ -443,7 +451,10 @@ fn cached_objects_are_revalidated_at_each_logical_route() {
         let mut altered_root = root.clone();
         altered_root["maps"]["file_notes"] = index;
         let error = read(altered_root, &values).unwrap_err();
-        assert_eq!(error.code, "HISTORY_PACKAGE_INVALID");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::HistoryPackageInvalid
+        );
     }
 }
 

@@ -7,22 +7,33 @@ pub use operation::{OperationStatus, operation_status};
 /// Common JSON response cap, enforced while streaming and again when decoding.
 pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, error_definition::Error)]
+#[error("{code}: {message}")]
 pub struct ResponseError {
     pub status: u16,
-    pub code: String,
+    pub code: crate::ErrorCode,
     pub message: String,
     pub retryable: bool,
     pub request_id: Option<String>,
+    #[source]
+    pub source: Option<ResponseDecodeError>,
+}
+#[derive(Debug, error_definition::Error)]
+pub enum ResponseDecodeError {
+    #[error("invalid response JSON: {0}")]
+    Json(#[source] json_codec::Error),
+    #[error("invalid response error code: {0}")]
+    Code(#[source] json_codec::Error),
 }
 impl ResponseError {
-    pub fn new(status: u16, code: &str, message: &str) -> Self {
+    pub fn new(status: u16, code: crate::ErrorCode, message: &str) -> Self {
         Self {
             status,
-            code: code.into(),
+            code,
             message: message.into(),
             retryable: status >= 500 || status == 429,
             request_id: None,
+            source: None,
         }
     }
 }
@@ -50,7 +61,7 @@ pub fn publication_attempted(evidence: Option<bool>) -> bool {
 pub fn response_too_large(status: u16) -> ResponseError {
     ResponseError::new(
         status,
-        "RESPONSE_TOO_LARGE",
+        crate::ErrorCode::ResponseTooLarge,
         "JSON response exceeds client limit",
     )
 }
@@ -136,15 +147,32 @@ pub fn decode_response(status: u16, bytes: &[u8]) -> Result<Value, ResponseError
     let value = if bytes.is_empty() {
         Value::Null
     } else {
-        strict_response_json(bytes).map_err(|_| {
-            ResponseError::new(status, "INVALID_RESPONSE", "The response is not valid JSON")
+        strict_response_json(bytes).map_err(|source| {
+            let mut error = ResponseError::new(
+                status,
+                crate::ErrorCode::InvalidResponse,
+                "The response is not valid JSON",
+            );
+            error.source = Some(ResponseDecodeError::Json(source));
+            error
         })?
     };
     if !(200..300).contains(&status) {
         let item = value.get("error").unwrap_or(&value);
         return Err(ResponseError {
             status,
-            code: item["code"].as_str().unwrap_or("HTTP_ERROR").into(),
+            code: match item.get("code") {
+                Some(code) => json_codec::from_value(code.clone()).map_err(|error| {
+                    let mut failure = ResponseError::new(
+                        status,
+                        crate::ErrorCode::InvalidResponse,
+                        "The response error code is invalid or unknown",
+                    );
+                    failure.source = Some(ResponseDecodeError::Code(error));
+                    failure
+                })?,
+                None => crate::ErrorCode::HttpError,
+            },
             message: item["message"]
                 .as_str()
                 .unwrap_or("The request failed")
@@ -153,6 +181,7 @@ pub fn decode_response(status: u16, bytes: &[u8]) -> Result<Value, ResponseError
                 .as_bool()
                 .unwrap_or(status >= 500 || status == 429),
             request_id: item["request_id"].as_str().map(str::to_owned),
+            source: None,
         });
     }
     Ok(value)
@@ -169,7 +198,7 @@ pub fn prepare_commit(
 ) -> crate::Result<Value> {
     if !seal.is_object() || seal["workspace_id"].as_str() != Some(workspace) {
         return Err(crate::Error::new(
-            "INVALID_RESPONSE",
+            crate::ErrorCode::InvalidResponse,
             "seal response has an invalid workspace identity",
         ));
     }

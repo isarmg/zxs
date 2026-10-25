@@ -622,12 +622,12 @@ fn prepare_interruption(fixture: &SetupFixture, password: &str) -> Result<()> {
         |_engine, _, _| {
             Err(storage_server::ApiError::new(
                 500,
-                "TEST_INSTALL_FAILURE",
+                storage_engine::ErrorCode::InjectedFailure,
                 "fixture failure before authority publication",
             ))
         },
     );
-    if !matches!(result,Err(error) if error.code=="TEST_INSTALL_FAILURE")
+    if !matches!(result,Err(error) if error.code==storage_engine::ErrorCode::InjectedFailure)
         || !service.status().completion_available
     {
         return Err("interrupted setup fixture lacks genuine bound completion proof".into());

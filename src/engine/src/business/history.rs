@@ -3,20 +3,29 @@ use super::*;
 use json_codec::json;
 fn branch_contains_commit(state: &State, branch: &Branch, target: &str) -> Result<bool> {
     if branch.state == "migrated" {
-        return Err(Error::new("TREE_MOVED", "branch moved to another history"));
+        return Err(Error::new(
+            storage_contract::ErrorCode::TreeMoved,
+            "branch moved to another history",
+        ));
     }
     let mut seen = std::collections::BTreeSet::new();
     let mut cursor = branch.head_commit_id.as_str();
     loop {
         if !seen.insert(cursor) {
-            return Err(Error::new("STATE_INVALID", "history parent cycle"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "history parent cycle",
+            ));
         }
         let commit = state.commits.get(cursor).ok_or_else(|| {
-            Error::new("STATE_INVALID", "branch ancestry contains an absent commit")
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "branch ancestry contains an absent commit",
+            )
         })?;
         if commit.history_tree_id != branch.history_tree_id || commit.parent_commit_ids.len() > 1 {
             return Err(Error::new(
-                "STATE_INVALID",
+                storage_contract::ErrorCode::StateInvalid,
                 "branch ancestry violates single history and parent invariants",
             ));
         }
@@ -42,11 +51,12 @@ impl Engine {
 
     /// Borrow the current frozen namespace without copying unrelated entries.
     pub fn list_tree_ref(&self, branch_id: &str) -> Result<&[Entry]> {
-        let branch = self
-            .state
-            .branches
-            .get(branch_id)
-            .ok_or_else(|| Error::new("BRANCH_NOT_FOUND", "branch not found"))?;
+        let branch = self.state.branches.get(branch_id).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::BranchNotFound,
+                "branch not found",
+            )
+        })?;
         self.list_tree_at_ref(branch_id, &branch.head_commit_id)
     }
 
@@ -59,14 +69,15 @@ impl Engine {
     /// Borrow a selected frozen namespace within the branch's history.
     /// Like `list_tree_at`, rejects migrated branches and foreign snapshots.
     pub fn list_tree_at_ref(&self, branch_id: &str, commit_id: &str) -> Result<&[Entry]> {
-        let branch = self
-            .state
-            .branches
-            .get(branch_id)
-            .ok_or_else(|| Error::new("BRANCH_NOT_FOUND", "branch not found"))?;
+        let branch = self.state.branches.get(branch_id).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::BranchNotFound,
+                "branch not found",
+            )
+        })?;
         if branch.state == "migrated" {
             return Err(Error::new(
-                "TREE_MOVED",
+                storage_contract::ErrorCode::TreeMoved,
                 "this branch moved during a history split; use the published mapping",
             ));
         }
@@ -77,7 +88,7 @@ impl Engine {
             .filter(|commit| commit.history_tree_id == branch.history_tree_id)
             .ok_or_else(|| {
                 Error::new(
-                    "COMMIT_NOT_FOUND",
+                    storage_contract::ErrorCode::CommitNotFound,
                     "selected snapshot is outside this branch's history",
                 )
             })?;
@@ -105,7 +116,12 @@ impl Engine {
             .histories
             .get(history_id)
             .cloned()
-            .ok_or_else(|| Error::new("HISTORY_NOT_FOUND", "history tree not found"))?;
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::HistoryNotFound,
+                    "history tree not found",
+                )
+            })?;
         let mut commits = self
             .state
             .commits
@@ -154,18 +170,19 @@ impl Engine {
             operation,
             json!({"source_commit_id":source_commit,"name":name}),
             |engine, state, _| {
-                let source = state
-                    .commits
-                    .get(source_commit)
-                    .cloned()
-                    .ok_or_else(|| Error::new("COMMIT_NOT_FOUND", "source commit not found"))?;
+                let source = state.commits.get(source_commit).cloned().ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::CommitNotFound,
+                        "source commit not found",
+                    )
+                })?;
                 engine.repository_for_history(&source.history_tree_id)?;
 
                 if state.branches.values().any(|branch| {
                     branch.history_tree_id == source.history_tree_id && branch.file_id.is_some()
                 }) {
                     return Err(Error::new(
-                        "FILE_BRANCH_SCOPE",
+                        storage_contract::ErrorCode::FileBranchScope,
                         "use independent file branches in this history",
                     ));
                 }
@@ -173,7 +190,10 @@ impl Engine {
                     branch.history_tree_id == source.history_tree_id
                         && name_policy::lookup_key(&branch.name) == name_policy::lookup_key(name)
                 }) {
-                    return Err(Error::new("NAME_COLLISION", "branch name already exists"));
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::NameCollision,
+                        "branch name already exists",
+                    ));
                 }
                 let id = new_id("br");
                 let commit_id = new_id("commit");
@@ -232,8 +252,12 @@ impl Engine {
         // Creation returns the published record, not the branch's later head,
         // name or lifecycle state. Exact replay has already matched its owner
         // and request before decoding this immutable receipt.
-        json_codec::from_value(op.result["created_branch"].clone())
-            .map_err(|_| Error::new("STATE_INVALID", "created branch receipt is invalid"))
+        json_codec::from_value(op.result["created_branch"].clone()).map_err(|_| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "created branch receipt is invalid",
+            )
+        })
     }
     pub fn add_merge_link(
         &mut self,
@@ -255,23 +279,27 @@ impl Engine {
                 "target_commit_id": target_commit
             }),
             |engine, state, _| {
-                let sb = state
-                    .branches
-                    .get(source_branch)
-                    .ok_or_else(|| Error::new("BRANCH_NOT_FOUND", "source branch missing"))?;
-                let tb = state
-                    .branches
-                    .get(target_branch)
-                    .ok_or_else(|| Error::new("BRANCH_NOT_FOUND", "target branch missing"))?;
+                let sb = state.branches.get(source_branch).ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::BranchNotFound,
+                        "source branch missing",
+                    )
+                })?;
+                let tb = state.branches.get(target_branch).ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::BranchNotFound,
+                        "target branch missing",
+                    )
+                })?;
                 if sb.history_tree_id != tb.history_tree_id {
                     return Err(Error::new(
-                        "HISTORY_MISMATCH",
+                        storage_contract::ErrorCode::HistoryMismatch,
                         "merge endpoints must belong to one history",
                     ));
                 }
                 if sb.file_id != tb.file_id && (sb.file_id.is_some() || tb.file_id.is_some()) {
                     return Err(Error::new(
-                        "FILE_BRANCH_SCOPE",
+                        storage_contract::ErrorCode::FileBranchScope,
                         "file branch relations must identify the same file",
                     ));
                 }
@@ -283,7 +311,7 @@ impl Engine {
                         .is_some_and(|c| c.history_tree_id == sb.history_tree_id)
                     {
                         return Err(Error::new(
-                            "COMMIT_NOT_FOUND",
+                            storage_contract::ErrorCode::CommitNotFound,
                             "selected endpoint is not in the history",
                         ));
                     }
@@ -293,7 +321,7 @@ impl Engine {
                     || !branch_contains_commit(state, tb, target_commit)?
                 {
                     return Err(Error::new(
-                        "MERGE_ENDPOINT_MISMATCH",
+                        storage_contract::ErrorCode::MergeEndpointMismatch,
                         "select one existing commit from each of two distinct branches",
                     ));
                 }
@@ -319,11 +347,19 @@ impl Engine {
         Ok(MergeLink {
             merge_link_id: op.result["merge_link_id"]
                 .as_str()
-                .ok_or_else(|| Error::new("STATE_INVALID", "merge-link receipt identity missing"))?
+                .ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::StateInvalid,
+                        "merge-link receipt identity missing",
+                    )
+                })?
                 .into(),
-            history_tree_id: op
-                .history_tree_id
-                .ok_or_else(|| Error::new("STATE_INVALID", "merge-link receipt history missing"))?,
+            history_tree_id: op.history_tree_id.ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::StateInvalid,
+                    "merge-link receipt history missing",
+                )
+            })?,
             source_branch_id: source_branch.into(),
             source_commit_id: source_commit.into(),
             target_branch_id: target_branch.into(),
@@ -348,7 +384,7 @@ impl Engine {
 
                 if repo.main_branch_id == id {
                     return Err(Error::new(
-                        "MAIN_BRANCH_REQUIRED",
+                        storage_contract::ErrorCode::MainBranchRequired,
                         "main branch cannot be archived while shared",
                     ));
                 }
@@ -362,7 +398,7 @@ impl Engine {
                         .any(|context| context.branch_id == id)
                 {
                     return Err(Error::new(
-                        "FILE_BRANCH_SELECTED",
+                        storage_contract::ErrorCode::FileBranchSelected,
                         "select another file branch before archiving this branch",
                     ));
                 }
@@ -371,33 +407,42 @@ impl Engine {
                     .values()
                     .any(|w| w.branch_id == id && matches!(w.state.as_str(), "open" | "sealed"))
                 {
-                    return Err(Error::new("WORKSPACE_BUSY", "branch has an open workspace"));
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::WorkspaceBusy,
+                        "branch has an open workspace",
+                    ));
                 }
-                let b = state
-                    .branches
-                    .get_mut(id)
-                    .ok_or_else(|| Error::new("BRANCH_NOT_FOUND", "branch missing"))?;
+                let b = state.branches.get_mut(id).ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::BranchNotFound,
+                        "branch missing",
+                    )
+                })?;
                 b.state = "archived".into();
-                b.generation = b
-                    .generation
-                    .checked_add(1)
-                    .ok_or_else(|| Error::new("RESOURCE_LIMIT", "branch generation exhausted"))?;
+                b.generation = b.generation.checked_add(1).ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::ResourceLimit,
+                        "branch generation exhausted",
+                    )
+                })?;
                 Ok(json!({"branch_id":id,"history_tree_id":b.history_tree_id}))
             },
         )
     }
 
     pub fn compare_commits(&self, left: &str, right: &str) -> Result<json_codec::Value> {
-        let a = self
-            .state
-            .commits
-            .get(left)
-            .ok_or_else(|| Error::new("COMMIT_NOT_FOUND", "left commit missing"))?;
-        let b = self
-            .state
-            .commits
-            .get(right)
-            .ok_or_else(|| Error::new("COMMIT_NOT_FOUND", "right commit missing"))?;
+        let a = self.state.commits.get(left).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::CommitNotFound,
+                "left commit missing",
+            )
+        })?;
+        let b = self.state.commits.get(right).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::CommitNotFound,
+                "right commit missing",
+            )
+        })?;
         fn index(entries: &[Entry]) -> std::collections::BTreeMap<&str, &Entry> {
             entries
                 .iter()

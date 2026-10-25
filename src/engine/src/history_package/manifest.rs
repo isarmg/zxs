@@ -87,7 +87,7 @@ impl HistoryManifest {
                 if entry.file_id.is_empty() && entry.version_id.is_empty() && entry.size == 0 => {}
             _ => {
                 return Err(Error::new(
-                    "HISTORY_PACKAGE_INVALID",
+                    storage_contract::ErrorCode::HistoryPackageInvalid,
                     "namespace entry kind or directory payload is invalid",
                 ));
             }
@@ -96,16 +96,22 @@ impl HistoryManifest {
     }
 
     pub(super) fn from_state(state: &State, history_id: &str) -> Result<Self> {
-        let history = state
-            .histories
-            .get(history_id)
-            .cloned()
-            .ok_or_else(|| Error::new("HISTORY_NOT_FOUND", "history does not exist"))?;
+        let history = state.histories.get(history_id).cloned().ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::HistoryNotFound,
+                "history does not exist",
+            )
+        })?;
         let repository = state
             .repositories
             .get(&history.repository_id)
             .cloned()
-            .ok_or_else(|| Error::new("STATE_INVALID", "history repository missing"))?;
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::StateInvalid,
+                    "history repository missing",
+                )
+            })?;
         let repository_id = history.repository_id.clone();
         let directory_ids = state
             .commits
@@ -341,7 +347,8 @@ impl HistoryManifest {
         Ok(manifest)
     }
     fn validate_directory_snapshot(&self, branch: &DirectoryBranch) -> Result<()> {
-        let invalid = |message| Error::new("HISTORY_PACKAGE_INVALID", message);
+        let invalid =
+            |message| Error::new(storage_contract::ErrorCode::HistoryPackageInvalid, message);
         let history = &self.history.history_tree_id;
         let commit = self
             .commits
@@ -507,7 +514,8 @@ impl HistoryManifest {
         file_id: &str,
         version_id: &str,
     ) -> Result<()> {
-        let invalid = |message| Error::new("HISTORY_PACKAGE_INVALID", message);
+        let invalid =
+            |message| Error::new(storage_contract::ErrorCode::HistoryPackageInvalid, message);
         let branch = self
             .branches
             .get(&context.branch_id)
@@ -552,13 +560,14 @@ impl HistoryManifest {
             })
             .ok_or_else(|| {
                 Error::new(
-                    "HISTORY_PACKAGE_INVALID",
+                    storage_contract::ErrorCode::HistoryPackageInvalid,
                     "file history node or its body reference is missing",
                 )
             })
     }
     fn validate_file_nodes(&self) -> Result<()> {
-        let invalid = |message| Error::new("HISTORY_PACKAGE_INVALID", message);
+        let invalid =
+            |message| Error::new(storage_contract::ErrorCode::HistoryPackageInvalid, message);
         let mut graph = BTreeMap::<&str, Vec<String>>::new();
         for (id, version) in &self.versions {
             graph.insert(
@@ -816,7 +825,8 @@ impl HistoryManifest {
         Ok(())
     }
     pub(super) fn validate(&self) -> Result<()> {
-        let invalid = |message| Error::new("HISTORY_PACKAGE_INVALID", message);
+        let invalid =
+            |message| Error::new(storage_contract::ErrorCode::HistoryPackageInvalid, message);
         let history = &self.history.history_tree_id;
         validate_id(history, "history")?;
         validate_id(&self.repository.repository_id, "repo")?;
@@ -1270,7 +1280,7 @@ impl HistoryManifest {
             // import can reach a decision or post-decision name projection.
             crate::container_storage::validate_version(version).map_err(|error| {
                 Error::new(
-                    "HISTORY_PACKAGE_INVALID",
+                    storage_contract::ErrorCode::HistoryPackageInvalid,
                     format!("invalid version storage identity: {error}"),
                 )
             })?;

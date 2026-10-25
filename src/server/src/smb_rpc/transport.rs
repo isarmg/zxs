@@ -39,10 +39,13 @@ struct SessionPermit {
 }
 impl SessionPermit {
     fn acquire(shared: &Arc<Shared>) -> Result<Self, ApiError> {
-        let mut sessions = shared
-            .authenticated_sessions
-            .lock()
-            .map_err(|_| ApiError::new(503, "SMB_UNAVAILABLE", "SMB session registry poisoned"))?;
+        let mut sessions = shared.authenticated_sessions.lock().map_err(|_| {
+            ApiError::new(
+                503,
+                storage_contract::ErrorCode::SmbUnavailable,
+                "SMB session registry poisoned",
+            )
+        })?;
         if *sessions >= MAX_AUTHENTICATED_SESSIONS {
             return Err(ApiError::limit("too many authenticated SMB sessions"));
         }
@@ -102,7 +105,7 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
         if repo.get("smb_enabled").and_then(Value::as_bool) != Some(true) {
             return Err(ApiError::new(
                 409,
-                "SMB_REBIND_REQUIRED",
+                storage_contract::ErrorCode::SmbRebindRequired,
                 "repository requires an explicit SMB binding after history migration",
             ));
         }
@@ -203,7 +206,7 @@ fn send_success(
 
 fn response_error(error: ApiError, operation_id: Option<String>) -> Response {
     Response::Error {
-        code: error.code,
+        code: error.code.as_str().to_owned(),
         message: error.message,
         retryable: error.retryable,
         operation_id,

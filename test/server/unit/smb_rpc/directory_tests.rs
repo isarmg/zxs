@@ -165,6 +165,6 @@ fn renamed_and_replaced_directory_does_not_retarget_the_open_handle() {
             })
             .unwrap_err()
             .code,
-        "SMB_REBIND_REQUIRED"
+        storage_contract::ErrorCode::SmbRebindRequired
     );
 }

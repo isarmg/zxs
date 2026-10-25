@@ -25,10 +25,17 @@ impl Session {
             self.find(&path)?
         };
         if existing.is_some() && create && exclusive {
-            return Err(ApiError::conflict("NAME_CONFLICT", "entry already exists"));
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::NameConflict,
+                "entry already exists",
+            ));
         }
         if existing.is_none() && !create && !path.is_empty() {
-            return Err(ApiError::new(404, "NOT_FOUND", "entry does not exist"));
+            return Err(ApiError::new(
+                404,
+                storage_contract::ErrorCode::NotFound,
+                "entry does not exist",
+            ));
         }
         // A lookup spelling is not a proposed new name. Existing writes keep
         // the stored display path all the way through strict upload admission.
@@ -65,7 +72,7 @@ impl Session {
             if writable || create || truncate {
                 return Err(ApiError::new(
                     409,
-                    "IS_DIRECTORY",
+                    storage_contract::ErrorCode::IsDirectory,
                     "directory data is not writable",
                 ));
             }
@@ -144,7 +151,7 @@ impl Session {
                 };
                 if existing.as_ref().map(identity) != baseline.map(identity) {
                     return Err(ApiError::conflict(
-                        "FILE_VERSION_CONFLICT",
+                        storage_contract::ErrorCode::FileVersionConflict,
                         "the file changed while its write handle was opening; reopen it",
                     ));
                 }
@@ -261,9 +268,13 @@ impl Session {
             }
             let content = self.shared.backend.content(
                 &self.identity,
-                version
-                    .as_deref()
-                    .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "version missing"))?,
+                version.as_deref().ok_or_else(|| {
+                    ApiError::new(
+                        404,
+                        storage_contract::ErrorCode::NotFound,
+                        "version missing",
+                    )
+                })?,
             )?;
             let size = content.size;
             let fd = OwnedFd::from(content.file.try_clone().map_err(ApiError::io)?);
@@ -306,7 +317,13 @@ impl Session {
                     json!({"branch_id":self.branch}),
                 )?;
             }
-            None => return Err(ApiError::new(404, "NOT_FOUND", "SMB handle missing")),
+            None => {
+                return Err(ApiError::new(
+                    404,
+                    storage_contract::ErrorCode::NotFound,
+                    "SMB handle missing",
+                ));
+            }
         }
         Ok(json!({"authorized":true}))
     }

@@ -88,7 +88,7 @@ impl Engine {
         let workspace = self.workspace(&request.workspace_id)?;
         if workspace.principal != request.principal {
             return Err(Error::new(
-                "PERMISSION_DENIED",
+                storage_contract::ErrorCode::PermissionDenied,
                 "workspace belongs to another principal",
             ));
         }
@@ -99,7 +99,7 @@ impl Engine {
             .get(&request.operation_id)
             .ok_or_else(|| {
                 Error::new(
-                    "OPERATION_NOT_FOUND",
+                    storage_contract::ErrorCode::OperationNotFound,
                     "published workspace operation is absent",
                 )
             })?;
@@ -107,7 +107,7 @@ impl Engine {
             || existing.request_digest != digest
         {
             return Err(Error::new(
-                "IDEMPOTENCY_KEY_REUSED",
+                storage_contract::ErrorCode::IdempotencyKeyReused,
                 "commit retry differs from the published request",
             ));
         }
@@ -124,7 +124,7 @@ impl Engine {
         let workspace = self.workspace(&request.workspace_id)?;
         if workspace.principal != request.principal {
             return Err(Error::new(
-                "PERMISSION_DENIED",
+                storage_contract::ErrorCode::PermissionDenied,
                 "workspace belongs to another principal",
             ));
         }
@@ -134,7 +134,7 @@ impl Engine {
             self.require_write()?;
             if workspace.fencing_token != request.fencing_token {
                 return Err(Error::new(
-                    "FENCING_TOKEN_INVALID",
+                    storage_contract::ErrorCode::FencingTokenInvalid,
                     "workspace fencing token differs",
                 ));
             }
@@ -143,7 +143,7 @@ impl Engine {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| {
                 Error::new(
-                    "COMMIT_PREPARATION_BUSY",
+                    storage_contract::ErrorCode::CommitPreparationBusy,
                     "another workspace commit is being prepared",
                 )
                 .retryable()
@@ -191,7 +191,7 @@ impl Engine {
     ) -> Result<OperationResult> {
         if self.root != prepared.base_root {
             return Err(Error::new(
-                "COMMIT_PREPARATION_STALE",
+                storage_contract::ErrorCode::CommitPreparationStale,
                 "prepared commit belongs to another engine",
             )
             .retryable());
@@ -201,7 +201,10 @@ impl Engine {
         drop(prepared._admission.take());
         let workspace = self.workspace(&prepared.request.workspace_id)?;
         if workspace.principal != prepared.request.principal {
-            return Err(Error::new("PERMISSION_DENIED", "workspace owner changed"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::PermissionDenied,
+                "workspace owner changed",
+            ));
         }
         if self
             .state
@@ -221,13 +224,13 @@ impl Engine {
             || self.state.business_generation != prepared.base_business
             || canonical_json(&self.config)? != prepared.frozen_config
         {
-            return Err(Error::new("COMMIT_PREPARATION_STALE", "workspace or publication base changed during preparation; retry the same operation").retryable());
+            return Err(Error::new(storage_contract::ErrorCode::CommitPreparationStale, "workspace or publication base changed during preparation; retry the same operation").retryable());
         }
         if !matches!(workspace.state.as_str(), "open" | "sealed")
             || workspace.fencing_token != prepared.request.fencing_token
         {
             return Err(Error::new(
-                "FENCING_TOKEN_INVALID",
+                storage_contract::ErrorCode::FencingTokenInvalid,
                 "workspace no longer admits this commit",
             ));
         }
@@ -235,7 +238,7 @@ impl Engine {
             > self.config.workspace_ttl_seconds
         {
             return Err(Error::new(
-                "FENCING_TOKEN_EXPIRED",
+                storage_contract::ErrorCode::FencingTokenExpired,
                 "workspace lease expired during preparation",
             ));
         }
@@ -249,9 +252,12 @@ impl Engine {
         let result = if let Some(publication) = prepared.publication {
             self.decide_publication(publication)?
         } else {
-            prepared
-                .existing
-                .ok_or_else(|| Error::new("STATE_INVALID", "prepared commit has no publication"))?
+            prepared.existing.ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::StateInvalid,
+                    "prepared commit has no publication",
+                )
+            })?
         };
         self.complete_workspace_commit(prepared.workspace, result)
     }

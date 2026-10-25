@@ -54,12 +54,12 @@ fn raw_page_digest_is_the_original_canonical_domain_digest_not_a_semantic_load()
         read_published_page(&config.disks, hash, MAX_METADATA)
             .unwrap_err()
             .code(),
-        "OBJECT_CORRUPT"
+        storage_contract::ErrorCode::ObjectCorrupt
     );
     let (next, hot) = heat(&state, &prepared);
     assert_eq!(
         hot.store(&config.disks, &next).unwrap_err().code(),
-        "OBJECT_COLLISION"
+        storage_contract::ErrorCode::ObjectCollision
     );
     for disk in &config.disks {
         assert_eq!(
@@ -132,7 +132,7 @@ fn field_reconstruction_cannot_substitute_different_bytes_or_a_different_page_co
     wrong.file_notes.clear();
     assert_eq!(
         hot.store(&config.disks, &wrong).unwrap_err().code(),
-        "OBJECT_CORRUPT"
+        storage_contract::ErrorCode::ObjectCorrupt
     );
     assert!(!object_path(&config.disks[0], "snapshot", &hot.hash).exists());
     wrong.file_notes = state.file_notes.clone();
@@ -141,7 +141,7 @@ fn field_reconstruction_cannot_substitute_different_bytes_or_a_different_page_co
         .insert("file-00000000".into(), "different".into());
     assert_eq!(
         hot.store(&config.disks, &wrong).unwrap_err().code(),
-        "OBJECT_CORRUPT"
+        storage_contract::ErrorCode::ObjectCorrupt
     );
     assert!(!object_path(&config.disks[0], "snapshot", &hot.hash).exists());
     let correct = next(&state);
@@ -165,7 +165,7 @@ fn corrupt_large_targets_and_unsafe_targets_are_not_overwritten_or_buffered_to_g
     REUSED_PAGE_PEAK_BYTES.with(|peak| peak.set(0));
     assert_eq!(
         hot.store(&config.disks, &next).unwrap_err().code(),
-        "OBJECT_COLLISION"
+        storage_contract::ErrorCode::ObjectCollision
     );
     assert_eq!(fs::metadata(&path).unwrap().len(), size as u64);
     assert!(
@@ -178,7 +178,7 @@ fn corrupt_large_targets_and_unsafe_targets_are_not_overwritten_or_buffered_to_g
     std::os::unix::fs::symlink(&outside, &path).unwrap();
     assert_eq!(
         hot.store(&config.disks, &next).unwrap_err().code(),
-        "UNSAFE_PATH"
+        storage_contract::ErrorCode::UnsafePath
     );
     assert_eq!(fs::read(&outside).unwrap(), b"untouched");
     assert!(
@@ -200,13 +200,13 @@ fn existing_reused_pages_cannot_bypass_a_failed_directory_barrier() {
             object_storage::write_object_bytes_with(disk, "state-page", hash, bytes, |_, _| {
                 barriers += 1;
                 Err(Error::new(
-                    "INJECTED_SYNC_FAILURE",
+                    storage_contract::ErrorCode::InjectedFailure,
                     "parent sync failed after bytes became visible",
                 ))
             })
         })
         .unwrap_err();
-    assert_eq!(error.code(), "INJECTED_SYNC_FAILURE");
+    assert_eq!(error.code(), storage_contract::ErrorCode::InjectedFailure);
     assert_eq!(barriers, 1);
     assert!(!object_path(&config.disks[0], "snapshot", &hot.hash).exists());
     hot.store_with(&config.disks, &next, |disk, hash, bytes| {
@@ -233,7 +233,7 @@ fn reused_page_maxima_are_admitted_before_reading_sources_or_reencoding_records(
     let error = prepare_snapshot_incremental(&state, &next(&state), &basis, maximum - 1)
         .err()
         .unwrap();
-    assert_eq!(error.code(), "RESOURCE_LIMIT");
+    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
     assert_eq!(snapshot::take_encoding_counts().get("file_notes"), None);
     assert!(prepare_snapshot_incremental(&state, &next(&state), &basis, maximum).is_ok());
 }

@@ -110,7 +110,10 @@ fn source_reconfiguration_preserves_one_shared_snapshot_for_moved_files() {
                 operation_id: &new_id("op"),
             })
             .unwrap_err();
-        assert_eq!(failure.code(), "BACKUP_CONFIGURATION_REQUIRED");
+        assert_eq!(
+            failure.code(),
+            storage_contract::ErrorCode::BackupConfigurationRequired
+        );
         assert_eq!(canonical_json(engine.state()).unwrap(), before);
     }
     drop(engine);
@@ -154,7 +157,7 @@ fn retained_settings_replay_once_and_restore_without_becoming_inherited() {
     engine.inject_fault_once("after_finalize");
     assert_eq!(
         engine.configure_backups(request).unwrap_err().code(),
-        "IN_DOUBT"
+        storage_contract::ErrorCode::InDoubt
     );
     drop(engine);
     let mut engine = Engine::open(&temp.path().join("original/state")).unwrap();

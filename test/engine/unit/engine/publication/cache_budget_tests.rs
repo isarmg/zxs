@@ -53,7 +53,7 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
         .prepare_publication_bounded(next.clone(), Vec::new(), result.clone(), MAX_METADATA, 128)
         .err()
         .unwrap();
-    assert_eq!(error.code(), "RESOURCE_LIMIT");
+    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
     assert!(!engine.blocked);
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     assert_eq!(
@@ -69,7 +69,7 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     assert_eq!(
         engine.operation(&result.operation_id).unwrap_err().code(),
-        "OPERATION_NOT_FOUND"
+        storage_contract::ErrorCode::OperationNotFound
     );
     drop(engine);
     let mut engine = Engine::open_for_recovery(&root).unwrap();
@@ -80,7 +80,7 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
     engine.inject_fault_once("after_accept_1");
     assert_eq!(
         engine.decide_publication(detached).unwrap_err().code(),
-        "IN_DOUBT"
+        storage_contract::ErrorCode::InDoubt
     );
     drop(engine);
     let engine = Engine::open(&root).unwrap();
@@ -210,7 +210,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
         .prepare_publication_bounded(next.clone(), pending, result.clone(), MAX_METADATA, 128)
         .err()
         .unwrap();
-    assert_eq!(error.code(), "RESOURCE_LIMIT");
+    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
     assert!(!engine.blocked);
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     assert_eq!(engine.snapshot, original_snapshot);

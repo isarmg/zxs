@@ -153,7 +153,11 @@ fn rejects_malformed_or_unsupported_path_escapes() {
             format!("36 35 8:1 {path} /mnt/disk rw - btrfs /dev/sda1 rw\n"),
         ] {
             let error = resolve(&table, Path::new("/mnt/disk")).unwrap_err();
-            assert_eq!(error.code(), "DISK_IDENTITY_MISMATCH", "{table:?}");
+            assert_eq!(
+                error.code(),
+                storage_contract::ErrorCode::DiskIdentityMismatch,
+                "{table:?}"
+            );
         }
     }
     // Unlike a generic source, a kernel mount-point path does not escape '#'.
@@ -180,7 +184,11 @@ fn malformed_rows_cannot_fall_back_to_an_ancestor_mount() {
     for row in malformed {
         let table = format!("{}{row}\n", record("/", "/dev/root"));
         let error = resolve(&table, Path::new("/mnt/disk/data")).unwrap_err();
-        assert_eq!(error.code(), "DISK_IDENTITY_MISMATCH", "{row:?}");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::DiskIdentityMismatch,
+            "{row:?}"
+        );
     }
 }
 
@@ -192,7 +200,10 @@ fn rejects_empty_tables_unmatched_roots_and_relative_lookup_paths() {
         (record("/", "/dev/sda1"), "relative"),
     ] {
         let error = resolve(&table, Path::new(path)).unwrap_err();
-        assert_eq!(error.code(), "DISK_IDENTITY_MISMATCH");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::DiskIdentityMismatch
+        );
     }
 }
 

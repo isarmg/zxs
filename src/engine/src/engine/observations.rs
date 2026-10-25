@@ -67,11 +67,15 @@ impl Engine {
 fn capacity(disk: &DiskConfig, seal: &DiskSeal) -> Result<(u64, u64, u64)> {
     // Pin the validated member, rather than sampling an empty mountpoint on
     // the system filesystem after a missing/unmounted data disk.
-    let directory = OpenAt2Root::open(&disk.root, MountPolicy::SameMount)
-        .map_err(|error| Error::new("DISK_IDENTITY_MISMATCH", error.to_string()))?;
+    let directory = OpenAt2Root::open(&disk.root, MountPolicy::SameMount).map_err(|error| {
+        Error::new(
+            storage_contract::ErrorCode::DiskIdentityMismatch,
+            error.to_string(),
+        )
+    })?;
     if directory.identity().device != seal.device || directory.identity().inode != seal.inode {
         return Err(Error::new(
-            "DISK_IDENTITY_MISMATCH",
+            storage_contract::ErrorCode::DiskIdentityMismatch,
             "disk root changed during capacity observation",
         ));
     }

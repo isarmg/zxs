@@ -6,34 +6,57 @@ use storage_contract::State;
 // decision after these metadata checks and is intentionally not reproduced.
 fn old_tree_admission(state: &State, input: &Value) -> Result<(), ApiError> {
     let branch = field(input, "branch_id")?;
-    let branch_info = state
-        .branches
-        .get(branch)
-        .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "branch not found"))?;
+    let branch_info = state.branches.get(branch).ok_or_else(|| {
+        ApiError::new(
+            404,
+            storage_contract::ErrorCode::NotFound,
+            "branch not found",
+        )
+    })?;
     if branch_info.state == "migrated" {
         return Err(ApiError::new(
             409,
-            "TREE_MOVED",
+            storage_contract::ErrorCode::TreeMoved,
             "branch has moved to an independent history domain",
         ));
     }
     let history = state
         .histories
         .get(&branch_info.history_tree_id)
-        .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "history not found"))?;
+        .ok_or_else(|| {
+            ApiError::new(
+                404,
+                storage_contract::ErrorCode::NotFound,
+                "history not found",
+            )
+        })?;
     state
         .repositories
         .get(&history.repository_id)
-        .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "repository not found"))?;
+        .ok_or_else(|| {
+            ApiError::new(
+                404,
+                storage_contract::ErrorCode::NotFound,
+                "repository not found",
+            )
+        })?;
     state
         .commits
         .get(&branch_info.head_commit_id)
         .filter(|commit| commit.history_tree_id == branch_info.history_tree_id)
-        .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "commit not found"))?;
+        .ok_or_else(|| {
+            ApiError::new(
+                404,
+                storage_contract::ErrorCode::NotFound,
+                "commit not found",
+            )
+        })?;
     Ok(())
 }
 
-fn decision<T>(result: Result<T, ApiError>) -> Result<(), (u16, String, String, bool)> {
+fn decision<T>(
+    result: Result<T, ApiError>,
+) -> Result<(), (u16, storage_contract::ErrorCode, String, bool)> {
     result
         .map(|_| ())
         .map_err(|error| (error.status, error.code, error.message, error.retryable))
@@ -119,7 +142,7 @@ fn narrow_authorization_matches_old_tree_metadata_decisions_and_error_precedence
                 .err()
                 .unwrap()
                 .code,
-            "INVALID_REQUEST"
+            storage_contract::ErrorCode::InvalidRequest
         );
     }
 }
@@ -214,7 +237,7 @@ fn narrow_authorization_rechecks_identity_sessions_and_binding_before_branch_err
                 .call(BackendAction::SmbAuthorizeRead, &bound, input.clone())
                 .unwrap_err()
                 .code,
-            "UNAUTHORIZED",
+            storage_contract::ErrorCode::Unauthorized,
             "{kind}",
         );
     }
@@ -235,7 +258,7 @@ fn narrow_authorization_rechecks_identity_sessions_and_binding_before_branch_err
             )
             .unwrap_err()
             .code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
 }
 
@@ -277,6 +300,6 @@ fn narrow_authorization_after_held_lock_binding_change_rechecks_current_generati
     drop(held);
     assert_eq!(
         worker.join().unwrap().unwrap_err().code,
-        "SMB_REBIND_REQUIRED"
+        storage_contract::ErrorCode::SmbRebindRequired
     );
 }

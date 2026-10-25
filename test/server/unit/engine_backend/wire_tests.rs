@@ -91,7 +91,7 @@ fn unknown_and_aborted_projection_have_one_current_shape_per_operation_kind() {
                 assert_eq!(actual["state"], "failed");
                 assert!(actual["result"].is_null());
                 let error: ApiError = json_codec::from_value(actual["error"].clone()).unwrap();
-                assert_eq!(error.code, "OPERATION_ABORTED");
+                assert_eq!(error.code, storage_contract::ErrorCode::OperationAborted);
                 assert!(!error.retryable);
                 storage_contract::validate_id(&error.request_id, "req").unwrap();
                 assert_eq!(actual["error"].as_object().unwrap().len(), 4);

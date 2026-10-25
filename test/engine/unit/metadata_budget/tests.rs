@@ -93,7 +93,7 @@ fn manifest_limit_rejects_before_any_new_payload_or_decision_and_keeps_published
     let error = engine
         .persist_with_metadata_limit(next, pending, result.clone(), high - 1)
         .unwrap_err();
-    assert_eq!(error.code(), "RESOURCE_LIMIT");
+    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     assert_eq!(engine.snapshot, snapshot);
     assert_eq!(engine.next_slot, next_slot);
@@ -103,7 +103,7 @@ fn manifest_limit_rejects_before_any_new_payload_or_decision_and_keeps_published
     }
     assert_eq!(
         engine.operation(&result.operation_id).unwrap_err().code(),
-        "OPERATION_NOT_FOUND"
+        storage_contract::ErrorCode::OperationNotFound
     );
     assert_eq!(
         engine
@@ -184,7 +184,7 @@ fn actual_publication_and_local_proofs_fit_the_exact_preflight_boundary() {
         )
         .unwrap_err()
         .code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     // The actual final sequence occupies all twenty decimal digits.
     let mut wide = candidate;
@@ -281,7 +281,7 @@ fn metadata_only_package_and_purge_tombstone_combinations_are_preflighted() {
         )
         .unwrap_err()
         .code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     assert!(package_size > canonical_json(&publication).unwrap().len());
 
@@ -370,7 +370,7 @@ fn metadata_only_package_and_purge_tombstone_combinations_are_preflighted() {
         )
         .unwrap_err()
         .code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
 
     // A pre-upgrade decided candidate must keep its old, larger pages for
@@ -445,7 +445,7 @@ fn metadata_only_package_and_purge_tombstone_combinations_are_preflighted() {
             )
             .unwrap_err()
             .code(),
-            "RESOURCE_LIMIT"
+            storage_contract::ErrorCode::ResourceLimit
         );
     }
     assert_eq!(
@@ -497,14 +497,14 @@ fn snapshot_page_and_common_metadata_encoder_reject_one_byte_over_boundary() {
         store_snapshot_bounded(&[], &state, high - 1)
             .unwrap_err()
             .code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     let object = json_codec::json!({"bytes":"full"});
     let size = canonical_json(&object).unwrap().len();
     assert_eq!(encode_metadata(&object, size).unwrap().len(), size);
     assert_eq!(
         encode_metadata(&object, size - 1).unwrap_err().code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
 }
 
@@ -564,7 +564,7 @@ fn reused_content_pages_have_identical_exact_tombstone_budget_without_installing
     assert_eq!(budget(&reused, largest).unwrap(), largest);
     assert_eq!(
         budget(&reused, largest - 1).unwrap_err().code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     let page_hashes = &prepared.descriptor.pages["content_states"];
     assert!(page_hashes.len() > 1);

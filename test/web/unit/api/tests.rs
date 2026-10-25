@@ -211,7 +211,7 @@ fn malformed_authentication_success_cannot_install_or_restore_a_session() {
                 accept_restore(original.generation, value)
             };
             let error = result.expect_err("incomplete or retired identities must not open the UI");
-            assert_eq!(error.code, "INVALID_SESSION");
+            assert_eq!(error.code, storage_contract::ErrorCode::InvalidSession);
             assert_eq!(error.status, 200);
             CREDENTIALS.with(|saved| {
                 let saved = saved.borrow();
@@ -250,7 +250,7 @@ fn validated_session_restoration_requires_the_original_credential_generation() {
     );
     assert_eq!(
         accept_restore(0, response).unwrap_err().code,
-        "SESSION_CHANGED"
+        storage_contract::ErrorCode::SessionChanged
     );
     CREDENTIALS.with(|saved| {
         let saved = saved.borrow();

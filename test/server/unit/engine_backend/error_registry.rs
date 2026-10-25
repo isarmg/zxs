@@ -3,11 +3,11 @@ use super::*;
 #[test]
 fn durability_unknown_is_retryable_unknown_and_diagnostics_are_private() {
     let mapped = super::super::wire::error(storage_engine::Error::new(
-        "DURABILITY_UNKNOWN",
+        storage_contract::ErrorCode::DurabilityUnknown,
         "private /srv/zxs/disk/config.json directory sync failure after publication",
     ));
     assert_eq!(mapped.status, 500);
-    assert_eq!(mapped.code, "DURABILITY_UNKNOWN");
+    assert_eq!(mapped.code, storage_contract::ErrorCode::DurabilityUnknown);
     assert!(mapped.retryable);
     assert!(storage_contract::client_protocol::mutation_outcome_unknown(
         mapped.status
@@ -26,7 +26,7 @@ fn registrations_are_unique_and_alias_targets_have_explicit_status() {
     }
     for &(source, target) in ALIASES {
         assert!(internal.insert(source), "duplicate alias {source}");
-        assert!(public.contains(target), "unregistered target {target}");
+        assert!(public.contains(&target), "unregistered target {target}");
         assert_eq!(public_code(source), target);
     }
 }
@@ -50,14 +50,14 @@ fn wire_mapping_preserves_status_retry_and_diagnostic_policy() {
         assert_eq!(mapped.status, status(public));
     }
     for (code, expected) in [
-        ("NOT_FOUND", 404),
-        ("WORKSPACE_NOT_FOUND", 404),
-        ("VALIDATION_FAILURE", 400),
+        (storage_contract::ErrorCode::NotFound, 404),
+        (storage_contract::ErrorCode::WorkspaceNotFound, 404),
+        (storage_contract::ErrorCode::InjectedFailure, 400),
     ] {
         assert_eq!(status(code), expected);
         assert_eq!(public_code(code), code);
     }
-    let mut error = storage_engine::Error::new("VALIDATION_FAILURE", "detail");
-    error.retryable = true;
+    let error = storage_engine::Error::new(storage_contract::ErrorCode::InjectedFailure, "detail");
+    let error = error.retryable();
     assert!(super::super::wire::error(error).retryable);
 }

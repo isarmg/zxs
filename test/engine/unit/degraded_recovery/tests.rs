@@ -132,7 +132,7 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
             .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", false)
             .unwrap_err()
             .code(),
-        "PERMANENT_LOSS_NOT_ACKNOWLEDGED"
+        storage_contract::ErrorCode::PermanentLossNotAcknowledged
     );
     let result = engine
         .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", true)
@@ -191,7 +191,7 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
         )
         .unwrap_err()
         .code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
 
     assert_eq!(
@@ -399,7 +399,7 @@ fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
             .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", true)
             .unwrap_err();
         if fail_index {
-            assert_eq!(error.code(), "UNSAFE_PATH");
+            assert_eq!(error.code(), storage_contract::ErrorCode::UnsafePath);
         }
         assert!(
             engine.is_read_only(),
@@ -414,7 +414,7 @@ fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
                 .create_repository("must-not-write", "P01", 3, "alice", &new_id("op"))
                 .unwrap_err()
                 .code(),
-            "RECOVERY_REQUIRED"
+            storage_contract::ErrorCode::RecoveryRequired
         );
         // Idempotent result lookup must not reopen writes either.
         engine
@@ -445,7 +445,7 @@ fn insufficient_accepts_or_repairable_bytes_never_authorize_degraded_publication
             .prepare_degraded_recovery(&operation, "alice", "loss")
             .unwrap_err()
             .code(),
-        "RECOVERY_REQUIRED"
+        storage_contract::ErrorCode::RecoveryRequired
     );
     let (temp, engine, operation, candidate) = fixture("after_accept_2");
     lose(&engine, &candidate, false);
@@ -456,7 +456,7 @@ fn insufficient_accepts_or_repairable_bytes_never_authorize_degraded_publication
             .prepare_degraded_recovery(&operation, "alice", "one copy lost")
             .unwrap_err()
             .code(),
-        "RECOVERY_REQUIRED"
+        storage_contract::ErrorCode::RecoveryRequired
     );
 }
 #[test]
@@ -480,7 +480,7 @@ fn original_normal_publication_is_preserved_when_content_was_lost_later() {
             .prepare_degraded_recovery(&operation, "alice", "later loss")
             .unwrap_err()
             .code(),
-        "RECOVERY_REQUIRED"
+        storage_contract::ErrorCode::RecoveryRequired
     );
 }
 #[test]
@@ -540,7 +540,7 @@ fn incomplete_log_cannot_prove_absence_and_unknown_record_types_are_rejected() {
             .prepare_degraded_recovery(&operation, "alice", "loss")
             .unwrap_err()
             .code(),
-        "RECOVERY_REQUIRED"
+        storage_contract::ErrorCode::RecoveryRequired
     );
     assert_eq!(fs::metadata(log).unwrap().len(), length);
     drop(engine);
@@ -560,7 +560,7 @@ fn incomplete_log_cannot_prove_absence_and_unknown_record_types_are_rejected() {
             .err()
             .unwrap()
             .code(),
-        "LOG_FORMAT_UNSUPPORTED"
+        storage_contract::ErrorCode::LogFormatUnsupported
     );
 }
 
@@ -570,7 +570,7 @@ fn prepare_only_failure_reserves_its_slot_and_is_not_an_indeterminate_operation(
     assert!(!engine.is_read_only());
     assert_eq!(
         engine.operation(&operation).unwrap_err().code(),
-        "OPERATION_NOT_FOUND"
+        storage_contract::ErrorCode::OperationNotFound
     );
     assert!(engine.operation_owner(&operation).is_none());
     let branch = engine

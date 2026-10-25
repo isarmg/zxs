@@ -39,14 +39,17 @@ impl PreparedSnapshot {
         let Some(plan) = self.fields.get(field) else {
             if self.descriptor.pages.contains_key(field) {
                 return Err(Error::new(
-                    "STATE_INVALID",
+                    storage_contract::ErrorCode::StateInvalid,
                     "snapshot field lacks an installation plan",
                 ));
             }
             return Ok(());
         };
         let expected = self.descriptor.pages.get(field).ok_or_else(|| {
-            Error::new("STATE_INVALID", "snapshot field lacks its bound references")
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "snapshot field lacks its bound references",
+            )
         })?;
         if let Some(range) = &plan.objects {
             if range.len() != expected.len() {
@@ -105,7 +108,7 @@ impl PreparedSnapshot {
             self.visit_field_pages(field, members, state, |hash, bytes| {
                 if !members.is_empty() && bytes.len() > MAX_METADATA {
                     return Err(Error::new(
-                        "RESOURCE_LIMIT",
+                        storage_contract::ErrorCode::ResourceLimit,
                         "serialized metadata exceeds reader limit",
                     ));
                 }
@@ -117,10 +120,12 @@ impl PreparedSnapshot {
         }
         // A root cannot become durable before every exact page has completed
         // its per-member file and directory barriers, including reused pages.
-        let root = self
-            .objects
-            .last()
-            .ok_or_else(|| Error::new("STATE_INVALID", "snapshot root is absent"))?;
+        let root = self.objects.last().ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "snapshot root is absent",
+            )
+        })?;
         if root.kind != "snapshot" || root.hash != self.hash {
             return Err(invalid_reconstruction());
         }
@@ -130,7 +135,7 @@ impl PreparedSnapshot {
 }
 fn invalid_reconstruction() -> Error {
     Error::new(
-        "OBJECT_CORRUPT",
+        storage_contract::ErrorCode::ObjectCorrupt,
         "reconstructed snapshot field differs from its exact bound references",
     )
 }
@@ -153,7 +158,7 @@ fn read_published_page(members: &[DiskConfig], hash: &str, maximum: usize) -> Re
             digest.update(&bytes);
             if digest.finalize().to_hex().as_str() != hash {
                 return Err(Error::new(
-                    "OBJECT_CORRUPT",
+                    storage_contract::ErrorCode::ObjectCorrupt,
                     "published snapshot page bytes differ",
                 ));
             }
@@ -166,8 +171,12 @@ fn read_published_page(members: &[DiskConfig], hash: &str, maximum: usize) -> Re
             }
         }
     }
-    Err(first_error
-        .unwrap_or_else(|| Error::new("OBJECT_CORRUPT", "published snapshot page has no source")))
+    Err(first_error.unwrap_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::ObjectCorrupt,
+            "published snapshot page has no source",
+        )
+    }))
 }
 #[inline]
 fn observe_buffer(bytes: usize) {

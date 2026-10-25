@@ -642,7 +642,7 @@ fn shared_versions_still_validate_sql_marker_and_query_proof_sequence() {
             assert!(
                 result
                     .unwrap_err()
-                    .message
+                    .message()
                     .contains("projection sequence mismatch")
             );
             assert_eq!(writes(&path), (0, 0, 0, 0));
@@ -744,7 +744,10 @@ fn publication_rejects_substituted_marker_view_and_reopen_recovers() {
     let error = engine
         .create_repository("published", "P01", 1, "admin", &operation)
         .unwrap_err();
-    assert_eq!(error.code, "INDEX_REBUILD_FAILED");
+    assert_eq!(
+        error.code(),
+        storage_contract::ErrorCode::IndexRebuildFailed
+    );
     assert!(
         error
             .to_string()
@@ -786,7 +789,10 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
     let error = engine
         .create_repository("second", "P01", 1, "admin", &operation)
         .unwrap_err();
-    assert_eq!(error.code, "INDEX_REBUILD_FAILED");
+    assert_eq!(
+        error.code(),
+        storage_contract::ErrorCode::IndexRebuildFailed
+    );
     assert!(engine.is_read_only());
     assert!(engine.state.operations.contains_key(&operation));
     let published = engine.state().clone();
@@ -901,7 +907,11 @@ fn rebuild_refuses_linked_index_or_sidecar_without_touching_target() {
             }
             let original_index = std::fs::read(engine.root.join("index.sqlite")).unwrap();
             let error = engine.rebuild_index().unwrap_err();
-            assert_eq!(error.code, "UNSAFE_PATH", "{name} hard_link={hard_link}");
+            assert_eq!(
+                error.code(),
+                storage_contract::ErrorCode::UnsafePath,
+                "{name} hard_link={hard_link}"
+            );
             assert_eq!(std::fs::read(&target).unwrap(), b"do not change");
             assert_eq!(
                 std::fs::read(engine.root.join("index.sqlite")).unwrap(),
@@ -943,7 +953,7 @@ fn runtime_linked_cache_falls_back_and_blocks_publication_without_touching_targe
             let error = engine
                 .create_repository("published", "P01", 1, "admin", &new_id("op"))
                 .unwrap_err();
-            assert_eq!(error.code, "UNSAFE_PATH");
+            assert_eq!(error.code(), storage_contract::ErrorCode::UnsafePath);
             assert!(engine.is_read_only());
             assert_eq!(std::fs::read(&target).unwrap(), b"do not change");
         }

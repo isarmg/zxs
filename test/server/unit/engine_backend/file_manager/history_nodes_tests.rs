@@ -187,7 +187,7 @@ fn history_propagates_projection_error_instead_of_inventing_empty_graph() {
         None,
     )
     .unwrap_err();
-    assert_eq!(error.code, "FILE_NODE_NOT_FOUND");
+    assert_eq!(error.code, storage_contract::ErrorCode::FileNodeNotFound);
 }
 
 #[test]

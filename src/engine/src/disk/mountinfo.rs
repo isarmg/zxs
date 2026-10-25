@@ -105,7 +105,7 @@ fn decode_field(encoded: &str, escapes: Escapes) -> Result<String> {
 }
 
 fn invalid(message: &str) -> Error {
-    Error::new("DISK_IDENTITY_MISMATCH", message)
+    Error::new(storage_contract::ErrorCode::DiskIdentityMismatch, message)
 }
 
 #[cfg(test)]

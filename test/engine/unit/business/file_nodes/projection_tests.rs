@@ -297,12 +297,15 @@ fn batch_matches_public_single_node_results_including_partial_errors_and_scope()
         assert_eq!(actual, expected, "{id}");
     }
     for id in ["missing-body", "wrong-body"] {
-        assert_eq!(summaries[id].as_ref().unwrap_err().code(), "STATE_INVALID");
+        assert_eq!(
+            summaries[id].as_ref().unwrap_err().code(),
+            storage_contract::ErrorCode::StateInvalid
+        );
     }
     for id in ["foreign-node", "foreign-body", "absent"] {
         assert_eq!(
             summaries[id].as_ref().unwrap_err().code(),
-            "FILE_NODE_NOT_FOUND"
+            storage_contract::ErrorCode::FileNodeNotFound
         );
     }
     assert_eq!(

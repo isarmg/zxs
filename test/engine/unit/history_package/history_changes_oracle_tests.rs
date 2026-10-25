@@ -565,7 +565,7 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
         .iter()
         .try_for_each(|object| object.store(&config.disks).map(|_| ()))
         .unwrap_err();
-    assert_eq!(error.code(), "OBJECT_COLLISION");
+    assert_eq!(error.code(), storage_contract::ErrorCode::ObjectCollision);
     for disk in &config.disks {
         assert_eq!(
             fs::read(object_path(disk, "history-manifest", hash)).unwrap(),
@@ -586,8 +586,8 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
     )
     .err()
     .expect("fallback must retain the exact published root");
-    assert_eq!(error.code(), "OBJECT_CORRUPT");
-    assert!(error.message.contains("published baseline"));
+    assert_eq!(error.code(), storage_contract::ErrorCode::ObjectCorrupt);
+    assert!(error.message().contains("published baseline"));
 
     // Falling back after an unsafe read is not authority to follow or replace
     // a symlink. The ordinary immutable writer must preserve both link/target.
@@ -605,7 +605,7 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
         .iter()
         .try_for_each(|object| object.store(&config.disks).map(|_| ()))
         .unwrap_err();
-    assert_eq!(error.code(), "UNSAFE_PATH");
+    assert_eq!(error.code(), storage_contract::ErrorCode::UnsafePath);
     assert_eq!(fs::read(&target).unwrap(), b"sentinel");
     for disk in &config.disks {
         assert!(

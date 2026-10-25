@@ -119,7 +119,7 @@ fn large_candidate_uses_bounded_full_revalidation_and_rejects_changes() {
     let next_slot = engine.next_slot;
     assert_eq!(
         engine.decide_publication(detached).unwrap_err().code(),
-        "PREPARATION_STALE"
+        storage_contract::ErrorCode::PreparationStale
     );
     assert_eq!(engine.state.sequence, sequence);
     assert_eq!(engine.next_slot, next_slot);
@@ -146,7 +146,7 @@ fn held_proof_rejects_in_place_content_changes() {
             .validate(&engine.config, &candidate)
             .unwrap_err()
             .code(),
-        "PREPARATION_STALE"
+        storage_contract::ErrorCode::PreparationStale
     );
 }
 #[test]
@@ -163,7 +163,7 @@ fn held_proof_rejects_replaced_checksum_inode() {
             .validate(&engine.config, &candidate)
             .unwrap_err()
             .code(),
-        "PREPARATION_STALE"
+        storage_contract::ErrorCode::PreparationStale
     );
 }
 #[test]
@@ -174,7 +174,7 @@ fn held_proof_rejects_disk_seal_replacement_and_candidate_changes() {
     changed.versions[0].version.content_hash = "0".repeat(64);
     assert_eq!(
         proof.validate(&engine.config, &changed).unwrap_err().code(),
-        "PREPARATION_STALE"
+        storage_contract::ErrorCode::PreparationStale
     );
     let path = proof.disks[0].root.join("disk.json");
     let bytes = std::fs::read(&path).unwrap();
@@ -185,7 +185,7 @@ fn held_proof_rejects_disk_seal_replacement_and_candidate_changes() {
             .validate(&engine.config, &candidate)
             .unwrap_err()
             .code(),
-        "PREPARATION_STALE"
+        storage_contract::ErrorCode::PreparationStale
     );
 }
 #[test]
@@ -202,7 +202,7 @@ fn detached_decision_rejects_changed_topology_before_journaling() {
     engine.config.metadata_reserve_bytes += 1;
     assert_eq!(
         engine.decide_publication(detached).unwrap_err().code(),
-        "PREPARATION_STALE"
+        storage_contract::ErrorCode::PreparationStale
     );
     assert_eq!(engine.state.sequence, sequence);
     assert_eq!(engine.next_slot, slot);
@@ -217,7 +217,7 @@ fn preparation_pins_disk_identity_before_payload_work() {
     std::fs::rename(&path, path.with_extension("old")).unwrap();
     std::fs::write(&path, bytes).unwrap();
     match preparation.verify(&engine.config, &candidate) {
-        Err(error) => assert_eq!(error.code(), "PREPARATION_STALE"),
+        Err(error) => assert_eq!(error.code(), storage_contract::ErrorCode::PreparationStale),
         Ok(_) => panic!("replaced disk seal was accepted"),
     }
 }
@@ -295,7 +295,10 @@ fn large_preparation_rejects_corruption_like_reference() {
     let new_error = VerifiedPayloadSet::prepare(&engine.config, &candidate)
         .err()
         .unwrap();
-    assert_eq!(new_error.code(), "CHECKSUM_MISMATCH");
+    assert_eq!(
+        new_error.code(),
+        storage_contract::ErrorCode::ChecksumMismatch
+    );
     assert_eq!(old_error.code(), new_error.code());
 }
 #[test]
@@ -347,7 +350,7 @@ fn large_preparation_rechecks_disk_identity_after_last_replica() {
         .verify(&engine.config, &candidate)
         .err()
         .unwrap();
-    assert_eq!(error.code(), "PREPARATION_STALE");
+    assert_eq!(error.code(), storage_contract::ErrorCode::PreparationStale);
 }
 #[test]
 fn large_preparation_rejects_disk_change_before_hashing() {
@@ -358,6 +361,9 @@ fn large_preparation_rejects_disk_change_before_hashing() {
     std::fs::rename(&path, path.with_extension("old")).unwrap();
     std::fs::write(&path, bytes).unwrap();
     let (result, cost) = verification_cost(|| preparation.verify(&engine.config, &candidate));
-    assert_eq!(result.err().unwrap().code(), "PREPARATION_STALE");
+    assert_eq!(
+        result.err().unwrap().code(),
+        storage_contract::ErrorCode::PreparationStale
+    );
     assert_eq!(cost, (0, 0));
 }

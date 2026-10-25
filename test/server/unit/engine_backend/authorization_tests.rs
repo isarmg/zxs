@@ -3,9 +3,9 @@ use super::*;
 #[test]
 fn preparation_conflicts_retain_retryable_contract() {
     for code in [
-        "COMMIT_PREPARATION_BUSY",
-        "COMMIT_PREPARATION_STALE",
-        "PREPARATION_STALE",
+        storage_contract::ErrorCode::CommitPreparationBusy,
+        storage_contract::ErrorCode::CommitPreparationStale,
+        storage_contract::ErrorCode::PreparationStale,
     ] {
         let mapped = error(storage_engine::Error::new(code, "retry preparation").retryable());
         assert_eq!(mapped.status, 409);
@@ -17,9 +17,18 @@ fn preparation_conflicts_retain_retryable_contract() {
 #[test]
 fn upload_generation_and_lease_errors_preserve_conflict_status() {
     for (core_code, api_code) in [
-        ("STALE_UPLOAD_GENERATION", "UPLOAD_GENERATION_CONFLICT"),
-        ("UPLOAD_GENERATION_CONFLICT", "UPLOAD_GENERATION_CONFLICT"),
-        ("FENCING_TOKEN_EXPIRED", "LEASE_EXPIRED"),
+        (
+            storage_contract::ErrorCode::StaleUploadGeneration,
+            storage_contract::ErrorCode::UploadGenerationConflict,
+        ),
+        (
+            storage_contract::ErrorCode::UploadGenerationConflict,
+            storage_contract::ErrorCode::UploadGenerationConflict,
+        ),
+        (
+            storage_contract::ErrorCode::FencingTokenExpired,
+            storage_contract::ErrorCode::LeaseExpired,
+        ),
     ] {
         let error = error(storage_engine::Error::new(
             core_code,
@@ -51,7 +60,7 @@ fn missing_credentials_do_not_admit_even_a_named_administrator() {
     ] {
         assert_eq!(
             backend.call(action, &caller, json!({})).unwrap_err().code,
-            "UNAUTHORIZED"
+            storage_contract::ErrorCode::Unauthorized
         );
     }
     assert!(
@@ -90,7 +99,7 @@ fn a_valid_singleton_admits_its_owner_but_not_arbitrary_callers() {
             .call(crate::BackendAction::Repositories, &stranger, json!({}))
             .unwrap_err()
             .code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
 }
 
@@ -133,13 +142,13 @@ fn workspace_authorization_borrows_records_and_preserves_owner_checks() {
         workspace_authorize(&engine, &stranger, &workspace.workspace_id)
             .unwrap_err()
             .code,
-        "FORBIDDEN"
+        storage_contract::ErrorCode::Forbidden
     );
     assert_eq!(
         workspace_authorize(&engine, &owner, "missing")
             .unwrap_err()
             .code,
-        "WORKSPACE_NOT_FOUND"
+        storage_contract::ErrorCode::WorkspaceNotFound
     );
     engine
         .stage_bytes(&workspace.workspace_id, "second.txt", b"new")

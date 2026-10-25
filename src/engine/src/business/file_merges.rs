@@ -37,7 +37,7 @@ impl Engine {
             |engine,state,_| {
                 super::file_requests::validate_location(engine, file, location)?;
                 if inputs.len() < 2 || inputs.len() > engine.config.max_entries {
-                    return Err(Error::new("INVALID_REQUEST", "merge requires at least two bounded file branches"));
+                    return Err(Error::new(storage_contract::ErrorCode::InvalidRequest, "merge requires at least two bounded file branches"));
                 }
                 let version = super::file_nodes::node_version(state,file,chosen_node)?;
                 let body = state.versions[&version].clone();
@@ -48,22 +48,22 @@ impl Engine {
                 let mut heads = Vec::new();
                 for input in inputs {
                     if !branches.insert(input.branch_id.clone()) {
-                        return Err(Error::new("INVALID_REQUEST","merge branch inputs must be distinct"));
+                        return Err(Error::new(storage_contract::ErrorCode::InvalidRequest,"merge branch inputs must be distinct"));
                     }
                     let branch = state.branches.get(&input.branch_id)
                         .filter(|branch| branch.file_id.as_deref()==Some(file) && branch.history_tree_id==body.history_tree_id)
-                        .ok_or_else(|| Error::new("FILE_BRANCH_NOT_FOUND","merge branch does not belong to this file"))?;
+                        .ok_or_else(|| Error::new(storage_contract::ErrorCode::FileBranchNotFound,"merge branch does not belong to this file"))?;
                     if branch.state != "active" || state.file_branch_aliases.contains_key(&input.branch_id) {
-                        return Err(Error::new("FILE_BRANCH_CONFLICT","merged branches cannot be merged or written again"));
+                        return Err(Error::new(storage_contract::ErrorCode::FileBranchConflict,"merged branches cannot be merged or written again"));
                     }
                     let head = super::file_nodes::branch_head(state,&input.branch_id)?;
                     if head != input.expected_node_id {
-                        return Err(Error::new("FILE_BRANCH_CONFLICT","merge branch head changed; review all inputs again"));
+                        return Err(Error::new(storage_contract::ErrorCode::FileBranchConflict,"merge branch head changed; review all inputs again"));
                     }
                     heads.push(head);
                 }
                 if !branches.contains(survivor) {
-                    return Err(Error::new("INVALID_REQUEST","the surviving branch must be an explicit input"));
+                    return Err(Error::new(storage_contract::ErrorCode::InvalidRequest,"the surviving branch must be an explicit input"));
                 }
                 let reused = heads.iter().any(|head| head==chosen_node);
                 let mut parents = heads.iter().cloned().collect::<BTreeSet<_>>();
@@ -93,7 +93,7 @@ impl Engine {
                     state.file_branch_aliases.insert(branch.clone(),survivor.into());
                     let branch = state.branches.get_mut(branch).expect("checked merge branch");
                     branch.state="merged".into();
-                    branch.generation = branch.generation.checked_add(1).ok_or_else(|| Error::new("RESOURCE_LIMIT", "branch generation exhausted"))?;
+                    branch.generation = branch.generation.checked_add(1).ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "branch generation exhausted"))?;
                 }
                 // Historical aliases remain frozen, while their writable
                 // ownership target follows a later explicit owner merge.

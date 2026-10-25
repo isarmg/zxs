@@ -15,7 +15,7 @@ fn validate(kind: &str, hash: &str) -> Result<()> {
         || !valid_hash(hash)
     {
         return Err(Error::new(
-            "OBJECT_CORRUPT",
+            storage_contract::ErrorCode::ObjectCorrupt,
             "invalid immutable object address",
         ));
     }
@@ -84,7 +84,7 @@ pub(crate) fn existing_object_paths(
             Err(error) => return Err(error.into()),
             Ok(_) => {
                 return Err(Error::new(
-                    "FORMAT_UNSUPPORTED",
+                    storage_contract::ErrorCode::FormatUnsupported,
                     "flat metadata object layout is unsupported",
                 ));
             }
@@ -105,9 +105,12 @@ pub(super) fn read_object_bytes_bounded(
     maximum: usize,
 ) -> Result<Vec<u8>> {
     let paths = existing_object_paths(d, kind, hash)?;
-    let path = paths
-        .first()
-        .ok_or_else(|| Error::new("OBJECT_CORRUPT", "immutable object is missing"))?;
+    let path = paths.first().ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::ObjectCorrupt,
+            "immutable object is missing",
+        )
+    })?;
     read_bytes(path, maximum.min(MAX_METADATA))
 }
 pub(super) fn write_object_bytes(
@@ -133,11 +136,14 @@ pub(super) fn write_object_bytes_with(
         let file = open_regular(path)?;
         let size = file.metadata()?.len();
         if size > MAX_METADATA as u64 {
-            return Err(Error::new("RESOURCE_LIMIT", "metadata input exceeds limit"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::ResourceLimit,
+                "metadata input exceeds limit",
+            ));
         }
         let collision = || {
             Error::new(
-                "OBJECT_COLLISION",
+                storage_contract::ErrorCode::ObjectCollision,
                 "immutable object differs from existing bytes",
             )
         };
@@ -147,7 +153,7 @@ pub(super) fn write_object_bytes_with(
         // Compare against the expected object's bound, not the global metadata
         // ceiling. A corrupt target cannot inflate a small reused page buffer.
         let existing = read_file_bytes(file, bytes.len()).map_err(|error| {
-            if error.code() == "RESOURCE_LIMIT" {
+            if error.code() == storage_contract::ErrorCode::ResourceLimit {
                 collision()
             } else {
                 error
@@ -171,10 +177,12 @@ pub(crate) fn list_object_hashes(d: &DiskConfig, kind: &str) -> Result<BTreeSet<
     };
     for entry in fs::read_dir(&directory)? {
         let entry = entry?;
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| Error::new("OBJECT_CORRUPT", "invalid object name"))?;
+        let name = entry.file_name().into_string().map_err(|_| {
+            Error::new(
+                storage_contract::ErrorCode::ObjectCorrupt,
+                "invalid object name",
+            )
+        })?;
         if name.len() == 2
             && name
                 .bytes()
@@ -185,13 +193,16 @@ pub(crate) fn list_object_hashes(d: &DiskConfig, kind: &str) -> Result<BTreeSet<
                 let child = child?;
                 let hash = inventory_hash(&child.path())?;
                 if !hash.starts_with(&name) {
-                    return Err(Error::new("OBJECT_CORRUPT", "object is in the wrong shard"));
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::ObjectCorrupt,
+                        "object is in the wrong shard",
+                    ));
                 }
                 hashes.insert(hash);
             }
         } else {
             return Err(Error::new(
-                "FORMAT_UNSUPPORTED",
+                storage_contract::ErrorCode::FormatUnsupported,
                 "expected a metadata object hash-prefix directory",
             ));
         }
@@ -204,7 +215,12 @@ fn inventory_hash(path: &Path) -> Result<String> {
         .and_then(|n| n.to_str())
         .and_then(|n| n.strip_suffix(".json"))
         .filter(|hash| valid_hash(hash))
-        .ok_or_else(|| Error::new("OBJECT_CORRUPT", "invalid object filename"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::ObjectCorrupt,
+                "invalid object filename",
+            )
+        })?;
     open_regular(path)?;
     Ok(hash.to_owned())
 }

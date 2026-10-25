@@ -76,7 +76,10 @@ fn all_mutable_access_invalidates_before_a_borrow_can_change_or_replace_engine()
     revoked["administrator"]["username"] = json!("replacement");
     publish(&mut engine, revoked);
     assert!(engine.admission.get().is_none());
-    assert_eq!(engine.identity(&caller()).unwrap_err().code, "UNAUTHORIZED");
+    assert_eq!(
+        engine.identity(&caller()).unwrap_err().code,
+        storage_contract::ErrorCode::Unauthorized
+    );
 }
 
 #[test]
@@ -113,7 +116,7 @@ fn malformed_singleton_sessions_and_top_level_fields_fail_closed() {
         for _ in 0..2 {
             assert_eq!(
                 engine.identity(&caller()).unwrap_err().code,
-                "INVALID_REQUEST"
+                storage_contract::ErrorCode::InvalidRequest
             );
         }
         assert_eq!(engine.validations.load(Ordering::Relaxed) - before, 1);
@@ -163,7 +166,10 @@ fn interrupted_revocation_is_revalidated_from_recovered_authority() {
 #[test]
 fn embedded_identity_is_rejected_until_an_authoritative_snapshot_is_published() {
     let (_root, mut engine) = fixture();
-    assert_eq!(engine.identity(&caller()).unwrap_err().code, "UNAUTHORIZED");
+    assert_eq!(
+        engine.identity(&caller()).unwrap_err().code,
+        storage_contract::ErrorCode::Unauthorized
+    );
     publish(&mut engine, snapshot(0));
     assert_eq!(engine.identity(&caller()).unwrap().principal, "owner");
 }
@@ -179,7 +185,7 @@ fn failed_degraded_recovery_does_not_keep_or_forge_an_admission_projection() {
             .commit_degraded_recovery(&new_id("recovery"), "missing-digest", "owner", false)
             .unwrap_err()
             .code(),
-        "RECOVERY_PLAN_NOT_FOUND"
+        storage_contract::ErrorCode::RecoveryPlanNotFound
     );
     assert!(engine.admission.get().is_none());
     assert_eq!(engine.identity(&caller()).unwrap().principal, "owner");
@@ -349,7 +355,7 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
         for (action, input) in read_requests(&repo, &entry) {
             assert_eq!(
                 backend.call(action, &caller(), input).unwrap_err().code,
-                "UNAUTHORIZED"
+                storage_contract::ErrorCode::Unauthorized
             );
         }
     }
@@ -494,7 +500,7 @@ fn file_manager_borrowed_tree_reads_preserve_listing_and_path_context() {
             json!({"file_id":entry.file_id,"query":{"repository_id":repo.repository_id,"path":"missing.txt"}}),
         )
         .unwrap_err();
-    assert_eq!(missing.code, "FILE_NOT_FOUND");
+    assert_eq!(missing.code, storage_contract::ErrorCode::FileNotFound);
     let missing_directory = backend
         .call(
             BackendAction::FileManagerEntries,
@@ -502,5 +508,8 @@ fn file_manager_borrowed_tree_reads_preserve_listing_and_path_context() {
             json!({"slot_id":"P01","path":format!("{}/missing",repo.name)}),
         )
         .unwrap_err();
-    assert_eq!(missing_directory.code, "DIRECTORY_NOT_FOUND");
+    assert_eq!(
+        missing_directory.code,
+        storage_contract::ErrorCode::DirectoryNotFound
+    );
 }

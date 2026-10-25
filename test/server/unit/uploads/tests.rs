@@ -115,7 +115,7 @@ fn corrupt_or_oversized_progress_is_an_internal_state_error() {
         fs::write(&path, bytes).unwrap();
         let error = load(dir.path(), "ws", "item").err().unwrap();
         assert_eq!(error.status, 500);
-        assert_eq!(error.code, "UPLOAD_STATE_INVALID");
+        assert_eq!(error.code, storage_contract::ErrorCode::UploadStateInvalid);
     }
 }
 

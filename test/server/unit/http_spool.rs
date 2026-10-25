@@ -205,7 +205,10 @@ async fn stalled_real_inventory_keeps_management_responsive_and_uploads_pending(
         .reserve("admin", "new", 0)
         .err()
         .unwrap();
-    assert_eq!(error.code, "RESOURCE_LIMIT_EXCEEDED");
+    assert_eq!(
+        error.code,
+        storage_contract::ErrorCode::ResourceLimitExceeded
+    );
     assert_eq!(std::fs::read(&unknown).unwrap(), b"payload");
 }
 
@@ -237,7 +240,7 @@ async fn failed_inventory_and_panicked_job_become_terminal_unavailable() {
         assert_eq!(state.status(), "unavailable", "{failure}");
         assert_eq!(
             state.budget().err().unwrap().code,
-            "HTTP_UPLOADS_UNAVAILABLE"
+            storage_contract::ErrorCode::HttpUploadsUnavailable
         );
         if failure == "occupied" {
             assert_eq!(std::fs::read(&config.spool_dir).unwrap(), b"evidence");
@@ -287,7 +290,7 @@ fn dropped_publisher_never_becomes_ready_and_runtime_joins_inventory() {
     assert_eq!(observed.status(), "pending");
     assert_eq!(
         observed.budget().err().unwrap().code,
-        "HTTP_UPLOADS_PENDING"
+        storage_contract::ErrorCode::HttpUploadsPending
     );
     release.send(()).unwrap();
     completion.recv_timeout(DEADLINE).unwrap();

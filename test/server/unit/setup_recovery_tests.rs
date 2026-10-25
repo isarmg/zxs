@@ -72,7 +72,10 @@ fn never_treats_old_disk_or_lost_config_as_empty() {
         .initialize(&permit(&f.service), request(), |_, _, _| {
             panic!("must not initialize")
         });
-    assert_eq!(result.unwrap_err().code, "RECOVERY_REQUIRED");
+    assert_eq!(
+        result.unwrap_err().code,
+        storage_contract::ErrorCode::RecoveryRequired
+    );
     assert!(!f.service.data_root.join("config.json").exists());
 }
 #[test]
@@ -177,9 +180,15 @@ fn partial_setup_is_fenced_and_success_never_reinitializes() {
     let result = f
         .service
         .initialize(&permit(&f.service), request(), |_, _, _| {
-            Err(ApiError::conflict("TEST_FAILURE", "simulated auth failure"))
+            Err(ApiError::conflict(
+                storage_contract::ErrorCode::InjectedFailure,
+                "simulated auth failure",
+            ))
         });
-    assert_eq!(result.unwrap_err().code, "TEST_FAILURE");
+    assert_eq!(
+        result.unwrap_err().code,
+        storage_contract::ErrorCode::InjectedFailure
+    );
     assert!(f.service.data_root.join("setup-intent.json").exists());
     fs::remove_file(f.service.data_root.join("config.json")).unwrap();
     assert_eq!(
@@ -199,7 +208,10 @@ fn exclusive_lock_blocks_concurrent_setup() {
     let result = f
         .service
         .initialize(&permit(&f.service), request(), |_, _, _| panic!());
-    assert_eq!(result.unwrap_err().code, "SETUP_BUSY");
+    assert_eq!(
+        result.unwrap_err().code,
+        storage_contract::ErrorCode::SetupBusy
+    );
 }
 #[test]
 fn recovery_requires_explicit_permanent_loss_acknowledgement() {
@@ -300,7 +312,7 @@ fn local_bootstrap_never_bypasses_existing_management_auth() {
             |_| panic!(),
         )
         .unwrap_err();
-    assert_eq!(error.code, "SYSTEM_AUTH_REQUIRED");
+    assert_eq!(error.code, storage_contract::ErrorCode::SystemAuthRequired);
     assert!(!f.service.data_root.join("config.json").exists());
 }
 
@@ -335,7 +347,7 @@ fn bootstrap_expiration_and_directory_replacement_are_fenced() {
         .authorize_bootstrap("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
         .err()
         .unwrap();
-    assert_eq!(error.code, "BOOTSTRAP_EXPIRED");
+    assert_eq!(error.code, storage_contract::ErrorCode::BootstrapExpired);
     let disk = &f.service.disks["one"];
     fs::rename(disk, disk.with_extension("old")).unwrap();
     fs::create_dir(disk).unwrap();
@@ -396,7 +408,7 @@ fn unavailable_unrelated_member_does_not_block_survivor_checks_or_restore_select
     );
     assert_eq!(
         service.selected(&["three".into()]).unwrap_err().code,
-        "DISK_UNAVAILABLE"
+        storage_contract::ErrorCode::DiskUnavailable
     );
     assert_eq!(
         service
@@ -424,7 +436,10 @@ fn unavailable_unrelated_member_does_not_block_survivor_checks_or_restore_select
         },
         |_| panic!("no credentials may be invented"),
     );
-    assert_eq!(result.unwrap_err().code, "AUTH_RECOVERY_REQUIRED");
+    assert_eq!(
+        result.unwrap_err().code,
+        storage_contract::ErrorCode::AuthRecoveryRequired
+    );
     assert!(restored.join("config.json").exists());
     assert!(!f.service.disks["three"].exists());
 }
@@ -454,11 +469,14 @@ fn interrupted(f: &Fixture) {
     assert_eq!(
         f.service
             .initialize(&permit(&f.service), request(), |_, _, _| Err(
-                ApiError::conflict("INJECTED_BEFORE_AUTHORITY", "test interruption")
+                ApiError::conflict(
+                    storage_contract::ErrorCode::InjectedFailure,
+                    "test interruption"
+                )
             ))
             .unwrap_err()
             .code,
-        "INJECTED_BEFORE_AUTHORITY"
+        storage_contract::ErrorCode::InjectedFailure
     );
 }
 fn completion() -> CompleteSetupRequest {
@@ -495,7 +513,7 @@ fn completes_only_bound_pre_authority_interruption() {
             .complete_initialization(&permit(&f.service), completion(), |_, _, _| panic!())
             .unwrap_err()
             .code,
-        "AUTHORITY_RECOVERY_REQUIRED"
+        storage_contract::ErrorCode::AuthorityRecoveryRequired
     );
 }
 #[test]
@@ -526,7 +544,7 @@ fn completion_cannot_reset_old_pool_or_partial_authority_or_changed_data() {
                 .complete_initialization(&permit(&f.service), completion(), |_, _, _| panic!())
                 .unwrap_err()
                 .code,
-            "AUTHORITY_RECOVERY_REQUIRED"
+            storage_contract::ErrorCode::AuthorityRecoveryRequired
         );
     }
     let f = fixture();
@@ -541,7 +559,7 @@ fn completion_cannot_reset_old_pool_or_partial_authority_or_changed_data() {
             .complete_initialization(&permit(&f.service), completion(), |_, _, _| panic!())
             .unwrap_err()
             .code,
-        "AUTHORITY_RECOVERY_REQUIRED"
+        storage_contract::ErrorCode::AuthorityRecoveryRequired
     );
     let f = fixture();
     interrupted(&f);
@@ -680,7 +698,7 @@ fn preset_change_or_unapproved_roots_cannot_be_applied() {
             |_, _, _| panic!(),
         )
         .unwrap_err();
-    assert_eq!(error.code, "SETUP_PRESET_CHANGED");
+    assert_eq!(error.code, storage_contract::ErrorCode::SetupPresetChanged);
     assert!(!f.service.data_root.join("setup-intent.json").exists());
     config.disks[0].root = f.service.management_root.clone();
     fs::write(&path, json_codec::to_vec(&config).unwrap()).unwrap();
@@ -892,11 +910,15 @@ fn restore_single_member_uses_original_membership_not_survivor_count() {
             )
             .unwrap_err();
         if ids.len() == 1 {
-            assert_eq!(error.code, "AUTH_RECOVERY_REQUIRED");
+            assert_eq!(
+                error.code,
+                storage_contract::ErrorCode::AuthRecoveryRequired
+            );
             assert!(restored.join("config.json").exists());
         } else {
             assert_ne!(
-                error.code, "AUTH_RECOVERY_REQUIRED",
+                error.code,
+                storage_contract::ErrorCode::AuthRecoveryRequired,
                 "one surviving member must not shrink a three-member quorum"
             );
             assert!(!restored.join("config.json").exists());
@@ -912,11 +934,14 @@ fn single_disk_interrupted_setup_still_requires_bound_completion_proof() {
     assert_eq!(
         f.service
             .initialize(&permit(&f.service), input, |_, _, _| Err(
-                ApiError::conflict("INTERRUPTED", "test interruption")
+                ApiError::conflict(
+                    storage_contract::ErrorCode::InjectedFailure,
+                    "test interruption"
+                )
             ))
             .unwrap_err()
             .code,
-        "INTERRUPTED"
+        storage_contract::ErrorCode::InjectedFailure
     );
     assert!(f.service.status().completion_available);
     f.service
@@ -1064,16 +1089,56 @@ fn authenticated_restore_does_not_require_bootstrap_authorization() {
 #[test]
 fn offline_engine_failures_preserve_http_outcome_and_retry_classification() {
     for (internal, public, status) in [
-        ("IO_ERROR", "IO_ERROR", 500),
-        ("DURABILITY_UNKNOWN", "DURABILITY_UNKNOWN", 500),
-        ("NO_SPACE", "NO_SPACE", 507),
-        ("IN_DOUBT", "COMMIT_IN_DOUBT", 503),
-        ("METADATA_UNAVAILABLE", "METADATA_UNAVAILABLE", 503),
-        ("RECOVERY_REQUIRED", "RECOVERY_REQUIRED", 503),
-        ("RESOURCE_LIMIT", "RESOURCE_LIMIT_EXCEEDED", 429),
-        ("PERMISSION_DENIED", "FORBIDDEN", 403),
-        ("HEAD_CONFLICT", "HEAD_CONFLICT", 409),
-        ("INVALID_CONFIG", "INVALID_CONFIG", 400),
+        (
+            storage_contract::ErrorCode::IoError,
+            storage_contract::ErrorCode::IoError,
+            500,
+        ),
+        (
+            storage_contract::ErrorCode::DurabilityUnknown,
+            storage_contract::ErrorCode::DurabilityUnknown,
+            500,
+        ),
+        (
+            storage_contract::ErrorCode::NoSpace,
+            storage_contract::ErrorCode::NoSpace,
+            507,
+        ),
+        (
+            storage_contract::ErrorCode::InDoubt,
+            storage_contract::ErrorCode::CommitInDoubt,
+            503,
+        ),
+        (
+            storage_contract::ErrorCode::MetadataUnavailable,
+            storage_contract::ErrorCode::MetadataUnavailable,
+            503,
+        ),
+        (
+            storage_contract::ErrorCode::RecoveryRequired,
+            storage_contract::ErrorCode::RecoveryRequired,
+            503,
+        ),
+        (
+            storage_contract::ErrorCode::ResourceLimit,
+            storage_contract::ErrorCode::ResourceLimitExceeded,
+            429,
+        ),
+        (
+            storage_contract::ErrorCode::PermissionDenied,
+            storage_contract::ErrorCode::Forbidden,
+            403,
+        ),
+        (
+            storage_contract::ErrorCode::HeadConflict,
+            storage_contract::ErrorCode::HeadConflict,
+            409,
+        ),
+        (
+            storage_contract::ErrorCode::InjectedFailure,
+            storage_contract::ErrorCode::InjectedFailure,
+            400,
+        ),
     ] {
         let mapped = engine_error(storage_engine::Error::new(
             internal,
@@ -1090,7 +1155,11 @@ fn offline_engine_failures_preserve_http_outcome_and_retry_classification() {
         assert!(!mapped.message.contains("/srv/zxs"));
     }
     assert!(
-        engine_error(storage_engine::Error::new("STORAGE_BUSY", "private").retryable()).retryable
+        engine_error(
+            storage_engine::Error::new(storage_contract::ErrorCode::WorkspaceBusy, "private")
+                .retryable()
+        )
+        .retryable
     );
 }
 
@@ -1195,12 +1264,12 @@ fn initialization_and_bound_completion_keep_runtime_workspace_limits_out_of_conf
                 baseline.max_retained_workspaces
             );
             Err(ApiError::conflict(
-                "INTERRUPTED",
+                storage_contract::ErrorCode::InjectedFailure,
                 "test before authority publication",
             ))
         })
         .unwrap_err();
-    assert_eq!(error.code, "INTERRUPTED");
+    assert_eq!(error.code, storage_contract::ErrorCode::InjectedFailure);
     let persisted = fs::read(f.service.data_root.join("config.json")).unwrap();
     f.service
         .complete_initialization(

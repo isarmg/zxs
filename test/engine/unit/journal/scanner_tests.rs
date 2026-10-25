@@ -147,9 +147,9 @@ fn buffered_scan_does_not_skip_corrupt_or_unsupported_frames() {
         assert_eq!(
             error.code(),
             if change == 5 {
-                "LOG_FORMAT_UNSUPPORTED"
+                storage_contract::ErrorCode::LogFormatUnsupported
             } else {
-                "LOG_CORRUPT"
+                storage_contract::ErrorCode::LogCorrupt
             }
         );
     }

@@ -39,7 +39,7 @@ fn readiness_uses_fixed_membership_and_reports_single_disk_no_metadata_redundanc
                 .call(BackendAction::Ready, &anonymous, json!({}))
                 .unwrap_err()
                 .code,
-            "METADATA_UNAVAILABLE"
+            storage_contract::ErrorCode::MetadataUnavailable
         );
     }
 }

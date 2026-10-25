@@ -66,7 +66,7 @@ impl Backend for LostCommitReply {
         {
             return Err(ApiError::new(
                 503,
-                "RECONCILIATION_READ_FAILED",
+                storage_contract::ErrorCode::MetadataUnavailable,
                 "injected one-shot published tree read failure",
             ));
         }
@@ -99,7 +99,7 @@ impl Backend for LostCommitReply {
         {
             return Err(ApiError::new(
                 503,
-                "RESPONSE_LOST",
+                storage_contract::ErrorCode::InjectedFailure,
                 "injected after actual durable publication",
             ));
         }
@@ -129,7 +129,7 @@ impl Backend for LostCommitReply {
         {
             return Err(ApiError::new(
                 503,
-                "RECONCILIATION_READ_FAILED",
+                storage_contract::ErrorCode::MetadataUnavailable,
                 "injected one-shot published content read failure",
             ));
         }
@@ -324,7 +324,10 @@ fn directory_default_switch_fences_open_and_already_published_writers() {
     file.write_all_at(b"new", 0).unwrap();
     select_directory(&shared, &repository, &draft);
     let error = one.dirty(opened.handle).unwrap_err();
-    assert_eq!(error.code, "DIRECTORY_BRANCH_CONFLICT");
+    assert_eq!(
+        error.code,
+        storage_contract::ErrorCode::DirectoryBranchConflict
+    );
     assert_eq!(error.status, 409);
     let writer = match &one.handles[&opened.handle] {
         Handle::Write(w) => w,
@@ -347,7 +350,7 @@ fn directory_default_switch_fences_open_and_already_published_writers() {
     file.write_all_at(b"bad", 0).unwrap();
     assert_eq!(
         one.dirty(opened.handle).unwrap_err().code,
-        "DIRECTORY_BRANCH_CONFLICT"
+        storage_contract::ErrorCode::DirectoryBranchConflict
     );
     assert_eq!(backend.uploads.load(Ordering::SeqCst), 1);
     let writer = match &one.handles[&opened.handle] {
@@ -512,7 +515,7 @@ fn newly_created_ancestor_selection_fences_an_existing_create_handle() {
     file.write_all_at(b"keep", 0).unwrap();
     assert_eq!(
         original.dirty(opened.handle).unwrap_err().code,
-        "DIRECTORY_BRANCH_CONFLICT"
+        storage_contract::ErrorCode::DirectoryBranchConflict
     );
     let writer = match &original.handles[&opened.handle] {
         Handle::Write(w) => w,
@@ -854,7 +857,10 @@ fn lost_commit_reply_reconciles_same_operation_without_restaging_or_second_versi
     file.write_all_at(b"new", 0).unwrap();
     one.dirty(opened.handle).unwrap();
     backend.fail.store(true, Ordering::SeqCst);
-    assert_eq!(one.flush(opened.handle).unwrap_err().code, "RESPONSE_LOST");
+    assert_eq!(
+        one.flush(opened.handle).unwrap_err().code,
+        storage_contract::ErrorCode::InjectedFailure
+    );
     let uploads = backend.uploads.load(Ordering::SeqCst);
     let saved = one.flush(opened.handle).unwrap();
     assert_eq!(saved["commit_state"], "PUBLISHED");
@@ -885,7 +891,7 @@ fn cross_session_writer_is_denied_and_last_close_commits() {
     let error = two
         .open("report.txt".into(), true, false, false, false, false)
         .unwrap_err();
-    assert_eq!(error.code, "FILE_WRITE_BUSY");
+    assert_eq!(error.code, storage_contract::ErrorCode::FileWriteBusy);
     file.write_all_at(b"end", 0).unwrap();
     one.dirty(opened.handle).unwrap();
     one.close(opened.handle, false).unwrap();
@@ -960,7 +966,7 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
         })
         .unwrap_err()
         .code,
-        "FILE_WRITE_BUSY"
+        storage_contract::ErrorCode::FileWriteBusy
     );
     two.dispatch(Request::Namespace {
         operation_id: new_id("op"),
@@ -985,7 +991,7 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
         })
         .unwrap_err()
         .code,
-        "INVALID_REQUEST"
+        storage_contract::ErrorCode::InvalidRequest
     );
     two.dispatch(Request::Namespace {
         operation_id: new_id("op"),
@@ -1056,7 +1062,7 @@ fn listing_uses_portable_lookup_keys_and_rejects_files_or_missing_directories() 
             })
             .unwrap_err()
             .code,
-        "NOT_DIRECTORY"
+        storage_contract::ErrorCode::NotDirectory
     );
     assert_eq!(
         session
@@ -1075,11 +1081,14 @@ fn changed_bytes_after_lost_publication_reply_are_retained_for_a_second_save() {
     file.write_all_at(b"new", 0).unwrap();
     one.dirty(opened.handle).unwrap();
     backend.fail.store(true, Ordering::SeqCst);
-    assert_eq!(one.flush(opened.handle).unwrap_err().code, "RESPONSE_LOST");
+    assert_eq!(
+        one.flush(opened.handle).unwrap_err().code,
+        storage_contract::ErrorCode::InjectedFailure
+    );
     file.write_all_at(b"end", 0).unwrap();
     assert_eq!(
         one.flush(opened.handle).unwrap_err().code,
-        "WORKSPACE_REBASE_REQUIRED"
+        storage_contract::ErrorCode::WorkspaceRebaseRequired
     );
     one.dirty(opened.handle).unwrap();
     one.flush(opened.handle).unwrap();
@@ -1124,7 +1133,7 @@ fn external_same_file_change_rejects_rebase_and_preserves_work_bytes() {
     file.write_all_at(b"end", 0).unwrap();
     assert_eq!(
         one.dirty(opened.handle).unwrap_err().code,
-        "FILE_VERSION_CONFLICT"
+        storage_contract::ErrorCode::FileVersionConflict
     );
     let pending = match &one.handles[&opened.handle] {
         Handle::Write(writer) => writer.source.clone(),
@@ -1132,7 +1141,7 @@ fn external_same_file_change_rejects_rebase_and_preserves_work_bytes() {
     };
     assert_eq!(
         one.close(opened.handle, false).unwrap_err().code,
-        "WORKSPACE_REBASE_REQUIRED"
+        storage_contract::ErrorCode::WorkspaceRebaseRequired
     );
     assert!(!one.handles.contains_key(&opened.handle));
     assert!(one.writer_locks.is_empty());
@@ -1156,7 +1165,7 @@ fn already_open_reader_checks_current_account_before_each_read_request() {
         })
         .unwrap_err()
         .code,
-        "FORBIDDEN"
+        storage_contract::ErrorCode::Forbidden
     );
     assert!(one.handles.contains_key(&opened.handle));
     one.close(opened.handle, false).unwrap();
@@ -1287,7 +1296,9 @@ fn raw_fd_and_writer_copy_reject_corruption_and_use_verified_fallback() {
         }
         let mut denied = session(shared, &branch);
         let result = denied.open("report.txt".into(), writable, false, false, false, false);
-        assert!(matches!(result, Err(ref error) if error.code == "CONTENT_UNAVAILABLE"));
+        assert!(
+            matches!(result, Err(ref error) if error.code == storage_contract::ErrorCode::ContentUnavailable)
+        );
         assert!(denied.handles.is_empty(), "corrupt descriptor was admitted");
     }
 }
@@ -1328,7 +1339,10 @@ fn writable_open_rejects_entry_changed_before_workspace_snapshot() {
             result.is_err(),
             "stale entry must not be copied or truncated under a newer workspace baseline"
         );
-        assert_eq!(result.unwrap_err().code, "FILE_VERSION_CONFLICT");
+        assert_eq!(
+            result.unwrap_err().code,
+            storage_contract::ErrorCode::FileVersionConflict
+        );
         assert!(client.handles.is_empty());
         assert!(client.writer_locks.is_empty());
         let entry = client.find("report.txt").unwrap().unwrap();

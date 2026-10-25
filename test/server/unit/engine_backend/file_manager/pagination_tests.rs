@@ -128,7 +128,7 @@ fn cursor_is_rejected_after_snapshot_or_request_context_changes() {
     let stale = PageRequest::with_snapshot(&input, "P01", "docs", "different-snapshot".into())
         .err()
         .unwrap();
-    assert_eq!(stale.code, "LISTING_CHANGED");
+    assert_eq!(stale.code, storage_contract::ErrorCode::ListingChanged);
     for (slot, path) in [("P02", "docs"), ("P01", "other")] {
         assert!(
             PageRequest::with_snapshot(&input, slot, path, "synthetic-snapshot".into()).is_err()

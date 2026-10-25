@@ -200,12 +200,15 @@ fn writer_panic_retries_verify_visible_and_torn_bytes_after_leases_drain() {
         }));
         assert!(panicked.is_err());
         assert!(!tails().lock().unwrap().contains_key(&path));
-        assert_eq!(waiter.lock().unwrap_err().code(), "RECOVERY_REQUIRED");
+        assert_eq!(
+            waiter.lock().unwrap_err().code(),
+            storage_contract::ErrorCode::RecoveryRequired
+        );
         assert_eq!(
             append(disk, "ACCEPT", 1, &"a".repeat(64), &"c".repeat(64))
                 .unwrap_err()
                 .code(),
-            "RECOVERY_REQUIRED"
+            storage_contract::ErrorCode::RecoveryRequired
         );
         assert!(writers().lock().unwrap().contains_key(&path));
         drop(waiter);

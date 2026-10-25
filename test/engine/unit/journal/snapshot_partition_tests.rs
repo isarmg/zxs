@@ -137,7 +137,7 @@ fn event_pages_remove_scalar_cap_preserve_order_and_append_locality() {
     std::fs::write(&path, b"corrupt").unwrap();
     assert_eq!(
         prepared.store(&config.disks, &state).unwrap_err().code(),
-        "OBJECT_COLLISION"
+        storage_contract::ErrorCode::ObjectCollision
     );
     assert_eq!(std::fs::read(path).unwrap(), b"corrupt");
 }
@@ -194,7 +194,11 @@ fn current_snapshot_requires_nonsparse_state_fields() {
             assert!(snapshot.pages.remove(field).is_some());
         }
         let error = resolve_snapshot(snapshot, |_| panic!("empty maps have no pages")).unwrap_err();
-        assert_eq!(error.code(), "INVALID_JSON", "{field}");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::InvalidJson,
+            "{field}"
+        );
     }
 }
 
@@ -219,14 +223,14 @@ fn scalar_event_snapshots_are_rejected_without_rewriting_evidence() {
     let bytes = std::fs::read(&path).unwrap();
     assert_eq!(
         load_snapshot(disk, &hash).unwrap_err().code(),
-        "FORMAT_UNSUPPORTED"
+        storage_contract::ErrorCode::FormatUnsupported
     );
     assert_eq!(std::fs::read(path).unwrap(), bytes);
     descriptor.scalars.remove("events");
     let absent_hash = store_object(disk, "snapshot", &descriptor).unwrap();
     assert_eq!(
         load_snapshot(disk, &absent_hash).unwrap_err().code(),
-        "FORMAT_UNSUPPORTED"
+        storage_contract::ErrorCode::FormatUnsupported
     );
 }
 
@@ -253,7 +257,7 @@ fn event_snapshot_rejects_gaps_and_ambiguous_scalar_page_fields() {
     let duplicate_hash = store_object(disk, "snapshot", &descriptor).unwrap();
     assert_eq!(
         load_snapshot(disk, &duplicate_hash).unwrap_err().code(),
-        "OBJECT_CORRUPT"
+        storage_contract::ErrorCode::ObjectCorrupt
     );
     let bad_page = json_codec::json!({"00000000000000000001": event_state(1).events[0]});
     descriptor.pages.insert(
@@ -263,7 +267,7 @@ fn event_snapshot_rejects_gaps_and_ambiguous_scalar_page_fields() {
     let hash = store_object(disk, "snapshot", &descriptor).unwrap();
     assert_eq!(
         load_snapshot(disk, &hash).unwrap_err().code(),
-        "OBJECT_CORRUPT"
+        storage_contract::ErrorCode::ObjectCorrupt
     );
     descriptor
         .scalars
@@ -271,7 +275,7 @@ fn event_snapshot_rejects_gaps_and_ambiguous_scalar_page_fields() {
     let hash = store_object(disk, "snapshot", &descriptor).unwrap();
     assert_eq!(
         load_snapshot(disk, &hash).unwrap_err().code(),
-        "OBJECT_CORRUPT"
+        storage_contract::ErrorCode::ObjectCorrupt
     );
 }
 

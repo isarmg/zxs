@@ -31,7 +31,7 @@ pub(crate) fn unavailable_fallback() -> Router {
         .fallback(|| async {
             let mut response = ApiError::new(
                 503,
-                "WEB_ASSETS_UNAVAILABLE",
+                storage_contract::ErrorCode::WebAssetsUnavailable,
                 "Web UI assets are unavailable; management HTTP APIs remain available",
             )
             .into_response();

@@ -109,7 +109,7 @@ fn monitoring_rechecks_the_current_session_after_logout() {
     auth.lock().unwrap().logout(&token).unwrap();
     assert_eq!(
         require_current_session(&auth, &captured).unwrap_err().code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
 }
 

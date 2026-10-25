@@ -149,7 +149,10 @@ fn directory_generation_checks_match_both_views_roots_and_component_boundaries()
                         "{id}/{current_generation:?}/{captured_generation:?}/{path}"
                     );
                     if let Err(error) = actual {
-                        assert_eq!(error.code(), "DIRECTORY_BRANCH_CONFLICT");
+                        assert_eq!(
+                            error.code(),
+                            storage_contract::ErrorCode::DirectoryBranchConflict
+                        );
                     }
                 }
             }
@@ -236,7 +239,7 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
                 .validate_workspace_file_selection(&workspace.workspace_id, path)
                 .unwrap_err()
                 .code(),
-            "DIRECTORY_BRANCH_CONFLICT"
+            storage_contract::ErrorCode::DirectoryBranchConflict
         );
     }
     engine

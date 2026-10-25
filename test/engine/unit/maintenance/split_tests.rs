@@ -460,14 +460,14 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
             )
             .unwrap_err()
             .code(),
-        "CONTENT_PINNED"
+        storage_contract::ErrorCode::ContentPinned
     );
     assert_eq!(
         engine
             .create_split_plan(&repo.history_tree_id, &source_commit, "alice")
             .unwrap_err()
             .code(),
-        "DIRECTORY_HISTORY_SPLIT_UNSUPPORTED"
+        storage_contract::ErrorCode::DirectoryHistorySplitUnsupported
     );
     engine
         .mutate(
@@ -510,7 +510,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
             )
             .unwrap_err()
             .code(),
-        "CONTENT_PINNED"
+        storage_contract::ErrorCode::ContentPinned
     );
     engine
         .mutate(
@@ -535,7 +535,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
             )
             .unwrap_err()
             .code(),
-        "CONTENT_PINNED"
+        storage_contract::ErrorCode::ContentPinned
     );
     engine
         .mutate(
@@ -558,7 +558,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
             )
             .unwrap_err()
             .code(),
-        "CONTENT_PINNED"
+        storage_contract::ErrorCode::ContentPinned
     );
     // A branch remains a readable snapshot when it is not selected. Only
     // advancing every retained named HEAD releases its former content.
@@ -615,7 +615,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
             .err()
             .unwrap()
             .code(),
-        "CONTENT_PURGED"
+        storage_contract::ErrorCode::ContentPurged
     );
     assert_eq!(
         engine.state.directory_trees[&parent_tree].entries[0].version_id,
@@ -654,7 +654,7 @@ fn inherited_branches_and_their_workspaces_pin_sources_until_first_own_content()
             .create_purge_plan(&repo.history_tree_id, vec![old.version_id.clone()], "alice")
             .unwrap_err()
             .code(),
-        "CONTENT_PINNED"
+        storage_contract::ErrorCode::ContentPinned
     );
     let inherited = engine
         .list_tree(&pending.branch_id)
@@ -701,7 +701,7 @@ fn inherited_branches_and_their_workspaces_pin_sources_until_first_own_content()
         .unwrap();
     assert_eq!(
         engine.open_content(&old.version_id).err().unwrap().code(),
-        "CONTENT_PURGED"
+        storage_contract::ErrorCode::ContentPurged
     );
     assert!(engine.open_content(&current.version_id).is_ok());
 }
@@ -738,7 +738,7 @@ fn selected_inherited_file_pins_source_through_directory_main_until_materialized
             .create_purge_plan(&repo.history_tree_id, vec![old.version_id.clone()], "alice")
             .unwrap_err()
             .code(),
-        "CONTENT_PINNED"
+        storage_contract::ErrorCode::ContentPinned
     );
     engine
         .stage_bytes(
@@ -781,7 +781,7 @@ fn selected_inherited_file_pins_source_through_directory_main_until_materialized
         .unwrap();
     assert_eq!(
         engine.open_content(&old.version_id).err().unwrap().code(),
-        "CONTENT_PURGED"
+        storage_contract::ErrorCode::ContentPurged
     );
     assert!(engine.open_content(&current.version_id).is_ok());
 }
@@ -1207,7 +1207,7 @@ fn split_rejects_root_and_rechecks_active_read_before_publication() {
             .create_split_plan(&repo.history_tree_id, &root, "alice")
             .unwrap_err()
             .code(),
-        "SPLIT_ROOT_FORBIDDEN"
+        storage_contract::ErrorCode::SplitRootForbidden
     );
     let cut = save(&mut engine, &repo.main_branch_id, b"first");
     let plan = engine
@@ -1227,7 +1227,7 @@ fn split_rejects_root_and_rechecks_active_read_before_publication() {
             .commit_plan(&plan.plan_id, "alice", &new_id("op"))
             .unwrap_err()
             .code(),
-        "CONTENT_PINNED"
+        storage_contract::ErrorCode::ContentPinned
     );
     assert_eq!(engine.state.business_generation, generation);
     drop(read);

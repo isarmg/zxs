@@ -163,7 +163,7 @@ fn save_rejects_root_marker_and_equivalent_spellings_before_decision() {
         let before = PublishedSnapshot::capture(&fixture.engine);
         assert_eq!(
             fixture.save(path).unwrap_err().code(),
-            "NAME_COLLISION",
+            storage_contract::ErrorCode::NameCollision,
             "{path}"
         );
         before.assert_unchanged(&fixture.engine);
@@ -183,7 +183,7 @@ fn file_and_directory_rename_reject_root_marker_before_decision() {
         let before = PublishedSnapshot::capture(&fixture.engine);
         assert_eq!(
             fixture.rename(source, destination).unwrap_err().code(),
-            "NAME_COLLISION"
+            storage_contract::ErrorCode::NameCollision
         );
         before.assert_unchanged(&fixture.engine);
         fixture.assert_writable_after_reopen();
@@ -198,7 +198,7 @@ fn backup_prefix_rejects_root_marker_before_decision() {
         let before = PublishedSnapshot::capture(&fixture.engine);
         assert_eq!(
             fixture.backups(prefix).unwrap_err().code(),
-            "NAME_COLLISION"
+            storage_contract::ErrorCode::NameCollision
         );
         before.assert_unchanged(&fixture.engine);
         fixture.assert_writable_after_reopen();
@@ -230,7 +230,7 @@ fn rejected_save_retains_workspace_without_installing_replicas() {
             request_digest: None,
         })
         .unwrap_err();
-    assert_eq!(error.code(), "NAME_COLLISION");
+    assert_eq!(error.code(), storage_contract::ErrorCode::NameCollision);
     assert_eq!(fs::metadata(&staged.source_path).unwrap().ino(), inode);
     assert_eq!(fs::read(&staged.source_path).unwrap(), b"preserved body");
     assert_eq!(

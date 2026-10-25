@@ -83,7 +83,7 @@ impl Engine {
             || result.sequence != candidate.sequence
         {
             return Err(Error::new(
-                "OBJECT_CORRUPT",
+                storage_contract::ErrorCode::ObjectCorrupt,
                 "operation differs from accepted candidate",
             ));
         }
@@ -176,7 +176,10 @@ impl Engine {
                                 .and_then(json_codec::Value::as_str)
                                 != Some(candidate.sequence.to_string().as_str())
                         {
-                            return Err(Error::new("OBJECT_CORRUPT", "snapshot sequence differs"));
+                            return Err(Error::new(
+                                storage_contract::ErrorCode::ObjectCorrupt,
+                                "snapshot sequence differs",
+                            ));
                         }
                         return Ok((members, snapshot, candidate));
                     }
@@ -188,7 +191,10 @@ impl Engine {
 }
 
 fn operation_not_found() -> Error {
-    Error::new("OPERATION_NOT_FOUND", "operation is not registered")
+    Error::new(
+        storage_contract::ErrorCode::OperationNotFound,
+        "operation is not registered",
+    )
 }
 
 // Verify exact bounded pages one at a time. Do not materialize unrelated maps,
@@ -201,21 +207,23 @@ fn snapshot_entry<T: data_serialization::Serialize + data_serialization::de::Des
 ) -> Result<Option<T>> {
     if snapshot.scalars.contains_key(field) {
         return Err(Error::new(
-            "OBJECT_CORRUPT",
+            storage_contract::ErrorCode::ObjectCorrupt,
             "operation snapshot field is not paged",
         ));
     }
-    let hashes = snapshot
-        .pages
-        .get(field)
-        .ok_or_else(|| Error::new("OBJECT_CORRUPT", "operation snapshot field is missing"))?;
+    let hashes = snapshot.pages.get(field).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::ObjectCorrupt,
+            "operation snapshot field is missing",
+        )
+    })?;
     let mut found = None;
     for hash in hashes {
         let mut page: std::collections::BTreeMap<String, T> =
             verified_object(members, "state-page", hash)?;
         if page.len() > STATE_PAGE_ENTRIES {
             return Err(Error::new(
-                "OBJECT_CORRUPT",
+                storage_contract::ErrorCode::ObjectCorrupt,
                 "operation snapshot page exceeds entry limit",
             ));
         }
@@ -223,7 +231,7 @@ fn snapshot_entry<T: data_serialization::Serialize + data_serialization::de::Des
             && found.replace(value).is_some()
         {
             return Err(Error::new(
-                "OBJECT_CORRUPT",
+                storage_contract::ErrorCode::ObjectCorrupt,
                 "duplicate operation snapshot entity",
             ));
         }

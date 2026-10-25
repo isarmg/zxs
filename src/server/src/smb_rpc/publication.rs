@@ -112,7 +112,10 @@ pub(super) fn finish_publication(
         .iter()
         .find(|entry| entry.entry_id == writer.item_id)
         .ok_or_else(|| {
-            ApiError::conflict("FILE_VERSION_CONFLICT", "published file identity missing")
+            ApiError::conflict(
+                storage_contract::ErrorCode::FileVersionConflict,
+                "published file identity missing",
+            )
         })?;
     let published = shared.backend.content(identity, &entry.version_id)?;
     let mut hash = blake3::Hasher::new();
@@ -140,7 +143,7 @@ pub(super) fn finish_publication(
     }
     if writer.dirty {
         return Err(ApiError::conflict(
-            "WORKSPACE_REBASE_REQUIRED",
+            storage_contract::ErrorCode::WorkspaceRebaseRequired,
             "original save published; later changed bytes are retained and need a new dirty request",
         ));
     }
@@ -202,7 +205,7 @@ impl Session {
                         .map(|e| (&e.entry_id, &e.version_id, &e.path))
                 {
                     return Err(ApiError::conflict(
-                        "FILE_VERSION_CONFLICT",
+                        storage_contract::ErrorCode::FileVersionConflict,
                         "the open file changed since this handle last published",
                     ));
                 }
@@ -245,7 +248,11 @@ impl Session {
     }
     pub(super) fn flush(&mut self, handle: u64) -> Result<Value, ApiError> {
         let Some(entry) = self.handles.get_mut(&handle) else {
-            return Err(ApiError::new(404, "NOT_FOUND", "SMB handle missing"));
+            return Err(ApiError::new(
+                404,
+                storage_contract::ErrorCode::NotFound,
+                "SMB handle missing",
+            ));
         };
         let writer = match entry {
             Handle::Read(content, _) => {
@@ -263,7 +270,7 @@ impl Session {
         }
         if writer.committed {
             return Err(ApiError::conflict(
-                "WORKSPACE_REBASE_REQUIRED",
+                storage_contract::ErrorCode::WorkspaceRebaseRequired,
                 "changed bytes need an authorized workspace before saving",
             ));
         }
@@ -288,11 +295,13 @@ impl Session {
             Ok(_) => {
                 return Err(ApiError::new(
                     503,
-                    "RECOVERY_REQUIRED",
+                    storage_contract::ErrorCode::RecoveryRequired,
                     "SMB save outcome must be reconciled before retrying",
                 ));
             }
-            Err(error) if error.code == "NOT_FOUND" || error.code == "OPERATION_NOT_FOUND" => {}
+            Err(error)
+                if error.code == storage_contract::ErrorCode::NotFound
+                    || error.code == storage_contract::ErrorCode::OperationNotFound => {}
             Err(error) => return Err(error),
         }
         writer
@@ -340,7 +349,11 @@ impl Session {
     /// becomes retained detached work, not a lock with no VFS owner.
     pub(super) fn close(&mut self, handle: u64, abort: bool) -> Result<Value, ApiError> {
         if !self.handles.contains_key(&handle) {
-            return Err(ApiError::new(404, "NOT_FOUND", "SMB handle missing"));
+            return Err(ApiError::new(
+                404,
+                storage_contract::ErrorCode::NotFound,
+                "SMB handle missing",
+            ));
         }
         let saved = (|| {
             if !abort {
@@ -372,15 +385,18 @@ impl Session {
     /// Used when a local worker failed before Close could safely attempt a save.
     /// Detach is not Abort: no backend mutation, source deletion or new operation.
     pub(super) fn detach(&mut self, handle: u64) -> Result<Value, ApiError> {
-        let entry = self
-            .handles
-            .remove(&handle)
-            .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "SMB handle missing"))?;
+        let entry = self.handles.remove(&handle).ok_or_else(|| {
+            ApiError::new(
+                404,
+                storage_contract::ErrorCode::NotFound,
+                "SMB handle missing",
+            )
+        })?;
         let mut result = json!({"closed":true,"detached":true});
         if let Handle::Write(writer) = entry {
             let reason = ApiError::new(
                 503,
-                "RECOVERY_REQUIRED",
+                storage_contract::ErrorCode::RecoveryRequired,
                 "SMB handle detached without saving; retained work requires reconciliation",
             );
             retain_detached(&writer, &self.identity.principal, &self.branch, &reason);

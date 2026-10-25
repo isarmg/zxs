@@ -13,6 +13,9 @@ fn notes_share_byte_control_and_clear_semantics() {
         "\u{007f}".into(),
         "\u{0085}".into(),
     ] {
-        assert_eq!(validate_note(&note).unwrap_err().code(), "INVALID_REQUEST");
+        assert_eq!(
+            validate_note(&note).unwrap_err().code(),
+            crate::ErrorCode::InvalidRequest
+        );
     }
 }

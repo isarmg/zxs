@@ -19,43 +19,8 @@ pub use workspace_capacity::*;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, error_definition::Error)]
-#[error("{code}: {message}")]
-pub struct Error {
-    pub code: String,
-    pub message: String,
-    pub retryable: bool,
-}
-impl Error {
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-            retryable: false,
-        }
-    }
-    pub fn retryable(mut self) -> Self {
-        self.retryable = true;
-        self
-    }
-    pub fn code(&self) -> &str {
-        &self.code
-    }
-}
-impl From<std::io::Error> for Error {
-    fn from(error: std::io::Error) -> Self {
-        let code = match error.raw_os_error() {
-            Some(28) => "NO_SPACE",
-            _ => "IO_ERROR",
-        };
-        Self::new(code, error.to_string())
-    }
-}
-impl From<json_codec::Error> for Error {
-    fn from(error: json_codec::Error) -> Self {
-        Self::new("INVALID_JSON", error.to_string())
-    }
-}
+mod error;
+pub use error::{Error, ErrorCode};
 pub fn new_id(prefix: &str) -> String {
     format!("{prefix}_{}", uuid::Uuid::new_v4().simple())
 }
@@ -69,7 +34,7 @@ pub fn validate_id(value: &str, prefix: &str) -> Result<()> {
         Ok(())
     } else {
         Err(Error::new(
-            "INVALID_ID",
+            crate::ErrorCode::InvalidId,
             format!("invalid {prefix} identifier"),
         ))
     }
@@ -84,13 +49,11 @@ pub fn parse_u64_decimal(value: &str) -> Result<u64> {
         || !value.bytes().all(|byte| byte.is_ascii_digit())
     {
         return Err(Error::new(
-            "INVALID_INTEGER",
+            crate::ErrorCode::InvalidInteger,
             "expected a canonical unsigned decimal string",
         ));
     }
-    value
-        .parse()
-        .map_err(|_| Error::new("INVALID_INTEGER", "unsigned decimal exceeds u64"))
+    value.parse().map_err(Error::from)
 }
 
 pub mod u64_string {

@@ -184,7 +184,7 @@ fn concurrent_password_preparations_publish_once_and_revoke_every_old_session_an
     assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
     assert_eq!(
         results[1 - winner].as_ref().unwrap_err().code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
     let mut store = store.into_inner().unwrap();
     assert_eq!(store.database().unwrap().administrator.generation, 2);
@@ -193,7 +193,7 @@ fn concurrent_password_preparations_publish_once_and_revoke_every_old_session_an
     assert!(store.authenticate(&second.token).is_err());
     assert_eq!(
         store.finish_login(pending_login).err().unwrap().code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
     drop(store);
     let mut store = AuthStore::open(root.path()).unwrap();
@@ -267,9 +267,9 @@ fn prepared_password_change_rechecks_session_and_exact_credentials_without_mutat
         assert_eq!(
             error.code,
             if invalidation == "blocked" {
-                "RECOVERY_REQUIRED"
+                storage_contract::ErrorCode::RecoveryRequired
             } else {
-                "UNAUTHORIZED"
+                storage_contract::ErrorCode::Unauthorized
             },
             "{invalidation}"
         );
@@ -300,9 +300,9 @@ fn failed_prepared_password_publication_restores_sessions_created_during_prepara
             Err(ApiError::new(
                 if uncertain { 503 } else { 409 },
                 if uncertain {
-                    "COMMIT_IN_DOUBT"
+                    storage_contract::ErrorCode::CommitInDoubt
                 } else {
-                    "COMMIT_PREPARATION_BUSY"
+                    storage_contract::ErrorCode::CommitPreparationBusy
                 },
                 "injected publication failure",
             ))
@@ -310,9 +310,9 @@ fn failed_prepared_password_publication_restores_sessions_created_during_prepara
         assert_eq!(
             store.finish_password_change(prepared).unwrap_err().code,
             if uncertain {
-                "COMMIT_IN_DOUBT"
+                storage_contract::ErrorCode::CommitInDoubt
             } else {
-                "COMMIT_PREPARATION_BUSY"
+                storage_contract::ErrorCode::CommitPreparationBusy
             }
         );
         assert_eq!(store.snapshot().unwrap(), before);
@@ -321,7 +321,7 @@ fn failed_prepared_password_publication_restores_sessions_created_during_prepara
             if uncertain {
                 assert_eq!(
                     store.authenticate(token).unwrap_err().code,
-                    "RECOVERY_REQUIRED"
+                    storage_contract::ErrorCode::RecoveryRequired
                 );
             } else {
                 assert!(store.authenticate(token).is_ok());

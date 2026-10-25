@@ -205,7 +205,7 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
                     .restore_history_package(&package, "P01", copies, "alice", &new_id("op"))
                     .unwrap_err()
                     .code(),
-                "BACKUP_PREFIX_REQUIRED"
+                storage_contract::ErrorCode::BackupPrefixRequired
             );
             assert_eq!(canonical_json(destination.state()).unwrap(), before);
         }
@@ -273,7 +273,10 @@ fn restore_backup_prefixes_preserve_evidenced_positions_and_reject_identity_coll
             &new_id("op"),
         );
         if source_copies == 2 {
-            assert_eq!(result.unwrap_err().code(), "RESTORE_BACKUP_CONFLICT");
+            assert_eq!(
+                result.unwrap_err().code(),
+                storage_contract::ErrorCode::RestoreBackupConflict
+            );
             assert_eq!(canonical_json(restored.state()).unwrap(), before);
         } else {
             result.unwrap();
@@ -972,7 +975,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
         .parent_node_ids = vec![node.clone()];
     assert_eq!(
         cyclic.validate().unwrap_err().code(),
-        "HISTORY_PACKAGE_INVALID"
+        storage_contract::ErrorCode::HistoryPackageInvalid
     );
     let mut wrong_body = manifest.clone();
     wrong_body
@@ -982,7 +985,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
         .version_id = latest.version_id.clone();
     assert_eq!(
         wrong_body.validate().unwrap_err().code(),
-        "HISTORY_PACKAGE_INVALID"
+        storage_contract::ErrorCode::HistoryPackageInvalid
     );
     let mut wrong_parent = manifest.clone();
     wrong_parent
@@ -990,7 +993,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
         .insert(latest.version_id.clone(), vec![latest.version_id.clone()]);
     assert_eq!(
         wrong_parent.validate().unwrap_err().code(),
-        "HISTORY_PACKAGE_INVALID"
+        storage_contract::ErrorCode::HistoryPackageInvalid
     );
     let package = temporary.path().join("package");
     let report = engine
@@ -1014,7 +1017,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
     );
     assert_eq!(
         restored.open_content(&old.version_id).err().unwrap().code(),
-        "CONTENT_PURGED"
+        storage_contract::ErrorCode::ContentPurged
     );
     assert_eq!(
         fs::read(restored.valid_replica(&latest.version_id).unwrap().0).unwrap(),
@@ -1126,7 +1129,7 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
     let bad = |manifest: &HistoryManifest| {
         assert_eq!(
             manifest.validate().unwrap_err().code(),
-            "HISTORY_PACKAGE_INVALID"
+            storage_contract::ErrorCode::HistoryPackageInvalid
         )
     };
     for target in ["branch", "tree"] {
@@ -1386,7 +1389,7 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
         .insert(file.file_id.clone(), new_id("ver"));
     assert_eq!(
         invalid.validate().unwrap_err().code(),
-        "HISTORY_PACKAGE_INVALID"
+        storage_contract::ErrorCode::HistoryPackageInvalid
     );
     let pending_commit = engine.state.branches[&branch].head_commit_id.clone();
     assert_eq!(
@@ -1402,7 +1405,7 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
         .insert(file.file_id.clone(), new_id("ver"));
     assert_eq!(
         invalid.validate().unwrap_err().code(),
-        "HISTORY_PACKAGE_INVALID"
+        storage_contract::ErrorCode::HistoryPackageInvalid
     );
     let package = temp.path().join("package");
     let exported = engine
@@ -1535,7 +1538,7 @@ fn inherited_metadata_replays_after_decision_without_preparing_payloads_or_stubs
                 .create_branch(&source_commit, "pending", "alice", &operation)
                 .unwrap_err()
                 .code(),
-            "IN_DOUBT"
+            storage_contract::ErrorCode::InDoubt
         );
         assert_eq!(engine.state.versions.len(), 1);
         drop(engine);
@@ -1834,18 +1837,18 @@ fn tombstoned_storage_identity_is_validated_before_restore_decision() {
             } else {
                 assert_eq!(
                     manifest.validate().unwrap_err().code(),
-                    "HISTORY_PACKAGE_INVALID"
+                    storage_contract::ErrorCode::HistoryPackageInvalid
                 );
                 assert_eq!(
                     offline_check_history_package(&package).unwrap_err().code(),
-                    "HISTORY_PACKAGE_INVALID"
+                    storage_contract::ErrorCode::HistoryPackageInvalid
                 );
                 assert_eq!(
                     restored
                         .restore_history_package(&package, "P01", 3, "alice", &new_id("op"))
                         .unwrap_err()
                         .code(),
-                    "HISTORY_PACKAGE_INVALID"
+                    storage_contract::ErrorCode::HistoryPackageInvalid
                 );
                 assert_eq!(canonical_json(restored.state()).unwrap(), before);
                 assert_eq!(restored.next_slot, next_slot);
@@ -1889,7 +1892,7 @@ fn package_preserves_purge_and_rejects_missing_bytes_or_unpublished_manifest() {
         .unwrap();
     assert_eq!(
         restored.open_content(&old).err().unwrap().code(),
-        "CONTENT_PURGED"
+        storage_contract::ErrorCode::ContentPurged
     );
     let original = fs::read(package.join("manifest.json")).unwrap();
     let manifest = load_package(&package).unwrap().0;
@@ -1898,7 +1901,7 @@ fn package_preserves_purge_and_rejects_missing_bytes_or_unpublished_manifest() {
     write_json(&package.join("manifest.json"), &root, true).unwrap();
     assert_eq!(
         offline_check_history_package(&package).unwrap_err().code(),
-        "HISTORY_PACKAGE_INVALID"
+        storage_contract::ErrorCode::HistoryPackageInvalid
     );
     write_atomic(&package.join("manifest.json"), &original, true).unwrap();
     let version = manifest
@@ -2166,7 +2169,7 @@ fn history_notes_use_the_current_write_format_without_legacy_limits() {
             }
             assert_eq!(
                 invalid.validate().unwrap_err().code(),
-                "HISTORY_PACKAGE_INVALID",
+                storage_contract::ErrorCode::HistoryPackageInvalid,
                 "{scope}"
             );
         }
@@ -2294,7 +2297,7 @@ fn history_branch_names_match_the_current_128_byte_write_limit() {
             }
             assert_eq!(
                 invalid.validate().unwrap_err().code(),
-                "METADATA_TOO_LONG",
+                storage_contract::ErrorCode::MetadataTooLong,
                 "{scope}: {name}"
             );
         }
@@ -2699,6 +2702,6 @@ fn manifest_content_state_coverage_rejects_equal_length_wrong_version_keys() {
     manifest.content_states.insert(new_id("ver"), state);
     assert_eq!(
         manifest.validate().unwrap_err().code(),
-        "HISTORY_PACKAGE_INVALID"
+        storage_contract::ErrorCode::HistoryPackageInvalid
     );
 }

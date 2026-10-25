@@ -230,7 +230,7 @@ fn copied_alias_destination_collision_rejects_all_targets_without_mutation() {
             .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", &new_id("op"))
             .unwrap_err()
             .code(),
-        "NAME_COLLISION"
+        storage_contract::ErrorCode::NameCollision
     );
     assert_eq!(
         storage_engine::canonical_json(pool.engine.state()).unwrap(),

@@ -19,11 +19,14 @@ fn failed_publication_reconciliation_retries_without_restaging_or_second_version
                 .store(failure, Ordering::SeqCst);
             if lost_reply {
                 backend.fail.store(true, Ordering::SeqCst);
-                assert_eq!(one.flush(opened.handle).unwrap_err().code, "RESPONSE_LOST");
+                assert_eq!(
+                    one.flush(opened.handle).unwrap_err().code,
+                    storage_contract::ErrorCode::InjectedFailure
+                );
             }
             assert_eq!(
                 one.flush(opened.handle).unwrap_err().code,
-                "RECONCILIATION_READ_FAILED"
+                storage_contract::ErrorCode::MetadataUnavailable
             );
             let published = backend
                 .call(
@@ -65,12 +68,12 @@ fn failed_publication_reconciliation_preserves_later_bytes_for_authorized_rebase
             .store(failure, Ordering::SeqCst);
         assert_eq!(
             one.flush(opened.handle).unwrap_err().code,
-            "RECONCILIATION_READ_FAILED"
+            storage_contract::ErrorCode::MetadataUnavailable
         );
         file.write_all_at(b"end", 0).unwrap();
         assert_eq!(
             one.flush(opened.handle).unwrap_err().code,
-            "WORKSPACE_REBASE_REQUIRED"
+            storage_contract::ErrorCode::WorkspaceRebaseRequired
         );
         let writer = match &one.handles[&opened.handle] {
             Handle::Write(writer) => writer,

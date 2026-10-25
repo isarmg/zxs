@@ -24,7 +24,7 @@ pub struct HistoricalSaveOptions {
 fn text<'a>(input: &'a Value, key: &str) -> Result<&'a str> {
     input.get(key).and_then(Value::as_str).ok_or_else(|| {
         Error::new(
-            "PLAN_INVALID",
+            storage_contract::ErrorCode::PlanInvalid,
             format!("missing historical plan field {key}"),
         )
     })
@@ -38,25 +38,25 @@ fn historical_workspace(
     let workspace = engine.workspace(id)?;
     if workspace.principal != principal {
         return Err(Error::new(
-            "PERMISSION_DENIED",
+            storage_contract::ErrorCode::PermissionDenied,
             "historical workspace belongs to another principal",
         ));
     }
     if workspace.purpose != "historical_branch" || workspace.base_head != source {
         return Err(Error::new(
-            "SAVE_MODE_UNSUPPORTED",
+            storage_contract::ErrorCode::SaveModeUnsupported,
             "historical save requires a workspace explicitly bound to the selected historical commit",
         ));
     }
     if !["open", "sealed"].contains(&workspace.state.as_str()) {
         return Err(Error::new(
-            "WORKSPACE_CLOSED",
+            storage_contract::ErrorCode::WorkspaceClosed,
             "historical workspace is no longer available",
         ));
     }
     if now().saturating_sub(workspace.created_at) > engine.config.workspace_ttl_seconds {
         return Err(Error::new(
-            "FENCING_TOKEN_EXPIRED",
+            storage_contract::ErrorCode::FencingTokenExpired,
             "historical workspace lease expired; work data is retained",
         ));
     }
@@ -78,7 +78,7 @@ fn final_entries(
             let previous = find_unordered(&entries, &staged.path).cloned();
             if previous.as_ref().is_some_and(|entry| entry.kind != "file") {
                 return Err(Error::new(
-                    "IS_DIRECTORY",
+                    storage_contract::ErrorCode::IsDirectory,
                     "historical upload cannot replace a directory",
                 ));
             }
@@ -127,29 +127,32 @@ impl Engine {
             .any(|b| b.history_tree_id == repository.history_tree_id && b.file_id.is_some())
         {
             return Err(Error::new(
-                "FILE_BRANCH_SCOPE",
+                storage_contract::ErrorCode::FileBranchScope,
                 "historical file versions must be saved as independent file branches",
             ));
         }
 
-        let selected =
-            self.state.commits.get(source_commit).ok_or_else(|| {
-                Error::new("COMMIT_NOT_FOUND", "historical source commit is missing")
-            })?;
-        let branch_record = self
-            .state
-            .branches
-            .get(branch)
-            .ok_or_else(|| Error::new("BRANCH_NOT_FOUND", "source branch is missing"))?;
+        let selected = self.state.commits.get(source_commit).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::CommitNotFound,
+                "historical source commit is missing",
+            )
+        })?;
+        let branch_record = self.state.branches.get(branch).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::BranchNotFound,
+                "source branch is missing",
+            )
+        })?;
         if branch_record.state == "migrated" {
             return Err(Error::new(
-                "TREE_MOVED",
+                storage_contract::ErrorCode::TreeMoved,
                 "source branch has moved to an independent history domain",
             ));
         }
         if selected.history_tree_id != branch_record.history_tree_id {
             return Err(Error::new(
-                "HISTORY_MISMATCH",
+                storage_contract::ErrorCode::HistoryMismatch,
                 "historical source is outside the selected branch's history domain",
             ));
         }
@@ -161,7 +164,7 @@ impl Engine {
             >= self.config.max_workspaces
         {
             return Err(Error::new(
-                "RESOURCE_LIMIT",
+                storage_contract::ErrorCode::ResourceLimit,
                 "workspace count budget exhausted",
             ));
         }
@@ -203,7 +206,7 @@ impl Engine {
             .any(|b| b.history_tree_id == history && b.file_id.is_some())
         {
             return Err(Error::new(
-                "FILE_BRANCH_SCOPE",
+                storage_contract::ErrorCode::FileBranchScope,
                 "historical file versions must be saved as independent file branches",
             ));
         }
@@ -218,7 +221,7 @@ impl Engine {
             .cloned()
             .ok_or_else(|| {
                 Error::new(
-                    "COMMIT_NOT_FOUND",
+                    storage_contract::ErrorCode::CommitNotFound,
                     "historical source commit is outside the selected domain",
                 )
             })?;
@@ -227,13 +230,13 @@ impl Engine {
                 && name_policy::lookup_key(&branch.name) == name_policy::lookup_key(&options.name)
         }) {
             return Err(Error::new(
-                "NAME_COLLISION",
+                storage_contract::ErrorCode::NameCollision,
                 "historical branch name already exists",
             ));
         }
         if options.primary_slot_id.is_some() != options.target_copies.is_some() {
             return Err(Error::new(
-                "PLACEMENT_INVALID",
+                storage_contract::ErrorCode::PlacementInvalid,
                 "historical placement overrides require both primary_slot_id and target_copies",
             ));
         }
@@ -248,7 +251,7 @@ impl Engine {
                 != repository.repository_id
             {
                 return Err(Error::new(
-                    "HISTORY_MISMATCH",
+                    storage_contract::ErrorCode::HistoryMismatch,
                     "historical workspace is outside the selected repository",
                 ));
             }
@@ -267,7 +270,10 @@ impl Engine {
                     .as_ref()
                     .and_then(|workspace| workspace.files.get(item))
                     .ok_or_else(|| {
-                        Error::new("STATE_INVALID", "historical staged item is missing")
+                        Error::new(
+                            storage_contract::ErrorCode::StateInvalid,
+                            "historical staged item is missing",
+                        )
                     })?;
                 let opened = self.open_workspace_content(
                     &workspace.as_ref().unwrap().workspace_id,
@@ -277,7 +283,7 @@ impl Engine {
                 drop(opened);
                 if staged.size != entry.size {
                     return Err(Error::new(
-                        "SOURCE_CHANGED",
+                        storage_contract::ErrorCode::SourceChanged,
                         "historical staged file changed after preparation",
                     ));
                 }
@@ -292,12 +298,18 @@ impl Engine {
             for slot in self.route(&primary, copies)? {
                 let bytes = per_slot.entry(slot).or_default();
                 *bytes = bytes.checked_add(entry.size).ok_or_else(|| {
-                    Error::new("RESOURCE_LIMIT", "historical copy budget overflow")
+                    Error::new(
+                        storage_contract::ErrorCode::ResourceLimit,
+                        "historical copy budget overflow",
+                    )
                 })?;
             }
-            total = total
-                .checked_add(entry.size)
-                .ok_or_else(|| Error::new("RESOURCE_LIMIT", "historical copy budget overflow"))?;
+            total = total.checked_add(entry.size).ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::ResourceLimit,
+                    "historical copy budget overflow",
+                )
+            })?;
             count += 1;
         }
         for (slot, bytes) in &per_slot {
@@ -311,7 +323,7 @@ impl Engine {
                 || *bytes > capacity
             {
                 return Err(Error::new(
-                    "NO_SPACE",
+                    storage_contract::ErrorCode::NoSpace,
                     "historical full branch exceeds an assigned disk's free-space reserve",
                 ));
             }
@@ -354,38 +366,38 @@ impl Engine {
                 return self.operation(operation);
             }
             return Err(Error::new(
-                "IDEMPOTENCY_KEY_REUSED",
+                storage_contract::ErrorCode::IdempotencyKeyReused,
                 "operation is already bound to another request",
             ));
         }
         let plan = self.plan(id)?;
         if plan.kind != "historical_save" || plan.principal != principal {
             return Err(Error::new(
-                "PERMISSION_DENIED",
+                storage_contract::ErrorCode::PermissionDenied,
                 "historical plan belongs to another operation or principal",
             ));
         }
         if plan.state != "ready" {
             return Err(Error::new(
-                "PLAN_CLOSED",
+                storage_contract::ErrorCode::PlanClosed,
                 "historical plan is no longer ready",
             ));
         }
         if plan.expected_sequence != self.state.business_generation {
             return Err(Error::new(
-                "PLAN_STALE",
+                storage_contract::ErrorCode::PlanStale,
                 "business state changed; preview historical save again",
             ));
         }
         if object_hash("plan", &plan.input)? != plan.digest {
             return Err(Error::new(
-                "PLAN_INVALID",
+                storage_contract::ErrorCode::PlanInvalid,
                 "historical plan input digest does not match",
             ));
         }
         if plan.input["branch_creation"].as_str() != Some("placeholder-until-write") {
             return Err(Error::new(
-                "PLAN_STALE",
+                storage_contract::ErrorCode::PlanStale,
                 "preview this plan again under the placeholder branch rules",
             ));
         }
@@ -396,7 +408,7 @@ impl Engine {
             != self.state.topology_generation.to_string()
         {
             return Err(Error::new(
-                "TOPOLOGY_GENERATION_MISMATCH",
+                storage_contract::ErrorCode::TopologyGenerationMismatch,
                 "topology changed after historical preparation",
             ));
         }
@@ -409,7 +421,7 @@ impl Engine {
                     != text(&plan.input, "workspace_fencing_token")?
             {
                 return Err(Error::new(
-                    "SEALED_MANIFEST_MISMATCH",
+                    storage_contract::ErrorCode::SealedManifestMismatch,
                     "historical workspace differs from the sealed plan",
                 ));
             }
@@ -421,8 +433,12 @@ impl Engine {
         let copies_override = plan.input["target_copies"]
             .as_u64()
             .map(|copies| {
-                u32::try_from(copies)
-                    .map_err(|_| Error::new("PLAN_INVALID", "historical copy count is invalid"))
+                u32::try_from(copies).map_err(|_| {
+                    Error::new(
+                        storage_contract::ErrorCode::PlanInvalid,
+                        "historical copy count is invalid",
+                    )
+                })
             })
             .transpose()?;
         let result = self.mutate(
@@ -438,12 +454,12 @@ impl Engine {
                     branch.history_tree_id == history
                         && name_policy::lookup_key(&branch.name) == name_policy::lookup_key(&name)
                 }) {
-                    return Err(Error::new("NAME_COLLISION", "historical branch name already exists"));
+                    return Err(Error::new(storage_contract::ErrorCode::NameCollision, "historical branch name already exists"));
                 }
                 let source = state.commits.get(&source_id)
                     .filter(|commit| commit.history_tree_id == history)
                     .cloned()
-                    .ok_or_else(|| Error::new("COMMIT_NOT_FOUND", "historical source no longer exists"))?;
+                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::CommitNotFound, "historical source no longer exists"))?;
                 let (mut entries, deleted) = final_entries(&source, workspace.as_ref(), engine.config.max_entries)?;
                 let branch_id = new_id("br");
                 let commit_id = new_id("commit");
@@ -458,7 +474,7 @@ impl Engine {
                         if let Some(item) = entry.version_id.strip_prefix("staged:") {
                             let staged = workspace.as_ref()
                                 .and_then(|workspace| workspace.files.get(item))
-                                .ok_or_else(|| Error::new("STATE_INVALID", "historical staged item missing"))?;
+                                .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "historical staged item missing"))?;
                             (staged.source_path.clone(), staged.base_version_id.clone().into_iter().collect::<Vec<_>>(), staged.content_hash.clone(), staged.size)
                         } else {
                             pending_file_versions.insert(entry.file_id.clone(), entry.version_id.clone());
@@ -475,7 +491,7 @@ impl Engine {
                         state, pending, crate::business::VersionBuild { history: &history, file_id: &entry.file_id, path: &entry.path, source: &source_path, primary: &primary, copies, source_ids: source_versions, checkpoint: true },
                     )?;
                     if version.logical_size != expected_size || version.content_hash != expected_hash {
-                        return Err(Error::new("CHECKSUM_MISMATCH", "historical source changed after sealing"));
+                        return Err(Error::new(storage_contract::ErrorCode::ChecksumMismatch, "historical source changed after sealing"));
                     }
                     entry.version_id = version.version_id;
                     entry.size = version.logical_size;
@@ -503,10 +519,12 @@ impl Engine {
         )?;
         if let Some(mut workspace) = workspace {
             workspace.state = "committed".into();
-            workspace.fencing_token = workspace
-                .fencing_token
-                .checked_add(1)
-                .ok_or_else(|| Error::new("RESOURCE_LIMIT", "workspace fencing token exhausted"))?;
+            workspace.fencing_token = workspace.fencing_token.checked_add(1).ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::ResourceLimit,
+                    "workspace fencing token exhausted",
+                )
+            })?;
             self.persist_workspace(&workspace)?;
             self.workspaces
                 .insert(workspace.workspace_id.clone(), workspace);

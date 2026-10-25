@@ -260,8 +260,10 @@ impl Inner {
     fn resume_after_setup(self: &Arc<Self>, mut completed: Value) -> Result<Value, ApiError> {
         match self.recover() {
             Ok(()) => Ok(completed),
-            Err(error) if error.code == "STORAGE_RETRY_RUNNING" => Ok(completed),
-            Err(error) if error.code == "SERVICE_STOPPING" => {
+            Err(error) if error.code == storage_contract::ErrorCode::StorageRetryRunning => {
+                Ok(completed)
+            }
+            Err(error) if error.code == storage_contract::ErrorCode::ServiceStopping => {
                 // The admitted setup operation is already durable. Shutdown
                 // must not turn its success into a misleading retryable failure.
                 completed["recovering"] = json!(false);
@@ -286,7 +288,7 @@ impl Inner {
         self.ensure_running()?;
         if self.recovering.swap(true, Ordering::SeqCst) {
             return Err(ApiError::conflict(
-                "STORAGE_RETRY_RUNNING",
+                storage_contract::ErrorCode::StorageRetryRunning,
                 "storage recovery is already running",
             ));
         }
@@ -315,7 +317,7 @@ impl Inner {
                 {
                     self.recovering.store(false, Ordering::SeqCst);
                     let mut error = ApiError::conflict(
-                        "STORAGE_DRAINING",
+                        storage_contract::ErrorCode::StorageDraining,
                         "existing storage operations must finish before reopening; retry after they drain",
                     );
                     error.retryable = true;
@@ -347,7 +349,7 @@ impl Inner {
         if self.stopping.load(Ordering::SeqCst) {
             Err(ApiError::new(
                 503,
-                "SERVICE_STOPPING",
+                storage_contract::ErrorCode::ServiceStopping,
                 "service is stopping",
             ))
         } else {
@@ -377,7 +379,7 @@ impl Inner {
             worker.join().map_err(|_| {
                 ApiError::new(
                     500,
-                    "RECOVERY_WORKER_FAILED",
+                    storage_contract::ErrorCode::RecoveryWorkerFailed,
                     "storage recovery worker panicked",
                 )
             })?;
@@ -440,7 +442,7 @@ impl Inner {
         let auth = crate::lock(&self.auth)?.clone().ok_or_else(|| {
             ApiError::new(
                 503,
-                "AUTH_RECOVERY_REQUIRED",
+                storage_contract::ErrorCode::AuthRecoveryRequired,
                 "management is not initialized",
             )
         })?;
@@ -453,7 +455,7 @@ impl Inner {
             if !auth.is_available() {
                 return Err(ApiError::new(
                     503,
-                    "AUTH_RECOVERY_REQUIRED",
+                    storage_contract::ErrorCode::AuthRecoveryRequired,
                     "system credentials require explicit local recovery",
                 ));
             }
@@ -517,7 +519,7 @@ impl Inner {
     fn backend(&self) -> Result<Arc<EngineBackend>, ApiError> {
         self.ensure_running()?;
         let state = crate::lock(&self.state)?;
-        state.backend.as_ref().filter(|_|state.admitted && state.status!=StorageState::Unavailable && state.observed_at.elapsed()<std::time::Duration::from_secs(15)).cloned().ok_or_else(||ApiError::new(503,"STORAGE_UNAVAILABLE","storage is unavailable; inspect /api/system/storage and retry after correcting the fault"))
+        state.backend.as_ref().filter(|_|state.admitted && state.status!=StorageState::Unavailable && state.observed_at.elapsed()<std::time::Duration::from_secs(15)).cloned().ok_or_else(||ApiError::new(503,storage_contract::ErrorCode::StorageUnavailable,"storage is unavailable; inspect /api/system/storage and retry after correcting the fault"))
     }
     /// Keep the engine lease inside one sample. The observer's idle interval
     /// must not look like an in-flight storage operation to recovery admission.
@@ -529,7 +531,13 @@ impl Inner {
             .and_then(|state| state.backend.as_ref().filter(|_| state.admitted).cloned());
         let observation = backend
             .as_ref()
-            .ok_or_else(|| ApiError::new(503, "STORAGE_UNAVAILABLE", "storage unavailable"))
+            .ok_or_else(|| {
+                ApiError::new(
+                    503,
+                    storage_contract::ErrorCode::StorageUnavailable,
+                    "storage unavailable",
+                )
+            })
             .and_then(|backend| {
                 let health = backend.call(
                     BackendAction::Ready,
@@ -552,8 +560,9 @@ impl Inner {
                         Ok(_) => StorageState::Ready,
                         Err(error)
                             if matches!(
-                                error.code.as_str(),
-                                "RECOVERY_REQUIRED" | "METADATA_UNAVAILABLE"
+                                error.code,
+                                storage_contract::ErrorCode::RecoveryRequired
+                                    | storage_contract::ErrorCode::MetadataUnavailable
                             ) =>
                         {
                             StorageState::ReadOnly
@@ -665,7 +674,7 @@ impl Backend for ManagementBackend {
         }
         if self.inner.recovering.swap(true, Ordering::SeqCst) {
             return Err(ApiError::conflict(
-                "STORAGE_RETRY_RUNNING",
+                storage_contract::ErrorCode::StorageRetryRunning,
                 "another storage lifecycle operation is running",
             ));
         }
@@ -675,7 +684,7 @@ impl Backend for ManagementBackend {
             if let Some(backend) = &state.backend {
                 if state.effective_status() == StorageState::Ready {
                     return Err(ApiError::conflict(
-                        "STORAGE_ACTIVE",
+                        storage_contract::ErrorCode::StorageActive,
                         "offline management requires a faulted storage backend",
                     ));
                 }
@@ -683,7 +692,7 @@ impl Backend for ManagementBackend {
                 state.admitted = false;
                 if busy {
                     let mut error = ApiError::conflict(
-                        "STORAGE_DRAINING",
+                        storage_contract::ErrorCode::StorageDraining,
                         "existing storage operations must finish before offline recovery; retry after they drain",
                     );
                     error.retryable = true;
@@ -743,7 +752,7 @@ impl Backend for ManagementBackend {
                         let mut snapshot = engine.auth_state().ok_or_else(|| {
                             ApiError::new(
                                 503,
-                                "AUTH_RECOVERY_REQUIRED",
+                                storage_contract::ErrorCode::AuthRecoveryRequired,
                                 "restored storage contains no credential backup",
                             )
                         })?;
@@ -905,7 +914,7 @@ impl Backend for ManagementBackend {
             } else {
                 Err(ApiError::new(
                     503,
-                    "STORAGE_UNAVAILABLE",
+                    storage_contract::ErrorCode::StorageUnavailable,
                     "storage is not ready",
                 ))
             };
@@ -958,7 +967,7 @@ impl Backend for ManagementBackend {
             .ok_or_else(|| {
                 ApiError::new(
                     503,
-                    "DISK_SAMPLE_UNAVAILABLE",
+                    storage_contract::ErrorCode::DiskSampleUnavailable,
                     "disk observations are unavailable or stale",
                 )
             })

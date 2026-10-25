@@ -98,7 +98,7 @@ fn emit_canonical_json(value: &Value) -> Result<Vec<u8>> {
             || n.as_u64().is_some_and(|v| v <= MAX_SAFE_INTEGER);
         if !safe {
             return Err(Error::new(
-                "INVALID_JSON",
+                crate::ErrorCode::InvalidJson,
                 "JSON numbers must be safe integers; encode u64 fields as decimal strings",
             ));
         }
@@ -169,7 +169,10 @@ pub fn encode_hashed_value(kind: &str, value: &Value) -> Result<(Vec<u8>, String
 
 fn validate_object_domain(kind: &str) -> Result<()> {
     if kind.is_empty() || !kind.bytes().all(|b| b.is_ascii_lowercase() || b == b'-') {
-        return Err(Error::new("INVALID_OBJECT_TYPE", "invalid metadata domain"));
+        return Err(Error::new(
+            crate::ErrorCode::InvalidObjectType,
+            "invalid metadata domain",
+        ));
     }
     Ok(())
 }
@@ -191,7 +194,12 @@ pub fn request_digest(
 ) -> Result<String> {
     let mut body = body.clone();
     body.as_object_mut()
-        .ok_or_else(|| Error::new("INVALID_REQUEST", "request body must be an object"))?
+        .ok_or_else(|| {
+            Error::new(
+                crate::ErrorCode::InvalidRequest,
+                "request body must be an object",
+            )
+        })?
         .remove("request_digest");
     object_hash_value(
         "request",
@@ -224,7 +232,7 @@ impl ChecksumManifest {
             .and_then(|bytes| bytes.checked_add(CHECKSUM_HEADER_BYTES))
             .ok_or_else(|| {
                 Error::new(
-                    "CHECKSUM_FORMAT_INVALID",
+                    crate::ErrorCode::ChecksumFormatInvalid,
                     "checksum manifest length overflow",
                 )
             })?;
@@ -240,16 +248,33 @@ impl ChecksumManifest {
         Ok(out)
     }
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let bad = || Error::new("CHECKSUM_FORMAT_INVALID", "invalid checksum manifest");
+        let bad = || {
+            Error::new(
+                crate::ErrorCode::ChecksumFormatInvalid,
+                "invalid checksum manifest",
+            )
+        };
         if bytes.len() < CHECKSUM_HEADER_BYTES
             || &bytes[..8] != CHECKSUM_MAGIC
             || bytes[8..10] != 1u16.to_le_bytes()
         {
             return Err(bad());
         }
-        let chunk_bytes = u32::from_le_bytes(bytes[10..14].try_into().map_err(|_| bad())?);
-        let logical_size = u64::from_le_bytes(bytes[14..22].try_into().map_err(|_| bad())?);
-        let count = u64::from_le_bytes(bytes[22..30].try_into().map_err(|_| bad())?);
+        let chunk_bytes = u32::from_le_bytes(
+            bytes[10..14]
+                .try_into()
+                .expect("invariant: validated checksum header contains chunk size"),
+        );
+        let logical_size = u64::from_le_bytes(
+            bytes[14..22]
+                .try_into()
+                .expect("invariant: validated checksum header contains logical size"),
+        );
+        let count = u64::from_le_bytes(
+            bytes[22..30]
+                .try_into()
+                .expect("invariant: validated checksum header contains chunk count"),
+        );
         let payload_len = usize::try_from(count)
             .ok()
             .and_then(|count| count.checked_mul(32))
@@ -271,7 +296,7 @@ impl ChecksumManifest {
             || self.chunks.len() as u64 != self.logical_size.div_ceil(u64::from(self.chunk_bytes))
         {
             return Err(Error::new(
-                "CHECKSUM_FORMAT_INVALID",
+                crate::ErrorCode::ChecksumFormatInvalid,
                 "checksum chunk count or size mismatch",
             ));
         }

@@ -57,7 +57,7 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
                     .create_branch(&source, name, principal, &operation)
                     .unwrap_err()
                     .code(),
-                "IDEMPOTENCY_KEY_REUSED"
+                storage_contract::ErrorCode::IdempotencyKeyReused
             );
         }
         assert_eq!(canonical_json(engine.state()).unwrap(), before);
@@ -166,7 +166,7 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
                         )
                         .unwrap_err()
                         .code(),
-                    "IDEMPOTENCY_KEY_REUSED"
+                    storage_contract::ErrorCode::IdempotencyKeyReused
                 );
             }
             assert_eq!(canonical_json(engine.state()).unwrap(), before);

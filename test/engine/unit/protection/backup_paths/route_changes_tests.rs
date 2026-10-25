@@ -120,7 +120,10 @@ fn directory_configuration_requires_child_future_placement_prefixes() {
             operation_id: &new_id("op"),
         })
         .unwrap_err();
-    assert_eq!(failure.code(), "BACKUP_PREFIX_REQUIRED");
+    assert_eq!(
+        failure.code(),
+        storage_contract::ErrorCode::BackupPrefixRequired
+    );
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     engine
         .configure_backups(BackupConfigurationRequest {
@@ -197,10 +200,18 @@ fn moved_file_can_reduce_copy_count_to_fit_its_current_chain() {
         (
             3,
             prefixes(&[("B01", "first"), ("B02", "second"), ("C01", "cold")]),
-            "ROUTE_INCOMPLETE",
+            storage_contract::ErrorCode::RouteIncomplete,
         ),
-        (2, prefixes(&[("B02", "second")]), "BACKUP_PREFIX_REQUIRED"),
-        (2, prefixes(&[("B01", "first")]), "BACKUP_PREFIX_REQUIRED"),
+        (
+            2,
+            prefixes(&[("B02", "second")]),
+            storage_contract::ErrorCode::BackupPrefixRequired,
+        ),
+        (
+            2,
+            prefixes(&[("B01", "first")]),
+            storage_contract::ErrorCode::BackupPrefixRequired,
+        ),
     ] {
         assert_eq!(
             engine

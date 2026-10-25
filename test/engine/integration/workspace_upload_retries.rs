@@ -62,7 +62,7 @@ fn upload_retry_recovers_published_bytes_after_manifest_failure() {
                 .stage_upload(&workspace.workspace_id, &item, "a", &source, 1)
                 .unwrap_err()
                 .code(),
-            "RECOVERY_REQUIRED"
+            storage_contract::ErrorCode::RecoveryRequired
         );
         assert_eq!(fs::read(&published).unwrap(), b"data");
         drop(engine);
@@ -75,7 +75,7 @@ fn upload_retry_recovers_published_bytes_after_manifest_failure() {
             let retained_system = fs::read(&manifest).unwrap();
             assert_eq!(
                 Engine::open(&root).err().unwrap().code(),
-                "RECOVERY_REQUIRED"
+                storage_contract::ErrorCode::RecoveryRequired
             );
             assert_eq!(fs::read(data_manifest).unwrap(), retained_data);
             assert_eq!(fs::read(manifest).unwrap(), retained_system);
@@ -90,7 +90,7 @@ fn upload_retry_recovers_published_bytes_after_manifest_failure() {
                 .stage_upload(&workspace.workspace_id, &item, "a", &source, 1)
                 .unwrap_err()
                 .code(),
-            "UPLOAD_GENERATION_CONFLICT"
+            storage_contract::ErrorCode::UploadGenerationConflict
         );
         assert_eq!(fs::read(&published).unwrap(), b"data");
         fs::write(&source, b"data").unwrap();
@@ -108,7 +108,7 @@ fn upload_retry_recovers_published_bytes_after_manifest_failure() {
                 .stage_upload(&workspace.workspace_id, &new_id("entry"), "b", &source, 1)
                 .unwrap_err()
                 .code(),
-            "RESOURCE_LIMIT"
+            storage_contract::ErrorCode::ResourceLimit
         );
         drop(engine);
         let engine = Engine::open(&root).unwrap();
@@ -216,7 +216,7 @@ fn same_generation_retry_revalidates_held_target_before_acknowledging() {
         }
         assert_eq!(
             engine.finish_upload(prepared).unwrap_err().code(),
-            "CHECKSUM_MISMATCH"
+            storage_contract::ErrorCode::ChecksumMismatch
         );
         assert_eq!(
             engine.workspace(&workspace.workspace_id).unwrap().files[&item].content_hash,
@@ -258,7 +258,7 @@ fn detached_upload_keeps_writer_locks_until_cancelled() {
                 Engine::open(&root)
                     .err()
                     .map(|error| error.code().to_owned()),
-                Some("WRITER_ALREADY_ACTIVE".into()),
+                Some(storage_contract::ErrorCode::WriterAlreadyActive),
                 "prepared upload still owns scratch bytes and its workspace admission"
             );
             drop(prepared);
@@ -267,7 +267,7 @@ fn detached_upload_keeps_writer_locks_until_cancelled() {
                 Engine::open(&root)
                     .err()
                     .map(|error| error.code().to_owned()),
-                Some("WRITER_ALREADY_ACTIVE".into()),
+                Some(storage_contract::ErrorCode::WriterAlreadyActive),
                 "detached upload can still write to this pool"
             );
             drop(preparation);
@@ -336,7 +336,7 @@ fn first_upload_revalidates_prepared_bytes_before_acknowledging() {
                 .finish_upload(prepared)
                 .err()
                 .map(|error| error.code().to_owned()),
-            Some("CHECKSUM_MISMATCH".into())
+            Some(storage_contract::ErrorCode::ChecksumMismatch)
         );
         assert!(
             engine
@@ -397,7 +397,7 @@ fn interrupted_copy_temporaries_consume_workspace_bytes_and_generation_slots() {
                     .stage_bytes(&workspace.workspace_id, "a", b"data")
                     .unwrap_err()
                     .code(),
-                "RESOURCE_LIMIT",
+                storage_contract::ErrorCode::ResourceLimit,
                 "interrupted copies consume the {} budget",
                 if count_limit { "generation" } else { "byte" },
             );

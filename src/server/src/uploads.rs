@@ -43,8 +43,13 @@ pub(crate) fn load(
         EntryName::new(format!("{}.json", key(workspace, item))).map_err(crate::upload_fs_error)?;
     match directory.read_bounded(&name, 16384) {
         Ok(bytes) => {
-            let record = storage_contract::decode_strict::<UploadRecord>(&bytes)
-                .map_err(|_| ApiError::new(500, "UPLOAD_STATE_INVALID", "invalid upload state"))?;
+            let record = storage_contract::decode_strict::<UploadRecord>(&bytes).map_err(|_| {
+                ApiError::new(
+                    500,
+                    storage_contract::ErrorCode::UploadStateInvalid,
+                    "invalid upload state",
+                )
+            })?;
             if record.workspace_id != workspace
                 || record.item_id != item
                 || record.persisted_bytes > record.logical_size
@@ -67,7 +72,7 @@ pub(crate) fn load(
             {
                 return Err(ApiError::new(
                     500,
-                    "UPLOAD_STATE_INVALID",
+                    storage_contract::ErrorCode::UploadStateInvalid,
                     "invalid upload state",
                 ));
             }
@@ -285,7 +290,7 @@ impl ExistingPrefix {
         if length < record.persisted_bytes || length > record.logical_size {
             return Err(ApiError::new(
                 500,
-                "UPLOAD_STATE_INVALID",
+                storage_contract::ErrorCode::UploadStateInvalid,
                 "persisted upload data is missing",
             ));
         }
@@ -305,7 +310,7 @@ impl ExistingPrefix {
         self.file.read_exact(&mut expected).map_err(ApiError::io)?;
         if expected != bytes[..length] {
             return Err(ApiError::conflict(
-                "UPLOAD_RANGE_CONFLICT",
+                storage_contract::ErrorCode::UploadRangeConflict,
                 "same upload generation contains different bytes; retain this generation and explicitly start a newer one",
             ));
         }

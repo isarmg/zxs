@@ -336,7 +336,7 @@ fn reconstruction_never_overwrites_corruption_unsafe_targets_or_changes_bound_ro
     )
     .err()
     .unwrap();
-    assert_eq!(error.code(), "OBJECT_CORRUPT");
+    assert_eq!(error.code(), storage_contract::ErrorCode::ObjectCorrupt);
     assert!(
         fs::symlink_metadata(&path)
             .unwrap()

@@ -33,7 +33,7 @@ pub(crate) fn find_unordered<'a>(entries: &'a [Entry], path: &str) -> Option<&'a
 pub(crate) fn validate_entries(entries: &mut [Entry], maximum: usize) -> Result<()> {
     if entries.len() > maximum {
         return Err(Error::new(
-            "RESOURCE_LIMIT",
+            storage_contract::ErrorCode::ResourceLimit,
             "directory entry budget exceeded",
         ));
     }
@@ -50,7 +50,7 @@ pub(crate) fn validate_entries(entries: &mut [Entry], maximum: usize) -> Result<
             .is_some()
         {
             return Err(Error::new(
-                "NAME_COLLISION",
+                storage_contract::ErrorCode::NameCollision,
                 "two entries have the same normalized lookup key",
             ));
         }
@@ -60,7 +60,7 @@ pub(crate) fn validate_entries(entries: &mut [Entry], maximum: usize) -> Result<
             && kinds.get(parent).copied() != Some("directory")
         {
             return Err(Error::new(
-                "PARENT_NOT_DIRECTORY",
+                storage_contract::ErrorCode::ParentNotDirectory,
                 "file parent is missing or is not a directory",
             ));
         }
@@ -79,7 +79,7 @@ pub(crate) fn ensure_parents(entries: &mut Vec<Entry>, path: &str) -> Result<()>
         if let Some(existing) = find_unordered(entries, &p) {
             if existing.kind != "directory" {
                 return Err(Error::new(
-                    "PARENT_NOT_DIRECTORY",
+                    storage_contract::ErrorCode::ParentNotDirectory,
                     "parent is not a directory",
                 ));
             }
@@ -141,7 +141,7 @@ pub(crate) fn validate_workspace_dependencies(workspace: &Workspace) -> Result<(
                     .is_some_and(|path| overlaps(&file.path, path))
         }) {
             return Err(Error::new(
-                "WORKSPACE_DEPENDENCY_BUSY",
+                storage_contract::ErrorCode::WorkspaceDependencyBusy,
                 "overlapping upload and delete/rename require separate explicit saves; staged bytes are preserved",
             ));
         }
@@ -159,7 +159,12 @@ pub(crate) fn deleted_path(entry: &Entry) -> Result<DeletedPath> {
     let kind = match entry.kind.as_str() {
         "file" => NamespaceEntryKind::File,
         "directory" => NamespaceEntryKind::Directory,
-        _ => return Err(Error::new("STATE_INVALID", "deleted entry kind is invalid")),
+        _ => {
+            return Err(Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "deleted entry kind is invalid",
+            ));
+        }
     };
     Ok(DeletedPath {
         path: entry.path.clone(),
@@ -183,7 +188,10 @@ pub(crate) fn apply_namespace(
     match op.kind.as_str() {
         "mkdir" => {
             if find_unordered(entries, &op.path).is_some() {
-                return Err(Error::new("NAME_COLLISION", "directory target exists"));
+                return Err(Error::new(
+                    storage_contract::ErrorCode::NameCollision,
+                    "directory target exists",
+                ));
             }
             ensure_parents(entries, &op.path)?;
             entries.push(Entry {
@@ -199,11 +207,14 @@ pub(crate) fn apply_namespace(
         }
         "delete" | "delete_tree" => {
             if find_unordered(entries, &op.path).is_none() {
-                return Err(Error::new("ENTRY_NOT_FOUND", "delete target missing"));
+                return Err(Error::new(
+                    storage_contract::ErrorCode::EntryNotFound,
+                    "delete target missing",
+                ));
             }
             if op.kind == "delete" && entries.iter().any(|e| is_descendant(&e.lookup_key, &key)) {
                 return Err(Error::new(
-                    "DIRECTORY_NOT_EMPTY",
+                    storage_contract::ErrorCode::DirectoryNotEmpty,
                     "directory contains children",
                 ));
             }
@@ -221,22 +232,30 @@ pub(crate) fn apply_namespace(
             });
         }
         "rename" => {
-            let target = op
-                .destination
-                .as_ref()
-                .ok_or_else(|| Error::new("INVALID_REQUEST", "rename needs destination"))?;
+            let target = op.destination.as_ref().ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::InvalidRequest,
+                    "rename needs destination",
+                )
+            })?;
             let to_key = name_policy::path_key(target);
-            let original = find_unordered(entries, &op.path)
-                .cloned()
-                .ok_or_else(|| Error::new("ENTRY_NOT_FOUND", "rename source missing"))?;
+            let original = find_unordered(entries, &op.path).cloned().ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::EntryNotFound,
+                    "rename source missing",
+                )
+            })?;
             if is_descendant(&to_key, &key) {
                 return Err(Error::new(
-                    "INVALID_MOVE",
+                    storage_contract::ErrorCode::InvalidMove,
                     "cannot move a directory into itself",
                 ));
             }
             if key != to_key && find_unordered(entries, target).is_some() {
-                return Err(Error::new("NAME_COLLISION", "rename destination exists"));
+                return Err(Error::new(
+                    storage_contract::ErrorCode::NameCollision,
+                    "rename destination exists",
+                ));
             }
             ensure_parents(entries, target)?;
             // Display spellings can differ in both case and UTF-8 length from
@@ -252,7 +271,10 @@ pub(crate) fn apply_namespace(
                         .splitn(depth + 1, '/')
                         .nth(depth)
                         .ok_or_else(|| {
-                            Error::new("STATE_INVALID", "entry path and lookup depth differ")
+                            Error::new(
+                                storage_contract::ErrorCode::StateInvalid,
+                                "entry path and lookup depth differ",
+                            )
                         })?;
                     format!("{target}/{suffix}")
                 } else {
@@ -263,7 +285,7 @@ pub(crate) fn apply_namespace(
         }
         _ => {
             return Err(Error::new(
-                "OPERATION_UNSUPPORTED",
+                storage_contract::ErrorCode::OperationUnsupported,
                 "namespace operation not supported",
             ));
         }

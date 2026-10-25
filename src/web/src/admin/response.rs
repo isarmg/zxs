@@ -139,7 +139,7 @@ impl Contract {
         if valid {
             Ok(value)
         } else {
-            Err(api::Error { code: "INVALID_ADMIN_RESPONSE".into(), message: "The response did not confirm the requested action. Inspect the original operation before retrying.".into(), retryable: false, status: 200, request_id: None })
+            Err(api::Error { code: storage_contract::ErrorCode::InvalidAdminResponse, message: "The response did not confirm the requested action. Inspect the original operation before retrying.".into(), retryable: false, status: 200, request_id: None })
         }
     }
 }

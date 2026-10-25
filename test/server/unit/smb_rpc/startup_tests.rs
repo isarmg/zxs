@@ -110,7 +110,10 @@ fn durable_spool_and_accounting_survive_runtime_directory_removal() {
         .reserve("owner", &durable.join("another"), 0, 100)
         .err()
         .unwrap();
-    assert_eq!(error.code, "RESOURCE_LIMIT_EXCEEDED");
+    assert_eq!(
+        error.code,
+        storage_contract::ErrorCode::ResourceLimitExceeded
+    );
     assert!(!durable.join("another.budget.json").exists());
 }
 

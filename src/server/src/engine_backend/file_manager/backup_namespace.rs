@@ -24,7 +24,7 @@ fn available_on(engine: &Engine, slot: &str, version: &str) -> bool {
 fn conflict() -> ApiError {
     ApiError::new(
         409,
-        "BACKUP_PATH_CONFLICT",
+        storage_contract::ErrorCode::BackupPathConflict,
         "authorized backup containers have conflicting logical paths; choose distinct backup prefixes",
     )
 }
@@ -91,7 +91,7 @@ fn retain_node<'a>(
     if nodes.len() >= maximum {
         return Err(ApiError::new(
             429,
-            "RESOURCE_LIMIT_EXCEEDED",
+            storage_contract::ErrorCode::ResourceLimitExceeded,
             "backup namespace exceeds the bounded entry limit",
         ));
     }
@@ -270,7 +270,7 @@ pub(super) fn entries(
     if !path.is_empty() && !nodes.get(&key).is_some_and(Node::directory) {
         return Err(ApiError::new(
             404,
-            "DIRECTORY_NOT_FOUND",
+            storage_contract::ErrorCode::DirectoryNotFound,
             "backup directory not found",
         ));
     }

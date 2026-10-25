@@ -109,7 +109,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
     stale["sources"][0]["expected_tree_id"] = new_id("tree").into();
     assert_eq!(
         scope_query::read(&engine, &stale).unwrap_err().code,
-        "LISTING_CHANGED"
+        storage_contract::ErrorCode::ListingChanged
     );
     for path in [Value::Null, json!(12), json!([])] {
         let mut malformed = request.clone();

@@ -4,7 +4,7 @@ use json_codec::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn required<'a, T>(value: Option<&'a T>, message: &str) -> Result<&'a T> {
-    value.ok_or_else(|| Error::new("STATE_INVALID", message))
+    value.ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, message))
 }
 
 fn selected_tree<'a>(state: &'a State, directory: &str) -> Result<(&'a str, &'a DirectoryTree)> {
@@ -108,10 +108,12 @@ pub(crate) fn scope(
     if !path.is_empty() {
         name_policy::validate_lookup_path(path)?;
     }
-    let repo = state
-        .repositories
-        .get(repository)
-        .ok_or_else(|| Error::new("REPOSITORY_NOT_FOUND", "directory repository missing"))?;
+    let repo = state.repositories.get(repository).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::RepositoryNotFound,
+            "directory repository missing",
+        )
+    })?;
     let branch = required(
         state.branches.get(&repo.main_branch_id),
         "repository main branch missing",
@@ -128,7 +130,12 @@ pub(crate) fn scope(
             .entries
             .iter()
             .find(|e| e.kind == "directory" && e.lookup_key == key)
-            .ok_or_else(|| Error::new("DIRECTORY_NOT_FOUND", "directory missing"))?
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::DirectoryNotFound,
+                    "directory missing",
+                )
+            })?
             .entry_id
             .clone()
     };
@@ -150,7 +157,7 @@ pub(crate) fn rebase_path(path: &str, from: &str, to: &str) -> Result<String> {
     let suffix = path.split('/').skip(depth).collect::<Vec<_>>().join("/");
     if suffix.is_empty() {
         return Err(Error::new(
-            "STATE_INVALID",
+            storage_contract::ErrorCode::StateInvalid,
             "directory snapshot contains its own root",
         ));
     }
@@ -192,7 +199,12 @@ fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
             .entries
             .iter()
             .find(|entry| entry.lookup_key == key && entry.kind == "directory")
-            .ok_or_else(|| Error::new("DIRECTORY_NOT_FOUND", "directory missing"))?
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::DirectoryNotFound,
+                    "directory missing",
+                )
+            })?
             .path
             .as_str()
     };
@@ -243,7 +255,7 @@ fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
             .contains_key(&entry.entry_id)
         {
             return Err(Error::new(
-                "STATE_INVALID",
+                storage_contract::ErrorCode::StateInvalid,
                 "directory tree selection has no branch",
             ));
         }
@@ -254,7 +266,7 @@ fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
     } else {
         if state.directory_tree_selections.contains_key(&directory_id) {
             return Err(Error::new(
-                "STATE_INVALID",
+                storage_contract::ErrorCode::StateInvalid,
                 "directory tree selection has no branch",
             ));
         }
@@ -607,7 +619,7 @@ pub(crate) fn namespace_locations(
                     && name_policy::path_key(&previous) != name_policy::path_key(&outcome)
                 {
                     return Err(Error::new(
-                        "BATCH_MAPPING_CONFLICT",
+                        storage_contract::ErrorCode::BatchMappingConflict,
                         "namespace changes give one physical file incompatible names or locations",
                     ));
                 }
@@ -693,11 +705,21 @@ pub(crate) fn prepare_file_write(
     .iter()
     .find(|e| e.lookup_key == key && e.kind == "file")
     .cloned()
-    .ok_or_else(|| Error::new("FILE_NOT_FOUND", "inherited file missing"))?;
+    .ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::FileNotFound,
+            "inherited file missing",
+        )
+    })?;
     let origin_name = state
         .directory_branches
         .get(&origin)
-        .ok_or_else(|| Error::new("STATE_INVALID", "inherited directory origin missing"))?
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "inherited directory origin missing",
+            )
+        })?
         .name
         .clone();
     let unique = |name: &str| {
@@ -722,9 +744,12 @@ pub(crate) fn prepare_file_write(
         if name_policy::lookup_key(&candidate) != "main" && unique(&candidate) {
             break candidate;
         }
-        number = number
-            .checked_add(1)
-            .ok_or_else(|| Error::new("RESOURCE_LIMIT", "file branch name exhausted"))?;
+        number = number.checked_add(1).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::ResourceLimit,
+                "file branch name exhausted",
+            )
+        })?;
     };
     let result = file::create_file_branch_change(
         engine,
@@ -735,14 +760,22 @@ pub(crate) fn prepare_file_write(
         principal,
         operation,
     )?;
-    let id = result["branch_id"]
-        .as_str()
-        .ok_or_else(|| Error::new("STATE_INVALID", "file fork receipt missing"))?;
+    let id = result["branch_id"].as_str().ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "file fork receipt missing",
+        )
+    })?;
     let inherited_node = context_at(state, &repository, path).and_then(|c| c.node_id);
     state
         .branches
         .get_mut(id)
-        .ok_or_else(|| Error::new("STATE_INVALID", "created file branch missing"))?
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "created file branch missing",
+            )
+        })?
         .file_node_id = inherited_node.clone();
     state.file_selections.insert(file_id.into(), id.into());
     state.file_write_origins.remove(file_id);
@@ -806,7 +839,7 @@ pub(crate) fn record_directory_edits(
             continue;
         }
         match scope(state, repository, &path) {
-            Err(e) if e.code() == "DIRECTORY_NOT_FOUND" => continue,
+            Err(e) if e.code() == storage_contract::ErrorCode::DirectoryNotFound => continue,
             Err(e) => return Err(e),
             Ok(_) => result.push(snapshot(state, repository, &path)?),
         }
@@ -831,7 +864,7 @@ pub(crate) fn select_change(
         .filter(|b| b.repository_id == repository)
         .ok_or_else(|| {
             Error::new(
-                "DIRECTORY_BRANCH_NOT_FOUND",
+                storage_contract::ErrorCode::DirectoryBranchNotFound,
                 "directory composition missing",
             )
         })?;
@@ -875,7 +908,12 @@ pub(crate) fn select_change(
             .entries
             .iter()
             .find(|e| e.entry_id == selected.directory_id && e.kind == "directory")
-            .ok_or_else(|| Error::new("DIRECTORY_NOT_FOUND", "directory no longer exists"))?
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::DirectoryNotFound,
+                    "directory no longer exists",
+                )
+            })?
             .path
             .clone()
     };
@@ -898,7 +936,7 @@ pub(crate) fn select_change(
             .is_some_and(|b| b.file_id.as_deref() == Some(file) && b.state == "active")
         {
             return Err(Error::new(
-                "FILE_BRANCH_NOT_FOUND",
+                storage_contract::ErrorCode::FileBranchNotFound,
                 "snapshot references an unavailable public file branch",
             ));
         }
@@ -988,19 +1026,29 @@ pub(crate) fn select_change(
     let target = state
         .branches
         .get_mut(&repo.main_branch_id)
-        .ok_or_else(|| Error::new("STATE_INVALID", "repository main branch missing"))?;
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "repository main branch missing",
+            )
+        })?;
     target.head_commit_id = commit_id.clone();
-    target.generation = target
-        .generation
-        .checked_add(1)
-        .ok_or_else(|| Error::new("RESOURCE_LIMIT", "branch generation exhausted"))?;
+    target.generation = target.generation.checked_add(1).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::ResourceLimit,
+            "branch generation exhausted",
+        )
+    })?;
     let generation = state
         .directory_selection_generations
         .entry(selected.directory_id.clone())
         .or_default();
-    *generation = generation
-        .checked_add(1)
-        .ok_or_else(|| Error::new("RESOURCE_LIMIT", "directory selection generation exhausted"))?;
+    *generation = generation.checked_add(1).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::ResourceLimit,
+            "directory selection generation exhausted",
+        )
+    })?;
     let changed = if path.is_empty() {
         Vec::new()
     } else {
@@ -1051,10 +1099,12 @@ impl Engine {
             operation,
             json!({"repository_id":repository,"path":path}),
             |_, state, _| {
-                state
-                    .repositories
-                    .get(repository)
-                    .ok_or_else(|| Error::new("REPOSITORY_NOT_FOUND", "repository missing"))?;
+                state.repositories.get(repository).ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::RepositoryNotFound,
+                        "repository missing",
+                    )
+                })?;
 
                 let (id, _, _) = scope(state, repository, path)?;
                 if !state.directory_selections.contains_key(&id) {
@@ -1080,11 +1130,12 @@ impl Engine {
             operation,
             json!({"repository_id":repository,"path":path,"name":name}),
             |_, state, _| {
-                let repo = state
-                    .repositories
-                    .get(repository)
-                    .cloned()
-                    .ok_or_else(|| Error::new("REPOSITORY_NOT_FOUND", "repository missing"))?;
+                let repo = state.repositories.get(repository).cloned().ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::RepositoryNotFound,
+                        "repository missing",
+                    )
+                })?;
 
                 let (directory_id, _, _) = scope(state, repository, path)?;
                 if !state.directory_selections.contains_key(&directory_id) {
@@ -1095,7 +1146,7 @@ impl Engine {
                         && name_policy::lookup_key(&b.name) == name_policy::lookup_key(name)
                 }) {
                     return Err(Error::new(
-                        "NAME_COLLISION",
+                        storage_contract::ErrorCode::NameCollision,
                         "directory branch name already exists",
                     ));
                 }
@@ -1165,10 +1216,12 @@ impl Engine {
             operation,
             json!({"repository_id":repository,"path":path,"name":name}),
             |engine, state, _| {
-                state
-                    .repositories
-                    .get(repository)
-                    .ok_or_else(|| Error::new("REPOSITORY_NOT_FOUND", "repository missing"))?;
+                state.repositories.get(repository).ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::RepositoryNotFound,
+                        "repository missing",
+                    )
+                })?;
 
                 let (id, _, _) = scope(state, repository, path)?;
                 let selected = state
@@ -1180,7 +1233,10 @@ impl Engine {
                     })
                     .map(|b| b.directory_branch_id.clone())
                     .ok_or_else(|| {
-                        Error::new("DIRECTORY_BRANCH_NOT_FOUND", "directory branch missing")
+                        Error::new(
+                            storage_contract::ErrorCode::DirectoryBranchNotFound,
+                            "directory branch missing",
+                        )
                     })?;
                 select_change(
                     state,
@@ -1223,10 +1279,12 @@ impl Engine {
             operation,
             json!({"repository_id":repository,"directory_branch_id":branch}),
             |engine, state, _| {
-                state
-                    .repositories
-                    .get(repository)
-                    .ok_or_else(|| Error::new("REPOSITORY_NOT_FOUND", "repository missing"))?;
+                state.repositories.get(repository).ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::RepositoryNotFound,
+                        "repository missing",
+                    )
+                })?;
 
                 if !state
                     .directory_branches
@@ -1234,7 +1292,7 @@ impl Engine {
                     .is_some_and(|b| b.repository_id == repository && b.directory_id == repository)
                 {
                     return Err(Error::new(
-                        "DIRECTORY_BRANCH_SCOPE",
+                        storage_contract::ErrorCode::DirectoryBranchScope,
                         "default requires a root composition",
                     ));
                 }
@@ -1264,29 +1322,39 @@ impl Engine {
             operation,
             json!({"repository_id":repository,"directory_branch_id":branch,"name":name}),
             |_, state, _| {
-                state
-                    .repositories
-                    .get(repository)
-                    .ok_or_else(|| Error::new("REPOSITORY_NOT_FOUND", "repository missing"))?;
+                state.repositories.get(repository).ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::RepositoryNotFound,
+                        "repository missing",
+                    )
+                })?;
 
                 let current = state
                     .directory_branches
                     .get(branch)
                     .filter(|b| b.repository_id == repository)
                     .ok_or_else(|| {
-                        Error::new("DIRECTORY_BRANCH_NOT_FOUND", "directory branch missing")
+                        Error::new(
+                            storage_contract::ErrorCode::DirectoryBranchNotFound,
+                            "directory branch missing",
+                        )
                     })?;
                 if state.directory_branches.values().any(|b| {
                     b.directory_id == current.directory_id
                         && b.directory_branch_id != branch
                         && name_policy::lookup_key(&b.name) == name_policy::lookup_key(name)
                 }) {
-                    return Err(Error::new("NAME_COLLISION", "directory branch name exists"));
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::NameCollision,
+                        "directory branch name exists",
+                    ));
                 }
-                let target = state
-                    .directory_branches
-                    .get_mut(branch)
-                    .ok_or_else(|| Error::new("STATE_INVALID", "directory branch missing"))?;
+                let target = state.directory_branches.get_mut(branch).ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::StateInvalid,
+                        "directory branch missing",
+                    )
+                })?;
                 target.name = name.into();
                 Ok(json!({"directory_branch_id":branch,"name":name,
                     "path":target.path,"head_tree_id":target.head_tree_id}))

@@ -76,7 +76,7 @@ impl Fixture {
                 .err()
                 .unwrap()
                 .code,
-            "RECOVERY_REQUIRED"
+            storage_contract::ErrorCode::RecoveryRequired
         );
         assert!(backend.inner.backend().is_err());
     }
@@ -116,7 +116,7 @@ fn rejected_bootstrap_restore_cannot_publish_credentials_on_retry_or_restart() {
         for _ in 0..2 {
             assert_eq!(
                 backend.inner.recover_once().unwrap_err().code,
-                "AUTH_RECOVERY_REQUIRED"
+                storage_contract::ErrorCode::AuthRecoveryRequired
             );
             f.assert_closed(&backend, &auth);
             assert!(!f.management.join("management-auth.json").exists());
@@ -127,7 +127,7 @@ fn rejected_bootstrap_restore_cannot_publish_credentials_on_retry_or_restart() {
         let (backend, auth) = f.open();
         assert_eq!(
             backend.inner.recover_once().unwrap_err().code,
-            "AUTH_RECOVERY_REQUIRED"
+            storage_contract::ErrorCode::AuthRecoveryRequired
         );
         f.assert_closed(&backend, &auth);
         assert!(!f.management.join("management-auth.json").exists());
@@ -154,7 +154,7 @@ fn missing_or_corrupt_local_credentials_never_migrate_even_without_a_marker() {
             let (backend, auth) = f.open();
             assert_eq!(
                 backend.inner.recover_once().unwrap_err().code,
-                "AUTH_RECOVERY_REQUIRED"
+                storage_contract::ErrorCode::AuthRecoveryRequired
             );
             f.assert_closed(&backend, &auth);
             assert!(!f.data.join("management-authority.json").exists());
@@ -277,12 +277,12 @@ fn protected_management_rejects_missing_forged_and_revoked_sessions_before_stora
                     .setup_operation(action, json!({}), None, Some(&identity))
                     .unwrap_err()
                     .code,
-                "UNAUTHORIZED"
+                storage_contract::ErrorCode::Unauthorized
             );
         }
         assert_eq!(
             backend.retry_storage(&identity).unwrap_err().code,
-            "UNAUTHORIZED"
+            storage_contract::ErrorCode::Unauthorized
         );
     }
     assert!(!f.data.join("config.json").exists());
@@ -323,7 +323,7 @@ fn authenticated_restore_rechecks_revocation_before_authority_publication() {
             )
             .unwrap_err()
             .code,
-        "UNAUTHORIZED"
+        storage_contract::ErrorCode::Unauthorized
     );
     assert!(f.data.join("config.json").exists());
     assert_eq!(

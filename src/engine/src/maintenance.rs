@@ -45,7 +45,7 @@ impl Engine {
             })
         {
             return Err(Error::new(
-                "FILE_NODE_HISTORY_SPLIT_UNSUPPORTED",
+                storage_contract::ErrorCode::FileNodeHistorySplitUnsupported,
                 "history splitting does not yet remap immutable file path nodes and their mixed ancestry",
             ));
         }
@@ -56,7 +56,7 @@ impl Engine {
                 .any(|branch| branch.repository_id == history.repository_id)
         }) {
             return Err(Error::new(
-                "DIRECTORY_HISTORY_SPLIT_UNSUPPORTED",
+                storage_contract::ErrorCode::DirectoryHistorySplitUnsupported,
                 "history splitting does not yet remap shared directory composition records",
             ));
         }
@@ -75,7 +75,10 @@ impl Engine {
         ids.sort();
         ids.dedup();
         if ids.is_empty() {
-            return Err(Error::new("INVALID_REQUEST", "purge selection is empty"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::InvalidRequest,
+                "purge selection is empty",
+            ));
         }
         self.check_purge(history, &ids)?;
         self.save_plan(
@@ -96,7 +99,7 @@ impl Engine {
             .any(|branch| branch.history_tree_id == history && branch.file_id.is_some())
         {
             return Err(Error::new(
-                "FILE_HISTORY_SPLIT_UNSUPPORTED",
+                storage_contract::ErrorCode::FileHistorySplitUnsupported,
                 "directory history splitting cannot be applied to independent file branches",
             ));
         }
@@ -107,7 +110,7 @@ impl Engine {
             .is_some_and(|c| c.history_tree_id == history)
         {
             return Err(Error::new(
-                "COMMIT_NOT_FOUND",
+                storage_contract::ErrorCode::CommitNotFound,
                 "cut commit is not in the selected history",
             ));
         }
@@ -118,7 +121,7 @@ impl Engine {
             .is_some_and(|h| h.root_commit_id == cut)
         {
             return Err(Error::new(
-                "SPLIT_ROOT_FORBIDDEN",
+                storage_contract::ErrorCode::SplitRootForbidden,
                 "a split must leave the source root and prefix history intact",
             ));
         }
@@ -131,7 +134,7 @@ impl Engine {
                     .is_some_and(|b| b.history_tree_id == history)
         }) {
             return Err(Error::new(
-                "WORKSPACE_BUSY",
+                storage_contract::ErrorCode::WorkspaceBusy,
                 "split requires all affected workspaces to close",
             ));
         }
@@ -179,20 +182,20 @@ impl Engine {
                 return self.operation(operation);
             }
             return Err(Error::new(
-                "IDEMPOTENCY_KEY_REUSED",
+                storage_contract::ErrorCode::IdempotencyKeyReused,
                 "operation already names a different action",
             ));
         }
         let plan = self.plan(id)?;
         if plan.principal != principal {
             return Err(Error::new(
-                "PERMISSION_DENIED",
+                storage_contract::ErrorCode::PermissionDenied,
                 "plan belongs to another principal",
             ));
         }
         if plan.state != "ready" {
             return Err(Error::new(
-                "PLAN_CLOSED",
+                storage_contract::ErrorCode::PlanClosed,
                 "only an unexecuted plan can be cancelled",
             ));
         }
@@ -229,7 +232,10 @@ impl Engine {
                 Err(platform_io::fs_safety::Error::Io(error))
                     if error.kind() == std::io::ErrorKind::NotFound =>
                 {
-                    return Err(Error::new("PLAN_NOT_FOUND", "plan not found"));
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::PlanNotFound,
+                        "plan not found",
+                    ));
                 }
                 Err(error) => return Err(fs_error(error)),
             };
@@ -240,7 +246,7 @@ impl Engine {
         // paired with modified local purge/split input after restart.
         if plan.plan_id != id || object_hash("plan", &plan.input)? != plan.digest {
             return Err(Error::new(
-                "PLAN_INVALID",
+                storage_contract::ErrorCode::PlanInvalid,
                 "plan identity or input digest differs",
             ));
         }
@@ -267,7 +273,7 @@ impl Engine {
                 return self.operation(operation);
             }
             return Err(Error::new(
-                "IDEMPOTENCY_KEY_REUSED",
+                storage_contract::ErrorCode::IdempotencyKeyReused,
                 "operation already used",
             ));
         }
@@ -277,34 +283,42 @@ impl Engine {
         }
         if plan.principal != principal {
             return Err(Error::new(
-                "PERMISSION_DENIED",
+                storage_contract::ErrorCode::PermissionDenied,
                 "plan belongs to another principal",
             ));
         }
         if plan.state != "ready" {
-            return Err(Error::new("PLAN_CLOSED", "plan is no longer ready"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::PlanClosed,
+                "plan is no longer ready",
+            ));
         }
         if plan.expected_sequence != self.state.business_generation {
             return Err(Error::new(
-                "PLAN_STALE",
+                storage_contract::ErrorCode::PlanStale,
                 "published state changed; preview a new plan",
             ));
         }
         let history = plan.input["history_tree_id"]
             .as_str()
-            .ok_or_else(|| Error::new("PLAN_INVALID", "history missing"))?
+            .ok_or_else(|| Error::new(storage_contract::ErrorCode::PlanInvalid, "history missing"))?
             .to_string();
         self.repository_for_history(&history)?;
         let result = match plan.kind.as_str() {
             "purge" => {
                 let ids = plan.input["version_ids"]
                     .as_array()
-                    .ok_or_else(|| Error::new("PLAN_INVALID", "versions missing"))?
+                    .ok_or_else(|| {
+                        Error::new(storage_contract::ErrorCode::PlanInvalid, "versions missing")
+                    })?
                     .iter()
                     .map(|v| {
-                        v.as_str()
-                            .map(str::to_string)
-                            .ok_or_else(|| Error::new("PLAN_INVALID", "version id is not a string"))
+                        v.as_str().map(str::to_string).ok_or_else(|| {
+                            Error::new(
+                                storage_contract::ErrorCode::PlanInvalid,
+                                "version id is not a string",
+                            )
+                        })
                     })
                     .collect::<Result<Vec<_>>>()?;
                 self.check_purge(&history, &ids)?;
@@ -329,36 +343,46 @@ impl Engine {
             "split" => {
                 let cut = plan.input["cut_commit_id"]
                     .as_str()
-                    .ok_or_else(|| Error::new("PLAN_INVALID", "cut missing"))?
+                    .ok_or_else(|| {
+                        Error::new(storage_contract::ErrorCode::PlanInvalid, "cut missing")
+                    })?
                     .to_string();
                 self.split_history(&history, &cut, principal, operation, &plan)?
             }
-            _ => return Err(Error::new("PLAN_UNSUPPORTED", "unknown plan kind")),
+            _ => {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::PlanUnsupported,
+                    "unknown plan kind",
+                ));
+            }
         };
         self.cleanup_purged()?;
         Ok(result)
     }
     fn check_purge(&self, history: &str, versions: &[String]) -> Result<()> {
         let selected = versions.iter().collect::<BTreeSet<_>>();
-        let reads = self
-            .reads
-            .lock()
-            .map_err(|_| Error::new("INTERNAL_ERROR", "read lease lock poisoned"))?;
+        let reads = self.reads.lock().map_err(|_| {
+            Error::new(
+                storage_contract::ErrorCode::InternalError,
+                "read lease lock poisoned",
+            )
+        })?;
         for id in versions {
-            let v = self
-                .state
-                .versions
-                .get(id)
-                .ok_or_else(|| Error::new("VERSION_NOT_FOUND", "selected version missing"))?;
+            let v = self.state.versions.get(id).ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::VersionNotFound,
+                    "selected version missing",
+                )
+            })?;
             if v.history_tree_id != history {
                 return Err(Error::new(
-                    "HISTORY_MISMATCH",
+                    storage_contract::ErrorCode::HistoryMismatch,
                     "purge version belongs to another history",
                 ));
             }
             if reads.get(id).copied().unwrap_or(0) > 0 {
                 return Err(Error::new(
-                    "CONTENT_PINNED",
+                    storage_contract::ErrorCode::ContentPinned,
                     "version has an active read lease",
                 ));
             }
@@ -370,7 +394,7 @@ impl Engine {
                     .is_some_and(|c| c.entries.iter().any(|e| e.version_id == *id))
                 {
                     return Err(Error::new(
-                        "CONTENT_PINNED",
+                        storage_contract::ErrorCode::ContentPinned,
                         "version is used by an active branch HEAD",
                     ));
                 }
@@ -382,7 +406,7 @@ impl Engine {
                     .any(|entry| entry.kind == "file" && entry.version_id == *id)
                 {
                     return Err(Error::new(
-                        "CONTENT_PINNED",
+                        storage_contract::ErrorCode::ContentPinned,
                         "version is referenced by a retained directory branch HEAD",
                     ));
                 }
@@ -400,7 +424,7 @@ impl Engine {
                 .is_some_and(|c| c.entries.iter().any(|e| selected.contains(&e.version_id)))
             {
                 return Err(Error::new(
-                    "CONTENT_PINNED",
+                    storage_contract::ErrorCode::ContentPinned,
                     "an open workspace needs a selected version",
                 ));
             }
@@ -449,7 +473,7 @@ impl Engine {
                     || self.snapshot.as_deref() != Some(candidate.snapshot_hash.as_str())
                 {
                     return Err(Error::new(
-                        "TOMBSTONE_INVALID",
+                        storage_contract::ErrorCode::TombstoneInvalid,
                         "tombstone publication differs from recovered state",
                     ));
                 }
@@ -464,7 +488,7 @@ impl Engine {
         }
         let (candidate, publication, seal, snapshot) = published.ok_or_else(|| {
             Error::new(
-                "RECOVERY_REQUIRED",
+                storage_contract::ErrorCode::RecoveryRequired,
                 "published tombstone evidence is unavailable",
             )
         })?;
@@ -489,7 +513,7 @@ impl Engine {
             }
             let content_state_page = inclusion.ok_or_else(|| {
                 Error::new(
-                    "TOMBSTONE_INVALID",
+                    storage_contract::ErrorCode::TombstoneInvalid,
                     "published state page does not contain the tombstone",
                 )
             })?;
@@ -535,45 +559,45 @@ impl Engine {
             json!({"plan_id":plan.plan_id,"digest":plan.digest}),
             |engine, state, pending| {
                 let original = state.histories.get(history).cloned()
-                    .ok_or_else(|| Error::new("HISTORY_NOT_FOUND", "source history missing"))?;
+                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::HistoryNotFound, "source history missing"))?;
                 let original_repo = state.repositories.get(&original.repository_id).cloned()
-                    .ok_or_else(|| Error::new("REPOSITORY_NOT_FOUND", "source repository missing"))?;
+                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::RepositoryNotFound, "source repository missing"))?;
                 let cut_commit = state.commits.get(cut)
                     .filter(|c| c.history_tree_id == history).cloned()
-                    .ok_or_else(|| Error::new("COMMIT_NOT_FOUND", "cut commit missing"))?;
+                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::CommitNotFound, "cut commit missing"))?;
                 if cut_commit.commit_id != cut {
-                    return Err(Error::new("STATE_INVALID", "split cut commit identity differs from its key"));
+                    return Err(Error::new(storage_contract::ErrorCode::StateInvalid, "split cut commit identity differs from its key"));
                 }
                 if original.root_commit_id == cut || cut_commit.parent_commit_ids.len() != 1 {
-                    return Err(Error::new("SPLIT_ROOT_FORBIDDEN", "split must preserve the original root and prefix"));
+                    return Err(Error::new(storage_contract::ErrorCode::SplitRootForbidden, "split must preserve the original root and prefix"));
                 }
                 let prefix_head = cut_commit.parent_commit_ids[0].clone();
                 let prefix = state.commits.get(&prefix_head)
                     .filter(|commit| commit.commit_id == prefix_head && commit.history_tree_id == history)
-                    .ok_or_else(|| Error::new("STATE_INVALID", "split prefix commit missing from source history"))?;
+                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "split prefix commit missing from source history"))?;
                 let prefix_pending = prefix.pending_file_versions.clone();
                 let selected = crate::business::descendant_commits(
                     state.commits.values().filter(|commit| commit.history_tree_id == history), cut,
                 );
                 if selected.contains(&prefix_head) {
-                    return Err(Error::new("STATE_INVALID", "split prefix is part of a cyclic selected history"));
+                    return Err(Error::new(storage_contract::ErrorCode::StateInvalid, "split prefix is part of a cyclic selected history"));
                 }
                 if engine.workspaces.values().any(|w| matches!(w.state.as_str(), "open" | "sealed") && state.branches
                     .get(&w.branch_id).is_some_and(|b| b.history_tree_id == history)) {
-                    return Err(Error::new("WORKSPACE_BUSY", "split input has an open workspace"));
+                    return Err(Error::new(storage_contract::ErrorCode::WorkspaceBusy, "split input has an open workspace"));
                 }
                 let mut commits = selected.iter().map(|id| state.commits.get(id)
                     .filter(|commit| commit.commit_id == *id && commit.history_tree_id == history).cloned()
-                    .ok_or_else(|| Error::new("STATE_INVALID", "split commit identity missing from source history")))
+                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "split commit identity missing from source history")))
                     .collect::<Result<Vec<_>>>()?;
                 commits.sort_by_key(|c| c.sequence);
                 let selected_versions = commits.iter().flat_map(|c| &c.entries)
                     .filter(|e| e.kind == "file").map(|e| e.version_id.clone())
                     .collect::<BTreeSet<_>>();
                 let reads = engine.reads.lock()
-                    .map_err(|_| Error::new("INTERNAL_ERROR", "read lease lock poisoned"))?;
+                    .map_err(|_| Error::new(storage_contract::ErrorCode::InternalError, "read lease lock poisoned"))?;
                 if selected_versions.iter().any(|id| reads.get(id).copied().unwrap_or(0) != 0) {
-                    return Err(Error::new("CONTENT_PINNED", "split input has an active read lease"));
+                    return Err(Error::new(storage_contract::ErrorCode::ContentPinned, "split input has an active read lease"));
                 }
                 drop(reads);
                 let history_id = new_id("history");
@@ -590,7 +614,7 @@ impl Engine {
                 let source_branches = state.branches.iter().filter(|(_, branch)| branch.history_tree_id == history)
                     .map(|(id, branch)| {
                         if id != &branch.branch_id {
-                            return Err(Error::new("STATE_INVALID", "split source branch identity differs from its key"));
+                            return Err(Error::new(storage_contract::ErrorCode::StateInvalid, "split source branch identity differs from its key"));
                         }
                         Ok(branch.clone())
                     }).collect::<Result<Vec<_>>>()?;
@@ -599,7 +623,7 @@ impl Engine {
                 let links = state.merge_links.iter().filter(|(_, link)| link.history_tree_id == history)
                     .map(|(id, link)| {
                         if id != &link.merge_link_id {
-                            return Err(Error::new("STATE_INVALID", "split merge link identity differs from its key"));
+                            return Err(Error::new(storage_contract::ErrorCode::StateInvalid, "split merge link identity differs from its key"));
                         }
                         Ok(link.clone())
                     }).collect::<Result<Vec<_>>>()?;
@@ -616,12 +640,12 @@ impl Engine {
                         if !state.branches.get(branch).is_some_and(|b|
                             b.branch_id == *branch && b.history_tree_id == history)
                         {
-                            return Err(Error::new("STATE_INVALID", "merge link branch missing from source history"));
+                            return Err(Error::new(storage_contract::ErrorCode::StateInvalid, "merge link branch missing from source history"));
                         }
                         if !state.commits.get(commit).is_some_and(|c|
                             c.commit_id == *commit && c.history_tree_id == history)
                         {
-                            return Err(Error::new("STATE_INVALID", "merge link commit missing from source history"));
+                            return Err(Error::new(storage_contract::ErrorCode::StateInvalid, "merge link commit missing from source history"));
                         }
                         if selected.contains(commit) {
                             branch_map.entry(branch.clone()).or_insert_with(|| new_id("br"));
@@ -634,13 +658,13 @@ impl Engine {
                         let old = state.versions.get(&entry.version_id)
                             .filter(|version| version.version_id == entry.version_id
                                 && version.file_id == entry.file_id && version.history_tree_id == history)
-                            .ok_or_else(|| Error::new("STATE_INVALID", "split version identity differs from its entry"))?;
+                            .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "split version identity differs from its entry"))?;
                         if version_map.contains_key(&entry.version_id) { continue; }
                         let old = old.clone();
                         let placement = state.placements.get(&entry.version_id).cloned()
-                            .ok_or_else(|| Error::new("PLACEMENT_NOT_FOUND", "split placement missing"))?;
+                            .ok_or_else(|| Error::new(storage_contract::ErrorCode::PlacementNotFound, "split placement missing"))?;
                         let file_id = file_map.get(&old.file_id)
-                            .ok_or_else(|| Error::new("STATE_INVALID", "entry and version file identity differ"))?;
+                            .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "entry and version file identity differ"))?;
                         let new = if state.content_states.get(&old.version_id).is_some_and(|s| *s == ContentState::Purged) {
                             let mut new = old.clone();
                             new.version_id = new_id("ver");
@@ -676,7 +700,7 @@ impl Engine {
                     new.history_tree_id = history_id.clone();
                     new.parent_commit_ids = if commit.commit_id == cut { Vec::new() } else {
                         commit.parent_commit_ids.iter().map(|p| commit_map.get(p).cloned()
-                            .ok_or_else(|| Error::new("SPLIT_INVALID", "selected closure has an external parent")))
+                            .ok_or_else(|| Error::new(storage_contract::ErrorCode::SplitInvalid, "selected closure has an external parent")))
                             .collect::<Result<_>>()?
                     };
                     new.tree_id = new_id("tree");
@@ -702,7 +726,7 @@ impl Engine {
                     let mut new = branch.clone();
                     new.branch_id = new_id.clone();
                     new.history_tree_id = history_id.clone();
-                    new.file_id = branch.file_id.as_ref().map(|file|file_map.get(file).cloned().ok_or_else(||Error::new("SPLIT_INVALID","file branch identity is outside the selected history"))).transpose()?;
+                    new.file_id = branch.file_id.as_ref().map(|file|file_map.get(file).cloned().ok_or_else(||Error::new(storage_contract::ErrorCode::SplitInvalid,"file branch identity is outside the selected history"))).transpose()?;
                     new.generation = 1;
                     new.fork_commit_id = commit_map.get(&branch.fork_commit_id)
                         .cloned().unwrap_or_else(|| commit_map[cut].clone());
@@ -712,13 +736,13 @@ impl Engine {
                         )?;
                         new.head_commit_id = commit_map[&branch.head_commit_id].clone();
                         let old = state.branches.get_mut(&branch.branch_id)
-                            .ok_or_else(|| Error::new("STATE_INVALID", "split source branch identity missing"))?;
+                            .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "split source branch identity missing"))?;
                         old.pending_file_versions = prefix_pending.clone();
                         old.head_commit_id = prefix_head.clone();
                         if selected.contains(&old.fork_commit_id) { old.fork_commit_id = prefix_head.clone(); }
                         old.state = "migrated".into();
                         old.generation = old.generation.checked_add(1)
-                            .ok_or_else(|| Error::new("RESOURCE_LIMIT", "branch generation exhausted"))?;
+                            .ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "branch generation exhausted"))?;
                     } else {
                         let endpoint = links.iter().find_map(|l| {
                             if l.source_branch_id == branch.branch_id && selected.contains(&l.source_commit_id) {
@@ -726,7 +750,7 @@ impl Engine {
                             } else if l.target_branch_id == branch.branch_id && selected.contains(&l.target_commit_id) {
                                 Some(&l.target_commit_id)
                             } else { None }
-                        }).ok_or_else(|| Error::new("STATE_INVALID", "split branch endpoint missing"))?;
+                        }).ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "split branch endpoint missing"))?;
                         new.head_commit_id = commit_map[endpoint].clone();
                         new.state = "archived".into();
                         // The audit endpoint keeps its own snapshot state,
@@ -777,13 +801,13 @@ impl Engine {
                 });
                 let old = state.histories.get_mut(history).expect("source history");
                 old.generation = old.generation.checked_add(1)
-                    .ok_or_else(|| Error::new("RESOURCE_LIMIT", "history generation exhausted"))?;
+                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "history generation exhausted"))?;
                 let main_moved = old.main_branch_id.as_ref().is_some_and(|id| moved.contains(id));
                 if main_moved { old.main_branch_id = None; old.state = "archived".into(); }
                 if main_moved {
                     let repository = state.repositories.get_mut(&original.repository_id).expect("source repository");
                     repository.smb_binding_generation = repository.smb_binding_generation.checked_add(1)
-                        .ok_or_else(|| Error::new("RESOURCE_LIMIT", "SMB binding generation exhausted"))?;
+                        .ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "SMB binding generation exhausted"))?;
                     repository.smb_enabled = false;
                 }
                 let mut new_repo = original_repo.clone();
@@ -905,13 +929,13 @@ fn remap_pending_versions(
             Ok((
                 files.get(file).cloned().ok_or_else(|| {
                     Error::new(
-                        "SPLIT_INVALID",
+                        storage_contract::ErrorCode::SplitInvalid,
                         "pending file is outside the selected history",
                     )
                 })?,
                 versions.get(version).cloned().ok_or_else(|| {
                     Error::new(
-                        "SPLIT_INVALID",
+                        storage_contract::ErrorCode::SplitInvalid,
                         "pending source version is outside the selected history",
                     )
                 })?,

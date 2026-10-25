@@ -12,7 +12,7 @@ pub fn validate_tag(tag: &str) -> Result<()> {
         || tag.chars().any(char::is_control)
     {
         return Err(Error::new(
-            "INVALID_TAG",
+            crate::ErrorCode::InvalidTag,
             "tags must be nonempty, trimmed, control-free and at most 128 UTF-8 bytes",
         ));
     }
@@ -24,7 +24,7 @@ pub fn validate_tag(tag: &str) -> Result<()> {
 pub fn validate_note(note: &str) -> Result<()> {
     if note.len() > MAX_NOTE_BYTES || note.chars().any(char::is_control) {
         return Err(Error::new(
-            "INVALID_REQUEST",
+            crate::ErrorCode::InvalidRequest,
             format!(
                 "notes must be at most {MAX_NOTE_BYTES} UTF-8 bytes without line breaks or control characters"
             ),

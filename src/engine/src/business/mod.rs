@@ -37,7 +37,7 @@ pub(crate) fn now() -> u64 {
 pub fn validate_branch_name(name: &str) -> Result<()> {
     if name.len() > 128 {
         return Err(Error::new(
-            "METADATA_TOO_LONG",
+            storage_contract::ErrorCode::MetadataTooLong,
             "branch names must not exceed 128 UTF-8 bytes",
         ));
     }

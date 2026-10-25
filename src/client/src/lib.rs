@@ -17,9 +17,11 @@ pub enum Error {
     #[error("{code}: {message}")]
     Api {
         status: u16,
-        code: String,
+        code: storage_contract::ErrorCode,
         message: String,
         retryable: bool,
+        #[source]
+        source: Option<storage_contract::client_protocol::ResponseDecodeError>,
     },
     #[error("transport failed: {0}")]
     Transport(#[from] reqwest::Error),
@@ -115,7 +117,8 @@ impl Client {
         self.base.as_str()
     }
     fn url(&self, path: &str) -> Result<url_encoding::address::Url, Error> {
-        storage_contract::validate_api_path(path).map_err(|error| Error::Address(error.message))?;
+        storage_contract::validate_api_path(path)
+            .map_err(|error| Error::Address(error.message().into_owned()))?;
         let url = self
             .base
             .join(path)

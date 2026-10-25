@@ -78,11 +78,15 @@ fn empty_descendant_routes_use_normalized_identity_and_root_scope() {
         assert_eq!(read["file_count"], "0");
         assert_eq!(canonical_json(engine.state()).unwrap(), before);
         for (copies, values, code) in [
-            (2, vec![("B01", "first")], "BACKUP_PREFIX_REQUIRED"),
+            (
+                2,
+                vec![("B01", "first")],
+                storage_contract::ErrorCode::BackupPrefixRequired,
+            ),
             (
                 3,
                 vec![("B01", "first"), ("B02", "second"), ("C01", "cold")],
-                "ROUTE_INCOMPLETE",
+                storage_contract::ErrorCode::RouteIncomplete,
             ),
         ] {
             assert_eq!(
@@ -136,7 +140,7 @@ fn existing_parent_configuration_can_add_a_later_descendant_route() {
         configure(&mut engine, &repo, "docs", 2, &[("B01", "first")], 1)
             .unwrap_err()
             .code(),
-        "BACKUP_PREFIX_REQUIRED"
+        storage_contract::ErrorCode::BackupPrefixRequired
     );
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     configure(

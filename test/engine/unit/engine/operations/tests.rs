@@ -59,7 +59,7 @@ fn operation_read_plan_blocks_purge_until_observation_finishes() {
             .commit_plan(&purge.plan_id, "owner", &new_id("op"))
             .unwrap_err()
             .code(),
-        "CONTENT_PINNED"
+        storage_contract::ErrorCode::ContentPinned
     );
     let observed = plan.check().into_result();
     assert_eq!(observed.current_health, "HEALTHY");

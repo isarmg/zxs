@@ -57,7 +57,13 @@ fn branch_snapshot<'a>(
         .commits
         .get(commit)
         .filter(|commit| commit.history_tree_id == branch_info.history_tree_id)
-        .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "commit not found"))?;
+        .ok_or_else(|| {
+            ApiError::new(
+                404,
+                storage_contract::ErrorCode::NotFound,
+                "commit not found",
+            )
+        })?;
     Ok((commit, snapshot))
 }
 
@@ -97,7 +103,13 @@ impl SmbLookup {
             .commits
             .get(&branch_info.head_commit_id)
             .filter(|commit| commit.history_tree_id == branch_info.history_tree_id)
-            .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "commit not found"))?;
+            .ok_or_else(|| {
+                ApiError::new(
+                    404,
+                    storage_contract::ErrorCode::NotFound,
+                    "commit not found",
+                )
+            })?;
         let tree = engine.namespace_tree(branch).map_err(error)?;
         Ok(Self(tree.get(field(input, "path")?).cloned()))
     }
@@ -125,7 +137,13 @@ impl SmbDirectory {
             .commits
             .get(commit)
             .filter(|snapshot| snapshot.history_tree_id == branch_info.history_tree_id)
-            .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "directory snapshot missing"))?;
+            .ok_or_else(|| {
+                ApiError::new(
+                    404,
+                    storage_contract::ErrorCode::NotFound,
+                    "directory snapshot missing",
+                )
+            })?;
         let tree = engine.namespace_tree_at(branch, commit).map_err(error)?;
         // The synthetic share root has an intentionally empty path.
         let path = input
@@ -145,7 +163,7 @@ impl SmbDirectory {
             {
                 return Err(ApiError::new(
                     409,
-                    "SMB_REBIND_REQUIRED",
+                    storage_contract::ErrorCode::SmbRebindRequired,
                     "opened directory identity changed",
                 ));
             }

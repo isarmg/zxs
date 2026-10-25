@@ -189,7 +189,7 @@ pub(crate) async fn upload(
         if deadline.publication_admitted.load(Ordering::Acquire) {
             ApiError::new(
                 503,
-                "TRANSFER_TIMEOUT",
+                storage_contract::ErrorCode::TransferTimeout,
                 "upload publication may have completed; check upload status before retrying",
             )
         } else {
@@ -213,7 +213,7 @@ async fn upload_inner(
         let mut claims = lock(&state.upload_claims)?;
         if !claims.insert(key.clone()) {
             return Err(ApiError::conflict(
-                "FILE_WRITE_BUSY",
+                storage_contract::ErrorCode::FileWriteBusy,
                 "another upload owns this item",
             ));
         }
@@ -246,7 +246,7 @@ async fn upload_inner(
     if expected_length > state.config.max_upload_bytes {
         return Err(ApiError::new(
             413,
-            "RESOURCE_LIMIT_EXCEEDED",
+            storage_contract::ErrorCode::ResourceLimitExceeded,
             "file exceeds upload limit",
         ));
     }
@@ -305,7 +305,7 @@ async fn upload_inner(
         }
         if generation < previous.generation {
             return Err(ApiError::conflict(
-                "UPLOAD_GENERATION_CONFLICT",
+                storage_contract::ErrorCode::UploadGenerationConflict,
                 "an upload from a newer generation already exists",
             ));
         }
@@ -317,7 +317,7 @@ async fn upload_inner(
                     .is_some_and(|(a, b)| a != b)
             {
                 return Err(ApiError::conflict(
-                    "UPLOAD_GENERATION_CONFLICT",
+                    storage_contract::ErrorCode::UploadGenerationConflict,
                     "length or content hash changed; explicitly start a newer upload generation",
                 ));
             }
@@ -446,7 +446,7 @@ async fn upload_inner(
         if length > expected_length {
             return Err(ApiError::new(
                 413,
-                "UPLOAD_RANGE_CONFLICT",
+                storage_contract::ErrorCode::UploadRangeConflict,
                 "received more bytes than declared; original upload is retained",
             ));
         }
@@ -499,7 +499,7 @@ async fn upload_inner(
     if prefix.as_ref().is_some_and(|prefix| !prefix.complete()) {
         return Err(ApiError::new(
             400,
-            "UPLOAD_INCOMPLETE",
+            storage_contract::ErrorCode::UploadIncomplete,
             "retry ended before the previously persisted prefix; original work data is retained",
         ));
     }
@@ -509,7 +509,7 @@ async fn upload_inner(
     if length != expected_length {
         return Err(ApiError::new(
             400,
-            "UPLOAD_INCOMPLETE",
+            storage_contract::ErrorCode::UploadIncomplete,
             "upload ended before its declared length; durable work data is retained",
         ));
     }
@@ -519,7 +519,7 @@ async fn upload_inner(
         persist_upload(&spool, &record, &admission, &staged_file).await?;
         return Err(ApiError::new(
             400,
-            "CHECKSUM_MISMATCH",
+            storage_contract::ErrorCode::ChecksumMismatch,
             "uploaded bytes do not match the declared hash; work data is retained",
         ));
     }
@@ -550,13 +550,17 @@ async fn upload_inner(
 }
 
 fn parse_range(value: &str, size: u64) -> Result<(u64, u64), ApiError> {
-    let value = value
-        .strip_prefix("bytes=")
-        .ok_or_else(|| ApiError::new(416, "RANGE_NOT_SATISFIABLE", "unsupported byte range"))?;
+    let value = value.strip_prefix("bytes=").ok_or_else(|| {
+        ApiError::new(
+            416,
+            storage_contract::ErrorCode::RangeNotSatisfiable,
+            "unsupported byte range",
+        )
+    })?;
     if value.contains(',') || size == 0 {
         return Err(ApiError::new(
             416,
-            "RANGE_NOT_SATISFIABLE",
+            storage_contract::ErrorCode::RangeNotSatisfiable,
             "only one satisfiable byte range is supported",
         ));
     }
@@ -576,7 +580,7 @@ fn parse_range(value: &str, size: u64) -> Result<(u64, u64), ApiError> {
         if suffix == 0 {
             return Err(ApiError::new(
                 416,
-                "RANGE_NOT_SATISFIABLE",
+                storage_contract::ErrorCode::RangeNotSatisfiable,
                 "empty suffix range",
             ));
         }
@@ -593,7 +597,7 @@ fn parse_range(value: &str, size: u64) -> Result<(u64, u64), ApiError> {
     if start >= size || start > end {
         return Err(ApiError::new(
             416,
-            "RANGE_NOT_SATISFIABLE",
+            storage_contract::ErrorCode::RangeNotSatisfiable,
             "byte range is outside the file",
         ));
     }
@@ -601,7 +605,11 @@ fn parse_range(value: &str, size: u64) -> Result<(u64, u64), ApiError> {
 }
 
 fn invalid_range(message: &str) -> ApiError {
-    ApiError::new(416, "RANGE_NOT_SATISFIABLE", message)
+    ApiError::new(
+        416,
+        storage_contract::ErrorCode::RangeNotSatisfiable,
+        message,
+    )
 }
 
 fn unsatisfiable_range(error: ApiError, size: u64, method: &Method) -> Response {
@@ -656,7 +664,11 @@ pub(crate) async fn content(
                         .get("name")
                         .and_then(Value::as_str)
                         .ok_or_else(|| {
-                            ApiError::new(500, "STATE_INVALID", "download context has no filename")
+                            ApiError::new(
+                                500,
+                                storage_contract::ErrorCode::StateInvalid,
+                                "download context has no filename",
+                            )
                         })?
                         .to_owned(),
                 )

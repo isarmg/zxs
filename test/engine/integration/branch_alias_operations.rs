@@ -376,7 +376,7 @@ fn archive_respects_each_selected_alias_and_preserves_closed_branch_head() {
             .archive_branch(&b.branch_id, "admin", &operation)
             .unwrap_err()
             .code(),
-        "FILE_BRANCH_SELECTED"
+        storage_contract::ErrorCode::FileBranchSelected
     );
     assert!(!p.engine.state().operations.contains_key(&operation));
     assert_eq!(p.engine.state().branches[&b.branch_id].state, "active");
@@ -631,7 +631,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
             &new_id("op"),
         )
         .unwrap_err();
-    assert_eq!(collision.code(), "NAME_COLLISION");
+    assert_eq!(collision.code(), storage_contract::ErrorCode::NameCollision);
     let denied = p
         .engine
         .rename_file_branch(
@@ -642,7 +642,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
             &new_id("op"),
         )
         .unwrap_err();
-    assert_eq!(denied.code(), "UNAUTHENTICATED");
+    assert_eq!(denied.code(), storage_contract::ErrorCode::Unauthenticated);
     let foreign = p
         .engine
         .rename_file_branch(
@@ -653,7 +653,10 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
             &new_id("op"),
         )
         .unwrap_err();
-    assert_eq!(foreign.code(), "FILE_BRANCH_NOT_FOUND");
+    assert_eq!(
+        foreign.code(),
+        storage_contract::ErrorCode::FileBranchNotFound
+    );
     let boundary = format!("{}ab", "文".repeat(42));
     assert_eq!(boundary.len(), 128);
     p.engine
@@ -716,7 +719,10 @@ fn workspace_conflicting_alias_names_reject_the_complete_namespace_decision() {
             request_digest: None,
         })
         .unwrap_err();
-    assert_eq!(error.code(), "BATCH_MAPPING_CONFLICT");
+    assert_eq!(
+        error.code(),
+        storage_contract::ErrorCode::BatchMappingConflict
+    );
     assert_eq!(
         json_codec::to_value(p.engine.list_tree(&p.repo.main_branch_id).unwrap()).unwrap(),
         json_codec::to_value(before).unwrap()

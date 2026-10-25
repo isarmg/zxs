@@ -116,7 +116,7 @@ async fn body(request: Request) -> Result<Value, ApiError> {
     {
         return Err(ApiError::new(
             415,
-            "UNSUPPORTED_MEDIA_TYPE",
+            storage_contract::ErrorCode::UnsupportedMediaType,
             "application/json is required",
         ));
     }
@@ -125,7 +125,13 @@ async fn body(request: Request) -> Result<Value, ApiError> {
         http_boundary::read_body(request, super::MAX_SETUP_BODY_BYTES),
     )
     .await
-    .map_err(|_| ApiError::new(408, "REQUEST_TIMEOUT", "setup request body timed out"))??;
+    .map_err(|_| {
+        ApiError::new(
+            408,
+            storage_contract::ErrorCode::RequestTimeout,
+            "setup request body timed out",
+        )
+    })??;
     storage_contract::strict_json(&bytes).map_err(ApiError::invalid)
 }
 async fn status(State(state): State<AppState>, request: Request) -> Result<Json<Value>, ApiError> {
@@ -134,7 +140,13 @@ async fn status(State(state): State<AppState>, request: Request) -> Result<Json<
     let mut value = dispatch(state, "status", json!({}), Some(token), None).await?;
     value
         .as_object_mut()
-        .ok_or_else(|| ApiError::new(500, "INTERNAL_ERROR", "invalid setup status"))?
+        .ok_or_else(|| {
+            ApiError::new(
+                500,
+                storage_contract::ErrorCode::InternalError,
+                "invalid setup status",
+            )
+        })?
         .insert("csrf_token".into(), Value::String(csrf_token));
     Ok(Json(value))
 }

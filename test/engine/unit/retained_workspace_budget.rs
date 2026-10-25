@@ -19,7 +19,7 @@ fn aborted_records_consume_global_and_principal_budgets_after_restart() {
         e.create_workspace(&repo.main_branch_id, "writer")
             .unwrap_err()
             .code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     let w = e.create_workspace(&repo.main_branch_id, "admin").unwrap();
     e.abort_workspace(&w.workspace_id, "admin").unwrap();
@@ -27,7 +27,7 @@ fn aborted_records_consume_global_and_principal_budgets_after_restart() {
         e.create_workspace(&repo.main_branch_id, "admin")
             .unwrap_err()
             .code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     e.assert_workspace_budget_consistent();
     drop(e);
@@ -37,7 +37,7 @@ fn aborted_records_consume_global_and_principal_budgets_after_restart() {
         e.create_workspace(&repo.main_branch_id, "admin")
             .unwrap_err()
             .code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
 }
 
@@ -69,7 +69,7 @@ fn namespace_growth_is_charged_and_rejection_preserves_durable_evidence() {
                     assert!(accepted < 100, "manifest admission must be bounded");
                 }
                 Err(error) => {
-                    assert_eq!(error.code(), "RESOURCE_LIMIT");
+                    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
                     assert_eq!(
                         canonical_json(&e.workspace(&w.workspace_id).unwrap()).unwrap(),
                         before
@@ -91,7 +91,7 @@ fn namespace_growth_is_charged_and_rejection_preserves_durable_evidence() {
             e.create_workspace(&repo.main_branch_id, "admin")
                 .unwrap_err()
                 .code(),
-            "RESOURCE_LIMIT"
+            storage_contract::ErrorCode::ResourceLimit
         );
     }
 }
@@ -160,7 +160,7 @@ fn over_budget_restart_fails_without_discarding_records() {
         Ok(_) => panic!("startup must reject over-budget retained evidence"),
         Err(error) => error,
     };
-    assert_eq!(error.code(), "RESOURCE_LIMIT");
+    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
     crate::disk::write_json(&f.root.join("config.json"), &f.config, true).unwrap();
     assert_eq!(Engine::open(&f.root).unwrap().workspaces.len(), 2);
 }
@@ -176,7 +176,7 @@ fn rejected_initial_manifest_does_not_consume_durable_record_capacity() {
             e.create_workspace(&repo.main_branch_id, "admin")
                 .unwrap_err()
                 .code(),
-            "RESOURCE_LIMIT"
+            storage_contract::ErrorCode::ResourceLimit
         );
         assert!(e.workspaces.is_empty());
     }
@@ -252,7 +252,7 @@ fn retained_record_owner_cannot_move_its_charge_to_another_principal() {
     w.principal = "another-writer".into();
     assert_eq!(
         e.check_workspace_budget(&w).map(|_| ()).unwrap_err().code(),
-        "STATE_INVALID"
+        storage_contract::ErrorCode::StateInvalid
     );
     assert_eq!(e.retained_workspace_metadata_bytes(), charge);
     e.assert_workspace_budget_consistent();
@@ -289,7 +289,7 @@ fn zero_byte_generations_consume_retained_entry_budget_without_extra_artifacts()
             e.stage_upload(&w.workspace_id, &item, "empty", &source, 3)
                 .unwrap_err()
                 .code(),
-            "RESOURCE_LIMIT"
+            storage_contract::ErrorCode::ResourceLimit
         );
         assert_eq!(
             names(),
@@ -308,7 +308,7 @@ fn zero_byte_generations_consume_retained_entry_budget_without_extra_artifacts()
         e.stage_upload(&w.workspace_id, &item, "empty", &source, 3)
             .unwrap_err()
             .code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     assert_eq!(names(), before);
 }
@@ -366,7 +366,7 @@ fn capacity_reports_retained_lifecycle_counts_and_only_selected_principal() {
     let error = e
         .create_workspace(&repo.main_branch_id, "admin")
         .unwrap_err();
-    assert_eq!(error.code(), "RESOURCE_LIMIT");
+    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
     assert!(error.to_string().contains("principal record count"));
     assert_eq!(capacity_report(&e, "admin"), before);
 }
@@ -431,7 +431,7 @@ fn admission_errors_identify_each_exhausted_dimension_without_changing_evidence(
         let error = e
             .create_workspace(&repo.main_branch_id, "admin")
             .unwrap_err();
-        assert_eq!(error.code(), "RESOURCE_LIMIT");
+        assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
         assert!(error.to_string().contains(dimension), "{error}");
         assert_eq!(capacity_report(&e, "admin"), before);
         assert_eq!(

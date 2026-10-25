@@ -50,7 +50,7 @@ impl Engine {
         let matches = |path: &std::path::Path| -> Result<bool> {
             match read_json::<CommitRequest>(path) {
                 Ok(saved) => Ok(canonical_json(&saved)? == expected),
-                Err(error) if error.code() == "UNSAFE_PATH" => Err(error),
+                Err(error) if error.code() == storage_contract::ErrorCode::UnsafePath => Err(error),
                 Err(_) => Ok(false),
             }
         };
@@ -64,7 +64,7 @@ impl Engine {
             return Ok(());
         }
         Err(Error::new(
-            "RECOVERY_REQUIRED",
+            storage_contract::ErrorCode::RecoveryRequired,
             "no exact saved workspace commit request is available",
         ))
     }
@@ -97,7 +97,9 @@ impl Engine {
         for directory in directories {
             let body = match read_json::<json_codec::Value>(&directory.join("wire-request.json")) {
                 Ok(body) => body,
-                Err(error) if error.code() == "UNSAFE_PATH" => return Err(error),
+                Err(error) if error.code() == storage_contract::ErrorCode::UnsafePath => {
+                    return Err(error);
+                }
                 Err(_) => continue,
             };
             if body["operation_id"].as_str() == Some(request.operation_id.as_str())
@@ -180,7 +182,10 @@ impl Engine {
             for entry in fs::read_dir(&root)? {
                 let entry = entry?;
                 if entry.file_type()?.is_symlink() {
-                    return Err(Error::new("UNSAFE_PATH", "linked workspace directory"));
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::UnsafePath,
+                        "linked workspace directory",
+                    ));
                 }
                 if !entry.file_type()?.is_dir() {
                     continue;
@@ -192,14 +197,17 @@ impl Engine {
                     Ok(_) => {}
                 }
                 let id = entry.file_name().into_string().map_err(|_| {
-                    Error::new("UNSAFE_PATH", "invalid workspace directory identity")
+                    Error::new(
+                        storage_contract::ErrorCode::UnsafePath,
+                        "invalid workspace directory identity",
+                    )
                 })?;
                 validate_id(&id, "ws")?;
                 if !candidates.contains_key(&id)
                     && candidates.len() >= self.effective_workspace_limits().max_retained_workspaces
                 {
                     return Err(Error::new(
-                        "RESOURCE_LIMIT",
+                        storage_contract::ErrorCode::ResourceLimit,
                         "retained workspace scan budget exhausted",
                     ));
                 }
@@ -221,7 +229,9 @@ impl Engine {
                         self.validate_workspace_mirror(&id, path, &workspace, authoritative)?;
                         healthy.push(workspace);
                     }
-                    Err(error) if error.code() == "UNSAFE_PATH" => return Err(error),
+                    Err(error) if error.code() == storage_contract::ErrorCode::UnsafePath => {
+                        return Err(error);
+                    }
                     Err(_) => damaged = true,
                 }
             }
@@ -372,14 +382,14 @@ impl Engine {
                     .any(|part| matches!(part, Component::ParentDir))
             {
                 return Err(Error::new(
-                    "UNSAFE_PATH",
+                    storage_contract::ErrorCode::UnsafePath,
                     "workspace staging path escapes owned directory",
                 ));
             }
             // Missing bytes can be an existing unavailable-content condition,
             // but an unsafe source must not be hidden by a healthy JSON mirror.
             if let Err(error) = open_regular(&file.source_path)
-                && error.code() == "UNSAFE_PATH"
+                && error.code() == storage_contract::ErrorCode::UnsafePath
             {
                 return Err(error);
             }
@@ -432,7 +442,9 @@ impl Engine {
         for directory in &directories {
             let request = match read_json::<CommitRequest>(&directory.join("commit-request.json")) {
                 Ok(request) => request,
-                Err(error) if error.code() == "UNSAFE_PATH" => return Err(error),
+                Err(error) if error.code() == storage_contract::ErrorCode::UnsafePath => {
+                    return Err(error);
+                }
                 Err(_) => continue,
             };
             if !self.workspace_request_matches_operation(workspace, &request)
@@ -499,7 +511,9 @@ impl Engine {
         for directory in &directories {
             let request = match read_json::<CommitRequest>(&directory.join("commit-request.json")) {
                 Ok(request) => request,
-                Err(error) if error.code() == "UNSAFE_PATH" => return Err(error),
+                Err(error) if error.code() == storage_contract::ErrorCode::UnsafePath => {
+                    return Err(error);
+                }
                 Err(_) => continue,
             };
             if self.workspace_request_matches_operation(workspace, &request)
@@ -578,7 +592,7 @@ impl Engine {
 }
 
 fn recovery_required(message: &str) -> Error {
-    Error::new("RECOVERY_REQUIRED", message)
+    Error::new(storage_contract::ErrorCode::RecoveryRequired, message)
 }
 
 fn possible_commit_transition(before: &Workspace, after: &Workspace) -> bool {

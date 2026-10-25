@@ -16,16 +16,18 @@ mod mountinfo;
 pub(crate) fn fs_error(e: platform_io::fs_safety::Error) -> Error {
     match e {
         platform_io::fs_safety::Error::Io(e) if matches!(e.raw_os_error(), Some(20 | 40)) => {
-            Error::new("UNSAFE_PATH", e.to_string())
+            Error::new(storage_contract::ErrorCode::UnsafePath, e.to_string())
         }
         platform_io::fs_safety::Error::Io(e) => e.into(),
-        platform_io::fs_safety::Error::PublishedDurabilityUnknown(e) => {
-            Error::new("DURABILITY_UNKNOWN", e.to_string())
-        }
-        platform_io::fs_safety::Error::DestinationExists(p) => {
-            Error::new("DESTINATION_EXISTS", p.display().to_string())
-        }
-        other => Error::new("UNSAFE_PATH", other.to_string()),
+        platform_io::fs_safety::Error::PublishedDurabilityUnknown(e) => Error::new(
+            storage_contract::ErrorCode::DurabilityUnknown,
+            e.to_string(),
+        ),
+        platform_io::fs_safety::Error::DestinationExists(p) => Error::new(
+            storage_contract::ErrorCode::DestinationExists,
+            p.display().to_string(),
+        ),
+        other => Error::new(storage_contract::ErrorCode::UnsafePath, other.to_string()),
     }
 }
 fn absolute_path(path: &Path) -> Result<PathBuf> {
@@ -44,7 +46,7 @@ fn absolute_path(path: &Path) -> Result<PathBuf> {
             // them would change their meaning if an ancestor were a symlink.
             _ => {
                 return Err(Error::new(
-                    "UNSAFE_PATH",
+                    storage_contract::ErrorCode::UnsafePath,
                     "parent traversal is not allowed in managed I/O",
                 ));
             }
@@ -80,9 +82,12 @@ pub(crate) fn private_dir(path: &Path) -> Result<()> {
             PrivateDirectory::open_existing(&path).map_err(fs_error)?;
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let parent = path
-                .parent()
-                .ok_or_else(|| Error::new("UNSAFE_PATH", "missing directory parent"))?;
+            let parent = path.parent().ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::UnsafePath,
+                    "missing directory parent",
+                )
+            })?;
             if !parent.exists() {
                 private_dir(parent)?;
             }
@@ -110,15 +115,18 @@ pub(crate) fn open_regular(path: &Path) -> Result<File> {
 /// or linked parent and every other I/O failure must remain an error.
 pub(crate) fn open_optional_regular(path: &Path) -> Result<Option<File>> {
     let path = absolute_path(path)?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| Error::new("UNSAFE_PATH", "missing file parent"))?;
+    let parent = path.parent().ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::UnsafePath,
+            "missing file parent",
+        )
+    })?;
     let root = OpenAt2Root::open(parent, MountPolicy::SameMount).map_err(fs_error)?;
-    let name = RelativePath::new(
-        path.file_name()
-            .ok_or_else(|| Error::new("UNSAFE_PATH", "missing file name"))?,
-    )
-    .map_err(fs_error)?;
+    let name =
+        RelativePath::new(path.file_name().ok_or_else(|| {
+            Error::new(storage_contract::ErrorCode::UnsafePath, "missing file name")
+        })?)
+        .map_err(fs_error)?;
     match root.open_file(&name, false) {
         Ok(file) => Ok(Some(file)),
         Err(platform_io::fs_safety::Error::Io(error))
@@ -132,15 +140,18 @@ pub(crate) fn open_optional_regular(path: &Path) -> Result<Option<File>> {
 /// Open a journal relative to its verified parent, without following a leaf symlink.
 pub(crate) fn open_append_regular(path: &Path) -> Result<File> {
     let path = absolute_path(path)?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| Error::new("UNSAFE_PATH", "missing file parent"))?;
+    let parent = path.parent().ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::UnsafePath,
+            "missing file parent",
+        )
+    })?;
     let root = OpenAt2Root::open(parent, MountPolicy::SameMount).map_err(fs_error)?;
-    let name = EntryName::new(
-        path.file_name()
-            .ok_or_else(|| Error::new("UNSAFE_PATH", "missing file name"))?,
-    )
-    .map_err(fs_error)?;
+    let name =
+        EntryName::new(path.file_name().ok_or_else(|| {
+            Error::new(storage_contract::ErrorCode::UnsafePath, "missing file name")
+        })?)
+        .map_err(fs_error)?;
     let file = File::from(
         rustix::fs::openat2(
             root.directory(),
@@ -168,12 +179,18 @@ pub(crate) fn read_bytes(path: &Path, maximum: usize) -> Result<Vec<u8>> {
 pub(crate) fn read_file_bytes(mut f: File, maximum: usize) -> Result<Vec<u8>> {
     let size = f.metadata()?.len();
     if size > maximum as u64 {
-        return Err(Error::new("RESOURCE_LIMIT", "metadata input exceeds limit"));
+        return Err(Error::new(
+            storage_contract::ErrorCode::ResourceLimit,
+            "metadata input exceeds limit",
+        ));
     }
     let mut out = Vec::new();
     (&mut f).take(maximum as u64 + 1).read_to_end(&mut out)?;
     if out.len() > maximum {
-        return Err(Error::new("RESOURCE_LIMIT", "metadata grew beyond limit"));
+        return Err(Error::new(
+            storage_contract::ErrorCode::ResourceLimit,
+            "metadata grew beyond limit",
+        ));
     }
     Ok(out)
 }
@@ -184,13 +201,15 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8], replace: bool) -> Result<(
     let path = absolute_path(path)?;
     let parent = path
         .parent()
-        .ok_or_else(|| Error::new("UNSAFE_PATH", "missing parent"))?;
+        .ok_or_else(|| Error::new(storage_contract::ErrorCode::UnsafePath, "missing parent"))?;
     private_dir(parent)?;
     let directory = PrivateDirectory::open_existing(parent).map_err(fs_error)?;
-    let name = EntryName::new(
-        path.file_name()
-            .ok_or_else(|| Error::new("UNSAFE_PATH", "missing object name"))?,
-    )
+    let name = EntryName::new(path.file_name().ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::UnsafePath,
+            "missing object name",
+        )
+    })?)
     .map_err(fs_error)?;
     if !replace && path.try_exists()? {
         if directory
@@ -205,7 +224,7 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8], replace: bool) -> Result<(
             return Ok(());
         }
         return Err(Error::new(
-            "OBJECT_COLLISION",
+            storage_contract::ErrorCode::ObjectCollision,
             "immutable object differs from existing bytes",
         ));
     }
@@ -220,7 +239,7 @@ pub(crate) fn encode_metadata<T: Serialize + ?Sized>(value: &T, maximum: usize) 
     let bytes = canonical_json(value)?;
     if bytes.len() > maximum {
         return Err(Error::new(
-            "RESOURCE_LIMIT",
+            storage_contract::ErrorCode::ResourceLimit,
             format!("serialized metadata exceeds {maximum} byte reader limit"),
         ));
     }
@@ -266,18 +285,22 @@ fn full_copy_to_path(
     expected: Option<&FileVersion>,
 ) -> Result<(u64, String, ChecksumManifest)> {
     let destination = absolute_path(destination)?;
-    let parent = destination
-        .parent()
-        .ok_or_else(|| Error::new("UNSAFE_PATH", "missing destination parent"))?;
+    let parent = destination.parent().ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::UnsafePath,
+            "missing destination parent",
+        )
+    })?;
     if !parent.exists() {
         private_dir(parent)?;
     }
     let directory = OpenAt2Root::open(parent, MountPolicy::SameMount).map_err(fs_error)?;
-    let destination_name = EntryName::new(
-        destination
-            .file_name()
-            .ok_or_else(|| Error::new("UNSAFE_PATH", "missing destination name"))?,
-    )
+    let destination_name = EntryName::new(destination.file_name().ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::UnsafePath,
+            "missing destination name",
+        )
+    })?)
     .map_err(fs_error)?;
     full_copy_checked(
         source,
@@ -350,12 +373,15 @@ fn full_copy_checked(
             if used == 0 {
                 break;
             }
-            size = size
-                .checked_add(used as u64)
-                .ok_or_else(|| Error::new("FILE_TOO_LARGE", "file length overflow"))?;
+            size = size.checked_add(used as u64).ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::FileTooLarge,
+                    "file length overflow",
+                )
+            })?;
             if size > max_bytes {
                 return Err(Error::new(
-                    "FILE_TOO_LARGE",
+                    storage_contract::ErrorCode::FileTooLarge,
                     "file exceeds configured maximum",
                 ));
             }
@@ -378,7 +404,7 @@ fn full_copy_checked(
                     != expected.checksum_manifest_hash)
         {
             return Err(Error::new(
-                "SOURCE_CHANGED",
+                storage_contract::ErrorCode::SourceChanged,
                 "exported content differs from the published manifest",
             ));
         }
@@ -414,7 +440,7 @@ pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Re
     let checks = read_bytes(&directory.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
     if blake3::hash(&checks).to_hex().as_str() != version.checksum_manifest_hash {
         return Err(Error::new(
-            "CHECKSUM_MISMATCH",
+            storage_contract::ErrorCode::ChecksumMismatch,
             "checksum manifest digest differs",
         ));
     }
@@ -423,13 +449,16 @@ pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Re
         || manifest.chunk_bytes != version.checksum_chunk_bytes
     {
         return Err(Error::new(
-            "CHECKSUM_MISMATCH",
+            storage_contract::ErrorCode::ChecksumMismatch,
             "checksum header differs from version",
         ));
     }
     let mut file = open_regular(&crate::container_storage::content_path(directory, version)?)?;
     if file.metadata()?.len() != version.logical_size {
-        return Err(Error::new("CHECKSUM_MISMATCH", "payload length differs"));
+        return Err(Error::new(
+            storage_contract::ErrorCode::ChecksumMismatch,
+            "payload length differs",
+        ));
     }
     let mut full = blake3::Hasher::new();
     let mut buf = vec![0u8; manifest.chunk_bytes as usize];
@@ -438,7 +467,10 @@ pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Re
         let n = remaining.min(buf.len() as u64) as usize;
         file.read_exact(&mut buf[..n])?;
         if blake3::hash(&buf[..n]).as_bytes() != &expected {
-            return Err(Error::new("CHECKSUM_MISMATCH", "payload chunk differs"));
+            return Err(Error::new(
+                storage_contract::ErrorCode::ChecksumMismatch,
+                "payload chunk differs",
+            ));
         }
         full.update(&buf[..n]);
         remaining -= n as u64;
@@ -446,13 +478,13 @@ pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Re
     let mut extra = [0u8; 1];
     if file.read(&mut extra)? != 0 || file.metadata()?.len() != version.logical_size {
         return Err(Error::new(
-            "CHECKSUM_MISMATCH",
+            storage_contract::ErrorCode::ChecksumMismatch,
             "payload length changed during verification",
         ));
     }
     if full.finalize().to_hex().as_str() != version.content_hash {
         return Err(Error::new(
-            "CHECKSUM_MISMATCH",
+            storage_contract::ErrorCode::ChecksumMismatch,
             "complete payload hash differs",
         ));
     }
@@ -470,7 +502,7 @@ pub(crate) fn identity(config: &Config, disk: &DiskConfig) -> Result<DiskSeal> {
     let m = fs::symlink_metadata(&disk.root)?;
     if !m.is_dir() || m.file_type().is_symlink() {
         return Err(Error::new(
-            "DISK_IDENTITY_MISMATCH",
+            storage_contract::ErrorCode::DiskIdentityMismatch,
             "disk root is not a physical directory",
         ));
     }
@@ -500,20 +532,28 @@ fn production_device(root: &Path) -> Result<(String, String)> {
     let selected = mountinfo::resolve(&mountinfo, &canonical)?;
     if selected.kind != "btrfs" {
         return Err(Error::new(
-            "FILESYSTEM_REQUIRED",
+            storage_contract::ErrorCode::FilesystemRequired,
             "production requires an independent Btrfs filesystem for every disk",
         ));
     }
     let device = selected.source.canonicalize()?;
-    let name = device
-        .file_name()
-        .ok_or_else(|| Error::new("DISK_IDENTITY_MISMATCH", "missing block identity"))?;
+    let name = device.file_name().ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::DiskIdentityMismatch,
+            "missing block identity",
+        )
+    })?;
     let class = Path::new("/sys/class/block").join(name);
     let hardware = class.canonicalize()?;
     let mut physical = if class.join("partition").exists() {
         hardware
             .parent()
-            .ok_or_else(|| Error::new("DISK_IDENTITY_MISMATCH", "partition parent missing"))?
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::DiskIdentityMismatch,
+                    "partition parent missing",
+                )
+            })?
             .to_path_buf()
     } else {
         hardware.clone()
@@ -525,7 +565,7 @@ fn production_device(root: &Path) -> Result<(String, String)> {
         || fs::read_dir(class.join("slaves"))?.next().is_some()
     {
         return Err(Error::new(
-            "UNSUPPORTED_DEVICE_TOPOLOGY",
+            storage_contract::ErrorCode::UnsupportedDeviceTopology,
             "production requires directly identifiable independent drives; virtual or aggregated block devices are not supported",
         ));
     }
@@ -548,7 +588,7 @@ fn production_device(root: &Path) -> Result<(String, String)> {
                 .parent()
                 .ok_or_else(|| {
                     Error::new(
-                        "DISK_IDENTITY_MISMATCH",
+                        storage_contract::ErrorCode::DiskIdentityMismatch,
                         "NVMe controller identity is missing",
                     )
                 })?
@@ -569,7 +609,7 @@ fn production_device(root: &Path) -> Result<(String, String)> {
         if belongs {
             if entries.len() != 1 {
                 return Err(Error::new(
-                    "MULTI_DEVICE_FILESYSTEM",
+                    storage_contract::ErrorCode::MultiDeviceFilesystem,
                     "Btrfs must contain exactly one physical device",
                 ));
             }
@@ -581,7 +621,7 @@ fn production_device(root: &Path) -> Result<(String, String)> {
         physical.to_string_lossy().into_owned(),
         fsid.ok_or_else(|| {
             Error::new(
-                "DISK_IDENTITY_MISMATCH",
+                storage_contract::ErrorCode::DiskIdentityMismatch,
                 "cannot verify Btrfs device count and UUID",
             )
         })?,
@@ -616,7 +656,7 @@ pub(crate) fn validate_seal(config: &Config, disk: &DiskConfig) -> Result<DiskSe
         || stored.simulation != live.simulation
     {
         return Err(Error::new(
-            "DISK_IDENTITY_MISMATCH",
+            storage_contract::ErrorCode::DiskIdentityMismatch,
             format!("disk {} identity changed", disk.slot_id),
         ));
     }
@@ -700,7 +740,7 @@ pub fn offline_export(root: &Path, version_id: &str, destination: &Path) -> Resu
         let source = verify_payload_held(&directory, &version)?;
         if destination.exists() {
             return Err(Error::new(
-                "DESTINATION_EXISTS",
+                storage_contract::ErrorCode::DestinationExists,
                 "export does not overwrite existing files",
             ));
         }
@@ -708,7 +748,7 @@ pub fn offline_export(root: &Path, version_id: &str, destination: &Path) -> Resu
         return Ok(());
     }
     Err(Error::new(
-        "VERSION_NOT_FOUND",
+        storage_contract::ErrorCode::VersionNotFound,
         "version is not present on this disk",
     ))
 }

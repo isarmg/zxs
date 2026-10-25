@@ -220,7 +220,7 @@ fn stale_and_over_capacity_batches_are_atomic_and_retry_is_idempotent() {
             })
             .unwrap_err()
             .code(),
-            "IDEMPOTENCY_KEY_REUSED"
+            storage_contract::ErrorCode::IdempotencyKeyReused
         );
         assert_eq!(canonical_json(e.state()).unwrap(), state);
     }
@@ -236,7 +236,7 @@ fn stale_and_over_capacity_batches_are_atomic_and_retry_is_idempotent() {
         })
         .unwrap_err()
         .code(),
-        "FILE_BRANCH_CONFLICT"
+        storage_contract::ErrorCode::FileBranchConflict
     );
     t.source_node_id = receipt.result["nodes"][0]["node_id"]
         .as_str()
@@ -256,7 +256,7 @@ fn stale_and_over_capacity_batches_are_atomic_and_retry_is_idempotent() {
         })
         .unwrap_err()
         .code(),
-        "TAG_LIMIT_EXCEEDED"
+        storage_contract::ErrorCode::TagLimitExceeded
     );
     assert_eq!(canonical_json(e.state()).unwrap(), state);
     assert!(validate_tag(&"汉".repeat(43)).is_err());

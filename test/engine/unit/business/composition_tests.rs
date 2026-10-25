@@ -141,7 +141,7 @@ fn explicit_same_node_selection_changes_intent_once_and_fences_old_workspaces() 
         e.stage_bytes(&old.workspace_id, "folder/a.txt", b"stale")
             .unwrap_err()
             .code(),
-        "FILE_BRANCH_CONFLICT"
+        storage_contract::ErrorCode::FileBranchConflict
     );
     let count = e.state().directory_trees.len();
     e.select_file_branch(&file.file_id, &main, "admin", &new_id("op"))
@@ -269,9 +269,9 @@ fn batch_move_recovery_keeps_source_and_target_in_one_decision() {
         assert_eq!(
             error.code(),
             if published {
-                "IN_DOUBT"
+                storage_contract::ErrorCode::InDoubt
             } else {
-                "INJECTED_FAILURE"
+                storage_contract::ErrorCode::InjectedFailure
             }
         );
         drop(e);
@@ -303,14 +303,14 @@ fn batch_rejects_ambiguous_move_and_late_collision_without_any_branch_change() {
     let before = canonical_json(e.state()).unwrap();
     for (expected, items) in [
         (
-            "BATCH_MAPPING_CONFLICT",
+            storage_contract::ErrorCode::BatchMappingConflict,
             vec![
                 item(&e, &m, "a/f.txt", Some((&l, "b/f.txt"))),
                 item(&e, &n, "a/f.txt", Some((&q, "c/f.txt"))),
             ],
         ),
         (
-            "NAME_COLLISION",
+            storage_contract::ErrorCode::NameCollision,
             vec![
                 item(&e, &m, "a/f.txt", Some((&l, "b/f.txt"))),
                 item(&e, &n, "a/f.txt", Some((&l, "b/exists.txt"))),
@@ -381,7 +381,7 @@ fn first_lazy_save_receipt_allows_the_same_writer_to_continue_but_fences_later_s
         e.validate_workspace_file_selection(&w.workspace_id, "a/f.txt")
             .unwrap_err()
             .code(),
-        "DIRECTORY_BRANCH_CONFLICT"
+        storage_contract::ErrorCode::DirectoryBranchConflict
     );
 }
 #[test]
@@ -405,7 +405,7 @@ fn a_directory_created_after_workspace_open_still_fences_new_file_staging() {
         e.stage_bytes(&w.workspace_id, "new/f.txt", b"stale")
             .unwrap_err()
             .code(),
-        "DIRECTORY_BRANCH_CONFLICT"
+        storage_contract::ErrorCode::DirectoryBranchConflict
     );
 }
 

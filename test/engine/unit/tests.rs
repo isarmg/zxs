@@ -133,7 +133,7 @@ fn rejected_directory_upload_does_not_consume_an_immutable_generation() {
             .stage_upload(&workspace.workspace_id, &item, "folder", &source, 1)
             .unwrap_err()
             .code(),
-        "IS_DIRECTORY"
+        storage_contract::ErrorCode::IsDirectory
     );
     let staging = engine.workspace_data_directory(&workspace).unwrap();
     assert!(fs::read_dir(staging).unwrap().all(|entry| {
@@ -173,7 +173,7 @@ fn direct_namespace_cannot_write_an_inactive_directory_branch() {
             &new_id("op"),
         )
         .unwrap_err();
-    assert_eq!(error.code(), "BRANCH_NOT_ACTIVE");
+    assert_eq!(error.code(), storage_contract::ErrorCode::BranchNotActive);
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
 }
 
@@ -264,7 +264,7 @@ fn modified_local_maintenance_plan_cannot_execute_a_different_preview_after_rest
             .commit_plan(&plan.plan_id, "admin", &new_id("op"))
             .unwrap_err()
             .code(),
-        "PLAN_INVALID"
+        storage_contract::ErrorCode::PlanInvalid
     );
     assert_eq!(engine.state().sequence, before);
     assert_eq!(bytes(&engine, &first), b"one");
@@ -277,7 +277,7 @@ fn modified_local_maintenance_plan_cannot_execute_a_different_preview_after_rest
             .plan(plan_path.file_stem().unwrap().to_str().unwrap())
             .unwrap_err()
             .code(),
-        "PLAN_INVALID"
+        storage_contract::ErrorCode::PlanInvalid
     );
 }
 
@@ -326,9 +326,9 @@ fn file_container_rename_replays_only_after_decision_and_keeps_all_version_bytes
                 .unwrap_err()
                 .code(),
             if committed {
-                "IN_DOUBT"
+                storage_contract::ErrorCode::InDoubt
             } else {
-                "INJECTED_FAILURE"
+                storage_contract::ErrorCode::InjectedFailure
             }
         );
         if fault != "after_container_names" {
@@ -449,7 +449,7 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
             )
             .unwrap_err()
             .code(),
-        "FILE_BRANCH_SCOPE"
+        storage_contract::ErrorCode::FileBranchScope
     );
     assert_eq!(
         engine.state().versions.len(),
@@ -468,7 +468,7 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
             .stage_bytes(&scope.workspace_id, "docs/two.txt", b"bad")
             .unwrap_err()
             .code(),
-        "FILE_BRANCH_SCOPE"
+        storage_contract::ErrorCode::FileBranchScope
     );
     assert_eq!(
         engine
@@ -482,7 +482,7 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
             )
             .unwrap_err()
             .code(),
-        "FILE_BRANCH_SCOPE"
+        storage_contract::ErrorCode::FileBranchScope
     );
     engine
         .abort_workspace(&scope.workspace_id, "admin")
@@ -566,14 +566,14 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
             )
             .unwrap_err()
             .code(),
-        "VERSION_NOT_FOUND"
+        storage_contract::ErrorCode::VersionNotFound
     );
     assert_eq!(
         engine
             .select_file_branch(&one.file_id, &branch_id, "", &new_id("op"))
             .unwrap_err()
             .code(),
-        "UNAUTHENTICATED"
+        storage_contract::ErrorCode::Unauthenticated
     );
     drop(engine);
     let mut engine = Engine::open(&fixture.root).unwrap();
@@ -867,7 +867,7 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
             )
             .unwrap_err()
             .code(),
-        "NAME_COLLISION"
+        storage_contract::ErrorCode::NameCollision
     );
     assert_eq!(
         canonical_json(engine.state()).unwrap(),
@@ -917,7 +917,7 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
             )
             .unwrap_err()
             .code(),
-        "UNAUTHENTICATED"
+        storage_contract::ErrorCode::Unauthenticated
     );
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     let lost = engine.state().versions[&b.version_id].clone();
@@ -1056,12 +1056,18 @@ fn written_branch_survives_source_purge_and_merge_is_metadata_only() {
         .unwrap();
     e.commit_plan(&plan.plan_id, "admin", &new_id("op"))
         .unwrap();
-    assert_eq!(e.open_content(&old).err().unwrap().code(), "CONTENT_PURGED");
+    assert_eq!(
+        e.open_content(&old).err().unwrap().code(),
+        storage_contract::ErrorCode::ContentPurged
+    );
     assert_eq!(bytes(&e, &fork), b"written independently");
     drop(e);
     let e = Engine::open(&f.root).unwrap();
     assert_eq!(bytes(&e, &fork), b"written independently");
-    assert_eq!(e.open_content(&old).err().unwrap().code(), "CONTENT_PURGED");
+    assert_eq!(
+        e.open_content(&old).err().unwrap().code(),
+        storage_contract::ErrorCode::ContentPurged
+    );
 }
 #[test]
 fn faults_replay_same_operation_and_never_publish_early() {
@@ -1093,7 +1099,7 @@ fn faults_replay_same_operation_and_never_publish_early() {
         e.inject_fault_once(point);
         assert_eq!(
             e.commit_workspace(request.clone()).unwrap_err().code(),
-            "IN_DOUBT",
+            storage_contract::ErrorCode::InDoubt,
             "{point}"
         );
         assert!(e.is_read_only());
@@ -1130,7 +1136,7 @@ fn disjoint_workspaces_rebase_but_same_file_is_owned() {
         e.stage_bytes(&b.workspace_id, "a", b"b")
             .unwrap_err()
             .code(),
-        "FILE_BUSY"
+        storage_contract::ErrorCode::FileBusy
     );
     e.stage_bytes(&b.workspace_id, "b", b"b").unwrap();
     for w in [a, b] {
@@ -1164,21 +1170,21 @@ fn durable_workspace_and_plan_preparations_require_an_audit_actor() {
             .create_workspace(&repo.main_branch_id, "")
             .unwrap_err()
             .code(),
-        "UNAUTHENTICATED"
+        storage_contract::ErrorCode::Unauthenticated
     );
     assert_eq!(
         engine
             .create_historical_workspace(&repo.main_branch_id, &head, "")
             .unwrap_err()
             .code(),
-        "UNAUTHENTICATED"
+        storage_contract::ErrorCode::Unauthenticated
     );
     assert_eq!(
         engine
             .create_purge_plan(&repo.history_tree_id, Vec::new(), "")
             .unwrap_err()
             .code(),
-        "UNAUTHENTICATED"
+        storage_contract::ErrorCode::Unauthenticated
     );
     assert_eq!(engine.workspaces.len(), workspaces);
     assert_eq!(engine.state.plans.len(), plans);
@@ -1210,14 +1216,14 @@ fn workspace_actor_binding_and_idempotency_conflicts() {
         e.commit_workspace(changed_actor.clone())
             .unwrap_err()
             .code(),
-        "PERMISSION_DENIED"
+        storage_contract::ErrorCode::PermissionDenied
     );
     assert_eq!(
         e.prepare_workspace_commit(changed_actor, None)
             .err()
             .unwrap()
             .code(),
-        "PERMISSION_DENIED"
+        storage_contract::ErrorCode::PermissionDenied
     );
     // Conversely, the correct actor does not bypass a stale or forged fence.
     let mut changed_fence = request.clone();
@@ -1226,14 +1232,14 @@ fn workspace_actor_binding_and_idempotency_conflicts() {
         e.commit_workspace(changed_fence.clone())
             .unwrap_err()
             .code(),
-        "FENCING_TOKEN_INVALID"
+        storage_contract::ErrorCode::FencingTokenInvalid
     );
     assert_eq!(
         e.prepare_workspace_commit(changed_fence, None)
             .err()
             .unwrap()
             .code(),
-        "FENCING_TOKEN_INVALID"
+        storage_contract::ErrorCode::FencingTokenInvalid
     );
     assert_eq!(canonical_json(e.state()).unwrap(), state_before);
     assert_eq!(
@@ -1255,7 +1261,7 @@ fn workspace_actor_binding_and_idempotency_conflicts() {
         e.create_repository("other", "P01", 1, "admin", &op)
             .unwrap_err()
             .code(),
-        "IDEMPOTENCY_KEY_REUSED"
+        storage_contract::ErrorCode::IdempotencyKeyReused
     );
 }
 #[test]
@@ -1273,7 +1279,7 @@ fn active_reads_protect_history_and_split_remaps_full_payloads() {
         e.create_purge_plan(&r.history_tree_id, vec![old.clone()], "admin")
             .unwrap_err()
             .code(),
-        "CONTENT_PINNED"
+        storage_contract::ErrorCode::ContentPinned
     );
     drop(lease);
     let plan = e
@@ -1317,7 +1323,7 @@ fn fixed_route_capacity_does_not_fallback_and_second_writer_is_rejected() {
     let mut e = f.initialize();
     assert_eq!(
         Engine::open(&f.root).err().unwrap().code(),
-        "WRITER_ALREADY_ACTIVE"
+        storage_contract::ErrorCode::WriterAlreadyActive
     );
     let r = repository(&mut e, 3);
     let w = e.create_workspace(&r.main_branch_id, "admin").unwrap();
@@ -1334,7 +1340,7 @@ fn fixed_route_capacity_does_not_fallback_and_second_writer_is_rejected() {
             request_digest: None,
         })
         .unwrap_err();
-    assert_eq!(err.code(), "NO_SPACE");
+    assert_eq!(err.code(), storage_contract::ErrorCode::NoSpace);
     assert!(e.list_tree(&r.main_branch_id).unwrap().is_empty());
     assert!(!e.workspace(&w.workspace_id).unwrap().files.is_empty());
 }
@@ -1418,14 +1424,14 @@ fn explicit_upload_generations_and_sealed_wire_requests_are_stable() {
         e.stage_upload(&w.workspace_id, &item, "a", &input, 99)
             .unwrap_err()
             .code(),
-        "STALE_UPLOAD_GENERATION"
+        storage_contract::ErrorCode::StaleUploadGeneration
     );
     fs::write(&input, b"different").unwrap();
     assert_eq!(
         e.stage_upload(&w.workspace_id, &item, "a", &input, 100)
             .unwrap_err()
             .code(),
-        "UPLOAD_GENERATION_CONFLICT"
+        storage_contract::ErrorCode::UploadGenerationConflict
     );
     let next = e
         .stage_upload(&w.workspace_id, &item, "a", &input, 200)
@@ -1453,7 +1459,7 @@ fn explicit_upload_generations_and_sealed_wire_requests_are_stable() {
         e.commit_workspace_wire(request.clone(), wrong)
             .unwrap_err()
             .code(),
-        "REQUEST_DIGEST_MISMATCH"
+        storage_contract::ErrorCode::RequestDigestMismatch
     );
     assert!(
         e.stage_upload(&w.workspace_id, &item, "a", &input, 201)
@@ -1581,7 +1587,7 @@ fn mkdir_and_child_upload_publish_together_and_cancellation_never_undoes_executi
         e.commit_plan(&plan.plan_id, "admin", &cancel)
             .unwrap_err()
             .code(),
-        "IDEMPOTENCY_KEY_REUSED"
+        storage_contract::ErrorCode::IdempotencyKeyReused
     );
     let plan = e
         .create_purge_plan(&r.history_tree_id, vec![old], "admin")
@@ -1592,7 +1598,7 @@ fn mkdir_and_child_upload_publish_together_and_cancellation_never_undoes_executi
         e.cancel_plan(&plan.plan_id, "admin", &new_id("op"))
             .unwrap_err()
             .code(),
-        "PLAN_CLOSED"
+        storage_contract::ErrorCode::PlanClosed
     );
 }
 
@@ -1620,7 +1626,7 @@ fn managed_io_rejects_symlink_ancestors_and_preserves_export_directory_permissio
         crate::disk::open_regular(&link.join("a"))
             .unwrap_err()
             .code(),
-        "UNSAFE_PATH"
+        storage_contract::ErrorCode::UnsafePath
     );
     assert!(crate::disk::write_atomic(&link.join("attack"), b"no", true).is_err());
     assert!(!public.join("attack").exists());
@@ -1692,7 +1698,7 @@ fn conditional_directory_policies_change_only_future_placements() {
         })
         .unwrap_err()
         .code(),
-        "GENERATION_MISMATCH"
+        storage_contract::ErrorCode::GenerationMismatch
     );
     let other = e
         .create_repository("other", "P01", 3, "admin", &new_id("op"))
@@ -1710,7 +1716,7 @@ fn conditional_directory_policies_change_only_future_placements() {
         })
         .unwrap_err()
         .code(),
-        "UNAUTHENTICATED"
+        storage_contract::ErrorCode::Unauthenticated
     );
     // The sole administrator can manage both repositories, but an existing
     // policy/rule identity cannot be rebound to a different repository.
@@ -1726,7 +1732,7 @@ fn conditional_directory_policies_change_only_future_placements() {
         })
         .unwrap_err()
         .code(),
-        "REQUEST_BINDING_MISMATCH"
+        storage_contract::ErrorCode::RequestBindingMismatch
     );
     assert_eq!(
         e.update_placement_rule(crate::PlacementRuleUpdate {
@@ -1740,7 +1746,7 @@ fn conditional_directory_policies_change_only_future_placements() {
         })
         .unwrap_err()
         .code(),
-        "REQUEST_BINDING_MISMATCH"
+        storage_contract::ErrorCode::RequestBindingMismatch
     );
     assert_eq!(canonical_json(e.state()).unwrap(), before_rejected_updates);
     save(&mut e, &r.main_branch_id, "docs/a", b"new primary");
@@ -1805,7 +1811,10 @@ fn overlapping_namespace_and_upload_never_reports_a_successful_disappearing_file
                 request_digest: None,
             })
             .unwrap_err();
-        assert_eq!(error.code(), "WORKSPACE_DEPENDENCY_BUSY");
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::WorkspaceDependencyBusy
+        );
         assert_eq!(e.state().branches[&r.main_branch_id].head_commit_id, head);
         assert_eq!(fs::read(staged.source_path).unwrap(), b"must remain staged");
     }
@@ -1832,7 +1841,7 @@ fn smb_binding_is_explicit_conditional_and_requires_clean_workspaces() {
         )
         .unwrap_err()
         .code(),
-        "WORKSPACE_BUSY"
+        storage_contract::ErrorCode::WorkspaceBusy
     );
     e.abort_workspace(&w.workspace_id, "admin").unwrap();
     e.set_smb_binding(
@@ -1859,7 +1868,7 @@ fn smb_binding_is_explicit_conditional_and_requires_clean_workspaces() {
         )
         .unwrap_err()
         .code(),
-        "GENERATION_MISMATCH"
+        storage_contract::ErrorCode::GenerationMismatch
     );
 }
 
@@ -1889,7 +1898,7 @@ fn retained_generations_and_sealed_workspaces_keep_their_resource_and_file_owner
         e.stage_upload(&w.workspace_id, &item, "a", &input, 3)
             .unwrap_err()
             .code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     assert_eq!(fs::read(first.source_path).unwrap(), b"1234");
     e.seal_workspace(&w.workspace_id, "admin").unwrap();
@@ -1898,13 +1907,13 @@ fn retained_generations_and_sealed_workspaces_keep_their_resource_and_file_owner
         e.stage_bytes(&second.workspace_id, "a", b"no")
             .unwrap_err()
             .code(),
-        "FILE_BUSY"
+        storage_contract::ErrorCode::FileBusy
     );
     assert_eq!(
         e.create_workspace(&r.main_branch_id, "admin")
             .unwrap_err()
             .code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     let missing = f.temp.path().join("open-must-not-initialize");
     assert!(Engine::open(&missing).is_err());
@@ -1936,7 +1945,7 @@ fn merge_link_endpoints_must_belong_to_the_selected_distinct_branches() {
         )
         .unwrap_err()
         .code(),
-        "MERGE_ENDPOINT_MISMATCH"
+        storage_contract::ErrorCode::MergeEndpointMismatch
     );
     assert_eq!(
         e.add_merge_link(
@@ -1949,7 +1958,7 @@ fn merge_link_endpoints_must_belong_to_the_selected_distinct_branches() {
         )
         .unwrap_err()
         .code(),
-        "MERGE_ENDPOINT_MISMATCH"
+        storage_contract::ErrorCode::MergeEndpointMismatch
     );
     assert_eq!(
         e.add_merge_link(
@@ -1962,7 +1971,7 @@ fn merge_link_endpoints_must_belong_to_the_selected_distinct_branches() {
         )
         .unwrap_err()
         .code(),
-        "MERGE_ENDPOINT_MISMATCH"
+        storage_contract::ErrorCode::MergeEndpointMismatch
     );
     e.archive_branch(&branch.branch_id, "admin", &new_id("op"))
         .unwrap();
@@ -2083,7 +2092,7 @@ fn partial_publication_is_not_visible_with_two_members_and_receipt_tampering_is_
             )
             .unwrap_err()
             .code(),
-            "PUBLICATION_INVALID"
+            storage_contract::ErrorCode::PublicationInvalid
         );
     }
 }
@@ -2093,7 +2102,7 @@ fn production_does_not_silently_accept_directory_simulation() {
     f.config.mode = Mode::Production;
     assert_eq!(
         Engine::initialize(&f.root, f.config).err().unwrap().code(),
-        "FILESYSTEM_REQUIRED"
+        storage_contract::ErrorCode::FilesystemRequired
     );
 }
 
@@ -2321,7 +2330,10 @@ fn switching_pending_destinations_fences_old_directory_writes_with_same_source()
             request_digest: None,
         })
         .unwrap_err();
-    assert_eq!(error.code(), "FILE_BRANCH_CONFLICT");
+    assert_eq!(
+        error.code(),
+        storage_contract::ErrorCode::FileBranchConflict
+    );
     assert!(staged.source_path.exists());
     assert_eq!(engine.state().versions.len(), before);
     assert_eq!(
@@ -2519,7 +2531,7 @@ fn workspace_commit_rejects_bytes_changed_after_upload_sealing() {
             request_digest: None,
         };
         let error = engine.commit_workspace(request.clone()).unwrap_err();
-        assert_eq!(error.code(), "CHECKSUM_MISMATCH");
+        assert_eq!(error.code(), storage_contract::ErrorCode::ChecksumMismatch);
         assert_eq!(engine.state().sequence, sequence);
         assert!(!engine.state().operations.contains_key(&operation));
         assert!(engine.list_tree(&repo.main_branch_id).unwrap().is_empty());
@@ -2549,7 +2561,7 @@ fn journal_append_rejects_dangling_symlink_without_creating_its_target() {
     std::os::unix::fs::symlink(&outside, &log).unwrap();
     let error =
         crate::journal::append(disk, "PREPARE", 1, &"a".repeat(64), &"b".repeat(64)).unwrap_err();
-    assert_eq!(error.code(), "UNSAFE_PATH");
+    assert_eq!(error.code(), storage_contract::ErrorCode::UnsafePath);
     assert!(!outside.exists());
     assert!(fs::symlink_metadata(&log).unwrap().file_type().is_symlink());
 }
@@ -2596,7 +2608,7 @@ fn sealed_batch_checksum_failure_rolls_back_all_files_and_retries_after_restart(
     let before = canonical_json(engine.state()).unwrap();
     assert_eq!(
         engine.commit_workspace(request.clone()).unwrap_err().code(),
-        "CHECKSUM_MISMATCH"
+        storage_contract::ErrorCode::ChecksumMismatch
     );
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     assert!(!engine.is_read_only());
@@ -2610,7 +2622,7 @@ fn sealed_batch_checksum_failure_rolls_back_all_files_and_retries_after_restart(
     );
     assert_eq!(
         engine.commit_workspace(request.clone()).unwrap_err().code(),
-        "CHECKSUM_MISMATCH"
+        storage_contract::ErrorCode::ChecksumMismatch
     );
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     fs::write(&staged.source_path, staged.path.as_bytes()).unwrap();
@@ -2665,7 +2677,7 @@ fn accepted_batch_recovers_without_staged_sources_and_replays_exactly_once() {
     engine.inject_fault_once("after_accept_1");
     assert_eq!(
         engine.commit_workspace(request.clone()).unwrap_err().code(),
-        "IN_DOUBT"
+        storage_contract::ErrorCode::InDoubt
     );
     assert!(engine.list_tree(&repo.main_branch_id).unwrap().is_empty());
     assert!(engine.state().versions.is_empty());
@@ -2735,9 +2747,9 @@ fn unchanged_save_recovery_persists_operation_without_creating_content_history()
         assert_eq!(
             engine.commit_workspace(request.clone()).unwrap_err().code(),
             if accepted {
-                "IN_DOUBT"
+                storage_contract::ErrorCode::InDoubt
             } else {
-                "INJECTED_FAILURE"
+                storage_contract::ErrorCode::InjectedFailure
             },
             "{fault}"
         );
@@ -2801,7 +2813,7 @@ fn content_read_plan_pins_before_io_and_authenticates_manifest_outside_engine() 
             .create_purge_plan(&repo.history_tree_id, vec![version_id.clone()], "admin")
             .unwrap_err()
             .code(),
-        "CONTENT_PINNED"
+        storage_contract::ErrorCode::ContentPinned
     );
     // The plan owns its snapshot, so unrelated metadata work can run before any
     // disk verification; no borrow or Engine mutex is retained.
@@ -2930,7 +2942,7 @@ fn workspace_read_plan_pins_exact_inode_before_unlocked_verification() {
             .err()
             .unwrap()
             .code(),
-        "CHECKSUM_MISMATCH"
+        storage_contract::ErrorCode::ChecksumMismatch
     );
 }
 
@@ -2954,7 +2966,7 @@ fn upload_preparation_releases_engine_and_revalidates_workspace_without_lost_upd
             .err()
             .unwrap()
             .code(),
-        "FILE_WRITE_BUSY"
+        storage_contract::ErrorCode::FileWriteBusy
     );
     // The copy plan is detached from Engine; unrelated writer work is allowed.
     engine
@@ -2976,7 +2988,7 @@ fn upload_preparation_releases_engine_and_revalidates_workspace_without_lost_upd
         .fencing_token += 1;
     assert_eq!(
         engine.finish_upload(prepared).unwrap_err().code(),
-        "WORKSPACE_CHANGED"
+        storage_contract::ErrorCode::WorkspaceChanged
     );
     assert!(input.exists());
     assert!(
@@ -3055,7 +3067,7 @@ fn upload_preparation_counts_crash_scratch_and_rechecks_final_quota() {
             .err()
             .unwrap()
             .code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     // A failed admission must release its claim, and new scratch counts once.
     fs::remove_file(&crash_scratch).unwrap();
@@ -3067,7 +3079,7 @@ fn upload_preparation_counts_crash_scratch_and_rechecks_final_quota() {
     fs::write(&crash_scratch, b"old").unwrap();
     assert_eq!(
         engine.finish_upload(prepared).unwrap_err().code(),
-        "RESOURCE_LIMIT"
+        storage_contract::ErrorCode::ResourceLimit
     );
     assert_eq!(fs::read(&crash_scratch).unwrap(), b"old");
     assert!(input.exists());
@@ -3116,7 +3128,7 @@ fn upload_preparation_rejects_parent_swap_and_cleans_original_directory_only() {
     .unwrap();
     assert_eq!(
         engine.finish_upload(prepared).unwrap_err().code(),
-        "UNSAFE_PATH"
+        storage_contract::ErrorCode::UnsafePath
     );
     assert_eq!(
         fs::read(directory.join(&scratch_name)).unwrap(),
@@ -3212,7 +3224,7 @@ fn detached_commit_retry_preserves_actor_binding_after_restart() {
             .err()
             .unwrap()
             .code(),
-        "PERMISSION_DENIED"
+        storage_contract::ErrorCode::PermissionDenied
     );
 }
 
@@ -3237,7 +3249,7 @@ fn detached_workspace_preparation_writes_no_decision_and_replays_original_operat
             .err()
             .unwrap()
             .code(),
-        "COMMIT_PREPARATION_BUSY"
+        storage_contract::ErrorCode::CommitPreparationBusy
     );
     let prepared = plan.execute().unwrap();
     assert_eq!(engine.state.sequence, sequence);
@@ -3290,12 +3302,18 @@ fn detached_workspace_commit_stale_base_is_definite_retryable_conflict() {
     let busy = engine
         .create_repository("unrelated-writer", "P01", 1, "admin", &new_id("op"))
         .unwrap_err();
-    assert_eq!(busy.code(), "COMMIT_PREPARATION_BUSY");
-    assert!(busy.retryable);
+    assert_eq!(
+        busy.code(),
+        storage_contract::ErrorCode::CommitPreparationBusy
+    );
+    assert!(busy.is_retryable());
     // Simulate an externally invalidated base to retain the final fence test.
     std::sync::Arc::make_mut(&mut engine.state).business_generation += 1;
     let error = engine.finish_workspace_commit(prepared).unwrap_err();
-    assert_eq!(error.code(), "COMMIT_PREPARATION_STALE");
+    assert_eq!(
+        error.code(),
+        storage_contract::ErrorCode::CommitPreparationStale
+    );
     assert!(!engine.state.operations.contains_key(&request.operation_id));
     assert_eq!(
         engine.workspace(&workspace.workspace_id).unwrap().state,
@@ -3346,7 +3364,7 @@ fn detached_workspace_commit_rechecks_fence_and_releases_cancelled_admission() {
         .unwrap();
     assert_eq!(
         engine.finish_workspace_commit(prepared).unwrap_err().code(),
-        "COMMIT_PREPARATION_STALE"
+        storage_contract::ErrorCode::CommitPreparationStale
     );
     assert!(!engine.state.operations.contains_key(&request.operation_id));
 }
@@ -3365,7 +3383,7 @@ fn detached_workspace_commit_consumes_real_fault_only_at_decision_boundary() {
         .unwrap();
     assert_eq!(
         engine.finish_workspace_commit(prepared).unwrap_err().code(),
-        "INJECTED_FAILURE"
+        storage_contract::ErrorCode::InjectedFailure
     );
     assert!(!engine.blocked);
     assert!(!engine.state.operations.contains_key(&request.operation_id));
@@ -3401,7 +3419,10 @@ fn detached_workspace_commit_checks_actual_source_owner_and_topology() {
                 .unwrap();
             fs::set_permissions(&staged.source_path, fs::Permissions::from_mode(0o600)).unwrap();
             fs::write(&staged.source_path, b"altered after snapshot").unwrap();
-            assert_eq!(plan.execute().err().unwrap().code(), "CHECKSUM_MISMATCH");
+            assert_eq!(
+                plan.execute().err().unwrap().code(),
+                storage_contract::ErrorCode::ChecksumMismatch
+            );
         } else {
             let prepared = plan.execute().unwrap();
             if changed == "owner" {
@@ -3414,9 +3435,9 @@ fn detached_workspace_commit_checks_actual_source_owner_and_topology() {
             assert_eq!(
                 error.code(),
                 if changed == "owner" {
-                    "PERMISSION_DENIED"
+                    storage_contract::ErrorCode::PermissionDenied
                 } else {
-                    "COMMIT_PREPARATION_STALE"
+                    storage_contract::ErrorCode::CommitPreparationStale
                 }
             );
         }
@@ -3477,7 +3498,7 @@ fn detached_public_wire_commit_keeps_exact_digest_and_retry_binding() {
         .unwrap();
     assert_eq!(
         plan.execute().err().unwrap().code(),
-        "IDEMPOTENCY_KEY_REUSED"
+        storage_contract::ErrorCode::IdempotencyKeyReused
     );
 }
 
@@ -3520,20 +3541,23 @@ fn detached_preparation_fences_physical_namespace_writes_but_not_reads() {
     let error = engine
         .file_namespace(&repo.repository_id, rename.clone(), "admin", &new_id("op"))
         .unwrap_err();
-    assert_eq!(error.code(), "COMMIT_PREPARATION_BUSY");
-    assert!(error.retryable);
+    assert_eq!(
+        error.code(),
+        storage_contract::ErrorCode::CommitPreparationBusy
+    );
+    assert!(error.is_retryable());
     assert_eq!(bytes(&engine, &version), b"published");
     let prepared = plan.execute().unwrap();
     assert_eq!(
         engine.cleanup_purged().unwrap_err().code(),
-        "COMMIT_PREPARATION_BUSY"
+        storage_contract::ErrorCode::CommitPreparationBusy
     );
     assert_eq!(
         engine
             .stage_bytes(&workspace_id, "other.txt", b"x")
             .unwrap_err()
             .code(),
-        "COMMIT_PREPARATION_BUSY"
+        storage_contract::ErrorCode::CommitPreparationBusy
     );
     drop(prepared);
     engine
@@ -3561,7 +3585,10 @@ fn detached_commit_rechecks_lease_expiry_at_finish() {
     std::thread::sleep(std::time::Duration::from_secs(2));
     let before = engine.state.sequence;
     let error = engine.finish_workspace_commit(prepared).unwrap_err();
-    assert_eq!(error.code(), "FENCING_TOKEN_EXPIRED");
+    assert_eq!(
+        error.code(),
+        storage_contract::ErrorCode::FencingTokenExpired
+    );
     assert_eq!(engine.state.sequence, before);
     assert!(!engine.state.operations.contains_key(&request.operation_id));
     assert!(engine.require_write().is_ok());
@@ -3696,7 +3723,7 @@ fn pending_operation_requires_a_trusted_decision_not_prepared_objects() {
         }
         assert_eq!(
             engine.operation(&operation).unwrap_err().code(),
-            "OPERATION_NOT_FOUND"
+            storage_contract::ErrorCode::OperationNotFound
         );
         assert_eq!(engine.operation_owner(&operation), None);
     }
@@ -3817,7 +3844,10 @@ fn upload_preparation_rejects_copied_bytes_not_matching_verified_stream() {
         if !wrong_size {
             fs::write(&input, b"modified stream").unwrap();
         }
-        assert_eq!(plan.execute().err().unwrap().code(), "CHECKSUM_MISMATCH");
+        assert_eq!(
+            plan.execute().err().unwrap().code(),
+            storage_contract::ErrorCode::ChecksumMismatch
+        );
         assert!(
             engine
                 .workspace(&workspace.workspace_id)
@@ -3898,12 +3928,12 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
         current.as_ptr()
     );
     assert_eq!(
-        engine.list_tree_ref("missing").unwrap_err().code,
-        "BRANCH_NOT_FOUND"
+        engine.list_tree_ref("missing").unwrap_err().code(),
+        storage_contract::ErrorCode::BranchNotFound
     );
     assert_eq!(
-        engine.list_tree("missing").unwrap_err().code,
-        "BRANCH_NOT_FOUND"
+        engine.list_tree("missing").unwrap_err().code(),
+        storage_contract::ErrorCode::BranchNotFound
     );
 
     let other = engine
@@ -3913,20 +3943,32 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
         .head_commit_id
         .clone();
     for (branch, selected, code) in [
-        ("missing", head.as_str(), "BRANCH_NOT_FOUND"),
-        ("missing", "missing", "BRANCH_NOT_FOUND"),
-        (repo.main_branch_id.as_str(), "missing", "COMMIT_NOT_FOUND"),
+        (
+            "missing",
+            head.as_str(),
+            storage_contract::ErrorCode::BranchNotFound,
+        ),
+        (
+            "missing",
+            "missing",
+            storage_contract::ErrorCode::BranchNotFound,
+        ),
+        (
+            repo.main_branch_id.as_str(),
+            "missing",
+            storage_contract::ErrorCode::CommitNotFound,
+        ),
         (
             repo.main_branch_id.as_str(),
             foreign_head.as_str(),
-            "COMMIT_NOT_FOUND",
+            storage_contract::ErrorCode::CommitNotFound,
         ),
     ] {
         let borrowed = engine.list_tree_at_ref(branch, selected).unwrap_err();
         let owned = engine.list_tree_at(branch, selected).unwrap_err();
-        assert_eq!(borrowed.code, code);
-        assert_eq!(borrowed.code, owned.code);
-        assert_eq!(borrowed.message, owned.message);
+        assert_eq!(borrowed.code(), code);
+        assert_eq!(borrowed.code(), owned.code());
+        assert_eq!(borrowed.message(), owned.message());
     }
     // Exercise identical validation when the current head itself is invalid.
     std::sync::Arc::make_mut(&mut engine.state)
@@ -3935,12 +3977,15 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
         .unwrap()
         .head_commit_id = foreign_head.clone();
     assert_eq!(
-        engine.list_tree_ref(&repo.main_branch_id).unwrap_err().code,
-        "COMMIT_NOT_FOUND"
+        engine
+            .list_tree_ref(&repo.main_branch_id)
+            .unwrap_err()
+            .code(),
+        storage_contract::ErrorCode::CommitNotFound
     );
     assert_eq!(
-        engine.list_tree(&repo.main_branch_id).unwrap_err().code,
-        "COMMIT_NOT_FOUND"
+        engine.list_tree(&repo.main_branch_id).unwrap_err().code(),
+        storage_contract::ErrorCode::CommitNotFound
     );
     // An explicit valid snapshot is independent of the current head.
     assert_eq!(
@@ -3957,12 +4002,15 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
     branch.head_commit_id = head.clone();
     branch.state = "migrated".into();
     assert_eq!(
-        engine.list_tree_ref(&repo.main_branch_id).unwrap_err().code,
-        "TREE_MOVED"
+        engine
+            .list_tree_ref(&repo.main_branch_id)
+            .unwrap_err()
+            .code(),
+        storage_contract::ErrorCode::TreeMoved
     );
     assert_eq!(
-        engine.list_tree(&repo.main_branch_id).unwrap_err().code,
-        "TREE_MOVED"
+        engine.list_tree(&repo.main_branch_id).unwrap_err().code(),
+        storage_contract::ErrorCode::TreeMoved
     );
     // Migration wins over commit lookup, including missing and foreign IDs.
     for selected in [head.as_str(), foreign_head.as_str(), "missing"] {
@@ -3972,8 +4020,8 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
         let owned = engine
             .list_tree_at(&repo.main_branch_id, selected)
             .unwrap_err();
-        assert_eq!(borrowed.code, "TREE_MOVED");
-        assert_eq!(borrowed.code, owned.code);
-        assert_eq!(borrowed.message, owned.message);
+        assert_eq!(borrowed.code(), storage_contract::ErrorCode::TreeMoved);
+        assert_eq!(borrowed.code(), owned.code());
+        assert_eq!(borrowed.message(), owned.message());
     }
 }

@@ -98,7 +98,7 @@ pub(super) type GraphObject = (String, String, Value);
 pub(super) type ResolvedGraph = (HistoryManifest, Vec<GraphObject>);
 
 fn invalid(message: &str) -> Error {
-    Error::new("HISTORY_PACKAGE_INVALID", message)
+    Error::new(storage_contract::ErrorCode::HistoryPackageInvalid, message)
 }
 
 fn hexadecimal(value: &str) -> bool {
@@ -145,7 +145,7 @@ impl Encoder {
                 // limit on Commit.entries and other existing entity payloads.
                 if encoded_bytes > MAX_METADATA - 2 {
                     return Err(Error::new(
-                        "RESOURCE_LIMIT",
+                        storage_contract::ErrorCode::ResourceLimit,
                         "one history entity exceeds the metadata reader limit",
                     ));
                 }
@@ -180,7 +180,7 @@ impl Encoder {
         let depth = prefix.len();
         if depth >= RADIX_DEPTH {
             return Err(Error::new(
-                "RESOURCE_LIMIT",
+                storage_contract::ErrorCode::ResourceLimit,
                 "history entity keys cannot be divided within the radix depth limit",
             ));
         }
@@ -277,7 +277,7 @@ impl<F: FnMut(&str, &str) -> Result<Value>> Resolver<F> {
                 let value = (self.load)(domain, &reference.hash)?;
                 if object_hash_value(domain, &value)? != reference.hash {
                     return Err(Error::new(
-                        "OBJECT_CORRUPT",
+                        storage_contract::ErrorCode::ObjectCorrupt,
                         "history graph object digest differs",
                     ));
                 }

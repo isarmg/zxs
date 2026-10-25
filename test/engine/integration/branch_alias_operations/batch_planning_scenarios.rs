@@ -136,7 +136,7 @@ fn frozen_batch_nonparticipating_target_collision_is_atomic() {
             .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", &new_id("op"))
             .unwrap_err()
             .code(),
-        "NAME_COLLISION"
+        storage_contract::ErrorCode::NameCollision
     );
     assert_eq!(
         storage_engine::canonical_json(pool.engine.state()).unwrap(),
@@ -172,7 +172,10 @@ fn frozen_batch_overlapping_active_scopes_reject_before_losing_an_item() {
         &new_id("op"),
     );
     match result {
-        Err(error) => assert_eq!(error.code(), "BATCH_SCOPE_CONFLICT"),
+        Err(error) => assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::BatchScopeConflict
+        ),
         Ok(_) => panic!(
             "overlapping scopes were published instead of rejected; final paths: {:?}",
             pool.engine
@@ -297,7 +300,7 @@ fn frozen_batch_deletes_distinct_same_directory_aliases_but_rejects_duplicate_so
             )
             .unwrap_err()
             .code(),
-        "BATCH_MAPPING_CONFLICT"
+        storage_contract::ErrorCode::BatchMappingConflict
     );
     assert_eq!(
         storage_engine::canonical_json(pool.engine.state()).unwrap(),

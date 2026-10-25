@@ -21,7 +21,7 @@ impl RetainedWorkspaceLimits {
             || self.max_retained_workspace_metadata_bytes_per_principal == 0
         {
             return Err(Error::new(
-                "CONFIG_INVALID",
+                storage_contract::ErrorCode::ConfigInvalid,
                 "retained workspace runtime limits must be positive",
             ));
         }
@@ -40,7 +40,7 @@ impl RetainedWorkspaceLimits {
                 < config.max_retained_workspace_metadata_bytes_per_principal
         {
             return Err(Error::new(
-                "CONFIG_INVALID",
+                storage_contract::ErrorCode::ConfigInvalid,
                 "retained workspace runtime limits cannot be below the persisted configuration",
             ));
         }

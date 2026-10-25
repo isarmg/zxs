@@ -62,8 +62,8 @@ fn seal_identity_is_checked_before_preparation() {
         assert_eq!(
             prepare_commit(seal, "workspace_test", "op_test", "save", None)
                 .unwrap_err()
-                .code,
-            "INVALID_RESPONSE"
+                .code(),
+            crate::ErrorCode::InvalidResponse
         );
     }
 }
@@ -105,7 +105,7 @@ fn response_json_rejects_duplicate_aliases_and_retains_telemetry_decimals() {
     ] {
         assert_eq!(
             decode_response(200, body).unwrap_err().code,
-            "INVALID_RESPONSE"
+            crate::ErrorCode::InvalidResponse
         );
     }
     let body = br#"{"cpu":8.899999618530273,"bytes":"18446744073709551615"}"#;
@@ -128,13 +128,16 @@ fn status_and_publication_classification_survive_all_response_failures() {
     assert!(publication_attempted(Some(true)));
     assert!(publication_attempted(None));
     assert_eq!(decode_response(204, b"").unwrap(), Value::Null);
-    assert_eq!(decode_response(404, b"").unwrap_err().code, "HTTP_ERROR");
+    assert_eq!(
+        decode_response(404, b"").unwrap_err().code,
+        crate::ErrorCode::HttpError
+    );
 }
 
 #[test]
 fn response_envelopes_preserve_fields_and_share_a_bounded_size() {
-    let error = decode_response(503, br#"{"error":{"code":"OFFLINE","message":"offline","retryable":false,"request_id":"req_test"}}"#).unwrap_err();
-    assert_eq!(error.code, "OFFLINE");
+    let error = decode_response(503, br#"{"error":{"code":"STORAGE_UNAVAILABLE","message":"offline","retryable":false,"request_id":"req_test"}}"#).unwrap_err();
+    assert_eq!(error.code, crate::ErrorCode::StorageUnavailable);
     assert_eq!(error.request_id.as_deref(), Some("req_test"));
     assert!(!error.retryable);
     let mut bytes = vec![b' '; MAX_RESPONSE_BYTES];
@@ -142,6 +145,30 @@ fn response_envelopes_preserve_fields_and_share_a_bounded_size() {
     assert!(decode_response(200, &bytes).is_ok());
     bytes.push(b' ');
     let error = decode_response(409, &bytes).unwrap_err();
-    assert_eq!(error.code, "RESPONSE_TOO_LARGE");
+    assert_eq!(error.code, crate::ErrorCode::ResponseTooLarge);
     assert_eq!(error.status, 409);
+}
+
+#[test]
+fn unknown_remote_code_is_an_explicit_decode_failure_with_source() {
+    use std::error::Error as _;
+    let failure = decode_response(
+        503,
+        br#"{"error":{"code":"FUTURE_UNKNOWN_CODE","message":"private","retryable":false}}"#,
+    )
+    .unwrap_err();
+    assert_eq!(failure.status, 503);
+    assert_eq!(failure.code, crate::ErrorCode::InvalidResponse);
+    assert!(!failure.message.contains("private"));
+    assert!(matches!(failure.source, Some(ResponseDecodeError::Code(_))));
+    assert!(
+        failure
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<json_codec::Error>()
+    );
+    let failure = decode_response(200, b"{").unwrap_err();
+    assert!(matches!(failure.source, Some(ResponseDecodeError::Json(_))));
 }
