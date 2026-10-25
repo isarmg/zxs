@@ -756,7 +756,7 @@ fn smb_lookup_rechecks_admission_and_returns_only_current_entry() {
 }
 
 #[test]
-fn smb_lookup_preserves_migrated_branch_error() {
+fn namespace_reads_preserve_migrated_branch_error() {
     let (_root, mut engine, repo, identity) = fixture();
     save_projection_file(&mut engine, &repo.main_branch_id, "file.txt", b"first");
     let cut = engine.state().branches[&repo.main_branch_id]
@@ -771,7 +771,11 @@ fn smb_lookup_preserves_migrated_branch_error() {
         .unwrap();
     let backend = EngineBackend::new(engine);
     let input = json!({"branch_id":repo.main_branch_id,"path":"file.txt"});
-    for action in [BackendAction::Tree, BackendAction::SmbLookup] {
+    for action in [
+        BackendAction::Tree,
+        BackendAction::SmbLookup,
+        BackendAction::Resolve,
+    ] {
         assert_eq!(
             backend
                 .call(action, &identity, input.clone())

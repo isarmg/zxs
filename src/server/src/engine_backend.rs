@@ -500,7 +500,9 @@ impl Backend for EngineBackend {
                     .filter(|commit| commit.history_tree_id == branch.history_tree_id)
                     .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "commit not found"))?;
                 let key = name_policy::path_key(path);
-                let entries = engine.list_tree_at(branch_id, commit_id).map_err(error)?;
+                let entries = engine
+                    .list_tree_at_ref(branch_id, commit_id)
+                    .map_err(error)?;
                 let entry = entries
                     .iter()
                     .find(|entry| entry.lookup_key == key)

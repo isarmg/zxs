@@ -3861,6 +3861,42 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
         borrowed.as_ptr(),
         engine.state.commits[&head].entries.as_ptr()
     );
+    save(
+        &mut engine,
+        &repo.main_branch_id,
+        "file.txt",
+        b"updated content",
+    );
+    let current_head = engine.state.branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    assert_ne!(head, current_head);
+    for selected in [&head, &current_head] {
+        let borrowed = engine
+            .list_tree_at_ref(&repo.main_branch_id, selected)
+            .unwrap();
+        assert_eq!(
+            borrowed.as_ptr(),
+            engine.state.commits[selected].entries.as_ptr()
+        );
+        assert_eq!(
+            borrowed,
+            engine.list_tree_at(&repo.main_branch_id, selected).unwrap()
+        );
+    }
+    let historical = engine
+        .list_tree_at_ref(&repo.main_branch_id, &head)
+        .unwrap();
+    let current = engine
+        .list_tree_at_ref(&repo.main_branch_id, &current_head)
+        .unwrap();
+    assert_ne!(historical[0].version_id, current[0].version_id);
+    assert_eq!(historical[0].size, 7);
+    assert_eq!(current[0].size, 15);
+    assert_eq!(
+        engine.list_tree_ref(&repo.main_branch_id).unwrap().as_ptr(),
+        current.as_ptr()
+    );
     assert_eq!(
         engine.list_tree_ref("missing").unwrap_err().code,
         "BRANCH_NOT_FOUND"
@@ -3869,13 +3905,6 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
         engine.list_tree("missing").unwrap_err().code,
         "BRANCH_NOT_FOUND"
     );
-    assert_eq!(
-        engine
-            .list_tree_at(&repo.main_branch_id, "missing")
-            .unwrap_err()
-            .code,
-        "COMMIT_NOT_FOUND"
-    );
 
     let other = engine
         .create_repository("Other", "P01", 1, "admin", &new_id("op"))
@@ -3883,19 +3912,28 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
     let foreign_head = engine.state.branches[&other.main_branch_id]
         .head_commit_id
         .clone();
-    assert_eq!(
-        engine
-            .list_tree_at(&repo.main_branch_id, &foreign_head)
-            .unwrap_err()
-            .code,
-        "COMMIT_NOT_FOUND"
-    );
+    for (branch, selected, code) in [
+        ("missing", head.as_str(), "BRANCH_NOT_FOUND"),
+        ("missing", "missing", "BRANCH_NOT_FOUND"),
+        (repo.main_branch_id.as_str(), "missing", "COMMIT_NOT_FOUND"),
+        (
+            repo.main_branch_id.as_str(),
+            foreign_head.as_str(),
+            "COMMIT_NOT_FOUND",
+        ),
+    ] {
+        let borrowed = engine.list_tree_at_ref(branch, selected).unwrap_err();
+        let owned = engine.list_tree_at(branch, selected).unwrap_err();
+        assert_eq!(borrowed.code, code);
+        assert_eq!(borrowed.code, owned.code);
+        assert_eq!(borrowed.message, owned.message);
+    }
     // Exercise identical validation when the current head itself is invalid.
     std::sync::Arc::make_mut(&mut engine.state)
         .branches
         .get_mut(&repo.main_branch_id)
         .unwrap()
-        .head_commit_id = foreign_head;
+        .head_commit_id = foreign_head.clone();
     assert_eq!(
         engine.list_tree_ref(&repo.main_branch_id).unwrap_err().code,
         "COMMIT_NOT_FOUND"
@@ -3903,6 +3941,14 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
     assert_eq!(
         engine.list_tree(&repo.main_branch_id).unwrap_err().code,
         "COMMIT_NOT_FOUND"
+    );
+    // An explicit valid snapshot is independent of the current head.
+    assert_eq!(
+        engine
+            .list_tree_at_ref(&repo.main_branch_id, &head)
+            .unwrap()
+            .as_ptr(),
+        engine.state.commits[&head].entries.as_ptr()
     );
     let branch = std::sync::Arc::make_mut(&mut engine.state)
         .branches
@@ -3918,11 +3964,16 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
         engine.list_tree(&repo.main_branch_id).unwrap_err().code,
         "TREE_MOVED"
     );
-    assert_eq!(
-        engine
-            .list_tree_at(&repo.main_branch_id, &head)
-            .unwrap_err()
-            .code,
-        "TREE_MOVED"
-    );
+    // Migration wins over commit lookup, including missing and foreign IDs.
+    for selected in [head.as_str(), foreign_head.as_str(), "missing"] {
+        let borrowed = engine
+            .list_tree_at_ref(&repo.main_branch_id, selected)
+            .unwrap_err();
+        let owned = engine
+            .list_tree_at(&repo.main_branch_id, selected)
+            .unwrap_err();
+        assert_eq!(borrowed.code, "TREE_MOVED");
+        assert_eq!(borrowed.code, owned.code);
+        assert_eq!(borrowed.message, owned.message);
+    }
 }

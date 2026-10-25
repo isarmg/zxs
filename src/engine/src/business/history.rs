@@ -56,7 +56,9 @@ impl Engine {
         Ok(self.list_tree_at_ref(branch_id, commit_id)?.to_vec())
     }
 
-    fn list_tree_at_ref(&self, branch_id: &str, commit_id: &str) -> Result<&[Entry]> {
+    /// Borrow a selected frozen namespace within the branch's history.
+    /// Like `list_tree_at`, rejects migrated branches and foreign snapshots.
+    pub fn list_tree_at_ref(&self, branch_id: &str, commit_id: &str) -> Result<&[Entry]> {
         let branch = self
             .state
             .branches
