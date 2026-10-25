@@ -5,7 +5,7 @@ use std::{
     io::{BufReader, Read, Write},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Mutex, OnceLock},
 };
 pub(crate) const MAX_FRAME: usize = 16 * 1024 * 1024;
 const LOG_MAGIC: &[u8; 8] = b"ZXSLOG\0\0";
@@ -222,54 +222,7 @@ fn tails() -> &'static Mutex<BTreeMap<PathBuf, VerifiedTail>> {
     TAILS.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
-fn writers() -> &'static Mutex<BTreeMap<PathBuf, Arc<Mutex<()>>>> {
-    static WRITERS: OnceLock<Mutex<BTreeMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
-    WRITERS.get_or_init(|| Mutex::new(BTreeMap::new()))
-}
-
-// A lease exists for every holder AND waiter. Cache eviction never removes a
-// writer lock, and the registry owns no paths once their last lease is gone.
-// Configured roots are absolute, traversal-free and symlink-safe, like log I/O.
-struct JournalWriter {
-    path: PathBuf,
-    lock: Option<Arc<Mutex<()>>>,
-}
-impl JournalWriter {
-    fn acquire(path: &Path) -> Result<Self> {
-        let mut writers = writers()
-            .lock()
-            .expect("invariant: journal writer registry poisoned");
-        let lock = writers.entry(path.to_path_buf()).or_default().clone();
-        Ok(Self {
-            path: path.to_path_buf(),
-            lock: Some(lock),
-        })
-    }
-    fn lock(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.lock
-            .as_ref()
-            .expect("live journal writer lease")
-            .lock()
-            .expect("invariant: journal writer lock poisoned")
-    }
-}
-impl Drop for JournalWriter {
-    fn drop(&mut self) {
-        let mut writers = writers()
-            .lock()
-            .expect("invariant: journal writer registry poisoned");
-        // Release this lease while holding the registry lock too: simultaneous
-        // drops must not each see the other's soon-to-be-released ownership.
-        drop(self.lock.take());
-        if writers
-            .get(&self.path)
-            .is_some_and(|lock| Arc::strong_count(lock) == 1)
-        {
-            writers.remove(&self.path);
-        }
-    }
-}
-
+// Append and replay run only in the owning &mut Engine's decision/recovery paths.
 pub(crate) fn append(
     d: &DiskConfig,
     kind: &str,
@@ -340,11 +293,8 @@ fn append_with_sync(
     synchronize: impl FnOnce(&std::fs::File, &Path) -> Result<()>,
 ) -> Result<Receipt> {
     let path = log_path(d);
-    let writer = JournalWriter::acquire(&path)?;
-    let _writer_guard = writer.lock();
     private_dir(path.parent().expect("log parent"))?;
-    // Only this journal stays locked across I/O. The global cache is held just
-    // for removal/insertion, never for a scan or either durability barrier.
+    // Independent engines share only the cache map, never a lock across I/O.
     // Remove before touching disk so failures force partial writes to be checked.
     let cached = tails()
         .lock()
