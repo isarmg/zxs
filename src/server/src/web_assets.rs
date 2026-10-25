@@ -30,7 +30,7 @@ pub(crate) fn unavailable_fallback() -> Router {
     Router::new()
         .fallback(|| async {
             let mut response = ApiError::new(
-                503,
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::WebAssetsUnavailable,
                 "Web UI assets are unavailable; management HTTP APIs remain available",
             )
@@ -73,7 +73,7 @@ pub(crate) fn static_etags(root: &Path) -> Result<BTreeMap<String, String>, ApiE
                 let relative = entry
                     .path()
                     .strip_prefix(base)
-                    .map_err(ApiError::invalid)?
+                    .expect("invariant: directory traversal yields descendants of its root")
                     .to_string_lossy()
                     .replace('\\', "/");
                 if relative.ends_with(".gz") {

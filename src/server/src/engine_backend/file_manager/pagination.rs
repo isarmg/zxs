@@ -54,7 +54,7 @@ impl PageRequest {
     ) -> Result<Self, ApiError> {
         let snapshot = blake3::hash(&json_codec::to_vec(&json!({
             "configuration":engine.config(), "generation":engine.state().business_generation.to_string()
-        })).map_err(ApiError::invalid)?).to_hex().to_string();
+        })).expect("invariant: internal JSON serialization succeeds")).to_hex().to_string();
         Self::with_snapshot(input, slot, path, snapshot)
     }
     pub(super) fn with_snapshot(
@@ -88,7 +88,7 @@ impl PageRequest {
                 .transpose()
         };
         let limit = string("limit")?
-            .map(|value| value.parse::<usize>().map_err(ApiError::invalid))
+            .map(|value| value.parse::<usize>().map_err(ApiError::invalid_source))
             .transpose()?
             .unwrap_or(DEFAULT_LIMIT);
         if !(1..=MAX_LIMIT).contains(&limit) {
@@ -104,7 +104,7 @@ impl PageRequest {
                 name_policy::validate_lookup_name(
                     selected_path.rsplit('/').next().unwrap_or_default(),
                 )
-                .map_err(ApiError::invalid)?;
+                .map_err(ApiError::invalid_source)?;
                 let parent = selected_path
                     .rsplit_once('/')
                     .map(|(parent, _)| parent)
@@ -126,7 +126,7 @@ impl PageRequest {
         let request = blake3::hash(&json_codec::to_vec(&json!({
             "slot":slot,"path":name_policy::path_key(path),"query":query,"limit":limit,
             "order":"directory-lowercase-normalized-name-path-identity", "unicode":name_policy::UNICODE_VERSION,"lowercase_unicode":std::char::UNICODE_VERSION
-        })).map_err(ApiError::invalid)?).to_hex().to_string();
+        })).expect("invariant: internal JSON serialization succeeds")).to_hex().to_string();
         let cursor = string("cursor")?.map(decode).transpose()?;
         if let Some(cursor) = &cursor {
             if cursor.request != request {
@@ -168,15 +168,15 @@ impl PageRequest {
             backward,
             key: key.clone(),
         })
-        .map_err(ApiError::invalid)?;
+        .expect("invariant: internal JSON serialization succeeds");
         let mut encoded = String::with_capacity(bytes.len() * 2);
         for byte in bytes {
             use std::fmt::Write;
-            write!(&mut encoded, "{byte:02x}").map_err(ApiError::invalid)?;
+            write!(&mut encoded, "{byte:02x}").expect("invariant: formatting into String succeeds");
         }
         if encoded.len() > MAX_CURSOR_BYTES {
             return Err(ApiError::new(
-                500,
+                ::http::StatusCode::INTERNAL_SERVER_ERROR,
                 storage_contract::ErrorCode::StateInvalid,
                 "listing cursor exceeds its bounded representation",
             ));
@@ -202,7 +202,7 @@ fn decode(value: &str) -> Result<Cursor, ApiError> {
             Ok((digit(pair[0])? << 4) | digit(pair[1])?)
         })
         .collect::<Result<Vec<u8>, ApiError>>()?;
-    json_codec::from_slice(&bytes).map_err(ApiError::invalid)
+    json_codec::from_slice(&bytes).map_err(ApiError::invalid_source)
 }
 
 /// Retains at most limit + 1 lightweight candidates, independent of directory

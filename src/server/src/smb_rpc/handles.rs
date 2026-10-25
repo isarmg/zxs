@@ -32,7 +32,7 @@ impl Session {
         }
         if existing.is_none() && !create && !path.is_empty() {
             return Err(ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::NotFound,
                 "entry does not exist",
             ));
@@ -71,7 +71,7 @@ impl Session {
         {
             if writable || create || truncate {
                 return Err(ApiError::new(
-                    409,
+                    ::http::StatusCode::CONFLICT,
                     storage_contract::ErrorCode::IsDirectory,
                     "directory data is not writable",
                 ));
@@ -115,7 +115,8 @@ impl Session {
                 workspace_id: None,
             };
             return Ok((
-                json_codec::to_value(result).map_err(ApiError::invalid)?,
+                json_codec::to_value(result)
+                    .expect("invariant: internal JSON serialization succeeds"),
                 Some(fd),
             ));
         }
@@ -137,7 +138,7 @@ impl Session {
                     }),
                 )?;
                 let entries: Vec<Entry> = json_codec::from_value(snapshot["entries"].clone())
-                    .map_err(ApiError::invalid)?;
+                    .map_err(ApiError::invalid_source)?;
                 let baseline = entries
                     .iter()
                     .find(|entry| entry.lookup_key == name_policy::path_key(&path));
@@ -270,7 +271,7 @@ impl Session {
                 &self.identity,
                 version.as_deref().ok_or_else(|| {
                     ApiError::new(
-                        404,
+                        ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::NotFound,
                         "version missing",
                     )
@@ -302,7 +303,7 @@ impl Session {
             workspace_id,
         };
         Ok((
-            json_codec::to_value(result).map_err(ApiError::invalid)?,
+            json_codec::to_value(result).expect("invariant: internal JSON serialization succeeds"),
             Some(fd),
         ))
     }
@@ -319,7 +320,7 @@ impl Session {
             }
             None => {
                 return Err(ApiError::new(
-                    404,
+                    ::http::StatusCode::NOT_FOUND,
                     storage_contract::ErrorCode::NotFound,
                     "SMB handle missing",
                 ));

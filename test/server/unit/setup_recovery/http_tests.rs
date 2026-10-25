@@ -31,7 +31,8 @@ impl Backend for Probe {
                 .authorize_bootstrap(bootstrap.ok_or_else(ApiError::unauthorized)?)?;
         }
         if action == "status" {
-            return json_codec::to_value(self.service.status()).map_err(ApiError::invalid);
+            return Ok(json_codec::to_value(self.service.status())
+                .expect("invariant: setup status serialization succeeds"));
         }
         self.mutations.fetch_add(1, Ordering::SeqCst);
         Ok(json!({"accepted":true,"restart_required":false,"recovering":true}))

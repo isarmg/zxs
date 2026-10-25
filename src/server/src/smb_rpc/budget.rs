@@ -107,7 +107,7 @@ pub(super) struct Lease {
 }
 fn invalid(message: &str) -> ApiError {
     ApiError::new(
-        503,
+        ::http::StatusCode::SERVICE_UNAVAILABLE,
         storage_contract::ErrorCode::SmbSpoolUnavailable,
         message,
     )
@@ -134,13 +134,15 @@ impl Budget {
             ));
         }
         let directory = PrivateDirectory::open_trusted(root)
-            .map_err(|_| invalid("SMB spool directory is unsafe"))?;
+            .map_err(|source| invalid("SMB spool directory is unsafe").with_source(source))?;
         let lock = AdvisoryLock::acquire(
             &directory,
             &RelativePath::new(".budget.lock")
-                .map_err(|_| invalid("SMB spool lock name is invalid"))?,
+                .expect("invariant: static SMB budget lock filename is valid"),
         )
-        .map_err(|_| invalid("SMB spool lock is unsafe or already has an owner"))?;
+        .map_err(|source| {
+            invalid("SMB spool lock is unsafe or already has an owner").with_source(source)
+        })?;
         let mut inventory = BTreeMap::new();
         for entry in fs::read_dir(root).map_err(ApiError::io)? {
             let entry = entry.map_err(ApiError::io)?;
@@ -164,12 +166,14 @@ impl Budget {
                 return Err(invalid("SMB budget record is too large"));
             }
             let name = EntryName::new(path.file_name().unwrap())
-                .map_err(|_| invalid("SMB budget filename is invalid"))?;
+                .map_err(|source| invalid("SMB budget filename is invalid").with_source(source))?;
             let bytes = directory
                 .read_bounded(&name, RECORD_LIMIT as usize)
-                .map_err(|_| invalid("SMB budget record is unsafe or unavailable"))?;
+                .map_err(|source| {
+                    invalid("SMB budget record is unsafe or unavailable").with_source(source)
+                })?;
             let owner: Owner = storage_contract::decode_strict(&bytes)
-                .map_err(|_| invalid("SMB budget record is invalid"))?;
+                .map_err(|source| invalid("SMB budget record is invalid").with_source(source))?;
             if !source_name(&owner.source)
                 || owner.principal.is_empty()
                 || owner.principal.len() > 1024
@@ -269,10 +273,7 @@ impl Budget {
         {
             return Err(invalid("invalid SMB reservation identity"));
         }
-        let mut ledger = self
-            .ledger
-            .lock()
-            .map_err(|_| invalid("SMB budget poisoned"))?;
+        let mut ledger = self.ledger.lock().expect("service state lock poisoned");
         if ledger.uncertain || ledger.files.contains_key(source) {
             return Err(invalid("SMB spool needs reconciliation"));
         }
@@ -297,8 +298,11 @@ impl Budget {
                 source: name.into(),
                 admitted_end,
             };
-            file.write_all(&json_codec::to_vec(&value).map_err(ApiError::invalid)?)
-                .map_err(ApiError::io)?;
+            file.write_all(
+                &json_codec::to_vec(&value)
+                    .expect("invariant: internal JSON serialization succeeds"),
+            )
+            .map_err(ApiError::io)?;
             file.sync_all().map_err(ApiError::io)?;
             File::open(&self.root)
                 .and_then(|directory| directory.sync_all())
@@ -378,7 +382,7 @@ impl Lease {
             .budget
             .ledger
             .lock()
-            .map_err(|_| invalid("SMB budget poisoned"))?;
+            .expect("service state lock poisoned");
         if ledger.uncertain {
             return Err(invalid("SMB spool needs reconciliation"));
         }
@@ -409,7 +413,10 @@ impl Lease {
                     admitted_end: end,
                 };
                 temporary
-                    .write_all(&json_codec::to_vec(&value).map_err(ApiError::invalid)?)
+                    .write_all(
+                        &json_codec::to_vec(&value)
+                            .expect("invariant: internal JSON serialization succeeds"),
+                    )
                     .map_err(ApiError::io)?;
                 temporary.as_file().sync_all().map_err(ApiError::io)?;
                 temporary

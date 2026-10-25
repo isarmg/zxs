@@ -1148,7 +1148,7 @@ fn offline_engine_failures_preserve_http_outcome_and_retry_classification() {
         assert_eq!(mapped.status, status, "{internal}");
         assert_eq!(mapped.retryable, status >= 500 || status == 429);
         assert_eq!(
-            storage_contract::client_protocol::mutation_outcome_unknown(mapped.status),
+            storage_contract::client_protocol::mutation_outcome_unknown(mapped.status.as_u16()),
             status >= 500,
             "{internal} must not make uncertain storage writes look rejected"
         );

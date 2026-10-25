@@ -142,6 +142,7 @@ name = "browser-smoke"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "http",
  "json-codec",
  "storage-engine",
  "storage-server",
@@ -1356,6 +1357,7 @@ dependencies = [
  "command-line",
  "data-serialization",
  "date-time",
+ "error-definition",
  "futures",
  "http",
  "http-routing",

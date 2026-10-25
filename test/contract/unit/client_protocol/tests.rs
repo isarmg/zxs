@@ -154,11 +154,13 @@ fn unknown_remote_code_is_an_explicit_decode_failure_with_source() {
     use std::error::Error as _;
     let failure = decode_response(
         503,
-        br#"{"error":{"code":"FUTURE_UNKNOWN_CODE","message":"private","retryable":false}}"#,
+        br#"{"error":{"code":"FUTURE_UNKNOWN_CODE","message":"private","retryable":false,"request_id":"req_trace"}}"#,
     )
     .unwrap_err();
     assert_eq!(failure.status, 503);
     assert_eq!(failure.code, crate::ErrorCode::InvalidResponse);
+    assert!(!failure.retryable);
+    assert_eq!(failure.request_id.as_deref(), Some("req_trace"));
     assert!(!failure.message.contains("private"));
     assert!(matches!(failure.source, Some(ResponseDecodeError::Code(_))));
     assert!(

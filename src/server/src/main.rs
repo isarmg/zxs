@@ -128,7 +128,7 @@ async fn run_with_runtime(args: Args) -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             // Report the error before runtime teardown, which may need to wait.
-            eprintln!("zxs: {error}");
+            eprintln!("zxs: {error:?}");
             std::process::ExitCode::FAILURE
         }
     }
@@ -215,13 +215,12 @@ async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()>
             retained_workspace_limits,
         },
     )?;
-    storage_server::serve_with_shutdown(backend, auth, config, shutdown).await
+    storage_server::serve_with_shutdown(backend, auth, config, shutdown).await?;
+    Ok(())
 }
 
-fn parse_smb_user(value: &str) -> std::result::Result<String, String> {
-    smb_protocol::protocol::validate_username(value)
-        .map(|()| value.to_owned())
-        .map_err(|error| error.to_string())
+fn parse_smb_user(value: &str) -> std::io::Result<String> {
+    smb_protocol::protocol::validate_username(value).map(|()| value.to_owned())
 }
 
 fn parse_setup_map(

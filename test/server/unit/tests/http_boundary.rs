@@ -416,6 +416,15 @@ async fn ordinary_body_deadline_rejects_a_stalled_sender() {
     .unwrap_err();
     assert_eq!(error.status, 408);
     assert_eq!(error.code, storage_contract::ErrorCode::RequestTimeout);
+    use std::error::Error as _;
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<tokio::time::error::Elapsed>()
+    );
 }
 
 #[tokio::test]
@@ -589,8 +598,114 @@ fn api_error_codes_keep_wire_spelling_and_reject_unknown_boundary_values() {
     );
     let mut wire = json_codec::to_value(&error).unwrap();
     assert_eq!(wire["code"], "FILE_WRITE_BUSY");
-    let decoded: ApiError = json_codec::from_value(wire.clone()).unwrap();
-    assert_eq!(decoded.code, storage_contract::ErrorCode::FileWriteBusy);
+    let decoded: storage_contract::ErrorCode =
+        json_codec::from_value(wire["code"].clone()).unwrap();
+    assert_eq!(decoded, storage_contract::ErrorCode::FileWriteBusy);
     wire["code"] = json!("UNRECOGNIZED_EXTERNAL_CODE");
-    assert!(json_codec::from_value::<ApiError>(wire).is_err());
+    assert!(json_codec::from_value::<storage_contract::ErrorCode>(wire["code"].clone()).is_err());
+}
+
+#[test]
+fn source_survives_api_mapping_but_never_enters_the_wire_envelope() {
+    use std::error::Error as _;
+    let original = std::io::Error::from_raw_os_error(13);
+    let error = ApiError::io(original);
+    assert_eq!(error.status, 500);
+    assert_eq!(error.code, storage_contract::ErrorCode::IoError);
+    assert!(error.retryable);
+    let source = error.source().unwrap().source().unwrap();
+    assert_eq!(
+        source
+            .downcast_ref::<std::io::Error>()
+            .unwrap()
+            .raw_os_error(),
+        Some(13)
+    );
+    let wire = json_codec::to_value(&error).unwrap();
+    assert_eq!(wire.as_object().unwrap().len(), 4);
+    assert_eq!(wire["message"], "local storage operation failed");
+    assert!(wire.get("source").is_none());
+}
+
+#[test]
+fn external_json_failure_keeps_its_concrete_cause() {
+    use std::error::Error as _;
+    let source = json_codec::from_slice::<Value>(b"{").unwrap_err();
+    let error = ApiError::invalid_source(source);
+    assert_eq!(error.status, 400);
+    assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
+    assert!(!error.retryable);
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<json_codec::Error>()
+    );
+}
+
+#[tokio::test]
+async fn failed_request_task_keeps_join_source_without_public_panic_detail() {
+    use std::error::Error as _;
+    let source = tokio::spawn(async { panic!("private worker diagnostic") })
+        .await
+        .unwrap_err();
+    let error = ApiError::join(source);
+    assert_eq!(error.status, 500);
+    assert_eq!(error.message, "request task failed");
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<tokio::task::JoinError>()
+            .unwrap()
+            .is_panic()
+    );
+    assert!(
+        !json_codec::to_string(&error)
+            .unwrap()
+            .contains("private worker diagnostic")
+    );
+}
+
+#[test]
+fn io_failure_is_logged_once_at_response_not_at_mapping() {
+    use std::io::{Read, Seek};
+    let mut capture = tempfile::tempfile().unwrap();
+    let subscriber = tracing::collector::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(Arc::new(capture.try_clone().unwrap()))
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        let error = ApiError::io(std::io::Error::other("private /srv/zxs/data diagnostic"));
+        assert_eq!(capture.metadata().unwrap().len(), 0);
+        let wire = json_codec::to_string(&error).unwrap();
+        assert!(!wire.contains("/srv/zxs"));
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    });
+    capture.rewind().unwrap();
+    let mut logged = String::new();
+    capture.read_to_string(&mut logged).unwrap();
+    assert_eq!(logged.matches("request failed").count(), 1, "{logged}");
+    assert!(logged.contains("/srv/zxs/data"));
+}
+
+#[test]
+fn server_startup_error_preserves_its_concrete_io_cause() {
+    use std::error::Error as _;
+    let error = crate::ServeError::from(std::io::Error::from_raw_os_error(13));
+    assert_eq!(
+        error
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap()
+            .raw_os_error(),
+        Some(13)
+    );
 }

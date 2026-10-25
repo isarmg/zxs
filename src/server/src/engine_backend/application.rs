@@ -223,8 +223,9 @@ impl<'a> Application<'a> {
         command: PublicCommitWorkspace,
     ) -> Result<(CommitRequest, json_codec::Value), ApiError> {
         let fencing_token = storage_contract::parse_u64_decimal(&command.fencing_token)
-            .map_err(ApiError::invalid)?;
-        let body = json_codec::to_value(&command).map_err(ApiError::invalid)?;
+            .map_err(ApiError::invalid_source)?;
+        let body = json_codec::to_value(&command)
+            .expect("invariant: internal JSON serialization succeeds");
         let request = self.commit_request(CommitWorkspace {
             workspace_id: command.workspace_id,
             operation_id: command.operation_id,
@@ -298,7 +299,7 @@ impl<'a> Application<'a> {
             .is_none_or(|commit| commit.history_tree_id != repo.history_tree_id)
         {
             return Err(ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::HistoryNodeNotFound,
                 "source commit is outside the repository",
             ));
@@ -382,14 +383,14 @@ impl<'a> Application<'a> {
             .find(|disk| disk.slot_id == command.slot_id)
             .ok_or_else(|| {
                 ApiError::new(
-                    404,
+                    ::http::StatusCode::NOT_FOUND,
                     storage_contract::ErrorCode::DiskNotFound,
                     "disk not found",
                 )
             })?;
         if disk.level != 1 {
             return Err(ApiError::new(
-                403,
+                ::http::StatusCode::FORBIDDEN,
                 storage_contract::ErrorCode::DiskReadOnly,
                 "backup disks are read only",
             ));
@@ -408,7 +409,7 @@ impl<'a> Application<'a> {
                     .get(branch_id)
                     .ok_or_else(|| {
                         ApiError::new(
-                            404,
+                            ::http::StatusCode::NOT_FOUND,
                             storage_contract::ErrorCode::DirectoryBranchNotFound,
                             "directory branch missing",
                         )
@@ -451,7 +452,7 @@ impl<'a> Application<'a> {
             .find(|version| version.file_id == file)
             .ok_or_else(|| {
                 ApiError::new(
-                    404,
+                    ::http::StatusCode::NOT_FOUND,
                     storage_contract::ErrorCode::FileNotFound,
                     "file not found",
                 )

@@ -19,15 +19,17 @@ use std::{
 fn utc_timestamp(seconds: u64) -> Result<String, ApiError> {
     let invalid = || {
         ApiError::new(
-            500,
+            ::http::StatusCode::INTERNAL_SERVER_ERROR,
             storage_contract::ErrorCode::StateInvalid,
             "history timestamp is invalid",
         )
     };
-    date_time::OffsetDateTime::from_unix_timestamp(i64::try_from(seconds).map_err(|_| invalid())?)
-        .map_err(|_| invalid())?
-        .format(&date_time::format_description::well_known::Rfc3339)
-        .map_err(|_| invalid())
+    date_time::OffsetDateTime::from_unix_timestamp(
+        i64::try_from(seconds).map_err(|source| invalid().with_source(source))?,
+    )
+    .map_err(|source| invalid().with_source(source))?
+    .format(&date_time::format_description::well_known::Rfc3339)
+    .map_err(|source| invalid().with_source(source))
 }
 
 fn query<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
@@ -62,7 +64,7 @@ fn checked_path(input: &Value, lookup: bool) -> Result<&str, ApiError> {
         } else {
             name_policy::validate_path(value)
         }
-        .map_err(ApiError::invalid)?;
+        .map_err(ApiError::invalid_source)?;
     }
     Ok(value)
 }
@@ -74,7 +76,7 @@ fn disk<'a>(engine: &'a Engine, slot: &str) -> Result<&'a storage_engine::DiskCo
         .find(|d| d.slot_id == slot)
         .ok_or_else(|| {
             ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::DiskNotFound,
                 "disk not found",
             )
@@ -164,7 +166,7 @@ fn resolve_existing(
     let write = access != DiskAccess::Read;
     if write && disk(engine, slot)?.level != 1 {
         return Err(ApiError::new(
-            403,
+            ::http::StatusCode::FORBIDDEN,
             storage_contract::ErrorCode::DiskReadOnly,
             "backup disks are read only",
         ));
@@ -193,7 +195,7 @@ fn resolve_existing(
     {
         if !eligible(engine, slot, &repo) {
             return Err(ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::DirectoryNotFound,
                 "directory is not stored on this disk",
             ));
@@ -214,7 +216,7 @@ fn resolve_existing(
 }
 fn empty_directory() -> ApiError {
     ApiError::new(
-        404,
+        ::http::StatusCode::NOT_FOUND,
         storage_contract::ErrorCode::DirectoryNotFound,
         "disk directory is empty",
     )
@@ -256,7 +258,7 @@ fn file_repo<'a>(engine: &'a Engine, file: &str) -> Result<&'a Repository, ApiEr
         .find(|v| v.file_id == file)
         .ok_or_else(|| {
             ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::FileNotFound,
                 "file not found",
             )
@@ -281,7 +283,7 @@ fn listed_current_entry(
         .get(index)
         .ok_or_else(|| {
             ApiError::new(
-                500,
+                ::http::StatusCode::INTERNAL_SERVER_ERROR,
                 storage_contract::ErrorCode::StateInvalid,
                 "listing entry index is invalid",
             )
@@ -345,7 +347,7 @@ fn scoped_directory_branches<'a>(
 ) -> Result<Vec<&'a storage_contract::DirectoryBranch>, ApiError> {
     let repository = repository(engine, repo)?;
     if let Some(path) = requested_path.filter(|path| !path.is_empty()) {
-        name_policy::validate_lookup_path(path).map_err(ApiError::invalid)?;
+        name_policy::validate_lookup_path(path).map_err(ApiError::invalid_source)?;
     }
     let requested_key = requested_path.map(name_policy::path_key);
     let requested_directory_id = requested_key.as_ref().and_then(|key| {
@@ -458,14 +460,14 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
         ));
     }
     if let Some(path) = requested_path {
-        name_policy::validate_lookup_path(path).map_err(ApiError::invalid)?;
+        name_policy::validate_lookup_path(path).map_err(ApiError::invalid_source)?;
     }
     let tree = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
     let entries = tree.entries();
     let current = if let Some(path) = requested_path {
         if requested_repo != Some(repo.repository_id.as_str()) {
             return Err(ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::FileNotFound,
                 "file is not present in this repository context",
             ));
@@ -476,7 +478,7 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
                 .cloned()
                 .ok_or_else(|| {
                     ApiError::new(
-                        404,
+                        ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::FileNotFound,
                         "file is not present at this logical path",
                     )
@@ -643,21 +645,21 @@ pub(super) fn read(
             keys(&input, &["repository_id", "path", "version_id"])?;
             let repo = repository(engine, field(&input, "repository_id")?)?;
             let path = field(&input, "path")?;
-            name_policy::validate_lookup_path(path).map_err(ApiError::invalid)?;
+            name_policy::validate_lookup_path(path).map_err(ApiError::invalid_source)?;
             let version = engine
                 .state()
                 .versions
                 .get(field(&input, "version_id")?)
                 .ok_or_else(|| {
                     ApiError::new(
-                        404,
+                        ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::VersionNotFound,
                         "version missing",
                     )
                 })?;
             if version.history_tree_id != repo.history_tree_id {
                 return Err(ApiError::new(
-                    404,
+                    ::http::StatusCode::NOT_FOUND,
                     storage_contract::ErrorCode::FileNotFound,
                     "version is not in this repository context",
                 ));
@@ -669,7 +671,7 @@ pub(super) fn read(
                 .filter(|entry| entry.kind == "file" && entry.file_id == version.file_id)
                 .ok_or_else(|| {
                     ApiError::new(
-                        404,
+                        ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::FileNotFound,
                         "version file is not present at this logical path",
                     )
@@ -708,10 +710,10 @@ pub(super) fn call(
             let name = field(&input, "name")?;
             storage_engine::validate_branch_name(name).map_err(error)?;
             let operation = operation(&input)?;
-            storage_contract::validate_id(operation, "op").map_err(ApiError::invalid)?;
+            storage_contract::validate_id(operation, "op").map_err(ApiError::invalid_source)?;
             if display.is_empty() && root_has_virtual_directories(engine, slot) {
                 return Err(ApiError::new(
-                    409,
+                    ::http::StatusCode::CONFLICT,
                     storage_contract::ErrorCode::DirectoryScopeRequired,
                     "select a specific folder before branching this disk root",
                 ));
@@ -765,7 +767,7 @@ pub(super) fn call(
                 .map(|_| field(&input, "branch_id"))
                 .transpose()?;
             if let Some(branch) = requested_branch {
-                storage_contract::validate_id(branch, "br").map_err(ApiError::invalid)?;
+                storage_contract::validate_id(branch, "br").map_err(ApiError::invalid_source)?;
             }
             // Selecting an existing branch cannot create a namespace as a side
             // effect when neither that branch nor its file exists.
@@ -836,7 +838,7 @@ pub(super) fn call(
                 ));
             }
             let operation = operation(&input)?;
-            storage_contract::validate_id(operation, "op").map_err(ApiError::invalid)?;
+            storage_contract::validate_id(operation, "op").map_err(ApiError::invalid_source)?;
             let display = path(&input)?;
             if display.is_empty() {
                 return Err(ApiError::invalid("disk namespace root cannot be changed"));
@@ -873,7 +875,7 @@ pub(super) fn call(
                 json_codec::from_value(json!({
                     "kind":input.get("kind"), "items":input.get("items")
                 }))
-                .map_err(ApiError::invalid)?;
+                .map_err(ApiError::invalid_source)?;
             let result = Application::new(engine, identity).namespace_batch(
                 application::NamespaceBatch {
                     slot_id: slot.into(),
@@ -905,7 +907,7 @@ pub(super) fn call(
                     .get(id)
                     .ok_or_else(|| {
                         ApiError::new(
-                            404,
+                            ::http::StatusCode::NOT_FOUND,
                             storage_contract::ErrorCode::VersionNotFound,
                             "version not found",
                         )
@@ -1013,7 +1015,7 @@ pub(super) fn call(
             let result = if requested_repo.is_some() {
                 if field(&input, "repository_id")? != repo {
                     return Err(ApiError::new(
-                        404,
+                        ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::FileNotFound,
                         "file is not in this repository",
                     ));

@@ -7,22 +7,22 @@ use storage_engine::Engine;
 pub(crate) fn error(error: storage_engine::Error) -> ApiError {
     let code = super::error_registry::public_code(error.code());
     let status = super::error_registry::status(code);
-    if status == 500 {
-        tracing::error!(%error,"storage operation failed");
+    if status == ::http::StatusCode::INTERNAL_SERVER_ERROR {
         ApiError::new(
             status,
             code,
             "storage operation could not be completed; administrator inspection is required",
         )
+        .with_source(error)
     } else {
         let mut mapped = ApiError::new(status, code, error.message());
         mapped.retryable |= error.is_retryable();
-        mapped
+        mapped.with_source(error)
     }
 }
 
 pub(super) fn encode(value: impl Serialize) -> Result<Value, ApiError> {
-    json_codec::to_value(value).map_err(ApiError::invalid)
+    Ok(json_codec::to_value(value).expect("invariant: internal response serialization succeeds"))
 }
 /// A missing stored disposition has the same available-content semantics as
 /// core reads. This is distinct from LIVE/PENDING branch presentation states.
@@ -393,7 +393,7 @@ pub(super) fn operation_wire(op: storage_engine::OperationResult) -> Result<Valu
         "HEALTHY" | "DEGRADED" | "UNAVAILABLE" | "UNKNOWN" => op.current_health.as_str(),
         _ => "UNKNOWN",
     };
-    let current_health = json!({"state":health,"checked_at":date_time::OffsetDateTime::now_utc().format(&date_time::format_description::well_known::Rfc3339).map_err(ApiError::invalid)?});
+    let current_health = json!({"state":health,"checked_at":date_time::OffsetDateTime::now_utc().format(&date_time::format_description::well_known::Rfc3339).map_err(ApiError::invalid_source)?});
     let content_save = op.kind == "workspace.commit"
         && op.protection_at_publish != storage_contract::ProtectionAtPublish::NotApplicable;
     if content_save {
@@ -423,7 +423,7 @@ pub(super) fn operation_wire(op: storage_engine::OperationResult) -> Result<Valu
                 .filter(|versions| versions.is_array())
                 .ok_or_else(|| {
                     ApiError::new(
-                        500,
+                        ::http::StatusCode::INTERNAL_SERVER_ERROR,
                         storage_contract::ErrorCode::StateInvalid,
                         "frozen publication protection evidence is missing",
                     )

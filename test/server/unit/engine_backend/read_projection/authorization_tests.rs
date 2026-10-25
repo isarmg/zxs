@@ -8,14 +8,14 @@ fn old_tree_admission(state: &State, input: &Value) -> Result<(), ApiError> {
     let branch = field(input, "branch_id")?;
     let branch_info = state.branches.get(branch).ok_or_else(|| {
         ApiError::new(
-            404,
+            ::http::StatusCode::NOT_FOUND,
             storage_contract::ErrorCode::NotFound,
             "branch not found",
         )
     })?;
     if branch_info.state == "migrated" {
         return Err(ApiError::new(
-            409,
+            ::http::StatusCode::CONFLICT,
             storage_contract::ErrorCode::TreeMoved,
             "branch has moved to an independent history domain",
         ));
@@ -25,7 +25,7 @@ fn old_tree_admission(state: &State, input: &Value) -> Result<(), ApiError> {
         .get(&branch_info.history_tree_id)
         .ok_or_else(|| {
             ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::NotFound,
                 "history not found",
             )
@@ -35,7 +35,7 @@ fn old_tree_admission(state: &State, input: &Value) -> Result<(), ApiError> {
         .get(&history.repository_id)
         .ok_or_else(|| {
             ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::NotFound,
                 "repository not found",
             )
@@ -46,7 +46,7 @@ fn old_tree_admission(state: &State, input: &Value) -> Result<(), ApiError> {
         .filter(|commit| commit.history_tree_id == branch_info.history_tree_id)
         .ok_or_else(|| {
             ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::NotFound,
                 "commit not found",
             )
@@ -56,7 +56,15 @@ fn old_tree_admission(state: &State, input: &Value) -> Result<(), ApiError> {
 
 fn decision<T>(
     result: Result<T, ApiError>,
-) -> Result<(), (u16, storage_contract::ErrorCode, String, bool)> {
+) -> Result<
+    (),
+    (
+        ::http::StatusCode,
+        storage_contract::ErrorCode,
+        String,
+        bool,
+    ),
+> {
     result
         .map(|_| ())
         .map_err(|error| (error.status, error.code, error.message, error.retryable))

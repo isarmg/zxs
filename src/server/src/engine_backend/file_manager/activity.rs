@@ -17,7 +17,7 @@ fn utc_event_timestamp(event: &mut Value) -> Result<(), ApiError> {
             .and_then(|value| storage_contract::parse_u64_decimal(value).ok())
             .ok_or_else(|| {
                 ApiError::new(
-                    500,
+                    ::http::StatusCode::INTERNAL_SERVER_ERROR,
                     storage_contract::ErrorCode::StateInvalid,
                     "history timestamp is invalid",
                 )

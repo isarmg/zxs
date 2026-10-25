@@ -136,7 +136,7 @@ impl Listener for DrainListener {
             match prepared {
                 Ok(stream) => return (stream, address),
                 Err(error) => {
-                    tracing::warn!(%error, "HTTP connection shutdown registration failed");
+                    tracing::warn!(error = ?error, "HTTP connection shutdown registration failed");
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             }

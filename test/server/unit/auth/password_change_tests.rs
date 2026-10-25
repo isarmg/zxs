@@ -298,7 +298,11 @@ fn failed_prepared_password_publication_restores_sessions_created_during_prepara
         let disk = fs::read(root.path().join("auth.json")).unwrap();
         store.backup = Some(Arc::new(move |_| {
             Err(ApiError::new(
-                if uncertain { 503 } else { 409 },
+                if uncertain {
+                    ::http::StatusCode::SERVICE_UNAVAILABLE
+                } else {
+                    ::http::StatusCode::CONFLICT
+                },
                 if uncertain {
                     storage_contract::ErrorCode::CommitInDoubt
                 } else {

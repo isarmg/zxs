@@ -167,7 +167,7 @@ impl HistoryStore {
             {
                 let sample = average(&samples);
                 if let Err(error) = result.append_file(false, &sample) {
-                    tracing::warn!(%error, "monitoring cache recovery is read-only; using bounded memory history");
+                    tracing::warn!(error = ?error, "monitoring cache recovery is read-only; using bounded memory history");
                     result.directory = None;
                 }
                 result.minutes.push_back(sample);

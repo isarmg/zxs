@@ -48,12 +48,12 @@ impl HttpSpool {
         match self.state.lock().as_deref() {
             Ok(State::Ready(budget)) => Ok(budget.clone()),
             Ok(State::Pending) => Err(ApiError::new(
-                503,
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::HttpUploadsPending,
                 "HTTP upload staging inventory is still running; retry after it completes",
             )),
             Ok(State::Unavailable) | Err(_) => Err(ApiError::new(
-                503,
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::HttpUploadsUnavailable,
                 "HTTP upload staging is unavailable; repair the local spool and restart",
             )),
@@ -75,7 +75,7 @@ impl Startup {
             Ok(Some(budget)) => State::Ready(budget),
             Ok(None) => State::Unavailable,
             Err(error) => {
-                tracing::error!(%error, "HTTP spool startup job failed; management remains available");
+                tracing::error!(error = ?error, "HTTP spool startup job failed; management remains available");
                 State::Unavailable
             }
         };

@@ -211,7 +211,7 @@ fn uncertain_backup_blocks_authentication_and_queued_password_changes_until_reco
                 Ok(())
             } else {
                 Err(ApiError::new(
-                    503,
+                    ::http::StatusCode::SERVICE_UNAVAILABLE,
                     storage_contract::ErrorCode::CommitInDoubt,
                     "publication interrupted",
                 ))

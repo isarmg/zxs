@@ -2,7 +2,7 @@
 //!
 //! Translate failures before a response starts. Content stream errors remain
 //! transport failures; they cannot be replaced by a JSON envelope after headers.
-use data_serialization::{Deserialize, Serialize, de::DeserializeOwned};
+use data_serialization::{Serialize, de::DeserializeOwned};
 use http_routing::{
     Json,
     body::Bytes,
@@ -12,90 +12,159 @@ use http_routing::{
 };
 use json_codec::json;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, error_definition::Error)]
+pub(crate) enum ApiErrorSource {
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Join(#[from] tokio::task::JoinError),
+    #[error("{0}")]
+    Contract(#[from] storage_contract::Error),
+    #[cfg(feature = "core")]
+    #[error("{0}")]
+    Engine(#[from] storage_engine::Error),
+    #[error("{0}")]
+    Json(#[from] json_codec::Error),
+    #[error("{0}")]
+    Filesystem(#[from] platform_io::fs_safety::Error),
+    #[error("{0}")]
+    Authentication(#[from] authentication::Error),
+    #[error("{0}")]
+    Integer(#[from] std::num::ParseIntError),
+    #[error("{0}")]
+    IntegerRange(#[from] std::num::TryFromIntError),
+    #[error("{0}")]
+    FileLock(#[from] std::fs::TryLockError),
+    #[error("filename is not valid UTF-8: {0:?}")]
+    Filename(std::ffi::OsString),
+    #[error("{0}")]
+    HeaderText(#[from] http::header::ToStrError),
+    #[error("{0}")]
+    HeaderValue(#[from] http::header::InvalidHeaderValue),
+    #[error("{0}")]
+    Url(#[from] url_encoding::address::ParseError),
+    #[error("{0}")]
+    Query(#[from] http_routing::extract::rejection::QueryRejection),
+    #[error("{0}")]
+    Path(#[from] http_routing::extract::rejection::PathRejection),
+    #[error("{0}")]
+    Body(#[from] http_routing::extract::rejection::BytesRejection),
+    #[error("{0}")]
+    Timeout(#[from] tokio::time::error::Elapsed),
+    #[error("{0}")]
+    Capacity(#[from] tokio::sync::TryAcquireError),
+    #[error("{0}")]
+    Timestamp(#[from] date_time::error::ComponentRange),
+    #[error("{0}")]
+    DateFormat(#[from] date_time::error::Format),
+    #[error("{0}")]
+    Clock(#[from] std::time::SystemTimeError),
+    #[cfg(feature = "core")]
+    #[error("{0}")]
+    Admission(#[from] std::sync::Arc<ApiError>),
+}
+
+#[derive(Debug, Serialize, error_definition::Error)]
+#[error("{code}: {message}")]
 pub struct ApiError {
     pub code: storage_contract::ErrorCode,
     pub message: String,
     pub retryable: bool,
     pub request_id: String,
     #[serialization(skip)]
-    pub status: u16,
+    pub status: StatusCode,
+    #[serialization(skip)]
+    #[source]
+    pub(crate) source: Option<Box<ApiErrorSource>>,
 }
 impl ApiError {
-    pub fn new(status: u16, code: storage_contract::ErrorCode, message: impl Into<String>) -> Self {
+    pub fn new(
+        status: StatusCode,
+        code: storage_contract::ErrorCode,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             status,
             code,
+            source: None,
             message: message.into(),
-            retryable: (status >= 500 && status != 501) || status == 429,
+            retryable: (status.is_server_error() && status != StatusCode::NOT_IMPLEMENTED)
+                || status == StatusCode::TOO_MANY_REQUESTS,
             request_id: storage_contract::new_id("req"),
         }
     }
-    pub fn invalid(error: impl std::fmt::Display) -> Self {
+    pub fn invalid(message: impl Into<String>) -> Self {
         Self::new(
-            400,
+            ::http::StatusCode::BAD_REQUEST,
             storage_contract::ErrorCode::InvalidRequest,
-            error.to_string(),
+            message,
         )
     }
+    pub(crate) fn invalid_source(source: impl Into<ApiErrorSource>) -> Self {
+        let source = source.into();
+        Self::invalid(source.to_string()).with_source(source)
+    }
+    pub(crate) fn with_source(mut self, source: impl Into<ApiErrorSource>) -> Self {
+        self.source = Some(Box::new(source.into()));
+        self
+    }
+    pub(crate) fn log_response(&self) {
+        if self.status.is_server_error() {
+            tracing::error!(error = ?self, "request failed");
+        }
+    }
     pub(crate) fn join(error: tokio::task::JoinError) -> Self {
-        tracing::error!(%error, "blocking request task failed");
         Self::new(
-            500,
+            ::http::StatusCode::INTERNAL_SERVER_ERROR,
             storage_contract::ErrorCode::InternalError,
             "request task failed",
         )
+        .with_source(error)
     }
     pub fn io(error: std::io::Error) -> Self {
-        tracing::error!(%error, "local I/O failed");
         Self::new(
-            500,
+            ::http::StatusCode::INTERNAL_SERVER_ERROR,
             storage_contract::ErrorCode::IoError,
             "local storage operation failed",
         )
+        .with_source(error)
     }
     pub fn unauthorized() -> Self {
         Self::new(
-            401,
+            ::http::StatusCode::UNAUTHORIZED,
             storage_contract::ErrorCode::Unauthorized,
             "authentication required or session expired",
         )
     }
     pub fn forbidden() -> Self {
         Self::new(
-            403,
+            ::http::StatusCode::FORBIDDEN,
             storage_contract::ErrorCode::Forbidden,
             "permission denied",
         )
     }
     pub fn conflict(code: storage_contract::ErrorCode, message: &str) -> Self {
-        Self::new(409, code, message)
+        Self::new(StatusCode::CONFLICT, code, message)
     }
     pub fn limit(message: &str) -> Self {
         Self::new(
-            429,
+            ::http::StatusCode::TOO_MANY_REQUESTS,
             storage_contract::ErrorCode::ResourceLimitExceeded,
             message,
         )
     }
     pub fn unsupported() -> Self {
         Self::new(
-            501,
+            ::http::StatusCode::NOT_IMPLEMENTED,
             storage_contract::ErrorCode::UnsupportedOperation,
             "operation is not supported by this build",
         )
     }
 }
-impl std::fmt::Display for ApiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.code, self.message)
-    }
-}
-impl std::error::Error for ApiError {}
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        (status, Json(json!({"error":self}))).into_response()
+        self.log_response();
+        (self.status, Json(json!({"error":self}))).into_response()
     }
 }
 
@@ -122,7 +191,7 @@ where
         Query::<T>::from_request_parts(parts, state)
             .await
             .map(|Query(value)| Self(value))
-            .map_err(|error| ApiError::invalid(error.body_text()))
+            .map_err(|error| ApiError::invalid(error.body_text()).with_source(error))
     }
 }
 
@@ -142,14 +211,14 @@ where
             .map(|Path(value)| Self(value))
             .map_err(|error| {
                 if error.status().is_server_error() {
-                    tracing::error!(%error, "request path extraction failed");
                     ApiError::new(
-                        500,
+                        ::http::StatusCode::INTERNAL_SERVER_ERROR,
                         storage_contract::ErrorCode::InternalError,
                         "request routing failed",
                     )
+                    .with_source(error)
                 } else {
-                    ApiError::invalid(error.body_text())
+                    ApiError::invalid(error.body_text()).with_source(error)
                 }
             })
     }
@@ -169,22 +238,24 @@ pub(crate) async fn read_body_with_timeout(
     DefaultBodyLimit::max(limit).apply(&mut request);
     tokio::time::timeout(timeout, Bytes::from_request(request, &()))
         .await
-        .map_err(|_| {
+        .map_err(|source| {
             ApiError::new(
-                408,
+                ::http::StatusCode::REQUEST_TIMEOUT,
                 storage_contract::ErrorCode::RequestTimeout,
                 "request body deadline exceeded",
             )
+            .with_source(source)
         })?
         .map_err(|error| {
             if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
                 ApiError::new(
-                    413,
+                    ::http::StatusCode::PAYLOAD_TOO_LARGE,
                     storage_contract::ErrorCode::PayloadTooLarge,
                     "request body exceeds limit",
                 )
+                .with_source(error)
             } else {
-                ApiError::invalid("failed to read request body")
+                ApiError::invalid("failed to read request body").with_source(error)
             }
         })
 }
@@ -205,11 +276,9 @@ pub(crate) async fn admit_request(
                 | http_routing::http::Method::HEAD
                 | http_routing::http::Method::OPTIONS
         ) {
-        Some(
-            slots
-                .try_acquire_owned()
-                .map_err(|_| ApiError::limit("HTTP request capacity reached"))?,
-        )
+        Some(slots.try_acquire_owned().map_err(|source| {
+            ApiError::limit("HTTP request capacity reached").with_source(source)
+        })?)
     } else {
         None
     };
@@ -218,7 +287,7 @@ pub(crate) async fn admit_request(
 
 pub(crate) async fn not_found() -> ApiError {
     ApiError::new(
-        404,
+        ::http::StatusCode::NOT_FOUND,
         storage_contract::ErrorCode::NotFound,
         "route not found",
     )
@@ -227,7 +296,7 @@ pub(crate) async fn not_found() -> ApiError {
 pub(crate) async fn method_not_allowed() -> ApiError {
     // Axum adds the matched route's Allow header to this fallback response.
     ApiError::new(
-        405,
+        ::http::StatusCode::METHOD_NOT_ALLOWED,
         storage_contract::ErrorCode::MethodNotAllowed,
         "method not allowed for this route",
     )

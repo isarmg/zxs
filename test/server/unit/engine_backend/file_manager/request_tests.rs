@@ -484,7 +484,10 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                     listing::entries(&engine, &json!({"slot_id":"P01","path":path})).unwrap_err();
                 assert_eq!(
                     (failure.status, failure.code),
-                    (409, storage_contract::ErrorCode::NameCollision)
+                    (
+                        ::http::StatusCode::CONFLICT,
+                        storage_contract::ErrorCode::NameCollision
+                    )
                 );
             }
             for (action, input) in [
@@ -508,7 +511,10 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                 let failure = call(&mut engine, &identity, action, input).unwrap_err();
                 assert_eq!(
                     (failure.status, failure.code),
-                    (409, storage_contract::ErrorCode::NameCollision)
+                    (
+                        ::http::StatusCode::CONFLICT,
+                        storage_contract::ErrorCode::NameCollision
+                    )
                 );
                 assert_eq!(engine.state(), &before);
                 assert_eq!(engine.workspace_capacity("owner"), capacity);

@@ -21,61 +21,154 @@ pub(super) const ALIASES: &[(ErrorCode, ErrorCode)] = &[
 ];
 
 #[cfg(test)]
-pub(super) const PUBLIC_STATUS: &[(ErrorCode, u16)] = &[
-    (ErrorCode::Unauthorized, 401),
-    (ErrorCode::Forbidden, 403),
-    (ErrorCode::ContentPurged, 410),
-    (ErrorCode::NoSpace, 507),
-    (ErrorCode::ResourceLimitExceeded, 429),
-    (ErrorCode::QuotaExceeded, 429),
-    (ErrorCode::ContentUnavailable, 503),
-    (ErrorCode::MetadataUnavailable, 503),
-    (ErrorCode::RecoveryRequired, 503),
-    (ErrorCode::ReplicaTargetUnavailable, 503),
-    (ErrorCode::RouteTargetUnavailable, 503),
-    (ErrorCode::CommitInDoubt, 503),
-    (ErrorCode::BackupRouteIncomplete, 503),
-    (ErrorCode::CommitPreparationBusy, 409),
-    (ErrorCode::CommitPreparationStale, 409),
-    (ErrorCode::PreparationStale, 409),
-    (ErrorCode::HeadConflict, 409),
-    (ErrorCode::BranchNotActive, 409),
-    (ErrorCode::Fenced, 409),
-    (ErrorCode::LeaseExpired, 409),
-    (ErrorCode::UploadGenerationConflict, 409),
-    (ErrorCode::FileConflict, 409),
-    (ErrorCode::FileBranchConflict, 409),
-    (ErrorCode::DirectoryBranchConflict, 409),
-    (ErrorCode::DirectoryAliasConflict, 409),
-    (ErrorCode::BatchMappingConflict, 409),
-    (ErrorCode::BatchScopeConflict, 409),
-    (ErrorCode::IdempotencyKeyReused, 409),
-    (ErrorCode::SplitPlanStale, 409),
-    (ErrorCode::PurgeBlockedByReference, 409),
-    (ErrorCode::ContentPinned, 409),
-    (ErrorCode::ConfigConflict, 409),
-    (ErrorCode::BranchWriteBusy, 409),
-    (ErrorCode::FileWriteBusy, 409),
-    (ErrorCode::NamespaceConflict, 409),
-    (ErrorCode::NameCollision, 409),
-    (ErrorCode::WorkspaceClosed, 409),
-    (ErrorCode::PlanStale, 409),
-    (ErrorCode::PlanClosed, 409),
-    (ErrorCode::TreeMoved, 409),
-    (ErrorCode::RestoreBackupConflict, 409),
-    (ErrorCode::DirectoryBranchIncomplete, 409),
-    (ErrorCode::DirectoryScopeRequired, 409),
-    (ErrorCode::DirectoryHistorySplitUnsupported, 400),
-    (ErrorCode::FileNodeHistorySplitUnsupported, 400),
-    (ErrorCode::IoError, 500),
-    (ErrorCode::DurabilityUnknown, 500),
-    (ErrorCode::StateInvalid, 500),
-    (ErrorCode::InternalError, 500),
-    (ErrorCode::ObjectCorrupt, 500),
-    (ErrorCode::LogCorrupt, 500),
-    (ErrorCode::PublicationInvalid, 500),
-    (ErrorCode::OperationUnsupported, 501),
-    (ErrorCode::PlanUnsupported, 501),
+pub(super) const PUBLIC_STATUS: &[(ErrorCode, ::http::StatusCode)] = &[
+    (ErrorCode::Unauthorized, ::http::StatusCode::UNAUTHORIZED),
+    (ErrorCode::Forbidden, ::http::StatusCode::FORBIDDEN),
+    (ErrorCode::ContentPurged, ::http::StatusCode::GONE),
+    (ErrorCode::NoSpace, ::http::StatusCode::INSUFFICIENT_STORAGE),
+    (
+        ErrorCode::ResourceLimitExceeded,
+        ::http::StatusCode::TOO_MANY_REQUESTS,
+    ),
+    (
+        ErrorCode::QuotaExceeded,
+        ::http::StatusCode::TOO_MANY_REQUESTS,
+    ),
+    (
+        ErrorCode::ContentUnavailable,
+        ::http::StatusCode::SERVICE_UNAVAILABLE,
+    ),
+    (
+        ErrorCode::MetadataUnavailable,
+        ::http::StatusCode::SERVICE_UNAVAILABLE,
+    ),
+    (
+        ErrorCode::RecoveryRequired,
+        ::http::StatusCode::SERVICE_UNAVAILABLE,
+    ),
+    (
+        ErrorCode::ReplicaTargetUnavailable,
+        ::http::StatusCode::SERVICE_UNAVAILABLE,
+    ),
+    (
+        ErrorCode::RouteTargetUnavailable,
+        ::http::StatusCode::SERVICE_UNAVAILABLE,
+    ),
+    (
+        ErrorCode::CommitInDoubt,
+        ::http::StatusCode::SERVICE_UNAVAILABLE,
+    ),
+    (
+        ErrorCode::BackupRouteIncomplete,
+        ::http::StatusCode::SERVICE_UNAVAILABLE,
+    ),
+    (
+        ErrorCode::CommitPreparationBusy,
+        ::http::StatusCode::CONFLICT,
+    ),
+    (
+        ErrorCode::CommitPreparationStale,
+        ::http::StatusCode::CONFLICT,
+    ),
+    (ErrorCode::PreparationStale, ::http::StatusCode::CONFLICT),
+    (ErrorCode::HeadConflict, ::http::StatusCode::CONFLICT),
+    (ErrorCode::BranchNotActive, ::http::StatusCode::CONFLICT),
+    (ErrorCode::Fenced, ::http::StatusCode::CONFLICT),
+    (ErrorCode::LeaseExpired, ::http::StatusCode::CONFLICT),
+    (
+        ErrorCode::UploadGenerationConflict,
+        ::http::StatusCode::CONFLICT,
+    ),
+    (ErrorCode::FileConflict, ::http::StatusCode::CONFLICT),
+    (ErrorCode::FileBranchConflict, ::http::StatusCode::CONFLICT),
+    (
+        ErrorCode::DirectoryBranchConflict,
+        ::http::StatusCode::CONFLICT,
+    ),
+    (
+        ErrorCode::DirectoryAliasConflict,
+        ::http::StatusCode::CONFLICT,
+    ),
+    (
+        ErrorCode::BatchMappingConflict,
+        ::http::StatusCode::CONFLICT,
+    ),
+    (ErrorCode::BatchScopeConflict, ::http::StatusCode::CONFLICT),
+    (
+        ErrorCode::IdempotencyKeyReused,
+        ::http::StatusCode::CONFLICT,
+    ),
+    (ErrorCode::SplitPlanStale, ::http::StatusCode::CONFLICT),
+    (
+        ErrorCode::PurgeBlockedByReference,
+        ::http::StatusCode::CONFLICT,
+    ),
+    (ErrorCode::ContentPinned, ::http::StatusCode::CONFLICT),
+    (ErrorCode::ConfigConflict, ::http::StatusCode::CONFLICT),
+    (ErrorCode::BranchWriteBusy, ::http::StatusCode::CONFLICT),
+    (ErrorCode::FileWriteBusy, ::http::StatusCode::CONFLICT),
+    (ErrorCode::NamespaceConflict, ::http::StatusCode::CONFLICT),
+    (ErrorCode::NameCollision, ::http::StatusCode::CONFLICT),
+    (ErrorCode::WorkspaceClosed, ::http::StatusCode::CONFLICT),
+    (ErrorCode::PlanStale, ::http::StatusCode::CONFLICT),
+    (ErrorCode::PlanClosed, ::http::StatusCode::CONFLICT),
+    (ErrorCode::TreeMoved, ::http::StatusCode::CONFLICT),
+    (
+        ErrorCode::RestoreBackupConflict,
+        ::http::StatusCode::CONFLICT,
+    ),
+    (
+        ErrorCode::DirectoryBranchIncomplete,
+        ::http::StatusCode::CONFLICT,
+    ),
+    (
+        ErrorCode::DirectoryScopeRequired,
+        ::http::StatusCode::CONFLICT,
+    ),
+    (
+        ErrorCode::DirectoryHistorySplitUnsupported,
+        ::http::StatusCode::BAD_REQUEST,
+    ),
+    (
+        ErrorCode::FileNodeHistorySplitUnsupported,
+        ::http::StatusCode::BAD_REQUEST,
+    ),
+    (
+        ErrorCode::IoError,
+        ::http::StatusCode::INTERNAL_SERVER_ERROR,
+    ),
+    (
+        ErrorCode::DurabilityUnknown,
+        ::http::StatusCode::INTERNAL_SERVER_ERROR,
+    ),
+    (
+        ErrorCode::StateInvalid,
+        ::http::StatusCode::INTERNAL_SERVER_ERROR,
+    ),
+    (
+        ErrorCode::InternalError,
+        ::http::StatusCode::INTERNAL_SERVER_ERROR,
+    ),
+    (
+        ErrorCode::ObjectCorrupt,
+        ::http::StatusCode::INTERNAL_SERVER_ERROR,
+    ),
+    (
+        ErrorCode::LogCorrupt,
+        ::http::StatusCode::INTERNAL_SERVER_ERROR,
+    ),
+    (
+        ErrorCode::PublicationInvalid,
+        ::http::StatusCode::INTERNAL_SERVER_ERROR,
+    ),
+    (
+        ErrorCode::OperationUnsupported,
+        ::http::StatusCode::NOT_IMPLEMENTED,
+    ),
+    (
+        ErrorCode::PlanUnsupported,
+        ::http::StatusCode::NOT_IMPLEMENTED,
+    ),
 ];
 
 pub(super) fn public_code(internal: ErrorCode) -> ErrorCode {
@@ -310,7 +403,7 @@ pub(super) fn public_code(internal: ErrorCode) -> ErrorCode {
     }
 }
 
-pub(super) fn status(code: ErrorCode) -> u16 {
+pub(super) fn status(code: ErrorCode) -> ::http::StatusCode {
     match code {
         ErrorCode::AlreadyInitialized
         | ErrorCode::AuthorityRecoveryRequired
@@ -465,9 +558,9 @@ pub(super) fn status(code: ErrorCode) -> u16 {
         | ErrorCode::WorkspaceDependencyBusy
         | ErrorCode::WorkspaceNotSealed
         | ErrorCode::WorkspaceRebaseRequired
-        | ErrorCode::WriterAlreadyActive => 400,
-        ErrorCode::Unauthorized => 401,
-        ErrorCode::Forbidden => 403,
+        | ErrorCode::WriterAlreadyActive => ::http::StatusCode::BAD_REQUEST,
+        ErrorCode::Unauthorized => ::http::StatusCode::UNAUTHORIZED,
+        ErrorCode::Forbidden => ::http::StatusCode::FORBIDDEN,
         ErrorCode::BranchNotFound
         | ErrorCode::CommitNotFound
         | ErrorCode::DirectoryBranchNotFound
@@ -488,7 +581,7 @@ pub(super) fn status(code: ErrorCode) -> u16 {
         | ErrorCode::RepositoryNotFound
         | ErrorCode::SlotNotFound
         | ErrorCode::VersionNotFound
-        | ErrorCode::WorkspaceNotFound => 404,
+        | ErrorCode::WorkspaceNotFound => ::http::StatusCode::NOT_FOUND,
         ErrorCode::BatchMappingConflict
         | ErrorCode::BatchScopeConflict
         | ErrorCode::BranchNotActive
@@ -518,25 +611,29 @@ pub(super) fn status(code: ErrorCode) -> u16 {
         | ErrorCode::SplitPlanStale
         | ErrorCode::TreeMoved
         | ErrorCode::UploadGenerationConflict
-        | ErrorCode::WorkspaceClosed => 409,
-        ErrorCode::ContentPurged => 410,
-        ErrorCode::QuotaExceeded | ErrorCode::ResourceLimitExceeded => 429,
+        | ErrorCode::WorkspaceClosed => ::http::StatusCode::CONFLICT,
+        ErrorCode::ContentPurged => ::http::StatusCode::GONE,
+        ErrorCode::QuotaExceeded | ErrorCode::ResourceLimitExceeded => {
+            ::http::StatusCode::TOO_MANY_REQUESTS
+        }
         ErrorCode::DurabilityUnknown
         | ErrorCode::InternalError
         | ErrorCode::IoError
         | ErrorCode::LogCorrupt
         | ErrorCode::ObjectCorrupt
         | ErrorCode::PublicationInvalid
-        | ErrorCode::StateInvalid => 500,
-        ErrorCode::OperationUnsupported | ErrorCode::PlanUnsupported => 501,
+        | ErrorCode::StateInvalid => ::http::StatusCode::INTERNAL_SERVER_ERROR,
+        ErrorCode::OperationUnsupported | ErrorCode::PlanUnsupported => {
+            ::http::StatusCode::NOT_IMPLEMENTED
+        }
         ErrorCode::BackupRouteIncomplete
         | ErrorCode::CommitInDoubt
         | ErrorCode::ContentUnavailable
         | ErrorCode::MetadataUnavailable
         | ErrorCode::RecoveryRequired
         | ErrorCode::ReplicaTargetUnavailable
-        | ErrorCode::RouteTargetUnavailable => 503,
-        ErrorCode::NoSpace => 507,
+        | ErrorCode::RouteTargetUnavailable => ::http::StatusCode::SERVICE_UNAVAILABLE,
+        ErrorCode::NoSpace => ::http::StatusCode::INSUFFICIENT_STORAGE,
     }
 }
 

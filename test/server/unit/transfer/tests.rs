@@ -254,11 +254,14 @@ fn ranges_obey_boundaries_and_reject_non_decimal_syntax() {
     ] {
         assert_eq!(
             parse_range(invalid, 5).unwrap_err().status,
-            416,
+            http::StatusCode::RANGE_NOT_SATISFIABLE,
             "{invalid}"
         );
     }
-    assert_eq!(parse_range("bytes=0-0", 0).unwrap_err().status, 416);
+    assert_eq!(
+        parse_range("bytes=0-0", 0).unwrap_err().status,
+        http::StatusCode::RANGE_NOT_SATISFIABLE
+    );
 }
 
 #[tokio::test]
@@ -795,4 +798,24 @@ async fn upload_batching_ready_and_paced_measurement() {
             );
         }
     }
+}
+
+#[test]
+fn public_backend_content_hash_is_validated_at_the_header_boundary() {
+    use std::error::Error as _;
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let mut content = content(dropped.clone());
+    content.hash = "untrusted\r\nheader".into();
+    let error = content_response(content, Method::HEAD, HeaderMap::new()).unwrap_err();
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<http::header::InvalidHeaderValue>()
+    );
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
 }

@@ -114,7 +114,7 @@ fn corrupt_or_oversized_progress_is_an_internal_state_error() {
     ] {
         fs::write(&path, bytes).unwrap();
         let error = load(dir.path(), "ws", "item").err().unwrap();
-        assert_eq!(error.status, 500);
+        assert_eq!(error.status, http::StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(error.code, storage_contract::ErrorCode::UploadStateInvalid);
     }
 }
@@ -207,13 +207,16 @@ fn upload_progress_and_retry_prefix_reject_links_without_reading_targets() {
                 symlink(outside.path().join(name), dir.path().join(name)).unwrap();
             }
         }
-        assert_eq!(load(dir.path(), "ws", "item").err().unwrap().status, 500);
+        assert_eq!(
+            load(dir.path(), "ws", "item").err().unwrap().status,
+            http::StatusCode::INTERNAL_SERVER_ERROR
+        );
         assert_eq!(
             ExistingPrefix::open(dir.path(), &record)
                 .err()
                 .unwrap()
                 .status,
-            500
+            http::StatusCode::INTERNAL_SERVER_ERROR
         );
         fs::remove_file(dir.path().join(&progress_name)).unwrap();
         fs::remove_file(dir.path().join("data")).unwrap();

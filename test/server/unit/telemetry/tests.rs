@@ -163,7 +163,7 @@ async fn telemetry_admission_survives_cancellation_without_consuming_management_
             move || {
                 started.add_permits(1);
                 wait.recv_timeout(Duration::from_secs(10))
-                    .map_err(ApiError::invalid)?;
+                    .expect("invariant: test releases blocked telemetry worker");
                 Ok(())
             },
         )));

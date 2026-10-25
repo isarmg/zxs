@@ -144,7 +144,7 @@ fn replica_failure_cannot_roll_back_revocation_or_password_change() {
     let old = auth.login("admin", "a-long-test-password").unwrap();
     auth.attach_replica(std::sync::Arc::new(|_| {
         Err(crate::ApiError::new(
-            503,
+            ::http::StatusCode::SERVICE_UNAVAILABLE,
             storage_contract::ErrorCode::InjectedFailure,
             "disk offline",
         ))
@@ -653,7 +653,7 @@ async fn web_completion_requires_bound_pristine_pre_authority_setup_proof() {
             let error = service
                 .initialize(&permit, request, |_engine, _, _| {
                     Err(crate::ApiError::new(
-                        500,
+                        ::http::StatusCode::INTERNAL_SERVER_ERROR,
                         storage_contract::ErrorCode::InjectedFailure,
                         "injected failure before authority publication",
                     ))

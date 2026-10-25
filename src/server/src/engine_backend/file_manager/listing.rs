@@ -42,7 +42,15 @@ pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError>
     // Keep the resolved repository alive while candidates borrow its metadata.
     let resolved = match resolved {
         Ok(resolved) => Some(resolved),
-        Err(error) if root && matches!(error.status, 403 | 404) => None,
+        Err(error)
+            if root
+                && matches!(
+                    error.status,
+                    ::http::StatusCode::FORBIDDEN | ::http::StatusCode::NOT_FOUND
+                ) =>
+        {
+            None
+        }
         Err(error) => return Err(error),
     };
     if let Some((repo, within)) = &resolved {
@@ -56,7 +64,7 @@ pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError>
                 .is_some_and(|entry| entry.kind == "directory")
         {
             return Err(ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::DirectoryNotFound,
                 "directory not found",
             ));

@@ -24,6 +24,7 @@ futures = { version = "0.3.34", path = "../foundation/concurrency/futures", defa
 http = {version = "1", path = "../foundation/networking/http"}
 data-serialization.workspace = true
 json-codec.workspace = true
+error-definition.workspace = true
 sysinfo = { version = "=0.39.6", default-features = false, features = ["system"], path = "../foundation/platform/sysinfo"}
 tokio.workspace = true
 tower-http = { version = "0.6", features = ["fs"], path = "../foundation/networking/tower-http"}

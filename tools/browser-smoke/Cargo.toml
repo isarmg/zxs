@@ -10,6 +10,7 @@ name = "browser-smoke"
 path = "../../test/tools/browser-smoke/runner/main.rs"
 
 [dependencies]
+http = { version = "1", path = "../../src/foundation/networking/http" }
 storage-engine.workspace = true
 storage-server.workspace = true
 base64 = {version = "0.23.1", path = "../../src/foundation/data-storage/base64", default-features = false, features = ["std"]}

@@ -179,7 +179,7 @@ pub fn open_service_with_options(
     // Pure host validation must precede every system-state write. Baseline
     // comparison belongs to the background engine open, not startup disk I/O.
     if let Some(limits) = retained_workspace_limits {
-        limits.validate().map_err(ApiError::invalid)?;
+        limits.validate().map_err(ApiError::invalid_source)?;
     }
     // These are system state directories, never data-disk mountpoints.
     if !setup_disks.is_empty() || !setup_configs.is_empty() {
@@ -187,7 +187,7 @@ pub fn open_service_with_options(
     }
     create_private_directory(management_root)?;
     let mut auth = AuthStore::open_management(management_root).unwrap_or_else(|error| {
-        tracing::warn!(code=%error.code, "management credentials require recovery");
+        tracing::warn!(code = %error.code, "management credentials require recovery");
         AuthStore::unavailable(management_root)
     });
     if auth.is_available() {
@@ -195,7 +195,7 @@ pub fn open_service_with_options(
         // including when the data pool itself cannot be opened.
         let claim = create_private_directory(data_root).and_then(|_| claim_authority(data_root));
         if let Err(error) = claim {
-            tracing::warn!(code=%error.code,"cannot durably establish management authority");
+            tracing::warn!(code = %error.code,"cannot durably establish management authority");
             auth = AuthStore::unavailable(management_root);
         }
     }
@@ -274,7 +274,7 @@ impl Inner {
                 // Initialization/recovery has committed already. An enqueue
                 // failure is a service-restart requirement, not an operation
                 // failure that invites repeating the durable mutation.
-                tracing::warn!(%error, "completed setup requires a service restart");
+                tracing::warn!(error = ?error, "completed setup requires a service restart");
                 completed["recovering"] = json!(false);
                 completed["restart_required"] = json!(true);
                 Ok(completed)
@@ -284,7 +284,7 @@ impl Inner {
     fn start_recovery(self: &Arc<Self>, reopen: bool) -> Result<(), ApiError> {
         // Serialize enqueue with stop, including ownership of a newly spawned
         // native thread. No thread may escape the shutdown owner's drain.
-        let mut worker = crate::lock(&self.recovery_worker)?;
+        let mut worker = crate::lock(&self.recovery_worker);
         self.ensure_running()?;
         if self.recovering.swap(true, Ordering::SeqCst) {
             return Err(ApiError::conflict(
@@ -300,13 +300,7 @@ impl Inner {
             let _ = previous.join();
         }
         if reopen {
-            let mut state = match crate::lock(&self.state) {
-                Ok(state) => state,
-                Err(error) => {
-                    self.recovering.store(false, Ordering::SeqCst);
-                    return Err(error);
-                }
-            };
+            let mut state = crate::lock(&self.state);
             state.status = state.effective_status();
             if state.status != StorageState::Ready {
                 state.admitted = false;
@@ -326,7 +320,7 @@ impl Inner {
                 state.backend = None;
             }
         }
-        let mut worker = crate::lock(&self.recovery_worker)?;
+        let mut worker = crate::lock(&self.recovery_worker);
         if let Err(error) = self.ensure_running() {
             self.recovering.store(false, Ordering::SeqCst);
             return Err(error);
@@ -348,7 +342,7 @@ impl Inner {
     fn ensure_running(&self) -> Result<(), ApiError> {
         if self.stopping.load(Ordering::SeqCst) {
             Err(ApiError::new(
-                503,
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::ServiceStopping,
                 "service is stopping",
             ))
@@ -376,13 +370,9 @@ impl Inner {
             .unwrap_or_else(|error| error.into_inner())
             .take();
         if let Some(worker) = worker {
-            worker.join().map_err(|_| {
-                ApiError::new(
-                    500,
-                    storage_contract::ErrorCode::RecoveryWorkerFailed,
-                    "storage recovery worker panicked",
-                )
-            })?;
+            worker
+                .join()
+                .expect("invariant: storage recovery worker does not panic");
         }
         Ok(())
     }
@@ -390,7 +380,7 @@ impl Inner {
         loop {
             let generation = self.generation.load(Ordering::SeqCst);
             if let Err(error) = recover(&self) {
-                tracing::warn!(code=%error.code,"storage unavailable; management remains online");
+                tracing::warn!(error = ?error,"storage unavailable; management remains online");
                 if let Ok(mut state) = self.state.lock() {
                     state.admitted = false;
                     state.status = StorageState::RecoveryRequired;
@@ -412,7 +402,7 @@ impl Inner {
         }
     }
     fn recover_once(self: &Arc<Self>) -> Result<(), ApiError> {
-        let existing = crate::lock(&self.state)?.backend.clone();
+        let existing = crate::lock(&self.state).backend.clone();
         let backend = if let Some(backend) = existing {
             backend
         } else {
@@ -422,7 +412,7 @@ impl Inner {
             ) {
                 Ok(engine) => engine,
                 Err(error) => {
-                    tracing::warn!(%error,"storage recovery failed");
+                    tracing::warn!(error = ?error,"storage recovery failed");
                     let status =
                         if self.data_root.join("config.json").try_exists().ok() == Some(false) {
                             if self.data_root.join("management-authority.json").exists() {
@@ -439,22 +429,22 @@ impl Inner {
             };
             Arc::new(EngineBackend::new(engine))
         };
-        let auth = crate::lock(&self.auth)?.clone().ok_or_else(|| {
+        let auth = crate::lock(&self.auth).clone().ok_or_else(|| {
             ApiError::new(
-                503,
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::AuthRecoveryRequired,
                 "management is not initialized",
             )
         })?;
         {
-            let mut auth = crate::lock(&auth)?;
+            let mut auth = crate::lock(&auth);
             // A recovered pool is evidence, never permission to install system
             // credentials. In particular, disk restore may have completed before
             // bootstrap authorization expired or was revoked. Neither an absent
             // handover marker nor a restart may turn that rejection into consent.
             if !auth.is_available() {
                 return Err(ApiError::new(
-                    503,
+                    ::http::StatusCode::SERVICE_UNAVAILABLE,
                     storage_contract::ErrorCode::AuthRecoveryRequired,
                     "system credentials require explicit local recovery",
                 ));
@@ -466,7 +456,7 @@ impl Inner {
             let weak = Arc::downgrade(self);
             auth.attach_replica(Arc::new(move |mut snapshot| {
                 snapshot["sessions"] = json!({});
-                let mut last = crate::lock(&last)?;
+                let mut last = crate::lock(&last);
                 if *last == snapshot {
                     return Ok(());
                 }
@@ -475,7 +465,7 @@ impl Inner {
                     // Revoke data admission synchronously. Only the bounded,
                     // coalescing worker touches the engine/data disks.
                     {
-                        let mut state = crate::lock(&inner.state)?;
+                        let mut state = crate::lock(&inner.state);
                         state.admitted = false;
                         state.status = StorageState::RecoveryRequired;
                     }
@@ -488,7 +478,7 @@ impl Inner {
         backend.set_management_auth(Arc::downgrade(&auth))?;
         self.set(Some(backend.clone()), StorageState::RecoveryRequired);
         loop {
-            let mut snapshot = crate::lock(&auth)?.snapshot()?;
+            let mut snapshot = crate::lock(&auth).snapshot()?;
             snapshot["sessions"] = json!({});
             backend.replicate_auth(snapshot.clone())?;
             let capabilities = backend.call(
@@ -500,13 +490,13 @@ impl Inner {
                 },
                 json!({}),
             )?;
-            *crate::lock(&self.capabilities)? = capabilities;
+            *crate::lock(&self.capabilities) = capabilities;
             let ready = if backend.read_only()? {
                 StorageState::ReadOnly
             } else {
                 StorageState::Ready
             };
-            let current = crate::lock(&auth)?;
+            let current = crate::lock(&auth);
             let mut latest = current.snapshot()?;
             latest["sessions"] = json!({});
             if latest == snapshot {
@@ -518,8 +508,8 @@ impl Inner {
     }
     fn backend(&self) -> Result<Arc<EngineBackend>, ApiError> {
         self.ensure_running()?;
-        let state = crate::lock(&self.state)?;
-        state.backend.as_ref().filter(|_|state.admitted && state.status!=StorageState::Unavailable && state.observed_at.elapsed()<std::time::Duration::from_secs(15)).cloned().ok_or_else(||ApiError::new(503,storage_contract::ErrorCode::StorageUnavailable,"storage is unavailable; inspect /api/system/storage and retry after correcting the fault"))
+        let state = crate::lock(&self.state);
+        state.backend.as_ref().filter(|_|state.admitted && state.status!=StorageState::Unavailable && state.observed_at.elapsed()<std::time::Duration::from_secs(15)).cloned().ok_or_else(||ApiError::new(::http::StatusCode::SERVICE_UNAVAILABLE,storage_contract::ErrorCode::StorageUnavailable,"storage is unavailable; inspect /api/system/storage and retry after correcting the fault"))
     }
     /// Keep the engine lease inside one sample. The observer's idle interval
     /// must not look like an in-flight storage operation to recovery admission.
@@ -533,7 +523,7 @@ impl Inner {
             .as_ref()
             .ok_or_else(|| {
                 ApiError::new(
-                    503,
+                    ::http::StatusCode::SERVICE_UNAVAILABLE,
                     storage_contract::ErrorCode::StorageUnavailable,
                     "storage unavailable",
                 )
@@ -593,7 +583,7 @@ impl Backend for ManagementBackend {
             RecoveryPreviewRequest, RestoreRequest, SetupRecovery, SetupRequest,
         };
         // Authenticate against system-disk state before touching any data path.
-        let auth = crate::lock(&self.inner.auth)?
+        let auth = crate::lock(&self.inner.auth)
             .clone()
             .ok_or_else(ApiError::unauthorized)?;
         let identity = identity
@@ -603,7 +593,7 @@ impl Backend for ManagementBackend {
                 if identity.admission_session.is_none() {
                     return Err(ApiError::unauthorized());
                 }
-                crate::lock(&auth)?.revalidate_identity(identity)
+                crate::lock(&auth).revalidate_identity(identity)
             })
             .transpose()?;
         if let Some(token) = bootstrap {
@@ -630,38 +620,40 @@ impl Backend for ManagementBackend {
             .map(|token| setup.authorize_bootstrap(token))
             .transpose()?;
         if action == "status" {
-            return json_codec::to_value(setup.status()).map_err(ApiError::invalid);
+            return Ok(json_codec::to_value(setup.status())
+                .expect("invariant: setup status serialization succeeds"));
         }
         if action == "preset_preview" {
             let request: PresetPreviewRequest =
-                json_codec::from_value(input).map_err(ApiError::invalid)?;
+                json_codec::from_value(input).map_err(ApiError::invalid_source)?;
             return setup
                 .preview_preset(permit.as_ref().ok_or_else(ApiError::unauthorized)?, request);
         }
         // Reject malformed DTOs before changing the optional engine lifecycle.
         match action {
             "initialize" => {
-                json_codec::from_value::<SetupRequest>(input.clone()).map_err(ApiError::invalid)?;
+                json_codec::from_value::<SetupRequest>(input.clone())
+                    .map_err(ApiError::invalid_source)?;
             }
             "initialize_preset" => {
                 json_codec::from_value::<PresetSetupRequest>(input.clone())
-                    .map_err(ApiError::invalid)?;
+                    .map_err(ApiError::invalid_source)?;
             }
             "complete_initialization" => {
                 json_codec::from_value::<CompleteSetupRequest>(input.clone())
-                    .map_err(ApiError::invalid)?;
+                    .map_err(ApiError::invalid_source)?;
             }
             "restore_system" => {
                 json_codec::from_value::<RestoreRequest>(input.clone())
-                    .map_err(ApiError::invalid)?;
+                    .map_err(ApiError::invalid_source)?;
             }
             "recovery_preview" => {
                 json_codec::from_value::<RecoveryPreviewRequest>(input.clone())
-                    .map_err(ApiError::invalid)?;
+                    .map_err(ApiError::invalid_source)?;
             }
             "recovery_commit" => {
                 json_codec::from_value::<RecoveryCommitRequest>(input.clone())
-                    .map_err(ApiError::invalid)?;
+                    .map_err(ApiError::invalid_source)?;
             }
             "offline_check" => {
                 if input.as_object().is_none_or(|object| {
@@ -680,7 +672,7 @@ impl Backend for ManagementBackend {
         }
         let lifecycle = RecoveryPermit(&self.inner.recovering);
         {
-            let mut state = crate::lock(&self.inner.state)?;
+            let mut state = crate::lock(&self.inner.state);
             if let Some(backend) = &state.backend {
                 if state.effective_status() == StorageState::Ready {
                     return Err(ApiError::conflict(
@@ -708,13 +700,13 @@ impl Backend for ManagementBackend {
                 AuthStore::initialize_management(&self.inner.management_root, username, password)?;
             let mut snapshot = new_auth.snapshot()?;
             snapshot["sessions"] = json!({});
-            *crate::lock(&auth)? = new_auth;
+            *crate::lock(&auth) = new_auth;
             EngineBackend::new(engine).replicate_auth(snapshot)
         };
         let result = match action {
             "initialize" => {
                 let request: SetupRequest =
-                    json_codec::from_value(input).map_err(ApiError::invalid)?;
+                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
                 let permit = permit.as_ref().ok_or_else(ApiError::unauthorized)?;
                 setup
                     .initialize(permit, request, install)
@@ -722,7 +714,7 @@ impl Backend for ManagementBackend {
             }
             "initialize_preset" => {
                 let request: PresetSetupRequest =
-                    json_codec::from_value(input).map_err(ApiError::invalid)?;
+                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
                 let permit = permit.as_ref().ok_or_else(ApiError::unauthorized)?;
                 setup
                     .initialize_preset(permit, request, install)
@@ -730,28 +722,28 @@ impl Backend for ManagementBackend {
             }
             "complete_initialization" => {
                 let request: CompleteSetupRequest =
-                    json_codec::from_value(input).map_err(ApiError::invalid)?;
+                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
                 let permit = permit.as_ref().ok_or_else(ApiError::unauthorized)?;
                 setup.complete_initialization(permit,request,install)
                     .map(|_|json!({"initialized":true,"completed":true,"restart_required":false,"recovering":true}))
             }
             "restore_system" => {
                 let request: RestoreRequest =
-                    json_codec::from_value(input).map_err(ApiError::invalid)?;
+                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
                 let restore = |engine: storage_engine::Engine| {
                     if let Some(identity) = &identity {
                         // Disk reconstruction can outlive the original session.
                         // Recheck immediately before publishing system authority.
-                        crate::lock(&auth)?.revalidate_identity(identity)?;
+                        crate::lock(&auth).revalidate_identity(identity)?;
                     }
                     claim_authority(&self.inner.data_root)?;
                     // Valid local system authority wins over an older DR copy.
-                    let snapshot = if crate::lock(&auth)?.is_available() {
-                        crate::lock(&auth)?.snapshot()?
+                    let snapshot = if crate::lock(&auth).is_available() {
+                        crate::lock(&auth).snapshot()?
                     } else {
                         let mut snapshot = engine.auth_state().ok_or_else(|| {
                             ApiError::new(
-                                503,
+                                ::http::StatusCode::SERVICE_UNAVAILABLE,
                                 storage_contract::ErrorCode::AuthRecoveryRequired,
                                 "restored storage contains no credential backup",
                             )
@@ -761,7 +753,7 @@ impl Backend for ManagementBackend {
                             &self.inner.management_root,
                             snapshot.clone(),
                         )?;
-                        *crate::lock(&auth)? = restored;
+                        *crate::lock(&auth) = restored;
                         snapshot
                     };
                     let mut snapshot = snapshot;
@@ -791,39 +783,38 @@ impl Backend for ManagementBackend {
                     .get("disk_id")
                     .and_then(Value::as_str)
                     .ok_or_else(|| ApiError::invalid("disk_id required"))?;
-                setup
-                    .offline_check(identity, disk)
-                    .and_then(|value| json_codec::to_value(value).map_err(ApiError::invalid))
+                setup.offline_check(identity, disk).map(|value| {
+                    json_codec::to_value(value)
+                        .expect("invariant: internal response serialization succeeds")
+                })
             }
             "recovery_preview" => {
                 let request: RecoveryPreviewRequest =
-                    json_codec::from_value(input).map_err(ApiError::invalid)?;
+                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
                 setup
                     .recovery_preview(
                         identity.as_ref().ok_or_else(ApiError::unauthorized)?,
                         request,
-                        |identity| {
-                            crate::lock(&auth)?
-                                .revalidate_identity(identity)
-                                .map(|_| ())
-                        },
+                        |identity| crate::lock(&auth).revalidate_identity(identity).map(|_| ()),
                     )
-                    .and_then(|value| json_codec::to_value(value).map_err(ApiError::invalid))
+                    .map(|value| {
+                        json_codec::to_value(value)
+                            .expect("invariant: internal response serialization succeeds")
+                    })
             }
             "recovery_commit" => {
                 let request: RecoveryCommitRequest =
-                    json_codec::from_value(input).map_err(ApiError::invalid)?;
+                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
                 setup
                     .recovery_commit(
                         identity.as_ref().ok_or_else(ApiError::unauthorized)?,
                         request,
-                        |identity| {
-                            crate::lock(&auth)?
-                                .revalidate_identity(identity)
-                                .map(|_| ())
-                        },
+                        |identity| crate::lock(&auth).revalidate_identity(identity).map(|_| ()),
                     )
-                    .and_then(|value| json_codec::to_value(value).map_err(ApiError::invalid))
+                    .map(|value| {
+                        json_codec::to_value(value)
+                            .expect("invariant: internal response serialization succeeds")
+                    })
             }
             _ => Err(ApiError::unsupported()),
         };
@@ -890,10 +881,10 @@ impl Backend for ManagementBackend {
         if identity.admission_session.is_none() {
             return Err(ApiError::unauthorized());
         }
-        let auth = crate::lock(&self.inner.auth)?
+        let auth = crate::lock(&self.inner.auth)
             .clone()
             .ok_or_else(ApiError::unauthorized)?;
-        crate::lock(&auth)?.revalidate_identity(identity)?;
+        crate::lock(&auth).revalidate_identity(identity)?;
         self.inner.start_recovery(true)?;
         Ok(self.management_status())
     }
@@ -904,7 +895,7 @@ impl Backend for ManagementBackend {
         input: Value,
     ) -> Result<Value, ApiError> {
         if action == BackendAction::Capabilities {
-            let mut value = crate::lock(&self.inner.capabilities)?.clone();
+            let mut value = crate::lock(&self.inner.capabilities).clone();
             value["storage"] = self.management_status();
             return Ok(value);
         }
@@ -913,7 +904,7 @@ impl Backend for ManagementBackend {
                 Ok(json!({"ready":true}))
             } else {
                 Err(ApiError::new(
-                    503,
+                    ::http::StatusCode::SERVICE_UNAVAILABLE,
                     storage_contract::ErrorCode::StorageUnavailable,
                     "storage is not ready",
                 ))
@@ -959,14 +950,14 @@ impl Backend for ManagementBackend {
     fn observe_disks(&self, _o: &InternalDiskObservation) -> Result<Value, ApiError> {
         // Only a single background observer can block on disk I/O. HTTP host
         // diagnostics read a bounded cache and explicitly reject stale data.
-        let cache = crate::lock(&self.inner.disk_observation)?;
+        let cache = crate::lock(&self.inner.disk_observation);
         cache
             .as_ref()
             .filter(|(at, _)| at.elapsed() < std::time::Duration::from_secs(15))
             .map(|(_, value)| value.clone())
             .ok_or_else(|| {
                 ApiError::new(
-                    503,
+                    ::http::StatusCode::SERVICE_UNAVAILABLE,
                     storage_contract::ErrorCode::DiskSampleUnavailable,
                     "disk observations are unavailable or stale",
                 )

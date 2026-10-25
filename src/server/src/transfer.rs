@@ -40,7 +40,7 @@ pub(crate) async fn upload_status(
         .backend_slots
         .clone()
         .try_acquire_owned()
-        .map_err(|_| ApiError::limit("HTTP backend capacity reached"))?;
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
     tokio::task::spawn_blocking(move || {
         // Both quotas cover authorization, engine status and local spool reads.
         // Keep them until actual work ends, even if the requester disconnects.
@@ -58,7 +58,7 @@ pub(crate) async fn upload_status(
                 .call(crate::BackendAction::UploadStatus, &identity, input)
             {
                 Ok(status) => Ok(status),
-                Err(error) if error.status == 404 => Err(error),
+                Err(error) if error.status == ::http::StatusCode::NOT_FOUND => Err(error),
                 Err(error) => return Err(error),
             };
         if let Some(record) = uploads::load(&state.config.spool_dir, &workspace, &item)? {
@@ -185,16 +185,17 @@ pub(crate) async fn upload(
         upload_inner(state, identity, workspace, item, query, request, &deadline),
     )
     .await
-    .map_err(|_| {
-        if deadline.publication_admitted.load(Ordering::Acquire) {
+    .map_err(|source| {
+        let error = if deadline.publication_admitted.load(Ordering::Acquire) {
             ApiError::new(
-                503,
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::TransferTimeout,
                 "upload publication may have completed; check upload status before retrying",
             )
         } else {
             timeout_error()
-        }
+        };
+        error.with_source(source)
     })?
 }
 
@@ -210,7 +211,7 @@ async fn upload_inner(
     let _permit = state.upload_slots.acquire()?;
     let key = uploads::key(&workspace, &item);
     {
-        let mut claims = lock(&state.upload_claims)?;
+        let mut claims = lock(&state.upload_claims);
         if !claims.insert(key.clone()) {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::FileWriteBusy,
@@ -225,7 +226,7 @@ async fn upload_inner(
             key,
         },
     });
-    name_policy::validate_path(&query.path).map_err(ApiError::invalid)?;
+    name_policy::validate_path(&query.path).map_err(ApiError::invalid_source)?;
     let headers = request.headers();
     let parse_header = |name: &'static str| -> Result<Option<u64>, ApiError> {
         if headers.get_all(name).iter().count() > 1 {
@@ -234,9 +235,12 @@ async fn upload_inner(
         headers
             .get(name)
             .map(|value| {
-                value.to_str().map_err(ApiError::invalid).and_then(|value| {
-                    storage_contract::parse_u64_decimal(value).map_err(ApiError::invalid)
-                })
+                value
+                    .to_str()
+                    .map_err(ApiError::invalid_source)
+                    .and_then(|value| {
+                        storage_contract::parse_u64_decimal(value).map_err(ApiError::invalid_source)
+                    })
             })
             .transpose()
     };
@@ -245,7 +249,7 @@ async fn upload_inner(
         .ok_or_else(|| ApiError::invalid("Content-Length or X-ZXS-Logical-Size is required"))?;
     if expected_length > state.config.max_upload_bytes {
         return Err(ApiError::new(
-            413,
+            ::http::StatusCode::PAYLOAD_TOO_LARGE,
             storage_contract::ErrorCode::ResourceLimitExceeded,
             "file exceeds upload limit",
         ));
@@ -256,7 +260,12 @@ async fn upload_inner(
     }
     let expected_hash = headers
         .get("x-zxs-content-hash")
-        .map(|value| value.to_str().map(str::to_owned).map_err(ApiError::invalid))
+        .map(|value| {
+            value
+                .to_str()
+                .map(str::to_owned)
+                .map_err(ApiError::invalid_source)
+        })
         .transpose()?;
     if expected_hash.is_none() {
         return Err(ApiError::invalid("X-ZXS-Content-Hash is required"));
@@ -339,7 +348,7 @@ async fn upload_inner(
         Some(previous) => previous.data_file.clone(),
         None => format!(
             "upload-{}.data",
-            authentication::random_token().map_err(ApiError::invalid)?
+            authentication::random_token().map_err(ApiError::invalid_source)?
         ),
     };
     let path = spool.join(&data_file);
@@ -445,7 +454,7 @@ async fn upload_inner(
             .ok_or_else(|| ApiError::invalid("upload length overflow"))?;
         if length > expected_length {
             return Err(ApiError::new(
-                413,
+                ::http::StatusCode::PAYLOAD_TOO_LARGE,
                 storage_contract::ErrorCode::UploadRangeConflict,
                 "received more bytes than declared; original upload is retained",
             ));
@@ -498,7 +507,7 @@ async fn upload_inner(
     }
     if prefix.as_ref().is_some_and(|prefix| !prefix.complete()) {
         return Err(ApiError::new(
-            400,
+            ::http::StatusCode::BAD_REQUEST,
             storage_contract::ErrorCode::UploadIncomplete,
             "retry ended before the previously persisted prefix; original work data is retained",
         ));
@@ -508,7 +517,7 @@ async fn upload_inner(
     persist_upload(&spool, &record, &admission, &staged_file).await?;
     if length != expected_length {
         return Err(ApiError::new(
-            400,
+            ::http::StatusCode::BAD_REQUEST,
             storage_contract::ErrorCode::UploadIncomplete,
             "upload ended before its declared length; durable work data is retained",
         ));
@@ -518,7 +527,7 @@ async fn upload_inner(
         record.state = "checksum_mismatch".into();
         persist_upload(&spool, &record, &admission, &staged_file).await?;
         return Err(ApiError::new(
-            400,
+            ::http::StatusCode::BAD_REQUEST,
             storage_contract::ErrorCode::ChecksumMismatch,
             "uploaded bytes do not match the declared hash; work data is retained",
         ));
@@ -552,14 +561,14 @@ async fn upload_inner(
 fn parse_range(value: &str, size: u64) -> Result<(u64, u64), ApiError> {
     let value = value.strip_prefix("bytes=").ok_or_else(|| {
         ApiError::new(
-            416,
+            ::http::StatusCode::RANGE_NOT_SATISFIABLE,
             storage_contract::ErrorCode::RangeNotSatisfiable,
             "unsupported byte range",
         )
     })?;
     if value.contains(',') || size == 0 {
         return Err(ApiError::new(
-            416,
+            ::http::StatusCode::RANGE_NOT_SATISFIABLE,
             storage_contract::ErrorCode::RangeNotSatisfiable,
             "only one satisfiable byte range is supported",
         ));
@@ -573,13 +582,13 @@ fn parse_range(value: &str, size: u64) -> Result<(u64, u64), ApiError> {
         }
         value
             .parse::<u64>()
-            .map_err(|_| invalid_range("invalid byte range"))
+            .map_err(|source| invalid_range("invalid byte range").with_source(source))
     };
     let (start, end) = if start.is_empty() {
         let suffix = parse(end)?;
         if suffix == 0 {
             return Err(ApiError::new(
-                416,
+                ::http::StatusCode::RANGE_NOT_SATISFIABLE,
                 storage_contract::ErrorCode::RangeNotSatisfiable,
                 "empty suffix range",
             ));
@@ -596,7 +605,7 @@ fn parse_range(value: &str, size: u64) -> Result<(u64, u64), ApiError> {
     };
     if start >= size || start > end {
         return Err(ApiError::new(
-            416,
+            ::http::StatusCode::RANGE_NOT_SATISFIABLE,
             storage_contract::ErrorCode::RangeNotSatisfiable,
             "byte range is outside the file",
         ));
@@ -606,7 +615,7 @@ fn parse_range(value: &str, size: u64) -> Result<(u64, u64), ApiError> {
 
 fn invalid_range(message: &str) -> ApiError {
     ApiError::new(
-        416,
+        ::http::StatusCode::RANGE_NOT_SATISFIABLE,
         storage_contract::ErrorCode::RangeNotSatisfiable,
         message,
     )
@@ -665,7 +674,7 @@ pub(crate) async fn content(
                         .and_then(Value::as_str)
                         .ok_or_else(|| {
                             ApiError::new(
-                                500,
+                                ::http::StatusCode::INTERNAL_SERVER_ERROR,
                                 storage_contract::ErrorCode::StateInvalid,
                                 "download context has no filename",
                             )
@@ -684,7 +693,7 @@ pub(crate) async fn content(
         }),
     )
     .await
-    .map_err(|_| timeout_error())?
+    .map_err(|source| timeout_error().with_source(source))?
     .map_err(ApiError::join)??;
     content_response_with_limits(content, method, headers, &limits, deadline)
 }
@@ -709,7 +718,7 @@ pub(crate) async fn workspace_content(
         }),
     )
     .await
-    .map_err(|_| timeout_error())?
+    .map_err(|source| timeout_error().with_source(source))?
     .map_err(ApiError::join)??;
     content_response_with_limits(content, method, headers, &limits, deadline)
 }
@@ -729,7 +738,7 @@ pub(crate) async fn checksums(
         }),
     )
     .await
-    .map_err(|_| timeout_error())?
+    .map_err(|source| timeout_error().with_source(source))?
     .map_err(ApiError::join)??;
     let length = bytes.len();
     let stream = futures::stream::try_unfold(
@@ -803,7 +812,7 @@ fn content_response_with_limits(
     let (status, start, length) = if let Some(range) = range {
         match range
             .to_str()
-            .map_err(|_| invalid_range("invalid byte range"))
+            .map_err(|source| invalid_range("invalid byte range").with_source(source))
             .and_then(|range| parse_range(range, size))
         {
             Ok((start, end)) => (StatusCode::PARTIAL_CONTENT, start, end - start + 1),
@@ -882,7 +891,7 @@ fn content_response_with_limits(
             HeaderValue::from_str(&format!(
                 "attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
             ))
-            .map_err(ApiError::invalid)?,
+            .expect("invariant: escaped download name is a valid header"),
         );
     }
     headers.insert(
@@ -894,9 +903,10 @@ fn content_response_with_limits(
         header::CONTENT_LENGTH,
         HeaderValue::from_str(&length.to_string()).unwrap(),
     );
+    // Public Backend implementations supply the content hash.
     headers.insert(
         header::ETAG,
-        HeaderValue::from_str(&etag).map_err(ApiError::invalid)?,
+        HeaderValue::from_str(&etag).map_err(ApiError::invalid_source)?,
     );
     if status == StatusCode::PARTIAL_CONTENT {
         headers.insert(

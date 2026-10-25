@@ -94,5 +94,5 @@ fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, ApiError> {
         .ok_or_else(|| ApiError::invalid(format!("missing {key}")))
 }
 fn contract(error: storage_contract::Error) -> ApiError {
-    ApiError::invalid(error)
+    ApiError::invalid_source(error)
 }

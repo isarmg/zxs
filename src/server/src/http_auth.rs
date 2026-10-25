@@ -33,7 +33,7 @@ struct PendingLogin {
 impl PendingLogin {
     fn acquire(pending: &Arc<Mutex<HashSet<String>>>, username: &str) -> Result<Self, ApiError> {
         let account = login_username_key(username)?;
-        let mut active = lock(pending)?;
+        let mut active = lock(pending);
         if active.len() >= MAX_PENDING_LOGINS || active.contains(&account) {
             return Err(ApiError::limit("login verification is busy"));
         }
@@ -64,7 +64,7 @@ fn login_username_key(username: &str) -> Result<String, ApiError> {
     // Validate before retaining any input in pending/counter maps. The shared
     // policy bounds raw candidate bytes before normalization can allocate.
     let canonical = authentication::normalize_administrator_username(username)
-        .map_err(|_| ApiError::unauthorized())?;
+        .map_err(|source| ApiError::unauthorized().with_source(source))?;
     Ok(format!("user:{canonical}"))
 }
 
@@ -75,7 +75,7 @@ fn charge_attempts<const N: usize>(
     capacity_message: &str,
     attempt_message: &str,
 ) -> Result<[u32; N], ApiError> {
-    let mut attempts = lock(attempts)?;
+    let mut attempts = lock(attempts);
     attempts.retain(|_, attempt| attempt.since.elapsed() < ATTEMPT_WINDOW);
     let additional = keys
         .iter()
@@ -210,7 +210,9 @@ pub(crate) fn same_origin(
     if headers.get_all(header::ORIGIN).iter().count() != 1 {
         return Err(ApiError::forbidden());
     }
-    let origin = origin.to_str().map_err(|_| ApiError::forbidden())?;
+    let origin = origin
+        .to_str()
+        .map_err(|source| ApiError::forbidden().with_source(source))?;
     let expected = match config.normalized_external_origin()? {
         Some(origin) => origin,
         None => {
@@ -219,7 +221,7 @@ pub(crate) fn same_origin(
                 .and_then(|host| host.to_str().ok())
                 .ok_or_else(ApiError::forbidden)?;
             let parsed = url_encoding::address::Url::parse(&format!("http://{host}"))
-                .map_err(|_| ApiError::forbidden())?;
+                .map_err(|source| ApiError::forbidden().with_source(source))?;
             if !matches!(
                 parsed.host_str(),
                 Some("localhost") | Some("127.0.0.1") | Some("[::1]") | Some("::1")
@@ -245,7 +247,9 @@ fn request_token(headers: &HeaderMap) -> Result<(String, bool), ApiError> {
         if headers.get_all(header::AUTHORIZATION).iter().count() != 1 {
             return Err(ApiError::unauthorized());
         }
-        let value = value.to_str().map_err(|_| ApiError::unauthorized())?;
+        let value = value
+            .to_str()
+            .map_err(|source| ApiError::unauthorized().with_source(source))?;
         let (scheme, token) = value.split_once(' ').ok_or_else(ApiError::unauthorized)?;
         // Only the scheme is case-insensitive. Never normalize credentials or
         // accept an empty token, extra fields, or a duplicate Authorization.
@@ -294,7 +298,7 @@ pub(crate) async fn authorize(
                 csrf,
                 &authentication::token_hash(
                     &authentication::derive_csrf_token(&token)
-                        .map_err(|_| ApiError::forbidden())?,
+                        .map_err(|source| ApiError::forbidden().with_source(source))?,
                 ),
             )
         {
@@ -316,7 +320,7 @@ async fn authenticate(
     if !authentication::is_token_shape(&credential) {
         return Err(ApiError::unauthorized());
     }
-    auth_job(slots, move || lock(&auth)?.authenticate(&credential)).await
+    auth_job(slots, move || lock(&auth).authenticate(&credential)).await
 }
 
 async fn auth_job<T: Send + 'static>(
@@ -325,7 +329,7 @@ async fn auth_job<T: Send + 'static>(
 ) -> Result<T, ApiError> {
     let permit = slots
         .try_acquire_owned()
-        .map_err(|_| ApiError::limit("authentication capacity reached"))?;
+        .map_err(|source| ApiError::limit("authentication capacity reached").with_source(source))?;
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         job()
@@ -343,7 +347,7 @@ pub(crate) async fn storage_retry_job(
 ) -> Result<Value, ApiError> {
     let permit = slots
         .try_acquire_owned()
-        .map_err(|_| ApiError::limit("management capacity reached"))?;
+        .map_err(|source| ApiError::limit("management capacity reached").with_source(source))?;
     tokio::task::spawn_blocking(move || {
         // A disconnected caller does not free admission while the job is queued
         // or blocked on the authority lock.
@@ -371,7 +375,7 @@ pub(crate) async fn login(
     let ip = client_ip(&request, &state.config)?;
     // Legal JSON Unicode escapes can use six bytes per decoded password byte.
     let bytes = crate::http_boundary::read_body(request, 8 * 1024).await?;
-    let body: Login = storage_contract::decode_strict(&bytes).map_err(ApiError::invalid)?;
+    let body: Login = storage_contract::decode_strict(&bytes).map_err(ApiError::invalid_source)?;
     let pending = PendingLogin::acquire(&state.pending_logins, &body.username)?;
     let delay = admit_login(&state.attempts, ip, &body.username)?;
     tokio::time::sleep(delay).await;
@@ -379,14 +383,14 @@ pub(crate) async fn login(
         .password_slots
         .clone()
         .try_acquire_owned()
-        .map_err(|_| ApiError::limit("password verification is busy"))?;
+        .map_err(|source| ApiError::limit("password verification is busy").with_source(source))?;
     let auth = state.auth.clone();
     let result = tokio::task::spawn_blocking(move || {
         let _pending = pending;
         let _permit = permit;
-        let challenge = lock(&auth)?.login_challenge(&body.username)?;
+        let challenge = lock(&auth).login_challenge(&body.username)?;
         let verified = challenge.verify(&body.password)?;
-        lock(&auth)?.finish_login(verified)
+        lock(&auth).finish_login(verified)
     })
     .await
     .map_err(ApiError::join)??;
@@ -403,7 +407,8 @@ pub(crate) async fn login(
     let mut response = Json(result).into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
-        HeaderValue::from_str(&cookie).map_err(ApiError::invalid)?,
+        HeaderValue::from_str(&cookie)
+            .expect("invariant: generated session cookie is a valid header"),
     );
     Ok(response)
 }
@@ -412,7 +417,8 @@ pub(crate) async fn me(
     http_routing::Extension(identity): http_routing::Extension<Identity>,
     http_routing::Extension(token): http_routing::Extension<SessionToken>,
 ) -> Result<Json<Value>, ApiError> {
-    let csrf_token = authentication::derive_csrf_token(&token.0).map_err(ApiError::invalid)?;
+    let csrf_token =
+        authentication::derive_csrf_token(&token.0).map_err(ApiError::invalid_source)?;
     Ok(Json(
         json!({"principal":identity.principal,"csrf_token":csrf_token}),
     ))
@@ -423,7 +429,7 @@ pub(crate) async fn logout(
 ) -> Result<Response, ApiError> {
     let auth = state.auth.clone();
     auth_job(state.authorization_slots, move || {
-        lock(&auth)?.logout(&token.0)
+        lock(&auth).logout(&token.0)
     })
     .await?;
     let mut response = Json(json!({"logged_out":true})).into_response();
@@ -451,7 +457,7 @@ pub(crate) async fn change_password(
     let body: PasswordChange = storage_contract::decode_strict(
         &crate::http_boundary::read_body(request, 16 * 1024).await?,
     )
-    .map_err(ApiError::invalid)?;
+    .map_err(ApiError::invalid_source)?;
     admit_attempts(
         &state.attempts,
         [
@@ -465,13 +471,13 @@ pub(crate) async fn change_password(
         .password_slots
         .clone()
         .try_acquire_owned()
-        .map_err(|_| ApiError::limit("password verification is busy"))?;
+        .map_err(|source| ApiError::limit("password verification is busy").with_source(source))?;
     let auth = state.auth.clone();
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        let challenge = lock(&auth)?.password_change_challenge(&token.0)?;
+        let challenge = lock(&auth).password_change_challenge(&token.0)?;
         let prepared = challenge.prepare(&body.current_password, &body.new_password)?;
-        lock(&auth)?.finish_password_change(prepared)
+        lock(&auth).finish_password_change(prepared)
     })
     .await
     .map_err(ApiError::join)??;

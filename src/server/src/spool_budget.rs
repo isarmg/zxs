@@ -179,7 +179,7 @@ fn metadata<T: data_serialization::de::DeserializeOwned>(path: &Path) -> Option<
 fn charge_bytes(bytes: u64) -> Result<u64, ApiError> {
     bytes.checked_add(METADATA_ALLOWANCE).ok_or_else(|| {
         ApiError::new(
-            500,
+            ::http::StatusCode::INTERNAL_SERVER_ERROR,
             storage_contract::ErrorCode::UploadStateInvalid,
             "spool accounting overflow",
         )
@@ -187,7 +187,7 @@ fn charge_bytes(bytes: u64) -> Result<u64, ApiError> {
 }
 fn invalid_state(message: &str) -> ApiError {
     ApiError::new(
-        500,
+        ::http::StatusCode::INTERNAL_SERVER_ERROR,
         storage_contract::ErrorCode::UploadStateInvalid,
         message,
     )
@@ -216,8 +216,8 @@ impl SpoolBudget {
             &RelativePath::new(".budget.lock").map_err(crate::upload_fs_error)?,
         )
         .map_err(|error| match error {
-            platform_io::fs_safety::Error::AlreadyLocked(_) => {
-                invalid_state("HTTP spool is already owned by another server")
+            source @ platform_io::fs_safety::Error::AlreadyLocked(_) => {
+                invalid_state("HTTP spool is already owned by another server").with_source(source)
             }
             error => crate::upload_fs_error(error),
         })?;
@@ -228,10 +228,10 @@ impl SpoolBudget {
         // charged as unknown rather than being silently discarded or ignored.
         for entry in fs::read_dir(root).map_err(ApiError::io)? {
             let entry = entry.map_err(ApiError::io)?;
-            let name = entry
-                .file_name()
-                .into_string()
-                .map_err(|_| invalid_state("spool filenames must be valid UTF-8"))?;
+            let name = entry.file_name().into_string().map_err(|name| {
+                invalid_state("spool filenames must be valid UTF-8")
+                    .with_source(crate::http_boundary::ApiErrorSource::Filename(name))
+            })?;
             let info = fs::symlink_metadata(entry.path()).map_err(ApiError::io)?;
             if !info.is_file() {
                 return Err(invalid_state("spool contains a non-regular file"));
@@ -349,7 +349,7 @@ impl SpoolBudget {
         if !valid_name(name) || principal.is_empty() || principal.len() > 1024 {
             return Err(ApiError::invalid("invalid spool reservation identity"));
         }
-        let mut ledger = lock(&self.ledger)?;
+        let mut ledger = lock(&self.ledger);
         if ledger.uncertain {
             return Err(invalid_state(
                 "spool accounting requires restart and inventory",
@@ -480,7 +480,7 @@ impl Reservation {
             data_file: self.name.clone(),
             principal: self.principal.clone(),
         })
-        .map_err(ApiError::invalid)?;
+        .expect("invariant: internal JSON serialization succeeds");
         file.write_all(&bytes).map_err(ApiError::io)?;
         file.sync_all().map_err(ApiError::io)?;
         fs::File::open(&self.budget.root)

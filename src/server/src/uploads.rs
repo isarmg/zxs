@@ -43,13 +43,15 @@ pub(crate) fn load(
         EntryName::new(format!("{}.json", key(workspace, item))).map_err(crate::upload_fs_error)?;
     match directory.read_bounded(&name, 16384) {
         Ok(bytes) => {
-            let record = storage_contract::decode_strict::<UploadRecord>(&bytes).map_err(|_| {
-                ApiError::new(
-                    500,
-                    storage_contract::ErrorCode::UploadStateInvalid,
-                    "invalid upload state",
-                )
-            })?;
+            let record =
+                storage_contract::decode_strict::<UploadRecord>(&bytes).map_err(|source| {
+                    ApiError::new(
+                        ::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        storage_contract::ErrorCode::UploadStateInvalid,
+                        "invalid upload state",
+                    )
+                    .with_source(source)
+                })?;
             if record.workspace_id != workspace
                 || record.item_id != item
                 || record.persisted_bytes > record.logical_size
@@ -71,7 +73,7 @@ pub(crate) fn load(
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
             {
                 return Err(ApiError::new(
-                    500,
+                    ::http::StatusCode::INTERNAL_SERVER_ERROR,
                     storage_contract::ErrorCode::UploadStateInvalid,
                     "invalid upload state",
                 ));
@@ -128,7 +130,7 @@ impl StagedFile {
         }))
     }
     pub fn source(&self, size: u64, hash: String) -> Result<crate::UploadSource, ApiError> {
-        let writer = crate::lock(&self.writer)?;
+        let writer = crate::lock(&self.writer);
         self.directory
             .verify_payload(&self.name, &writer)
             .map_err(crate::upload_fs_error)?;
@@ -139,7 +141,7 @@ impl StagedFile {
         })
     }
     pub fn write(&self, bytes: &[u8]) -> Result<(), ApiError> {
-        let mut writer = crate::lock(&self.writer)?;
+        let mut writer = crate::lock(&self.writer);
         self.reservation.check_headroom(
             writer.metadata().map_err(ApiError::io)?.len(),
             bytes.len() as u64,
@@ -147,7 +149,7 @@ impl StagedFile {
         writer.write_all(bytes).map_err(ApiError::io)
     }
     pub fn sync(&self) -> Result<(), ApiError> {
-        crate::lock(&self.writer)?.sync_all().map_err(ApiError::io)
+        crate::lock(&self.writer).sync_all().map_err(ApiError::io)
     }
     pub fn block_admission(&self) {
         self.reservation.block_admission();
@@ -221,7 +223,8 @@ fn persist_held(
     sync: impl FnOnce() -> Result<(), ApiError>,
 ) -> Result<(), ApiError> {
     use platform_io::fs_safety::{AtomicFile, RelativePath};
-    let bytes = json_codec::to_vec(record).map_err(ApiError::invalid)?;
+    let bytes =
+        json_codec::to_vec(record).expect("invariant: internal JSON serialization succeeds");
     if bytes.len() > 16384 {
         return Err(ApiError::invalid("upload metadata exceeds limit"));
     }
@@ -289,7 +292,7 @@ impl ExistingPrefix {
         let length = file.metadata().map_err(ApiError::io)?.len();
         if length < record.persisted_bytes || length > record.logical_size {
             return Err(ApiError::new(
-                500,
+                ::http::StatusCode::INTERNAL_SERVER_ERROR,
                 storage_contract::ErrorCode::UploadStateInvalid,
                 "persisted upload data is missing",
             ));

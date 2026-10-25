@@ -19,7 +19,8 @@ struct RecordingBackend {
 
 fn sentinel_error(method: &str) -> ApiError {
     ApiError {
-        status: 409,
+        status: ::http::StatusCode::CONFLICT,
+        source: None,
         code: storage_contract::ErrorCode::InjectedFailure,
         message: method.into(),
         retryable: true,

@@ -23,7 +23,7 @@ fn available_on(engine: &Engine, slot: &str, version: &str) -> bool {
 }
 fn conflict() -> ApiError {
     ApiError::new(
-        409,
+        ::http::StatusCode::CONFLICT,
         storage_contract::ErrorCode::BackupPathConflict,
         "authorized backup containers have conflicting logical paths; choose distinct backup prefixes",
     )
@@ -90,7 +90,7 @@ fn retain_node<'a>(
     }
     if nodes.len() >= maximum {
         return Err(ApiError::new(
-            429,
+            ::http::StatusCode::TOO_MANY_REQUESTS,
             storage_contract::ErrorCode::ResourceLimitExceeded,
             "backup namespace exceeds the bounded entry limit",
         ));
@@ -253,7 +253,7 @@ pub(super) fn entries(
             .unwrap_or_else(|| {
                 default_backup_path(repo, current.map(|(_, entry)| entry), version, engine)
             });
-        name_policy::validate_path(&display).map_err(ApiError::invalid)?;
+        name_policy::validate_path(&display).map_err(ApiError::invalid_source)?;
         parents(&mut nodes, &display, maximum)?;
         retain_node(
             &mut nodes,
@@ -269,7 +269,7 @@ pub(super) fn entries(
     let key = name_policy::path_key(path);
     if !path.is_empty() && !nodes.get(&key).is_some_and(Node::directory) {
         return Err(ApiError::new(
-            404,
+            ::http::StatusCode::NOT_FOUND,
             storage_contract::ErrorCode::DirectoryNotFound,
             "backup directory not found",
         ));

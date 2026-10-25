@@ -70,7 +70,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
             .remove("selected_path");
         assert_eq!(
             listing::entries(&engine, &malformed).unwrap_err().status,
-            400
+            http::StatusCode::BAD_REQUEST
         );
         let next=listing::entries(&engine,&json!({"slot_id":slot,"query":{"path":path,"limit":"2","cursor":first["next_cursor"]}})).unwrap();
         let back=listing::entries(&engine,&json!({"slot_id":slot,"query":{"path":path,"limit":"2","cursor":next["previous_cursor"]}})).unwrap();
@@ -116,18 +116,21 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
         malformed["path"] = path;
         assert_eq!(
             scope_query::read(&engine, &malformed).unwrap_err().status,
-            400
+            http::StatusCode::BAD_REQUEST
         );
     }
     let mut traversal = request.clone();
     traversal["entries"][0]["path"] = "../zeta.txt".into();
     assert_eq!(
         scope_query::read(&engine, &traversal).unwrap_err().status,
-        400
+        http::StatusCode::BAD_REQUEST
     );
     let mut nested = request;
     nested["entries"][0]["path"] = "folder/child.txt".into();
-    assert_eq!(scope_query::read(&engine, &nested).unwrap_err().status, 400);
+    assert_eq!(
+        scope_query::read(&engine, &nested).unwrap_err().status,
+        http::StatusCode::BAD_REQUEST
+    );
 }
 
 #[test]

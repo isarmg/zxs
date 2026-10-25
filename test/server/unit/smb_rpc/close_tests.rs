@@ -49,7 +49,7 @@ impl Backend for CloseFailure {
                 && matches!(self.failure, Failure::UnknownOperation)
             {
                 return Err(ApiError::new(
-                    503,
+                    ::http::StatusCode::SERVICE_UNAVAILABLE,
                     storage_contract::ErrorCode::RecoveryRequired,
                     "original operation outcome is unavailable",
                 ));
@@ -58,7 +58,7 @@ impl Backend for CloseFailure {
                 && matches!(self.failure, Failure::Abort)
             {
                 return Err(ApiError::new(
-                    503,
+                    ::http::StatusCode::SERVICE_UNAVAILABLE,
                     storage_contract::ErrorCode::WorkspaceBusy,
                     "injected abort failure",
                 ));

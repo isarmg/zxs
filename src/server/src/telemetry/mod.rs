@@ -151,7 +151,7 @@ impl Telemetry {
                 Err(error) => {
                     // Unsafe cache paths remain rejected and untouched. The
                     // optional persistence failure must not veto management.
-                    tracing::warn!(%error, "monitoring cache unavailable; using bounded memory history");
+                    tracing::warn!(error = ?error, "monitoring cache unavailable; using bounded memory history");
                     HistoryStore::memory(now)
                 }
             }),
@@ -159,7 +159,7 @@ impl Telemetry {
         // Synchronous initialization guarantees a usable first snapshot. A
         // backend without monitor support can still serve its other routes.
         if let Err(error) = service.refresh() {
-            tracing::warn!(code = %error.code, "initial host sample is unavailable");
+            tracing::warn!(error = ?error, "initial host sample is unavailable");
         }
         let weak = Arc::downgrade(&service);
         std::thread::Builder::new()
@@ -171,7 +171,7 @@ impl Telemetry {
                         break;
                     };
                     if let Err(error) = service.refresh() {
-                        tracing::warn!(code = %error.code, "periodic host sample is unavailable");
+                        tracing::warn!(error = ?error, "periodic host sample is unavailable");
                     }
                     // Release the service while sleeping. Dropping its router
                     // stops the sampler without retaining storage or auth state.
@@ -187,15 +187,21 @@ impl Telemetry {
             .backend
             .observe_disks(&crate::InternalDiskObservation(()))
             .and_then(|value| {
-                json_codec::from_value::<Vec<DiskStatus>>(value["disks"].clone())
-                    .map_err(|_| unavailable("disk sampling is unavailable"))
+                json_codec::from_value::<Vec<DiskStatus>>(value["disks"].clone()).map_err(
+                    |source| unavailable("disk sampling is unavailable").with_source(source),
+                )
             });
-        let disk_sampling_unavailable = disks.is_err();
-        let disks = disks.unwrap_or_default();
+        let (disks, disk_sampling_unavailable) = match disks {
+            Ok(disks) => (disks, false),
+            Err(error) => {
+                tracing::warn!(error = ?error, "disk sampling unavailable; host sampling remains available");
+                (Vec::new(), true)
+            }
+        };
         let (cpu, memory) = self
             .sampler
             .lock()
-            .map_err(|_| unavailable("host sampling is unavailable"))?
+            .expect("service state lock poisoned")
             .sample();
         let now = date_time::OffsetDateTime::now_utc().unix_timestamp();
         Ok(Sample {
@@ -217,11 +223,11 @@ impl Telemetry {
         if let Err(error) = self
             .history
             .lock()
-            .map_err(|_| unavailable("history sampling is unavailable"))?
+            .expect("service state lock poisoned")
             .record(sample)
         {
             // Cache failure cannot stop live monitoring or business storage.
-            tracing::warn!(%error, "monitoring cache persistence failed; current samples remain in memory");
+            tracing::warn!(error = ?error, "monitoring cache persistence failed; current samples remain in memory");
         }
         Ok(())
     }
@@ -235,7 +241,7 @@ impl Telemetry {
 
 fn unavailable(message: &str) -> ApiError {
     ApiError::new(
-        503,
+        ::http::StatusCode::SERVICE_UNAVAILABLE,
         storage_contract::ErrorCode::MonitorUnavailable,
         message,
     )
@@ -243,9 +249,9 @@ fn unavailable(message: &str) -> ApiError {
 
 fn timestamp(unix_seconds: i64) -> Result<String, ApiError> {
     date_time::OffsetDateTime::from_unix_timestamp(unix_seconds)
-        .map_err(|_| unavailable("sample time is unavailable"))?
+        .map_err(|source| unavailable("sample time is unavailable").with_source(source))?
         .format(&date_time::format_description::well_known::Rfc3339)
-        .map_err(|_| unavailable("sample time is unavailable"))
+        .map_err(|source| unavailable("sample time is unavailable").with_source(source))
 }
 
 // Keep diagnostics independent of data-backend and management-readiness pools.
@@ -254,15 +260,15 @@ async fn telemetry_job<T: Send + 'static>(
     slots: Arc<tokio::sync::Semaphore>,
     work: impl FnOnce() -> Result<T, ApiError> + Send + 'static,
 ) -> Result<T, ApiError> {
-    let permit = slots
-        .try_acquire_owned()
-        .map_err(|_| ApiError::limit("monitoring request capacity reached"))?;
+    let permit = slots.try_acquire_owned().map_err(|source| {
+        ApiError::limit("monitoring request capacity reached").with_source(source)
+    })?;
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         work()
     })
     .await
-    .map_err(|_| unavailable("monitoring request was interrupted"))?
+    .map_err(|source| unavailable("monitoring request was interrupted").with_source(source))?
 }
 
 pub(crate) async fn status(
@@ -273,9 +279,10 @@ pub(crate) async fn status(
         require_current_session(&state.auth, &identity)?;
         state.telemetry.current().and_then(|status| {
             require_current_session(&state.auth, &identity)?;
-            json_codec::to_value(status)
-                .map(Json)
-                .map_err(|_| unavailable("host sampling is unavailable"))
+            Ok(Json(
+                json_codec::to_value(status)
+                    .expect("invariant: host snapshot serialization succeeds"),
+            ))
         })
     })
     .await
@@ -314,7 +321,7 @@ pub(crate) async fn history(
         let (seconds, interval) = range_parameters(&query.range)?;
         let to = date_time::OffsetDateTime::now_utc().unix_timestamp();
         let from = to - seconds;
-        let samples = state.telemetry.history.lock().map_err(|_| unavailable("history sampling is unavailable"))?.samples(from, to, interval);
+        let samples = state.telemetry.history.lock().expect("service state lock poisoned").samples(from, to, interval);
         require_current_session(&state.auth, &identity)?;
         Ok(Json(json!({"range": query.range, "interval_seconds": interval, "from": timestamp(from)?, "to": timestamp(to)?, "samples": samples})))
     }).await
@@ -324,7 +331,7 @@ fn require_current_session(
     auth: &Mutex<crate::auth::AuthStore>,
     identity: &Identity,
 ) -> Result<(), ApiError> {
-    crate::lock(auth)?.revalidate_identity(identity).map(|_| ())
+    crate::lock(auth).revalidate_identity(identity).map(|_| ())
 }
 
 #[cfg(test)]

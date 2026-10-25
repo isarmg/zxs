@@ -63,7 +63,7 @@ fn history_query_rejects_unknown_fields_without_changing_context_or_admission() 
             query[field] = "unused".into();
             let input = json!({"file_id":entry.file_id,"query":query});
             let error = read(input.clone()).unwrap_err();
-            assert_eq!(error.status, 400, "{input}");
+            assert_eq!(error.status, http::StatusCode::BAD_REQUEST, "{input}");
             assert_eq!(
                 error.code,
                 storage_contract::ErrorCode::InvalidRequest,
@@ -77,7 +77,7 @@ fn history_query_rejects_unknown_fields_without_changing_context_or_admission() 
         json!({"path":"report.txt"}),
     ] {
         let error = read(json!({"file_id":entry.file_id,"query":query})).unwrap_err();
-        assert_eq!(error.status, 400);
+        assert_eq!(error.status, http::StatusCode::BAD_REQUEST);
         assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
         assert_eq!(
             error.message,
@@ -89,13 +89,13 @@ fn history_query_rejects_unknown_fields_without_changing_context_or_admission() 
         json!({"repository_id":repo.repository_id,"path":"missing.txt"}),
     ] {
         let error = read(json!({"file_id":entry.file_id,"query":query})).unwrap_err();
-        assert_eq!(error.status, 404);
+        assert_eq!(error.status, http::StatusCode::NOT_FOUND);
         assert_eq!(error.code, storage_contract::ErrorCode::FileNotFound);
     }
     assert_eq!(read(plain).unwrap(), expected);
 
     auth.logout(&token).unwrap();
     let error = read(json!({"file_id":entry.file_id,"query":{"limit":"1"}})).unwrap_err();
-    assert_eq!(error.status, 401);
+    assert_eq!(error.status, http::StatusCode::UNAUTHORIZED);
     assert_eq!(error.code, storage_contract::ErrorCode::Unauthorized);
 }

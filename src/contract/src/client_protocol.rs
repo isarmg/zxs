@@ -162,13 +162,17 @@ pub fn decode_response(status: u16, bytes: &[u8]) -> Result<Value, ResponseError
         return Err(ResponseError {
             status,
             code: match item.get("code") {
-                Some(code) => json_codec::from_value(code.clone()).map_err(|error| {
+                Some(code) => crate::ErrorCode::deserialize(code).map_err(|error| {
                     let mut failure = ResponseError::new(
                         status,
                         crate::ErrorCode::InvalidResponse,
                         "The response error code is invalid or unknown",
                     );
                     failure.source = Some(ResponseDecodeError::Code(error));
+                    failure.retryable = item["retryable"]
+                        .as_bool()
+                        .unwrap_or(status >= 500 || status == 429);
+                    failure.request_id = item["request_id"].as_str().map(str::to_owned);
                     failure
                 })?,
                 None => crate::ErrorCode::HttpError,

@@ -49,12 +49,12 @@ use std::{
 use transfer::{checksums, content, upload, upload_status, workspace_content};
 
 fn upload_fs_error(error: platform_io::fs_safety::Error) -> ApiError {
-    tracing::error!(%error, "upload filesystem boundary rejected");
     ApiError::new(
-        500,
+        ::http::StatusCode::INTERNAL_SERVER_ERROR,
         storage_contract::ErrorCode::UploadStateInvalid,
         "local upload staging is unsafe or changed",
     )
+    .with_source(error)
 }
 
 /// A held upload inode and the byte identity verified by the transport.
@@ -118,7 +118,7 @@ impl Content {
             }
             let Some(next) = self.fallback_files.pop() else {
                 return Err(ApiError::new(
-                    503,
+                    ::http::StatusCode::SERVICE_UNAVAILABLE,
                     storage_contract::ErrorCode::ContentUnavailable,
                     "no fully verified content replica is available",
                 ));
@@ -262,7 +262,7 @@ struct AuthorizedBackend {
 }
 impl AuthorizedBackend {
     fn current(&self, identity: &Identity) -> Result<Identity, ApiError> {
-        lock(&self.auth)?.revalidate_identity(identity)
+        lock(&self.auth).revalidate_identity(identity)
     }
 }
 impl Backend for AuthorizedBackend {
@@ -413,7 +413,7 @@ impl ServerConfig {
         }) {
             Ok(budget) => Some(budget),
             Err(error) => {
-                tracing::error!(%error, "HTTP upload spool unavailable; management HTTP remains available");
+                tracing::error!(error = ?error, "HTTP upload spool unavailable; management HTTP remains available");
                 None
             }
         }
@@ -429,7 +429,7 @@ impl ServerConfig {
             .as_ref()
             .map(|origin| {
                 let parsed =
-                    url_encoding::address::Url::parse(origin).map_err(ApiError::invalid)?;
+                    url_encoding::address::Url::parse(origin).map_err(ApiError::invalid_source)?;
                 if parsed.scheme() != "https"
                     || parsed.host_str().is_none()
                     || !parsed.username().is_empty()
@@ -512,14 +512,8 @@ impl AppState {
         self.spool_budget.budget()
     }
 }
-fn lock<T>(value: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, ApiError> {
-    value.lock().map_err(|_| {
-        ApiError::new(
-            500,
-            storage_contract::ErrorCode::InternalError,
-            "service state requires restart",
-        )
-    })
+fn lock<T>(value: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    value.lock().expect("service state lock poisoned")
 }
 
 /// Construct an embedded router synchronously, including complete HTTP spool
@@ -588,7 +582,7 @@ fn router_shared(
         match web_assets::static_etags(root) {
             Ok(etags) => Some(etags),
             Err(error) => {
-                tracing::error!(%error, "Web assets unavailable; management HTTP APIs remain available");
+                tracing::error!(error = ?error, "Web assets unavailable; management HTTP APIs remain available");
                 None
             }
         }
@@ -748,11 +742,19 @@ fn router_shared(
         .with_state(state))
 }
 
+#[derive(Debug, error_definition::Error)]
+pub enum ServeError {
+    #[error("{0}")]
+    Api(#[from] ApiError),
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+}
+
 pub async fn serve(
     backend: Arc<dyn Backend>,
     auth: AuthStore,
     config: ServerConfig,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), ServeError> {
     let shutdown = match ShutdownSignal::install() {
         Ok(shutdown) => shutdown,
         Err(error) => {
@@ -772,7 +774,7 @@ pub async fn serve_with_shutdown(
     auth: AuthStore,
     config: ServerConfig,
     mut shutdown: ShutdownSignal,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), ServeError> {
     let mut management_shutdown = service_lifecycle::ManagementShutdown::new(backend.clone());
     if shutdown.observed() {
         management_shutdown.finish().await?;
@@ -805,16 +807,17 @@ pub async fn serve_with_shutdown(
             let run = async move {
                 smb_rpc::serve(smb, bridge_auth, backend, smb_max_file_bytes)
                     .await
-                    .map_err(|_| {
+                    .map_err(|source| {
                         ApiError::new(
-                            503,
+                            ::http::StatusCode::SERVICE_UNAVAILABLE,
                             storage_contract::ErrorCode::SmbUnavailable,
                             "SMB bridge stopped",
                         )
+                        .with_source(source)
                     })
             };
             if let Err(error) = run.await {
-                tracing::error!(%error, "SMB bridge stopped; management HTTP remains available");
+                tracing::error!(error = ?error, "SMB bridge stopped; management HTTP remains available");
             }
         }
     };
@@ -864,7 +867,7 @@ async fn call(
         .backend_slots
         .clone()
         .try_acquire_owned()
-        .map_err(|_| ApiError::limit("HTTP backend capacity reached"))?;
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
     tokio::task::spawn_blocking(move || {
         // The job, including time queued in Tokio, owns admission. Dropping the
         // HTTP future must not release capacity while blocking work continues.
@@ -885,7 +888,7 @@ async fn management_call(
         .management_slots
         .clone()
         .try_acquire_owned()
-        .map_err(|_| ApiError::limit("management capacity reached"))?;
+        .map_err(|source| ApiError::limit("management capacity reached").with_source(source))?;
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         state.backend.call(action, &identity, input)
@@ -899,7 +902,7 @@ async fn json_body(request: Request) -> Result<Value, ApiError> {
     if bytes.is_empty() {
         Ok(json!({}))
     } else {
-        storage_contract::strict_json(&bytes).map_err(ApiError::invalid)
+        storage_contract::strict_json(&bytes).map_err(ApiError::invalid_source)
     }
 }
 fn with_id(mut body: Value, key: &str, id: String) -> Result<Value, ApiError> {

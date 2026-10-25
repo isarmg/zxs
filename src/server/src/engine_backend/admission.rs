@@ -17,7 +17,7 @@ use storage_engine::Engine;
 pub(super) struct AdmissionEngine {
     engine: Engine,
     managed_auth: Option<std::sync::Weak<std::sync::Mutex<crate::auth::AuthStore>>>,
-    admission: OnceLock<Result<Option<AdmissionSnapshot>, String>>,
+    admission: OnceLock<Result<Option<AdmissionSnapshot>, std::sync::Arc<ApiError>>>,
     #[cfg(test)]
     validations: std::sync::atomic::AtomicUsize,
 }
@@ -42,7 +42,7 @@ impl AdmissionEngine {
     pub(super) fn identity(&self, caller: &Identity) -> Result<Identity, ApiError> {
         if let Some(auth) = &self.managed_auth {
             let auth = auth.upgrade().ok_or_else(ApiError::unauthorized)?;
-            return crate::lock(&auth)?.revalidate_identity(caller);
+            return crate::lock(&auth).revalidate_identity(caller);
         }
 
         let projection = self.admission.get_or_init(|| {
@@ -51,14 +51,16 @@ impl AdmissionEngine {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.engine
                 .auth_state_ref()
-                .map(AdmissionSnapshot::from_snapshot)
+                .map(|snapshot| {
+                    AdmissionSnapshot::from_snapshot(snapshot).map_err(std::sync::Arc::new)
+                })
                 .transpose()
         });
         match projection {
             Ok(Some(snapshot)) => snapshot.revalidate_identity(caller),
             // An engine without authoritative credentials cannot admit data access.
             Ok(None) => Err(ApiError::unauthorized()),
-            Err(error) => Err(ApiError::invalid(error)),
+            Err(error) => Err(ApiError::invalid_source(std::sync::Arc::clone(error))),
         }
     }
 }

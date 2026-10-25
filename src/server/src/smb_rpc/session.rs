@@ -63,14 +63,14 @@ impl Session {
             crate::BackendAction::SmbLookup,
             json!({"branch_id":self.branch,"path":path}),
         )?)
-        .map_err(ApiError::invalid)
+        .map_err(ApiError::invalid_source)
     }
     pub(super) fn workspace(&self) -> Result<Workspace, ApiError> {
         json_codec::from_value(self.call(
             crate::BackendAction::CreateWorkspace,
             json!({"branch_id":self.branch}),
         )?)
-        .map_err(ApiError::invalid)
+        .map_err(ApiError::invalid_source)
     }
     pub(super) fn reserve_paths(&mut self, paths: &[&str]) -> Result<Vec<String>, ApiError> {
         let keys = paths
@@ -82,13 +82,11 @@ impl Session {
                 || left.starts_with(&format!("{right}/"))
                 || right.starts_with(&format!("{left}/"))
         };
-        let mut writers = self.shared.file_writers.lock().map_err(|_| {
-            ApiError::new(
-                500,
-                storage_contract::ErrorCode::InternalError,
-                "SMB lock registry poisoned",
-            )
-        })?;
+        let mut writers = self
+            .shared
+            .file_writers
+            .lock()
+            .expect("service state lock poisoned");
         if writers.iter().any(|(branch, existing)| {
             branch == &self.branch && keys.iter().any(|key| overlaps(existing, key))
         }) {
@@ -197,9 +195,13 @@ impl Session {
                 } else {
                     name_policy::validate_lookup_path(&path).map_err(contract)?;
                     json_codec::to_value(self.find(&path)?.ok_or_else(|| {
-                        ApiError::new(404, storage_contract::ErrorCode::NotFound, "entry missing")
+                        ApiError::new(
+                            ::http::StatusCode::NOT_FOUND,
+                            storage_contract::ErrorCode::NotFound,
+                            "entry missing",
+                        )
                     })?)
-                    .map_err(ApiError::invalid)?
+                    .expect("invariant: internal JSON serialization succeeds")
                 }
             }
             Request::ReadDirectory { handle, restart } => self.read_directory(handle, restart)?,

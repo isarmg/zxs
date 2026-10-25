@@ -93,7 +93,9 @@ async fn dispatch(
         .management_slots
         .clone()
         .try_acquire_owned()
-        .map_err(|_| ApiError::limit("management operation capacity reached"))?;
+        .map_err(|source| {
+            ApiError::limit("management operation capacity reached").with_source(source)
+        })?;
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         state
@@ -115,7 +117,7 @@ async fn body(request: Request) -> Result<Value, ApiError> {
         })
     {
         return Err(ApiError::new(
-            415,
+            ::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
             storage_contract::ErrorCode::UnsupportedMediaType,
             "application/json is required",
         ));
@@ -125,14 +127,15 @@ async fn body(request: Request) -> Result<Value, ApiError> {
         http_boundary::read_body(request, super::MAX_SETUP_BODY_BYTES),
     )
     .await
-    .map_err(|_| {
+    .map_err(|source| {
         ApiError::new(
-            408,
+            ::http::StatusCode::REQUEST_TIMEOUT,
             storage_contract::ErrorCode::RequestTimeout,
             "setup request body timed out",
         )
+        .with_source(source)
     })??;
-    storage_contract::strict_json(&bytes).map_err(ApiError::invalid)
+    storage_contract::strict_json(&bytes).map_err(ApiError::invalid_source)
 }
 async fn status(State(state): State<AppState>, request: Request) -> Result<Json<Value>, ApiError> {
     let token = bootstrap_request(&state, &request, false)?;
@@ -142,7 +145,7 @@ async fn status(State(state): State<AppState>, request: Request) -> Result<Json<
         .as_object_mut()
         .ok_or_else(|| {
             ApiError::new(
-                500,
+                ::http::StatusCode::INTERNAL_SERVER_ERROR,
                 storage_contract::ErrorCode::InternalError,
                 "invalid setup status",
             )

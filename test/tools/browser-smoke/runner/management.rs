@@ -621,7 +621,7 @@ fn prepare_interruption(fixture: &SetupFixture, password: &str) -> Result<()> {
         },
         |_engine, _, _| {
             Err(storage_server::ApiError::new(
-                500,
+                http::StatusCode::INTERNAL_SERVER_ERROR,
                 storage_engine::ErrorCode::InjectedFailure,
                 "fixture failure before authority publication",
             ))

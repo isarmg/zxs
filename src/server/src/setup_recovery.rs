@@ -307,7 +307,7 @@ impl SetupRecovery {
         for (id, path) in &self.disks {
             let expected = self.identities.get(id).ok_or_else(|| {
                 ApiError::new(
-                    503,
+                    ::http::StatusCode::SERVICE_UNAVAILABLE,
                     storage_contract::ErrorCode::DiskUnavailable,
                     "a configured disk is unavailable",
                 )
@@ -374,7 +374,7 @@ impl SetupRecovery {
             .and_then(|time| std::time::SystemTime::now().duration_since(time).ok());
         if age.is_none_or(|age| age > std::time::Duration::from_secs(30 * 60)) {
             return Err(ApiError::new(
-                401,
+                ::http::StatusCode::UNAUTHORIZED,
                 storage_contract::ErrorCode::BootstrapExpired,
                 "local bootstrap authorization has expired",
             ));
@@ -408,11 +408,12 @@ impl SetupRecovery {
             ));
         }
         let file = private_file(&self.data_root.join("setup.lock"), true)?;
-        file.try_lock().map_err(|_| {
+        file.try_lock().map_err(|source| {
             ApiError::conflict(
                 storage_contract::ErrorCode::SetupBusy,
                 "another setup or recovery operation is active",
             )
+            .with_source(source)
         })?;
         Ok(file)
     }
@@ -430,7 +431,7 @@ impl SetupRecovery {
                     .ok_or_else(|| ApiError::invalid("disk is not locally authorized"))?;
                 let expected = self.identities.get(id).ok_or_else(|| {
                     ApiError::new(
-                        503,
+                        ::http::StatusCode::SERVICE_UNAVAILABLE,
                         storage_contract::ErrorCode::DiskUnavailable,
                         "selected disk is unavailable",
                     )
@@ -471,8 +472,8 @@ impl SetupRecovery {
     {
         self.verify_permit(permit)?;
         authentication::normalize_administrator_username(&request.username)
-            .map_err(ApiError::invalid)?;
-        authentication::validate_password(&request.password).map_err(ApiError::invalid)?;
+            .map_err(ApiError::invalid_source)?;
+        authentication::validate_password(&request.password).map_err(ApiError::invalid_source)?;
         let _lock = self.lock()?;
         self.verify_permit(permit)?;
         if self.status().state != InstallationState::Empty {
@@ -588,7 +589,8 @@ impl SetupRecovery {
         self.verify_permit(permit)?;
         let (config, ids) = self.preset(&request.preset_id)?;
         let config_digest = value_digest(&config)?;
-        let mut safe = json_codec::to_value(&config).map_err(ApiError::invalid)?;
+        let mut safe =
+            json_codec::to_value(&config).expect("invariant: internal JSON serialization succeeds");
         for (disk, id) in safe["disks"]
             .as_array_mut()
             .ok_or_else(|| ApiError::invalid("invalid preset projection"))?
@@ -617,8 +619,8 @@ impl SetupRecovery {
     {
         self.verify_permit(permit)?;
         authentication::normalize_administrator_username(&request.username)
-            .map_err(ApiError::invalid)?;
-        authentication::validate_password(&request.password).map_err(ApiError::invalid)?;
+            .map_err(ApiError::invalid_source)?;
+        authentication::validate_password(&request.password).map_err(ApiError::invalid_source)?;
         let _lock = self.lock()?;
         self.verify_permit(permit)?;
         if self.status().state != InstallationState::Empty {
@@ -645,7 +647,8 @@ impl SetupRecovery {
     }
 
     fn write_control<T: Serialize>(&self, name: &str, value: &T) -> Result<(), ApiError> {
-        let bytes = json_codec::to_vec(value).map_err(ApiError::invalid)?;
+        let bytes =
+            json_codec::to_vec(value).expect("invariant: internal JSON serialization succeeds");
         if bytes.len() > MAX_LOCAL_CONFIG_BYTES {
             return Err(ApiError::invalid("setup control record exceeds limit"));
         }
@@ -779,8 +782,8 @@ impl SetupRecovery {
     {
         self.verify_permit(permit)?;
         authentication::normalize_administrator_username(&request.username)
-            .map_err(ApiError::invalid)?;
-        authentication::validate_password(&request.password).map_err(ApiError::invalid)?;
+            .map_err(ApiError::invalid_source)?;
+        authentication::validate_password(&request.password).map_err(ApiError::invalid_source)?;
         let _lock = self.lock()?;
         self.verify_permit(permit)?;
         self.completion_proof()?;
@@ -1053,11 +1056,11 @@ fn require_mountpoint(path: &Path) -> Result<(), ApiError> {
 }
 
 fn value_digest<T: Serialize>(value: &T) -> Result<String, ApiError> {
-    Ok(
-        blake3::hash(&json_codec::to_vec(value).map_err(ApiError::invalid)?)
-            .to_hex()
-            .to_string(),
+    Ok(blake3::hash(
+        &json_codec::to_vec(value).expect("invariant: internal JSON serialization succeeds"),
     )
+    .to_hex()
+    .to_string())
 }
 fn read_control<T: data_serialization::de::DeserializeOwned>(path: &Path) -> Result<T, ApiError> {
     let mut file = private_file(path, false)?;
@@ -1072,7 +1075,7 @@ fn read_control<T: data_serialization::de::DeserializeOwned>(path: &Path) -> Res
     if bytes.len() > MAX_LOCAL_CONFIG_BYTES {
         return Err(ApiError::invalid("setup control record exceeds limit"));
     }
-    storage_contract::decode_strict(&bytes).map_err(ApiError::invalid)
+    storage_contract::decode_strict(&bytes).map_err(ApiError::invalid_source)
 }
 fn tree_digest(root: &Path) -> Result<String, ApiError> {
     fn visit(
@@ -1190,8 +1193,9 @@ fn read_preset(path: &Path) -> Result<Config, ApiError> {
     if bytes.len() > MAX_LOCAL_CONFIG_BYTES {
         return Err(ApiError::invalid("setup preset exceeds limit"));
     }
-    storage_contract::decode_strict(&bytes)
-        .map_err(|_| ApiError::invalid("local setup preset is not a valid configuration"))
+    storage_contract::decode_strict(&bytes).map_err(|source| {
+        ApiError::invalid("local setup preset is not a valid configuration").with_source(source)
+    })
 }
 
 /// Deterministic test-only interruption after durable disk recovery.

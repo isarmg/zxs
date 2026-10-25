@@ -25,7 +25,7 @@ impl Drop for NativeDrain {
         if let Some(backend) = self.0.take()
             && let Err(error) = backend.drain_management()
         {
-            tracing::error!(%error, "management shutdown failed");
+            tracing::error!(error = ?error, "management shutdown failed");
         }
     }
 }

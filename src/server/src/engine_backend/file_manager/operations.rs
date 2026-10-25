@@ -46,7 +46,7 @@ pub(super) fn call(
                     .cloned()
                     .ok_or_else(|| ApiError::invalid("inputs are required"))?,
             )
-            .map_err(ApiError::invalid)?;
+            .map_err(ApiError::invalid_source)?;
             let result = Application::new(engine, identity).merge_file_branches(
                 application::MergeFileBranches {
                     file_id: file.into(),
@@ -82,7 +82,7 @@ pub(super) fn call(
                     .cloned()
                     .ok_or_else(|| ApiError::invalid("targets are required"))?,
             )
-            .map_err(ApiError::invalid)?;
+            .map_err(ApiError::invalid_source)?;
             let strings = |key: &str| -> Result<Vec<String>, ApiError> {
                 json_codec::from_value(
                     input
@@ -90,7 +90,7 @@ pub(super) fn call(
                         .cloned()
                         .ok_or_else(|| ApiError::invalid(format!("{key} is required")))?,
                 )
-                .map_err(ApiError::invalid)
+                .map_err(ApiError::invalid_source)
             };
             let result = engine
                 .update_file_node_tags(storage_engine::FileNodeTagsUpdateRequest {
@@ -131,10 +131,10 @@ pub(super) fn call(
                     .cloned()
                     .ok_or_else(|| ApiError::invalid("backup_prefixes are required"))?,
             )
-            .map_err(ApiError::invalid)?;
+            .map_err(ApiError::invalid_source)?;
             let generation =
                 storage_contract::parse_u64_decimal(field(input, "expected_generation")?)
-                    .map_err(ApiError::invalid)?;
+                    .map_err(ApiError::invalid_source)?;
             let result = engine
                 .configure_backups_scoped(storage_engine::ScopedBackupConfigurationRequest {
                     repository_id: repo,
@@ -149,14 +149,14 @@ pub(super) fn call(
                 .map_err(|failure| match failure.code() {
                     storage_contract::ErrorCode::RouteIncomplete
                     | storage_contract::ErrorCode::ScopeChanged => {
-                        ApiError::conflict(failure.code(), &failure.message())
+                        ApiError::conflict(failure.code(), &failure.message()).with_source(failure)
                     }
                     _ => error(failure),
                 })?;
             operation_wire(result)
         }
         _ => Err(ApiError::new(
-            404,
+            ::http::StatusCode::NOT_FOUND,
             storage_contract::ErrorCode::NotFound,
             "operation not found",
         )),

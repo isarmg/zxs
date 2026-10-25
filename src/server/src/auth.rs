@@ -69,7 +69,7 @@ impl Database {
         if sessions.values().any(|session| !session.is_object()) {
             return Err(ApiError::invalid("session records must be objects"));
         }
-        let database = Self::deserialize(snapshot).map_err(ApiError::invalid)?;
+        let database = Self::deserialize(snapshot).map_err(ApiError::invalid_source)?;
         database.validate()?;
         Ok(database)
     }
@@ -81,9 +81,9 @@ impl Database {
         }
         let administrator = &self.administrator;
         primitives::require_canonical_administrator_username(&administrator.username)
-            .map_err(ApiError::invalid)?;
+            .map_err(ApiError::invalid_source)?;
         primitives::require_current_password_hash(&administrator.password_hash)
-            .map_err(ApiError::invalid)?;
+            .map_err(ApiError::invalid_source)?;
         if administrator.generation == 0 {
             return Err(ApiError::invalid(
                 "administrator generation must be positive",
@@ -143,8 +143,8 @@ pub(crate) struct AdmissionSnapshot {
 
 #[cfg(feature = "core")]
 impl AdmissionSnapshot {
-    pub(crate) fn from_snapshot(snapshot: &json_codec::Value) -> Result<Self, String> {
-        let database = Database::from_snapshot(snapshot).map_err(|error| error.to_string())?;
+    pub(crate) fn from_snapshot(snapshot: &json_codec::Value) -> Result<Self, ApiError> {
+        let database = Database::from_snapshot(snapshot)?;
         Ok(Self {
             principal: database.administrator.username,
             generation: database.administrator.generation,
@@ -237,7 +237,7 @@ impl PasswordChangeChallenge {
         }
         if !primitives::verify_password(current_password, &self.previous.password_hash) {
             return Err(ApiError::new(
-                403,
+                ::http::StatusCode::FORBIDDEN,
                 storage_contract::ErrorCode::CurrentPasswordInvalid,
                 "current password is incorrect",
             ));
@@ -251,7 +251,8 @@ impl PasswordChangeChallenge {
         if let Some(hook) = &self.password_work_hook {
             hook();
         }
-        let password_hash = primitives::hash_password(new_password).map_err(ApiError::invalid)?;
+        let password_hash =
+            primitives::hash_password(new_password).map_err(ApiError::invalid_source)?;
         Ok(PreparedPasswordChange {
             identity: self.identity,
             previous: self.previous,
@@ -299,7 +300,7 @@ fn private_directory(root: &Path) -> Result<PrivateDirectory, ApiError> {
     let directory = PrivateDirectory::open_trusted(root);
     #[cfg(not(unix))]
     let directory = PrivateDirectory::open_existing(root);
-    directory.map_err(ApiError::invalid)
+    directory.map_err(ApiError::invalid_source)
 }
 
 fn read_credentials(path: &Path) -> Result<Vec<u8>, ApiError> {
@@ -311,17 +312,17 @@ fn read_credentials(path: &Path) -> Result<Vec<u8>, ApiError> {
         path.file_name()
             .ok_or_else(|| ApiError::invalid("missing credential name"))?,
     )
-    .map_err(ApiError::invalid)?;
+    .map_err(ApiError::invalid_source)?;
     directory
         .read_bounded(&name, MAX_STORE_BYTES)
-        .map_err(ApiError::invalid)
+        .map_err(ApiError::invalid_source)
 }
 
 impl AuthStore {
     fn require_available(&self) -> Result<(), ApiError> {
         if self.blocked.load(Ordering::SeqCst) {
             Err(ApiError::new(
-                503,
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::RecoveryRequired,
                 "authentication publication must be recovered before serving requests",
             ))
@@ -339,7 +340,7 @@ impl AuthStore {
     }
     fn missing_authority() -> ApiError {
         ApiError::new(
-            503,
+            ::http::StatusCode::SERVICE_UNAVAILABLE,
             storage_contract::ErrorCode::AuthRecoveryRequired,
             "administrator credentials are unavailable",
         )
@@ -347,8 +348,10 @@ impl AuthStore {
     pub fn snapshot(&self) -> Result<json_codec::Value, ApiError> {
         // A blocked publication may still be inspected for recovery, but an
         // uninitialized control plane cannot invent an administrator snapshot.
-        json_codec::to_value(self.db.as_ref().ok_or_else(Self::missing_authority)?)
-            .map_err(ApiError::invalid)
+        Ok(
+            json_codec::to_value(self.db.as_ref().ok_or_else(Self::missing_authority)?)
+                .expect("invariant: credential snapshot serialization succeeds"),
+        )
     }
     pub fn attach_backup(&mut self, backup: BackupHook) -> Result<(), ApiError> {
         backup(self.snapshot()?)?;
@@ -377,13 +380,13 @@ impl AuthStore {
     }
     fn acquire_lock(root: &Path) -> Result<AdvisoryLock, ApiError> {
         let directory = private_directory(root)?;
-        AdvisoryLock::acquire(&directory, &RelativePath::new("auth.lock").map_err(ApiError::invalid)?)
+        AdvisoryLock::acquire(&directory, &RelativePath::new("auth.lock").expect("invariant: static credential lock filename is valid"))
             .map_err(|error| match error {
-                platform_io::fs_safety::Error::AlreadyLocked(_) => ApiError::conflict(
+                source @ platform_io::fs_safety::Error::AlreadyLocked(_) => ApiError::conflict(
                     storage_contract::ErrorCode::AuthStoreBusy,
                     "another process owns the credential store; use its authenticated administration API",
-                ),
-                other => ApiError::invalid(other),
+                ).with_source(source),
+                other => ApiError::invalid_source(other),
             })
     }
     /// Create only through the explicit administrative setup command.
@@ -418,16 +421,17 @@ impl AuthStore {
             ));
         }
         #[cfg(unix)]
-        PrivateDirectory::create_trusted(absolute_root(root)?).map_err(ApiError::invalid)?;
+        PrivateDirectory::create_trusted(absolute_root(root)?).map_err(ApiError::invalid_source)?;
         #[cfg(not(unix))]
         {
             fs::create_dir_all(root).map_err(ApiError::io)?;
-            PrivateDirectory::open_existing(absolute_root(root)?).map_err(ApiError::invalid)?;
+            PrivateDirectory::open_existing(absolute_root(root)?)
+                .map_err(ApiError::invalid_source)?;
         }
         let auth_lock = Self::acquire_lock(root)?;
-        let username =
-            primitives::normalize_administrator_username(username).map_err(ApiError::invalid)?;
-        let hash = primitives::hash_password(password).map_err(ApiError::invalid)?;
+        let username = primitives::normalize_administrator_username(username)
+            .map_err(ApiError::invalid_source)?;
+        let hash = primitives::hash_password(password).map_err(ApiError::invalid_source)?;
         let db = Database {
             administrator: Administrator {
                 username,
@@ -519,12 +523,12 @@ impl AuthStore {
             Some(snapshot) => snapshot,
             None => storage_contract::strict_json(&local.ok_or_else(|| {
                 ApiError::new(
-                    503,
+                    ::http::StatusCode::SERVICE_UNAVAILABLE,
                     storage_contract::ErrorCode::AuthRecoveryRequired,
                     "credential store is missing and no authoritative backup is available",
                 )
             })?)
-            .map_err(ApiError::invalid)?,
+            .map_err(ApiError::invalid_source)?,
         };
         let db = Database::from_snapshot(&snapshot)?;
         let store = Self {
@@ -549,7 +553,8 @@ impl AuthStore {
         // not an uncertain I/O outcome that should block existing credentials.
         let database = self.db.as_ref().ok_or_else(Self::missing_authority)?;
         database.validate()?;
-        let bytes = json_codec::to_vec(database).map_err(ApiError::invalid)?;
+        let bytes =
+            json_codec::to_vec(database).expect("invariant: internal JSON serialization succeeds");
         if bytes.len() > MAX_STORE_BYTES {
             return Err(ApiError::limit(
                 "credential store exceeds serialized byte limit",
@@ -557,7 +562,7 @@ impl AuthStore {
         }
         let temporary = self.path.with_extension(format!(
             "tmp-{}",
-            primitives::random_token().map_err(ApiError::invalid)?
+            primitives::random_token().map_err(ApiError::invalid_source)?
         ));
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
@@ -670,8 +675,8 @@ impl AuthStore {
         {
             return Err(ApiError::unauthorized());
         }
-        let token = primitives::random_token().map_err(ApiError::invalid)?;
-        let csrf_token = primitives::derive_csrf_token(&token).map_err(ApiError::invalid)?;
+        let token = primitives::random_token().map_err(ApiError::invalid_source)?;
+        let csrf_token = primitives::derive_csrf_token(&token).map_err(ApiError::invalid_source)?;
         let expires_at = now() + SESSION_TTL_SECONDS;
         let result = LoginResult {
             token: token.clone(),

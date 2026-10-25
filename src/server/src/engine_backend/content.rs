@@ -10,17 +10,11 @@ impl EngineBackend {
         identity: &Identity,
         version: &str,
     ) -> Result<Content, ApiError> {
-        let engine = self.engine.lock().map_err(|_| {
-            ApiError::new(
-                500,
-                storage_contract::ErrorCode::InternalError,
-                "storage engine requires restart",
-            )
-        })?;
+        let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         let record = engine.state().versions.get(version).ok_or_else(|| {
             ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::NotFound,
                 "version not found",
             )
@@ -66,13 +60,7 @@ impl EngineBackend {
         workspace: &str,
         item: &str,
     ) -> Result<Content, ApiError> {
-        let engine = self.engine.lock().map_err(|_| {
-            ApiError::new(
-                500,
-                storage_contract::ErrorCode::InternalError,
-                "storage engine requires restart",
-            )
-        })?;
+        let engine = self.engine.lock().expect("service state lock poisoned");
         let current = current_protected_identity(&engine, identity)?;
         let workspace_record = workspace_authorize(&engine, &current, workspace)?;
         let plan = engine
@@ -95,17 +83,11 @@ impl EngineBackend {
         identity: &Identity,
         version: &str,
     ) -> Result<Vec<u8>, ApiError> {
-        let engine = self.engine.lock().map_err(|_| {
-            ApiError::new(
-                500,
-                storage_contract::ErrorCode::InternalError,
-                "storage engine requires restart",
-            )
-        })?;
+        let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         let record = engine.state().versions.get(version).ok_or_else(|| {
             ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::NotFound,
                 "version not found",
             )

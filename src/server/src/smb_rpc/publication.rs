@@ -53,7 +53,7 @@ fn write_recovery_record(
     AtomicFile::replace(
         &writer.directory,
         &name,
-        &json_codec::to_vec(&value).map_err(ApiError::invalid)?,
+        &json_codec::to_vec(&value).expect("invariant: internal JSON serialization succeeds"),
     )
     .map_err(crate::upload_fs_error)
 }
@@ -85,7 +85,7 @@ pub(super) fn cleanup_writer(writer: &Writer) {
         if let Err(error) = fs::remove_file(path)
             && error.kind() != io::ErrorKind::NotFound
         {
-            tracing::warn!(%error,path=%path.display(),"SMB staging cleanup failed");
+            tracing::warn!(error = ?error,path=%path.display(),"SMB staging cleanup failed");
         }
     }
     writer.reservation.cleanup_record();
@@ -107,7 +107,7 @@ pub(super) fn finish_publication(
         json!({"branch_id":branch,"query":{"commit_id":writer.last_head}}),
     )?;
     let entries: Vec<Entry> =
-        json_codec::from_value(tree["entries"].clone()).map_err(ApiError::invalid)?;
+        json_codec::from_value(tree["entries"].clone()).map_err(ApiError::invalid_source)?;
     let entry = entries
         .iter()
         .find(|entry| entry.entry_id == writer.item_id)
@@ -139,7 +139,7 @@ pub(super) fn finish_publication(
     // Only a completed comparison may require a new authorized dirty generation.
     writer.committed = true;
     if let Err(error) = recovery_record(writer, &identity.principal, branch) {
-        tracing::warn!(%error,"published SMB recovery record could not be refreshed");
+        tracing::warn!(error = ?error,"published SMB recovery record could not be refreshed");
     }
     if writer.dirty {
         return Err(ApiError::conflict(
@@ -190,7 +190,7 @@ impl Session {
                 )?;
                 let select = |tree: &Value| -> Result<Option<Entry>, ApiError> {
                     let entries: Vec<Entry> = json_codec::from_value(tree["entries"].clone())
-                        .map_err(ApiError::invalid)?;
+                        .map_err(ApiError::invalid_source)?;
                     Ok(entries
                         .into_iter()
                         .find(|entry| entry.lookup_key == name_policy::path_key(&path)))
@@ -249,7 +249,7 @@ impl Session {
     pub(super) fn flush(&mut self, handle: u64) -> Result<Value, ApiError> {
         let Some(entry) = self.handles.get_mut(&handle) else {
             return Err(ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::NotFound,
                 "SMB handle missing",
             ));
@@ -294,7 +294,7 @@ impl Session {
             }
             Ok(_) => {
                 return Err(ApiError::new(
-                    503,
+                    ::http::StatusCode::SERVICE_UNAVAILABLE,
                     storage_contract::ErrorCode::RecoveryRequired,
                     "SMB save outcome must be reconciled before retrying",
                 ));
@@ -350,7 +350,7 @@ impl Session {
     pub(super) fn close(&mut self, handle: u64, abort: bool) -> Result<Value, ApiError> {
         if !self.handles.contains_key(&handle) {
             return Err(ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::NotFound,
                 "SMB handle missing",
             ));
@@ -387,7 +387,7 @@ impl Session {
     pub(super) fn detach(&mut self, handle: u64) -> Result<Value, ApiError> {
         let entry = self.handles.remove(&handle).ok_or_else(|| {
             ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::NotFound,
                 "SMB handle missing",
             )
@@ -395,7 +395,7 @@ impl Session {
         let mut result = json!({"closed":true,"detached":true});
         if let Handle::Write(writer) = entry {
             let reason = ApiError::new(
-                503,
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::RecoveryRequired,
                 "SMB handle detached without saving; retained work requires reconciliation",
             );

@@ -12,14 +12,14 @@ impl Session {
             ),
             Some(_) => {
                 return Err(ApiError::new(
-                    409,
+                    ::http::StatusCode::CONFLICT,
                     storage_contract::ErrorCode::NotDirectory,
                     "handle is not a directory",
                 ));
             }
             None => {
                 return Err(ApiError::new(
-                    404,
+                    ::http::StatusCode::NOT_FOUND,
                     storage_contract::ErrorCode::NotFound,
                     "SMB handle missing",
                 ));
@@ -40,7 +40,7 @@ impl Session {
             .ok_or_else(|| ApiError::invalid("invalid directory page"))?
             .remove("commit_id");
         let page: DirectoryPage =
-            json_codec::from_value(result.clone()).map_err(ApiError::invalid)?;
+            json_codec::from_value(result.clone()).map_err(ApiError::invalid_source)?;
         if page.more && page.entries.is_empty() {
             return Err(ApiError::invalid("nonterminal directory page is empty"));
         }

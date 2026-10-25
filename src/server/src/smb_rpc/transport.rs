@@ -39,13 +39,10 @@ struct SessionPermit {
 }
 impl SessionPermit {
     fn acquire(shared: &Arc<Shared>) -> Result<Self, ApiError> {
-        let mut sessions = shared.authenticated_sessions.lock().map_err(|_| {
-            ApiError::new(
-                503,
-                storage_contract::ErrorCode::SmbUnavailable,
-                "SMB session registry poisoned",
-            )
-        })?;
+        let mut sessions = shared
+            .authenticated_sessions
+            .lock()
+            .expect("service state lock poisoned");
         if *sessions >= MAX_AUTHENTICATED_SESSIONS {
             return Err(ApiError::limit("too many authenticated SMB sessions"));
         }
@@ -95,7 +92,7 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
         if username != shared.username {
             return Err(ApiError::forbidden());
         }
-        let mut identity = crate::lock(&shared.auth)?.sole_identity()?;
+        let mut identity = crate::lock(&shared.auth).sole_identity()?;
         let permit = SessionPermit::acquire(&shared)?;
         let repo = shared.backend.call(
             crate::BackendAction::Repository,
@@ -104,7 +101,7 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
         )?;
         if repo.get("smb_enabled").and_then(Value::as_bool) != Some(true) {
             return Err(ApiError::new(
-                409,
+                ::http::StatusCode::CONFLICT,
                 storage_contract::ErrorCode::SmbRebindRequired,
                 "repository requires an explicit SMB binding after history migration",
             ));
@@ -195,7 +192,7 @@ fn send_success(
     if payload.len() > smb_protocol::protocol::MAX_FRAME_BYTES {
         drop(payload);
         return stream.send(&Response::Error {
-            code: "RESPONSE_TOO_LARGE".into(),
+            code: storage_contract::ErrorCode::ResponseTooLarge.as_str().to_owned(),
             message: "result exceeds RPC frame limit; the operation may have completed, query its original identity rather than replaying".into(),
             retryable: false,
             operation_id,
@@ -205,6 +202,7 @@ fn send_success(
 }
 
 fn response_error(error: ApiError, operation_id: Option<String>) -> Response {
+    error.log_response();
     Response::Error {
         code: error.code.as_str().to_owned(),
         message: error.message,
@@ -352,7 +350,7 @@ pub async fn serve(
             .ok_or_else(|| io::Error::other("SMB connection identifiers exhausted"))?;
         connections
             .lock()
-            .map_err(|_| io::Error::other("SMB connection registry poisoned"))?
+            .expect("service state lock poisoned")
             .insert(id, stream.try_clone()?);
         let connection_guard = ConnectionGuard {
             id,
@@ -364,7 +362,7 @@ pub async fn serve(
             let _connection_guard = connection_guard;
             match FrameStream::new(stream).and_then(|stream| run_connection(stream, shared)) {
                 Ok(()) => {}
-                Err(error) => tracing::warn!(%error,"SMB local RPC session ended"),
+                Err(error) => tracing::warn!(error = ?error,"SMB local RPC session ended"),
             }
         });
     }

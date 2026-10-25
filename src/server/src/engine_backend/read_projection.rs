@@ -59,7 +59,7 @@ fn branch_snapshot<'a>(
         .filter(|commit| commit.history_tree_id == branch_info.history_tree_id)
         .ok_or_else(|| {
             ApiError::new(
-                404,
+                ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::NotFound,
                 "commit not found",
             )
@@ -105,7 +105,7 @@ impl SmbLookup {
             .filter(|commit| commit.history_tree_id == branch_info.history_tree_id)
             .ok_or_else(|| {
                 ApiError::new(
-                    404,
+                    ::http::StatusCode::NOT_FOUND,
                     storage_contract::ErrorCode::NotFound,
                     "commit not found",
                 )
@@ -139,7 +139,7 @@ impl SmbDirectory {
             .filter(|snapshot| snapshot.history_tree_id == branch_info.history_tree_id)
             .ok_or_else(|| {
                 ApiError::new(
-                    404,
+                    ::http::StatusCode::NOT_FOUND,
                     storage_contract::ErrorCode::NotFound,
                     "directory snapshot missing",
                 )
@@ -157,12 +157,12 @@ impl SmbDirectory {
                 return Err(ApiError::invalid("invalid root directory identity"));
             }
         } else {
-            name_policy::validate_path(path).map_err(ApiError::invalid)?;
+            name_policy::validate_path(path).map_err(ApiError::invalid_source)?;
             let directory = tree.get_key(&key);
             if directory.is_none_or(|entry| entry.kind != "directory" || entry.entry_id != entry_id)
             {
                 return Err(ApiError::new(
-                    409,
+                    ::http::StatusCode::CONFLICT,
                     storage_contract::ErrorCode::SmbRebindRequired,
                     "opened directory identity changed",
                 ));
@@ -209,9 +209,10 @@ impl SmbDirectory {
         // Reserve the larger internal response envelope. The wire strips the
         // commit id; false->true only reduces the encoded length.
         let mut bytes = json_codec::to_vec(&Response::Ok {
-            result: json_codec::to_value(&page).map_err(ApiError::invalid)?,
+            result: json_codec::to_value(&page)
+                .expect("invariant: internal JSON serialization succeeds"),
         })
-        .map_err(ApiError::invalid)?
+        .expect("invariant: internal JSON serialization succeeds")
         .len();
         for entry in &entries[start..] {
             let Some(rest) = entry.lookup_key.strip_prefix(&prefix) else {
@@ -220,7 +221,9 @@ impl SmbDirectory {
             if rest.is_empty() || rest.contains('/') {
                 continue;
             }
-            let extra = json_codec::to_vec(entry).map_err(ApiError::invalid)?.len()
+            let extra = json_codec::to_vec(entry)
+                .expect("invariant: internal JSON serialization succeeds")
+                .len()
                 + usize::from(!page.entries.is_empty());
             if page.entries.len() >= MAX_DIRECTORY_PAGE_ENTRIES
                 || bytes.saturating_add(extra) > MAX_DIRECTORY_PAGE_BYTES

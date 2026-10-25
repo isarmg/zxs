@@ -15,7 +15,8 @@ status values, retry decisions and HTTP 500 diagnostic suppression are preserved
 
 HTTP error-envelope deserialization and client response decoding validate code
 strings once. An unknown remote code is an explicit invalid-response error,
-retaining the JSON decoder source and the actual HTTP status. A response without
+retaining the JSON decoder source, actual HTTP status, explicit retry advice and
+request identifier. The enum decoder borrows the JSON value. A response without
 an error code retains the existing generic HTTP-error classification. Client
 mutation outcome classification still uses the actual HTTP status, never the
 parse-error code. Internal code uses the validated enum.
@@ -42,10 +43,31 @@ optional history-index read still disables that acceleration at its existing
 decision point. Poisoned engine locks expose invariant failure rather than
 becoming a recoverable storage result; actual filesystem failures still propagate.
 
+## Server boundaries
+
+`ApiError` is an outbound-only serialized envelope. Its code is `ErrorCode` and
+its status is `http::StatusCode`; internal constructors and the registry cannot
+carry an invalid raw status. Neither the status field nor its concrete
+`ApiErrorSource` is serialized. Request decoding, I/O, task joins, admission,
+authentication and formatting adapters retain causes without logging them.
+HTTP response completion and SMB response serialization own response logging;
+consumed startup/recovery/telemetry failures stay with their decision owner.
+After headers are sent, bounded stream failures remain transport errors and are
+logged by that stream boundary, never rewritten into JSON. Server library entry
+points return the concrete `ServeError`, not boxed dynamic errors.
+
+The public backend's content hash still crosses a real boundary: constructing
+an ETag remains fallible and retains `InvalidHeaderValue`. Runtime clock values
+can be outside RFC3339's year range, so formatting them also retains its source.
+Only constant formats, validated generated header values, internal serializers
+and poisoned locks use invariant assertions.
+
 ## Staging limits
 
-These layers do not claim that all repository error paths are migrated.
-HTTP/SMB/startup source adapters and once-only outer-boundary logging are a
-subsequent layer. Platform and SMB transport-specific error domains are
-independent boundaries. Existing scheduler panic containment and unrelated
-fallback/state policies are not changed by the source-preservation layer.
+These layers do not claim that all repository error paths are migrated. Other
+native-client, authentication, platform and SMB-specific error domains still
+need their own source-preservation audit. Existing engine scheduler panic
+containment and unrelated fallback/state policies are not changed by these
+layers. In particular, this is not a replacement for a whole-repository audit
+of ignored results, defensive defaults, finite-state strings or public API
+validation contracts.

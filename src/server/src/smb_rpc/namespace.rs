@@ -9,13 +9,10 @@ struct OperationReservation {
 }
 impl OperationReservation {
     fn acquire(shared: &Arc<Shared>, operation_id: &str) -> Result<Self, ApiError> {
-        let mut operations = shared.namespace_operations.lock().map_err(|_| {
-            ApiError::new(
-                500,
-                storage_contract::ErrorCode::InternalError,
-                "SMB operation registry poisoned",
-            )
-        })?;
+        let mut operations = shared
+            .namespace_operations
+            .lock()
+            .expect("service state lock poisoned");
         if !operations.insert(operation_id.to_owned()) {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::RecoveryRequired,
@@ -138,8 +135,8 @@ impl Session {
                 crate::BackendAction::Tree,
                 json!({"branch_id":self.branch,"query":{"commit_id":workspace.base_head}}),
             )?;
-            let entries: Vec<Entry> =
-                json_codec::from_value(tree["entries"].clone()).map_err(ApiError::invalid)?;
+            let entries: Vec<Entry> = json_codec::from_value(tree["entries"].clone())
+                .map_err(ApiError::invalid_source)?;
             let find = |path: &str| {
                 let key = name_policy::path_key(path);
                 entries.iter().find(|entry| entry.lookup_key == key)
@@ -154,28 +151,28 @@ impl Session {
             if kind == "unlink" || kind == "rmdir" {
                 let entry = find(&path).ok_or_else(|| {
                     ApiError::new(
-                        404,
+                        ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::NotFound,
                         "remove target missing",
                     )
                 })?;
                 if kind == "unlink" && entry.kind == "directory" {
                     return Err(ApiError::new(
-                        409,
+                        ::http::StatusCode::CONFLICT,
                         storage_contract::ErrorCode::IsDirectory,
                         "unlink cannot remove a directory",
                     ));
                 }
                 if kind == "rmdir" && entry.kind != "directory" {
                     return Err(ApiError::new(
-                        409,
+                        ::http::StatusCode::CONFLICT,
                         storage_contract::ErrorCode::NotDirectory,
                         "rmdir requires a directory",
                     ));
                 }
                 if nonempty(entry) {
                     return Err(ApiError::new(
-                        409,
+                        ::http::StatusCode::CONFLICT,
                         storage_contract::ErrorCode::DirectoryNotEmpty,
                         "SMB directory removal requires an empty directory",
                     ));
@@ -188,7 +185,7 @@ impl Session {
             {
                 let source = find(&path).ok_or_else(|| {
                     ApiError::new(
-                        404,
+                        ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::NotFound,
                         "rename source missing",
                     )
@@ -202,7 +199,7 @@ impl Session {
                 if source.entry_id != target_entry.entry_id {
                     if nonempty(target_entry) {
                         return Err(ApiError::new(
-                            409,
+                            ::http::StatusCode::CONFLICT,
                             storage_contract::ErrorCode::DirectoryNotEmpty,
                             "rename replacement directory is not empty",
                         ));
@@ -235,7 +232,7 @@ impl Session {
                     tracing::warn!(operation_id, workspace, path=%record.display(), "SMB namespace record durability failed; retaining available recovery evidence after abort")
                 }
                 Err(error) => {
-                    tracing::warn!(operation_id, workspace, path=%record.display(), code=%error.code, message=%error.message, "SMB namespace preparation abort failed; recovery required")
+                    tracing::warn!(operation_id, workspace, path=%record.display(), error = ?error, "SMB namespace preparation abort failed; recovery required")
                 }
             }
         }
@@ -276,7 +273,9 @@ fn write_namespace_record(path: &Path, value: &Value) -> Result<(), ApiError> {
         .tempfile_in(parent)
         .map_err(ApiError::io)?;
     temporary
-        .write_all(&json_codec::to_vec(value).map_err(ApiError::invalid)?)
+        .write_all(
+            &json_codec::to_vec(value).expect("invariant: internal JSON serialization succeeds"),
+        )
         .map_err(ApiError::io)?;
     // Keep the complete intent available even if either sync fails. No core
     // commit may begin until both the file and its directory are durable.
@@ -293,7 +292,7 @@ fn cleanup_namespace_record(path: &Path) {
         Ok(()) => true,
         Err(error) if error.kind() == io::ErrorKind::NotFound => false,
         Err(error) => {
-            tracing::warn!(%error, path=%path.display(), "SMB namespace recovery record cleanup failed");
+            tracing::warn!(error = ?error, path=%path.display(), "SMB namespace recovery record cleanup failed");
             false
         }
     };
@@ -301,7 +300,7 @@ fn cleanup_namespace_record(path: &Path) {
         && let Some(parent) = path.parent()
         && let Err(error) = File::open(parent).and_then(|directory| directory.sync_all())
     {
-        tracing::warn!(%error, path=%path.display(), "SMB namespace recovery record cleanup was not synced");
+        tracing::warn!(error = ?error, path=%path.display(), "SMB namespace recovery record cleanup was not synced");
     }
 }
 

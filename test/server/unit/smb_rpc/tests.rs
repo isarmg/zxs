@@ -14,7 +14,7 @@ impl Session {
                 .cloned()
                 .ok_or_else(|| ApiError::invalid("missing tree entries"))?,
         )
-        .map_err(ApiError::invalid)
+        .map_err(ApiError::invalid_source)
     }
 }
 
@@ -65,7 +65,7 @@ impl Backend for LostCommitReply {
                 .is_ok()
         {
             return Err(ApiError::new(
-                503,
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::MetadataUnavailable,
                 "injected one-shot published tree read failure",
             ));
@@ -98,7 +98,7 @@ impl Backend for LostCommitReply {
             && self.fail.swap(false, Ordering::SeqCst)
         {
             return Err(ApiError::new(
-                503,
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::InjectedFailure,
                 "injected after actual durable publication",
             ));
@@ -128,7 +128,7 @@ impl Backend for LostCommitReply {
             .is_ok()
         {
             return Err(ApiError::new(
-                503,
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::MetadataUnavailable,
                 "injected one-shot published content read failure",
             ));

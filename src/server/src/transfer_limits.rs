@@ -54,7 +54,7 @@ impl Admission {
         })
     }
     pub(crate) fn acquire(self: &Arc<Self>) -> Result<Permit, ApiError> {
-        let mut active = lock(&self.active)?;
+        let mut active = lock(&self.active);
         if *active >= self.slots {
             return Err(ApiError::limit("HTTP transfer capacity reached"));
         }
@@ -73,7 +73,7 @@ impl Drop for Permit {
 }
 pub(crate) fn timeout_error() -> ApiError {
     ApiError::new(
-        408,
+        ::http::StatusCode::REQUEST_TIMEOUT,
         storage_contract::ErrorCode::TransferTimeout,
         "HTTP transfer deadline exceeded; durable work data is retained",
     )
@@ -146,10 +146,12 @@ impl<S: Stream<Item = Result<bytes::Bytes, std::io::Error>>> Stream for BoundedS
         }
         if state.expired {
             state.expired = false;
-            return Poll::Ready(Some(Err(std::io::Error::new(
+            let error = std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 "HTTP transfer deadline exceeded",
-            ))));
+            );
+            tracing::warn!(error = ?error, "HTTP response stream failed");
+            return Poll::Ready(Some(Err(error)));
         }
         let Some(stream) = state.stream.as_mut() else {
             return Poll::Ready(None);
@@ -159,7 +161,12 @@ impl<S: Stream<Item = Result<bytes::Bytes, std::io::Error>>> Stream for BoundedS
             Poll::Ready(Some(Ok(bytes))) if !bytes.is_empty() => {
                 self.progress.send_replace(Instant::now() + self.idle);
             }
-            Poll::Ready(None) | Poll::Ready(Some(Err(_))) => {
+            Poll::Ready(Some(Err(error))) => {
+                tracing::warn!(error = ?error, "HTTP response stream failed");
+                state.stream = None;
+                self.timer.abort();
+            }
+            Poll::Ready(None) => {
                 state.stream = None;
                 self.timer.abort();
             }

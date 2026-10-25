@@ -22,7 +22,7 @@ pub(in crate::engine_backend) fn read(engine: &Engine, input: &Value) -> Result<
         || sources.len().saturating_mul(selected.len()) > 10_000
     {
         return Err(ApiError::new(
-            429,
+            ::http::StatusCode::TOO_MANY_REQUESTS,
             storage_contract::ErrorCode::ResourceLimitExceeded,
             "scope query exceeds the bounded selection limit",
         ));
@@ -41,7 +41,7 @@ pub(in crate::engine_backend) fn read(engine: &Engine, input: &Value) -> Result<
         if id.len() > 256 {
             return Err(ApiError::invalid("entry identity is too long"));
         }
-        name_policy::validate_lookup_path(path).map_err(ApiError::invalid)?;
+        name_policy::validate_lookup_path(path).map_err(ApiError::invalid_source)?;
         let parent = path
             .rsplit_once('/')
             .map(|(parent, _)| parent)

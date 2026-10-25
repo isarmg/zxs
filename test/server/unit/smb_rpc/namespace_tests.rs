@@ -116,7 +116,7 @@ impl Backend for NamespaceFailure {
                 self.inner.call(action, identity, input)?;
             }
             return Err(ApiError::new(
-                503,
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::InjectedFailure,
                 "injected uncertain publication outcome",
             ));
@@ -482,7 +482,7 @@ impl Backend for PreparationFailure {
             self.aborts.fetch_add(1, Ordering::SeqCst);
             if self.abort_fails {
                 return Err(ApiError::new(
-                    503,
+                    ::http::StatusCode::SERVICE_UNAVAILABLE,
                     storage_contract::ErrorCode::InjectedFailure,
                     "injected abort failure",
                 ));
@@ -490,7 +490,7 @@ impl Backend for PreparationFailure {
         }
         if Some(action) == self.failure {
             return Err(ApiError::new(
-                503,
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::InvalidRequest,
                 "injected staging failure",
             ));
