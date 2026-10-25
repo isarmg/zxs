@@ -43,6 +43,7 @@ pub struct Engine {
     commit_preparation: Arc<std::sync::atomic::AtomicBool>,
     history_query_proof: Mutex<index::QueryProof>,
     _locks: Vec<File>,
+    #[cfg(feature = "fault-injection")]
     pub(crate) fault: Option<String>,
 }
 pub struct ReadLease {
@@ -209,6 +210,7 @@ impl Engine {
             commit_preparation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             history_query_proof: Mutex::new(index::QueryProof::default()),
             _locks: locks,
+            #[cfg(feature = "fault-injection")]
             fault: None,
         };
         engine.rebuild_index()?;
@@ -282,6 +284,7 @@ impl Engine {
             commit_preparation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             history_query_proof: Mutex::new(index::QueryProof::default()),
             _locks: locks,
+            #[cfg(feature = "fault-injection")]
             fault: None,
         };
         engine.seed_workspace_recovery()?;
@@ -460,9 +463,11 @@ impl Engine {
             .ok_or_else(|| Error::new("WORKSPACE_NOT_FOUND", "workspace does not exist"))
     }
     /// Deterministic injection only, never enabled by network or environment input.
+    #[cfg(feature = "fault-injection")]
     pub fn inject_fault_once(&mut self, point: &str) {
         self.fault = Some(point.to_string());
     }
+    #[cfg(feature = "fault-injection")]
     pub(crate) fn failpoint(&mut self, point: &str) -> Result<()> {
         if self.fault.as_deref() == Some(point) {
             self.fault = None;

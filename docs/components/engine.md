@@ -74,6 +74,15 @@ HistoryManifest 的 `commits` 与 `directory_trees` 也使用同一逻辑记录�
 
 ## 验证
 
+故障注入只属于非默认 `storage-engine/fault-injection` feature：关闭时，Engine
+没有故障字段、注入 API、failpoint 调用或测试点名称格式化。engine 自身及 server 的
+`dev-dependencies` 显式启用它，因此下面的普通测试命令仍运行全部发布/恢复故障回归，
+不以 `cfg` 跳过测试。工作区 resolver 2 不把 dev feature 带入正常构建；发行构建不得
+使用 `--all-features` 或显式开启 `fault-injection`。CI workspace suite 的
+`check-native-consumer-features.py` 分别检查实际消费者的 normal/build 与 dev 图，拒绝
+生产图中的故障注入并要求 engine/server 测试图保留它。测试构建产物不能当作发行包。
+
+
 ```sh
 cargo test --locked --offline -p storage-engine -p storage-contract -p name-policy --lib
 cargo test --locked --offline -p storage-engine --test directory_selection_limits

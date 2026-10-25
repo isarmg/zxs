@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+[features]
+fault-injection = []
+
 [dependencies]
 storage-contract.workspace = true
 name-policy.workspace = true
@@ -37,6 +40,8 @@ name = "workspace_upload_retries"
 path = "../../test/engine/integration/workspace_upload_retries.rs"
 
 [dev-dependencies]
+# Resolver 2 enables hooks for all engine tests, never normal product builds.
+storage-engine = { path = ".", features = ["fault-injection"] }
 hash-table = { version = "0.17.1", path = "../foundation/collections/hash-table" }
 hashlink = { version = "0.11.0", path = "../foundation/collections/hashlink" }
 sqlite-access = { version = "0.9.0", default-features = false, path = "../foundation/data-storage/sqlite-access" }

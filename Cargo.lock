@@ -1326,6 +1326,7 @@ dependencies = [
  "rustix",
  "sqlite-access",
  "storage-contract",
+ "storage-engine",
  "tempfile",
 ]
 

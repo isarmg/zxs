@@ -65,7 +65,11 @@ class SuiteCoverageTests(unittest.TestCase):
         self.assertEqual(calls[0], {
             "tool": "python3", "args": [".github/scripts/check-native-consumer-features.py"],
         })
-        self.assertEqual(calls[1], {"tool": "cargo", "args": ["test", "--locked", "--offline"]})
+        self.assertEqual(calls[1], {"tool": "cargo", "args": [
+            "check", "--locked", "--offline", "-p", "storage-engine",
+            "-p", "storage-server", "-p", "storage-rescue",
+        ]})
+        self.assertEqual(calls[2], {"tool": "cargo", "args": ["test", "--locked", "--offline"]})
 
     def test_build_tools_keep_log_filter_and_formatter_regressions(self):
         calls = self.suite("build-tools")

@@ -170,6 +170,7 @@ impl Engine {
             commit_preparation: Arc::new(AtomicBool::new(false)),
             history_query_proof: std::sync::Mutex::new(super::index::QueryProof::default()),
             _locks: locks,
+            #[cfg(feature = "fault-injection")]
             fault: None,
         };
         Ok(WorkspaceCommitPreparation {

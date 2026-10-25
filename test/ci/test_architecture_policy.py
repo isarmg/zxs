@@ -45,7 +45,24 @@ class ArchitecturePolicyTests(unittest.TestCase):
             self.check()
 
     def test_repository_inventory(self):
-        self.assertEqual(CHECK.validate(ROOT), (20, 27))
+        self.assertEqual(CHECK.validate(ROOT), (20, 29))
+
+    def test_only_engine_dev_self_edge_is_approved(self):
+        for scope in ('runtime', 'build', 'dev'):
+            self.policy['owners']['a'][scope] = ['a']
+            self.reject('self dependency is forbidden')
+            self.policy['owners']['a'][scope] = []
+        self.members = ['src/engine']
+        self.package('src/engine', 'storage-engine',
+                     '[dev-dependencies]\nstorage-engine = { path = ".", features = ["fault-injection"] }\n')
+        self.policy['owners'] = {'storage-engine': {
+            'path': 'src/engine', 'runtime': [], 'build': [], 'dev': ['storage-engine']}}
+        self.workspace()
+        self.assertEqual(self.check(), (1, 1))
+        for scope in ('runtime', 'build'):
+            self.policy['owners']['storage-engine'][scope] = ['storage-engine']
+            self.reject('self dependency is forbidden')
+            self.policy['owners']['storage-engine'][scope] = []
 
     def test_leaf_packages(self):
         self.assertEqual(self.check(), (2, 0))

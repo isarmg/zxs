@@ -271,13 +271,16 @@ impl Engine {
         for disk in &members {
             validate_seal(&self.config, disk)?;
         }
+        #[cfg(feature = "fault-injection")]
         self.failpoint("after_payloads")?;
         let hash = object_hash("candidate", &candidate)?;
         self.next_slot = candidate
             .sequence
             .checked_add(1)
             .ok_or_else(|| Error::new("RESOURCE_LIMIT", "decision sequence exhausted"))?;
-        for (index, d) in members.iter().enumerate() {
+        #[cfg(feature = "fault-injection")]
+        let mut prepared = 0;
+        for d in &members {
             store_object(d, "candidate", &candidate)?;
             append(
                 d,
@@ -286,7 +289,11 @@ impl Engine {
                 &hash,
                 &candidate.snapshot_hash,
             )?;
-            self.failpoint(&format!("after_prepare_{}", index + 1))?;
+            #[cfg(feature = "fault-injection")]
+            {
+                prepared += 1;
+                self.failpoint(&format!("after_prepare_{prepared}"))?;
+            }
         }
         // Once the first ACCEPT may have reached disk, failure is indeterminate.
         self.blocked = true;
@@ -436,11 +443,15 @@ impl Engine {
         crate::container_storage::repair_historical_names(&self.config, &self.state, next)?;
         let pub_hash = object_hash("publication", &publication)?;
         let mut publication_receipts = Vec::new();
-        for (index, d) in self.members().into_iter().enumerate() {
+        for d in self.members() {
             store_object(&d, "publication", &publication)?;
             publication_receipts.push(append_receipt(&d, &pub_hash)?);
+            #[cfg(feature = "fault-injection")]
             if publication.recovery.is_some() {
-                self.failpoint(&format!("after_recovery_publication_{}", index + 1))?;
+                self.failpoint(&format!(
+                    "after_recovery_publication_{}",
+                    publication_receipts.len()
+                ))?;
             }
         }
         let seal = PublicationSeal {
@@ -548,10 +559,11 @@ impl Engine {
         };
         let members = self.members();
         let mut accepts = Vec::new();
-        for (i, d) in members.iter().enumerate() {
+        for d in &members {
             validate_seal(&self.config, d)?;
             accepts.push(append(d, "ACCEPT", c.sequence, hash, hash)?);
-            self.failpoint(&format!("after_accept_{}", i + 1))?;
+            #[cfg(feature = "fault-injection")]
+            self.failpoint(&format!("after_accept_{}", accepts.len()))?;
         }
         let finalize = Finalize {
             candidate_hash: hash.into(),
@@ -564,10 +576,12 @@ impl Engine {
             store_object(d, "finalize", &finalize)?;
             final_receipts.push(append(d, "FINALIZE", c.sequence, hash, &final_hash)?);
         }
+        #[cfg(feature = "fault-injection")]
         self.failpoint("after_finalize")?;
         // Only a decided candidate may rename a published file container.
         // A crash leaves the operation indeterminate and recovery replays it.
         names.apply(&self.config)?;
+        #[cfg(feature = "fault-injection")]
         self.failpoint("after_container_names")?;
         let mut payload_receipts = Vec::new();
         for evidence in &c.versions {
@@ -605,6 +619,7 @@ impl Engine {
         }
         payload_receipts
             .sort_by(|a, b| (&a.version_id, &a.disk_id).cmp(&(&b.version_id, &b.disk_id)));
+        #[cfg(feature = "fault-injection")]
         self.failpoint("after_commit_proofs")?;
         let publication = Publication {
             recovery: None,
@@ -620,10 +635,11 @@ impl Engine {
         };
         let pub_hash = object_hash("publication", &publication)?;
         let mut publication_receipts = Vec::new();
-        for (i, d) in members.iter().enumerate() {
+        for d in &members {
             store_object(d, "publication", &publication)?;
             publication_receipts.push(append(d, "PUBLICATION", c.sequence, hash, &pub_hash)?);
-            self.failpoint(&format!("after_publication_{}", i + 1))?;
+            #[cfg(feature = "fault-injection")]
+            self.failpoint(&format!("after_publication_{}", publication_receipts.len()))?;
         }
         let seal = PublicationSeal {
             candidate_hash: hash.into(),
@@ -655,6 +671,7 @@ impl Engine {
                 )?;
             }
         }
+        #[cfg(feature = "fault-injection")]
         self.failpoint("after_local_publications")?;
         Ok(())
     }

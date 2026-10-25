@@ -43,7 +43,9 @@
         "platform-io"
       ],
       "build": [],
-      "dev": []
+      "dev": [
+        "storage-engine"
+      ]
     },
     "storage-server": {
       "path": "src/server",
@@ -56,7 +58,9 @@
         "smb-protocol"
       ],
       "build": [],
-      "dev": []
+      "dev": [
+        "storage-engine"
+      ]
     },
     "smb-protocol": {
       "path": "src/smb",

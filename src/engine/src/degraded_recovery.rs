@@ -680,7 +680,7 @@ impl Engine {
         )?;
         let mut reprotect = Vec::new();
         let plan_hash = object_hash("recovery-plan", &plan)?;
-        for (index, disk) in member_disks.iter().enumerate() {
+        for disk in &member_disks {
             store_object(disk, "candidate", &candidate)?;
             store_object(disk, "recovery-plan", &plan)?;
             reprotect.push(append(
@@ -690,7 +690,8 @@ impl Engine {
                 &plan.candidate_hash,
                 &plan_hash,
             )?);
-            self.failpoint(&format!("after_recovery_reprotect_{}", index + 1))?;
+            #[cfg(feature = "fault-injection")]
+            self.failpoint(&format!("after_recovery_reprotect_{}", reprotect.len()))?;
         }
         let finalize = Finalize {
             candidate_hash: plan.candidate_hash.clone(),
@@ -709,6 +710,7 @@ impl Engine {
                 &final_hash,
             )?);
         }
+        #[cfg(feature = "fault-injection")]
         self.failpoint("after_recovery_finalize")?;
         let mut payload_receipts = Vec::new();
         for evidence in &candidate.versions {

@@ -94,7 +94,8 @@ def validate(root, policy_path=None):
             require(len(edges) == len(set(edges)), f"{name}.{scope}: duplicate edge")
             for edge in edges:
                 require(edge in owners, f"{name}.{scope}: unknown rule owner {edge}")
-                require(edge != name, f"{name}.{scope}: self dependency is forbidden")
+                require(edge != name or (name == "storage-engine" and scope == "dev"),
+                        f"{name}.{scope}: self dependency is forbidden")
     with (root / 'Cargo.toml').open('rb') as stream:
         root_manifest = tomllib.load(stream)
     require('package' not in root_manifest, 'root Cargo.toml must remain a virtual workspace without [package]')
