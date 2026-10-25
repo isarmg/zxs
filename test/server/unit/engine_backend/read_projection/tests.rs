@@ -9,6 +9,22 @@ use json_codec::json;
 use std::sync::{Arc, Mutex};
 use storage_contract::{Config, new_id};
 
+#[path = "authorization_tests.rs"]
+mod authorization_tests;
+
+std::thread_local! {
+    static TREE_PROJECTION_WORK: std::cell::Cell<(usize, usize)> = const {
+        std::cell::Cell::new((0, 0))
+    };
+}
+
+pub(super) fn record_tree_projection(entries: usize) {
+    TREE_PROJECTION_WORK.with(|work| {
+        let (projections, copied_entries) = work.get();
+        work.set((projections + 1, copied_entries + entries));
+    });
+}
+
 fn fixture() -> (
     tempfile::TempDir,
     Engine,

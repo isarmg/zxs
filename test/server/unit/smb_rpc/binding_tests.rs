@@ -61,6 +61,237 @@ fn create(path: &str) -> Request {
         write_through: false,
     }
 }
+// Every check below inspects the entire dispatch log, so a fallback Tree or an
+// extra workspace-selection check cannot hide behind a successful response.
+fn open_authorization_handles(
+    wire: &mut FrameStream,
+) -> [(OpenResult, File, crate::BackendAction); 3] {
+    use crate::BackendAction::{SmbAuthorizeRead, Version};
+    [
+        ("report.txt", false, Version),
+        ("report.txt", true, SmbAuthorizeRead),
+        ("", false, SmbAuthorizeRead),
+    ]
+    .map(|(path, writable, action)| {
+        let (reply, descriptor) = exchange(
+            wire,
+            Request::Open {
+                path: path.into(),
+                writable,
+                create: false,
+                truncate: false,
+                exclusive: false,
+                write_through: false,
+            },
+        );
+        let Response::Ok { result } = reply else {
+            panic!("authorization fixture open failed: {reply:?}")
+        };
+        (
+            json_codec::from_value(result).unwrap(),
+            File::from(descriptor.unwrap()),
+            action,
+        )
+    })
+}
+fn check_read_authorization(
+    wire: &mut FrameStream,
+    backend: &LostCommitReply,
+    branch: &str,
+    handles: &[(OpenResult, File, crate::BackendAction)],
+    error: Option<&str>,
+) {
+    for (opened, _, action) in handles {
+        backend.take_calls();
+        let (reply, descriptor) = exchange(
+            wire,
+            Request::AuthorizeRead {
+                handle: opened.handle,
+            },
+        );
+        assert!(descriptor.is_none());
+        match (reply, error) {
+            (Response::Ok { result }, None) => assert_eq!(result, json!({"authorized":true})),
+            (Response::Error { code, .. }, Some(expected)) => assert_eq!(code, expected),
+            (reply, expected) => {
+                panic!("unexpected authorization reply: {reply:?}, error={expected:?}")
+            }
+        }
+        let input = if *action == crate::BackendAction::Version {
+            json!({"version_id":opened.version_id.as_ref().unwrap()})
+        } else {
+            json!({"branch_id":branch})
+        };
+        assert_eq!(backend.take_calls(), vec![(*action, input)]);
+    }
+}
+fn missing_read_handle(wire: &mut FrameStream, backend: &LostCommitReply, handle: u64) {
+    backend.take_calls();
+    let (reply, descriptor) = exchange(wire, Request::AuthorizeRead { handle });
+    assert!(descriptor.is_none());
+    assert!(matches!(
+        reply,
+        Response::Error { code, message, retryable: false, operation_id: None }
+            if code == "NOT_FOUND" && message == "SMB handle missing"
+    ));
+    assert!(backend.take_calls().is_empty());
+}
+fn close_authorization_handles(
+    wire: &mut FrameStream,
+    handles: &[(OpenResult, File, crate::BackendAction)],
+) {
+    for (opened, _, _) in handles {
+        let (reply, descriptor) = exchange(
+            wire,
+            Request::Close {
+                handle: opened.handle,
+            },
+        );
+        assert!(descriptor.is_none());
+        assert!(matches!(reply, Response::Ok { .. }));
+    }
+}
+
+#[test]
+fn authorize_read_dispatches_narrow_checks_without_tree_and_preserves_missing_handles() {
+    let (_temp, shared, backend, branch) = fixture();
+    let (mut client, worker, hello) = wire(shared);
+    assert!(matches!(hello, Response::Ok { .. }));
+    let handles = open_authorization_handles(&mut client);
+    check_read_authorization(&mut client, &backend, &branch, &handles, None);
+    missing_read_handle(&mut client, &backend, u64::MAX);
+    close_authorization_handles(&mut client, &handles);
+    for (opened, _, _) in &handles {
+        missing_read_handle(&mut client, &backend, opened.handle);
+    }
+    drop(client);
+    worker.join().unwrap().unwrap();
+}
+
+#[test]
+fn authorize_read_rechecks_current_owner_and_account_for_every_open_handle_kind() {
+    for owner_changed in [true, false] {
+        let (temp, shared, backend, branch) = fixture();
+        let (mut client, worker, hello) = wire(shared.clone());
+        assert!(matches!(hello, Response::Ok { .. }));
+        let handles = open_authorization_handles(&mut client);
+        check_read_authorization(&mut client, &backend, &branch, &handles, None);
+        let (replacement, error) = if owner_changed {
+            (
+                AuthStore::initialize(
+                    &temp.path().join("replacement-auth"),
+                    "replacement-owner",
+                    "long-test-password",
+                )
+                .unwrap(),
+                "UNAUTHORIZED",
+            )
+        } else {
+            (
+                AuthStore::unavailable(&temp.path().join("recovering-auth")),
+                "RECOVERY_REQUIRED",
+            )
+        };
+        let original = std::mem::replace(&mut *shared.auth.lock().unwrap(), replacement);
+        check_read_authorization(&mut client, &backend, &branch, &handles, Some(error));
+        // A missing handle still fails locally, even while admission is denied.
+        missing_read_handle(&mut client, &backend, u64::MAX);
+        *shared.auth.lock().unwrap() = original;
+        // Failed authorization did not consume or retarget any existing handle.
+        check_read_authorization(&mut client, &backend, &branch, &handles, None);
+        close_authorization_handles(&mut client, &handles);
+        drop(client);
+        worker.join().unwrap().unwrap();
+    }
+}
+
+#[test]
+fn authorize_read_keeps_read_semantics_after_normal_writes_and_default_selection() {
+    let (_temp, shared, backend, branch) = fixture();
+    let (repository, _main, draft) = directory_fixture(&shared);
+    let (mut client, worker, hello) = wire(shared.clone());
+    assert!(matches!(hello, Response::Ok { .. }));
+    let handles = open_authorization_handles(&mut client);
+    let (writer, file, _) = &handles[1];
+    file.write_all_at(b"new", 0).unwrap();
+    for request in [
+        Request::Dirty {
+            handle: writer.handle,
+        },
+        Request::Flush {
+            handle: writer.handle,
+        },
+    ] {
+        assert!(matches!(
+            exchange(&mut client, request).0,
+            Response::Ok { .. }
+        ));
+    }
+    check_read_authorization(&mut client, &backend, &branch, &handles, None);
+    let mut bytes = [0; 3];
+    handles[0].1.read_exact_at(&mut bytes, 0).unwrap();
+    assert_eq!(&bytes, b"old", "immutable reader keeps its opened version");
+    select_directory(&shared, &repository, &draft);
+    // A changed write destination must not prevent reading an existing FD.
+    check_read_authorization(&mut client, &backend, &branch, &handles, None);
+    handles[0].1.read_exact_at(&mut bytes, 0).unwrap();
+    assert_eq!(&bytes, b"old");
+    file.read_exact_at(&mut bytes, 0).unwrap();
+    assert_eq!(
+        &bytes, b"new",
+        "writable read still uses its private descriptor"
+    );
+    assert!(matches!(
+        exchange(&mut client, Request::PrepareWrite {
+            handle: writer.handle, end: 3, bytes: 3,
+        }).0,
+        Response::Error { code, .. } if code == "DIRECTORY_BRANCH_CONFLICT"
+    ));
+    close_authorization_handles(&mut client, &handles);
+    drop(client);
+    worker.join().unwrap().unwrap();
+}
+
+#[test]
+fn authorize_read_rechecks_binding_after_disable_and_reenable_for_every_handle_kind() {
+    let (_temp, shared, backend, branch) = fixture();
+    let (mut client, worker, hello) = wire(shared.clone());
+    assert!(matches!(hello, Response::Ok { .. }));
+    let handles = open_authorization_handles(&mut client);
+    let (writer, file, _) = &handles[1];
+    // Publication retires the active workspace, permitting administrative rebind
+    // while the writable descriptor remains open for subsequent read requests.
+    file.write_all_at(b"new", 0).unwrap();
+    for request in [
+        Request::Dirty {
+            handle: writer.handle,
+        },
+        Request::Flush {
+            handle: writer.handle,
+        },
+    ] {
+        assert!(matches!(
+            exchange(&mut client, request).0,
+            Response::Ok { .. }
+        ));
+    }
+    check_read_authorization(&mut client, &backend, &branch, &handles, None);
+    for enabled in [false, true] {
+        rebind(&shared, &branch, enabled);
+        check_read_authorization(
+            &mut client,
+            &backend,
+            &branch,
+            &handles,
+            Some("SMB_REBIND_REQUIRED"),
+        );
+        missing_read_handle(&mut client, &backend, u64::MAX);
+    }
+    close_authorization_handles(&mut client, &handles);
+    drop(client);
+    worker.join().unwrap().unwrap();
+}
+
 #[test]
 fn disabled_and_reenabled_binding_cannot_revive_an_idle_authenticated_connection() {
     let (_temp, shared, _backend, branch) = fixture();

@@ -21,19 +21,16 @@ pub(super) struct Tree {
 impl Tree {
     pub(super) fn capture(engine: &Engine, input: &Value) -> Result<Self, ApiError> {
         let branch = field(input, "branch_id")?;
-        repo_for_branch(engine, branch)?;
-        let branch_info = engine.state().branches.get(branch).unwrap();
-        let commit = input
-            .get("query")
-            .and_then(|v| v.get("commit_id"))
-            .and_then(Value::as_str)
-            .unwrap_or(&branch_info.head_commit_id);
-        let snapshot = engine
-            .state()
-            .commits
-            .get(commit)
-            .filter(|commit| commit.history_tree_id == branch_info.history_tree_id)
-            .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "commit not found"))?;
+        let (commit, snapshot) = branch_snapshot(
+            engine.state(),
+            branch,
+            input
+                .get("query")
+                .and_then(|v| v.get("commit_id"))
+                .and_then(Value::as_str),
+        )?;
+        #[cfg(test)]
+        tests::record_tree_projection(snapshot.entries.len());
         let entries = engine.list_tree_at(branch, commit).map_err(error)?;
         let pending_file_versions =
             PendingSources::new(engine, branch, snapshot).pending_versions();
@@ -43,6 +40,44 @@ impl Tree {
             entries,
             pending_file_versions,
         })
+    }
+}
+
+/// The same branch/head checks as Tree, without inspecting or copying entries.
+/// Callers must hold the engine admission lock; a snapshot is not an auth grant.
+fn branch_snapshot<'a>(
+    state: &'a storage_contract::State,
+    branch: &str,
+    selected_commit: Option<&'a str>,
+) -> Result<(&'a str, &'a storage_contract::Commit), ApiError> {
+    super::repo_for_branch_in_state(state, branch)?;
+    let branch_info = &state.branches[branch];
+    let commit = selected_commit.unwrap_or(&branch_info.head_commit_id);
+    let snapshot = state
+        .commits
+        .get(commit)
+        .filter(|commit| commit.history_tree_id == branch_info.history_tree_id)
+        .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "commit not found"))?;
+    Ok((commit, snapshot))
+}
+
+/// Request-local acknowledgment, never a cached or reusable authorization grant.
+/// This checks only the current namespace admission used by writable/directory
+/// descriptors, not workspace lifetime or write selection. Immutable readers
+/// continue to authorize their frozen version separately.
+#[derive(Serialize)]
+pub(super) struct SmbReadAuthorization {
+    authorized: bool,
+}
+
+impl SmbReadAuthorization {
+    pub(super) fn capture(
+        state: &storage_contract::State,
+        input: &Value,
+    ) -> Result<Self, ApiError> {
+        super::keys(input, &["branch_id"])?;
+        branch_snapshot(state, field(input, "branch_id")?, None)?;
+        Ok(Self { authorized: true })
     }
 }
 

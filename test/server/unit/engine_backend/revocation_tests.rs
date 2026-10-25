@@ -179,6 +179,7 @@ enum Request {
     Metadata,
     Administrator,
     Tree,
+    SmbAuthorizeRead,
     Version,
     Namespace,
     Content,
@@ -222,8 +223,15 @@ impl Request {
                     }),
                 )
                 .map(|_| ()),
-            // SMB's AuthorizeRead uses Version for file handles and Tree for
-            // directory/write handles; raw content opens share this boundary.
+            // SMB directory/write handles need current admission, not a tree.
+            Self::SmbAuthorizeRead => backend
+                .call(
+                    BackendAction::SmbAuthorizeRead,
+                    identity,
+                    json!({"branch_id":fixture.repo.main_branch_id}),
+                )
+                .map(|_| ()),
+            // Immutable SMB file handles still authorize their pinned version.
             Self::Version => backend
                 .call(
                     BackendAction::Version,
@@ -295,6 +303,7 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
             Request::Metadata,
             Request::Administrator,
             Request::Tree,
+            Request::SmbAuthorizeRead,
             Request::Version,
             Request::Namespace,
             Request::Content,
@@ -424,6 +433,7 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::Metadata,
         Request::Administrator,
         Request::Tree,
+        Request::SmbAuthorizeRead,
         Request::Version,
         Request::Namespace,
         Request::Content,

@@ -301,7 +301,10 @@ impl Session {
                 self.call(crate::BackendAction::Version, json!({"version_id":version}))?;
             }
             Some(Handle::Write(_)) | Some(Handle::Directory(_)) => {
-                self.call(crate::BackendAction::Tree, json!({"branch_id":self.branch}))?;
+                self.call(
+                    crate::BackendAction::SmbAuthorizeRead,
+                    json!({"branch_id":self.branch}),
+                )?;
             }
             None => return Err(ApiError::new(404, "NOT_FOUND", "SMB handle missing")),
         }

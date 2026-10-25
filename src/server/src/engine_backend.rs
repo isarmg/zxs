@@ -122,8 +122,13 @@ fn install_test_administrator(engine: &mut Engine, username: &str) -> Identity {
 }
 
 fn repository<'a>(engine: &'a Engine, id: &str) -> Result<&'a Repository, ApiError> {
-    engine
-        .state()
+    repository_in_state(engine.state(), id)
+}
+fn repository_in_state<'a>(
+    state: &'a storage_contract::State,
+    id: &str,
+) -> Result<&'a Repository, ApiError> {
+    state
         .repositories
         .get(id)
         .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "repository not found"))
@@ -134,16 +139,26 @@ fn events_after(events: &[storage_contract::Event], after: u64) -> &[storage_con
     &events[events.partition_point(|event| event.sequence <= after)..]
 }
 fn repo_for_history<'a>(engine: &'a Engine, id: &str) -> Result<&'a Repository, ApiError> {
-    let history = engine
-        .state()
+    repo_for_history_in_state(engine.state(), id)
+}
+fn repo_for_history_in_state<'a>(
+    state: &'a storage_contract::State,
+    id: &str,
+) -> Result<&'a Repository, ApiError> {
+    let history = state
         .histories
         .get(id)
         .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "history not found"))?;
-    repository(engine, &history.repository_id)
+    repository_in_state(state, &history.repository_id)
 }
 fn repo_for_branch<'a>(engine: &'a Engine, id: &str) -> Result<&'a Repository, ApiError> {
-    let branch = engine
-        .state()
+    repo_for_branch_in_state(engine.state(), id)
+}
+fn repo_for_branch_in_state<'a>(
+    state: &'a storage_contract::State,
+    id: &str,
+) -> Result<&'a Repository, ApiError> {
+    let branch = state
         .branches
         .get(id)
         .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "branch not found"))?;
@@ -154,7 +169,7 @@ fn repo_for_branch<'a>(engine: &'a Engine, id: &str) -> Result<&'a Repository, A
             "branch has moved to an independent history domain",
         ));
     }
-    repo_for_history(engine, &branch.history_tree_id)
+    repo_for_history_in_state(state, &branch.history_tree_id)
 }
 fn workspace_authorize(
     engine: &Engine,
@@ -326,6 +341,11 @@ impl Backend for EngineBackend {
             crate::BackendAction::Tree => {
                 let projection = read_projection::Tree::capture(&engine, &input)?;
                 read_projection::render_unlocked(engine, projection)
+            }
+            crate::BackendAction::SmbAuthorizeRead => {
+                let authorization =
+                    read_projection::SmbReadAuthorization::capture(engine.state(), &input)?;
+                read_projection::render_unlocked(engine, authorization)
             }
             crate::BackendAction::SmbLookup => {
                 let projection = read_projection::SmbLookup::capture(&engine, &input)?;

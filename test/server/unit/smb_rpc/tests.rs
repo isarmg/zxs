@@ -38,11 +38,17 @@ const RECONCILIATION_CONTENT: usize = 2;
 
 struct LostCommitReply {
     inner: EngineBackend,
+    calls: Mutex<Vec<(crate::BackendAction, Value)>>,
     fail: AtomicBool,
     reconciliation_failure: AtomicUsize,
     uploads: AtomicUsize,
     revoked: AtomicBool,
     change_before_workspace: AtomicBool,
+}
+impl LostCommitReply {
+    fn take_calls(&self) -> Vec<(crate::BackendAction, Value)> {
+        std::mem::take(&mut *self.calls.lock().unwrap())
+    }
 }
 impl Backend for LostCommitReply {
     fn call(
@@ -51,6 +57,7 @@ impl Backend for LostCommitReply {
         identity: &Identity,
         input: Value,
     ) -> Result<Value, ApiError> {
+        self.calls.lock().unwrap().push((action, input.clone()));
         if action == crate::BackendAction::Tree
             && self
                 .reconciliation_failure
@@ -167,6 +174,7 @@ fn fixture() -> (tempfile::TempDir, Arc<Shared>, Arc<LostCommitReply>, String) {
     fs::create_dir(spool.join("empty-directory")).unwrap();
     let backend = Arc::new(LostCommitReply {
         inner: EngineBackend::new(engine),
+        calls: Mutex::new(Vec::new()),
         fail: AtomicBool::new(false),
         reconciliation_failure: AtomicUsize::new(0),
         uploads: AtomicUsize::new(0),
