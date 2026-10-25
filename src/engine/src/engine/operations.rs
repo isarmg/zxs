@@ -2,6 +2,7 @@
 //! Neither a receipt nor a read plan is an authorization grant. Network callers
 //! must authorize the receipt before capturing health and recheck after slow I/O.
 use super::{ContentReadPlan, Engine};
+use crate::journal::RecordType;
 use crate::{journal::*, publication_evidence::verified_object, *};
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -163,7 +164,10 @@ impl Engine {
         for disk in &members {
             if let Ok(scan) = scan(disk) {
                 for (record, _) in scan.records.iter().rev().filter(|(record, _)| {
-                    matches!(record.record_type.as_str(), "ACCEPT" | "PUBLICATION")
+                    matches!(
+                        record.record_type,
+                        RecordType::Accept | RecordType::Publication
+                    )
                 }) {
                     if let Ok(candidate) =
                         verified_object::<Candidate>(&members, "candidate", &record.candidate_hash)

@@ -1,5 +1,6 @@
 //! Replay the verified publication prefix and reconcile pending decisions.
 use super::Engine;
+use crate::journal::RecordType;
 use crate::publication_evidence::{
     repair_object_copies, verified_object, verified_publication_seal, verified_snapshot,
 };
@@ -123,7 +124,10 @@ impl Engine {
                     .iter()
                     .filter(|(_, records)| {
                         records.iter().any(|(_, record)| {
-                            matches!(record.record_type.as_str(), "ACCEPT" | "PUBLICATION")
+                            matches!(
+                                record.record_type,
+                                RecordType::Accept | RecordType::Publication
+                            )
                         })
                     })
                     .map(|(hash, _)| hash.as_str())
@@ -148,8 +152,10 @@ impl Engine {
             let active = candidates
                 .into_iter()
                 .filter(|(_, rs)| {
-                    rs.iter()
-                        .any(|(_, r)| r.record_type == "ACCEPT" || r.record_type == "PUBLICATION")
+                    rs.iter().any(|(_, r)| {
+                        r.record_type == RecordType::Accept
+                            || r.record_type == RecordType::Publication
+                    })
                 })
                 .collect::<Vec<_>>();
             if active.len() > 1 {
@@ -171,7 +177,9 @@ impl Engine {
                     "candidate does not extend the verified publication prefix",
                 ));
             }
-            let publication_record = rs.iter().find(|(_, r)| r.record_type == "PUBLICATION");
+            let publication_record = rs
+                .iter()
+                .find(|(_, r)| r.record_type == RecordType::Publication);
             let publication = if let Some((_, r)) = publication_record {
                 Some(verified_object::<Publication>(
                     &online,
@@ -288,7 +296,7 @@ impl Engine {
                                 .get(&d.disk_id)
                                 .zip(prefixes.get(&d.disk_id))
                                 .zip(rs.iter().find(|(slot, r)| {
-                                    slot == &d.slot_id && r.record_type == "PUBLICATION"
+                                    slot == &d.slot_id && r.record_type == RecordType::Publication
                                 }))
                                 .map(|((stamp, hashes), (_, record))| ScannedReceipt {
                                     stamp,

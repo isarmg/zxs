@@ -10,7 +10,7 @@ fn disk(temp: &tempfile::TempDir) -> DiskConfig {
     .disks
     .remove(0)
 }
-fn put(d: &DiskConfig, kind: &str, sequence: u64) -> Receipt {
+fn put(d: &DiskConfig, kind: RecordType, sequence: u64) -> Receipt {
     append(
         d,
         kind,
@@ -25,7 +25,7 @@ fn put(d: &DiskConfig, kind: &str, sequence: u64) -> Receipt {
 fn unnumbered_frame_header_binds_length_payload_and_receipt() {
     let temp = tempfile::tempdir().unwrap();
     let d = disk(&temp);
-    let receipt = put(&d, "PREPARE", 1);
+    let receipt = put(&d, RecordType::Prepare, 1);
     let bytes = std::fs::read(log_path(&d)).unwrap();
     let payload = canonical_json(&receipt.record).unwrap();
     assert_eq!(&bytes[..8], LOG_MAGIC);
@@ -41,7 +41,7 @@ fn unnumbered_frame_header_binds_length_payload_and_receipt() {
     assert!(
         receipt_binds(
             &receipt,
-            "PREPARE",
+            RecordType::Prepare,
             1,
             &format!("{:064x}", 1),
             &"b".repeat(64)
@@ -66,21 +66,27 @@ fn unnumbered_frame_header_binds_length_payload_and_receipt() {
 fn latest_receipts_are_idempotent_and_old_retries_rescan() {
     let temp = tempfile::tempdir().unwrap();
     let d = disk(&temp);
-    let first = put(&d, "PREPARE", 1);
-    let latest = put(&d, "ACCEPT", 1);
-    assert_eq!(put(&d, "PREPARE", 1).frame_hash, first.frame_hash);
-    assert_eq!(put(&d, "ACCEPT", 1).frame_hash, latest.frame_hash);
-    put(&d, "PREPARE", 2);
+    let first = put(&d, RecordType::Prepare, 1);
+    let latest = put(&d, RecordType::Accept, 1);
+    assert_eq!(put(&d, RecordType::Prepare, 1).frame_hash, first.frame_hash);
+    assert_eq!(put(&d, RecordType::Accept, 1).frame_hash, latest.frame_hash);
+    put(&d, RecordType::Prepare, 2);
     let len = std::fs::metadata(log_path(&d)).unwrap().len();
     let before = SCAN_COUNT.with(|count| count.get());
-    assert_eq!(put(&d, "PREPARE", 1).frame_hash, first.frame_hash);
+    assert_eq!(put(&d, RecordType::Prepare, 1).frame_hash, first.frame_hash);
     assert_eq!(SCAN_COUNT.with(|count| count.get()) - before, 1);
     assert_eq!(std::fs::metadata(log_path(&d)).unwrap().len(), len);
     assert_eq!(scan(&d).unwrap().records.len(), 3);
     assert_eq!(
-        append(&d, "FINALIZE", 1, &format!("{:064x}", 1), &"b".repeat(64))
-            .unwrap_err()
-            .code(),
+        append(
+            &d,
+            RecordType::Finalize,
+            1,
+            &format!("{:064x}", 1),
+            &"b".repeat(64)
+        )
+        .unwrap_err()
+        .code(),
         storage_contract::ErrorCode::LogFork
     );
 }
@@ -91,12 +97,20 @@ fn visible_publication_retry_repeats_failed_durability_barrier() {
     let d = disk(&temp);
     let candidate = "a".repeat(64);
     let object = "b".repeat(64);
-    let failure = append_with_sync(&d, "PUBLICATION", 1, &candidate, &object, None, |_, _| {
-        Err(Error::new(
-            storage_contract::ErrorCode::InjectedFailure,
-            "frame written, file sync failed",
-        ))
-    });
+    let failure = append_with_sync(
+        &d,
+        RecordType::Publication,
+        1,
+        &candidate,
+        &object,
+        None,
+        |_, _| {
+            Err(Error::new(
+                storage_contract::ErrorCode::InjectedFailure,
+                "frame written, file sync failed",
+            ))
+        },
+    );
     assert_eq!(
         failure.unwrap_err().code(),
         storage_contract::ErrorCode::InjectedFailure
@@ -107,7 +121,7 @@ fn visible_publication_retry_repeats_failed_durability_barrier() {
     let mut repeated = false;
     let failure = append_with_sync(
         &d,
-        "PUBLICATION",
+        RecordType::Publication,
         1,
         &candidate,
         &object,
@@ -128,8 +142,8 @@ fn visible_publication_retry_repeats_failed_durability_barrier() {
     );
     assert!(!tails().lock().unwrap().contains_key(&log_path(&d)));
 
-    let receipt = append(&d, "PUBLICATION", 1, &candidate, &object).unwrap();
-    assert!(receipt_binds(&receipt, "PUBLICATION", 1, &candidate, &object).unwrap());
+    let receipt = append(&d, RecordType::Publication, 1, &candidate, &object).unwrap();
+    assert!(receipt_binds(&receipt, RecordType::Publication, 1, &candidate, &object).unwrap());
     assert_eq!(std::fs::metadata(log_path(&d)).unwrap().len(), length);
     assert_eq!(scan(&d).unwrap().records.len(), 1);
 }
@@ -138,8 +152,8 @@ fn visible_publication_retry_repeats_failed_durability_barrier() {
 fn cached_append_detects_same_length_prefix_corruption() {
     let temp = tempfile::tempdir().unwrap();
     let d = disk(&temp);
-    put(&d, "PREPARE", 1);
-    put(&d, "PREPARE", 2);
+    put(&d, RecordType::Prepare, 1);
+    put(&d, RecordType::Prepare, 2);
     let path = log_path(&d);
     let old = std::fs::metadata(&path).unwrap();
     let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
@@ -149,9 +163,15 @@ fn cached_append_detects_same_length_prefix_corruption() {
         .unwrap();
     file.sync_all().unwrap();
     assert_eq!(
-        append(&d, "ACCEPT", 2, &format!("{:064x}", 2), &"b".repeat(64))
-            .unwrap_err()
-            .code(),
+        append(
+            &d,
+            RecordType::Accept,
+            2,
+            &format!("{:064x}", 2),
+            &"b".repeat(64)
+        )
+        .unwrap_err()
+        .code(),
         storage_contract::ErrorCode::LogCorrupt
     );
 }
@@ -160,14 +180,14 @@ fn cached_append_detects_same_length_prefix_corruption() {
 fn cached_append_repairs_torn_external_tail() {
     let temp = tempfile::tempdir().unwrap();
     let d = disk(&temp);
-    put(&d, "PREPARE", 1);
+    put(&d, RecordType::Prepare, 1);
     let mut file = std::fs::OpenOptions::new()
         .append(true)
         .open(log_path(&d))
         .unwrap();
     file.write_all(b"ZXSLO").unwrap();
     file.sync_all().unwrap();
-    put(&d, "ACCEPT", 1);
+    put(&d, RecordType::Accept, 1);
     let scanned = scan(&d).unwrap();
     assert!(!scanned.torn_tail);
     assert_eq!(scanned.records.len(), 2);
@@ -177,11 +197,11 @@ fn cached_append_repairs_torn_external_tail() {
 fn replacement_and_truncation_invalidate_cached_receipts() {
     let temp = tempfile::tempdir().unwrap();
     let d = disk(&temp);
-    put(&d, "PREPARE", 1);
-    let old = put(&d, "ACCEPT", 1);
+    put(&d, RecordType::Prepare, 1);
+    let old = put(&d, RecordType::Accept, 1);
     let path = log_path(&d);
     std::fs::rename(&path, path.with_extension("old")).unwrap();
-    let fresh = put(&d, "ACCEPT", 1);
+    let fresh = put(&d, RecordType::Accept, 1);
     assert_ne!(fresh.frame_hash, old.frame_hash);
     assert_eq!(scan(&d).unwrap().records.len(), 1);
     std::fs::OpenOptions::new()
@@ -190,7 +210,7 @@ fn replacement_and_truncation_invalidate_cached_receipts() {
         .unwrap()
         .set_len(0)
         .unwrap();
-    put(&d, "PREPARE", 2);
+    put(&d, RecordType::Prepare, 2);
     let scanned = scan(&d).unwrap();
     assert_eq!(scanned.records.len(), 1);
     assert_eq!(scanned.records[0].0.sequence, 2);
@@ -207,8 +227,8 @@ fn cold_append_revalidates_chain_and_cache_retains_only_latest_slot() {
     let d = disk(&temp);
     let before = SCAN_COUNT.with(|count| count.get());
     for sequence in 1..=40 {
-        put(&d, "PREPARE", sequence);
-        put(&d, "ACCEPT", sequence);
+        put(&d, RecordType::Prepare, sequence);
+        put(&d, RecordType::Accept, sequence);
     }
     assert_eq!(
         SCAN_COUNT.with(|count| count.get()) - before,
@@ -222,7 +242,7 @@ fn cold_append_revalidates_chain_and_cache_retains_only_latest_slot() {
         assert_eq!(tail.records.capacity(), 2);
         assert!(tail.records.iter().all(|(r, _)| r.sequence == 40));
     }
-    put(&d, "FINALIZE", 40);
+    put(&d, RecordType::Finalize, 40);
     assert_eq!(
         SCAN_COUNT.with(|count| count.get()) - before,
         2,
@@ -265,7 +285,7 @@ fn full_recovery_preserves_publications_with_bounded_journal_scans() {
                     scanned
                         .records
                         .iter()
-                        .filter(|(r, _)| r.record_type == "PUBLICATION")
+                        .filter(|(r, _)| r.record_type == RecordType::Publication)
                         .count(),
                     publications
                 );
@@ -314,8 +334,8 @@ fn scanned_receipt<'a>(
 fn replayed_old_receipt_preserves_bytes_and_never_seeds_latest_tail() {
     let temp = tempfile::tempdir().unwrap();
     let d = disk(&temp);
-    let first = put(&d, "PUBLICATION", 1);
-    let last = put(&d, "PUBLICATION", 2);
+    let first = put(&d, RecordType::Publication, 1);
+    let last = put(&d, RecordType::Publication, 2);
     let scanned = scan(&d).unwrap();
     let hashes = scanned.records.iter().map(|(_, h)| h.clone()).collect();
     let bytes = std::fs::read(log_path(&d)).unwrap();
@@ -336,7 +356,7 @@ fn replayed_old_receipt_preserves_bytes_and_never_seeds_latest_tail() {
     assert_eq!(std::fs::read(log_path(&d)).unwrap(), bytes);
     assert_eq!(SCAN_COUNT.with(|count| count.get()) - before, 0);
     assert!(!tails().lock().unwrap().contains_key(&log_path(&d)));
-    let next = put(&d, "PREPARE", 3);
+    let next = put(&d, RecordType::Prepare, 3);
     assert_eq!(next.record.previous_frame_hash, last.frame_hash);
     assert_eq!(SCAN_COUNT.with(|count| count.get()) - before, 1);
 }
@@ -345,14 +365,14 @@ fn replayed_old_receipt_preserves_bytes_and_never_seeds_latest_tail() {
 fn replay_receipt_missing_or_mismatched_evidence_uses_normal_append() {
     let temp = tempfile::tempdir().unwrap();
     let d = disk(&temp);
-    let expected = put(&d, "PUBLICATION", 1);
-    put(&d, "PUBLICATION", 2);
+    let expected = put(&d, RecordType::Publication, 1);
+    put(&d, RecordType::Publication, 2);
     let scanned = scan(&d).unwrap();
     let hashes = scanned.records.iter().map(|(_, h)| h.clone()).collect();
     for mismatch in 0..7 {
         let mut record = scanned.records[0].0.clone();
         match mismatch {
-            0 => record.record_type = "ACCEPT".into(),
+            0 => record.record_type = RecordType::Accept,
             1 => record.sequence = 2,
             2 => record.candidate_hash = "c".repeat(64),
             3 => record.object_hash = "d".repeat(64),
@@ -409,9 +429,9 @@ fn replay_receipt_revalidates_replaced_truncated_and_rewritten_journals() {
     for change in 0..3 {
         let temp = tempfile::tempdir().unwrap();
         let d = disk(&temp);
-        let expected = put(&d, "PUBLICATION", 1);
+        let expected = put(&d, RecordType::Publication, 1);
         let prefix_bytes = std::fs::metadata(log_path(&d)).unwrap().len();
-        put(&d, "PUBLICATION", 2);
+        put(&d, RecordType::Publication, 2);
         let scanned = scan(&d).unwrap();
         let hashes = scanned.records.iter().map(|(_, h)| h.clone()).collect();
         let path = log_path(&d);
@@ -463,7 +483,7 @@ fn replay_receipt_revalidates_replaced_truncated_and_rewritten_journals() {
 fn replay_receipt_repeats_both_durability_barriers_after_failures() {
     let temp = tempfile::tempdir().unwrap();
     let d = disk(&temp);
-    let expected = put(&d, "PUBLICATION", 1);
+    let expected = put(&d, RecordType::Publication, 1);
     let scanned = scan(&d).unwrap();
     let hashes = scanned.records.iter().map(|(_, h)| h.clone()).collect();
     let bytes = std::fs::read(log_path(&d)).unwrap();
@@ -472,7 +492,7 @@ fn replay_receipt_repeats_both_durability_barriers_after_failures() {
         let mut synchronized = false;
         let result = append_with_sync(
             &d,
-            "PUBLICATION",
+            RecordType::Publication,
             1,
             &expected.record.candidate_hash,
             &expected.record.object_hash,
@@ -515,13 +535,13 @@ fn replay_receipt_rechecks_descriptor_and_path_after_synchronization() {
     for replace in [false, true] {
         let temp = tempfile::tempdir().unwrap();
         let d = disk(&temp);
-        let expected = put(&d, "PUBLICATION", 1);
+        let expected = put(&d, RecordType::Publication, 1);
         let scanned = scan(&d).unwrap();
         let hashes = scanned.records.iter().map(|(_, h)| h.clone()).collect();
         let path = log_path(&d);
         let result = append_with_sync(
             &d,
-            "PUBLICATION",
+            RecordType::Publication,
             1,
             &expected.record.candidate_hash,
             &expected.record.object_hash,

@@ -1,10 +1,11 @@
 //! Preflight the exact JSON shapes that publication will persist. Hash values
 //! occupy exactly 64 ASCII bytes; every other value comes from the real candidate.
+use crate::journal::RecordType;
 use crate::{degraded_recovery::RecoveryProof, disk::*, journal::*, *};
 
 fn receipt(
     disk: &DiskConfig,
-    kind: &str,
+    kind: RecordType,
     candidate: &Candidate,
     hash: &str,
     object: &str,
@@ -14,7 +15,7 @@ fn receipt(
         slot_id: disk.slot_id.clone(),
         frame_hash: "0".repeat(64),
         record: Record {
-            record_type: kind.into(),
+            record_type: kind,
             sequence: candidate.sequence,
             candidate_hash: hash.into(),
             object_hash: object.into(),
@@ -113,13 +114,13 @@ fn preflight_inner(
         let plan_hash = object_hash("recovery-plan", &recovery.plan)?;
         recovery.reprotect = members
             .iter()
-            .map(|d| receipt(d, "REPROTECT", candidate, &hash, &plan_hash))
+            .map(|d| receipt(d, RecordType::Reprotect, candidate, &hash, &plan_hash))
             .collect();
         recovery.plan.accepts().to_vec()
     } else {
         members
             .iter()
-            .map(|d| receipt(d, "ACCEPT", candidate, &hash, &hash))
+            .map(|d| receipt(d, RecordType::Accept, candidate, &hash, &hash))
             .collect()
     };
     let finalize = Finalize {
@@ -131,7 +132,7 @@ fn preflight_inner(
     let finalize_hash = object_hash("finalize", &finalize)?;
     let finalize_receipts = members
         .iter()
-        .map(|d| receipt(d, "FINALIZE", candidate, &hash, &finalize_hash))
+        .map(|d| receipt(d, RecordType::Finalize, candidate, &hash, &finalize_hash))
         .collect();
     let mut proofs = Vec::new();
     let mut payload_receipts = Vec::new();
@@ -184,7 +185,15 @@ fn preflight_inner(
     let publication_hash = object_hash("publication", &publication)?;
     let publication_receipts = members
         .iter()
-        .map(|d| receipt(d, "PUBLICATION", candidate, &hash, &publication_hash))
+        .map(|d| {
+            receipt(
+                d,
+                RecordType::Publication,
+                candidate,
+                &hash,
+                &publication_hash,
+            )
+        })
         .collect::<Vec<_>>();
     let seal = PublicationSeal {
         candidate_hash: hash.clone(),

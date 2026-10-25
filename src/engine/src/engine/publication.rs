@@ -1,5 +1,6 @@
 //! Durable preparation, decision and publication of one frozen transaction.
 use super::{Engine, Prepared};
+use crate::journal::RecordType;
 use crate::{disk::*, journal::*, *};
 use json_codec::json;
 use std::collections::BTreeMap;
@@ -290,7 +291,7 @@ impl Engine {
             store_object(d, "candidate", &candidate)?;
             append(
                 d,
-                "PREPARE",
+                RecordType::Prepare,
                 candidate.sequence,
                 &hash,
                 &candidate.snapshot_hash,
@@ -556,7 +557,7 @@ impl Engine {
     ) -> Result<()> {
         if let Some(publication) = existing {
             return self.complete_published_candidate(c, hash, next, publication, |d, pub_hash| {
-                append(d, "PUBLICATION", c.sequence, hash, pub_hash)
+                append(d, RecordType::Publication, c.sequence, hash, pub_hash)
             });
         }
         self.verify_candidate_membership(c)?;
@@ -573,7 +574,7 @@ impl Engine {
         let mut accepts = Vec::new();
         for d in &members {
             validate_seal(&self.config, d)?;
-            accepts.push(append(d, "ACCEPT", c.sequence, hash, hash)?);
+            accepts.push(append(d, RecordType::Accept, c.sequence, hash, hash)?);
             #[cfg(feature = "fault-injection")]
             self.failpoint(&format!("after_accept_{}", accepts.len()))?;
         }
@@ -586,7 +587,13 @@ impl Engine {
         let mut final_receipts = Vec::new();
         for d in &members {
             store_object(d, "finalize", &finalize)?;
-            final_receipts.push(append(d, "FINALIZE", c.sequence, hash, &final_hash)?);
+            final_receipts.push(append(
+                d,
+                RecordType::Finalize,
+                c.sequence,
+                hash,
+                &final_hash,
+            )?);
         }
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_finalize")?;
@@ -654,7 +661,13 @@ impl Engine {
         let mut publication_receipts = Vec::new();
         for d in &members {
             store_object(d, "publication", &publication)?;
-            publication_receipts.push(append(d, "PUBLICATION", c.sequence, hash, &pub_hash)?);
+            publication_receipts.push(append(
+                d,
+                RecordType::Publication,
+                c.sequence,
+                hash,
+                &pub_hash,
+            )?);
             #[cfg(feature = "fault-injection")]
             self.failpoint(&format!("after_publication_{}", publication_receipts.len()))?;
         }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::journal::RecordType;
 use std::fs;
 
 fn fixture() -> (tempfile::TempDir, Engine, Repository) {
@@ -97,7 +98,7 @@ fn purged_state_reopens_with_one_damaged_and_one_offline_metadata_member() {
             .records
             .into_iter()
             .rev()
-            .find(|(record, _)| record.record_type == "PUBLICATION")
+            .find(|(record, _)| record.record_type == RecordType::Publication)
             .unwrap()
             .0;
         let candidate: Candidate =

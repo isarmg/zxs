@@ -1,4 +1,5 @@
 use super::*;
+use crate::journal::RecordType;
 use std::{
     io::Read,
     os::unix::fs::{MetadataExt, PermissionsExt},
@@ -300,7 +301,7 @@ fn latest_candidate(engine: &Engine) -> Candidate {
         .records
         .into_iter()
         .rev()
-        .find(|(record, _)| record.record_type == "PUBLICATION")
+        .find(|(record, _)| record.record_type == RecordType::Publication)
         .unwrap()
         .0;
     load_object(member, "candidate", &record.candidate_hash).unwrap()
@@ -344,7 +345,7 @@ fn paged_pending_recovery_repairs_leaf_index_and_root_and_checkpoint_checks_them
             .records
             .into_iter()
             .rev()
-            .find(|(record, _)| record.record_type == "ACCEPT")
+            .find(|(record, _)| record.record_type == RecordType::Accept)
             .unwrap()
             .0;
         let candidate: Candidate =
@@ -1716,13 +1717,20 @@ fn rebind_test_package(
         .map(|member| {
             append(
                 member,
-                "PREPARE",
+                RecordType::Prepare,
                 sequence,
                 &candidate_hash,
                 &proof.candidate.snapshot_hash,
             )
             .unwrap();
-            append(member, "ACCEPT", sequence, &candidate_hash, &candidate_hash).unwrap()
+            append(
+                member,
+                RecordType::Accept,
+                sequence,
+                &candidate_hash,
+                &candidate_hash,
+            )
+            .unwrap()
         })
         .collect();
     proof.publication.candidate_hash = candidate_hash.clone();
@@ -1737,7 +1745,7 @@ fn rebind_test_package(
         .map(|member| {
             append(
                 member,
-                "FINALIZE",
+                RecordType::Finalize,
                 sequence,
                 &candidate_hash,
                 &finalize_hash,
@@ -1751,7 +1759,7 @@ fn rebind_test_package(
         .map(|member| {
             append(
                 member,
-                "PUBLICATION",
+                RecordType::Publication,
                 sequence,
                 &candidate_hash,
                 &publication_hash,

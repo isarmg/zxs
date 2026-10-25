@@ -1,4 +1,5 @@
 //! Independently recoverable, publication-bound history packages.
+use crate::journal::RecordType;
 use crate::{disk::*, journal::*, *};
 use data_serialization::{Deserialize, Serialize};
 use json_codec::json;
@@ -349,7 +350,7 @@ impl Engine {
                 .records
                 .into_iter()
                 .rev()
-                .filter(|(r, _)| r.record_type == "PUBLICATION")
+                .filter(|(r, _)| r.record_type == RecordType::Publication)
             {
                 let candidate: Candidate = crate::publication_evidence::verified_object(
                     &members,

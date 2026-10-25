@@ -1,4 +1,5 @@
 use super::*;
+use crate::journal::RecordType;
 
 #[test]
 fn recovery_rejects_lost_published_journals_before_rewriting_projection() {
@@ -166,7 +167,7 @@ fn recovery_repairs_exact_candidate_and_publication_replicas() {
                     .unwrap()
                     .records
                     .into_iter()
-                    .find(|(r, _)| r.record_type == "PUBLICATION")
+                    .find(|(r, _)| r.record_type == RecordType::Publication)
                     .unwrap()
                     .0;
                 let candidate: Candidate =
@@ -219,7 +220,7 @@ fn pending_candidate_recovers_from_healthy_exact_replica() {
                 .unwrap()
                 .records
                 .into_iter()
-                .find(|(r, _)| r.record_type == "ACCEPT")
+                .find(|(r, _)| r.record_type == RecordType::Accept)
                 .unwrap()
                 .0;
             let target = object_path(&members[0], "candidate", &record.candidate_hash);
@@ -262,7 +263,7 @@ fn recovery_rejects_all_digest_mismatched_object_replicas_without_rewriting_them
             .unwrap()
             .records
             .into_iter()
-            .find(|(r, _)| r.record_type == "PUBLICATION")
+            .find(|(r, _)| r.record_type == RecordType::Publication)
             .unwrap()
             .0;
         let hash = if kind == "candidate" {
@@ -318,7 +319,7 @@ fn recovery_rejects_flat_objects_without_repair_or_deletion() {
         .unwrap()
         .records
         .into_iter()
-        .find(|(r, _)| r.record_type == "PUBLICATION")
+        .find(|(r, _)| r.record_type == RecordType::Publication)
         .unwrap()
         .0;
     let hash = record.candidate_hash;
@@ -549,7 +550,7 @@ fn shared_pages_are_repaired_once_per_recovery_and_rechecked_next_time() {
     let mut pages = BTreeSet::new();
     let mut shared = None;
     for (record, _) in scan(&members[0]).unwrap().records {
-        if record.record_type != "PUBLICATION" {
+        if record.record_type != RecordType::Publication {
             continue;
         }
         let candidate: Candidate =
@@ -710,7 +711,7 @@ fn publication_proofs_require_exact_nonempty_unique_membership() {
             .unwrap()
             .records
             .into_iter()
-            .find(|(r, _)| r.record_type == "PUBLICATION")
+            .find(|(r, _)| r.record_type == RecordType::Publication)
             .unwrap()
             .0;
         let candidate: Candidate =
@@ -761,7 +762,7 @@ fn single_storage_disk_completes_pending_accept_but_never_invents_lost_metadata(
         .unwrap()
         .records
         .into_iter()
-        .find(|(r, _)| r.record_type == "ACCEPT")
+        .find(|(r, _)| r.record_type == RecordType::Accept)
         .unwrap()
         .0;
     let candidate_path = object_path(&member, "candidate", &record.candidate_hash);
@@ -789,7 +790,7 @@ fn self_consistent_one_member_seal_cannot_downgrade_configured_three_members() {
         .unwrap()
         .records
         .into_iter()
-        .find(|(r, _)| r.record_type == "PUBLICATION")
+        .find(|(r, _)| r.record_type == RecordType::Publication)
         .unwrap()
         .0;
     let candidate: Candidate = load_object(&member, "candidate", &record.candidate_hash).unwrap();
@@ -810,7 +811,7 @@ fn self_consistent_one_member_seal_cannot_downgrade_configured_three_members() {
     store_object(&target, "candidate", &candidate).unwrap();
     append(
         &target,
-        "ACCEPT",
+        RecordType::Accept,
         candidate.sequence,
         &record.candidate_hash,
         &record.candidate_hash,

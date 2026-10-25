@@ -1,4 +1,5 @@
 use super::*;
+use crate::journal::RecordType;
 use std::{
     fs,
     io::{Read, Write},
@@ -2578,8 +2579,14 @@ fn journal_append_rejects_dangling_symlink_without_creating_its_target() {
     crate::disk::private_dir(log.parent().unwrap()).unwrap();
     let outside = fixture.temp.path().join("outside-journal.bin");
     std::os::unix::fs::symlink(&outside, &log).unwrap();
-    let error =
-        crate::journal::append(disk, "PREPARE", 1, &"a".repeat(64), &"b".repeat(64)).unwrap_err();
+    let error = crate::journal::append(
+        disk,
+        RecordType::Prepare,
+        1,
+        &"a".repeat(64),
+        &"b".repeat(64),
+    )
+    .unwrap_err();
     assert_eq!(error.code(), storage_contract::ErrorCode::UnsafePath);
     assert!(!outside.exists());
     assert!(fs::symlink_metadata(&log).unwrap().file_type().is_symlink());
@@ -3633,7 +3640,7 @@ fn pending_operation_reads_exact_snapshot_replica_without_repair() {
                     .unwrap()
                     .records
                     .into_iter()
-                    .find(|(record, _)| record.record_type == "ACCEPT")
+                    .find(|(record, _)| record.record_type == RecordType::Accept)
                     .map(|(record, _)| (disk, record))
             })
             .unwrap();
@@ -3674,7 +3681,7 @@ fn history_export_reads_exact_evidence_replicas_without_repair() {
             .records
             .into_iter()
             .rev()
-            .find(|(record, _)| record.record_type == "PUBLICATION")
+            .find(|(record, _)| record.record_type == RecordType::Publication)
             .unwrap()
             .0;
         let path_for = |disk: &DiskConfig| match kind {
@@ -3735,7 +3742,7 @@ fn pending_operation_requires_a_trusted_decision_not_prepared_objects() {
                         .unwrap()
                         .records
                         .iter()
-                        .any(|(record, _)| record.record_type == "ACCEPT")
+                        .any(|(record, _)| record.record_type == RecordType::Accept)
                 })
                 .unwrap();
             fs::write(disk.root.join("disk.json"), b"untrusted").unwrap();
@@ -3760,7 +3767,7 @@ fn history_export_rejects_conflicting_flat_shard_duplicates_without_repair() {
             .records
             .into_iter()
             .rev()
-            .find(|(record, _)| record.record_type == "PUBLICATION")
+            .find(|(record, _)| record.record_type == RecordType::Publication)
             .unwrap()
             .0;
         let hash = if kind == "candidate" {

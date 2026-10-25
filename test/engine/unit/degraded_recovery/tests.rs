@@ -148,6 +148,21 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
     assert_eq!(result.current_health, "UNAVAILABLE");
     let disk = engine.members()[0].clone();
     let scanned = scan(&disk).unwrap();
+    assert_eq!(
+        scanned
+            .records
+            .iter()
+            .filter(|(r, _)| r.sequence == candidate.sequence)
+            .map(|(r, _)| r.record_type)
+            .collect::<Vec<_>>(),
+        [
+            RecordType::Prepare,
+            RecordType::Accept,
+            RecordType::Reprotect,
+            RecordType::Finalize,
+            RecordType::Publication
+        ]
+    );
     let (record, _) = scanned.records.last().unwrap();
     let publication: Publication = load_object(&disk, "publication", &record.object_hash).unwrap();
     let original = load_snapshot(&disk, &candidate.snapshot_hash).unwrap();
@@ -544,24 +559,47 @@ fn incomplete_log_cannot_prove_absence_and_unknown_record_types_are_rejected() {
     );
     assert_eq!(fs::metadata(log).unwrap().len(), length);
     drop(engine);
-    let (temp, engine, _operation, candidate) = fixture("after_accept_2");
+    let (temp, engine, _operation, _candidate) = fixture("after_accept_2");
     let disk = engine.members()[0].clone();
-    append(
-        &disk,
-        "UNRECOGNIZED",
-        candidate.sequence,
-        &object_hash("candidate", &candidate).unwrap(),
-        &candidate.snapshot_hash,
-    )
-    .unwrap();
+    let scanned = scan(&disk).unwrap();
+    let (previous, previous_hash) = scanned.records.last().unwrap();
+    let mut raw = json_codec::to_value(previous).unwrap();
+    raw["record_type"] = json_codec::json!("UNRECOGNIZED");
+    raw["previous_frame_hash"] = json_codec::json!(previous_hash);
+    let payload = canonical_json(&raw).unwrap();
+    let mut frame = b"ZXSLOG\0\0".to_vec();
+    frame.extend((payload.len() as u32).to_le_bytes());
+    frame.extend(payload);
+    let digest = blake3::hash(&frame);
+    frame.extend(digest.as_bytes());
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(log_path(&disk))
+        .unwrap();
+    file.write_all(&frame).unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    let logs_before = engine
+        .members()
+        .iter()
+        .map(|disk| (log_path(disk), fs::read(log_path(disk)).unwrap()))
+        .collect::<Vec<_>>();
     drop(engine);
+    let index_before = fs::read(temp.path().join("state/index.sqlite")).unwrap();
     assert_eq!(
         Engine::open_for_recovery(&temp.path().join("state"))
             .err()
             .unwrap()
             .code(),
-        storage_contract::ErrorCode::LogFormatUnsupported
+        storage_contract::ErrorCode::InvalidJson
     );
+    assert_eq!(
+        fs::read(temp.path().join("state/index.sqlite")).unwrap(),
+        index_before
+    );
+    for (path, bytes) in logs_before {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
 }
 
 #[test]

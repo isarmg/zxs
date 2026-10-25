@@ -11,10 +11,69 @@ pub(crate) const MAX_FRAME: usize = 16 * 1024 * 1024;
 const LOG_MAGIC: &[u8; 8] = b"ZXSLOG\0\0";
 const LOG_HEADER_BYTES: usize = 12;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RecordType {
+    Prepare,
+    Accept,
+    Finalize,
+    Publication,
+    Reprotect,
+}
+impl RecordType {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Prepare => "PREPARE",
+            Self::Accept => "ACCEPT",
+            Self::Finalize => "FINALIZE",
+            Self::Publication => "PUBLICATION",
+            Self::Reprotect => "REPROTECT",
+        }
+    }
+}
+impl Serialize for RecordType {
+    fn serialize<S: data_serialization::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+impl<'de> Deserialize<'de> for RecordType {
+    fn deserialize<D: data_serialization::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        // Journal phases are strings, never externally tagged unit objects.
+        struct PhaseVisitor;
+        impl data_serialization::de::Visitor<'_> for PhaseVisitor {
+            type Value = RecordType;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an uppercase journal phase string")
+            }
+            fn visit_str<E: data_serialization::de::Error>(
+                self,
+                token: &str,
+            ) -> std::result::Result<Self::Value, E> {
+                match token {
+                    "PREPARE" => Ok(RecordType::Prepare),
+                    "ACCEPT" => Ok(RecordType::Accept),
+                    "FINALIZE" => Ok(RecordType::Finalize),
+                    "PUBLICATION" => Ok(RecordType::Publication),
+                    "REPROTECT" => Ok(RecordType::Reprotect),
+                    _ => Err(E::unknown_variant(
+                        token,
+                        &["PREPARE", "ACCEPT", "FINALIZE", "PUBLICATION", "REPROTECT"],
+                    )),
+                }
+            }
+        }
+        deserializer.deserialize_str(PhaseVisitor)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Record {
-    pub record_type: String,
+    pub record_type: RecordType,
     #[serialization(with = "storage_contract::u64_string")]
     pub sequence: u64,
     pub candidate_hash: String,
@@ -30,7 +89,7 @@ pub(crate) struct Receipt {
 }
 pub(crate) fn receipt_binds(
     receipt: &Receipt,
-    kind: &str,
+    kind: RecordType,
     sequence: u64,
     candidate: &str,
     object: &str,
@@ -163,15 +222,6 @@ fn scan_frames(mut reader: impl Read) -> Result<Scan> {
             ));
         }
         let record: Record = decode_strict(&payload)?;
-        if !matches!(
-            record.record_type.as_str(),
-            "PREPARE" | "ACCEPT" | "FINALIZE" | "PUBLICATION" | "REPROTECT"
-        ) {
-            return Err(Error::new(
-                storage_contract::ErrorCode::LogFormatUnsupported,
-                "unknown journal record type",
-            ));
-        }
         if canonical_json(&record)? != payload
             || record.previous_frame_hash != previous
             || record.sequence < last_sequence
@@ -225,7 +275,7 @@ fn tails() -> &'static Mutex<BTreeMap<PathBuf, VerifiedTail>> {
 // Append and replay run only in the owning &mut Engine's decision/recovery paths.
 pub(crate) fn append(
     d: &DiskConfig,
-    kind: &str,
+    kind: RecordType,
     sequence: u64,
     candidate: &str,
     object: &str,
@@ -249,7 +299,7 @@ pub(crate) fn replay_publication(
 ) -> Result<Receipt> {
     append_with_sync(
         d,
-        "PUBLICATION",
+        RecordType::Publication,
         sequence,
         candidate,
         object,
@@ -285,7 +335,7 @@ fn sync_existing(
 
 fn append_with_sync(
     d: &DiskConfig,
-    kind: &str,
+    kind: RecordType,
     sequence: u64,
     candidate: &str,
     object: &str,
@@ -387,7 +437,7 @@ fn append_with_sync(
         ));
     }
     let record = Record {
-        record_type: kind.into(),
+        record_type: kind,
         sequence,
         candidate_hash: candidate.into(),
         object_hash: object.into(),
@@ -448,7 +498,7 @@ fn cache_tail(path: PathBuf, stamp: FileStamp, mut records: Vec<(Record, String)
     let retained_bytes = records
         .iter()
         .map(|(r, hash)| {
-            r.record_type.len()
+            r.record_type.as_str().len()
                 + r.candidate_hash.len()
                 + r.object_hash.len()
                 + r.previous_frame_hash.len()
@@ -937,7 +987,13 @@ pub(crate) fn verify_publication_seal(
                 .find(|a| a.disk_id == r.disk_id)
                 .expect("member sets checked");
             if accept.slot_id != r.slot_id
-                || !receipt_binds(accept, "ACCEPT", c.sequence, &candidate, &candidate)?
+                || !receipt_binds(
+                    accept,
+                    RecordType::Accept,
+                    c.sequence,
+                    &candidate,
+                    &candidate,
+                )?
             {
                 return Err(Error::new(
                     storage_contract::ErrorCode::PublicationInvalid,
@@ -950,14 +1006,20 @@ pub(crate) fn verify_publication_seal(
             || r.slot_id != f.slot_id
             || f.record.previous_frame_hash != predecessor
             || r.record.previous_frame_hash != f.frame_hash
-            || !receipt_binds(f, "FINALIZE", c.sequence, &candidate, &finalize)?
+            || !receipt_binds(f, RecordType::Finalize, c.sequence, &candidate, &finalize)?
         {
             return Err(Error::new(
                 storage_contract::ErrorCode::PublicationInvalid,
                 "member synchronized chain is invalid",
             ));
         }
-        if !receipt_binds(r, "PUBLICATION", c.sequence, &candidate, &publication)? {
+        if !receipt_binds(
+            r,
+            RecordType::Publication,
+            c.sequence,
+            &candidate,
+            &publication,
+        )? {
             return Err(Error::new(
                 storage_contract::ErrorCode::PublicationInvalid,
                 "publication frame receipt is invalid",

@@ -1,3 +1,4 @@
+use crate::journal::RecordType;
 use crate::{
     business::{now, sorted},
     disk::*,
@@ -446,11 +447,9 @@ impl Engine {
         let members = self.trusted_evidence_members();
         for member in &members {
             let scanned = scan(member)?;
-            if let Some((record, _)) =
-                scanned.records.iter().rev().find(|(r, _)| {
-                    r.sequence == self.state.sequence && r.record_type == "PUBLICATION"
-                })
-            {
+            if let Some((record, _)) = scanned.records.iter().rev().find(|(r, _)| {
+                r.sequence == self.state.sequence && r.record_type == RecordType::Publication
+            }) {
                 let candidate: Candidate = crate::publication_evidence::verified_object(
                     &members,
                     "candidate",

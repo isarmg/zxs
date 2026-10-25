@@ -15,7 +15,7 @@ fn records() -> Vec<Record> {
     (1..=24)
         .map(|sequence| {
             let record = Record {
-                record_type: "PREPARE".into(),
+                record_type: RecordType::Prepare,
                 sequence,
                 candidate_hash: format!("{sequence:064x}"),
                 object_hash: "b".repeat(64),
@@ -125,12 +125,11 @@ fn buffered_scan_keeps_every_partial_frame_as_a_torn_tail() {
 #[test]
 fn buffered_scan_does_not_skip_corrupt_or_unsupported_frames() {
     let records = records();
-    for change in 0..6 {
+    for change in 0..5 {
         let mut record = records[1].clone();
         match change {
             3 => record.previous_frame_hash = "f".repeat(64),
             4 => record.sequence = 0,
-            5 => record.record_type = "UNSUPPORTED".into(),
             _ => {}
         }
         let mut tail = frame(&record);
@@ -144,14 +143,7 @@ fn buffered_scan_does_not_skip_corrupt_or_unsupported_frames() {
         let error = scan_frames(BufReader::with_capacity(7, bytes.as_slice()))
             .err()
             .unwrap();
-        assert_eq!(
-            error.code(),
-            if change == 5 {
-                storage_contract::ErrorCode::LogFormatUnsupported
-            } else {
-                storage_contract::ErrorCode::LogCorrupt
-            }
-        );
+        assert_eq!(error.code(), storage_contract::ErrorCode::LogCorrupt);
     }
 }
 
@@ -164,4 +156,158 @@ fn buffered_scan_propagates_read_errors_instead_of_accepting_a_partial_tail() {
         }
     }
     assert!(scan_frames(BufReader::new(FailingReader)).is_err());
+}
+
+fn raw_frame(payload: &[u8]) -> Vec<u8> {
+    let mut bytes = b"ZXSLOG\0\0".to_vec();
+    bytes.extend((payload.len() as u32).to_le_bytes());
+    bytes.extend(payload);
+    let hash = blake3::hash(&bytes);
+    bytes.extend(hash.as_bytes());
+    bytes
+}
+
+#[test]
+fn phase_strings_preserve_canonical_payload_frame_and_hash() {
+    for (phase, token, payload_len, expected_hash) in [
+        (
+            RecordType::Prepare,
+            "PREPARE",
+            294,
+            "358308f300921f2b592a2c9e512ada59c9cf3e740730bc3dc4207c8a1ace18a7",
+        ),
+        (
+            RecordType::Accept,
+            "ACCEPT",
+            293,
+            "181fd9ba33af53d3dcac8386b75eb0aed44c1ef74b4cfaccc545ada1a8d72086",
+        ),
+        (
+            RecordType::Finalize,
+            "FINALIZE",
+            295,
+            "ffd91c5c9127a579d7bd1ea3d0fd9ac28b1de17f0a1ed11977186af247b8f8fc",
+        ),
+        (
+            RecordType::Publication,
+            "PUBLICATION",
+            298,
+            "98f671d06922969d3d56bcdca9bc33df44a1c4f02c38e2648af6a7fb931b987e",
+        ),
+        (
+            RecordType::Reprotect,
+            "REPROTECT",
+            296,
+            "b1b77c8c60ebec2332a7b2359f228b3824f3d5603991c2d52c6321f032ea7924",
+        ),
+    ] {
+        let record = Record {
+            record_type: phase,
+            sequence: 1,
+            candidate_hash: "a".repeat(64),
+            object_hash: "b".repeat(64),
+            previous_frame_hash: "0".repeat(64),
+        };
+        let payload = format!(
+            r#"{{"candidate_hash":"{}","object_hash":"{}","previous_frame_hash":"{}","record_type":"{token}","sequence":"1"}}"#,
+            "a".repeat(64),
+            "b".repeat(64),
+            "0".repeat(64)
+        );
+        assert_eq!(payload.len(), payload_len);
+        assert_eq!(canonical_json(&record).unwrap(), payload.as_bytes());
+        assert_eq!(json_codec::to_value(&record).unwrap()["record_type"], token);
+        let expected = raw_frame(payload.as_bytes());
+        assert_eq!(frame(&record), expected);
+        assert_eq!(
+            record_frame_hash(&record)
+                .unwrap()
+                .unwrap()
+                .to_hex()
+                .as_str(),
+            expected_hash
+        );
+        let scanned = scan_frames(expected.as_slice()).unwrap();
+        assert_eq!(scanned.records[0].0.record_type, phase);
+        assert_eq!(scanned.records[0].1, expected_hash);
+    }
+}
+
+#[test]
+fn raw_phase_decoder_rejects_unknown_and_non_string_shapes() {
+    for phase in [
+        json_codec::json!("UNSUPPORTED"),
+        json_codec::json!("prepare"),
+        json_codec::json!(""),
+        json_codec::json!(null),
+        json_codec::json!(1),
+        json_codec::json!(true),
+        json_codec::json!([]),
+        json_codec::json!({"PREPARE": null}),
+        json_codec::json!({"ACCEPT": null}),
+        json_codec::json!({"FINALIZE": null}),
+        json_codec::json!({"PUBLICATION": null}),
+        json_codec::json!({"REPROTECT": null}),
+    ] {
+        let mut raw = json_codec::to_value(&records()[0]).unwrap();
+        raw["record_type"] = phase.clone();
+        let payload = canonical_json(&raw).unwrap();
+        assert!(decode_strict::<Record>(&payload).is_err(), "{phase}");
+        let receipt = json_codec::json!({
+            "disk_id": "disk", "slot_id": "P01", "frame_hash": "0".repeat(64),
+            "record": raw,
+        });
+        assert!(
+            decode_strict::<Receipt>(&canonical_json(&receipt).unwrap()).is_err(),
+            "{phase}"
+        );
+        let bytes = raw_frame(&payload);
+        assert_eq!(
+            scan_frames(bytes.as_slice()).err().unwrap().code(),
+            storage_contract::ErrorCode::InvalidJson,
+            "{phase}"
+        );
+    }
+}
+
+#[test]
+fn typed_phases_survive_normal_publication_and_recovery() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("state");
+    let mut engine = Engine::initialize(
+        &root,
+        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))),
+    )
+    .unwrap();
+    let operation = new_id("op");
+    engine
+        .create_repository("typed phases", "P01", 1, "alice", &operation)
+        .unwrap();
+    let result = engine.operation(&operation).unwrap();
+    for disk in engine.members() {
+        let phases = scan(&disk)
+            .unwrap()
+            .records
+            .into_iter()
+            .filter(|(r, _)| r.sequence == result.sequence)
+            .map(|(r, _)| r.record_type)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            phases,
+            [
+                RecordType::Prepare,
+                RecordType::Accept,
+                RecordType::Finalize,
+                RecordType::Publication
+            ]
+        );
+    }
+    drop(engine);
+    let engine = Engine::open(&root).unwrap();
+    let recovered = engine.operation(&operation).unwrap();
+    assert_eq!(recovered.sequence, result.sequence);
+    assert_eq!(
+        recovered.commit_state,
+        storage_contract::CommitState::Published
+    );
 }

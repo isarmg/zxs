@@ -25,7 +25,7 @@ fn another_journal_can_sync_while_one_writer_is_blocked() {
         let first = scope.spawn(move || {
             append_with_sync(
                 first_disk,
-                "PREPARE",
+                RecordType::Prepare,
                 1,
                 &"a".repeat(64),
                 &"b".repeat(64),
@@ -39,7 +39,13 @@ fn another_journal_can_sync_while_one_writer_is_blocked() {
         });
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         let second = scope.spawn(|| {
-            let result = append(&disks[1], "PREPARE", 1, &"a".repeat(64), &"b".repeat(64));
+            let result = append(
+                &disks[1],
+                RecordType::Prepare,
+                1,
+                &"a".repeat(64),
+                &"b".repeat(64),
+            );
             other_tx.send(result.is_ok()).unwrap();
             result
         });
@@ -91,7 +97,7 @@ fn serialized_engine_mutations_preserve_one_verified_hash_chain() {
         scanned
             .records
             .iter()
-            .filter(|(r, _)| r.record_type == "PUBLICATION")
+            .filter(|(r, _)| r.record_type == RecordType::Publication)
             .count(),
         8
     );
@@ -103,19 +109,47 @@ fn serialized_engine_mutations_preserve_one_verified_hash_chain() {
 fn sequential_retries_and_cache_eviction_preserve_receipts() {
     let temp = tempfile::tempdir().unwrap();
     let disk = &disks(&temp)[0];
-    let first = append(disk, "PUBLICATION", 1, &"a".repeat(64), &"b".repeat(64)).unwrap();
+    let first = append(
+        disk,
+        RecordType::Publication,
+        1,
+        &"a".repeat(64),
+        &"b".repeat(64),
+    )
+    .unwrap();
     for _ in 0..16 {
-        let repeated = append(disk, "PUBLICATION", 1, &"a".repeat(64), &"b".repeat(64)).unwrap();
+        let repeated = append(
+            disk,
+            RecordType::Publication,
+            1,
+            &"a".repeat(64),
+            &"b".repeat(64),
+        )
+        .unwrap();
         assert_eq!(first.frame_hash, repeated.frame_hash);
     }
     for index in 0..MAX_CACHED_JOURNALS {
         let mut another = disk.clone();
         another.root = temp.path().join(format!("z-eviction-{index:03}"));
-        append(&another, "PREPARE", 1, &"a".repeat(64), &"b".repeat(64)).unwrap();
+        append(
+            &another,
+            RecordType::Prepare,
+            1,
+            &"a".repeat(64),
+            &"b".repeat(64),
+        )
+        .unwrap();
     }
     assert!(!tails().lock().unwrap().contains_key(&log_path(disk)));
     let before_scans = SCAN_COUNT.with(std::cell::Cell::get);
-    let repeated = append(disk, "PUBLICATION", 1, &"a".repeat(64), &"b".repeat(64)).unwrap();
+    let repeated = append(
+        disk,
+        RecordType::Publication,
+        1,
+        &"a".repeat(64),
+        &"b".repeat(64),
+    )
+    .unwrap();
     assert_eq!(first.frame_hash, repeated.frame_hash);
     assert_eq!(SCAN_COUNT.with(std::cell::Cell::get), before_scans + 1);
     assert_eq!(scan(disk).unwrap().records.len(), 1);
@@ -128,11 +162,18 @@ fn writer_panic_retries_verify_visible_and_torn_bytes() {
         let temp = tempfile::tempdir().unwrap();
         let disk = &disks(&temp)[0];
         let path = log_path(disk);
-        append(disk, "PREPARE", 1, &"a".repeat(64), &"b".repeat(64)).unwrap();
+        append(
+            disk,
+            RecordType::Prepare,
+            1,
+            &"a".repeat(64),
+            &"b".repeat(64),
+        )
+        .unwrap();
         let panicked = catch_unwind(AssertUnwindSafe(|| {
             append_with_sync(
                 disk,
-                "ACCEPT",
+                RecordType::Accept,
                 1,
                 &"a".repeat(64),
                 &"c".repeat(64),
@@ -149,7 +190,14 @@ fn writer_panic_retries_verify_visible_and_torn_bytes() {
         assert!(panicked.is_err());
         assert!(!tails().lock().unwrap().contains_key(&path));
         let before_scans = SCAN_COUNT.with(std::cell::Cell::get);
-        append(disk, "ACCEPT", 1, &"a".repeat(64), &"c".repeat(64)).unwrap();
+        append(
+            disk,
+            RecordType::Accept,
+            1,
+            &"a".repeat(64),
+            &"c".repeat(64),
+        )
+        .unwrap();
         assert_eq!(SCAN_COUNT.with(std::cell::Cell::get), before_scans + 1);
         let scanned = scan(disk).unwrap();
         assert_eq!(scanned.records.len(), 2);

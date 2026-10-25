@@ -1,5 +1,6 @@
 //! Durable workspace manifests and restart reconciliation.
 use super::Engine;
+use crate::journal::RecordType;
 use crate::{disk::*, *};
 use std::{
     collections::BTreeMap,
@@ -462,7 +463,8 @@ impl Engine {
             let members = self.trusted_evidence_members();
             for member in &members {
                 for (record, _) in crate::journal::scan(member)?.records {
-                    if record.sequence != operation.sequence || record.record_type != "PUBLICATION"
+                    if record.sequence != operation.sequence
+                        || record.record_type != RecordType::Publication
                     {
                         continue;
                     }

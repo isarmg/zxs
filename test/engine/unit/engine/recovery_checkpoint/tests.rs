@@ -1,4 +1,5 @@
 use super::*;
+use crate::journal::RecordType;
 use std::io::Write;
 
 fn setup() -> (tempfile::TempDir, std::path::PathBuf, Config) {
@@ -36,7 +37,7 @@ fn missing_or_corrupt_selected_snapshot_source_repairs_from_verified_replica() {
             .unwrap()
             .records
             .into_iter()
-            .find(|(r, _)| r.record_type == "PREPARE")
+            .find(|(r, _)| r.record_type == RecordType::Prepare)
             .unwrap()
             .0;
         let candidate: Candidate = load_object(source, "candidate", &first.candidate_hash).unwrap();
@@ -69,7 +70,7 @@ fn all_snapshot_replicas_invalid_fail_closed() {
         .unwrap()
         .records
         .into_iter()
-        .find(|(r, _)| r.record_type == "PREPARE")
+        .find(|(r, _)| r.record_type == RecordType::Prepare)
         .unwrap()
         .0;
     let candidate: Candidate = load_object(source, "candidate", &first.candidate_hash).unwrap();
@@ -136,7 +137,7 @@ fn added_conflicting_layout_cannot_hide_behind_checkpoint_coverage() {
         .unwrap()
         .records
         .into_iter()
-        .find(|(r, _)| r.record_type == "PUBLICATION")
+        .find(|(r, _)| r.record_type == RecordType::Publication)
         .unwrap()
         .0;
     for disk in &config.disks {
@@ -158,7 +159,7 @@ fn missing_historical_page_falls_back_and_repairs_replica() {
         .unwrap()
         .records
         .into_iter()
-        .find(|(r, _)| r.record_type == "PREPARE")
+        .find(|(r, _)| r.record_type == RecordType::Prepare)
         .unwrap()
         .0;
     let candidate: Candidate = load_object(source, "candidate", &first.candidate_hash).unwrap();
@@ -237,7 +238,7 @@ fn forked_suffix_cannot_authorize_derived_cache_exception() {
             vec![(
                 config.disks[0].slot_id.clone(),
                 Record {
-                    record_type: "ACCEPT".into(),
+                    record_type: RecordType::Accept,
                     sequence,
                     candidate_hash: hash.clone(),
                     object_hash: hash,

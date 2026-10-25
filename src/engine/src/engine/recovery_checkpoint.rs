@@ -6,6 +6,7 @@
 //! Missing or changed covered dependencies fall back to full repair. This bounds
 //! historical state decoding, not verification work or total startup time.
 use super::Engine;
+use crate::journal::RecordType;
 use crate::{disk::*, journal::*, *};
 use data_serialization::{Deserialize, Serialize};
 use std::{
@@ -263,9 +264,9 @@ fn suffix_rebuilt_containers(
         let active = candidates
             .iter()
             .filter(|(_, records)| {
-                records
-                    .iter()
-                    .any(|(_, r)| matches!(r.record_type.as_str(), "ACCEPT" | "PUBLICATION"))
+                records.iter().any(|(_, r)| {
+                    matches!(r.record_type, RecordType::Accept | RecordType::Publication)
+                })
             })
             .collect::<Vec<_>>();
         if active.len() > 1 {
@@ -274,7 +275,10 @@ fn suffix_rebuilt_containers(
         let Some((hash, records)) = active.first() else {
             continue;
         };
-        let Some((slot, r)) = records.iter().find(|(_, r)| r.record_type == "PUBLICATION") else {
+        let Some((slot, r)) = records
+            .iter()
+            .find(|(_, r)| r.record_type == RecordType::Publication)
+        else {
             break;
         };
         let disk = engine.disk(slot)?;
@@ -453,7 +457,7 @@ pub(super) fn save(engine: &Engine) -> Result<()> {
         for (record, _) in scanned
             .records
             .iter()
-            .filter(|(r, _)| r.record_type == "PUBLICATION")
+            .filter(|(r, _)| r.record_type == RecordType::Publication)
         {
             let c: Candidate = load_object(&d, "candidate", &record.candidate_hash)?;
             for evidence in &c.versions {
@@ -494,7 +498,7 @@ pub(super) fn save(engine: &Engine) -> Result<()> {
             .records
             .iter()
             .rev()
-            .find(|(r, _)| r.record_type == "PUBLICATION")
+            .find(|(r, _)| r.record_type == RecordType::Publication)
             .map(|(r, _)| (r.sequence, r.candidate_hash.clone()));
         if candidate
             .as_ref()

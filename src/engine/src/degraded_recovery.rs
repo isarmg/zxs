@@ -1,5 +1,6 @@
 //! Explicit loss acknowledgement for an already decided, unpublished candidate.
 //! This path never authorizes a new business write with fewer required copies.
+use crate::journal::RecordType;
 use crate::{disk::*, journal::*, *};
 use data_serialization::{Deserialize, Serialize};
 use json_codec::{Value, json};
@@ -265,12 +266,12 @@ impl RecoveryProof {
             for record in &member.records {
                 if record.disk_id != member.disk_id
                     || record.slot_id != member.slot_id
-                    || record.record.record_type == "PUBLICATION"
-                    || record.record.record_type == "REPROTECT"
+                    || record.record.record_type == RecordType::Publication
+                    || record.record.record_type == RecordType::Reprotect
                     || record.record.previous_frame_hash != previous
                     || !receipt_binds(
                         record,
-                        &record.record.record_type,
+                        record.record.record_type,
                         c.sequence,
                         &candidate,
                         &record.record.object_hash,
@@ -290,7 +291,13 @@ impl RecoveryProof {
                 .ok_or_else(bad)?;
             if fence.slot_id != member.slot_id
                 || fence.record.previous_frame_hash != member.last_frame_hash
-                || !receipt_binds(fence, "REPROTECT", c.sequence, &candidate, &plan_hash)?
+                || !receipt_binds(
+                    fence,
+                    RecordType::Reprotect,
+                    c.sequence,
+                    &candidate,
+                    &plan_hash,
+                )?
             {
                 return Err(bad());
             }
@@ -299,11 +306,16 @@ impl RecoveryProof {
             return Err(bad());
         }
         for accept in &plan.original_accepts {
-            if !receipt_binds(accept, "ACCEPT", c.sequence, &candidate, &candidate)?
-                || !plan
-                    .members
-                    .iter()
-                    .any(|m| m.records.iter().any(|r| r.frame_hash == accept.frame_hash))
+            if !receipt_binds(
+                accept,
+                RecordType::Accept,
+                c.sequence,
+                &candidate,
+                &candidate,
+            )? || !plan
+                .members
+                .iter()
+                .any(|m| m.records.iter().any(|r| r.frame_hash == accept.frame_hash))
             {
                 return Err(bad());
             }
@@ -423,15 +435,15 @@ impl Engine {
                 }
                 let plan_hash = object_hash("recovery-plan", plan)?;
                 for record in &records[expected.records.len()..] {
-                    let valid = match record.record.record_type.as_str() {
-                        "REPROTECT" => record.record.object_hash == plan_hash,
-                        "FINALIZE" => {
+                    let valid = match record.record.record_type {
+                        RecordType::Reprotect => record.record.object_hash == plan_hash,
+                        RecordType::Finalize => {
                             load_object::<Finalize>(&disk, "finalize", &record.record.object_hash)?
                                 .recovery_id
                                 .as_deref()
                                 == Some(plan.recovery_id.as_str())
                         }
-                        _ => false,
+                        RecordType::Prepare | RecordType::Accept | RecordType::Publication => false,
                     };
                     if !valid || record.record.candidate_hash != hash {
                         return Err(required(
@@ -443,15 +455,18 @@ impl Engine {
             }
             if records.iter().any(|r| {
                 r.record.candidate_hash != hash
-                    || r.record.record_type == "PUBLICATION"
-                    || r.record.record_type == "REPROTECT"
+                    || r.record.record_type == RecordType::Publication
+                    || r.record.record_type == RecordType::Reprotect
             }) {
                 return Err(required(
                     "publication or another recovery must be reconciled first",
                 ));
             }
-            for receipt in records.iter().filter(|r| r.record.record_type == "ACCEPT") {
-                if !receipt_binds(receipt, "ACCEPT", c.sequence, &hash, &hash)? {
+            for receipt in records
+                .iter()
+                .filter(|r| r.record.record_type == RecordType::Accept)
+            {
+                if !receipt_binds(receipt, RecordType::Accept, c.sequence, &hash, &hash)? {
                     return Err(required(
                         "original ACCEPT does not bind the fixed candidate",
                     ));
@@ -693,7 +708,7 @@ impl Engine {
             store_object(disk, "recovery-plan", &plan)?;
             reprotect.push(append(
                 disk,
-                "REPROTECT",
+                RecordType::Reprotect,
                 candidate.sequence,
                 &plan.candidate_hash,
                 &plan_hash,
@@ -712,7 +727,7 @@ impl Engine {
             store_object(disk, "finalize", &finalize)?;
             finalize_receipts.push(append(
                 disk,
-                "FINALIZE",
+                RecordType::Finalize,
                 candidate.sequence,
                 &plan.candidate_hash,
                 &final_hash,
