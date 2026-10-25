@@ -94,7 +94,8 @@ pub(crate) fn apply_workspace_namespace(
     entries: &mut Vec<Entry>,
     base: &[Entry],
     operations: &[NamespaceOperation],
-) -> Result<()> {
+) -> Result<Vec<DeletedPath>> {
+    let mut deleted = Vec::new();
     let mut explicit_directories = std::collections::BTreeSet::new();
     for op in operations {
         // Uploaded children may have materialized their missing parents. An
@@ -107,12 +108,12 @@ pub(crate) fn apply_workspace_namespace(
         {
             continue;
         }
-        apply_namespace(entries, op)?;
+        deleted.extend(apply_namespace(entries, op)?);
         if op.kind == "mkdir" {
             explicit_directories.insert(name_policy::path_key(&op.path));
         }
     }
-    Ok(())
+    Ok(deleted)
 }
 pub(crate) fn validate_workspace_dependencies(workspace: &Workspace) -> Result<()> {
     let overlaps = |left: &str, right: &str| {
@@ -146,8 +147,31 @@ pub(crate) fn is_descendant(key: &str, ancestor: &str) -> bool {
         .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
-pub(crate) fn apply_namespace(entries: &mut Vec<Entry>, op: &NamespaceOperation) -> Result<()> {
+pub(crate) fn deleted_path(entry: &Entry) -> Result<DeletedPath> {
+    let kind = match entry.kind.as_str() {
+        "file" => NamespaceEntryKind::File,
+        "directory" => NamespaceEntryKind::Directory,
+        _ => return Err(Error::new("STATE_INVALID", "deleted entry kind is invalid")),
+    };
+    Ok(DeletedPath {
+        path: entry.path.clone(),
+        kind,
+    })
+}
+
+pub(crate) fn deletion_record(
+    paths: Vec<DeletedPath>,
+    timestamp: u64,
+) -> Option<NamespaceDeletions> {
+    (!paths.is_empty()).then_some(NamespaceDeletions { timestamp, paths })
+}
+
+pub(crate) fn apply_namespace(
+    entries: &mut Vec<Entry>,
+    op: &NamespaceOperation,
+) -> Result<Vec<DeletedPath>> {
     let key = name_policy::path_key(&op.path);
+    let mut deleted = Vec::new();
     match op.kind.as_str() {
         "mkdir" => {
             if find(entries, &op.path).is_some() {
@@ -175,6 +199,14 @@ pub(crate) fn apply_namespace(entries: &mut Vec<Entry>, op: &NamespaceOperation)
                     "directory contains children",
                 ));
             }
+            deleted = entries
+                .iter()
+                .filter(|e| {
+                    e.lookup_key == key
+                        || (op.kind == "delete_tree" && is_descendant(&e.lookup_key, &key))
+                })
+                .map(deleted_path)
+                .collect::<Result<Vec<_>>>()?;
             entries.retain(|e| {
                 e.lookup_key != key
                     && !(op.kind == "delete_tree" && is_descendant(&e.lookup_key, &key))
@@ -228,7 +260,7 @@ pub(crate) fn apply_namespace(entries: &mut Vec<Entry>, op: &NamespaceOperation)
             ));
         }
     }
-    Ok(())
+    Ok(deleted)
 }
 
 #[cfg(test)]

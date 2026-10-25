@@ -97,3 +97,114 @@ fn directory_rename_follows_normalized_ancestry_without_slicing_utf8_by_key_leng
         assert!(find(&entries, &format!("{source}-other")).is_some());
     }
 }
+
+#[test]
+fn namespace_deletion_facts_follow_operations_not_identity_or_final_paths() {
+    let first = entry("first.txt", "file");
+    let mut second = first.clone();
+    relocate_entry(&mut second, "second.txt".into()).unwrap();
+    let base = vec![first, second];
+    let mut entries = base.clone();
+    let deleted = apply_workspace_namespace(
+        &mut entries,
+        &base,
+        &[
+            NamespaceOperation {
+                kind: "delete".into(),
+                path: "first.txt".into(),
+                destination: None,
+            },
+            NamespaceOperation {
+                kind: "rename".into(),
+                path: "second.txt".into(),
+                destination: Some("first.txt".into()),
+            },
+        ],
+    )
+    .unwrap();
+    assert_eq!(deleted.len(), 1);
+    assert_eq!(deleted[0].path, "first.txt");
+    assert_eq!(deleted[0].kind, storage_contract::NamespaceEntryKind::File);
+    assert_eq!(entries, vec![base[0].clone()]);
+    let deleted = apply_namespace(
+        &mut entries,
+        &NamespaceOperation {
+            kind: "rename".into(),
+            path: "first.txt".into(),
+            destination: Some("FIRST.txt".into()),
+        },
+    )
+    .unwrap();
+    assert!(deleted.is_empty());
+}
+
+#[test]
+fn namespace_deletion_facts_preserve_repeated_intermediate_paths_and_tree_members() {
+    let base = vec![
+        entry("a", "file"),
+        entry("b", "file"),
+        entry("tree", "directory"),
+        entry("tree/child", "file"),
+    ];
+    let mut entries = base.clone();
+    let deleted = apply_workspace_namespace(
+        &mut entries,
+        &base,
+        &[
+            NamespaceOperation {
+                kind: "rename".into(),
+                path: "a".into(),
+                destination: Some("temporary".into()),
+            },
+            NamespaceOperation {
+                kind: "delete".into(),
+                path: "temporary".into(),
+                destination: None,
+            },
+            NamespaceOperation {
+                kind: "rename".into(),
+                path: "b".into(),
+                destination: Some("temporary".into()),
+            },
+            NamespaceOperation {
+                kind: "delete".into(),
+                path: "temporary".into(),
+                destination: None,
+            },
+            NamespaceOperation {
+                kind: "delete_tree".into(),
+                path: "tree".into(),
+                destination: None,
+            },
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        deleted
+            .iter()
+            .map(|fact| fact.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["temporary", "temporary", "tree", "tree/child"]
+    );
+    assert!(entries.is_empty());
+}
+
+#[test]
+fn rejected_namespace_delete_does_not_remove_entries_or_return_facts() {
+    let base = vec![entry("tree", "directory"), entry("tree/child", "file")];
+    for path in ["tree", "missing"] {
+        let mut entries = base.clone();
+        assert!(
+            apply_namespace(
+                &mut entries,
+                &NamespaceOperation {
+                    kind: "delete".into(),
+                    path: path.into(),
+                    destination: None,
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(entries, base);
+    }
+}

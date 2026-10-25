@@ -187,6 +187,7 @@ impl Engine {
                 state.commits.insert(
                     commit_id.clone(),
                     Commit {
+                        namespace_deletions: None,
                         commit_id: commit_id.clone(),
                         history_tree_id: source.history_tree_id.clone(),
                         kind: "branch_pending".into(),

@@ -53,6 +53,7 @@ pub(crate) fn advance_branch_node(
     state.commits.insert(
         id.clone(),
         Commit {
+            namespace_deletions: None,
             commit_id: id.clone(),
             history_tree_id: previous.history_tree_id,
             kind: "file_metadata".into(),
@@ -242,6 +243,7 @@ impl Publication<'_> {
             state.commits.insert(
                 id.clone(),
                 Commit {
+                    namespace_deletions: None,
                     commit_id: id.clone(),
                     history_tree_id: previous.history_tree_id,
                     kind: "file_node_publication".into(),
@@ -413,6 +415,7 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
         state.commits.insert(
             id.clone(),
             Commit {
+                namespace_deletions: None,
                 commit_id: id.clone(),
                 history_tree_id: repo.history_tree_id.clone(),
                 kind: "file_node_publication".into(),

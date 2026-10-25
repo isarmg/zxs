@@ -2733,7 +2733,7 @@
     "/api/file-manager/history": {
       "get": {
         "operationId": "listFileManagerHistory",
-        "description": "返回账号可读范围内最近的已提交文件活动记录（最多200条），按审计sequence倒序有界保留；不包含认证秘密。旧时间缺失为null。记录包括文件路径及目录分支、子树活动，单次操作可能产生多条记录；内部同步提交不重复显示。",
+        "description": "返回账号可读范围内最近的已提交文件活动记录（最多200条），按审计sequence倒序有界保留；不包含认证秘密。旧时间缺失为null。记录包括文件路径及目录分支、子树活动，单次操作可能产生多条记录；内部同步提交不重复显示。delete 行直接来自已提交的命名空间删除事实，记录删除时的路径与时间，不根据文件身份消失推断；同一事务重复删除同一路径保留各次记录，重命名不算删除。删除事实不引用或保留正文，file_id为空字符串且version_id为null。",
         "parameters": [],
         "responses": {
           "200": {
@@ -2790,11 +2790,11 @@
                               "string",
                               "null"
                             ],
-                            "description": "当前操作可见的真实版本；分支登记为冻结父ID，尚非新分支自有版本；目录事件兼容空字符串。"
+                            "description": "当前操作可见的真实版本；分支登记为冻结父ID，尚非新分支自有版本；目录事件兼容空字符串；delete 行为 null，不绑定正文版本。"
                           },
                           "file_id": {
                             "type": "string",
-                            "description": "文件容器的稳定身份；普通目录操作为空字符串。"
+                            "description": "文件容器的稳定身份；普通目录操作及 delete 行为空字符串。"
                           },
                           "message": {
                             "type": "string"
@@ -6120,7 +6120,7 @@
         "additionalProperties": {
           "$ref": "#/components/schemas/VersionId"
         },
-        "description": "未拥有正文的file_id及创建时冻结的父version_id。读取继承父版本，首次实际写入后才成为自己的FULL。Branch/Commit空映射省略以保持旧规范字节；活跃继承关系固定父正文直到不再需要。"
+        "description": "未拥有正文的file_id及创建时冻结的父version_id。读取继承父版本，首次实际写入后才成为自己的FULL。Branch/Commit空映射采用当前稀疏编码省略，缺省表示空；活跃继承关系固定父正文直到不再需要。"
       },
       "Branch": {
         "type": "object",
@@ -6523,6 +6523,9 @@
               "string",
               "null"
             ]
+          },
+          "namespace_deletions": {
+            "$ref": "#/components/schemas/NamespaceDeletions"
           }
         },
         "required": [
@@ -6539,7 +6542,7 @@
           "provenance"
         ],
         "additionalProperties": false,
-        "description": "不可变目录快照。pending_file_versions固定当时尚未拥有正文的文件及其继承父版本；分支首写后读旧快照仍显示原父版本。空map省略以保持旧规范字节；文件Entry引用可见真实版本。"
+        "description": "不可变目录快照。pending_file_versions固定当时尚未拥有正文的文件及其继承父版本；分支首写后读旧快照仍显示原父版本。空映射省略编码；文件Entry引用可见真实版本。namespace_deletions仅在实际删除时保存，无删除则省略；重命名、移动及视图选择不算删除。"
       },
       "DirectoryBranchId": {
         "type": "string",
@@ -8015,6 +8018,51 @@
         "maxLength": 20,
         "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
         "description": "业务历史的整秒 UTC 时刻，固定 YYYY-MM-DDTHH:mm:ssZ；不接受本地时区、偏移量或数字秒字符串作为展示格式。"
+      },
+      "NamespaceEntryKind": {
+        "type": "string",
+        "enum": [
+          "file",
+          "directory"
+        ]
+      },
+      "DeletedPath": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NamespaceEntryKind"
+          }
+        },
+        "required": [
+          "path",
+          "kind"
+        ],
+        "additionalProperties": false,
+        "description": "实际删除时的相对路径与条目种类，不保存实体、版本或正文引用；路径有效性由核心命名规则校验。"
+      },
+      "NamespaceDeletions": {
+        "type": "object",
+        "properties": {
+          "timestamp": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeletedPath"
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "timestamp",
+          "paths"
+        ],
+        "additionalProperties": false,
+        "description": "提交拥有的命名空间删除事实。时间按UINT64十进制字符串编码；非空paths按实际操作效果顺序保存，允许同一路径删除、重建后再次删除，不排序或去重。不依赖操作回执或正文存在性。"
       }
     }
   }

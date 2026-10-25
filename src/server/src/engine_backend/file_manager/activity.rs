@@ -57,6 +57,28 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
         let Ok(repo) = repo_for_history(engine, &commit.history_tree_id) else {
             continue;
         };
+        // Deletions are committed namespace facts, independent of content
+        // identity and of whether another alias still names the same file.
+        // The ordinal preserves repeated removal of one path in a transaction.
+        if let Some(deletions) = &commit.namespace_deletions {
+            for (ordinal, deleted) in deletions.paths.iter().enumerate() {
+                let display = if repo.file_manager_root {
+                    deleted.path.clone()
+                } else {
+                    format!("{}/{}", repo.name, deleted.path)
+                };
+                record_event(
+                    &mut events,
+                    json!({
+                        "event_id":format!("{}:delete:{}", commit.commit_id, ordinal),
+                        "timestamp":deletions.timestamp.to_string(),
+                        "sequence":commit.sequence.to_string(),"slot_id":repo.primary_slot_id,
+                        "path":display,"action":"delete","principal":commit.author,
+                        "version_id":null,"file_id":"","message":commit.message
+                    }),
+                );
+            }
+        }
         if matches!(
             commit.kind.as_str(),
             "root"
@@ -151,24 +173,6 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
                 );
             }
             record_event(&mut events, event);
-        }
-        if !matches!(
-            commit.kind.as_str(),
-            "file_branch"
-                | "file_branch_pending"
-                | "branch_pending"
-                | "file_content"
-                | "historical_save"
-        ) && let Some(parent) = parent
-        {
-            for entry in &parent.entries {
-                if !commit.entries.iter().any(|e| e.entry_id == entry.entry_id) {
-                    record_event(
-                        &mut events,
-                        json!({"event_id":format!("{}:{}:{}:deleted",commit.commit_id,entry.entry_id,entry.path),"timestamp":timestamp,"sequence":commit.sequence.to_string(),"slot_id":repo.primary_slot_id,"path":if repo.file_manager_root{entry.path.clone()}else{format!("{}/{}",repo.name,entry.path)},"action":"delete","principal":commit.author,"version_id":entry.version_id,"file_id":entry.file_id,"message":commit.message}),
-                    );
-                }
-            }
         }
     }
     for operation in engine.state().operations.values().filter(|op| {

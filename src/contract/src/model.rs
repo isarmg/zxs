@@ -379,6 +379,27 @@ pub struct Entry {
     #[serialization(with = "crate::u64_string")]
     pub size: u64,
 }
+/// A logical deletion has no content identity or payload-retention dependency.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serialization(rename_all = "snake_case")]
+pub enum NamespaceEntryKind {
+    File,
+    Directory,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serialization(deny_unknown_fields)]
+pub struct DeletedPath {
+    pub path: String,
+    pub kind: NamespaceEntryKind,
+}
+/// Ordered removals performed by this commit, independent of later path reuse.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serialization(deny_unknown_fields)]
+pub struct NamespaceDeletions {
+    #[serialization(with = "crate::u64_string")]
+    pub timestamp: u64,
+    pub paths: Vec<DeletedPath>,
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub struct Commit {
@@ -393,6 +414,8 @@ pub struct Commit {
     pub author: String,
     pub message: String,
     pub entries: Vec<Entry>,
+    #[serialization(default, skip_serializing_if = "Option::is_none")]
+    pub namespace_deletions: Option<NamespaceDeletions>,
     /// Snapshot-local reservations preserve inherited parent views even after
     /// the live branch later gains its own content versions.
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]

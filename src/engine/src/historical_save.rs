@@ -1,7 +1,7 @@
 //! Historical branch records retain lineage; only staged writes gain content.
 use crate::{
     business::{
-        apply_workspace_namespace, ensure_parents, find, now, validate_entries,
+        apply_workspace_namespace, deletion_record, ensure_parents, find, now, validate_entries,
         validate_workspace_dependencies,
     },
     disk::*,
@@ -70,7 +70,8 @@ fn final_entries(
     source: &Commit,
     workspace: Option<&Workspace>,
     maximum: usize,
-) -> Result<Vec<Entry>> {
+) -> Result<(Vec<Entry>, Vec<DeletedPath>)> {
+    let mut deleted = Vec::new();
     let mut entries = source.entries.clone();
     if let Some(workspace) = workspace {
         for staged in workspace.files.values() {
@@ -99,14 +100,14 @@ fn final_entries(
             entries.retain(|entry| entry.lookup_key != key);
             entries.push(entry);
         }
-        apply_workspace_namespace(
+        deleted = apply_workspace_namespace(
             &mut entries,
             &source.entries,
             &workspace.namespace_operations,
         )?;
     }
     validate_entries(&mut entries, maximum)?;
-    Ok(entries)
+    Ok((entries, deleted))
 }
 
 impl Engine {
@@ -256,7 +257,7 @@ impl Engine {
         } else {
             None
         };
-        let entries = final_entries(&source, workspace.as_ref(), self.config.max_entries)?;
+        let (entries, _) = final_entries(&source, workspace.as_ref(), self.config.max_entries)?;
         let mut per_slot = BTreeMap::<String, u64>::new();
         let mut total = 0u64;
         let mut count = 0usize;
@@ -443,7 +444,7 @@ impl Engine {
                     .filter(|commit| commit.history_tree_id == history)
                     .cloned()
                     .ok_or_else(|| Error::new("COMMIT_NOT_FOUND", "historical source no longer exists"))?;
-                let mut entries = final_entries(&source, workspace.as_ref(), engine.config.max_entries)?;
+                let (mut entries, deleted) = final_entries(&source, workspace.as_ref(), engine.config.max_entries)?;
                 let branch_id = new_id("br");
                 let commit_id = new_id("commit");
                 let mut copied = 0usize;
@@ -482,6 +483,7 @@ impl Engine {
                 }
                 validate_entries(&mut entries, engine.config.max_entries)?;
                 state.commits.insert(commit_id.clone(), Commit {
+                    namespace_deletions: deletion_record(deleted, now()),
                     commit_id: commit_id.clone(), history_tree_id: history.clone(),
                     kind: "historical_save".into(), parent_commit_ids: vec![source_id.clone()],
                     tree_id: new_id("tree"), sequence: state.sequence, operation_id: operation.into(),

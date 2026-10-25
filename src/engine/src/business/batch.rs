@@ -145,6 +145,7 @@ fn save_inactive(
     principal: &str,
     operation: &str,
     maximum: usize,
+    namespace_deletions: Option<NamespaceDeletions>,
 ) -> Result<()> {
     let previous = state
         .directory_branches
@@ -177,6 +178,7 @@ fn save_inactive(
     state.commits.insert(
         commit_id.clone(),
         Commit {
+            namespace_deletions,
             commit_id: commit_id.clone(),
             history_tree_id: repo.history_tree_id.clone(),
             kind: "directory_namespace".into(),
@@ -295,6 +297,7 @@ fn apply(
     let mut source_ranges = BTreeMap::<String, Vec<String>>::new();
     let mut mappings = BTreeSet::new();
     let mut planned = Vec::new();
+    let mut deleted = Vec::<(String, DeletedPath)>::new();
     for item in &request.items {
         let source_scope = &originals[&item.source.directory_branch_id];
         if !contains(&source_scope.path, &item.source.path) {
@@ -354,6 +357,20 @@ fn apply(
             })
         {
             continue;
+        }
+        if request.kind == "delete" {
+            // Capture only actual deletions, never the temporary removals used
+            // to plan moves or renames. Keep request and source-entry order.
+            for entry in &drafts[&source_scope.directory_branch_id].entries {
+                if entry.lookup_key == source.lookup_key
+                    || namespace::is_descendant(&entry.lookup_key, &source.lookup_key)
+                {
+                    deleted.push((
+                        source_scope.directory_branch_id.clone(),
+                        namespace::deleted_path(entry)?,
+                    ));
+                }
+            }
         }
         if request.kind != "copy" {
             remove(
@@ -666,9 +683,21 @@ fn apply(
         validate_identities(&draft.entries)?;
         sorted(&mut draft.entries);
     }
+    let deletion_timestamp = now();
+    let active_ids = active.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let mut active_deleted = Vec::new();
+    let mut inactive_deleted = BTreeMap::<String, Vec<DeletedPath>>::new();
+    for (scope, path) in deleted {
+        if active_ids.contains(scope.as_str()) {
+            active_deleted.push((scope, path));
+        } else {
+            inactive_deleted.entry(scope).or_default().push(path);
+        }
+    }
     let previous = current;
     let mut entries = previous.entries.clone();
     let mut changed_paths = renamed_directories;
+    let mut active_paths = BTreeMap::new();
     for id in &active {
         let draft = &drafts[id];
         let path = if draft.directory_id == repository {
@@ -685,6 +714,7 @@ fn apply(
                     )
                 })?
         };
+        active_paths.insert(id.clone(), path.clone());
         let key = name_policy::path_key(&path);
         let removed = entries
             .iter()
@@ -730,12 +760,21 @@ fn apply(
     }
     validate_entries(&mut entries, engine.config.max_entries)?;
     validate_identities(&entries)?;
+    let active_deleted = active_deleted
+        .into_iter()
+        .map(|(scope, mut deleted)| {
+            deleted.path =
+                directory::rebase_path(&deleted.path, &drafts[&scope].path, &active_paths[&scope])?;
+            Ok(deleted)
+        })
+        .collect::<Result<Vec<_>>>()?;
     let commit_id = if !active.is_empty() {
         let id = new_id("commit");
         let pending = directory::snapshot_pending(state, &entries);
         state.commits.insert(
             id.clone(),
             Commit {
+                namespace_deletions: namespace::deletion_record(active_deleted, deletion_timestamp),
                 commit_id: id.clone(),
                 history_tree_id: repo.history_tree_id.clone(),
                 kind: "namespace_batch".into(),
@@ -770,6 +809,10 @@ fn apply(
             principal,
             operation,
             engine.config.max_entries,
+            namespace::deletion_record(
+                inactive_deleted.remove(id).unwrap_or_default(),
+                deletion_timestamp,
+            ),
         )?;
     }
     let ancestors = directory::record_directory_edits(state, repository, &changed_paths, None)?;

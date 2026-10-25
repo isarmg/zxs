@@ -2292,3 +2292,264 @@ fn history_branch_names_match_the_current_128_byte_write_limit() {
         }
     }
 }
+
+#[test]
+fn namespace_deletion_facts_validate_without_snapshot_or_content_dependencies() {
+    use storage_contract::{DeletedPath, NamespaceDeletions, NamespaceEntryKind};
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = initialize(temp.path());
+    let repo = engine
+        .create_repository("deletion facts", "P01", 1, "alice", &new_id("op"))
+        .unwrap();
+    let mut manifest = HistoryManifest::from_state(engine.state(), &repo.history_tree_id).unwrap();
+    let root = manifest.history.root_commit_id.clone();
+    // An intermediate path may be absent from every snapshot; repeated paths
+    // represent separate sequential operations rather than duplicate identities.
+    manifest.commits.get_mut(&root).unwrap().namespace_deletions = Some(NamespaceDeletions {
+        timestamp: 1,
+        paths: vec![
+            DeletedPath {
+                path: "parent/intermediate.txt".into(),
+                kind: NamespaceEntryKind::File
+            };
+            2
+        ],
+    });
+    manifest.validate().unwrap();
+    assert!(manifest.versions.is_empty());
+    let encoded = canonical_json(&manifest).unwrap();
+    let decoded: HistoryManifest = json_codec::from_slice(&encoded).unwrap();
+    assert_eq!(
+        decoded.commits[&root].namespace_deletions,
+        manifest.commits[&root].namespace_deletions
+    );
+    for path in ["", "../escape", "/absolute"] {
+        let mut invalid = manifest.clone();
+        invalid
+            .commits
+            .get_mut(&root)
+            .unwrap()
+            .namespace_deletions
+            .as_mut()
+            .unwrap()
+            .paths[0]
+            .path = path.into();
+        assert!(invalid.validate().is_err(), "accepted {path:?}");
+    }
+    for timestamp in [u64::MAX, i64::MAX as u64] {
+        let mut invalid = manifest.clone();
+        invalid
+            .commits
+            .get_mut(&root)
+            .unwrap()
+            .namespace_deletions
+            .as_mut()
+            .unwrap()
+            .timestamp = timestamp;
+        assert!(invalid.validate().is_err());
+    }
+    manifest
+        .commits
+        .get_mut(&root)
+        .unwrap()
+        .namespace_deletions
+        .as_mut()
+        .unwrap()
+        .paths
+        .clear();
+    assert!(manifest.validate().is_err());
+}
+
+#[test]
+fn namespace_deletions_survive_export_restore_and_replay_without_operation_records() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let mut engine = initialize(temp.path());
+    let repo = engine
+        .create_repository("deleted namespace", "P01", 1, "alice", &new_id("op"))
+        .unwrap();
+    save_path(
+        &mut engine,
+        &repo.main_branch_id,
+        "folder/file.txt",
+        b"retained historical body",
+    );
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "alice")
+        .unwrap();
+    engine
+        .namespace_operation(
+            &workspace.workspace_id,
+            NamespaceOperation {
+                kind: "delete_tree".into(),
+                path: "folder".into(),
+                destination: None,
+            },
+        )
+        .unwrap();
+    let request = CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: new_id("op"),
+        principal: "alice".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "remove folder".into(),
+        request_digest: None,
+    };
+    let result = engine.commit_workspace(request.clone()).unwrap();
+    let commit_id = result.commit_id.unwrap();
+    let facts = engine.state().commits[&commit_id]
+        .namespace_deletions
+        .clone()
+        .unwrap();
+    let paths = facts
+        .paths
+        .iter()
+        .map(|fact| fact.path.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(paths, BTreeSet::from(["folder", "folder/file.txt"]));
+    assert_eq!(facts.paths.len(), 2);
+    let count = engine.state().commits.len();
+    assert_eq!(
+        engine
+            .commit_workspace(request)
+            .unwrap()
+            .commit_id
+            .as_deref(),
+        Some(commit_id.as_str())
+    );
+    assert_eq!(engine.state().commits.len(), count);
+    let package = temp.path().join("deleted-package");
+    let report = engine
+        .export_history_package(&repo.history_tree_id, &package)
+        .unwrap();
+    offline_check_history_package(&package).unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let mut restored = initialize(target.path());
+    restored
+        .restore_history_package(&package, "P01", 1, "alice", &new_id("op"))
+        .unwrap();
+    assert_eq!(
+        restored.state().commits[&commit_id]
+            .namespace_deletions
+            .as_ref(),
+        Some(&facts)
+    );
+    assert!(
+        !restored
+            .state()
+            .operations
+            .contains_key(&engine.state().commits[&commit_id].operation_id)
+    );
+    assert_eq!(restored.state().versions.len(), report.versions);
+}
+
+#[test]
+fn failed_workspace_namespace_sequence_does_not_publish_deletion_facts() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = initialize(temp.path());
+    let repo = engine
+        .create_repository("failed deletion", "P01", 1, "alice", &new_id("op"))
+        .unwrap();
+    save(&mut engine, &repo.main_branch_id, b"still present");
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "alice")
+        .unwrap();
+    for path in ["file.txt", "missing.txt"] {
+        engine
+            .namespace_operation(
+                &workspace.workspace_id,
+                NamespaceOperation {
+                    kind: "delete".into(),
+                    path: path.into(),
+                    destination: None,
+                },
+            )
+            .unwrap();
+    }
+    let commits = engine.state().commits.clone();
+    let head = engine.state().branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    assert!(
+        engine
+            .commit_workspace(CommitRequest {
+                workspace_id: workspace.workspace_id,
+                operation_id: new_id("op"),
+                principal: "alice".into(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: "must not publish".into(),
+                request_digest: None,
+            })
+            .is_err()
+    );
+    assert_eq!(engine.state().commits, commits);
+    assert_eq!(
+        engine.state().branches[&repo.main_branch_id].head_commit_id,
+        head
+    );
+    assert!(
+        engine
+            .list_tree(&repo.main_branch_id)
+            .unwrap()
+            .iter()
+            .any(|entry| entry.path == "file.txt")
+    );
+}
+
+#[test]
+fn net_zero_namespace_sequence_persists_deletion_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = initialize(temp.path());
+    let repo = engine
+        .create_repository("temporary namespace", "P01", 1, "alice", &new_id("op"))
+        .unwrap();
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "alice")
+        .unwrap();
+    for kind in ["mkdir", "delete"] {
+        engine
+            .namespace_operation(
+                &workspace.workspace_id,
+                NamespaceOperation {
+                    kind: kind.into(),
+                    path: "temporary".into(),
+                    destination: None,
+                },
+            )
+            .unwrap();
+    }
+    let request = CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: new_id("op"),
+        principal: "alice".into(),
+        expected_head: workspace.base_head.clone(),
+        fencing_token: workspace.fencing_token,
+        message: "temporary directory".into(),
+        request_digest: None,
+    };
+    let commit = engine
+        .commit_workspace(request.clone())
+        .unwrap()
+        .commit_id
+        .unwrap();
+    assert_ne!(commit, workspace.base_head);
+    assert!(engine.state().commits[&commit].entries.is_empty());
+    let facts = engine.state().commits[&commit]
+        .namespace_deletions
+        .as_ref()
+        .unwrap();
+    assert_eq!(facts.paths.len(), 1);
+    assert_eq!(facts.paths[0].path, "temporary");
+    assert_eq!(
+        facts.paths[0].kind,
+        storage_contract::NamespaceEntryKind::Directory
+    );
+    let count = engine.state().commits.len();
+    assert_eq!(
+        engine.commit_workspace(request).unwrap().commit_id.as_ref(),
+        Some(&commit)
+    );
+    assert_eq!(engine.state().commits.len(), count);
+}

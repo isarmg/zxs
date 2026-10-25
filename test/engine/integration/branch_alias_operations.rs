@@ -8,6 +8,8 @@ use storage_engine::{
 };
 #[path = "branch_alias_operations/batch_planning_scenarios.rs"]
 mod batch_planning_scenarios;
+#[path = "branch_alias_operations/deletion_rebase_scenarios.rs"]
+mod deletion_rebase_scenarios;
 #[path = "branch_alias_operations/file_merge_scenarios.rs"]
 mod file_merge_scenarios;
 
@@ -1066,4 +1068,45 @@ fn exact_no_op_rename_of_stale_alias_preserves_physical_name() {
             "b/new.txt"
         )
     });
+}
+
+#[test]
+fn batch_deletion_facts_cover_active_and_inactive_alias_scopes_without_move_deletions() {
+    for active in [false, true] {
+        let mut p = Pool::new();
+        let (_, _, original) = selected_aliases(&mut p);
+        assert!(
+            p.engine
+                .state()
+                .commits
+                .values()
+                .all(|commit| commit.namespace_deletions.is_none()),
+            "moves and selections must not manufacture deletions"
+        );
+        let root = p.register("", "deletion scope");
+        if active {
+            p.select("", "deletion scope");
+        }
+        let operation = p.batch(
+            "delete",
+            vec![DirectoryNamespaceItem {
+                source: p.source(&root, "a/report.txt"),
+                target: None,
+            }],
+        );
+        let facts = p
+            .engine
+            .state()
+            .commits
+            .values()
+            .filter(|commit| commit.operation_id == operation.operation_id)
+            .filter_map(|commit| commit.namespace_deletions.as_ref())
+            .flat_map(|facts| &facts.paths)
+            .collect::<Vec<_>>();
+        assert_eq!(facts.len(), 1, "scope active: {active}");
+        assert_eq!(facts[0].path, "a/report.txt");
+        assert_eq!(facts[0].kind, storage_engine::NamespaceEntryKind::File);
+        assert_eq!(p.entry(&root, "b/report.txt").file_id, original.file_id);
+        assert_eq!(p.bytes(&original.version_id), b"original");
+    }
 }

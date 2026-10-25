@@ -142,6 +142,127 @@ fn sparse_branch_and_commit_canonical_bytes_omit_empty_pending_maps() {
 }
 
 #[test]
+fn namespace_deletion_facts_preserve_order_time_and_sparse_commit_encoding() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
+    let vectors = read(&root.join("vectors.json")).unwrap();
+    let value = array(&vectors["positive"])
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "commit-with-ordered-content-independent-deletions")
+        .unwrap()["value"]
+        .clone();
+    let mut core = read(&root.join("core.schema.json")).unwrap();
+    core["$ref"] = "#/$defs/Commit".into();
+    let core_schema = validator(&core).unwrap();
+    let mut api = read(&root.join("openapi.json")).unwrap();
+    api["$ref"] = "#/components/schemas/Commit".into();
+    let api_schema = validator(&api).unwrap();
+    assert!(core_schema.is_valid(&value));
+    assert!(api_schema.is_valid(&value));
+
+    let encoded = storage_contract::canonical_json(&value).unwrap();
+    let mut commit: storage_contract::Commit = storage_contract::decode_strict(&encoded).unwrap();
+    let facts = commit.namespace_deletions.as_ref().unwrap();
+    assert_eq!(facts.timestamp, u64::MAX);
+    assert_eq!(facts.paths.len(), 3);
+    assert_eq!(
+        facts.paths[0].kind,
+        storage_contract::NamespaceEntryKind::Directory
+    );
+    assert_eq!(
+        facts.paths[1].kind,
+        storage_contract::NamespaceEntryKind::File
+    );
+    assert_eq!(facts.paths[1], facts.paths[2]);
+    assert_eq!(storage_contract::canonical_json(&commit).unwrap(), encoded);
+    assert_eq!(
+        storage_contract::object_hash("commit", &commit).unwrap(),
+        storage_contract::object_hash("commit", &value).unwrap()
+    );
+    commit
+        .namespace_deletions
+        .as_mut()
+        .unwrap()
+        .paths
+        .swap(0, 1);
+    assert_ne!(storage_contract::canonical_json(&commit).unwrap(), encoded);
+    commit.namespace_deletions = None;
+    let sparse = storage_contract::canonical_json(&commit).unwrap();
+    let mut without_facts = value.clone();
+    without_facts
+        .as_object_mut()
+        .unwrap()
+        .remove("namespace_deletions");
+    assert_eq!(
+        sparse,
+        storage_contract::canonical_json(&without_facts).unwrap()
+    );
+    assert!(core_schema.is_valid(&without_facts));
+    assert!(api_schema.is_valid(&without_facts));
+
+    for invalid in [json!(null), json!({"timestamp":"1","paths":[]})] {
+        let mut changed = value.clone();
+        changed["namespace_deletions"] = invalid;
+        assert!(!core_schema.is_valid(&changed));
+        assert!(!api_schema.is_valid(&changed));
+    }
+}
+
+#[test]
+fn namespace_deletion_fact_shapes_reject_content_references_and_timestamp_aliases() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
+    let vectors = read(&root.join("vectors.json")).unwrap();
+    let core = read(&root.join("core.schema.json")).unwrap();
+    let api = read(&root.join("openapi.json")).unwrap();
+    for name in ["NamespaceDeletions", "DeletedPath"] {
+        let mut schema = core.clone();
+        schema["$ref"] = format!("#/$defs/{name}").into();
+        let core_schema = validator(&schema).unwrap();
+        let mut schema = api.clone();
+        schema["$ref"] = format!("#/components/schemas/{name}").into();
+        let api_schema = validator(&schema).unwrap();
+        for group in ["positive", "negative"] {
+            for case in array(&vectors[group])
+                .unwrap()
+                .iter()
+                .filter(|case| case["schema"] == name)
+            {
+                let value = &case["value"];
+                assert_eq!(
+                    core_schema.is_valid(value),
+                    group == "positive",
+                    "{}",
+                    case["name"]
+                );
+                assert_eq!(
+                    api_schema.is_valid(value),
+                    group == "positive",
+                    "{}",
+                    case["name"]
+                );
+                if group == "positive" {
+                    let encoded = storage_contract::canonical_json(value).unwrap();
+                    let roundtrip = match name {
+                        "NamespaceDeletions" => {
+                            let decoded: storage_contract::NamespaceDeletions =
+                                storage_contract::decode_strict(&encoded).unwrap();
+                            storage_contract::canonical_json(&decoded).unwrap()
+                        }
+                        "DeletedPath" => {
+                            let decoded: storage_contract::DeletedPath =
+                                storage_contract::decode_strict(&encoded).unwrap();
+                            storage_contract::canonical_json(&decoded).unwrap()
+                        }
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(roundtrip, encoded);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn inherited_file_manager_projection_distinguishes_visible_parent_from_own_content() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts/openapi.json");
     let mut api = read(&path).unwrap();

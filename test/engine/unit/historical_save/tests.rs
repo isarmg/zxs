@@ -228,3 +228,131 @@ fn historical_placeholders_need_no_old_payload_and_written_replacements_material
     );
     assert!(saved.branch_id.is_some());
 }
+
+#[test]
+fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherited() {
+    let root = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([root.path().join("primary")]),
+    )
+    .unwrap();
+    let repo = engine
+        .create_repository("historical deletion", "P01", 1, "admin", &new_id("op"))
+        .unwrap();
+    let mut commits = Vec::new();
+    for bytes in [b"old body".as_slice(), b"current body".as_slice()] {
+        let workspace = engine
+            .create_workspace(&repo.main_branch_id, "admin")
+            .unwrap();
+        engine
+            .stage_bytes(&workspace.workspace_id, "file.txt", bytes)
+            .unwrap();
+        commits.push(
+            engine
+                .commit_workspace(CommitRequest {
+                    workspace_id: workspace.workspace_id,
+                    operation_id: new_id("op"),
+                    principal: "admin".into(),
+                    expected_head: workspace.base_head,
+                    fencing_token: workspace.fencing_token,
+                    message: "source".into(),
+                    request_digest: None,
+                })
+                .unwrap()
+                .commit_id
+                .unwrap(),
+        );
+    }
+    let old_version = engine.state.commits[&commits[0]].entries[0]
+        .version_id
+        .clone();
+    let purge = engine
+        .create_purge_plan(&repo.history_tree_id, vec![old_version.clone()], "admin")
+        .unwrap();
+    engine
+        .commit_plan(&purge.plan_id, "admin", &new_id("op"))
+        .unwrap();
+    assert_eq!(engine.state.content_states[&old_version], "PURGED");
+    let workspace = engine
+        .create_historical_workspace(&repo.main_branch_id, &commits[0], "admin")
+        .unwrap();
+    engine
+        .namespace_operation(
+            &workspace.workspace_id,
+            NamespaceOperation {
+                kind: "delete".into(),
+                path: "file.txt".into(),
+                destination: None,
+            },
+        )
+        .unwrap();
+    let before = engine.state.commits.clone();
+    let version_count = engine.state.versions.len();
+    let plan = engine
+        .create_historical_save_plan(
+            &repo.history_tree_id,
+            HistoricalSaveOptions {
+                source_commit_id: commits[0].clone(),
+                name: "delete old file".into(),
+                workspace_id: Some(workspace.workspace_id),
+                primary_slot_id: None,
+                target_copies: None,
+            },
+            "admin",
+        )
+        .unwrap();
+    assert_eq!(
+        engine.state.commits, before,
+        "planning must not append operation facts"
+    );
+    assert_eq!(plan.input["full_copy_files"], 0);
+    assert_eq!(plan.input["placeholder_files"], 0);
+    let saved = engine
+        .commit_historical_save_plan(&plan.plan_id, "admin", &new_id("op"))
+        .unwrap();
+    let commit = saved.commit_id.unwrap();
+    let historical = &engine.state.commits[&commit];
+    assert!(historical.entries.is_empty());
+    let facts = historical.namespace_deletions.as_ref().unwrap();
+    assert_eq!(facts.paths.len(), 1);
+    assert_eq!(facts.paths[0].path, "file.txt");
+    assert_eq!(facts.paths[0].kind, NamespaceEntryKind::File);
+    assert_eq!(saved.result["full_copy_files"], 0);
+    assert_eq!(engine.state.versions.len(), version_count);
+    assert_eq!(engine.state.content_states[&old_version], "PURGED");
+    assert_eq!(
+        engine.state.branches[&repo.main_branch_id].head_commit_id,
+        commits[1]
+    );
+    let branch = engine
+        .create_branch(&commit, "ordinary copy", "admin", &new_id("op"))
+        .unwrap();
+    assert!(
+        engine.state.commits[&branch.head_commit_id]
+            .namespace_deletions
+            .is_none()
+    );
+    let copy = engine
+        .create_historical_save_plan(
+            &repo.history_tree_id,
+            HistoricalSaveOptions {
+                source_commit_id: commit,
+                name: "historical copy".into(),
+                workspace_id: None,
+                primary_slot_id: None,
+                target_copies: None,
+            },
+            "admin",
+        )
+        .unwrap();
+    let copied = engine
+        .commit_historical_save_plan(&copy.plan_id, "admin", &new_id("op"))
+        .unwrap();
+    assert!(
+        engine.state.commits[copied.commit_id.as_ref().unwrap()]
+            .namespace_deletions
+            .is_none()
+    );
+    assert_eq!(engine.state.versions.len(), version_count);
+}

@@ -1318,6 +1318,55 @@
           "B01": "档案/工作"
         }
       }
+    },
+    {
+      "name": "commit-with-ordered-content-independent-deletions",
+      "schema": "Commit",
+      "layer": "schema",
+      "value": {
+        "commit_id": "commit_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "kind": "namespace",
+        "parent_commit_ids": [],
+        "tree_id": "tree_00000000000000000000000000000001",
+        "sequence": "1",
+        "operation_id": "op_00000000000000000000000000000001",
+        "author": "alice",
+        "message": "删除目录与文件",
+        "entries": [],
+        "provenance": null,
+        "namespace_deletions": {
+          "timestamp": "18446744073709551615",
+          "paths": [
+            {
+              "path": "资料",
+              "kind": "directory"
+            },
+            {
+              "path": "资料/报告.txt",
+              "kind": "file"
+            },
+            {
+              "path": "资料/报告.txt",
+              "kind": "file"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "namespace-deletions-at-zero-time",
+      "schema": "NamespaceDeletions",
+      "layer": "schema",
+      "value": {
+        "timestamp": "0",
+        "paths": [
+          {
+            "path": "empty",
+            "kind": "directory"
+          }
+        ]
+      }
     }
   ],
   "negative": [
@@ -4918,6 +4967,269 @@
         "target_copies": 2,
         "inheritable": 0,
         "generation": "1"
+      }
+    },
+    {
+      "name": "namespace-deletions-empty-paths",
+      "schema": "NamespaceDeletions",
+      "layer": "schema",
+      "value": {
+        "timestamp": "18446744073709551615",
+        "paths": []
+      }
+    },
+    {
+      "name": "namespace-deletions-null-paths",
+      "schema": "NamespaceDeletions",
+      "layer": "schema",
+      "value": {
+        "timestamp": "18446744073709551615",
+        "paths": null
+      }
+    },
+    {
+      "name": "namespace-deletions-numeric-timestamp",
+      "schema": "NamespaceDeletions",
+      "layer": "schema",
+      "value": {
+        "timestamp": 1,
+        "paths": [
+          {
+            "path": "资料",
+            "kind": "directory"
+          },
+          {
+            "path": "资料/报告.txt",
+            "kind": "file"
+          },
+          {
+            "path": "资料/报告.txt",
+            "kind": "file"
+          }
+        ]
+      }
+    },
+    {
+      "name": "namespace-deletions-null-timestamp",
+      "schema": "NamespaceDeletions",
+      "layer": "schema",
+      "value": {
+        "timestamp": null,
+        "paths": [
+          {
+            "path": "资料",
+            "kind": "directory"
+          },
+          {
+            "path": "资料/报告.txt",
+            "kind": "file"
+          },
+          {
+            "path": "资料/报告.txt",
+            "kind": "file"
+          }
+        ]
+      }
+    },
+    {
+      "name": "namespace-deletions-leading-zero-timestamp",
+      "schema": "NamespaceDeletions",
+      "layer": "schema",
+      "value": {
+        "timestamp": "01",
+        "paths": [
+          {
+            "path": "资料",
+            "kind": "directory"
+          },
+          {
+            "path": "资料/报告.txt",
+            "kind": "file"
+          },
+          {
+            "path": "资料/报告.txt",
+            "kind": "file"
+          }
+        ]
+      }
+    },
+    {
+      "name": "namespace-deletions-overflow-timestamp",
+      "schema": "NamespaceDeletions",
+      "layer": "schema",
+      "value": {
+        "timestamp": "18446744073709551616",
+        "paths": [
+          {
+            "path": "资料",
+            "kind": "directory"
+          },
+          {
+            "path": "资料/报告.txt",
+            "kind": "file"
+          },
+          {
+            "path": "资料/报告.txt",
+            "kind": "file"
+          }
+        ]
+      }
+    },
+    {
+      "name": "namespace-deletions-negative-timestamp",
+      "schema": "NamespaceDeletions",
+      "layer": "schema",
+      "value": {
+        "timestamp": "-1",
+        "paths": [
+          {
+            "path": "资料",
+            "kind": "directory"
+          },
+          {
+            "path": "资料/报告.txt",
+            "kind": "file"
+          },
+          {
+            "path": "资料/报告.txt",
+            "kind": "file"
+          }
+        ]
+      }
+    },
+    {
+      "name": "namespace-deletions-missing-timestamp",
+      "schema": "NamespaceDeletions",
+      "layer": "schema",
+      "value": {
+        "paths": [
+          {
+            "path": "资料",
+            "kind": "directory"
+          },
+          {
+            "path": "资料/报告.txt",
+            "kind": "file"
+          },
+          {
+            "path": "资料/报告.txt",
+            "kind": "file"
+          }
+        ]
+      }
+    },
+    {
+      "name": "namespace-deletions-missing-paths",
+      "schema": "NamespaceDeletions",
+      "layer": "schema",
+      "value": {
+        "timestamp": "18446744073709551615"
+      }
+    },
+    {
+      "name": "commit-null-namespace-deletions",
+      "schema": "Commit",
+      "layer": "schema",
+      "value": {
+        "commit_id": "commit_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "kind": "namespace",
+        "parent_commit_ids": [],
+        "tree_id": "tree_00000000000000000000000000000001",
+        "sequence": "1",
+        "operation_id": "op_00000000000000000000000000000001",
+        "author": "alice",
+        "message": "删除目录与文件",
+        "entries": [],
+        "provenance": null,
+        "namespace_deletions": null
+      }
+    },
+    {
+      "name": "deleted-path-missing-path",
+      "schema": "DeletedPath",
+      "layer": "schema",
+      "value": {
+        "kind": "directory"
+      }
+    },
+    {
+      "name": "deleted-path-missing-kind",
+      "schema": "DeletedPath",
+      "layer": "schema",
+      "value": {
+        "path": "资料"
+      }
+    },
+    {
+      "name": "deleted-path-invalid-kind",
+      "schema": "DeletedPath",
+      "layer": "schema",
+      "value": {
+        "path": "资料",
+        "kind": "symlink"
+      }
+    },
+    {
+      "name": "deleted-path-forbids-entry-id",
+      "schema": "DeletedPath",
+      "layer": "schema",
+      "value": {
+        "path": "资料",
+        "kind": "directory",
+        "entry_id": "forbidden"
+      }
+    },
+    {
+      "name": "deleted-path-forbids-file-id",
+      "schema": "DeletedPath",
+      "layer": "schema",
+      "value": {
+        "path": "资料",
+        "kind": "directory",
+        "file_id": "forbidden"
+      }
+    },
+    {
+      "name": "deleted-path-forbids-version-id",
+      "schema": "DeletedPath",
+      "layer": "schema",
+      "value": {
+        "path": "资料",
+        "kind": "directory",
+        "version_id": "forbidden"
+      }
+    },
+    {
+      "name": "deleted-path-forbids-content-hash",
+      "schema": "DeletedPath",
+      "layer": "schema",
+      "value": {
+        "path": "资料",
+        "kind": "directory",
+        "content_hash": "forbidden"
+      }
+    },
+    {
+      "name": "namespace-deletions-rejects-created-at-alias",
+      "schema": "NamespaceDeletions",
+      "layer": "schema",
+      "value": {
+        "paths": [
+          {
+            "path": "资料",
+            "kind": "directory"
+          },
+          {
+            "path": "资料/报告.txt",
+            "kind": "file"
+          },
+          {
+            "path": "资料/报告.txt",
+            "kind": "file"
+          }
+        ],
+        "created_at": "18446744073709551615"
       }
     }
   ],

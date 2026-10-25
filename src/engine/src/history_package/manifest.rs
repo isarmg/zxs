@@ -858,6 +858,22 @@ impl HistoryManifest {
                     "history must have one root and single-parent commits",
                 ));
             }
+            if let Some(deletions) = &commit.namespace_deletions {
+                // Operation facts are not a namespace snapshot: parents can remain
+                // live, and sequential edits can delete the same path more than once.
+                if deletions.paths.is_empty() {
+                    return Err(invalid("namespace deletion facts are empty"));
+                }
+                crate::disk::encode_metadata(deletions, crate::disk::MAX_METADATA)?;
+                let timestamp = i64::try_from(deletions.timestamp)
+                    .map_err(|_| invalid("namespace deletion timestamp is invalid"))?;
+                date_time::OffsetDateTime::from_unix_timestamp(timestamp)
+                    .map_err(|_| invalid("namespace deletion timestamp is invalid"))?;
+                for deletion in &deletions.paths {
+                    name_policy::validate_path(&deletion.path)
+                        .map_err(|_| invalid("namespace deletion path is invalid"))?;
+                }
+            }
             let mut entries = commit.entries.clone();
             validate_entries(&mut entries, 1_000_000)?;
             if canonical_json(&entries)? != canonical_json(&commit.entries)? {

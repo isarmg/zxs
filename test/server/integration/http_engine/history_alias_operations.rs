@@ -143,7 +143,7 @@ async fn operation_events(
         .iter()
         .filter(|event| {
             event["sequence"] == operation["publication_sequence"]
-                && event["file_id"] == file["file_id"]
+                && (event["file_id"] == file["file_id"] || event["action"] == "delete")
         })
         .cloned()
         .collect()
@@ -159,6 +159,20 @@ fn assert_paths(events: &[Value], action: &str, expected: &[&str]) {
         .map(|event| event["path"].as_str().unwrap())
         .collect::<BTreeSet<_>>();
     assert_eq!(paths, expected.iter().copied().collect(), "{events:?}");
+    if action == "delete" {
+        for row in &rows {
+            assert_eq!(
+                row["file_id"], "",
+                "deletion facts do not retain content identity"
+            );
+            assert!(row["version_id"].is_null());
+            assert!(
+                row["timestamp"]
+                    .as_str()
+                    .is_some_and(|time| time.ends_with('Z'))
+            );
+        }
+    }
     let ids = rows
         .iter()
         .map(|event| event["event_id"].as_str().unwrap())
@@ -171,7 +185,7 @@ fn assert_paths(events: &[Value], action: &str, expected: &[&str]) {
     assert_eq!(
         rows.len(),
         expected.len(),
-        "one operation must not duplicate a path row"
+        "one row is required per removal, including repeated paths"
     );
 }
 
@@ -225,23 +239,121 @@ async fn workspace_history_keeps_both_deleted_alias_paths() {
 
 #[tokio::test]
 async fn workspace_alias_rename_is_not_reported_as_deletion() {
+    for destination in ["b/renamed.txt", "b/FIRST.txt"] {
+        let root = tempfile::tempdir().unwrap();
+        let app = application(root.path());
+        let token = login(&app, "admin", "integration-test-password").await;
+        let (file, _) = prepare_aliases(&app, &token).await;
+        let renamed = workspace_namespace(
+            &app,
+            &token,
+            &[json!({"kind":"rename","path":"b/first.txt","destination":destination})],
+        )
+        .await;
+        let events = operation_events(&app, &token, &renamed, &file).await;
+        assert_paths(&events, "delete", &[]);
+        assert_paths(&events, "file.path.rename", &[destination]);
+        assert!(
+            events
+                .iter()
+                .any(|event| event["action"] == "file.path.rename"
+                    && event["previous_path"] == "b/first.txt")
+        );
+    }
+}
+
+#[tokio::test]
+async fn workspace_history_records_each_single_alias_deletion() {
+    for path in ["b/first.txt", "b/second.txt"] {
+        let root = tempfile::tempdir().unwrap();
+        let app = application(root.path());
+        let token = login(&app, "admin", "integration-test-password").await;
+        let (file, _) = prepare_aliases(&app, &token).await;
+        let deleted =
+            workspace_namespace(&app, &token, &[json!({"kind":"delete","path":path})]).await;
+        let events = operation_events(&app, &token, &deleted, &file).await;
+        assert_paths(&events, "delete", &[path]);
+    }
+}
+
+#[tokio::test]
+async fn workspace_history_keeps_deletion_when_survivor_reuses_path() {
+    for (removed, survivor) in [
+        ("b/first.txt", "b/second.txt"),
+        ("b/second.txt", "b/first.txt"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let app = application(root.path());
+        let token = login(&app, "admin", "integration-test-password").await;
+        let (file, _) = prepare_aliases(&app, &token).await;
+        let operation = workspace_namespace(
+            &app,
+            &token,
+            &[
+                json!({"kind":"delete","path":removed}),
+                json!({"kind":"rename","path":survivor,"destination":removed}),
+            ],
+        )
+        .await;
+        let events = operation_events(&app, &token, &operation, &file).await;
+        assert_paths(&events, "delete", &[removed]);
+        assert_paths(&events, "file.path.rename", &[removed]);
+    }
+}
+
+#[tokio::test]
+async fn workspace_history_records_deleted_path_after_rename() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
     let (file, _) = prepare_aliases(&app, &token).await;
-    let renamed = workspace_namespace(
+    let operation = workspace_namespace(
         &app,
         &token,
-        &[json!({"kind":"rename","path":"b/first.txt","destination":"b/renamed.txt"})],
+        &[
+            json!({"kind":"rename","path":"b/first.txt","destination":"b/renamed.txt"}),
+            json!({"kind":"delete","path":"b/renamed.txt"}),
+        ],
     )
     .await;
-    let events = operation_events(&app, &token, &renamed, &file).await;
-    assert_paths(&events, "delete", &[]);
-    assert_paths(&events, "file.path.rename", &["b/renamed.txt"]);
-    assert!(
-        events
-            .iter()
-            .any(|event| event["action"] == "file.path.rename"
-                && event["previous_path"] == "b/first.txt")
+    let events = operation_events(&app, &token, &operation, &file).await;
+    assert_paths(&events, "delete", &["b/renamed.txt"]);
+}
+
+#[tokio::test]
+async fn workspace_history_keeps_repeated_removal_of_same_path() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let (file, _) = prepare_aliases(&app, &token).await;
+    let operation = workspace_namespace(
+        &app,
+        &token,
+        &[
+            json!({"kind":"delete","path":"b/first.txt"}),
+            json!({"kind":"rename","path":"b/second.txt","destination":"b/first.txt"}),
+            json!({"kind":"delete","path":"b/first.txt"}),
+        ],
+    )
+    .await;
+    let events = operation_events(&app, &token, &operation, &file).await;
+    assert_paths(&events, "delete", &["b/first.txt", "b/first.txt"]);
+    let reread = operation_events(&app, &token, &operation, &file).await;
+    assert_eq!(
+        events, reread,
+        "activity identities must remain stable across reads"
     );
+}
+
+#[tokio::test]
+async fn namespace_batch_history_records_single_alias_deletion_once() {
+    for path in ["b/first.txt", "b/second.txt"] {
+        let root = tempfile::tempdir().unwrap();
+        let app = application(root.path());
+        let token = login(&app, "admin", "integration-test-password").await;
+        let (file, _) = prepare_aliases(&app, &token).await;
+        let deleted = manager_namespace(&app, &token, "delete", path, None).await;
+        let events = operation_events(&app, &token, &deleted, &file).await;
+        assert_paths(&events, "delete", &[path]);
+    }
 }

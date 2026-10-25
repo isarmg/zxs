@@ -150,28 +150,34 @@ pub(crate) fn scope(
     Ok((id, entries, commit.commit_id.clone()))
 }
 
-pub(crate) fn rebase_entries(entries: &[Entry], from: &str, to: &str) -> Result<Vec<Entry>> {
+pub(crate) fn rebase_path(path: &str, from: &str, to: &str) -> Result<String> {
     let depth = if from.is_empty() {
         0
     } else {
         from.split('/').count()
     };
+    let suffix = path.split('/').skip(depth).collect::<Vec<_>>().join("/");
+    if suffix.is_empty() {
+        return Err(Error::new(
+            "STATE_INVALID",
+            "directory snapshot contains its own root",
+        ));
+    }
+    let path = if to.is_empty() {
+        suffix
+    } else {
+        format!("{to}/{suffix}")
+    };
+    name_policy::validate_path(&path)?;
+    Ok(path)
+}
+
+pub(crate) fn rebase_entries(entries: &[Entry], from: &str, to: &str) -> Result<Vec<Entry>> {
     entries
         .iter()
         .map(|e| {
-            let suffix = e.path.split('/').skip(depth).collect::<Vec<_>>().join("/");
-            if suffix.is_empty() {
-                return Err(Error::new(
-                    "STATE_INVALID",
-                    "directory snapshot contains its own root",
-                ));
-            }
+            let path = rebase_path(&e.path, from, to)?;
             let mut e = e.clone();
-            let path = if to.is_empty() {
-                suffix
-            } else {
-                format!("{to}/{suffix}")
-            };
             namespace::relocate_entry(&mut e, path)?;
             Ok(e)
         })
@@ -967,6 +973,7 @@ pub(crate) fn select_change(
     state.commits.insert(
         commit_id.clone(),
         Commit {
+            namespace_deletions: None,
             commit_id: commit_id.clone(),
             history_tree_id: repo.history_tree_id.clone(),
             kind: "directory_selection".into(),

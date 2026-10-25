@@ -107,6 +107,7 @@ pub(crate) fn synchronize_directory_edits(
         state.commits.insert(
             id.clone(),
             Commit {
+                namespace_deletions: None,
                 commit_id: id.clone(),
                 history_tree_id: current.history_tree_id.clone(),
                 kind: "file_content".into(),
@@ -243,6 +244,7 @@ pub(crate) fn publish_selected_file_at(
     state.commits.insert(
         id.clone(),
         Commit {
+            namespace_deletions: None,
             commit_id: id.clone(),
             history_tree_id: branch.history_tree_id,
             kind: "file_selection".into(),
@@ -336,6 +338,7 @@ pub(crate) fn ensure_shared_file_branch(
         state.commits.insert(
             commit_id.clone(),
             Commit {
+                namespace_deletions: None,
                 commit_id: commit_id.clone(),
                 history_tree_id: current.history_tree_id.clone(),
                 kind: "file_branch_root".into(),
@@ -455,6 +458,7 @@ pub(crate) fn create_file_branch_change(
     state.commits.insert(
         commit_id.clone(),
         Commit {
+            namespace_deletions: None,
             commit_id: commit_id.clone(),
             history_tree_id: source.history_tree_id.clone(),
             kind: "file_branch_pending".into(),
@@ -550,13 +554,13 @@ impl Engine {
             let branch=state.branches.get(&repo.main_branch_id).cloned().ok_or_else(||Error::new("BRANCH_NOT_FOUND","directory branch missing"))?;
             if branch.state!="active"{return Err(Error::new("BRANCH_NOT_ACTIVE","directory is not writable"));}
             let previous=state.commits.get(&branch.head_commit_id).cloned().ok_or_else(||Error::new("STATE_INVALID","directory head missing"))?;
-            let mut entries=previous.entries.clone();super::apply_namespace(&mut entries,&change)?;
+            let mut entries=previous.entries.clone();let deleted=super::apply_namespace(&mut entries,&change)?;
             validate_entries(&mut entries,engine.config.max_entries)?;
             let renamed_directories=directory::prepare_renamed_directories(state,repository,&previous.entries,std::slice::from_ref(&change))?;
             super::directory::namespace_locations(state,repository,&previous.entries,&entries,std::slice::from_ref(&change),principal,operation)?;
             let pending_file_versions=previous.pending_file_versions.iter().filter(|(file,_)|entries.iter().any(|entry|entry.kind=="file"&&entry.file_id==file.as_str())).map(|(file,source)|(file.clone(),source.clone())).collect();
             let id=new_id("commit");
-            state.commits.insert(id.clone(),Commit{commit_id:id.clone(),history_tree_id:branch.history_tree_id.clone(),kind:"namespace".into(),parent_commit_ids:vec![previous.commit_id],tree_id:new_id("tree"),sequence:state.sequence,operation_id:operation.into(),author:principal.into(),message:format!("{} {}",change.kind,change.path),entries,pending_file_versions,provenance:None});
+            state.commits.insert(id.clone(),Commit{ namespace_deletions: namespace::deletion_record(deleted, now()),commit_id:id.clone(),history_tree_id:branch.history_tree_id.clone(),kind:"namespace".into(),parent_commit_ids:vec![previous.commit_id],tree_id:new_id("tree"),sequence:state.sequence,operation_id:operation.into(),author:principal.into(),message:format!("{} {}",change.kind,change.path),entries,pending_file_versions,provenance:None});
             let live_files=state.commits[&id].entries.iter().filter(|entry|entry.kind=="file").map(|entry|entry.file_id.clone()).collect::<std::collections::BTreeSet<_>>();
             let branch=state.branches.get_mut(&repo.main_branch_id).expect("checked");branch.head_commit_id=id.clone();branch.generation = branch.generation.checked_add(1).ok_or_else(|| Error::new("RESOURCE_LIMIT", "branch generation exhausted"))?;
             branch.pending_file_versions.retain(|file,_|live_files.contains(file));

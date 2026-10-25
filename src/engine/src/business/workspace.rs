@@ -1249,10 +1249,10 @@ impl Engine {
                     written_files.push(file_id);
                 }
                 let renamed_directories=directory::prepare_renamed_directories(state,&repo.repository_id,&current.entries,&w.namespace_operations)?;
-                apply_workspace_namespace(&mut entries, &current.entries, &w.namespace_operations)?;
+                let deleted = apply_workspace_namespace(&mut entries, &current.entries, &w.namespace_operations)?;
                 super::directory::namespace_locations(state,&repo.repository_id,&current.entries,&entries,&w.namespace_operations,&request.principal,&request.operation_id)?;
                 validate_entries(&mut entries, engine.config.max_entries)?;
-                if entries == current.entries {
+                if entries == current.entries && deleted.is_empty() {
                     return Ok(json!({"commit_id":current.commit_id,"branch_id":branch.branch_id,"history_tree_id":branch.history_tree_id,"no_change":true}));
                 }
                 let live_files = entries.iter().filter(|entry| entry.kind == "file")
@@ -1260,6 +1260,7 @@ impl Engine {
                 let mut snapshot_pending = current.pending_file_versions.clone();
                 snapshot_pending.retain(|file,_| live_files.contains(file) && !written_files.contains(file));
                 state.commits.insert(commit_id.clone(), Commit {
+                    namespace_deletions: namespace::deletion_record(deleted, now()),
                     commit_id: commit_id.clone(), history_tree_id: branch.history_tree_id.clone(),
                     kind: "content".into(), parent_commit_ids: vec![current.commit_id],
                     tree_id: new_id("tree"), sequence: state.sequence, operation_id: request.operation_id.clone(),

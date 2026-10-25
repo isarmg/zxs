@@ -13,6 +13,7 @@ fn commit(id: &str, parent: Option<&str>) -> Commit {
         message: String::new(),
         entries: Vec::new(),
         pending_file_versions: Default::default(),
+        namespace_deletions: None,
         provenance: None,
     }
 }

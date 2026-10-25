@@ -1235,3 +1235,82 @@ fn split_rejects_root_and_rechecks_active_read_before_publication() {
         .commit_plan(&plan.plan_id, "alice", &new_id("op"))
         .unwrap();
 }
+
+#[test]
+fn split_at_deletion_preserves_facts_without_copying_deleted_content() {
+    let (temp, mut engine, repo) = fixture();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    save(
+        &mut engine,
+        &repo.main_branch_id,
+        b"not needed by split history",
+    );
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "alice")
+        .unwrap();
+    engine
+        .namespace_operation(
+            &workspace.workspace_id,
+            NamespaceOperation {
+                kind: "delete_tree".into(),
+                path: "资料".into(),
+                destination: None,
+            },
+        )
+        .unwrap();
+    let cut = engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: new_id("op"),
+            principal: "alice".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: "delete before split".into(),
+            request_digest: None,
+        })
+        .unwrap()
+        .commit_id
+        .unwrap();
+    let facts = engine.state.commits[&cut]
+        .namespace_deletions
+        .clone()
+        .unwrap();
+    let plan = engine
+        .create_split_plan(&repo.history_tree_id, &cut, "alice")
+        .unwrap();
+    let result = engine
+        .commit_plan(&plan.plan_id, "alice", &new_id("op"))
+        .unwrap();
+    let history = result.history_tree_id.unwrap();
+    let graph = engine.graph(&history).unwrap();
+    let root = graph
+        .commits
+        .iter()
+        .find(|commit| commit.kind == "split_root")
+        .unwrap();
+    assert!(root.entries.is_empty());
+    assert!(root.parent_commit_ids.is_empty());
+    assert_eq!(root.namespace_deletions.as_ref(), Some(&facts));
+    assert!(
+        !engine
+            .state
+            .versions
+            .values()
+            .any(|version| version.history_tree_id == history)
+    );
+    let package = temp.path().join("deletion-split-package");
+    let report = engine.export_history_package(&history, &package).unwrap();
+    assert_eq!(report.versions, 0);
+    assert_eq!(report.full_bytes, 0);
+    crate::history_package::offline_check_history_package(&package).unwrap();
+    let (_target, mut restored, _) = fixture();
+    restored
+        .restore_history_package(&package, "P01", 1, "alice", &new_id("op"))
+        .unwrap();
+    assert_eq!(
+        restored.state.commits[&root.commit_id]
+            .namespace_deletions
+            .as_ref(),
+        Some(&facts)
+    );
+}

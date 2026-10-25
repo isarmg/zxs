@@ -131,3 +131,87 @@ fn utc_history_projection_formats_seconds_and_preserves_missing_times() {
         assert_eq!(event, before);
     }
 }
+
+#[test]
+fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() {
+    use storage_contract::{CommitRequest, Config, NamespaceOperation, new_id};
+    use storage_engine::Engine;
+
+    let root = crate::tests::private_tempdir();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([root.path().join("disk")]),
+    )
+    .unwrap();
+    let repo = engine
+        .create_repository("Audit", "P01", 1, "owner", &new_id("op"))
+        .unwrap();
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "owner")
+        .unwrap();
+    for kind in ["mkdir", "delete"] {
+        engine
+            .namespace_operation(
+                &workspace.workspace_id,
+                NamespaceOperation {
+                    kind: kind.into(),
+                    path: "transient".into(),
+                    destination: None,
+                },
+            )
+            .unwrap();
+    }
+    let operation_id = new_id("op");
+    let published = engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: operation_id.clone(),
+            principal: "owner".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: "record transient removal".into(),
+            request_digest: None,
+        })
+        .unwrap();
+    let commit_id = published.commit_id.unwrap();
+    let timestamp = engine.state().commits[&commit_id]
+        .namespace_deletions
+        .as_ref()
+        .unwrap()
+        .timestamp;
+    let deletion_rows = |engine: &Engine| {
+        super::read(engine).unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["action"] == "delete")
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let before = deletion_rows(&engine);
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0]["path"], "Audit/transient");
+    assert_eq!(
+        before[0]["timestamp"],
+        super::utc_timestamp(timestamp).unwrap()
+    );
+    assert_eq!(before[0]["file_id"], "");
+    assert!(before[0]["version_id"].is_null());
+
+    let package = root.path().join("package");
+    engine
+        .export_history_package(&repo.history_tree_id, &package)
+        .unwrap();
+    let restored_root = crate::tests::private_tempdir();
+    let mut restored = Engine::initialize(
+        &restored_root.path().join("system"),
+        Config::development([restored_root.path().join("disk")]),
+    )
+    .unwrap();
+    restored
+        .restore_history_package(&package, "P01", 1, "owner", &new_id("op"))
+        .unwrap();
+    assert!(!restored.state().operations.contains_key(&operation_id));
+    assert!(restored.state().versions.is_empty());
+    assert_eq!(deletion_rows(&restored), before);
+}
