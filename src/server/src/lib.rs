@@ -266,6 +266,9 @@ impl AuthorizedBackend {
     }
 }
 impl Backend for AuthorizedBackend {
+    // Startup runs on the raw backend before this wrapper is constructed;
+    // telemetry also retains that raw backend for private disk sampling. Keep
+    // start_management and observe_disks on their inert defaults here.
     fn stop_management(&self) {
         self.backend.stop_management();
     }
@@ -1180,3 +1183,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../test/server/unit/backend_admission.rs"]
 mod backend_admission_tests;
+
+#[cfg(test)]
+#[path = "../../../test/server/unit/authorized_backend.rs"]
+mod authorized_backend_tests;
