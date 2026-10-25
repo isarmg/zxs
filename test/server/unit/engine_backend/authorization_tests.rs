@@ -93,3 +93,64 @@ fn a_valid_singleton_admits_its_owner_but_not_arbitrary_callers() {
         "UNAUTHORIZED"
     );
 }
+
+#[test]
+fn workspace_authorization_borrows_records_and_preserves_owner_checks() {
+    let root = crate::tests::private_tempdir();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        storage_engine::Config::development([root.path().join("disk")]),
+    )
+    .unwrap();
+    let owner = install_test_administrator(&mut engine, "owner");
+    let repo = engine
+        .create_repository(
+            "Borrowed workspace",
+            "P01",
+            1,
+            "owner",
+            &storage_engine::new_id("op"),
+        )
+        .unwrap();
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "owner")
+        .unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "file.txt", b"content")
+        .unwrap();
+    let borrowed = workspace_authorize(&engine, &owner, &workspace.workspace_id).unwrap();
+    assert!(std::ptr::eq(
+        borrowed,
+        engine.workspace_ref(&workspace.workspace_id).unwrap()
+    ));
+    assert_eq!(borrowed.files.len(), 1);
+    let snapshot = engine.workspace(&workspace.workspace_id).unwrap();
+    assert!(!std::ptr::eq(&snapshot, borrowed));
+    assert_eq!(snapshot.files.len(), borrowed.files.len());
+    let mut stranger = owner.clone();
+    stranger.principal = "stranger".into();
+    assert_eq!(
+        workspace_authorize(&engine, &stranger, &workspace.workspace_id)
+            .unwrap_err()
+            .code,
+        "FORBIDDEN"
+    );
+    assert_eq!(
+        workspace_authorize(&engine, &owner, "missing")
+            .unwrap_err()
+            .code,
+        "WORKSPACE_NOT_FOUND"
+    );
+    engine
+        .stage_bytes(&workspace.workspace_id, "second.txt", b"new")
+        .unwrap();
+    assert_eq!(snapshot.files.len(), 1);
+    assert_eq!(
+        engine
+            .workspace_ref(&workspace.workspace_id)
+            .unwrap()
+            .files
+            .len(),
+        2
+    );
+}

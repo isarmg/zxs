@@ -171,12 +171,12 @@ fn repo_for_branch_in_state<'a>(
     }
     repo_for_history_in_state(state, &branch.history_tree_id)
 }
-fn workspace_authorize(
-    engine: &Engine,
+fn workspace_authorize<'a>(
+    engine: &'a Engine,
     identity: &Identity,
     id: &str,
-) -> Result<storage_engine::Workspace, ApiError> {
-    let workspace = engine.workspace(id).map_err(error)?;
+) -> Result<&'a storage_engine::Workspace, ApiError> {
+    let workspace = engine.workspace_ref(id).map_err(error)?;
     if workspace.principal != identity.principal {
         return Err(ApiError::forbidden());
     }
@@ -730,7 +730,7 @@ impl Backend for EngineBackend {
                     .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "upload item not found"))?;
                 let sealed = matches!(workspace.state.as_str(), "sealed" | "committed");
                 let manifest = if sealed {
-                    Some(storage_engine::workspace_manifest_hash(&workspace).map_err(error)?)
+                    Some(storage_engine::workspace_manifest_hash(workspace).map_err(error)?)
                 } else {
                     None
                 };
@@ -760,8 +760,10 @@ impl Backend for EngineBackend {
                 keys(&input, &["workspace_id"])?;
                 let workspace =
                     workspace_authorize(&engine, identity, field(&input, "workspace_id")?)?;
+                let workspace_id = workspace.workspace_id.clone();
+                let principal = workspace.principal.clone();
                 engine
-                    .seal_workspace(&workspace.workspace_id, &workspace.principal)
+                    .seal_workspace(&workspace_id, &principal)
                     .map_err(error)
             }
             crate::BackendAction::CommitWorkspace

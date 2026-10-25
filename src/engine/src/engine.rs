@@ -448,10 +448,15 @@ impl Engine {
         )?;
         Ok(())
     }
+    /// Own a workspace snapshot for planning that outlives a shared engine borrow.
     pub fn workspace(&self, id: &str) -> Result<Workspace> {
+        self.workspace_ref(id).cloned()
+    }
+    /// Inspect a workspace without copying its staged-file and namespace records.
+    /// The view cannot outlive the engine borrow or span a mutation.
+    pub fn workspace_ref(&self, id: &str) -> Result<&Workspace> {
         self.workspaces
             .get(id)
-            .cloned()
             .ok_or_else(|| Error::new("WORKSPACE_NOT_FOUND", "workspace does not exist"))
     }
     /// Deterministic injection only, never enabled by network or environment input.

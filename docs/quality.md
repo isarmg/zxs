@@ -45,3 +45,7 @@ Clippy 和编译门禁经由 [Cargo 诊断包装器](../.github/scripts/check-ru
 密码学与 TLS 改动同时核对[常数时间原语](security/constant-time.md)、[证书信任](security/tls-trust.md)及[测试证书约束](security/TLS_TEST_FIXTURES.md)。编译与功能回归不构成常数时间机器码证明，也不替代证书来源或实际客户端验证。
 
 包含断言式验收条件的维护 Python 门禁在执行前拒绝 `-O`、`-OO` 和 `PYTHONOPTIMIZE` 优化模式，不能在断言被移除后报告通过。动态回归核对当前全部这类验证入口；性能报告比较器使用显式校验，不依赖 Python 断言是否启用。
+
+## 工作区只读视图
+
+工作区授权和只读状态查询使用 `Engine::workspace_ref`，在现有引擎借用内检查主体和分支，避免复制完整暂存文件表。需要跨越引擎可变操作的规划仍使用拥有独立数据的 `Engine::workspace` 快照；只读视图不延长授权有效期，也不取代异步准备完成后的重新鉴权。
