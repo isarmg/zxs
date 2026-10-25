@@ -22,6 +22,8 @@ mod daily_management;
 mod file_metadata_operations;
 #[path = "http_engine/history_alias_operations.rs"]
 mod history_alias_operations;
+#[path = "http_engine/history_query.rs"]
+mod history_query;
 #[path = "http_engine/optional_identities.rs"]
 mod optional_identities;
 #[path = "http_engine/paginated_listing.rs"]

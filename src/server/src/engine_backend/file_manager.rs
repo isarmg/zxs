@@ -418,6 +418,9 @@ fn root_has_virtual_directories(engine: &Engine, slot: &str) -> bool {
 fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
     let file = field(input, "file_id")?;
     let repo = file_repo(engine, file)?;
+    if let Some(query) = input.get("query") {
+        keys(query, &["repository_id", "path"])?;
+    }
     let state = engine.state();
     let requested_repo = query(input, "repository_id");
     let requested_path = query(input, "path");
@@ -1021,6 +1024,10 @@ pub(super) fn call(
 #[cfg(test)]
 #[path = "../../../../test/server/unit/engine_backend/file_manager/request_tests.rs"]
 mod request_tests;
+
+#[cfg(test)]
+#[path = "../../../../test/server/unit/engine_backend/file_manager/history_query_tests.rs"]
+mod history_query_tests;
 
 #[cfg(test)]
 #[path = "../../../../test/server/unit/engine_backend/file_manager/time_tests.rs"]

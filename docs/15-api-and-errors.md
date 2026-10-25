@@ -111,9 +111,13 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 
 文件历史图只使用 `nodes` 以及每项的 `node_id`、`parent_node_ids` 和字符串 `created_at`。`versions` 保留为正文版本元数据，不作为缺失 `nodes` 时的兼容替代；前端不再把 `version_id`、`source_version_ids` 或数字时间戳解读为旧版图协议。缺失的图不会在客户端从正文列表推测重建。
 
+`GET /api/file-manager/files/{file}/history` 当前仍返回该文件的完整 `versions/nodes/branches/merges` 集合，没有历史窗口或游标分页。查询参数只接受成对的 `repository_id/path`；`limit`、`cursor` 及其他未知字段返回 `400 INVALID_REQUEST`，不能用它们缩小响应。目录列表分页不适用于此接口。
+
+共享 JSON 客户端协议的响应上限为 8 MiB；Web 在 `Content-Length` 预检、流式读取及 JSON 解码处执行检查，超限报告 `RESPONSE_TOO_LARGE`。这是客户端接收边界，不是此历史路由的服务端响应上限：服务端当前仍构造并序列化完整历史。图投影计算优化不会消除长历史的响应容量限制。高级 `GET /api/files/{file}/history` 也仍返回全量正文版本；本次查询字段校验不为它增加分页或容量保护。
+
 文件分支登记回执固定创建时的可见父 ID、`inherited:true` 与 `own_version_id:null`；目录分支回执固定目录分支身份和父子树引用，不表示预先创建文件分支。之后首写不会改写原回执。当前内容状态通过读取接口查询，不能以当前状态回填旧操作结果。
 
-上述文件管理接口已实现，具体字段以服务端路由及机器契约为准。其后的高级接口表包含设计基线，不能推断每项均已开放。旧整树创建、历史保存与拆分接口在已包含文件分支的历史域中明确拒绝，避免把文件快照当作完整目录树。目录分支具有稳定的 directory_branch_id，其每次实际组成变化形成新的 head_tree_id；这两个身份不能与文件分支和文件版本混用。文件列表的下载入口通过 Content-Disposition 使用该视图中的逻辑名称；内部不可变 storage_name 不随下载或容器改名而改变。
+上述文件管理接口已实现，具体字段以服务端路由及机器契约为准。其后的高级接口表包含设计基线，不能推断每项均已开放。旧整树创建、历史保存与拆分接口在已包含文件分支的历史域中明确拒绝，避免把文件快照当作完整目录树。目录分支具有稳定的 directory_branch_id，其每次实际组成变化形成新的 head_tree_id；这两个身份不能与文件分支和文件版本混用。保留的受控 HTTP 正文下载接口通过 Content-Disposition 使用所选视图中的逻辑名称，Web 管理界面不提供文件上传、下载或预览入口；内部不可变 storage_name 不随下载或容器改名而改变。
 
 普通 workspace commit 只针对明确当前分支，SMB 的目标由共享默认根目录分支及其冻结子目录组成决定；历史节点保存通过 historical-save-plans 登记新分支，仅实际 staged 的文件产生 FULL 版本，不能沿用普通提交直接覆盖主分支。普通内容提交最多一个父提交，不能由用户任填父列表；这不限制统一文件节点图的多父 `parent_node_ids`。旧 `MergeLink` 不改写提交、正文或HEAD，新文件分支合并按独立请求推进参与引用并保存来源，原正文证明不变。树拆分使用独立结构迁移接口，不能把 rebase/强制重置作为隐藏入口。
 
