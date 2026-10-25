@@ -20,7 +20,7 @@
 - `web-interface-VERSION.tar.gz`：`public/` 中的正式 Web 静态目录，包括 WASM、绑定文件、所需法律文件及 `build-manifest.json`；完整资料置于旁边，不进入静态资源目录。
 - `INSTALL.md`、`BUILD.txt`、`SHA256SUMS`：安装与重建说明、源码提交及构建工具记录、全部其他资产的摘要。
 
-两个归档均携带完整 `docs/`、根说明和中央 `compliance/`，包括操作手册及 SMB 集成说明；另附 `deploy/systemd/zxs.service` 部署模板。归档属主和组统一记录为数值 0，避免 root 解压时继承构建机账户 UID；归档权限统一移除组/其他用户写权限，并保证目录和可执行文件可遍历/执行，避免打包者的私有 umask 使服务账户无法读取安装资料。模板仅供审阅，不会自动安装、启用或启动服务。独立 `INSTALL.md` 从[发布安装模板](templates/release-install.md)生成，不依赖从源码文档目录复制后的相对链接。源码与构建脚本引用须在 `BUILD.txt` 指定的仓库提交中查阅。
+两个归档均携带完整 `docs/`、根说明和中央 `compliance/`，包括操作手册及 SMB 集成说明；另附 `deploy/systemd/zxs.service` 与 `deploy/samba/smb.conf.example` 两个部署模板。归档属主和组统一记录为数值 0，避免 root 解压时继承构建机账户 UID；归档权限统一移除组/其他用户写权限，并保证目录和可执行文件可遍历/执行，避免打包者的私有 umask 使服务账户无法读取安装资料。模板仅供审阅，不会自动安装、启用或启动服务。独立 `INSTALL.md` 从[发布安装模板](templates/release-install.md)生成，不依赖从源码文档目录复制后的相对链接。源码与构建脚本引用须在 `BUILD.txt` 指定的仓库提交中查阅。
 
 此流程不发布 Samba VFS 二进制。VFS 必须使用项目固定的 Samba 4.23.0 SDK 构建并核对 ABI，步骤见 [SMB 集成](components/smb.md)。真实 Samba 操作、物理盘故障和恢复仍需专项验收，构建通过不能代替这些验证。
 

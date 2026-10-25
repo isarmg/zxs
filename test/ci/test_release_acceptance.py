@@ -16,6 +16,8 @@ class ReleaseAcceptance(unittest.TestCase):
         self.assertIn('--cli-bin "$work/server/zxs" --web-dir "$work/web/public"', script)
         self.assertIn('cargo run --locked --offline --release -p browser-smoke', script)
         self.assertNotIn('target/native/debug/zxs', script)
+        self.assertIn('test -f "$work/server/deploy/samba/smb.conf.example"', script)
+        self.assertIn('cmp "$work/server/deploy/samba/smb.conf.example" "$work/web/deploy/samba/smb.conf.example"', script)
 
     def test_main_ci_accepts_extracted_archives_without_duplicate_browser_suite(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text()
@@ -56,7 +58,10 @@ class ReleaseAcceptance(unittest.TestCase):
         install = (ROOT / 'docs/templates/release-install.md').read_text()
         self.assertIn('(templates/release-install.md)', release)
         self.assertNotIn('sha256sum ', release)
-        self.assertIn('set -eu\nsha256sum --check SHA256SUMS', install)
+        self.assertIn('set -eu\nVERSION="$(python3', install)
+        self.assertLess(install.index('if names != expected:'), install.index('sha256sum --check SHA256SUMS'))
+        self.assertLess(install.index('sha256sum --check SHA256SUMS'), install.index('mkdir "server-$VERSION"'))
+        self.assertIn('不是独立的发布者签名', install)
         self.assertIn('`public/`', install)
         self.assertTrue((ROOT / 'test/ci/release-publish.sh').is_file())
         self.assertNotIn('.github/scripts/tests/', release)

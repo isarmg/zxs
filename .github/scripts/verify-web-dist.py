@@ -143,7 +143,7 @@ def verify(root, stage=None):
         if digest(read_input(dist, relative)) != expected:
             raise ValueError(f"Web output checksum mismatch: {relative}")
     # Validate every archive input, not only the files copied by web-build.
-    materials = ["README.md", "deploy/systemd/zxs.service",
+    materials = ["README.md", "deploy/systemd/zxs.service", "deploy/samba/smb.conf.example",
                  *tree_paths(root, "compliance"), *tree_paths(root, "docs")]
     for relative in materials:
         input_path(root, relative)

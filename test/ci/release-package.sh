@@ -27,6 +27,7 @@ for path in README.md docs/README.md docs/release.md docs/25-operation-manual.md
 done
 printf '[SMB integration](components/smb.md)\n' >> "$fixture/docs/release.md"
 printf '[Operations](../25-operation-manual.md)\n' > "$fixture/docs/components/smb.md"
+printf '[Samba configuration](../../deploy/samba/smb.conf.example)\n' >> "$fixture/docs/components/smb.md"
 cp docs/templates/release-install.md "$fixture/docs/templates/"
 # Reproduce the real material size without putting thousands of files online.
 python3 - "$fixture" <<'PYFIXTURE'
@@ -61,11 +62,14 @@ PYMODES
   test ! -d "$output/tools"
   for path in compliance/NOTICE.md compliance/licenses/upstream/sample/LICENSE \
     compliance/provenance/origins.json docs/25-operation-manual.md \
-    docs/components/smb.md docs/templates/release-install.md deploy/systemd/zxs.service; do
+    docs/components/smb.md docs/templates/release-install.md deploy/systemd/zxs.service \
+    deploy/samba/smb.conf.example; do
     cmp "$fixture/$path" "$output/$path"
   done
   test "$(stat -c %a "$output/deploy/systemd")" = 755
   test "$(stat -c %a "$output/deploy/systemd/zxs.service")" = 644
+  test "$(stat -c %a "$output/deploy/samba")" = 755
+  test "$(stat -c %a "$output/deploy/samba/smb.conf.example")" = 644
   python3 - "$output" <<'PY'
 from pathlib import Path
 import re
@@ -105,6 +109,7 @@ test "$(head -1 "$fixture/release-assets/INSTALL.md")" = '# ZXS 0.1.0 安装'
 tail -n +3 "$fixture/release-assets/INSTALL.md" | cmp "$fixture/docs/templates/release-install.md" -
 python3 - "$fixture/release-assets" <<'PY'
 from pathlib import Path
+import hashlib
 import os
 import re
 import subprocess
@@ -119,7 +124,7 @@ def install():
     # No inherited errexit, shell startup file, aliases or exported functions.
     return subprocess.run(
         ["bash", "--noprofile", "--norc", "-c", commands], cwd=assets,
-        env={"PATH": os.defpath, "LC_ALL": "C"}, capture_output=True,
+        env={"PATH": os.defpath, "LC_ALL": "C"}, capture_output=True, timeout=30,
     )
 
 archive = assets / "web-interface-0.1.0.tar.gz"
@@ -128,6 +133,63 @@ archive.write_bytes(original + b"damaged download\n")
 assert install().returncode != 0
 assert not server.exists() and not web.exists(), "checksum failure must precede extraction"
 archive.write_bytes(original)
+receipt = assets / "SHA256SUMS"
+original_receipt = receipt.read_text()
+lines = original_receipt.splitlines(keepends=True)
+bad_receipts = ["".join(lines[:index] + lines[index + 1:]) for index in range(len(lines))]
+bad_receipts += [
+    "",
+    original_receipt + lines[0],
+    original_receipt + "0" * 64 + "  unexpected.tar.gz\n",
+    original_receipt.replace("  web-interface-0.1.0.tar.gz", "  ../web-interface-0.1.0.tar.gz"),
+    original_receipt.replace("  INSTALL.md", " *INSTALL.md"),
+]
+for bad in bad_receipts:
+    receipt.write_text(bad)
+    assert install().returncode != 0, "incomplete, duplicate or unsafe checksum inventory must fail"
+    assert not server.exists() and not web.exists(), "inventory failure must precede extraction"
+receipt.write_text(original_receipt)
+# Installation must reject links even when their target has the expected bytes,
+# and must reject FIFOs before any checksum reader can block on opening one.
+for name in ("BUILD.txt", "INSTALL.md", "SHA256SUMS",
+             "web-interface-0.1.0.tar.gz", "zxs-0.1.0-x86_64-unknown-linux-gnu.tar.gz"):
+    path = assets / name
+    saved = assets / (name + ".fixture-original")
+    path.rename(saved)
+    try:
+        for kind in ("missing", "symlink", "directory", "fifo", "empty"):
+            if kind == "symlink":
+                path.symlink_to(saved.name)
+            elif kind == "directory":
+                path.mkdir()
+            elif kind == "fifo":
+                os.mkfifo(path)
+            elif kind == "empty":
+                path.touch()
+            result = install()
+            assert result.returncode != 0, f"{kind} release input must fail: {name}"
+            assert not server.exists() and not web.exists(), "invalid input must precede extraction"
+            if kind == "directory":
+                path.rmdir()
+            elif kind != "missing":
+                path.unlink()
+    finally:
+        saved.rename(path)
+build = assets / "BUILD.txt"
+original_build = build.read_text()
+
+def refresh_checksums():
+    names = ["BUILD.txt", "INSTALL.md", *sorted(path.name for path in assets.glob("*.tar.gz"))]
+    receipt.write_text("".join(hashlib.sha256((assets / name).read_bytes()).hexdigest()
+                               + "  " + name + "\n" for name in names))
+
+for bad in ("", "../escape", "0.1.0/../../escape", "0.1", "0.1.0\nversion=0.1.0"):
+    build.write_text(original_build.replace("version=0.1.0\n", "version=" + bad + "\n"))
+    refresh_checksums()
+    assert install().returncode != 0, "invalid or duplicate version must fail even with matching checksum"
+    assert not server.exists() and not web.exists(), "version failure must precede extraction"
+build.write_text(original_build)
+receipt.write_text(original_receipt)
 result = install()
 assert result.returncode == 0, result.stderr.decode()
 assert (server / "docs/components/smb.md").is_file()
@@ -137,5 +199,15 @@ assert (web / "public/pkg/zxs_bg.wasm").read_bytes() == b"wasm fixture\n"
 retry = install()
 assert retry.returncode != 0
 assert (server / "zxs").read_bytes() == b"existing installation\n"
+# Preserve prerelease/build metadata accepted by the release filename grammar.
+version = "0.1.0-rc.1+build.7"
+for path in assets.glob("*.tar.gz"):
+    path.rename(path.with_name(path.name.replace("0.1.0", version)))
+build.write_text(original_build.replace("version=0.1.0\n", "version=" + version + "\n"))
+refresh_checksums()
+result = install()
+assert result.returncode == 0, result.stderr.decode()
+assert (assets / ("server-" + version) / "zxs").is_file()
+assert (assets / ("web-" + version) / "public/pkg/zxs_bg.wasm").is_file()
 PY
 echo 'PASS release archives retain complete documentation and assembly emits standalone installation instructions'

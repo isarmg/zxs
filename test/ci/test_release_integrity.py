@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import tarfile
 import unittest
 
 from web_dist_fixture import prepare, record, ROOT, SPEC
@@ -38,6 +39,16 @@ class ReleaseIntegrity(unittest.TestCase):
             result = self.package()
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(list((self.root / "release-assets").glob("*.tar.gz"))), 2)
+        for path in (self.root / "release-assets").glob("*.tar.gz"):
+            with tarfile.open(path) as archive:
+                for template in ("deploy/systemd/zxs.service", "deploy/samba/smb.conf.example"):
+                    self.assertEqual(archive.extractfile(template).read(), (self.root / template).read_bytes())
+
+    def test_missing_samba_template_rejects_incomplete_installation_material(self):
+        (self.root / "deploy/samba/smb.conf.example").unlink()
+        result = self.package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.root / "release-assets").exists())
 
     def test_missing_systemd_template_rejects_incomplete_installation_material(self):
         (self.root / "deploy/systemd/zxs.service").unlink()
@@ -155,7 +166,7 @@ class ReleaseIntegrity(unittest.TestCase):
             validator.verify(self.root)
 
     def test_symlinks_in_outputs_source_ancestors_materials_and_binary_fail(self):
-        for relative in ("build/web/pkg/zxs.js", "Cargo.lock", "README.md", "deploy/systemd/zxs.service", "target/native/release/zxs"):
+        for relative in ("build/web/pkg/zxs.js", "Cargo.lock", "README.md", "deploy/systemd/zxs.service", "deploy/samba/smb.conf.example", "target/native/release/zxs"):
             path = self.root / relative
             data, mode = path.read_bytes(), path.stat().st_mode
             path.unlink()

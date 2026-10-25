@@ -1,11 +1,53 @@
-下载同一版本的全部发布文件，放在同一个空目录中：两个 `.tar.gz` 归档、`INSTALL.md`、`BUILD.txt` 和 `SHA256SUMS`。先核对所选标签与提交，再校验全部文件：
+下载同一版本的全部发布文件，放在同一个空目录中：两个 `.tar.gz` 归档、`INSTALL.md`、`BUILD.txt` 和 `SHA256SUMS`。先从核实的仓库及对应工作流核对所选标签与提交，再校验全部文件。以下命令需要 Python 3、`sha256sum` 和 `tar`，先检查版本及完整摘要清单，再校验文件，任一步失败都不解压：
 
 ```sh
 (
 set -eu
+VERSION="$(python3 - <<'PYVERIFY'
+from pathlib import Path
+import re
+import stat
+
+def regular(name):
+    path = Path(name)
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or not info.st_size:
+        raise SystemExit("发行文件须为非空普通文件：" + name)
+    return path
+
+def metadata(name):
+    path = regular(name)
+    with path.open("rb") as source:
+        data = source.read(64 * 1024 + 1)
+    if len(data) > 64 * 1024:
+        raise SystemExit("发行元数据过大：" + name)
+    return data.decode("utf-8")
+
+fields = {}
+for line in metadata("BUILD.txt").splitlines():
+    key, separator, value = line.partition("=")
+    if not separator or not key or key in fields:
+        raise SystemExit("BUILD.txt 字段无效或重复")
+    fields[key] = value
+version = fields.get("version", "")
+if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.+-]+)?", version):
+    raise SystemExit("发行版本不符合文件名约束")
+expected = {"INSTALL.md", "BUILD.txt", f"web-interface-{version}.tar.gz",
+            f"zxs-{version}-x86_64-unknown-linux-gnu.tar.gz"}
+names = set()
+for line in metadata("SHA256SUMS").splitlines():
+    match = re.fullmatch(r"[0-9a-f]{64}  ([A-Za-z0-9.+_-]+)", line)
+    if not match or match[1] in names:
+        raise SystemExit("摘要清单含无效或重复条目")
+    names.add(match[1])
+if names != expected:
+    raise SystemExit("摘要清单必须恰好覆盖同版本的四个发行文件")
+for name in expected:
+    regular(name)
+print(version)
+PYVERIFY
+)"
 sha256sum --check SHA256SUMS
-VERSION="$(sed -n 's/^version=//p' BUILD.txt)"
-test -n "$VERSION"
 mkdir "server-$VERSION" "web-$VERSION"
 tar -xzf "zxs-$VERSION-x86_64-unknown-linux-gnu.tar.gz" -C "server-$VERSION"
 tar -xzf "web-interface-$VERSION.tar.gz" -C "web-$VERSION"
@@ -14,7 +56,9 @@ tar -xzf "web-interface-$VERSION.tar.gz" -C "web-$VERSION"
 )
 ```
 
-`mkdir` 必须成功创建两个新目录；已有目录应另选新名称。服务端与 Web 分别解压到独立空目录，避免混合文件或覆盖现有业务数据。两个归档都携带完整的 `docs/`、根说明与 `compliance/`，以及 `deploy/systemd/zxs.service` 部署模板；请从解压目录阅读 `docs/release.md`、`docs/25-operation-manual.md` 和 `docs/components/smb.md`。文档中的开发源码路径用于定位对应提交，开发与来源复核需要另外检出 `BUILD.txt` 指定的仓库提交。
+摘要核对只证明下载文件与清单一致，不是独立的发布者签名；不能仅因文件和同来源清单互相匹配就认定发布者身份已经验证。
+
+`mkdir` 必须成功创建两个新目录；已有目录应另选新名称。服务端与 Web 分别解压到独立空目录，避免混合文件或覆盖现有业务数据。两个归档都携带完整的 `docs/`、根说明与 `compliance/`，以及 `deploy/systemd/zxs.service` 和 `deploy/samba/smb.conf.example` 两个部署模板；请从解压目录阅读 `docs/release.md`、`docs/25-operation-manual.md` 和 `docs/components/smb.md`。文档中的开发源码路径用于定位对应提交，开发与来源复核需要另外检出 `BUILD.txt` 指定的仓库提交。
 
 服务端通过 `zxs` 提供业务 API 和 Web 静态资源；按运维文档配置数据与认证，并将 `--web-dir` 指向 Web 解压目录下 `public/` 的绝对路径（例如 `/opt/zxs/web-VERSION/public`），不要指向包含完整资料的解压根目录。Linux 二进制要求兼容 Ubuntu 24.04 的 GNU libc 及运行库。
 
