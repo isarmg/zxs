@@ -63,7 +63,7 @@
 
 ## json-codec
 
-[当前源码 / API](../../src/foundation/data-storage/json-codec/src/lib.rs) · [Cargo 清单](../../src/foundation/data-storage/json-codec/Cargo.toml)
+[当前源码 / API](../../src/foundation/data-storage/json-codec/src/lib.rs) · [Cargo 清单](../../src/foundation/data-storage/json-codec/Cargo.toml) · [当前维护说明](../../docs/components/json-codec.md)
 
 | 上游来源身份 | 使用文档 | 许可与来源 |
 | --- | --- | --- |

@@ -489,3 +489,94 @@ async fn ingress_admission_bounds_slow_bodies_without_blocking_health() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
+#[tokio::test]
+async fn login_requires_named_fields_before_creating_a_session() {
+    let root = crate::tests::private_tempdir();
+    let app = application(root.path());
+    for body in [
+        r#"["admin","a-long-test-password"]"#,
+        r#"["admin","incorrect-password"]"#,
+        r#"{"username":"admin","password":"a-long-test-password","unknown":true}"#,
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/login")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
+        assert_error(response, StatusCode::BAD_REQUEST, "INVALID_REQUEST", false).await;
+    }
+    // The documented object representation still authenticates normally.
+    let (_, _, _) = authenticated(&app).await;
+}
+
+#[tokio::test]
+async fn password_change_rejects_positional_fields_without_revoking_the_session() {
+    let root = crate::tests::private_tempdir();
+    let app = application(root.path());
+    let (token, _, cookie) = authenticated(&app).await;
+    let malformed = r#"["a-long-test-password","replacement-test-password"]"#;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/password")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(malformed))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_error(response, StatusCode::UNAUTHORIZED, "UNAUTHORIZED", false).await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/password")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(malformed))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_error(response, StatusCode::FORBIDDEN, "FORBIDDEN", false).await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/password")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(malformed))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(!response.headers().contains_key(header::SET_COOKIE));
+    assert_error(response, StatusCode::BAD_REQUEST, "INVALID_REQUEST", false).await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/me")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    // Rejection must not change the password, as well as not revoking the token.
+    let (_, _, _) = authenticated(&app).await;
+}

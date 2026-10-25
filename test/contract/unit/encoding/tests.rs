@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn named_wire_records_require_objects_at_every_nesting_level() {
+    let merge = json_codec::json!({"branch_id":"branch", "expected_node_id":"node"});
+    assert!(decode_strict::<crate::FileMergeInput>(&json_codec::to_vec(&merge).unwrap()).is_ok());
+    assert!(decode_strict::<crate::FileMergeInput>(br#"["branch","node"]"#).is_err());
+    assert!(
+        json_codec::from_value::<Vec<crate::FileMergeInput>>(json_codec::json!([[
+            "branch", "node"
+        ]]))
+        .is_err()
+    );
+    assert!(
+        json_codec::from_value::<Vec<crate::FileMergeInput>>(json_codec::json!([merge])).is_ok()
+    );
+
+    let source = json_codec::json!({
+        "directory_branch_id":"branch", "expected_tree_id":"tree",
+        "path":"file", "entry_id":"entry"
+    });
+    let valid = json_codec::json!({
+        "kind":"delete", "items":[{"source":source, "target":null}]
+    });
+    assert!(json_codec::from_value::<crate::DirectoryNamespaceBatch>(valid.clone()).is_ok());
+    let mut invalid = valid;
+    invalid["items"][0]["source"] = json_codec::json!(["branch", "tree", "file", "entry"]);
+    assert!(json_codec::from_value::<crate::DirectoryNamespaceBatch>(invalid).is_err());
+}
+
+#[test]
 fn request_digest_preserves_envelope_and_borrowed_body() {
     let payload = json_codec::json!({
         "message": "目录 😀",

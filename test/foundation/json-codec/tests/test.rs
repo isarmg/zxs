@@ -1282,29 +1282,17 @@ fn test_parse_struct() {
         ),
     ]);
 
-    let v: Outer = from_str(
-        "[
-            [
-                [ null, 2, [\"abc\", \"xyz\"] ]
-            ]
-        ]",
-    )
-    .unwrap();
-
-    assert_eq!(
-        v,
-        Outer {
-            inner: vec![Inner {
-                a: (),
-                b: 2,
-                c: vec!["abc".to_owned(), "xyz".to_owned()],
-            }],
-        }
-    );
+    // Maintained ZXS policy differs from the original upstream acceptance:
+    // named-field records must be objects, including records nested in lists.
+    // Ordinary tuple and sequence tests above retain their array semantics.
+    let positional = r#"[[[null,2,["abc","xyz"]]]]"#;
+    assert!(from_str::<Outer>(positional).is_err());
+    assert!(from_str::<Outer>(r#"{"inner":[[null,2,[]]]}"#).is_err());
 
     let j = json!([null, 2, []]);
-    Inner::deserialize(&j).unwrap();
-    Inner::deserialize(j).unwrap();
+    assert!(Inner::deserialize(&j).is_err());
+    assert!(Inner::deserialize(j).is_err());
+
 }
 
 #[test]

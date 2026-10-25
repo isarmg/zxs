@@ -41,6 +41,115 @@ fn round_trip() {
         "123456789012345678901234567890"
     );
 }
+
+#[cfg(test)]
+#[derive(Debug, Deserialize, PartialEq)]
+struct NamedRecord {
+    value: u32,
+}
+
+#[cfg(test)]
+fn assert_named_record_rejected<T: data_serialization::de::DeserializeOwned>(text: &str) {
+    assert!(json_codec::from_str::<T>(text).is_err(), "text: {text}");
+    assert!(
+        json_codec::from_slice::<T>(text.as_bytes()).is_err(),
+        "bytes: {text}"
+    );
+    assert!(
+        json_codec::from_reader::<_, T>(text.as_bytes()).is_err(),
+        "reader: {text}"
+    );
+    let value: json_codec::Value = json_codec::from_str(text).unwrap();
+    assert!(T::deserialize(&value).is_err(), "borrowed value: {text}");
+    assert!(
+        json_codec::from_value::<T>(value).is_err(),
+        "owned value: {text}"
+    );
+}
+
+#[test]
+fn named_struct_json_requires_objects_in_all_decoder_entrypoints() {
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct Container {
+        optional: Option<NamedRecord>,
+        sequence: Vec<NamedRecord>,
+        mapping: std::collections::BTreeMap<String, NamedRecord>,
+    }
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    enum Variant {
+        Named { value: u32 },
+    }
+    assert_named_record_rejected::<NamedRecord>("[1]");
+    assert_named_record_rejected::<Option<NamedRecord>>("[1]");
+    assert_named_record_rejected::<Vec<NamedRecord>>("[[1]]");
+    for text in [
+        r#"{"optional":[1],"sequence":[],"mapping":{}}"#,
+        r#"{"optional":null,"sequence":[[1]],"mapping":{}}"#,
+        r#"{"optional":null,"sequence":[],"mapping":{"record":[1]}}"#,
+    ] {
+        assert_named_record_rejected::<Container>(text);
+    }
+    assert_named_record_rejected::<Variant>(r#"{"Named":[1]}"#);
+    assert_eq!(
+        json_codec::from_str::<NamedRecord>(r#"{"value":1}"#).unwrap(),
+        NamedRecord { value: 1 }
+    );
+    assert!(
+        json_codec::from_str::<Container>(
+            r#"{"optional":{"value":1},"sequence":[{"value":2}],"mapping":{"record":{"value":3}}}"#
+        )
+        .is_ok()
+    );
+    assert!(json_codec::from_str::<Variant>(r#"{"Named":{"value":1}}"#).is_ok());
+}
+
+#[test]
+fn ordinary_json_sequences_and_other_struct_representations_are_unchanged() {
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct TupleRecord(u32, String);
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct Newtype(Vec<u32>);
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct Unit;
+    #[derive(Debug, Deserialize, PartialEq)]
+    enum Variant {
+        Tuple(u32, u32),
+        Newtype(Vec<u32>),
+        Unit,
+    }
+    fn all_entrypoints<
+        T: data_serialization::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+    >(
+        text: &str,
+        expected: T,
+    ) {
+        assert_eq!(json_codec::from_str::<T>(text).unwrap(), expected);
+        assert_eq!(
+            json_codec::from_slice::<T>(text.as_bytes()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            json_codec::from_reader::<_, T>(text.as_bytes()).unwrap(),
+            expected
+        );
+        let value: json_codec::Value = json_codec::from_str(text).unwrap();
+        assert_eq!(T::deserialize(&value).unwrap(), expected);
+        assert_eq!(json_codec::from_value::<T>(value).unwrap(), expected);
+    }
+    all_entrypoints("[1,2]", vec![1_u32, 2]);
+    all_entrypoints("[1,2]", [1_u32, 2]);
+    all_entrypoints(r#"[1,"two"]"#, (1_u32, String::from("two")));
+    all_entrypoints(r#"[1,"two"]"#, TupleRecord(1, "two".into()));
+    all_entrypoints("[1,2]", Newtype(vec![1, 2]));
+    all_entrypoints("null", Unit);
+    all_entrypoints(r#"{"Tuple":[1,2]}"#, Variant::Tuple(1, 2));
+    all_entrypoints(r#"{"Newtype":[1,2]}"#, Variant::Newtype(vec![1, 2]));
+    all_entrypoints(r#""Unit""#, Variant::Unit);
+    all_entrypoints("[1,[2]]", json_codec::json!([1, [2]]));
+    all_entrypoints(r#"{"value":1}"#, NamedRecord { value: 1 });
+}
 #[test]
 fn protocol_tokens_and_error_path() {
     use toml::span::__unstable as wire;

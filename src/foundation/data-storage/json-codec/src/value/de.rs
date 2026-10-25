@@ -489,7 +489,6 @@ impl<'de> data_serialization::Deserializer<'de> for Value {
         V: Visitor<'de>,
     {
         match self {
-            Value::Array(v) => visit_array(v, visitor),
             Value::Object(v) => v.deserialize_any(visitor),
             _ => Err(self.invalid_type(&visitor)),
         }
@@ -1016,7 +1015,6 @@ impl<'de> data_serialization::Deserializer<'de> for &'de Value {
         V: Visitor<'de>,
     {
         match self {
-            Value::Array(v) => visit_array_ref(v, visitor),
             Value::Object(v) => v.deserialize_any(visitor),
             _ => Err(self.invalid_type(&visitor)),
         }

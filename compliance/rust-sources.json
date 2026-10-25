@@ -52060,7 +52060,7 @@
     }
   },
   "external_test_mappings_sha256": {
-    "compliance/external-tests/foundation.json": "d5ef63c3c4f3179b0fa994cc74122d4d2b251d9dfa39036b113b970aca850cdc",
+    "compliance/external-tests/foundation.json": "c95b345d805efa5d31700e3d44af62fc01ef256aed6f34940b401f18199e4047",
     "compliance/external-tests/integrated.json": "da104ff38bd637f4c4a3710ce436e6e4cb2b2ea04a4b568e0ba5ec992b567d08",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
@@ -65194,7 +65194,7 @@
       ]
     },
     "src/foundation/data-storage/json-codec": {
-      "bytes": 155450,
+      "bytes": 155515,
       "directory": "src/foundation/data-storage/json-codec",
       "file_count": 42,
       "files": [
@@ -65326,7 +65326,7 @@
         },
         {
           "path": "test/foundation/json-codec/tests/test.rs",
-          "sha256": "5fdb6e8a6f951326e6927697089db47f4aab8d9422c414181473b05f19219d98",
+          "sha256": "af14c91e509991b5beb4412b76f6e7de00e674f968d41e5ba0b0a037701705be",
           "source": "src/foundation/serde_json/tests/test.rs",
           "source_sha256_before": "63646becb5c8ae724d4ea00a765407ca55e661d325f80006566a3c954646b1fa"
         },
@@ -94634,7 +94634,7 @@
       "files_sha256": {
         "Cargo.toml": "6a4c148579cf709c9191f9f7fb0df953560dc73cd0f917fa58d15f6bc984ab43",
         "build.rs": "a681e754be844c7dbef957f5d2d00b01f37c5dca160ef1055a8d8f975697a881",
-        "src/de.rs": "9bd96484eb106c63b14e4059b842938ae68d9541cf615a0049d8d21616282d73",
+        "src/de.rs": "b70f520cf6456c98b406cef2f1356891a29a19f11b9653702e23193ab7f21d65",
         "src/error.rs": "f388eb115f1c8a470b87542ac461aaeaf9bee8a38add323fe8e18f3f7a6057c1",
         "src/io/core.rs": "60ba28f67a9acaecf8964b611efba416b13f9f2bae4befc329fdf0e037293802",
         "src/io/mod.rs": "fd1ed5080495cab21117f6f7d3c2c9e3687cad0c69a0cd087b08a145a9e672da",
@@ -94665,7 +94665,7 @@
         "src/raw.rs": "bc6393b275ac0bab50b09eb2a2cde151fa1f0c13566850a6b954782e52120e1a",
         "src/read.rs": "4c4ef34764af0bbf06d7dee1170f9fa2988adae0b83b14b3270648f52e908552",
         "src/ser.rs": "0535e44c469d2f6f2f6fc55c04d6d05ce9e913b683ff2b699c212004d1229efa",
-        "src/value/de.rs": "445e91aca862a469897dd4c17caa131d136fcb367b11f6580eb033c20270a0fe",
+        "src/value/de.rs": "1d3aeb240eb9a162a428678c291c8e0b760b3a09ac7ed5f80247aa9f6e47f684",
         "src/value/from.rs": "38b5213ce873fc7d7f1eefcca938ba1c34da161cfdfc35a853377f93b8568b41",
         "src/value/index.rs": "3d2bf9f923495b86ee1ea0e46df6ed07e57dd6c00bd356d56da4acb37ff90dd6",
         "src/value/mod.rs": "4aa84c5808284fc596d5a3ed460ee20dcdad12644a8ddb04dcee346c5f0aa158",

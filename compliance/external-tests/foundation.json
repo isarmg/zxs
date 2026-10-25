@@ -9684,7 +9684,7 @@
         },
         {
           "path": "test/foundation/json-codec/tests/test.rs",
-          "sha256": "5fdb6e8a6f951326e6927697089db47f4aab8d9422c414181473b05f19219d98",
+          "sha256": "af14c91e509991b5beb4412b76f6e7de00e674f968d41e5ba0b0a037701705be",
           "source": "src/foundation/serde_json/tests/test.rs",
           "source_sha256_before": "63646becb5c8ae724d4ea00a765407ca55e661d325f80006566a3c954646b1fa"
         },
