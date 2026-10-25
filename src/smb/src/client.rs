@@ -43,9 +43,11 @@ fn remote_errno(code: &str) -> i32 {
         | "REPOSITORY_NOT_FOUND" => libc::ENOENT,
         "UNAUTHENTICATED" | "UNAUTHORIZED" | "PERMISSION_DENIED" | "FORBIDDEN" => libc::EACCES,
         "BRANCH_NOT_ACTIVE" | "FILE_BRANCH_READ_ONLY" => libc::EROFS,
-        "FILE_WRITE_BUSY" | "BRANCH_WRITE_BUSY" | "WORKSPACE_BUSY" | "CONTENT_PINNED" => {
-            libc::EBUSY
-        }
+        "FILE_WRITE_BUSY"
+        | "BRANCH_WRITE_BUSY"
+        | "WORKSPACE_BUSY"
+        | "CONTENT_PINNED"
+        | "COMMIT_PREPARATION_BUSY" => libc::EBUSY,
         "NAME_CONFLICT" | "NAME_COLLISION" | "OBJECT_COLLISION" => libc::EEXIST,
         "NO_SPACE" | "QUOTA_EXCEEDED" => libc::ENOSPC,
         "FILE_TOO_LARGE" => libc::EFBIG,
@@ -77,6 +79,7 @@ fn remote_errno(code: &str) -> i32 {
         | "BATCH_SCOPE_CONFLICT"
         | "NAMESPACE_CONFLICT"
         | "HEAD_CONFLICT"
+        | "COMMIT_PREPARATION_STALE"
         | "WORKSPACE_REBASE_REQUIRED" => libc::EAGAIN,
         _ => libc::EIO,
     }

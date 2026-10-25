@@ -182,6 +182,34 @@ fn remote_error_retains_operation_and_filesystem_errno() {
             false,
             None,
         ),
+        (
+            "COMMIT_PREPARATION_BUSY",
+            "another workspace commit is being prepared",
+            libc::EBUSY,
+            true,
+            Some("op_preparing"),
+        ),
+        (
+            "COMMIT_PREPARATION_STALE",
+            "workspace or publication base changed during preparation",
+            libc::EAGAIN,
+            true,
+            Some("op_stale"),
+        ),
+        (
+            "COMMIT_IN_DOUBT",
+            "query the original operation before retrying",
+            libc::EIO,
+            true,
+            Some("op_uncertain"),
+        ),
+        (
+            "DURABILITY_UNKNOWN",
+            "publication durability is unknown",
+            libc::EIO,
+            true,
+            Some("op_published"),
+        ),
     ] {
         let (one, two) = UnixStream::pair().unwrap();
         let server = std::thread::spawn(move || {
@@ -212,10 +240,31 @@ fn remote_error_retains_operation_and_filesystem_errno() {
             .unwrap()
             .downcast_ref::<RemoteError>()
             .unwrap();
+        assert_eq!(remote.code, code);
+        assert_eq!(remote.message, message);
         assert_eq!(remote.operation_id.as_deref(), operation);
         assert_eq!(remote.retryable, retryable);
         assert!(error.to_string().contains(code));
+        assert!(error.to_string().contains(message));
         server.join().unwrap();
+    }
+}
+
+#[test]
+fn preparation_conflicts_do_not_reclassify_uncertain_or_integrity_failures() {
+    assert_eq!(remote_errno("COMMIT_PREPARATION_BUSY"), libc::EBUSY);
+    assert_eq!(remote_errno("COMMIT_PREPARATION_STALE"), libc::EAGAIN);
+    // Only the two explicit workspace preparation conflicts are reclassified.
+    // Generic preparation failures and unknown outcomes remain I/O failures,
+    // even when their remote diagnostics separately permit a later retry.
+    for code in [
+        "COMMIT_IN_DOUBT",
+        "DURABILITY_UNKNOWN",
+        "PREPARATION_STALE",
+        "CHECKSUM_MISMATCH",
+        "UNRECOGNIZED_ERROR",
+    ] {
+        assert_eq!(remote_errno(code), libc::EIO, "{code}");
     }
 }
 
