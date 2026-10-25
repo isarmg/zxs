@@ -131,7 +131,12 @@ fn children(root: &Path, path: &Path) -> Result<Vec<String>> {
     let mut out = Vec::new();
     let mut bytes = 0;
     for entry in std::fs::read_dir(root.join(path))? {
-        let name = entry?.file_name().into_string().map_err(|_| invalid())?;
+        let name = entry?.file_name().into_string().map_err(|name| {
+            Error::PathEncoding(name).context(
+                ErrorCode::CheckpointInvalid,
+                "replay checkpoint coverage differs",
+            )
+        })?;
         if excluded(&path.join(&name)) {
             continue;
         }

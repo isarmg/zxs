@@ -250,11 +250,10 @@ impl Engine {
         verified
             .validate(&self.config, &candidate)
             .map_err(|error| {
-                Error::new(
-                    storage_contract::ErrorCode::PreparationStale,
-                    format!("prepared payload identity changed: {error}"),
-                )
-                .retryable()
+                let message = format!("prepared payload identity changed: {error}");
+                error
+                    .context(ErrorCode::PreparationStale, message)
+                    .retryable()
             })?;
         // Preparation consumed payload capacity, but concurrent staged uploads
         // may have consumed the metadata reserve without changing State.
@@ -397,14 +396,16 @@ impl Engine {
                     platform_io::fs_safety::linux::MountPolicy::SameMount,
                 )
                 .map_err(|error| {
-                    Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string())
+                    let message = error.to_string();
+                    Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
                 })?;
                 let version_parent = platform_io::fs_safety::linux::OpenAt2Root::open(
                     directory.parent().expect("version parent"),
                     platform_io::fs_safety::linux::MountPolicy::SameMount,
                 )
                 .map_err(|error| {
-                    Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string())
+                    let message = error.to_string();
+                    Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
                 })?;
                 rustix::fs::renameat_with(
                     staging_parent.directory(),
@@ -721,10 +722,14 @@ fn repair_local_proof<T: data_serialization::Serialize>(
     let parent = path.parent().expect("proof parent");
     let quarantine = parent.join("proof-quarantine");
     private_dir(&quarantine)?;
-    let source = OpenAt2Root::open(parent, MountPolicy::SameMount)
-        .map_err(|error| Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string()))?;
-    let destination = OpenAt2Root::open(&quarantine, MountPolicy::SameMount)
-        .map_err(|error| Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string()))?;
+    let source = OpenAt2Root::open(parent, MountPolicy::SameMount).map_err(|error| {
+        let message = error.to_string();
+        Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
+    })?;
+    let destination = OpenAt2Root::open(&quarantine, MountPolicy::SameMount).map_err(|error| {
+        let message = error.to_string();
+        Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
+    })?;
     if FileIdentity::from_fd(&original)? != FileIdentity::from_fd(open_regular(path)?)? {
         return Err(Error::new(
             storage_contract::ErrorCode::UnsafePath,
@@ -772,19 +777,15 @@ fn run_payload_groups<T: Sync>(
         next: 0,
         first_error: None,
     });
-    let poisoned = || {
-        Error::new(
-            storage_contract::ErrorCode::InternalError,
-            "payload preparation queue poisoned",
-        )
-    };
     std::thread::scope(|scope| {
         let workers: Vec<_> = (0..WORKERS.min(groups.len()))
             .map(|_| {
                 scope.spawn(|| -> Result<()> {
                     loop {
                         let index = {
-                            let mut queue = queue.lock().map_err(|_| poisoned())?;
+                            let mut queue = queue
+                                .lock()
+                                .expect("invariant: payload preparation queue poisoned");
                             if queue.first_error.is_some() || queue.next == groups.len() {
                                 return Ok(());
                             }
@@ -814,7 +815,9 @@ fn run_payload_groups<T: Sync>(
                             ),
                         };
                         {
-                            let mut queue = queue.lock().map_err(|_| poisoned())?;
+                            let mut queue = queue
+                                .lock()
+                                .expect("invariant: payload preparation queue poisoned");
                             // Claiming is ordered, completion is not. Earlier claimed files
                             // still finish, preserving index-priority error reporting.
                             if queue
@@ -849,7 +852,7 @@ fn run_payload_groups<T: Sync>(
     })?;
     queue
         .into_inner()
-        .map_err(|_| poisoned())?
+        .expect("invariant: payload preparation queue poisoned")
         .first_error
         .map_or(Ok(()), |(_, error)| Err(error))
 }

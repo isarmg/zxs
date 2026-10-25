@@ -15,7 +15,10 @@ fn required(message: impl Into<String>) -> Error {
 fn matching(path: &Path, version: &FileVersion) -> Result<bool> {
     match fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(required(format!("cannot inspect recovery bytes: {e}"))),
+        Err(e) => {
+            let message = format!("cannot inspect recovery bytes: {e}");
+            return Err(Error::from(e).context(ErrorCode::RecoveryRequired, message));
+        }
         Ok(meta) if !meta.is_file() || meta.file_type().is_symlink() => {
             return Err(required("recovery source is not a regular non-linked file"));
         }
@@ -23,8 +26,12 @@ fn matching(path: &Path, version: &FileVersion) -> Result<bool> {
         Ok(_) => {}
     }
     let mut file = open_regular(path)?;
-    let hash = blake3::Hash::from_hex(&version.content_hash)
-        .map_err(|_| required("candidate content digest is invalid"))?;
+    let hash = blake3::Hash::from_hex(&version.content_hash).map_err(|source| {
+        Error::from(source).context(
+            ErrorCode::RecoveryRequired,
+            "candidate content digest is invalid",
+        )
+    })?;
     match verify_full(
         &mut file,
         Expectation {
@@ -36,7 +43,10 @@ fn matching(path: &Path, version: &FileVersion) -> Result<bool> {
         Err(platform_io::payload::Error::Digest | platform_io::payload::Error::Length { .. }) => {
             Ok(false)
         }
-        Err(e) => Err(required(format!("cannot verify recovery bytes: {e}"))),
+        Err(e) => {
+            let message = format!("cannot verify recovery bytes: {e}");
+            Err(Error::from(e).context(ErrorCode::RecoveryRequired, message))
+        }
     }
 }
 impl Engine {
@@ -166,9 +176,16 @@ impl Engine {
                             content.parent().expect("content parent"),
                             MountPolicy::SameMount,
                         )
-                        .map_err(|e| required(e.to_string()))?;
-                        let to = OpenAt2Root::open(&destination, MountPolicy::SameMount)
-                            .map_err(|e| required(e.to_string()))?;
+                        .map_err(|source| {
+                            let message = source.to_string();
+                            Error::from(source).context(ErrorCode::RecoveryRequired, message)
+                        })?;
+                        let to = OpenAt2Root::open(&destination, MountPolicy::SameMount).map_err(
+                            |source| {
+                                let message = source.to_string();
+                                Error::from(source).context(ErrorCode::RecoveryRequired, message)
+                            },
+                        )?;
                         rustix::fs::renameat_with(
                             from.directory(),
                             content.file_name().expect("payload name"),
@@ -195,10 +212,14 @@ impl Engine {
                 let parent = directory
                     .parent()
                     .ok_or_else(|| required("replica parent missing"))?;
-                let from = OpenAt2Root::open(parent, MountPolicy::SameMount)
-                    .map_err(|e| required(e.to_string()))?;
-                let to = OpenAt2Root::open(&bundle, MountPolicy::SameMount)
-                    .map_err(|e| required(e.to_string()))?;
+                let from = OpenAt2Root::open(parent, MountPolicy::SameMount).map_err(|source| {
+                    let message = source.to_string();
+                    Error::from(source).context(ErrorCode::RecoveryRequired, message)
+                })?;
+                let to = OpenAt2Root::open(&bundle, MountPolicy::SameMount).map_err(|source| {
+                    let message = source.to_string();
+                    Error::from(source).context(ErrorCode::RecoveryRequired, message)
+                })?;
                 rustix::fs::renameat_with(
                     from.directory(),
                     directory.file_name().expect("version directory name"),

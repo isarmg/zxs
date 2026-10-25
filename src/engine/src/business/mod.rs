@@ -41,7 +41,7 @@ pub fn validate_branch_name(name: &str) -> Result<()> {
             "branch names must not exceed 128 UTF-8 bytes",
         ));
     }
-    name_policy::validate_name(name)
+    name_policy::validate_name(name).map_err(Into::into)
 }
 
 #[cfg(test)]

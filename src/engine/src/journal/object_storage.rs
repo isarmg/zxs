@@ -177,11 +177,8 @@ pub(crate) fn list_object_hashes(d: &DiskConfig, kind: &str) -> Result<BTreeSet<
     };
     for entry in fs::read_dir(&directory)? {
         let entry = entry?;
-        let name = entry.file_name().into_string().map_err(|_| {
-            Error::new(
-                storage_contract::ErrorCode::ObjectCorrupt,
-                "invalid object name",
-            )
+        let name = entry.file_name().into_string().map_err(|name| {
+            Error::PathEncoding(name).context(ErrorCode::ObjectCorrupt, "invalid object name")
         })?;
         if name.len() == 2
             && name

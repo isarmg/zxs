@@ -43,7 +43,8 @@ fn upload_fingerprint_file(input: std::fs::File, maximum: u64) -> Result<(u64, S
 }
 
 fn preparation_fs_error(error: platform_io::fs_safety::Error) -> Error {
-    Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string())
+    let message = error.to_string();
+    Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
 }
 fn retained_upload_usage(directory: &OpenAt2Root) -> Result<(u64, usize)> {
     let mut retained = 0u64;
@@ -92,9 +93,10 @@ struct UploadPreparationClaim {
 }
 impl Drop for UploadPreparationClaim {
     fn drop(&mut self) {
-        if let Ok(mut claims) = self.claims.lock() {
-            claims.remove(&self.workspace);
-        }
+        self.claims
+            .lock()
+            .expect("invariant: upload preparation lock poisoned")
+            .remove(&self.workspace);
     }
 }
 
@@ -246,8 +248,8 @@ impl UploadPreparation {
                 .verify_retained(incoming.0, &incoming.1)
                 .map_err(|error| {
                     if error.code() == storage_contract::ErrorCode::ChecksumMismatch {
-                        Error::new(
-                            storage_contract::ErrorCode::UploadGenerationConflict,
+                        error.context(
+                            ErrorCode::UploadGenerationConflict,
                             "one upload generation cannot name different bytes",
                         )
                     } else {
@@ -322,7 +324,7 @@ pub(crate) fn native_commit_digest(
     object_hash(
         "request",
         &json!({"kind":"workspace.commit","principal":request.principal,"body":workspace_commit_input(workspace, request)?}),
-    )
+    ).map_err(Into::into)
 }
 
 fn validate_directory_selection(state: &State, workspace: &Workspace, path: &str) -> Result<()> {
@@ -791,12 +793,10 @@ impl Engine {
             ));
         }
         let directory = self.workspace_data_directory(&w)?;
-        let mut claims = self.upload_preparations.lock().map_err(|_| {
-            Error::new(
-                storage_contract::ErrorCode::InternalError,
-                "upload preparation lock poisoned",
-            )
-        })?;
+        let mut claims = self
+            .upload_preparations
+            .lock()
+            .expect("invariant: upload preparation lock poisoned");
         if !claims.insert(workspace.into()) {
             return Err(Error::new(
                 storage_contract::ErrorCode::FileWriteBusy,
@@ -1024,8 +1024,8 @@ impl Engine {
             None
         };
         if let Some((size, hash)) = expected {
-            let digest = blake3::Hash::from_hex(&hash).map_err(|_| {
-                Error::new(
+            let digest = blake3::Hash::from_hex(&hash).map_err(|source| {
+                Error::from(source).context(
                     storage_contract::ErrorCode::ChecksumMismatch,
                     "invalid staged content digest",
                 )
@@ -1041,10 +1041,8 @@ impl Engine {
                 },
             )
             .map_err(|error| {
-                Error::new(
-                    storage_contract::ErrorCode::ChecksumMismatch,
-                    error.to_string(),
-                )
+                let message = error.to_string();
+                Error::from(error).context(ErrorCode::ChecksumMismatch, message)
             })?;
         }
         temporary.seek(SeekFrom::Start(offset))?;

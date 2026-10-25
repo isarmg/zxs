@@ -139,15 +139,17 @@ impl Engine {
                 ));
             }
         }
-        self.commit_preparation
+        if self
+            .commit_preparation
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| {
-                Error::new(
-                    storage_contract::ErrorCode::CommitPreparationBusy,
-                    "another workspace commit is being prepared",
-                )
-                .retryable()
-            })?;
+            .is_err()
+        {
+            return Err(Error::new(
+                ErrorCode::CommitPreparationBusy,
+                "another workspace commit is being prepared",
+            )
+            .retryable());
+        }
         let admission = PreparationAdmission(self.commit_preparation.clone());
         // Duplicate the existing open-file descriptions: they keep this pool's
         // process locks alive even if the original Engine is dropped meanwhile.

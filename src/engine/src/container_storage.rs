@@ -47,9 +47,12 @@ fn sequence(name: &str) -> Result<u64> {
             "version storage name is not a numbered UTC checkpoint",
         ));
     }
-    let value = number
-        .parse::<u64>()
-        .map_err(|_| invalid("version sequence exceeds the storage format"))?;
+    let value = number.parse::<u64>().map_err(|source| {
+        Error::from(source).context(
+            ErrorCode::ContainerLayoutInvalid,
+            "version sequence exceeds the storage format",
+        )
+    })?;
     if value == 0 {
         return Err(invalid("version storage sequence starts at one"));
     }
@@ -87,8 +90,12 @@ pub(crate) fn validate_version(version: &FileVersion) -> Result<()> {
     {
         return Err(invalid("version creation time must be whole-second UTC"));
     }
-    OffsetDateTime::parse(&version.created_at, &Rfc3339)
-        .map_err(|_| invalid("version creation time is not RFC3339"))?;
+    OffsetDateTime::parse(&version.created_at, &Rfc3339).map_err(|source| {
+        Error::from(source).context(
+            ErrorCode::ContainerLayoutInvalid,
+            "version creation time is not RFC3339",
+        )
+    })?;
     Ok(())
 }
 
@@ -125,17 +132,15 @@ pub(crate) fn version_identity(
     })?;
     let now = OffsetDateTime::now_utc()
         .replace_nanosecond(0)
-        .map_err(|error| invalid(&error.to_string()))?;
-    let timestamp = now
-        .format(&Rfc3339)
-        .map_err(|error| invalid(&error.to_string()))?;
+        .expect("invariant: zero nanoseconds is representable");
+    let timestamp = now.format(&Rfc3339)?;
     let format = date_time::format_description::parse_borrowed::<3>(
         "[year][month][day]T[hour][minute][second]Z",
     )
-    .map_err(|error| invalid(&error.to_string()))?;
+    .expect("invariant: static checkpoint format is valid");
     let stamp = now
         .format(&format)
-        .map_err(|error| invalid(&error.to_string()))?;
+        .expect("invariant: UTC datetime contains every checkpoint format component");
     let current_name = state
         .file_names
         .get(file_id)
@@ -235,10 +240,12 @@ fn named_containers(
                 "container namespace contains a non-directory or symbolic link",
             ));
         }
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| invalid("container directory name is not UTF-8"))?;
+        let name = entry.file_name().into_string().map_err(|name| {
+            Error::PathEncoding(name).context(
+                ErrorCode::ContainerLayoutInvalid,
+                "container directory name is not UTF-8",
+            )
+        })?;
         name_policy::validate_name(&name)?;
         let path = entry.path();
         existing_private_dir(&path)?;
@@ -281,10 +288,12 @@ fn container(history: &Path, file_id: &str) -> Result<Option<PathBuf>> {
                 "stable file directory contains a non-directory or symbolic link",
             ));
         }
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| invalid("container directory name is not UTF-8"))?;
+        let name = entry.file_name().into_string().map_err(|name| {
+            Error::PathEncoding(name).context(
+                ErrorCode::ContainerLayoutInvalid,
+                "container directory name is not UTF-8",
+            )
+        })?;
         name_policy::validate_name(&name)?;
         existing_private_dir(&entry.path())?;
         if name == "namespace" && marker_matches(&entry.path().join(NAMESPACE_MARKER), file_id)? {
@@ -349,8 +358,10 @@ pub(crate) fn content_path(directory: &Path, version: &FileVersion) -> Result<Pa
 
 fn held_directory(path: &Path) -> Result<OpenAt2Root> {
     let private = existing_private_dir(path)?;
-    OpenAt2Root::open(private.path(), MountPolicy::SameMount)
-        .map_err(|error| Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string()))
+    OpenAt2Root::open(private.path(), MountPolicy::SameMount).map_err(|error| {
+        let message = error.to_string();
+        Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
+    })
 }
 
 fn verify_body(path: &Path, version: &FileVersion) -> Result<()> {

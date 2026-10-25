@@ -47,7 +47,7 @@ fn required(message: impl Into<String>) -> Error {
 fn plan_digest(plan: &RecoveryPlan) -> Result<String> {
     let mut plan = plan.clone();
     plan.digest.clear();
-    object_hash("recovery-plan-digest", &plan)
+    object_hash("recovery-plan-digest", &plan).map_err(Into::into)
 }
 fn receipts_ids(receipts: &[Receipt]) -> BTreeSet<String> {
     receipts.iter().map(|r| r.disk_id.clone()).collect()
@@ -82,10 +82,11 @@ fn observe(engine: &Engine, candidate: &Candidate) -> Result<Vec<Value>> {
                     let content = crate::container_storage::content_path(&dir, &evidence.version)?;
                     match fs::symlink_metadata(&content) {
                         Err(io) if io.kind() == std::io::ErrorKind::NotFound => "MISSING",
-                        Err(_) => {
-                            return Err(required(format!(
-                                "cannot classify payload slot {slot}: {error}"
-                            )));
+                        Err(source) => {
+                            return Err(Error::from(source).context(
+                                ErrorCode::RecoveryRequired,
+                                format!("cannot classify payload slot {slot}: {error}"),
+                            ));
                         }
                         Ok(meta) if meta.is_file() => "CORRUPT",
                         Ok(_) => {
@@ -125,8 +126,11 @@ pub(crate) fn discover_publication(
     for disk in engine.members() {
         for name in list_object_hashes(&disk, "publication")? {
             let publication: Publication =
-                load_object(&disk, "publication", &name).map_err(|_| {
-                    required("an unreadable publication object prevents proving absence")
+                load_object(&disk, "publication", &name).map_err(|source| {
+                    source.context(
+                        ErrorCode::RecoveryRequired,
+                        "an unreadable publication object prevents proving absence",
+                    )
                 })?;
             if publication.candidate_hash == hash {
                 if found.as_ref().is_some_and(|old| {
@@ -148,8 +152,12 @@ pub(crate) fn discover_publication(
             );
             let path = local_proof_directory(&directory, hash)?.join("publication-proof.json");
             if path.exists() {
-                let local: LocalPublication = read_json(&path)
-                    .map_err(|_| required("unreadable local publication evidence"))?;
+                let local: LocalPublication = read_json(&path).map_err(|source| {
+                    source.context(
+                        ErrorCode::RecoveryRequired,
+                        "unreadable local publication evidence",
+                    )
+                })?;
                 if object_hash("candidate", &local.candidate)? != hash {
                     return Err(required("conflicting local publication evidence"));
                 }

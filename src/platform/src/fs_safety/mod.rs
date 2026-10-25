@@ -561,7 +561,7 @@ pub enum Error {
     #[error("directory entry identity changed: {0:?}")]
     IdentityChanged(PathBuf),
     #[error("publication happened but durability could not be confirmed: {0}")]
-    PublishedDurabilityUnknown(io::Error),
+    PublishedDurabilityUnknown(#[source] io::Error),
     #[error("advisory lock is already held: {0:?}")]
     AlreadyLocked(PathBuf),
     #[error("destination already exists: {0:?}")]

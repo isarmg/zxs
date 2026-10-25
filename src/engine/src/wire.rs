@@ -13,7 +13,7 @@ pub fn manifest_hash(w: &Workspace) -> Result<String> {
     object_hash(
         "workspace-manifest",
         &json!({"workspace_id":w.workspace_id,"branch_id":w.branch_id,"base_head":w.base_head,"fencing_token":w.fencing_token.to_string(),"items":w.files.values().map(|f|json!({"item_id":f.item_id,"path":f.path,"logical_size":f.size.to_string(),"content_hash":f.content_hash,"upload_generation":f.dirty_generation.to_string()})).collect::<Vec<_>>(),"namespace_operations":w.namespace_operations}),
-    )
+    ).map_err(Into::into)
 }
 pub fn commit_request_digest(workspace: &str, body: &Value) -> Result<String> {
     request_digest(
@@ -23,6 +23,7 @@ pub fn commit_request_digest(workspace: &str, body: &Value) -> Result<String> {
         json!({}),
         body,
     )
+    .map_err(Into::into)
 }
 fn text<'a>(body: &'a Value, key: &str) -> Result<&'a str> {
     body.get(key).and_then(Value::as_str).ok_or_else(|| {

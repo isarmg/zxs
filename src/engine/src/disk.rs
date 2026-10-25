@@ -14,21 +14,7 @@ use std::{
 mod mountinfo;
 
 pub(crate) fn fs_error(e: platform_io::fs_safety::Error) -> Error {
-    match e {
-        platform_io::fs_safety::Error::Io(e) if matches!(e.raw_os_error(), Some(20 | 40)) => {
-            Error::new(storage_contract::ErrorCode::UnsafePath, e.to_string())
-        }
-        platform_io::fs_safety::Error::Io(e) => e.into(),
-        platform_io::fs_safety::Error::PublishedDurabilityUnknown(e) => Error::new(
-            storage_contract::ErrorCode::DurabilityUnknown,
-            e.to_string(),
-        ),
-        platform_io::fs_safety::Error::DestinationExists(p) => Error::new(
-            storage_contract::ErrorCode::DestinationExists,
-            p.display().to_string(),
-        ),
-        other => Error::new(storage_contract::ErrorCode::UnsafePath, other.to_string()),
-    }
+    e.into()
 }
 fn absolute_path(path: &Path) -> Result<PathBuf> {
     let path = if path.is_absolute() {
@@ -195,7 +181,7 @@ pub(crate) fn read_file_bytes(mut f: File, maximum: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 pub(crate) fn read_json<T: data_serialization::de::DeserializeOwned>(path: &Path) -> Result<T> {
-    decode_strict(&read_bytes(path, MAX_METADATA)?)
+    decode_strict(&read_bytes(path, MAX_METADATA)?).map_err(Into::into)
 }
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8], replace: bool) -> Result<()> {
     let path = absolute_path(path)?;

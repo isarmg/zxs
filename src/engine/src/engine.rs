@@ -52,9 +52,11 @@ pub struct ReadLease {
 }
 impl Drop for ReadLease {
     fn drop(&mut self) {
-        if let Ok(mut reads) = self.reads.lock()
-            && let Some(count) = reads.get_mut(&self.version)
-        {
+        let mut reads = self
+            .reads
+            .lock()
+            .expect("invariant: read lease lock poisoned");
+        if let Some(count) = reads.get_mut(&self.version) {
             *count = count.saturating_sub(1);
             if *count == 0 {
                 reads.remove(&self.version);

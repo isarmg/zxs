@@ -25,11 +25,27 @@ through `std::error::Error::source`. Domain validation messages need no fabricat
 source. Fixed checksum-header slices use `expect` after the existing external
 length check; malformed external lengths and payloads still return errors.
 
+## Engine sources
+
+`storage_engine::Error` is separate from the portable contract error. Filesystem,
+SQLite, payload verification, timestamp, digest and integer parsing errors retain
+their concrete causes. Contextual reclassification wraps `Box<Error>`, not a
+trait object, and retains the previous public message, code and explicit retry
+policy. Directory-name decoding retains the rejected `OsString`. A published
+but not durably synchronized filesystem operation retains its original I/O
+source and `DURABILITY_UNKNOWN` classification.
+
+Index failures retain the underlying database/platform cause. The existing
+SQLite corruption classifier alone decides whether quarantine/rebuild is safe;
+permission, busy, schema and I/O failures do not become corruption. A failed
+optional history-index read still disables that acceleration at its existing
+decision point. Poisoned engine locks expose invariant failure rather than
+becoming a recoverable storage result; actual filesystem failures still propagate.
+
 ## Staging limits
 
-This layer establishes typed identities and portable contract sources. It does
-not claim that all repository error paths are migrated. Engine-specific
-filesystem/SQLite contextual errors still need an engine-local error enum;
-those dependencies must not enter the portable contract crate. HTTP/SMB/startup
-source adapters and once-only outer-boundary logging are a subsequent layer.
-Platform and SMB transport-specific error domains are independent boundaries.
+These layers do not claim that all repository error paths are migrated.
+HTTP/SMB/startup source adapters and once-only outer-boundary logging are a
+subsequent layer. Platform and SMB transport-specific error domains are
+independent boundaries. Existing scheduler panic containment and unrelated
+fallback/state policies are not changed by the source-preservation layer.

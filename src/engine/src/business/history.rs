@@ -252,11 +252,9 @@ impl Engine {
         // Creation returns the published record, not the branch's later head,
         // name or lifecycle state. Exact replay has already matched its owner
         // and request before decoding this immutable receipt.
-        json_codec::from_value(op.result["created_branch"].clone()).map_err(|_| {
-            Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "created branch receipt is invalid",
-            )
+        json_codec::from_value(op.result["created_branch"].clone()).map_err(|source| {
+            Error::from(source)
+                .context(ErrorCode::StateInvalid, "created branch receipt is invalid")
         })
     }
     pub fn add_merge_link(

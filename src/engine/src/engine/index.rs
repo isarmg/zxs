@@ -90,7 +90,7 @@ fn project(path: &Path, before: Option<&State>, after: &State) -> Result<()> {
 
 #[derive(Debug)]
 struct ProjectionFailure {
-    message: String,
+    source: Error,
     corrupt: bool,
 }
 impl From<sqlite_access::Error> for ProjectionFailure {
@@ -103,7 +103,7 @@ impl From<sqlite_access::Error> for ProjectionFailure {
             .and_then(|code| code.parse::<i32>().ok())
             .is_some_and(|code| matches!(code & 0xff, 11 | 26));
         Self {
-            message: error.to_string(),
+            source: error.into(),
             corrupt,
         }
     }
@@ -113,7 +113,7 @@ impl From<platform_io::sqlite::Error> for ProjectionFailure {
         match error {
             platform_io::sqlite::Error::Sqlx(error) => error.into(),
             error => Self {
-                message: error.to_string(),
+                source: error.into(),
                 corrupt: false,
             },
         }
@@ -122,14 +122,14 @@ impl From<platform_io::sqlite::Error> for ProjectionFailure {
 impl From<&str> for ProjectionFailure {
     fn from(message: &str) -> Self {
         Self {
-            message: message.into(),
+            source: Error::new(ErrorCode::IndexRebuildFailed, message),
             corrupt: false,
         }
     }
 }
 impl From<ProjectionFailure> for Error {
     fn from(error: ProjectionFailure) -> Self {
-        Self::new(ErrorCode::IndexRebuildFailed, error.message)
+        error.source
     }
 }
 
@@ -228,7 +228,7 @@ fn try_project_delta(
         // Do not replace files if closing the native worker is uncertain.
         if let Err(error) = c.close().await {
             return Err(ProjectionFailure {
-                message: error.to_string(),
+                source: error.into(),
                 corrupt: false,
             });
         }
@@ -266,15 +266,19 @@ fn checked_index_files(root: &Path) -> Result<Vec<(&'static str, std::fs::File)>
 fn quarantine_corrupt_index(root: &Path) -> Result<()> {
     use platform_io::fs_safety::linux::{FileIdentity, MountPolicy, OpenAt2Root};
     let files = checked_index_files(root)?;
-    let source = OpenAt2Root::open(root, MountPolicy::SameMount)
-        .map_err(|error| Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string()))?;
+    let source = OpenAt2Root::open(root, MountPolicy::SameMount).map_err(|error| {
+        let message = error.to_string();
+        Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
+    })?;
     // Keep from the outset: even a partial move must never be auto-deleted.
     let quarantine = tempfile::Builder::new()
         .prefix("index-corrupt-")
         .tempdir_in(root)?
         .keep();
-    let destination = OpenAt2Root::open(&quarantine, MountPolicy::SameMount)
-        .map_err(|error| Error::new(storage_contract::ErrorCode::UnsafePath, error.to_string()))?;
+    let destination = OpenAt2Root::open(&quarantine, MountPolicy::SameMount).map_err(|error| {
+        let message = error.to_string();
+        Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
+    })?;
     for (name, file) in files {
         let current = crate::disk::open_regular(&root.join(name))?;
         if FileIdentity::from_fd(&file)? != FileIdentity::from_fd(&current)? {
@@ -380,7 +384,10 @@ impl Engine {
 
     /// Candidate selection only. Every field comes from State, never SQLite JSON.
     pub(crate) fn indexed_file_history(&self, file_id: &str) -> Option<Vec<FileVersion>> {
-        let mut proof = self.history_query_proof.lock().ok()?;
+        let mut proof = self
+            .history_query_proof
+            .lock()
+            .expect("invariant: history query proof lock poisoned");
         if !proof.healthy || proof.sequence != self.state.sequence {
             return None;
         }
@@ -394,9 +401,9 @@ impl Engine {
             let mut c =
                 platform_io::sqlite::open_index_read_connection(&self.root.join("index.sqlite"))
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(ProjectionFailure::from)?;
             let result = async {
-                let mut tx = c.begin().await.map_err(|e| e.to_string())?;
+                let mut tx = c.begin().await.map_err(ProjectionFailure::from)?;
                 // Attest all queried objects before evaluating their contents: in
                 // particular, a cache must not substitute an expensive view.
                 for (name, kind, ddl) in [
@@ -405,25 +412,25 @@ impl Engine {
                     ("file_history_lookup", "index", HISTORY_INDEX),
                 ] {
                     let actual = sqlite_access::query("SELECT type,sql FROM sqlite_schema WHERE name=?")
-                        .bind(name).fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
-                    if actual.try_get::<String, _>(0).map_err(|e| e.to_string())? != kind
-                        || actual.try_get::<String, _>(1).map_err(|e| e.to_string())? != ddl {
+                        .bind(name).fetch_one(&mut *tx).await.map_err(ProjectionFailure::from)?;
+                    if actual.try_get::<String, _>(0).map_err(ProjectionFailure::from)? != kind
+                        || actual.try_get::<String, _>(1).map_err(ProjectionFailure::from)? != ddl {
                         return Err("query schema mismatch".into());
                     }
                 }
                 let sequence: String = sqlite_access::query_scalar("SELECT sequence FROM current_state WHERE singleton=1")
-                    .fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
+                    .fetch_one(&mut *tx).await.map_err(ProjectionFailure::from)?;
                 if sequence != self.state.sequence.to_string() { return Err("stale sequence".into()); }
                 let rows = sqlite_access::query("SELECT version_id,file_id,history_tree_id,version_sequence_key FROM file_history_versions INDEXED BY file_history_lookup WHERE file_id=? ORDER BY version_sequence_key,version_id LIMIT ?")
-                    .bind(file_id).bind(limit).fetch_all(&mut *tx).await.map_err(|e| e.to_string())?;
+                    .bind(file_id).bind(limit).fetch_all(&mut *tx).await.map_err(ProjectionFailure::from)?;
                 if rows.len() != expected { return Err("incomplete candidate set".into()); }
                 let mut versions = Vec::with_capacity(expected);
                 let mut prior: Option<(u64, String)> = None;
                 for row in rows {
-                    let id: String = row.try_get(0).map_err(|e| e.to_string())?;
-                    let file: String = row.try_get(1).map_err(|e| e.to_string())?;
-                    let history: String = row.try_get(2).map_err(|e| e.to_string())?;
-                    let key: Vec<u8> = row.try_get(3).map_err(|e| e.to_string())?;
+                    let id: String = row.try_get(0).map_err(ProjectionFailure::from)?;
+                    let file: String = row.try_get(1).map_err(ProjectionFailure::from)?;
+                    let history: String = row.try_get(2).map_err(ProjectionFailure::from)?;
+                    let key: Vec<u8> = row.try_get(3).map_err(ProjectionFailure::from)?;
                     let v = self.state.versions.get(&id).ok_or("unknown candidate")?;
                     if file != file_id || v.file_id != file || v.history_tree_id != history || v.version_id != id || key != v.version_sequence.to_be_bytes() {
                         return Err("invalid candidate".into());
@@ -433,10 +440,10 @@ impl Engine {
                     prior = Some(order);
                     versions.push(v.clone());
                 }
-                tx.commit().await.map_err(|e| e.to_string())?;
-                Ok::<_, String>(versions)
+                tx.commit().await.map_err(ProjectionFailure::from)?;
+                Ok::<_, ProjectionFailure>(versions)
             }.await;
-            let closed = c.close().await.map_err(|e| e.to_string());
+            let closed = c.close().await.map_err(ProjectionFailure::from);
             match (result, closed) {
                 (Ok(v), Ok(())) => Ok(v),
                 (Err(e), _) | (_, Err(e)) => Err(e),

@@ -124,7 +124,7 @@ fn writer_lock_outlives_cache_eviction_and_every_waiting_lease() {
     append(disk, "PREPARE", 1, &"a".repeat(64), &"b".repeat(64)).unwrap();
     let path = log_path(disk);
     let first = JournalWriter::acquire(&path).unwrap();
-    let first_guard = first.lock().unwrap();
+    let first_guard = first.lock();
     let waiter = JournalWriter::acquire(&path).unwrap();
     assert!(matches!(
         waiter.lock.as_ref().unwrap().try_lock(),
@@ -200,15 +200,12 @@ fn writer_panic_retries_verify_visible_and_torn_bytes_after_leases_drain() {
         }));
         assert!(panicked.is_err());
         assert!(!tails().lock().unwrap().contains_key(&path));
-        assert_eq!(
-            waiter.lock().unwrap_err().code(),
-            storage_contract::ErrorCode::RecoveryRequired
-        );
-        assert_eq!(
-            append(disk, "ACCEPT", 1, &"a".repeat(64), &"c".repeat(64))
-                .unwrap_err()
-                .code(),
-            storage_contract::ErrorCode::RecoveryRequired
+        assert!(catch_unwind(AssertUnwindSafe(|| waiter.lock())).is_err());
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                append(disk, "ACCEPT", 1, &"a".repeat(64), &"c".repeat(64))
+            }))
+            .is_err()
         );
         assert!(writers().lock().unwrap().contains_key(&path));
         drop(waiter);
@@ -236,7 +233,7 @@ fn writer_acquire_drop_churn_never_splits_a_same_path_lock() {
                 start.wait();
                 for iteration in 0..2048 {
                     let lease = JournalWriter::acquire(&path).unwrap();
-                    let guard = lease.lock().unwrap();
+                    let guard = lease.lock();
                     assert_eq!(inside.fetch_add(1, Ordering::SeqCst), 0);
                     if iteration % 8 == 0 {
                         std::thread::yield_now();

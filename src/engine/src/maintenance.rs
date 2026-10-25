@@ -361,12 +361,10 @@ impl Engine {
     }
     fn check_purge(&self, history: &str, versions: &[String]) -> Result<()> {
         let selected = versions.iter().collect::<BTreeSet<_>>();
-        let reads = self.reads.lock().map_err(|_| {
-            Error::new(
-                storage_contract::ErrorCode::InternalError,
-                "read lease lock poisoned",
-            )
-        })?;
+        let reads = self
+            .reads
+            .lock()
+            .expect("invariant: read lease lock poisoned");
         for id in versions {
             let v = self.state.versions.get(id).ok_or_else(|| {
                 Error::new(
@@ -594,8 +592,7 @@ impl Engine {
                 let selected_versions = commits.iter().flat_map(|c| &c.entries)
                     .filter(|e| e.kind == "file").map(|e| e.version_id.clone())
                     .collect::<BTreeSet<_>>();
-                let reads = engine.reads.lock()
-                    .map_err(|_| Error::new(storage_contract::ErrorCode::InternalError, "read lease lock poisoned"))?;
+                let reads = engine.reads.lock().expect("invariant: read lease lock poisoned");
                 if selected_versions.iter().any(|id| reads.get(id).copied().unwrap_or(0) != 0) {
                     return Err(Error::new(storage_contract::ErrorCode::ContentPinned, "split input has an active read lease"));
                 }

@@ -33,11 +33,13 @@ pub(super) fn acquire_locks(
             )
             .map_err(std::io::Error::from)?,
         );
-        platform_io::fs_safety::linux::SingleLinkRequirement::check(&f)
-            .map_err(|e| Error::new(storage_contract::ErrorCode::UnsafePath, e.to_string()))?;
+        platform_io::fs_safety::linux::SingleLinkRequirement::check(&f).map_err(|e| {
+            let message = e.to_string();
+            Error::from(e).context(storage_contract::ErrorCode::UnsafePath, message)
+        })?;
         rustix::fs::flock(&f, rustix::fs::FlockOperation::NonBlockingLockExclusive).map_err(
-            |_| {
-                Error::new(
+            |source| {
+                Error::from(std::io::Error::from(source)).context(
                     storage_contract::ErrorCode::WriterAlreadyActive,
                     "another process owns this pool or disk",
                 )

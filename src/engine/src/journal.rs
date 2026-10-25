@@ -236,36 +236,28 @@ struct JournalWriter {
 }
 impl JournalWriter {
     fn acquire(path: &Path) -> Result<Self> {
-        let mut writers = writers().lock().map_err(|_| {
-            Error::new(
-                storage_contract::ErrorCode::RecoveryRequired,
-                "journal writer registry poisoned",
-            )
-        })?;
+        let mut writers = writers()
+            .lock()
+            .expect("invariant: journal writer registry poisoned");
         let lock = writers.entry(path.to_path_buf()).or_default().clone();
         Ok(Self {
             path: path.to_path_buf(),
             lock: Some(lock),
         })
     }
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, ()>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, ()> {
         self.lock
             .as_ref()
             .expect("live journal writer lease")
             .lock()
-            .map_err(|_| {
-                Error::new(
-                    storage_contract::ErrorCode::RecoveryRequired,
-                    "journal writer lock poisoned",
-                )
-            })
+            .expect("invariant: journal writer lock poisoned")
     }
 }
 impl Drop for JournalWriter {
     fn drop(&mut self) {
-        let Ok(mut writers) = writers().lock() else {
-            return;
-        };
+        let mut writers = writers()
+            .lock()
+            .expect("invariant: journal writer registry poisoned");
         // Release this lease while holding the registry lock too: simultaneous
         // drops must not each see the other's soon-to-be-released ownership.
         drop(self.lock.take());
@@ -349,19 +341,14 @@ fn append_with_sync(
 ) -> Result<Receipt> {
     let path = log_path(d);
     let writer = JournalWriter::acquire(&path)?;
-    let _writer_guard = writer.lock()?;
+    let _writer_guard = writer.lock();
     private_dir(path.parent().expect("log parent"))?;
     // Only this journal stays locked across I/O. The global cache is held just
     // for removal/insertion, never for a scan or either durability barrier.
     // Remove before touching disk so failures force partial writes to be checked.
     let cached = tails()
         .lock()
-        .map_err(|_| {
-            Error::new(
-                storage_contract::ErrorCode::RecoveryRequired,
-                "journal cache lock poisoned",
-            )
-        })?
+        .expect("invariant: journal cache lock poisoned")
         .remove(&path);
     let mut file = open_append_regular(&path)?;
     let before = FileStamp::of(&file)?;
@@ -523,12 +510,9 @@ fn cache_tail(path: PathBuf, stamp: FileStamp, mut records: Vec<(Record, String)
     }
     // Do not retain the allocation of a full historical scan.
     records.shrink_to_fit();
-    let mut tails = tails().lock().map_err(|_| {
-        Error::new(
-            storage_contract::ErrorCode::RecoveryRequired,
-            "journal cache lock poisoned",
-        )
-    })?;
+    let mut tails = tails()
+        .lock()
+        .expect("invariant: journal cache lock poisoned");
     // Bound cache size across unrelated engines; eviction only costs a rescan.
     if tails.len() >= MAX_CACHED_JOURNALS {
         tails.pop_first();

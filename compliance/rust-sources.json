@@ -78542,14 +78542,14 @@
   "foundation_layout_receipt": "5f02def35b57751ea9e54a2f1f22fdfebdbd6dda1ed910de7f8fa805f55e281d",
   "initial_test_relocation_sha256": "791ad728a408677dd54ef98e3feaffe825c5fc5670e888440615933d9498ecc3",
   "lockfiles_sha256": {
-    "Cargo.lock": "ffbea79e6d7cffb5f1311a7eb78277ded69a5a9d5ac17ca957f637a3e3c8cf62"
+    "Cargo.lock": "f583e1e58d5c46b93e66d17663e60b0d25461cc01be29c242205bbb93c552250"
   },
   "manifests_sha256": {
     "Cargo.toml": "cf46884191c109e9c82e420f01da1f562b6a3255395352a876d9ca0c8cbdd34b",
     "src/auth/Cargo.toml": "e6986ad60c15d48e2b3d60a5157de60ac7318f1ecc80befc1adfd60059b5dab3",
     "src/client/Cargo.toml": "31f7eb0739b17cc0b590ded751c0dc3cefde9e9ec60387db0e204e6bd334570b",
     "src/contract/Cargo.toml": "3cdb429c2617fb934312c73d89045b838d1329b4db8e317701fa4daa04c95d8f",
-    "src/engine/Cargo.toml": "f6a0a33e9e3743b49cd9f0945d02c233fdcdb41dbd99bfc3986a101a44d5587f",
+    "src/engine/Cargo.toml": "826be1620c77b420d80a89946774bb00df3e31245ad33b613cf3cbfd2d6f4307",
     "src/foundation/code-generation/derive-where/Cargo.toml": "dac6d156693a9ca4d661e41d456a17154836e90ca1d9be52e85b86b5264f1725",
     "src/foundation/code-generation/displaydoc/Cargo.toml": "bffb4f3a7d1b0aa79151f31872f40b7b7bcac575fbeea5e628b30a523a883d8e",
     "src/foundation/code-generation/pastey/Cargo.toml": "0dcbf18a646aff0eb601f5efffc2294b82470a5c44b744778ac6920b536e5991",

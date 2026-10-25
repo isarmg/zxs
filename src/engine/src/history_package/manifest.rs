@@ -1,11 +1,12 @@
 //! Scoped logical history projection and closure validation, without storage I/O.
 use crate::business::{validate_branch_name, validate_entries};
+use crate::{Error, ErrorCode, Result};
 use data_serialization::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use storage_contract::{
-    Branch, Commit, ContentState, DirectoryBranch, DirectoryTree, Entry, Error, FileBranchMerge,
+    Branch, Commit, ContentState, DirectoryBranch, DirectoryTree, Entry, FileBranchMerge,
     FileContext, FileMetadataNode, FilePathNode, FileVersion, HistoryBoundary, HistoryTree,
-    MergeLink, Placement, PlacementRule, ProtectionPolicy, Repository, Result,
+    MergeLink, Placement, PlacementRule, ProtectionPolicy, Repository,
     SUPPORTED_CHECKSUM_CHUNK_BYTES, SharedRecords, State, canonical_json, validate_id,
 };
 
@@ -867,13 +868,25 @@ impl HistoryManifest {
                     return Err(invalid("namespace deletion facts are empty"));
                 }
                 crate::disk::encode_metadata(deletions, crate::disk::MAX_METADATA)?;
-                let timestamp = i64::try_from(deletions.timestamp)
-                    .map_err(|_| invalid("namespace deletion timestamp is invalid"))?;
-                date_time::OffsetDateTime::from_unix_timestamp(timestamp)
-                    .map_err(|_| invalid("namespace deletion timestamp is invalid"))?;
+                let timestamp = i64::try_from(deletions.timestamp).map_err(|source| {
+                    Error::from(source).context(
+                        ErrorCode::HistoryPackageInvalid,
+                        "namespace deletion timestamp is invalid",
+                    )
+                })?;
+                date_time::OffsetDateTime::from_unix_timestamp(timestamp).map_err(|source| {
+                    Error::from(source).context(
+                        ErrorCode::HistoryPackageInvalid,
+                        "namespace deletion timestamp is invalid",
+                    )
+                })?;
                 for deletion in &deletions.paths {
-                    name_policy::validate_path(&deletion.path)
-                        .map_err(|_| invalid("namespace deletion path is invalid"))?;
+                    name_policy::validate_path(&deletion.path).map_err(|source| {
+                        Error::from(source).context(
+                            ErrorCode::HistoryPackageInvalid,
+                            "namespace deletion path is invalid",
+                        )
+                    })?;
                 }
             }
             let mut entries = commit.entries.clone();
@@ -1279,10 +1292,8 @@ impl HistoryManifest {
             // content_path validation. Reject malformed retained records before
             // import can reach a decision or post-decision name projection.
             crate::container_storage::validate_version(version).map_err(|error| {
-                Error::new(
-                    storage_contract::ErrorCode::HistoryPackageInvalid,
-                    format!("invalid version storage identity: {error}"),
-                )
+                let message = format!("invalid version storage identity: {error}");
+                error.context(ErrorCode::HistoryPackageInvalid, message)
             })?;
             validate_id(id, "ver")?;
             validate_id(&version.file_id, "file")?;

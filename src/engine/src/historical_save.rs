@@ -433,8 +433,8 @@ impl Engine {
         let copies_override = plan.input["target_copies"]
             .as_u64()
             .map(|copies| {
-                u32::try_from(copies).map_err(|_| {
-                    Error::new(
+                u32::try_from(copies).map_err(|source| {
+                    Error::from(source).context(
                         storage_contract::ErrorCode::PlanInvalid,
                         "historical copy count is invalid",
                     )

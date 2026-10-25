@@ -1318,6 +1318,7 @@ dependencies = [
  "blake3",
  "data-serialization",
  "date-time",
+ "error-definition",
  "hash-table",
  "hashlink",
  "json-codec",

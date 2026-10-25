@@ -71,12 +71,10 @@ impl Engine {
     }
     pub fn open_content(&self, version_id: &str) -> Result<OpenedContent> {
         let (file, version, _) = self.verified_replica(version_id)?;
-        let mut reads = self.reads.lock().map_err(|_| {
-            Error::new(
-                storage_contract::ErrorCode::InternalError,
-                "read lease lock poisoned",
-            )
-        })?;
+        let mut reads = self
+            .reads
+            .lock()
+            .expect("invariant: read lease lock poisoned");
         *reads.entry(version_id.into()).or_default() += 1;
         drop(reads);
         Ok(OpenedContent {
@@ -117,12 +115,7 @@ impl Engine {
         *self
             .reads
             .lock()
-            .map_err(|_| {
-                Error::new(
-                    storage_contract::ErrorCode::InternalError,
-                    "read lease lock poisoned",
-                )
-            })?
+            .expect("invariant: read lease lock poisoned")
             .entry(key.clone())
             .or_default() += 1;
         Ok(WorkspaceReadPlan(OpenedContent {
@@ -250,12 +243,7 @@ impl Engine {
         *self
             .reads
             .lock()
-            .map_err(|_| {
-                Error::new(
-                    storage_contract::ErrorCode::InternalError,
-                    "read lease lock poisoned",
-                )
-            })?
+            .expect("invariant: read lease lock poisoned")
             .entry(version_id.into())
             .or_default() += 1;
         Ok(ContentReadPlan {

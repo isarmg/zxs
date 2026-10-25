@@ -713,7 +713,13 @@ fn failed_delta_rolls_back_rows_and_sequence_then_rebuilds_from_state() {
         &path,
         "CREATE TRIGGER fail_second BEFORE INSERT ON file_history_versions WHEN NEW.version_id='second' BEGIN SELECT RAISE(ABORT,'injected failure');END;",
     );
-    assert!(project(&path, Some(&previous), &next).is_err());
+    let failure = project(&path, Some(&previous), &next).unwrap_err();
+    assert_eq!(failure.code(), ErrorCode::IndexRebuildFailed);
+    assert!(
+        std::error::Error::source(&failure)
+            .unwrap()
+            .is::<sqlite_access::Error>()
+    );
     // The failed transaction's native worker has closed before returning.
     assert!(!path.with_file_name("index.sqlite-wal").exists());
     assert!(!path.with_file_name("index.sqlite-shm").exists());

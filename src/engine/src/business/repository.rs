@@ -259,9 +259,9 @@ impl Engine {
         )?;
         // Later SMB binding changes do not change a creation response. Do not
         // substitute the live repository when replaying its original receipt.
-        json_codec::from_value(result.result["created_repository"].clone()).map_err(|_| {
-            Error::new(
-                storage_contract::ErrorCode::StateInvalid,
+        json_codec::from_value(result.result["created_repository"].clone()).map_err(|source| {
+            Error::from(source).context(
+                ErrorCode::StateInvalid,
                 "created repository receipt is invalid",
             )
         })
