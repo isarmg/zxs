@@ -308,7 +308,14 @@ fn layout(versions: &[Version]) -> Layout {
 struct Geometry {
     width: f64,
     height: f64,
-    paths: Vec<(String, String, String)>,
+    paths: BTreeMap<(String, String), String>,
+}
+impl Geometry {
+    fn path(&self, edge: &(String, String)) -> String {
+        #[cfg(test)]
+        GEOMETRY_WORK.with(|work| work.borrow_mut().path_lookups += 1);
+        self.paths.get(edge).cloned().unwrap_or_default()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -325,39 +332,92 @@ impl NodeBounds {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct LayerBounds {
+    top: f64,
+    bottom: f64,
+}
+
+/// Bounds belong to one DOM measurement, not a cache across resizes or edits.
+/// Preserve the old per-edge extrema, but inspect each node only once.
+struct RoutingBounds {
+    layers: BTreeMap<usize, LayerBounds>,
+    left: f64,
+    right: f64,
+    all_finite: bool,
+}
+impl RoutingBounds {
+    fn new(boxes: impl IntoIterator<Item = NodeBounds>) -> Self {
+        let mut bounds = Self {
+            layers: BTreeMap::new(),
+            left: f64::INFINITY,
+            right: f64::NEG_INFINITY,
+            all_finite: true,
+        };
+        for node in boxes {
+            #[cfg(test)]
+            GEOMETRY_WORK.with(|work| work.borrow_mut().bounds_visits += 1);
+            bounds.all_finite &= [node.left, node.top, node.right, node.bottom]
+                .iter()
+                .all(|value| value.is_finite());
+            bounds.left = bounds.left.min(node.left);
+            bounds.right = bounds.right.max(node.right);
+            bounds
+                .layers
+                .entry(node.depth)
+                .and_modify(|layer| {
+                    layer.top = layer.top.min(node.top);
+                    layer.bottom = layer.bottom.max(node.bottom);
+                })
+                .or_insert(LayerBounds {
+                    top: node.top,
+                    bottom: node.bottom,
+                });
+        }
+        bounds
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Default, PartialEq, Eq)]
+struct GeometryWork {
+    bounds_visits: usize,
+    edge_visits: usize,
+    path_lookups: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static GEOMETRY_WORK: std::cell::RefCell<GeometryWork> = const {
+        std::cell::RefCell::new(GeometryWork { bounds_visits: 0, edge_visits: 0, path_lookups: 0 })
+    };
+}
+
 /// Arrows retain their old-parent → new-child meaning while travelling up.
 /// The target gap follows the entire newer layer so a short target's connector
 /// cannot pass through a taller sibling before arriving at its bottom edge.
-fn gap_heights(parent: NodeBounds, child: NodeBounds, boxes: &[NodeBounds]) -> (f64, f64) {
-    let exit = boxes
-        .iter()
-        .filter(|node| node.depth == parent.depth)
-        .map(|node| node.top)
-        .fold(parent.top, f64::min)
+fn gap_heights(parent: NodeBounds, child: NodeBounds, bounds: &RoutingBounds) -> (f64, f64) {
+    let exit = bounds
+        .layers
+        .get(&parent.depth)
+        .map(|layer| parent.top.min(layer.top))
+        .unwrap_or(parent.top)
         - 6.;
-    let entry = boxes
-        .iter()
-        .filter(|node| node.depth == child.depth)
-        .map(|node| node.bottom)
-        .fold(child.bottom, f64::max)
+    let entry = bounds
+        .layers
+        .get(&child.depth)
+        .map(|layer| child.bottom.max(layer.bottom))
+        .unwrap_or(child.bottom)
         + 6.;
     (exit, entry)
 }
 
-fn long_route(parent: NodeBounds, child: NodeBounds, boxes: &[NodeBounds]) -> Vec<(f64, f64)> {
-    let (exit, entry) = gap_heights(parent, child, boxes);
+fn long_route(parent: NodeBounds, child: NodeBounds, bounds: &RoutingBounds) -> Vec<(f64, f64)> {
+    let (exit, entry) = gap_heights(parent, child, bounds);
     let sx = parent.center();
     let tx = child.center();
-    let left = boxes
-        .iter()
-        .map(|node| node.left)
-        .fold(parent.left, f64::min)
-        - 9.;
-    let right = boxes
-        .iter()
-        .map(|node| node.right)
-        .fold(parent.right, f64::max)
-        + 9.;
+    let left = parent.left.min(bounds.left) - 9.;
+    let right = parent.right.max(bounds.right) + 9.;
     let lane = if (sx - left).abs() + (tx - left).abs() <= (sx - right).abs() + (tx - right).abs() {
         left
     } else {
@@ -462,21 +522,14 @@ fn rounded_route(points: &[(f64, f64)], radius: f64) -> Option<String> {
     Some(path)
 }
 
-fn edge_path(parent: NodeBounds, child: NodeBounds, boxes: &[NodeBounds]) -> Option<String> {
-    if parent.depth <= child.depth
-        || parent.top <= child.bottom
-        || !boxes.iter().all(|node| {
-            [node.left, node.top, node.right, node.bottom]
-                .iter()
-                .all(|value| value.is_finite())
-        })
-    {
+fn edge_path(parent: NodeBounds, child: NodeBounds, bounds: &RoutingBounds) -> Option<String> {
+    if parent.depth <= child.depth || parent.top <= child.bottom || !bounds.all_finite {
         return None;
     }
     if parent.depth > child.depth + 1 {
-        return rounded_route(&long_route(parent, child, boxes), EDGE_CORNER_RADIUS);
+        return rounded_route(&long_route(parent, child, bounds), EDGE_CORNER_RADIUS);
     }
-    let (exit, entry) = gap_heights(parent, child, boxes);
+    let (exit, entry) = gap_heights(parent, child, bounds);
     let middle = (exit + entry) / 2.;
     let sx = parent.center();
     let tx = child.center();
@@ -486,6 +539,25 @@ fn edge_path(parent: NodeBounds, child: NodeBounds, boxes: &[NodeBounds]) -> Opt
         &[(sx, sy), (sx, middle), (tx, middle), (tx, ty)],
         EDGE_CORNER_RADIUS,
     )
+}
+
+fn edge_paths(
+    layout: &Layout,
+    boxes: &BTreeMap<String, NodeBounds>,
+) -> BTreeMap<(String, String), String> {
+    let bounds = RoutingBounds::new(boxes.values().copied());
+    layout
+        .edges
+        .iter()
+        .filter_map(|(parent, child)| {
+            #[cfg(test)]
+            GEOMETRY_WORK.with(|work| work.borrow_mut().edge_visits += 1);
+            Some((
+                (parent.clone(), child.clone()),
+                edge_path(*boxes.get(parent)?, *boxes.get(child)?, &bounds)?,
+            ))
+        })
+        .collect()
 }
 
 fn measure(root: &web_sys::Element, layout: &Layout) -> Geometry {
@@ -519,22 +591,10 @@ fn measure(root: &web_sys::Element, layout: &Layout) -> Geometry {
             }
         }
     }
-    let all = boxes.values().copied().collect::<Vec<_>>();
-    let paths = layout
-        .edges
-        .iter()
-        .filter_map(|(parent, child)| {
-            Some((
-                parent.clone(),
-                child.clone(),
-                edge_path(*boxes.get(parent)?, *boxes.get(child)?, &all)?,
-            ))
-        })
-        .collect();
     Geometry {
         width: bounds.width().max(1.),
         height: bounds.height().max(1.),
-        paths,
+        paths: edge_paths(layout, &boxes),
     }
 }
 
@@ -677,9 +737,9 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 <svg class="zxs-version-tree-links" aria-hidden="true" focusable="false"
                     viewBox=move ||geometry.with(|g|format!("0 0 {} {}",g.width.max(1.),g.height.max(1.))) preserveAspectRatio="none">
                     <defs><marker id="zxs-version-arrow" class="zxs-version-tree-arrow" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L8,4 L0,8 Z"/></marker></defs>
-                    <For each=move ||geometry.with(|g|g.paths.clone()) key=|edge|(edge.0.clone(),edge.1.clone()) children=move |(parent,child,_)| {
+                    <For each=move ||geometry.with(|g|g.paths.keys().cloned().collect::<Vec<_>>()) key=|edge|edge.clone() children=move |(parent,child)| {
                         let key=StoredValue::new((parent.clone(),child.clone()));
-                        view!{<path class="zxs-version-tree-edge" data-parent-version=parent data-child-version=child d=move ||geometry.with(|g|g.paths.iter().find(|edge|key.with_value(|key|edge.0==key.0&&edge.1==key.1)).map(|edge|edge.2.clone()).unwrap_or_default()) marker-end="url(#zxs-version-arrow)" stroke-dasharray="none" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>}
+                        view!{<path class="zxs-version-tree-edge" data-parent-version=parent data-child-version=child d=move ||geometry.with(|g|key.with_value(|key|g.path(key))) marker-end="url(#zxs-version-arrow)" stroke-dasharray="none" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>}
                     }/>
                 </svg>
                 <For each=move ||tree.with(|tree|tree.levels.iter().enumerate().map(|(depth,ids)|(depth,ids.clone())).collect::<Vec<_>>()) key=|level|level.0 children=move |(depth,_)| {

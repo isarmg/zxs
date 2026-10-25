@@ -243,7 +243,8 @@ fn upward_cross_layer_routes_avoid_nodes_and_enter_below_the_tallest_target_sibl
         depth: 2,
     };
     let boxes = [child, tall_sibling, middle, parent];
-    let route = long_route(parent, child, &boxes);
+    let routing = RoutingBounds::new(boxes);
+    let route = long_route(parent, child, &routing);
     assert_eq!(middle.top - tall_sibling.bottom, 18.);
     assert_eq!(parent.top - middle.bottom, 18.);
     assert_eq!(route.first(), Some(&(parent.center(), parent.top)));
@@ -273,12 +274,12 @@ fn upward_cross_layer_routes_avoid_nodes_and_enter_below_the_tallest_target_sibl
             );
         }
     }
-    let across = edge_path(parent, child, &boxes).unwrap();
+    let across = edge_path(parent, child, &routing).unwrap();
     assert!(across.contains('H') && across.contains('V') && across.contains('A'));
     assert!(!across.contains(['C', 'L', 'Q']));
-    let adjacent = edge_path(middle, child, &boxes).unwrap();
+    let adjacent = edge_path(middle, child, &routing).unwrap();
     assert_eq!(adjacent, "M247.000,200.000 V113.000");
-    assert!(edge_path(child, parent, &boxes).is_none());
+    assert!(edge_path(child, parent, &routing).is_none());
 }
 #[test]
 fn an_eighteen_pixel_layer_gap_places_rounded_right_angles_between_nodes() {
@@ -305,10 +306,11 @@ fn an_eighteen_pixel_layer_gap_places_rounded_right_angles_between_nodes() {
     };
     let boxes = [child, sibling, parent];
     assert_eq!(parent.top - sibling.bottom, 18.);
-    let (exit, entry) = gap_heights(parent, child, &boxes);
+    let routing = RoutingBounds::new(boxes);
+    let (exit, entry) = gap_heights(parent, child, &routing);
     assert_eq!((exit, entry), (194., 188.));
     assert!(parent.top > exit && exit > entry && entry > child.bottom + 3.);
-    let path = edge_path(parent, child, &boxes).unwrap();
+    let path = edge_path(parent, child, &routing).unwrap();
     assert_eq!(
         path,
         "M477.000,200.000 V195.000 A4.000,4.000 0 0 0 473.000,191.000 H169.000 A4.000,4.000 0 0 1 165.000,187.000 V113.000"
@@ -792,4 +794,348 @@ fn equal_rational_centers_use_minimum_child_then_original_priority() {
         tree.levels,
         vec![vec!["tip-0", "tip-1", "tip-2"], vec!["all", "outer"]]
     );
+}
+
+// Frozen pre-aggregation connector routing, compiled only for tests.
+fn reference_gap_heights(
+    parent: NodeBounds,
+    child: NodeBounds,
+    boxes: &[NodeBounds],
+) -> (f64, f64) {
+    let exit = boxes
+        .iter()
+        .filter(|node| node.depth == parent.depth)
+        .map(|node| node.top)
+        .fold(parent.top, f64::min)
+        - 6.;
+    let entry = boxes
+        .iter()
+        .filter(|node| node.depth == child.depth)
+        .map(|node| node.bottom)
+        .fold(child.bottom, f64::max)
+        + 6.;
+    (exit, entry)
+}
+
+fn reference_long_route(
+    parent: NodeBounds,
+    child: NodeBounds,
+    boxes: &[NodeBounds],
+) -> Vec<(f64, f64)> {
+    let (exit, entry) = reference_gap_heights(parent, child, boxes);
+    let sx = parent.center();
+    let tx = child.center();
+    let left = boxes
+        .iter()
+        .map(|node| node.left)
+        .fold(parent.left, f64::min)
+        - 9.;
+    let right = boxes
+        .iter()
+        .map(|node| node.right)
+        .fold(parent.right, f64::max)
+        + 9.;
+    let lane = if (sx - left).abs() + (tx - left).abs() <= (sx - right).abs() + (tx - right).abs() {
+        left
+    } else {
+        right
+    };
+    vec![
+        (sx, parent.top),
+        (sx, exit),
+        (lane, exit),
+        (lane, entry),
+        (tx, entry),
+        (tx, child.bottom + 3.),
+    ]
+}
+
+fn reference_edge_path(
+    parent: NodeBounds,
+    child: NodeBounds,
+    boxes: &[NodeBounds],
+) -> Option<String> {
+    if parent.depth <= child.depth
+        || parent.top <= child.bottom
+        || !boxes.iter().all(|node| {
+            [node.left, node.top, node.right, node.bottom]
+                .iter()
+                .all(|value| value.is_finite())
+        })
+    {
+        return None;
+    }
+    if parent.depth > child.depth + 1 {
+        return rounded_route(
+            &reference_long_route(parent, child, boxes),
+            EDGE_CORNER_RADIUS,
+        );
+    }
+    let (exit, entry) = reference_gap_heights(parent, child, boxes);
+    let middle = (exit + entry) / 2.;
+    let sx = parent.center();
+    let tx = child.center();
+    let sy = parent.top;
+    let ty = child.bottom + 3.;
+    rounded_route(
+        &[(sx, sy), (sx, middle), (tx, middle), (tx, ty)],
+        EDGE_CORNER_RADIUS,
+    )
+}
+
+#[test]
+fn aggregated_routing_matches_exact_reference_paths_for_varied_bounds() {
+    let mut seed = 0x2b64_f91d_a732_c508u64;
+    for scene in 0..256 {
+        let mut boxes = Vec::new();
+        for depth in 0..5 {
+            for column in 0..4 {
+                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                let left = column as f64 * 130. - 260. + (seed % 19) as f64 / 8.;
+                let top = depth as f64 * 210. + (seed % 13) as f64 / 4.;
+                boxes.push(NodeBounds {
+                    left,
+                    right: left + 60. + (seed % 41) as f64,
+                    top,
+                    bottom: top + 40. + (seed % 100) as f64,
+                    depth,
+                });
+            }
+        }
+        let bounds = RoutingBounds::new(boxes.iter().copied());
+        for &parent in &boxes {
+            for &child in &boxes {
+                assert_eq!(
+                    edge_path(parent, child, &bounds),
+                    reference_edge_path(parent, child, &boxes),
+                    "scene {scene}, parent {parent:?}, child {child:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn routing_extrema_preserve_empty_partial_nonfinite_and_lane_tie_behavior() {
+    let child = NodeBounds {
+        left: -0.,
+        right: 100.,
+        top: -0.,
+        bottom: 50.,
+        depth: 0,
+    };
+    let parent = NodeBounds {
+        left: 0.,
+        right: 100.,
+        top: 400.,
+        bottom: 450.,
+        depth: 2,
+    };
+    let middle = NodeBounds {
+        left: 0.,
+        right: 100.,
+        top: 200.,
+        bottom: 250.,
+        depth: 1,
+    };
+    let outer = NodeBounds {
+        left: -500.,
+        right: 700.,
+        top: 200.,
+        bottom: 330.,
+        depth: 1,
+    };
+    for boxes in [
+        vec![],
+        vec![middle],
+        vec![child],
+        vec![parent],
+        vec![parent, child],
+        vec![outer, child, middle, parent],
+    ] {
+        let bounds = RoutingBounds::new(boxes.iter().copied());
+        assert_eq!(
+            gap_heights(parent, child, &bounds),
+            reference_gap_heights(parent, child, &boxes)
+        );
+        assert_eq!(
+            long_route(parent, child, &bounds),
+            reference_long_route(parent, child, &boxes)
+        );
+        assert_eq!(
+            edge_path(parent, child, &bounds),
+            reference_edge_path(parent, child, &boxes)
+        );
+    }
+    let bounds = RoutingBounds::new([parent, middle, child]);
+    assert_eq!(
+        long_route(parent, child, &bounds)[2].0,
+        -9.,
+        "equal lane distances still choose the left lane"
+    );
+    for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for field in 0..4 {
+            let mut unrelated = outer;
+            unrelated.depth = 99;
+            match field {
+                0 => unrelated.left = invalid,
+                1 => unrelated.right = invalid,
+                2 => unrelated.top = invalid,
+                _ => unrelated.bottom = invalid,
+            }
+            let boxes = [parent, child, unrelated];
+            assert_eq!(
+                edge_path(parent, child, &RoutingBounds::new(boxes)),
+                reference_edge_path(parent, child, &boxes)
+            );
+            assert!(edge_path(parent, child, &RoutingBounds::new(boxes)).is_none());
+        }
+    }
+}
+
+fn reference_edge_paths(
+    layout: &Layout,
+    boxes: &BTreeMap<String, NodeBounds>,
+) -> BTreeMap<(String, String), String> {
+    let all = boxes.values().copied().collect::<Vec<_>>();
+    layout
+        .edges
+        .iter()
+        .filter_map(|(parent, child)| {
+            Some((
+                (parent.clone(), child.clone()),
+                reference_edge_path(*boxes.get(parent)?, *boxes.get(child)?, &all)?,
+            ))
+        })
+        .collect()
+}
+
+#[test]
+fn indexed_paths_preserve_order_and_missing_endpoint_behavior() {
+    let tree = layout(&[
+        v("root", 1, &[]),
+        v("left", 2, &["root"]),
+        v("right", 3, &["root"]),
+        v("merge", 4, &["root", "left", "right"]),
+        v("orphan", 5, &[]),
+    ]);
+    let mut boxes = tree
+        .levels
+        .iter()
+        .enumerate()
+        .flat_map(|(depth, ids)| {
+            ids.iter().enumerate().map(move |(column, id)| {
+                (
+                    id.clone(),
+                    NodeBounds {
+                        left: column as f64 * 200.,
+                        right: column as f64 * 200. + 100.,
+                        top: depth as f64 * 200.,
+                        bottom: depth as f64 * 200. + 100.,
+                        depth,
+                    },
+                )
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    let paths = edge_paths(&tree, &boxes);
+    assert_eq!(paths, reference_edge_paths(&tree, &boxes));
+    assert_eq!(paths.keys().cloned().collect::<Vec<_>>(), tree.edges);
+    boxes.remove("left");
+    let paths = edge_paths(&tree, &boxes);
+    assert_eq!(paths, reference_edge_paths(&tree, &boxes));
+    assert_eq!(paths.len(), tree.edges.len() - 2);
+    assert!(
+        paths
+            .keys()
+            .all(|(parent, child)| parent != "left" && child != "left")
+    );
+    boxes.get_mut("orphan").unwrap().bottom = f64::NAN;
+    assert!(
+        edge_paths(&tree, &boxes).is_empty(),
+        "an unrelated nonfinite box invalidates all paths"
+    );
+    boxes.clear();
+    assert!(edge_paths(&tree, &boxes).is_empty());
+}
+
+#[test]
+fn geometry_aggregates_each_box_once_and_indexes_each_path_lookup() {
+    for count in [2_048, 4_096, 20_000] {
+        let boxes = (0..count)
+            .map(|depth| {
+                (
+                    format!("node-{depth:05}"),
+                    NodeBounds {
+                        left: 0.,
+                        right: 100.,
+                        top: depth as f64 * 120.,
+                        bottom: depth as f64 * 120. + 100.,
+                        depth,
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let tree = Layout {
+            levels: (0..count)
+                .map(|depth| vec![format!("node-{depth:05}")])
+                .collect(),
+            edges: (1..count)
+                .flat_map(|depth| {
+                    (1..=2.min(depth)).map(move |offset| {
+                        (
+                            format!("node-{depth:05}"),
+                            format!("node-{:05}", depth - offset),
+                        )
+                    })
+                })
+                .collect(),
+        };
+        GEOMETRY_WORK.with(|work| *work.borrow_mut() = GeometryWork::default());
+        let geometry = Geometry {
+            paths: edge_paths(&tree, &boxes),
+            ..Default::default()
+        };
+        assert_eq!(geometry.paths.len(), tree.edges.len());
+        for edge in &tree.edges {
+            assert!(geometry.path(edge).starts_with('M'));
+        }
+        GEOMETRY_WORK.with(|work| {
+            assert_eq!(
+                *work.borrow(),
+                GeometryWork {
+                    bounds_visits: count,
+                    edge_visits: tree.edges.len(),
+                    path_lookups: tree.edges.len(),
+                }
+            )
+        });
+    }
+}
+
+#[test]
+fn indexed_path_getters_observe_new_geometry_without_changing_edge_identity() {
+    Owner::new().with(|| {
+        let edge = ("parent".to_owned(), "child".to_owned());
+        let geometry = RwSignal::new(Geometry {
+            paths: BTreeMap::from([(edge.clone(), "first".into())]),
+            ..Default::default()
+        });
+        let key = edge.clone();
+        let path = Memo::new(move |_| geometry.with(|g| g.path(&key)));
+        assert_eq!(path.get_untracked(), "first");
+        let keys = geometry.with_untracked(|g| g.paths.keys().cloned().collect::<Vec<_>>());
+        geometry.update(|g| {
+            g.paths.insert(edge.clone(), "resized".into());
+        });
+        assert_eq!(path.get_untracked(), "resized");
+        assert_eq!(
+            geometry.with_untracked(|g| g.paths.keys().cloned().collect::<Vec<_>>()),
+            keys
+        );
+        geometry.update(|g| {
+            g.paths.remove(&edge);
+        });
+        assert_eq!(path.get_untracked(), "");
+    });
 }
