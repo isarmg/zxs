@@ -960,7 +960,10 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
         .commit_plan(&plan.plan_id, "alice", &new_id("op"))
         .unwrap();
     let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
-    assert_eq!(manifest.content_states[&old.version_id], "PURGED");
+    assert_eq!(
+        manifest.content_states[&old.version_id],
+        storage_contract::ContentState::Purged
+    );
     let mut cyclic = manifest.clone();
     cyclic
         .file_path_nodes
@@ -1788,11 +1791,14 @@ fn tombstoned_storage_identity_is_validated_before_restore_decision() {
         .unwrap();
     let (baseline, proof, _) = load_package(&package).unwrap();
     assert!(!package_version(&package, &old).exists());
-    for status in ["PURGED", "MIGRATED"] {
+    for status in [
+        storage_contract::ContentState::Purged,
+        storage_contract::ContentState::Migrated,
+    ] {
         for malformed in ["none", "storage_name", "created_at"] {
-            let label = format!("{status}-{malformed}");
+            let label = format!("{}-{malformed}", status.as_str());
             let mut manifest = baseline.clone();
-            manifest.content_states.insert(old.clone(), status.into());
+            manifest.content_states.insert(old.clone(), status);
             let version = manifest.versions.get_mut(&old).unwrap();
             match malformed {
                 "storage_name" => version.storage_name = "invalid.txt".into(),
@@ -1898,7 +1904,9 @@ fn package_preserves_purge_and_rejects_missing_bytes_or_unpublished_manifest() {
     let version = manifest
         .versions
         .values()
-        .find(|v| manifest.content_states[&v.version_id] == "AVAILABLE")
+        .find(|v| {
+            manifest.content_states[&v.version_id] == storage_contract::ContentState::Available
+        })
         .unwrap();
     fs::remove_file(
         package_version(&package, &version.version_id)
@@ -2674,4 +2682,23 @@ fn manifest_record_projection_is_scoped_shared_and_mutation_isolated() {
     assert_eq!(canonical_json(&frozen).unwrap(), before);
     drop(manifest);
     assert_eq!(canonical_json(&frozen).unwrap(), before);
+}
+
+#[test]
+fn manifest_content_state_coverage_rejects_equal_length_wrong_version_keys() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = initialize(temp.path());
+    let repo = engine
+        .create_repository("state coverage", "P01", 1, "alice", &new_id("op"))
+        .unwrap();
+    save(&mut engine, &repo.main_branch_id, b"body");
+    let mut manifest = HistoryManifest::from_state(engine.state(), &repo.history_tree_id).unwrap();
+    manifest.validate().unwrap();
+    let version = manifest.versions.keys().next().unwrap().clone();
+    let state = manifest.content_states.remove(&version).unwrap();
+    manifest.content_states.insert(new_id("ver"), state);
+    assert_eq!(
+        manifest.validate().unwrap_err().code(),
+        "HISTORY_PACKAGE_INVALID"
+    );
 }

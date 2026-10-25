@@ -163,7 +163,9 @@ fn dependency_fixture() -> State {
     state.file_notes.insert("shared-file".into(), "note".into());
     state.version_notes.insert("v1".into(), "note".into());
     state.file_names.insert("shared-file".into(), "file".into());
-    state.content_states.insert("v1".into(), "AVAILABLE".into());
+    state
+        .content_states
+        .insert("v1".into(), storage_contract::ContentState::Available);
     state
 }
 

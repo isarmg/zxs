@@ -1497,7 +1497,7 @@ impl Engine {
             .insert(version.version_id.clone(), placement.clone());
         state
             .content_states
-            .insert(version.version_id.clone(), "AVAILABLE".into());
+            .insert(version.version_id.clone(), ContentState::Available);
         pending.push(Prepared {
             version: version.clone(),
             placement,

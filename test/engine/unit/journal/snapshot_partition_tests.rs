@@ -334,7 +334,12 @@ fn typed_snapshot_matches_full_value_encoder_exactly() {
 fn typed_snapshot_only_buffers_one_page_of_borrowed_entries() {
     let state = State {
         content_states: (0..20_000)
-            .map(|i| (format!("version-{i:020}"), "AVAILABLE".into()))
+            .map(|i| {
+                (
+                    format!("version-{i:020}"),
+                    storage_contract::ContentState::Available,
+                )
+            })
             .collect(),
         ..event_state(20_000)
     };
@@ -371,7 +376,16 @@ fn alternate_page_partitions_preserve_exact_bound_current_snapshots() {
             .into_iter()
             .map(|(key, _)| key)
             .enumerate()
-            .map(|(n, key)| (key, if n % 3 == 0 { "PURGED" } else { "AVAILABLE" }.into()))
+            .map(|(n, key)| {
+                (
+                    key,
+                    if n % 3 == 0 {
+                        storage_contract::ContentState::Purged
+                    } else {
+                        storage_contract::ContentState::Available
+                    },
+                )
+            })
             .collect(),
         file_notes: [("文件".into(), "preserved note".into())].into(),
         control_auth: Some(json_codec::json!({"nested": {"roles": ["reader"]}})),
@@ -416,8 +430,10 @@ fn alternate_page_partitions_preserve_exact_bound_current_snapshots() {
     // Writing a later state must not change either retained snapshot.
     let mut next = state.clone();
     next.sequence += 1;
-    next.content_states
-        .insert("new-version".into(), "MIGRATED".into());
+    next.content_states.insert(
+        "new-version".into(),
+        storage_contract::ContentState::Migrated,
+    );
     let next_hash = store_snapshot(std::slice::from_ref(disk), &next).unwrap();
     assert_eq!(load_snapshot(disk, &next_hash).unwrap(), next);
     assert_eq!(load_snapshot(disk, &alternate_hash).unwrap(), state);
@@ -499,4 +515,52 @@ fn canonical_value_encoding_preserves_publication_bytes_and_hashes() {
         publication_object_bytes(&history_objects),
         fixture.history_objects
     );
+}
+
+#[test]
+fn content_state_snapshot_pages_keep_string_bytes_and_reject_unknown_values() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = Config::development([temp.path().join("disk")]);
+    let disk = &config.disks[0];
+    let raw = json_codec::json!({"a":"AVAILABLE","m":"MIGRATED","p":"PURGED"});
+    let state = State {
+        content_states: json_codec::from_value(raw.clone()).unwrap(),
+        ..State::default()
+    };
+    let prepared = prepare_snapshot(&state, MAX_METADATA).unwrap();
+    let expected_pages = state_pages(raw.as_object().unwrap()).collect::<Vec<_>>();
+    let expected_hashes = expected_pages
+        .iter()
+        .map(|page| object_hash("state-page", page).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(prepared.descriptor.pages["content_states"], expected_hashes);
+    let descriptor = prepared.descriptor.clone();
+    let hash = prepared.store(std::slice::from_ref(disk), &state).unwrap();
+    for (page, hash) in expected_pages.iter().zip(expected_hashes) {
+        assert_eq!(
+            std::fs::read(object_path(disk, "state-page", &hash)).unwrap(),
+            canonical_json(page).unwrap()
+        );
+    }
+    assert_eq!(load_snapshot(disk, &hash).unwrap(), state);
+    for invalid in [
+        json_codec::json!("available"),
+        json_codec::json!("UNKNOWN"),
+        json_codec::json!({"AVAILABLE":null}),
+        json_codec::json!(null),
+    ] {
+        let page = json_codec::json!({"a":invalid});
+        let page_hash = store_object(disk, "state-page", &page).unwrap();
+        let bytes = std::fs::read(object_path(disk, "state-page", &page_hash)).unwrap();
+        let mut damaged = descriptor.clone();
+        damaged
+            .pages
+            .insert("content_states".into(), vec![page_hash.clone()]);
+        let bad_hash = store_object(disk, "snapshot", &damaged).unwrap();
+        assert!(load_snapshot(disk, &bad_hash).is_err());
+        assert_eq!(
+            std::fs::read(object_path(disk, "state-page", &page_hash)).unwrap(),
+            bytes
+        );
+    }
 }

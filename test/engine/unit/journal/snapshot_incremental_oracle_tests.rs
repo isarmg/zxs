@@ -479,7 +479,7 @@ fn incremental_snapshot_many_pages_reuse_exact_order_without_value_serialization
             .map(|number| {
                 (
                     blake3::hash(&number.to_le_bytes()).to_hex().to_string(),
-                    "AVAILABLE".into(),
+                    storage_contract::ContentState::Available,
                 )
             })
             .collect(),

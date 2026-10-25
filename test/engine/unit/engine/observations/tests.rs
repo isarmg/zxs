@@ -107,7 +107,7 @@ fn accounting_snapshot_preserves_purge_and_duplicate_route_semantics() {
     for version in state.versions.keys() {
         state
             .content_states
-            .insert(version.clone(), "PURGED".into());
+            .insert(version.clone(), storage_contract::ContentState::Purged);
     }
     assert!(
         engine

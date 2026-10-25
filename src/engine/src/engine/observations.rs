@@ -28,7 +28,9 @@ impl Engine {
                 .state
                 .content_states
                 .get(&placement.version_id)
-                .is_some_and(|state| state == "PURGED" || state == "MIGRATED")
+                .is_some_and(|state| {
+                    *state == ContentState::Purged || *state == ContentState::Migrated
+                })
             {
                 continue;
             }

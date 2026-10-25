@@ -547,7 +547,7 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
             "message":commit.map(|commit| commit.message.as_str()).unwrap_or(""),
             "size":version.logical_size.to_string(),"sequence":version.version_sequence.to_string(),
             "current":current.as_ref().is_some_and(|entry| entry.version_id == version.version_id),
-            "content_state":state.content_states.get(&version.version_id).map(String::as_str).unwrap_or("LIVE"),
+            "content_state":state.content_states.get(&version.version_id).map(storage_contract::ContentState::as_str).unwrap_or("LIVE"),
             "content_hash":version.content_hash,
             "note":state.version_notes.get(&version.version_id).map(String::as_str).unwrap_or(""),
             "download_name":download_name,

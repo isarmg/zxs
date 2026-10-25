@@ -195,7 +195,7 @@ pub(super) fn unified_history(
             "current":current_node==Some(path.node_id.as_str()),
             "note":state.file_path_notes.get(&path.node_id).map(String::as_str).unwrap_or(""),
             "size":body.logical_size.to_string(),"content_hash":body.content_hash,
-            "content_state":state.content_states.get(&path.version_id).map(String::as_str).unwrap_or("LIVE"),
+            "content_state":state.content_states.get(&path.version_id).map(storage_contract::ContentState::as_str).unwrap_or("LIVE"),
             "download_name":metadata.and_then(|version|version.get("download_name")).cloned().unwrap_or_else(||body.creation_name.clone().into()),
             "storage_name":body.storage_name,
             "operation_id":path.operation_id,"author":path.author,"message":""
@@ -218,7 +218,7 @@ pub(super) fn unified_history(
             "tags":revision.tags,"path":path,"previous_path":null,"branch_id":revision.branch_id,
             "created_at":utc_timestamp(revision.created_at)?,"sequence":revision.sequence.to_string(),"current":current_node==Some(revision.node_id.as_str()),
             "note":state.file_path_notes.get(&revision.node_id).map(String::as_str).unwrap_or(""),
-            "size":body.logical_size.to_string(),"content_hash":body.content_hash,"content_state":state.content_states.get(&revision.version_id).map(String::as_str).unwrap_or("LIVE"),
+            "size":body.logical_size.to_string(),"content_hash":body.content_hash,"content_state":state.content_states.get(&revision.version_id).map(storage_contract::ContentState::as_str).unwrap_or("LIVE"),
             "download_name":metadata.and_then(|version|version.get("download_name")).cloned().unwrap_or_else(||body.creation_name.clone().into()),
             "storage_name":body.storage_name,"operation_id":revision.operation_id,"author":revision.author,"message":""}));
     }

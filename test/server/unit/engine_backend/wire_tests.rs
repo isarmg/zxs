@@ -107,3 +107,16 @@ fn unknown_and_aborted_projection_have_one_current_shape_per_operation_kind() {
         }
     }
 }
+
+#[test]
+fn stored_version_content_state_uses_canonical_tokens_including_sparse_available_default() {
+    use storage_contract::ContentState;
+    assert_eq!(stored_version_content_state(None), "AVAILABLE");
+    for (state, expected) in [
+        (ContentState::Available, "AVAILABLE"),
+        (ContentState::Purged, "PURGED"),
+        (ContentState::Migrated, "MIGRATED"),
+    ] {
+        assert_eq!(stored_version_content_state(Some(&state)), expected);
+    }
+}

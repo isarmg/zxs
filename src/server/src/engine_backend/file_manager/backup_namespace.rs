@@ -9,9 +9,7 @@ fn available_on(engine: &Engine, slot: &str, version: &str) -> bool {
         .state()
         .content_states
         .get(version)
-        .map(String::as_str)
-        .unwrap_or("AVAILABLE")
-        == "AVAILABLE"
+        .is_none_or(|state| *state == storage_contract::ContentState::Available)
         && engine
             .state()
             .placements

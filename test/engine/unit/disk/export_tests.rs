@@ -234,7 +234,7 @@ fn tombstoned_body(state: &str) -> (tempfile::TempDir, Engine, Config, FileVersi
     engine
         .commit_plan(&plan.plan_id, "owner", &new_id("op"))
         .unwrap();
-    assert_eq!(engine.state().content_states[old], state);
+    assert_eq!(engine.state().content_states[old].as_str(), state);
     let version = engine.state().versions[old].clone();
     (temporary, engine, config, version)
 }
@@ -289,6 +289,30 @@ fn offline_tombstones_bind_retained_version_metadata_and_directory() {
         )
         .unwrap();
 
+        let tombstone_path = directory.join("purged.json");
+        let tombstone_bytes = fs::read(&tombstone_path).unwrap();
+        let tombstone: crate::journal::ContentTombstone = decode_strict(&tombstone_bytes).unwrap();
+        let raw: json_codec::Value = decode_strict(&tombstone_bytes).unwrap();
+        assert_eq!(raw["state"], state);
+        assert_eq!(
+            canonical_json(&tombstone).unwrap(),
+            canonical_json(&raw).unwrap()
+        );
+        for invalid in [
+            json_codec::json!("AVAILABLE"),
+            json_codec::json!("purged"),
+            json_codec::json!("UNKNOWN"),
+            json_codec::json!({"PURGED":null}),
+        ] {
+            let mut damaged = raw.clone();
+            damaged["state"] = invalid;
+            let bytes = canonical_json(&damaged).unwrap();
+            fs::write(&tombstone_path, &bytes).unwrap();
+            assert_corrupt("invalid tombstone disposition");
+            assert_eq!(fs::read(&tombstone_path).unwrap(), bytes);
+        }
+        fs::write(&tombstone_path, tombstone_bytes).unwrap();
+
         let moved = directory.with_file_name(new_id("ver"));
         fs::rename(&directory, &moved).unwrap();
         assert_corrupt("directory");
@@ -324,7 +348,10 @@ fn restored_tombstones_need_no_source_payload_proofs() {
         restored
             .restore_history_package(&package, "P01", 3, "owner", &new_id("op"))
             .unwrap();
-        assert_eq!(restored.state().content_states[&version.version_id], state);
+        assert_eq!(
+            restored.state().content_states[&version.version_id].as_str(),
+            state
+        );
         drop(restored);
         for disk in &config.disks {
             // Imported retained identities have no local payload to purge and

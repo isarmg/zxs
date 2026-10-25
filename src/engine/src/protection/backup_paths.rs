@@ -308,9 +308,7 @@ fn backup_primaries(engine: &Engine, repository: &str, scope: &Scope) -> Result<
                 .state
                 .content_states
                 .get(&version.version_id)
-                .map(String::as_str)
-                .unwrap_or("AVAILABLE")
-                == "AVAILABLE"
+                .is_none_or(|state| *state == storage_contract::ContentState::Available)
     }) {
         let placement = engine
             .state
@@ -542,7 +540,7 @@ impl Engine {
                 }
                 let versions = state.versions.values().filter(|version| {
                     scope.files.contains_key(&version.file_id)
-                        && state.content_states.get(&version.version_id).map(String::as_str).unwrap_or("AVAILABLE") == "AVAILABLE"
+                        && state.content_states.get(&version.version_id).is_none_or(|state| *state == storage_contract::ContentState::Available)
                 }).cloned().collect::<Vec<_>>();
                 for slot in required {
                     if !normalized.contains_key(&slot) {

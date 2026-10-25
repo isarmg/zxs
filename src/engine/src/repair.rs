@@ -82,7 +82,7 @@ impl Engine {
                 .state
                 .content_states
                 .get(&published.version_id)
-                .is_some_and(|s| s != "AVAILABLE")
+                .is_some_and(|s| *s != ContentState::Available)
             {
                 continue;
             }

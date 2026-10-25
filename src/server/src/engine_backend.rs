@@ -923,13 +923,9 @@ impl Backend for EngineBackend {
                 repo_for_history(&engine, &version.history_tree_id)?;
                 if action == crate::BackendAction::Version {
                     let mut value = encode(version)?;
-                    value["content_state"] = engine
-                        .state()
-                        .content_states
-                        .get(id)
-                        .cloned()
-                        .unwrap_or_else(|| "available".into())
-                        .into();
+                    value["content_state"] =
+                        wire::stored_version_content_state(engine.state().content_states.get(id))
+                            .into();
                     Ok(value)
                 } else {
                     encode(

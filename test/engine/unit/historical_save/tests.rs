@@ -273,7 +273,10 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
     engine
         .commit_plan(&purge.plan_id, "admin", &new_id("op"))
         .unwrap();
-    assert_eq!(engine.state.content_states[&old_version], "PURGED");
+    assert_eq!(
+        engine.state.content_states[&old_version],
+        storage_contract::ContentState::Purged
+    );
     let workspace = engine
         .create_historical_workspace(&repo.main_branch_id, &commits[0], "admin")
         .unwrap();
@@ -320,7 +323,10 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
     assert_eq!(facts.paths[0].kind, NamespaceEntryKind::File);
     assert_eq!(saved.result["full_copy_files"], 0);
     assert_eq!(engine.state.versions.len(), version_count);
-    assert_eq!(engine.state.content_states[&old_version], "PURGED");
+    assert_eq!(
+        engine.state.content_states[&old_version],
+        storage_contract::ContentState::Purged
+    );
     assert_eq!(
         engine.state.branches[&repo.main_branch_id].head_commit_id,
         commits[1]

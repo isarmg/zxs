@@ -988,7 +988,7 @@ pub(crate) struct LocalPublication {
 #[serialization(deny_unknown_fields)]
 pub(crate) struct ContentTombstone {
     pub version_id: String,
-    pub state: String,
+    pub state: ContentState,
     pub candidate: Candidate,
     pub publication: Publication,
     pub publication_seal: PublicationSeal,
@@ -1042,7 +1042,7 @@ pub(crate) fn verify_tombstone(directory: &Path, version: &FileVersion) -> Resul
     let seal: DiskSeal = read_json(&root.join("disk.json"))?;
     verify_local_membership(root, &t.candidate, &seal)?;
     if t.version_id != version.version_id
-        || !["PURGED", "MIGRATED"].contains(&t.state.as_str())
+        || !matches!(t.state, ContentState::Purged | ContentState::Migrated)
         || t.candidate.pool_id != seal.pool_id
         || t.publication.candidate_hash != object_hash("candidate", &t.candidate)?
         || object_hash("snapshot", &t.snapshot)? != t.candidate.snapshot_hash

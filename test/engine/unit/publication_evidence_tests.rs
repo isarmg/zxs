@@ -121,7 +121,10 @@ fn purged_state_reopens_with_one_damaged_and_one_offline_metadata_member() {
         let recovered = Engine::open(&root).unwrap_or_else(|error| panic!("{kind}: {error}"));
         assert!(recovered.is_read_only());
         assert_eq!(canonical_json(recovered.state()).unwrap(), expected);
-        assert_eq!(recovered.state.content_states[&old], "PURGED");
+        assert_eq!(
+            recovered.state.content_states[&old],
+            storage_contract::ContentState::Purged
+        );
         assert_eq!(fs::read(damaged).unwrap(), b"corrupt redundant metadata");
     }
 }
@@ -144,7 +147,10 @@ fn migrated_content_does_not_consume_live_payload_budget() {
     let result = engine
         .commit_plan(&split.plan_id, "admin", &new_id("op"))
         .unwrap();
-    assert_eq!(engine.state.content_states[&original], "MIGRATED");
+    assert_eq!(
+        engine.state.content_states[&original],
+        storage_contract::ContentState::Migrated
+    );
     assert_eq!(engine.used_bytes("P01"), 16);
     let repository =
         engine.state.repositories[result.result["repository_id"].as_str().unwrap()].clone();

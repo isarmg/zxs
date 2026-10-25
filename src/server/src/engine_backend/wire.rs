@@ -24,6 +24,16 @@ pub(crate) fn error(error: storage_engine::Error) -> ApiError {
 pub(super) fn encode(value: impl Serialize) -> Result<Value, ApiError> {
     json_codec::to_value(value).map_err(ApiError::invalid)
 }
+/// A missing stored disposition has the same available-content semantics as
+/// core reads. This is distinct from LIVE/PENDING branch presentation states.
+pub(super) fn stored_version_content_state(
+    state: Option<&storage_contract::ContentState>,
+) -> &'static str {
+    state
+        .copied()
+        .unwrap_or(storage_contract::ContentState::Available)
+        .as_str()
+}
 /// Response ownership is independent from the version currently visible in a
 /// branch. An unwritten branch reads its parent's immutable version.
 pub(super) fn content_wire(engine: &Engine, visible: Option<&str>, source: Option<&str>) -> Value {
@@ -31,7 +41,7 @@ pub(super) fn content_wire(engine: &Engine, visible: Option<&str>, source: Optio
     let inherited = source.is_some();
     let state = visible
         .and_then(|version| engine.state().content_states.get(version))
-        .map(String::as_str)
+        .map(storage_contract::ContentState::as_str)
         .unwrap_or("LIVE");
     json!({"version_id":visible,"materialized":!inherited && visible.is_some(),
         "inherited":inherited,"own_version_id":(!inherited).then_some(visible).flatten(),

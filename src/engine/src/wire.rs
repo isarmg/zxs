@@ -237,7 +237,7 @@ impl Engine {
             .get(version)
             .ok_or_else(|| Error::new("VERSION_NOT_FOUND", "version not found"))?;
         if let Some(state) = self.state.content_states.get(version)
-            && (state == "PURGED" || state == "MIGRATED")
+            && (*state == ContentState::Purged || *state == ContentState::Migrated)
         {
             return Ok("PURGED".into());
         }

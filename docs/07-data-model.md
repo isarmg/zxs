@@ -107,3 +107,9 @@ SQLite 丢失或损坏后，由有效检查点、应用日志和不可变元数�
 ---
 
 [文档目录](README.md) · [上一章：版本、分支引用、合并连线与树拆分](06-history-and-branches.md) · [下一章：全量存储、盘格式与单盘恢复](08-full-storage-and-disk-format.md)
+
+### 持久内容状态的封闭词汇
+
+State 的 `content_states`、历史包同名映射和正文墓碑使用同一个 `ContentState` 类型，仅接受字符串 `AVAILABLE`、`PURGED`、`MIGRATED`。大小写别名、未知字符串、对象形式和其他 JSON 类型均拒绝；墓碑仍额外限制为 `PURGED` 或 `MIGRATED`，不能以 `AVAILABLE` 绕过墓碑验证。状态缺省时不补写映射项，读取按已有的可用正文规则处理；版本接口的缺省值也输出规范的 `AVAILABLE`。
+
+这些枚举值的规范 JSON 字节与原字符串相同，State 页、历史包及墓碑的内容哈希和证明覆盖规则不变；原始证明页继续保留原 JSON，而不是反序列化后重建证明。文件或分支视图的 `LIVE`、`PENDING` 是展示与继承状态，不属于持久正文状态。实时副本健康也不是 `ContentState`，磁盘身份、发布证明、内容校验和授权检查仍按原边界执行。

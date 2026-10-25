@@ -14,7 +14,7 @@ impl Engine {
                 self.state
                     .content_states
                     .get(&p.version_id)
-                    .is_none_or(|s| s != "PURGED" && s != "MIGRATED")
+                    .is_none_or(|s| *s != ContentState::Purged && *s != ContentState::Migrated)
             })
             .filter_map(|p| self.state.versions.get(&p.version_id))
             .fold(0u64, |sum, v| sum.saturating_add(v.logical_size))
@@ -29,7 +29,7 @@ impl Engine {
             .state
             .content_states
             .get(version_id)
-            .is_some_and(|s| s != "AVAILABLE")
+            .is_some_and(|s| *s != ContentState::Available)
         {
             return Err(Error::new(
                 "CONTENT_PURGED",
@@ -207,7 +207,7 @@ impl Engine {
             .state
             .content_states
             .get(version_id)
-            .is_some_and(|s| s != "AVAILABLE")
+            .is_some_and(|s| *s != ContentState::Available)
         {
             return Err(Error::new(
                 "CONTENT_PURGED",

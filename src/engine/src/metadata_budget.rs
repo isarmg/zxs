@@ -197,7 +197,7 @@ fn preflight_inner(
     if state
         .content_states
         .values()
-        .any(|status| matches!(status.as_str(), "PURGED" | "MIGRATED"))
+        .any(|status| matches!(status, ContentState::Purged | ContentState::Migrated))
     {
         // Decided candidates retain their original snapshot partitioning. Read
         // each exact dependency without repair so preflight precedes mutation.
@@ -228,11 +228,11 @@ fn preflight_inner(
         let mut check_page = |page: json_codec::Map<String, json_codec::Value>| -> Result<()> {
             // Only pages containing a tombstone can be embedded by cleanup.
             let mut longest = None;
-            for (id, status) in page.iter().filter(|(_, status)| {
-                status
-                    .as_str()
-                    .is_some_and(|s| matches!(s, "PURGED" | "MIGRATED"))
-            }) {
+            for (id, raw) in &page {
+                let status: ContentState = data_serialization::Deserialize::deserialize(raw)?;
+                if status == ContentState::Available {
+                    continue;
+                }
                 // These are the only two fields that differ between tombstones
                 // embedding this exact page. Compare their encoded lengths.
                 let size = encode_metadata(
@@ -253,7 +253,7 @@ fn preflight_inner(
             check(encode_metadata(
                 &ContentTombstone {
                     version_id: id.clone(),
-                    state: status.as_str().expect("tombstone checked").into(),
+                    state: status,
                     candidate: candidate.clone(),
                     publication: publication.clone(),
                     publication_seal: seal.clone(),

@@ -292,7 +292,11 @@ fn metadata_only_package_and_purge_tombstone_combinations_are_preflighted() {
     for n in 0u32..600 {
         wide_state.content_states.insert(
             blake3::hash(&n.to_le_bytes()).to_hex().to_string(),
-            if n % 3 == 0 { "MIGRATED" } else { "PURGED" }.into(),
+            if n % 3 == 0 {
+                storage_contract::ContentState::Migrated
+            } else {
+                storage_contract::ContentState::Purged
+            },
         );
     }
     // Keep each modern page below half the legacy cap so this fixture
@@ -322,7 +326,7 @@ fn metadata_only_package_and_purge_tombstone_combinations_are_preflighted() {
             actual_largest = actual_largest.max(
                 canonical_json(&ContentTombstone {
                     version_id: id.clone(),
-                    state: status.as_str().unwrap().into(),
+                    state: json_codec::from_value(status.clone()).unwrap(),
                     candidate: candidate.clone(),
                     publication: publication.clone(),
                     publication_seal: seal.clone(),
@@ -517,7 +521,11 @@ fn reused_content_pages_have_identical_exact_tombstone_budget_without_installing
     for n in 0u32..600 {
         before.content_states.insert(
             blake3::hash(&n.to_le_bytes()).to_hex().to_string(),
-            if n % 3 == 0 { "MIGRATED" } else { "PURGED" }.into(),
+            if n % 3 == 0 {
+                storage_contract::ContentState::Migrated
+            } else {
+                storage_contract::ContentState::Purged
+            },
         );
         before
             .file_notes

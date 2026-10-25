@@ -550,3 +550,43 @@ fn manifest_shared_maps_keep_required_and_sparse_wire_rules() {
     missing.as_object_mut().unwrap().remove("commits");
     assert!(json_codec::from_value::<HistoryManifest>(missing).is_err());
 }
+
+#[test]
+fn content_state_manifest_graph_preserves_string_bytes_and_rejects_unknown_values() {
+    let mut raw = json_codec::to_value(manifest()).unwrap();
+    raw["content_states"] = json!({"a":"AVAILABLE","m":"MIGRATED","p":"PURGED"});
+    let typed: HistoryManifest = json_codec::from_value(raw.clone()).unwrap();
+    assert_eq!(
+        canonical_json(&typed).unwrap(),
+        canonical_json(&raw).unwrap()
+    );
+    assert_eq!(
+        object_hash("history-manifest", &typed).unwrap(),
+        object_hash("history-manifest", &raw).unwrap()
+    );
+    let (_, root, objects) = encoded(&typed, PAGE_TARGET_BYTES);
+    let (resolved, _) = read(root.clone(), &objects).unwrap();
+    assert_eq!(
+        canonical_json(&resolved).unwrap(),
+        canonical_json(&raw).unwrap()
+    );
+    for invalid in [
+        json!("available"),
+        json!("UNKNOWN"),
+        json!({"AVAILABLE":null}),
+        json!(null),
+    ] {
+        raw["content_states"] = json!({"a":invalid});
+        assert!(json_codec::from_value::<HistoryManifest>(raw.clone()).is_err());
+        // Keep every object hash self-consistent: rejection must come from the
+        // resolved disposition schema, not merely from a damaged digest.
+        let mut damaged_objects = objects.clone();
+        let mut damaged_root = root.clone();
+        damaged_root["maps"]["content_states"] = object(
+            &mut damaged_objects,
+            "state-page",
+            raw["content_states"].clone(),
+        );
+        assert!(read(damaged_root, &damaged_objects).is_err());
+    }
+}

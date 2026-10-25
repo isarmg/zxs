@@ -290,7 +290,7 @@ fn load_package(package: &Path) -> Result<(HistoryManifest, PackageProof, Histor
     let mut tombstones = 0;
     let mut full_bytes = 0u64;
     for (id, version) in &manifest.versions {
-        if manifest.content_states[id] == "AVAILABLE" {
+        if manifest.content_states[id] == ContentState::Available {
             let directory = package_version(package, id);
             let metadata: FileVersion = read_json(&directory.join("version.json"))?;
             if object_hash("version", &metadata)? != object_hash("version", version)? {
@@ -402,7 +402,7 @@ impl Engine {
         private_dir(&staging)?;
         let result = (|| {
             for (id, version) in &manifest.versions {
-                if manifest.content_states[id] != "AVAILABLE" {
+                if manifest.content_states[id] != ContentState::Available {
                     continue;
                 }
                 let (source, _) = self.valid_replica(id)?;
@@ -626,8 +626,8 @@ impl Engine {
                     route_slot_ids:route.clone(),topology_generation:state.topology_generation,
                     binding_generations:route.iter().map(|slot| Ok((slot.clone(),engine.disk(slot)?.binding_generation))).collect::<Result<_>>()?};
                 state.versions.insert(id.clone(),version.clone()); state.placements.insert(id.clone(),placement.clone());
-                state.content_states.insert(id.clone(),manifest.content_states[id].clone());
-                if manifest.content_states[id] == "AVAILABLE" {
+                state.content_states.insert(id.clone(),manifest.content_states[id]);
+                if manifest.content_states[id] == ContentState::Available {
                     pending.push(crate::engine::Prepared {version:version.clone(),placement,
                         source:package_version(package,id).join("content").join(&version.creation_name)});
                 }

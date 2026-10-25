@@ -3,10 +3,10 @@ use crate::business::{validate_branch_name, validate_entries};
 use data_serialization::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use storage_contract::{
-    Branch, Commit, DirectoryBranch, DirectoryTree, Entry, Error, FileBranchMerge, FileContext,
-    FileMetadataNode, FilePathNode, FileVersion, HistoryBoundary, HistoryTree, MergeLink,
-    Placement, PlacementRule, ProtectionPolicy, Repository, Result, SUPPORTED_CHECKSUM_CHUNK_BYTES,
-    SharedRecords, State, canonical_json, validate_id,
+    Branch, Commit, ContentState, DirectoryBranch, DirectoryTree, Entry, Error, FileBranchMerge,
+    FileContext, FileMetadataNode, FilePathNode, FileVersion, HistoryBoundary, HistoryTree,
+    MergeLink, Placement, PlacementRule, ProtectionPolicy, Repository, Result,
+    SUPPORTED_CHECKSUM_CHUNK_BYTES, SharedRecords, State, canonical_json, validate_id,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -70,7 +70,7 @@ pub struct HistoryManifest {
     pub placements: BTreeMap<String, Placement>,
     pub merge_links: BTreeMap<String, MergeLink>,
     pub boundary_marks: BTreeMap<String, HistoryBoundary>,
-    pub content_states: BTreeMap<String, String>,
+    pub content_states: BTreeMap<String, ContentState>,
     pub placement_rules: BTreeMap<String, PlacementRule>,
     pub protection_policies: BTreeMap<String, ProtectionPolicy>,
 }
@@ -306,8 +306,8 @@ impl HistoryManifest {
                         state
                             .content_states
                             .get(id)
-                            .cloned()
-                            .unwrap_or_else(|| "AVAILABLE".into()),
+                            .copied()
+                            .unwrap_or(ContentState::Available),
                     )
                 })
                 .collect(),
@@ -1285,7 +1285,7 @@ impl HistoryManifest {
             if version.version_id != *id
                 || version.history_tree_id != *history
                 || placement.version_id != *id
-                || !["AVAILABLE", "PURGED", "MIGRATED"].contains(&self.content_states[id].as_str())
+                || !self.content_states.contains_key(id)
             {
                 return Err(invalid("version, placement or tombstone identity differs"));
             }

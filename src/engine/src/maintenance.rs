@@ -317,7 +317,7 @@ impl Engine {
                         for version in &ids {
                             state
                                 .content_states
-                                .insert(version.clone(), "PURGED".into());
+                                .insert(version.clone(), ContentState::Purged);
                         }
                         let mut p = plan.clone();
                         p.state = "committed".into();
@@ -413,7 +413,7 @@ impl Engine {
             .state
             .content_states
             .values()
-            .any(|s| s == "PURGED" || s == "MIGRATED")
+            .any(|s| *s == ContentState::Purged || *s == ContentState::Migrated)
         {
             return Ok(());
         }
@@ -469,7 +469,7 @@ impl Engine {
             )
         })?;
         for (id, state) in &self.state.content_states {
-            if state != "PURGED" && state != "MIGRATED" {
+            if *state != ContentState::Purged && *state != ContentState::Migrated {
                 continue;
             }
             let Some(v) = self.state.versions.get(id) else {
@@ -495,7 +495,7 @@ impl Engine {
             })?;
             let tombstone = ContentTombstone {
                 version_id: id.clone(),
-                state: state.clone(),
+                state: *state,
                 candidate: candidate.clone(),
                 publication: publication.clone(),
                 publication_seal: seal.clone(),
@@ -641,7 +641,7 @@ impl Engine {
                             .ok_or_else(|| Error::new("PLACEMENT_NOT_FOUND", "split placement missing"))?;
                         let file_id = file_map.get(&old.file_id)
                             .ok_or_else(|| Error::new("STATE_INVALID", "entry and version file identity differ"))?;
-                        let new = if state.content_states.get(&old.version_id).is_some_and(|s| s == "PURGED") {
+                        let new = if state.content_states.get(&old.version_id).is_some_and(|s| *s == ContentState::Purged) {
                             let mut new = old.clone();
                             new.version_id = new_id("ver");
                             new.file_id = file_id.clone();
@@ -651,7 +651,7 @@ impl Engine {
                             let mut placement = placement;
                             placement.version_id = new.version_id.clone();
                             state.placements.insert(new.version_id.clone(), placement);
-                            state.content_states.insert(new.version_id.clone(), "PURGED".into());
+                            state.content_states.insert(new.version_id.clone(), ContentState::Purged);
                             state.versions.insert(new.version_id.clone(), new.clone());
                             new
                         } else {
@@ -879,8 +879,8 @@ impl Engine {
                 for old_version in version_map.keys() {
                     let used = state.commits.values().filter(|c| c.history_tree_id == history)
                         .any(|c| c.entries.iter().any(|e| &e.version_id == old_version));
-                    if !used && state.content_states.get(old_version).is_none_or(|s| s != "PURGED") {
-                        state.content_states.insert(old_version.clone(), "MIGRATED".into());
+                    if !used && state.content_states.get(old_version).is_none_or(|s| *s != ContentState::Purged) {
+                        state.content_states.insert(old_version.clone(), ContentState::Migrated);
                     }
                 }
                 let mut completed = plan.clone(); completed.state = "committed".into();

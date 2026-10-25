@@ -554,6 +554,60 @@ pub struct CommitRequest {
     #[serialization(default)]
     pub request_digest: Option<String>,
 }
+/// Stored logical content disposition, not a live replica-health observation.
+/// Exact variant names participate in snapshot and history-package hashes.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+pub enum ContentState {
+    #[serialization(rename = "AVAILABLE")]
+    Available,
+    #[serialization(rename = "PURGED")]
+    Purged,
+    #[serialization(rename = "MIGRATED")]
+    Migrated,
+}
+impl<'de> Deserialize<'de> for ContentState {
+    fn deserialize<D: data_serialization::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Self, D::Error> {
+        // Deriving a unit enum would also accept {"AVAILABLE": null}. Only a
+        // string is valid; borrow its bytes instead of allocating per record.
+        struct ContentStateVisitor;
+        impl data_serialization::de::Visitor<'_> for ContentStateVisitor {
+            type Value = ContentState;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("AVAILABLE, PURGED or MIGRATED as a string")
+            }
+
+            fn visit_str<E: data_serialization::de::Error>(
+                self,
+                token: &str,
+            ) -> Result<Self::Value, E> {
+                match token {
+                    "AVAILABLE" => Ok(ContentState::Available),
+                    "PURGED" => Ok(ContentState::Purged),
+                    "MIGRATED" => Ok(ContentState::Migrated),
+                    _ => Err(E::unknown_variant(
+                        token,
+                        &["AVAILABLE", "PURGED", "MIGRATED"],
+                    )),
+                }
+            }
+        }
+        deserializer.deserialize_str(ContentStateVisitor)
+    }
+}
+impl ContentState {
+    /// The canonical stored token, also used to compare raw proof-page values.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Available => "AVAILABLE",
+            Self::Purged => "PURGED",
+            Self::Migrated => "MIGRATED",
+        }
+    }
+}
+
 /// Closed publication lifecycle vocabulary shared by persisted and wire results.
 /// Serde names are part of the hashed on-disk contract.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -710,7 +764,7 @@ pub struct State {
     pub placements: crate::TrackedMap<Placement>,
     pub merge_links: crate::TrackedMap<MergeLink>,
     pub history_boundaries: crate::TrackedMap<HistoryBoundary>,
-    pub content_states: crate::TrackedMap<String>,
+    pub content_states: crate::TrackedMap<ContentState>,
     pub operations: crate::TrackedMap<OperationResult>,
     pub plans: crate::TrackedMap<Plan>,
     pub placement_rules: crate::TrackedMap<PlacementRule>,

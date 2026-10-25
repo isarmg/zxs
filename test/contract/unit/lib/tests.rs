@@ -93,3 +93,95 @@ fn persisted_state_requires_nonsparse_fields_without_changing_current_bytes() {
         }
     }
 }
+
+#[test]
+fn content_state_preserves_exact_stored_tokens_and_hashes() {
+    use std::collections::BTreeMap;
+    let cases = [
+        (ContentState::Available, "AVAILABLE"),
+        (ContentState::Purged, "PURGED"),
+        (ContentState::Migrated, "MIGRATED"),
+    ];
+    for (state, token) in cases {
+        assert_eq!(state.as_str(), token);
+        let expected = format!("\"{token}\"");
+        assert_eq!(canonical_json(&state).unwrap(), expected.as_bytes());
+        assert_eq!(
+            decode_strict::<ContentState>(expected.as_bytes()).unwrap(),
+            state
+        );
+        assert_eq!(
+            json_codec::from_reader::<_, ContentState>(std::io::Cursor::new(expected.as_bytes()))
+                .unwrap(),
+            state
+        );
+    }
+    let typed = cases
+        .into_iter()
+        .map(|(state, key)| (key.to_owned(), state))
+        .collect::<BTreeMap<_, _>>();
+    let strings = cases
+        .into_iter()
+        .map(|(_, key)| (key.to_owned(), key.to_owned()))
+        .collect::<BTreeMap<_, _>>();
+    let expected = br#"{"AVAILABLE":"AVAILABLE","MIGRATED":"MIGRATED","PURGED":"PURGED"}"#;
+    assert_eq!(canonical_json(&typed).unwrap(), expected);
+    assert_eq!(
+        canonical_json(&typed).unwrap(),
+        canonical_json(&strings).unwrap()
+    );
+    assert_eq!(
+        object_hash("state-page", &typed).unwrap(),
+        object_hash("state-page", &strings).unwrap()
+    );
+    let state = State {
+        content_states: typed.into(),
+        ..State::default()
+    };
+    let mut expected_state = json_codec::to_value(State::default()).unwrap();
+    expected_state["content_states"] = json_codec::to_value(strings).unwrap();
+    assert_eq!(
+        canonical_json(&state).unwrap(),
+        canonical_json(&expected_state).unwrap()
+    );
+    assert_eq!(
+        decode_strict::<State>(&canonical_json(&state).unwrap()).unwrap(),
+        state
+    );
+    let empty = State::default();
+    assert!(
+        decode_strict::<State>(&canonical_json(&empty).unwrap())
+            .unwrap()
+            .content_states
+            .is_empty()
+    );
+}
+
+#[test]
+fn content_state_rejects_unknown_tokens_and_non_string_representations() {
+    for value in [
+        json_codec::json!("available"),
+        json_codec::json!("purged"),
+        json_codec::json!("migrated"),
+        json_codec::json!("LIVE"),
+        json_codec::json!("PENDING"),
+        json_codec::json!("UNAVAILABLE"),
+        json_codec::json!("UNKNOWN"),
+        json_codec::json!(""),
+        json_codec::json!(null),
+        json_codec::json!(0),
+        json_codec::json!({"AVAILABLE":null}),
+        json_codec::json!(["AVAILABLE"]),
+    ] {
+        assert!(
+            json_codec::from_value::<ContentState>(value.clone()).is_err(),
+            "accepted {value}"
+        );
+        let mut state = json_codec::to_value(State::default()).unwrap();
+        state["content_states"] = json_codec::json!({"version":value});
+        assert!(
+            decode_strict::<State>(&canonical_json(&state).unwrap()).is_err(),
+            "accepted {state}"
+        );
+    }
+}
