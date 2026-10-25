@@ -55,6 +55,14 @@ bash .github/scripts/check.sh browser-smoke
 
 所有业务及构建辅助 Rust 源码通过根工作区的本地依赖提供；正式 Cargo 命令使用 `--locked --offline`。验证器使用临时空 Cargo home 核对登记目标的依赖闭包。工具链和非 Rust SDK 继续独立管理；[安全扫描器](../.github/security-tools/README.md)作为独立开发工具，在产品工作区之外按审阅锁联网安装依赖，并实时读取漏洞及 registry/yank 状态。它的独立锁和联网不参与正式业务构建，历史扫描通过也不替代本次扫描。
 
+HTTP 上传集成测试使用真实文件系统剩余空间，并保留默认的 [1 GiB spool 恢复余量](21-configuration.md)。这是该测试配置对 spool 所在文件系统的可用余量要求，不是全项目统一的磁盘容量门槛；CI 应按实际编译产物、并行预留和测试数据规划空间。把全新 `CARGO_TARGET_DIR` 和测试临时目录同时放在容量较小的 `/tmp` tmpfs 中，可能使正常上传按设计返回 `429 / RESOURCE_LIMIT_EXCEEDED`，消息为 `HTTP spool must preserve filesystem recovery headroom`。先检查响应体和该目录的实际可用空间；不要减小生产配额、忽略失败或把所有 `429` 都归因于环境。空间不足时可将测试临时目录显式放到有充足空间的工作区文件系统，保持原有限额再重跑：
+
+```sh
+mkdir -p "$PWD/target/test-tmp"
+df -h "$PWD/target/test-tmp"
+TMPDIR="$PWD/target/test-tmp" bash .github/scripts/check.sh workspace
+```
+
 质量、SDK 和发布编译使用 [Cargo JSON 诊断包装器](../.github/scripts/check-rust-diagnostics.py)，保留命令参数与环境。包装器拒绝所有编译警告、错误及不完整或无效的构建流；其回归同时覆盖解析失败、Cargo 失败和本地依赖警告。质量任务与发布验证任务安装 WASM 标准库后检查目标闭包。
 
 SMB SDK 编译不等于 Samba 模块已加载或跨客户端往返通过；Chrome 检查不等于所有浏览器和移动设备通过；模拟文件故障不等于物理盘掉电验收。依赖源码本地化也不等于漏洞或许可证审查完成，见 [第三方来源清单](THIRD_PARTY_RUST_SOURCES.md)。

@@ -499,13 +499,17 @@ async fn upload(
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    json_codec::from_slice(
-        &http_routing::body::to_bytes(response.into_body(), 65536)
-            .await
-            .unwrap(),
-    )
-    .unwrap()
+    let status = response.status();
+    let bytes = http_routing::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "upload {path}: {}",
+        String::from_utf8_lossy(&bytes)
+    );
+    json_codec::from_slice(&bytes).unwrap()
 }
 
 async fn version_bytes(app: &Router, token: &str, version: &str) -> Vec<u8> {
