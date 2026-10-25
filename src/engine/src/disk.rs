@@ -11,6 +11,8 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+mod mountinfo;
+
 pub(crate) fn fs_error(e: platform_io::fs_safety::Error) -> Error {
     match e {
         platform_io::fs_safety::Error::Io(e) if matches!(e.raw_os_error(), Some(20 | 40)) => {
@@ -495,36 +497,14 @@ pub(crate) fn identity(config: &Config, disk: &DiskConfig) -> Result<DiskSeal> {
 fn production_device(root: &Path) -> Result<(String, String)> {
     let canonical = root.canonicalize()?;
     let mountinfo = fs::read_to_string("/proc/self/mountinfo")?;
-    let mut selected = None;
-    for line in mountinfo.lines() {
-        let Some((left, right)) = line.split_once(" - ") else {
-            continue;
-        };
-        let a = left.split_whitespace().collect::<Vec<_>>();
-        let b = right.split_whitespace().collect::<Vec<_>>();
-        if a.len() < 6 || b.len() < 2 {
-            continue;
-        }
-        let point = PathBuf::from(a[4].replace("\\040", " ").replace("\\134", "\\"));
-        if canonical.starts_with(&point)
-            && selected
-                .as_ref()
-                .is_none_or(|(p, _, _): &(PathBuf, String, String)| {
-                    point.as_os_str().len() > p.as_os_str().len()
-                })
-        {
-            selected = Some((point, b[0].to_string(), b[1].to_string()));
-        }
-    }
-    let (_, kind, source) = selected
-        .ok_or_else(|| Error::new("DISK_IDENTITY_MISMATCH", "cannot resolve managed mount"))?;
-    if kind != "btrfs" {
+    let selected = mountinfo::resolve(&mountinfo, &canonical)?;
+    if selected.kind != "btrfs" {
         return Err(Error::new(
             "FILESYSTEM_REQUIRED",
             "production requires an independent Btrfs filesystem for every disk",
         ));
     }
-    let device = Path::new(&source).canonicalize()?;
+    let device = selected.source.canonicalize()?;
     let name = device
         .file_name()
         .ok_or_else(|| Error::new("DISK_IDENTITY_MISMATCH", "missing block identity"))?;
