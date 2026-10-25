@@ -146,75 +146,113 @@ fn file_history_matches_preprojection_graph_json() {
 }
 
 #[test]
-fn summary_consumption_retains_overlapping_rows_and_error_defaults() {
+fn summary_consumption_retains_overlapping_rows() {
     let expected = storage_engine::FileNodeSummary {
         parent_node_ids: vec!["first".into(), "first".into(), "last".into()],
         tags: BTreeSet::from(["label".into()]),
     };
-    let mut summaries = BTreeMap::from([
-        (
-            "overlap".into(),
-            PendingSummary {
-                remaining_rows: 3,
-                summary: Ok(expected.clone()),
-            },
-        ),
-        (
-            "invalid".into(),
-            PendingSummary {
-                remaining_rows: 2,
-                summary: Err(storage_engine::Error::new("STATE_INVALID", "missing body")),
-            },
-        ),
-    ]);
-    for _ in 0..2 {
-        assert_eq!(
-            take_summary(&mut summaries, "overlap"),
-            Some(expected.clone())
-        );
+    let mut summaries = BTreeMap::from([(
+        "overlap".into(),
+        PendingSummary {
+            remaining_rows: 3,
+            summary: expected.clone(),
+        },
+    )]);
+    for _ in 0..3 {
+        assert_eq!(take_summary(&mut summaries, "overlap"), expected);
     }
-    assert_eq!(take_summary(&mut summaries, "overlap"), Some(expected));
-    assert!(!summaries.contains_key("overlap"));
-    assert_eq!(take_summary(&mut summaries, "invalid"), None);
-    assert!(summaries.contains_key("invalid"));
-    assert_eq!(take_summary(&mut summaries, "invalid"), None);
     assert!(summaries.is_empty());
 }
 
 #[test]
-fn display_order_retains_full_sequences_ties_and_missing_node_defaults() {
+fn history_propagates_projection_error_instead_of_inventing_empty_graph() {
     let root = crate::tests::private_tempdir();
     let engine = Engine::initialize(
         &root.path().join("system"),
         Config::development([root.path().join("disk")]),
     )
     .unwrap();
-    let versions = [
-        json!({"version_id":"z", "sequence":"10"}),
-        json!({"version_id":"invalid", "sequence":"not-a-number"}),
-        json!({"version_id":"a", "sequence":"10"}),
-        json!({"version_id":"old", "sequence":"9"}),
-        json!({"version_id":"maximum", "sequence":u64::MAX.to_string()}),
-    ];
-    let nodes = unified_history(
+    let versions = [HistoryVersion {
+        id: "missing",
+        sequence: 10,
+        download_name: "file.txt",
+        wire: json!({}),
+    }];
+    let error = unified_history(
         &engine,
         "file",
         "history",
         &versions,
         &BTreeMap::new(),
-        Some("a"),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "FILE_NODE_NOT_FOUND");
+}
+
+#[test]
+fn display_order_retains_full_typed_sequences_and_id_ties() {
+    let root = crate::tests::private_tempdir();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([root.path().join("disk")]),
     )
     .unwrap();
+    let repo = engine
+        .create_disk_root("P01", "owner", &new_id("op"))
+        .unwrap();
+    let first = save(
+        &mut engine,
+        &repo.main_branch_id,
+        "file.txt",
+        b"first",
+        "first",
+    );
+    let second = save(
+        &mut engine,
+        &repo.main_branch_id,
+        "file.txt",
+        b"second",
+        "second",
+    );
+    let third = save(
+        &mut engine,
+        &repo.main_branch_id,
+        "file.txt",
+        b"third",
+        "third",
+    );
+    let versions = [
+        (&first.version_id, 10),
+        (&third.version_id, u64::MAX),
+        (&second.version_id, 10),
+    ]
+    .map(|(id, sequence)| HistoryVersion {
+        id,
+        sequence,
+        download_name: "file.txt",
+        wire: json!({}),
+    });
+    let nodes = unified_history(
+        &engine,
+        &first.file_id,
+        &repo.history_tree_id,
+        &versions,
+        &BTreeMap::new(),
+        Some(&first.version_id),
+    )
+    .unwrap();
+    let mut ties = [&first.version_id, &second.version_id];
+    ties.sort();
     assert_eq!(
         nodes
             .iter()
             .map(|node| node["node_id"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["maximum", "a", "z", "old", "invalid"]
+        [&third.version_id, ties[0], ties[1]]
     );
+    assert_eq!(nodes[0]["sequence"], u64::MAX.to_string());
     for node in nodes {
-        assert_eq!(node["parent_node_ids"], json!([]));
-        assert_eq!(node["tags"], json!([]));
-        assert_eq!(node["current"], node["node_id"] == "a");
+        assert_eq!(node["current"], node["node_id"] == first.version_id);
     }
 }

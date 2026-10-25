@@ -541,7 +541,11 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
         let download_name = current.as_ref().map(|entry| entry.name.as_str())
             .or_else(|| state.file_names.get(file).map(String::as_str))
             .unwrap_or(&version.creation_name);
-        json!({
+        history_nodes::HistoryVersion {
+            id: &version.version_id,
+            sequence: version.version_sequence,
+            download_name,
+            wire: json!({
             "version_id":version.version_id,"file_id":file,"source_version_ids":source_version_ids,
             "branch_id":heads.get(version.version_id.as_str()),"created_at":version.created_at,
             "message":commit.map(|commit| commit.message.as_str()).unwrap_or(""),
@@ -552,7 +556,8 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
             "note":state.version_notes.get(&version.version_id).map(String::as_str).unwrap_or(""),
             "download_name":download_name,
             "storage_name":version.storage_name
-        })
+        }),
+        }
     }).collect::<Vec<_>>();
     versions.reverse();
     let nodes = history_nodes::unified_history(
@@ -563,6 +568,10 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
         &first_commits,
         current_node.as_deref(),
     )?;
+    let versions = versions
+        .into_iter()
+        .map(|version| version.wire)
+        .collect::<Vec<_>>();
     let mut response = json!({"file_id":file,"repository_id":repo.repository_id,"path":current.as_ref().map(|entry| &entry.path),
         "note":state.file_notes.get(file).map(String::as_str).unwrap_or(""),
         "node_id":current_node,"current_node_id":current_node,

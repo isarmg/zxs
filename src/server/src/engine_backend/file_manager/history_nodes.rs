@@ -1,9 +1,16 @@
 //! One presentation graph for content, path changes and metadata revisions.
 use super::*;
 
+pub(super) struct HistoryVersion<'a> {
+    pub id: &'a str,
+    pub sequence: u64,
+    pub download_name: &'a str,
+    pub wire: Value,
+}
+
 struct PendingSummary {
     remaining_rows: usize,
-    summary: storage_engine::Result<storage_engine::FileNodeSummary>,
+    summary: storage_engine::FileNodeSummary,
 }
 
 /// Consume the last row so parent/tag buffers do not live alongside the JSON
@@ -11,13 +18,18 @@ struct PendingSummary {
 fn take_summary(
     summaries: &mut BTreeMap<String, PendingSummary>,
     node: &str,
-) -> Option<storage_engine::FileNodeSummary> {
-    let pending = summaries.get_mut(node)?;
+) -> storage_engine::FileNodeSummary {
+    let pending = summaries
+        .get_mut(node)
+        .expect("invariant: projected row has a summary");
     if pending.remaining_rows > 1 {
         pending.remaining_rows -= 1;
-        pending.summary.as_ref().ok().cloned()
+        pending.summary.clone()
     } else {
-        summaries.remove(node)?.summary.ok()
+        summaries
+            .remove(node)
+            .expect("invariant: last projected row owns its summary")
+            .summary
     }
 }
 
@@ -87,7 +99,7 @@ pub(super) fn unified_history(
     engine: &Engine,
     file: &str,
     history: &str,
-    versions: &[Value],
+    versions: &[HistoryVersion<'_>],
     first_commits: &BTreeMap<&str, &storage_contract::Commit>,
     current_node: Option<&str>,
 ) -> Result<Vec<Value>, ApiError> {
@@ -105,7 +117,7 @@ pub(super) fn unified_history(
     };
     let version_metadata = versions
         .iter()
-        .filter_map(|version| version["version_id"].as_str().map(|id| (id, version)))
+        .map(|version| (version.id, version))
         .collect::<BTreeMap<_, _>>();
     let path_nodes = state
         .file_path_nodes
@@ -114,7 +126,7 @@ pub(super) fn unified_history(
         .collect::<Vec<_>>();
     let visible = versions
         .iter()
-        .filter_map(|version| version["version_id"].as_str())
+        .map(|version| version.id)
         .chain(path_nodes.iter().map(|node| node.node_id.as_str()))
         .chain(
             state
@@ -136,22 +148,22 @@ pub(super) fn unified_history(
         .into_iter()
         .map(|(id, summary)| {
             let remaining_rows = visible[id.as_str()];
-            (
+            Ok((
                 id,
                 PendingSummary {
                     remaining_rows,
-                    summary,
+                    summary: summary.map_err(error)?,
                 },
-            )
+            ))
         })
-        .collect();
+        .collect::<Result<_, ApiError>>()?;
     let mut nodes = versions
         .iter()
         .map(|version| {
-            let mut node = version.clone();
-            let id = version["version_id"].as_str().unwrap_or("");
+            let mut node = version.wire.clone();
+            let id = version.id;
             let commit = first_commits.get(id).copied();
-            let summary = take_summary(&mut summaries, id).unwrap_or_default();
+            let summary = take_summary(&mut summaries, id);
             node["node_id"] = id.into();
             node["kind"] = "content".into();
             node["tags"] = json!(summary.tags);
@@ -170,24 +182,20 @@ pub(super) fn unified_history(
                         .find(|entry| entry.file_id == file && entry.version_id == id)
                 })
                 .map(|entry| entry.path.clone())
-                .unwrap_or_else(|| version["download_name"].as_str().unwrap_or("").to_owned())
+                .unwrap_or_else(|| version.download_name.to_owned())
                 .into();
             node["previous_path"] = Value::Null;
-            node["sequence"] = commit
-                .map(|commit| commit.sequence.to_string())
-                .unwrap_or_else(|| version["sequence"].as_str().unwrap_or("0").to_owned())
-                .into();
+            let sequence = commit.map_or(version.sequence, |commit| commit.sequence);
+            node["sequence"] = sequence.to_string().into();
             node["current"] = (current_node == Some(id)).into();
-            node
+            (sequence, id, node)
         })
         .collect::<Vec<_>>();
     for path in path_nodes {
-        let Some(body) = state.versions.get(&path.version_id) else {
-            continue;
-        };
+        let body = &state.versions[&path.version_id];
         let metadata = version_metadata.get(path.version_id.as_str()).copied();
-        let summary = take_summary(&mut summaries, &path.node_id).unwrap_or_default();
-        nodes.push(json!({
+        let summary = take_summary(&mut summaries, &path.node_id);
+        nodes.push((path.sequence, path.node_id.as_str(), json!({
             "node_id":path.node_id,"version_id":path.version_id,"file_id":file,
             "parent_node_ids":summary.parent_node_ids.into_iter().filter(|parent|visible.contains_key(parent.as_str())).collect::<Vec<_>>(),
             "kind":"rename","path":path.path,"previous_path":path.previous_path,
@@ -196,44 +204,32 @@ pub(super) fn unified_history(
             "note":state.file_path_notes.get(&path.node_id).map(String::as_str).unwrap_or(""),
             "size":body.logical_size.to_string(),"content_hash":body.content_hash,
             "content_state":state.content_states.get(&path.version_id).map(storage_contract::ContentState::as_str).unwrap_or("LIVE"),
-            "download_name":metadata.and_then(|version|version.get("download_name")).cloned().unwrap_or_else(||body.creation_name.clone().into()),
+            "download_name":metadata.map_or(body.creation_name.as_str(), |version| version.download_name),
             "storage_name":body.storage_name,
             "operation_id":path.operation_id,"author":path.author,"message":""
             ,"tags":summary.tags
-        }));
+        })));
     }
     for revision in state
         .file_metadata_nodes
         .values()
         .filter(|node| node.file_id == file && node.history_tree_id == history)
     {
-        let Some(body) = state.versions.get(&revision.version_id) else {
-            continue;
-        };
+        let body = &state.versions[&revision.version_id];
         let metadata = version_metadata.get(revision.version_id.as_str()).copied();
         let path = paths.get(&revision.node_id);
-        let summary = take_summary(&mut summaries, &revision.node_id).unwrap_or_default();
-        nodes.push(json!({"node_id":revision.node_id,"version_id":revision.version_id,"file_id":file,
+        let summary = take_summary(&mut summaries, &revision.node_id);
+        nodes.push((revision.sequence, revision.node_id.as_str(), json!({"node_id":revision.node_id,"version_id":revision.version_id,"file_id":file,
             "kind":revision.kind,"parent_node_ids":summary.parent_node_ids.into_iter().filter(|parent|visible.contains_key(parent.as_str())).collect::<Vec<_>>(),
             "tags":revision.tags,"path":path,"previous_path":null,"branch_id":revision.branch_id,
             "created_at":utc_timestamp(revision.created_at)?,"sequence":revision.sequence.to_string(),"current":current_node==Some(revision.node_id.as_str()),
             "note":state.file_path_notes.get(&revision.node_id).map(String::as_str).unwrap_or(""),
             "size":body.logical_size.to_string(),"content_hash":body.content_hash,"content_state":state.content_states.get(&revision.version_id).map(storage_contract::ContentState::as_str).unwrap_or("LIVE"),
-            "download_name":metadata.and_then(|version|version.get("download_name")).cloned().unwrap_or_else(||body.creation_name.clone().into()),
-            "storage_name":body.storage_name,"operation_id":revision.operation_id,"author":revision.author,"message":""}));
+            "download_name":metadata.map_or(body.creation_name.as_str(), |version| version.download_name),
+            "storage_name":body.storage_name,"operation_id":revision.operation_id,"author":revision.author,"message":""})));
     }
-    nodes.sort_by(|left, right| {
-        let sequence = |node: &Value| {
-            node["sequence"]
-                .as_str()
-                .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(0)
-        };
-        sequence(right)
-            .cmp(&sequence(left))
-            .then_with(|| left["node_id"].as_str().cmp(&right["node_id"].as_str()))
-    });
-    Ok(nodes)
+    nodes.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(right.1)));
+    Ok(nodes.into_iter().map(|(_, _, node)| node).collect())
 }
 
 #[cfg(test)]
