@@ -204,37 +204,36 @@ impl Engine {
                         provenance: Some(source_commit.into()),
                     },
                 );
-                state.branches.insert(
-                    id.clone(),
-                    Branch {
-                        file_node_id: None,
-                        branch_id: id.clone(),
-                        history_tree_id: source.history_tree_id.clone(),
-                        name: name.into(),
-                        head_commit_id: commit_id.clone(),
-                        fork_commit_id: source_commit.into(),
-                        branch_kind: "full".into(),
-                        file_id: None,
-                        pending_file_versions,
-                        generation: 1,
-                        state: "active".into(),
-                    },
-                );
+                let created_branch = Branch {
+                    file_node_id: None,
+                    branch_id: id.clone(),
+                    history_tree_id: source.history_tree_id.clone(),
+                    name: name.into(),
+                    head_commit_id: commit_id.clone(),
+                    fork_commit_id: source_commit.into(),
+                    branch_kind: "full".into(),
+                    file_id: None,
+                    pending_file_versions,
+                    generation: 1,
+                    state: "active".into(),
+                };
+                state.branches.insert(id.clone(), created_branch.clone());
                 Ok(json!({
                     "branch_id": id,
                     "commit_id": commit_id,
                     "history_tree_id": source.history_tree_id,
+                    "created_branch": created_branch,
                     "copied_files": "0",
                     "placeholder_files": source.entries.iter()
                         .filter(|entry| entry.kind == "file").count().to_string()
                 }))
             },
         )?;
-        self.state
-            .branches
-            .get(op.branch_id.as_deref().unwrap_or(""))
-            .cloned()
-            .ok_or_else(|| Error::new("STATE_INVALID", "branch result missing"))
+        // Creation returns the published record, not the branch's later head,
+        // name or lifecycle state. Exact replay has already matched its owner
+        // and request before decoding this immutable receipt.
+        json_codec::from_value(op.result["created_branch"].clone())
+            .map_err(|_| Error::new("STATE_INVALID", "created branch receipt is invalid"))
     }
     pub fn add_merge_link(
         &mut self,

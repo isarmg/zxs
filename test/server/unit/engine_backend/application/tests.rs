@@ -340,6 +340,91 @@ fn typed_branch_rejects_cross_repository_source() {
 }
 
 #[test]
+fn creation_replays_keep_public_response_shapes_after_archive_binding_change_and_reopen() {
+    let (root, engine, _, owner) = fixture();
+    let mut backend = EngineBackend::new(engine);
+    let repository_request = json!({
+        "name":"Creation response", "primary_slot_id":"P01",
+        "target_copies":3, "operation_id":new_id("op")
+    });
+    let repository = backend
+        .call(
+            crate::BackendAction::CreateRepository,
+            &owner,
+            repository_request.clone(),
+        )
+        .unwrap();
+    let created: storage_engine::Repository = json_codec::from_value(repository.clone()).unwrap();
+    let source = backend.engine.lock().unwrap().state().histories[&created.history_tree_id]
+        .root_commit_id
+        .clone();
+    let branch_request = json!({
+        "repository_id":created.repository_id, "source_commit_id":source,
+        "name":"side", "operation_id":new_id("op")
+    });
+    let branch = backend
+        .call(
+            crate::BackendAction::CreateBranch,
+            &owner,
+            branch_request.clone(),
+        )
+        .unwrap();
+    assert_eq!(branch["state"], "active");
+    assert_eq!(branch["generation"], "1");
+    assert!(branch.get("created_branch").is_none());
+    backend
+        .call(
+            crate::BackendAction::Archive,
+            &owner,
+            json!({
+                "branch_id":branch["branch_id"], "operation_id":new_id("op")
+            }),
+        )
+        .unwrap();
+    backend
+        .call(
+            crate::BackendAction::UpdateSmbBinding,
+            &owner,
+            json!({
+                "repository_id":created.repository_id, "branch_id":created.main_branch_id,
+                "enabled":false, "expected_history_generation":"1", "operation_id":new_id("op")
+            }),
+        )
+        .unwrap();
+    for reopened in [false, true] {
+        if reopened {
+            drop(backend);
+            backend = EngineBackend::new(Engine::open(&root.path().join("system")).unwrap());
+        }
+        let before =
+            storage_engine::canonical_json(backend.engine.lock().unwrap().state()).unwrap();
+        for (action, request, response) in [
+            (
+                crate::BackendAction::CreateRepository,
+                &repository_request,
+                &repository,
+            ),
+            (crate::BackendAction::CreateBranch, &branch_request, &branch),
+        ] {
+            assert_eq!(
+                backend.call(action, &owner, request.clone()).unwrap(),
+                *response
+            );
+            let mut changed = request.clone();
+            changed["name"] = "Different request".into();
+            assert_eq!(
+                backend.call(action, &owner, changed).unwrap_err().code,
+                "IDEMPOTENCY_KEY_REUSED"
+            );
+        }
+        assert_eq!(
+            storage_engine::canonical_json(backend.engine.lock().unwrap().state()).unwrap(),
+            before
+        );
+    }
+}
+
+#[test]
 fn merge_link_retry_replays_original_scope_after_split_and_restart() {
     let (root, mut engine, repo, owner) = fixture();
     let root_commit = engine.state().histories[&repo.history_tree_id]

@@ -1,6 +1,146 @@
 use super::*;
 
 #[test]
+fn disk_root_creation_replay_checks_owner_input_and_returns_original_binding() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("system");
+    let mut config = Config::development([
+        temporary.path().join("primary"),
+        temporary.path().join("other-primary"),
+    ]);
+    config.disks[1].slot_id = "P02".into();
+    config.disks[1].level = 1;
+    config.disks[1].upstream_slot_id = None;
+    let mut engine = Engine::initialize(&root, config).unwrap();
+    let operation = new_id("op");
+    let original = engine.create_disk_root("p01", "admin", &operation).unwrap();
+    let other = engine
+        .create_disk_root("P02", "admin", &new_id("op"))
+        .unwrap();
+    let binding_operation = new_id("op");
+    engine
+        .set_smb_binding(
+            &original.repository_id,
+            &original.main_branch_id,
+            false,
+            1,
+            "admin",
+            &binding_operation,
+        )
+        .unwrap();
+    for reopened in [false, true] {
+        if reopened {
+            drop(engine);
+            engine = Engine::open(&root).unwrap();
+        }
+        let before = canonical_json(engine.state()).unwrap();
+        assert_eq!(
+            engine.create_disk_root("P01", "admin", &operation).unwrap(),
+            original
+        );
+        for (slot, principal, operation) in [
+            ("P01", "other", operation.as_str()),
+            ("P02", "admin", operation.as_str()),
+            ("P01", "admin", binding_operation.as_str()),
+        ] {
+            assert_eq!(
+                engine
+                    .create_disk_root(slot, principal, operation)
+                    .unwrap_err()
+                    .code(),
+                "IDEMPOTENCY_KEY_REUSED"
+            );
+        }
+        assert_eq!(
+            engine
+                .create_disk_root("P01", "admin", "not-an-operation")
+                .unwrap_err()
+                .code(),
+            "INVALID_ID"
+        );
+        assert_eq!(
+            engine
+                .create_disk_root("P01", "", &new_id("op"))
+                .unwrap_err()
+                .code(),
+            "UNAUTHENTICATED"
+        );
+        assert_eq!(
+            engine
+                .create_disk_root("P02", "admin", &new_id("op"))
+                .unwrap(),
+            other
+        );
+        let current = engine.state().repositories[&original.repository_id].clone();
+        assert_ne!(current, original);
+        assert_eq!(
+            engine
+                .create_disk_root("P01", "admin", &new_id("op"))
+                .unwrap(),
+            current
+        );
+        assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    }
+}
+
+#[test]
+fn repository_creation_replay_returns_original_binding_after_changes_and_reopen() {
+    let root = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([root.path().join("primary")]),
+    )
+    .unwrap();
+    let operation = new_id("op");
+    let original = engine
+        .create_repository("Replay", "P01", 1, "admin", &operation)
+        .unwrap();
+    let source = engine.state().histories[&original.history_tree_id]
+        .root_commit_id
+        .clone();
+    let side = engine
+        .create_branch(&source, "side", "admin", &new_id("op"))
+        .unwrap();
+    engine
+        .set_smb_binding(
+            &original.repository_id,
+            &side.branch_id,
+            false,
+            1,
+            "admin",
+            &new_id("op"),
+        )
+        .unwrap();
+    assert_ne!(
+        engine.state().repositories[&original.repository_id],
+        original
+    );
+    for reopened in [false, true] {
+        if reopened {
+            drop(engine);
+            engine = Engine::open(&root.path().join("system")).unwrap();
+        }
+        let before = canonical_json(engine.state()).unwrap();
+        assert_eq!(
+            engine
+                .create_repository("Replay", "P01", 1, "admin", &operation)
+                .unwrap(),
+            original
+        );
+        for (name, principal) in [("Different", "admin"), ("Replay", "other")] {
+            assert_eq!(
+                engine
+                    .create_repository(name, "P01", 1, principal, &operation)
+                    .unwrap_err()
+                    .code(),
+                "IDEMPOTENCY_KEY_REUSED"
+            );
+        }
+        assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    }
+}
+
+#[test]
 fn disk_root_uses_one_explicit_primary_on_short_and_complete_routes() {
     for disks in [1, 2, 3] {
         let temporary = tempfile::tempdir().unwrap();

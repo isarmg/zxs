@@ -114,12 +114,18 @@ impl Engine {
         principal: &str,
         operation: &str,
     ) -> Result<Repository> {
+        validate_id(operation, "op")?;
+        Self::require_actor(principal)?;
         let primary = self.disk(primary)?.slot_id.clone();
-        if let Some(repo) = self
-            .state
-            .repositories
-            .values()
-            .find(|r| r.file_manager_root && r.primary_slot_id == primary)
+        // An unused operation may resolve the existing disk root. A published
+        // operation must first match its original owner and creation request,
+        // and return that receipt rather than the root's current SMB binding.
+        if !self.state.operations.contains_key(operation)
+            && let Some(repo) = self
+                .state
+                .repositories
+                .values()
+                .find(|r| r.file_manager_root && r.primary_slot_id == primary)
         {
             return Ok(repo.clone());
         }
@@ -228,23 +234,22 @@ impl Engine {
                         provenance: None,
                     },
                 );
-                state.repositories.insert(repo_id.clone(), repository);
+                state
+                    .repositories
+                    .insert(repo_id.clone(), repository.clone());
                 Ok(json!({
                     "repository_id": repo_id,
                     "history_tree_id": history_id,
                     "branch_id": branch_id,
-                    "commit_id": commit_id
+                    "commit_id": commit_id,
+                    "created_repository": repository
                 }))
             },
         )?;
-        let id = result.result["repository_id"]
-            .as_str()
-            .ok_or_else(|| Error::new("STATE_INVALID", "repository result missing"))?;
-        self.state
-            .repositories
-            .get(id)
-            .cloned()
-            .ok_or_else(|| Error::new("STATE_INVALID", "repository missing after publication"))
+        // Later SMB binding changes do not change a creation response. Do not
+        // substitute the live repository when replaying its original receipt.
+        json_codec::from_value(result.result["created_repository"].clone())
+            .map_err(|_| Error::new("STATE_INVALID", "created repository receipt is invalid"))
     }
 }
 

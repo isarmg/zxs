@@ -1,6 +1,70 @@
 use super::*;
 
 #[test]
+fn branch_creation_replay_returns_original_record_after_writes_archive_and_reopen() {
+    let root = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([root.path().join("primary")]),
+    )
+    .unwrap();
+    let repo = engine
+        .create_repository("Branch replay", "P01", 1, "admin", &new_id("op"))
+        .unwrap();
+    let source = engine.state().histories[&repo.history_tree_id]
+        .root_commit_id
+        .clone();
+    let operation = new_id("op");
+    let original = engine
+        .create_branch(&source, "side", "admin", &operation)
+        .unwrap();
+    let workspace = engine
+        .create_workspace(&original.branch_id, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "file.txt", b"later body")
+        .unwrap();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: new_id("op"),
+            principal: "admin".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: "Later branch write".into(),
+            request_digest: None,
+        })
+        .unwrap();
+    engine
+        .archive_branch(&original.branch_id, "admin", &new_id("op"))
+        .unwrap();
+    assert_ne!(engine.state().branches[&original.branch_id], original);
+    for reopened in [false, true] {
+        if reopened {
+            drop(engine);
+            engine = Engine::open(&root.path().join("system")).unwrap();
+        }
+        let before = canonical_json(engine.state()).unwrap();
+        assert_eq!(
+            engine
+                .create_branch(&source, "side", "admin", &operation)
+                .unwrap(),
+            original
+        );
+        for (name, principal) in [("different", "admin"), ("side", "other")] {
+            assert_eq!(
+                engine
+                    .create_branch(&source, name, principal, &operation)
+                    .unwrap_err()
+                    .code(),
+                "IDEMPOTENCY_KEY_REUSED"
+            );
+        }
+        assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    }
+}
+
+#[test]
 fn merge_link_retry_keeps_original_result_after_split_and_restart() {
     for crossing in [false, true] {
         let root = tempfile::tempdir().unwrap();
