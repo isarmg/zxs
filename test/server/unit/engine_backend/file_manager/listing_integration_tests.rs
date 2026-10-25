@@ -111,6 +111,20 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
         scope_query::read(&engine, &stale).unwrap_err().code,
         "LISTING_CHANGED"
     );
+    for path in [Value::Null, json!(12), json!([])] {
+        let mut malformed = request.clone();
+        malformed["path"] = path;
+        assert_eq!(
+            scope_query::read(&engine, &malformed).unwrap_err().status,
+            400
+        );
+    }
+    let mut traversal = request.clone();
+    traversal["entries"][0]["path"] = "../zeta.txt".into();
+    assert_eq!(
+        scope_query::read(&engine, &traversal).unwrap_err().status,
+        400
+    );
     let mut nested = request;
     nested["entries"][0]["path"] = "folder/child.txt".into();
     assert_eq!(scope_query::read(&engine, &nested).unwrap_err().status, 400);

@@ -14,10 +14,7 @@ fn project_history_sources(
         }
         for id in ids {
             projected += 1;
-            record_event(
-                &mut events,
-                json!({"sequence":sequence.to_string(),"event_id":id,"source":source}),
-            );
+            record_event(&mut events, *sequence, id.clone(), json!({"source":source}));
         }
     }
     (events, projected)
@@ -28,26 +25,20 @@ fn history_sequence_cutoff_waits_for_distinct_rows_and_keeps_ties() {
     let mut events = BTreeMap::new();
     assert!(history_sequence_may_fit(&events, 0));
     for _ in 0..250 {
-        record_event(&mut events, json!({"sequence":"5","event_id":"duplicate"}));
+        record_event(&mut events, 5, "duplicate".into(), json!({}));
     }
     assert_eq!(events.len(), 1);
     for id in 0..198 {
-        record_event(
-            &mut events,
-            json!({"sequence":"10","event_id":id.to_string()}),
-        );
+        record_event(&mut events, 10, id.to_string(), json!({}));
     }
     assert_eq!(events.len(), HISTORY_LIMIT - 1);
     assert!(history_sequence_may_fit(&events, 0));
-    record_event(&mut events, json!({"sequence":"10","event_id":"last"}));
+    record_event(&mut events, 10, "last".into(), json!({}));
     assert_eq!(events.len(), HISTORY_LIMIT);
     assert!(!history_sequence_may_fit(&events, 4));
     assert!(history_sequence_may_fit(&events, 5));
     assert!(history_sequence_may_fit(&events, u64::MAX));
-    record_event(
-        &mut events,
-        json!({"sequence":u64::MAX.to_string(),"event_id":"newest"}),
-    );
+    record_event(&mut events, u64::MAX, "newest".into(), json!({}));
     assert!(!history_sequence_may_fit(&events, 5));
     assert!(history_sequence_may_fit(&events, 10));
 }

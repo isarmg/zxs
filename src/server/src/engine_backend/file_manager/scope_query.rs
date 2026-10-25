@@ -5,7 +5,7 @@ use super::*;
 pub(in crate::engine_backend) fn read(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
     keys(input, &["repository_id", "path", "sources", "entries"])?;
     let repo = field(input, "repository_id")?;
-    let path = input
+    let scope_path = input
         .get("path")
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::invalid("path must be a string"))?;
@@ -27,10 +27,11 @@ pub(in crate::engine_backend) fn read(engine: &Engine, input: &Value) -> Result<
             "scope query exceeds the bounded selection limit",
         ));
     }
-    let scopes = scoped_directory_branches(engine, repo, Some(path))?
+    let scopes = scoped_directory_branches(engine, repo, Some(scope_path))?
         .into_iter()
         .map(|branch| (branch.directory_branch_id.as_str(), branch))
         .collect::<BTreeMap<_, _>>();
+    let scope_key = name_policy::path_key(scope_path);
     let mut selections = BTreeSet::new();
     let mut selected_keys = BTreeSet::new();
     for entry in selected {
@@ -45,9 +46,7 @@ pub(in crate::engine_backend) fn read(engine: &Engine, input: &Value) -> Result<
             .rsplit_once('/')
             .map(|(parent, _)| parent)
             .unwrap_or("");
-        if name_policy::path_key(parent)
-            != name_policy::path_key(input["path"].as_str().unwrap_or_default())
-        {
+        if name_policy::path_key(parent) != scope_key {
             return Err(ApiError::invalid(
                 "selected entries must be direct children of the requested scope",
             ));

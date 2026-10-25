@@ -35,13 +35,14 @@ fn history_sequence_may_fit(
 
 /// Keep the newest 200 audit rows while scanning, rather than allocating the
 /// complete history and discarding all but one page afterward.
-fn record_event(events: &mut BTreeMap<(Reverse<u64>, String), Value>, event: Value) {
-    let sequence = event["sequence"]
-        .as_str()
-        .unwrap_or("0")
-        .parse::<u64>()
-        .unwrap_or(0);
-    let id = event["event_id"].as_str().unwrap_or("").to_string();
+fn record_event(
+    events: &mut BTreeMap<(Reverse<u64>, String), Value>,
+    sequence: u64,
+    id: String,
+    mut event: Value,
+) {
+    event["sequence"] = sequence.to_string().into();
+    event["event_id"] = id.as_str().into();
     events.insert((Reverse(sequence), id), event);
     if events.len() > HISTORY_LIMIT {
         events.pop_last();
@@ -69,10 +70,11 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
                 };
                 record_event(
                     &mut events,
+                    commit.sequence,
+                    format!("{}:delete:{}", commit.commit_id, ordinal),
                     json!({
-                        "event_id":format!("{}:delete:{}", commit.commit_id, ordinal),
                         "timestamp":deletions.timestamp.to_string(),
-                        "sequence":commit.sequence.to_string(),"slot_id":repo.primary_slot_id,
+                        "slot_id":repo.primary_slot_id,
                         "path":display,"action":"delete","principal":commit.author,
                         "version_id":null,"file_id":"","message":commit.message
                     }),
@@ -159,7 +161,7 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
             } else {
                 format!("{}/{}", repo.name, entry.path)
             };
-            let mut event = json!({"event_id":format!("{}:{}:{}",commit.commit_id,entry.entry_id,entry.path),"timestamp":timestamp,"sequence":commit.sequence.to_string(),"slot_id":repo.primary_slot_id,"path":display,"action":action,"principal":commit.author,"version_id":entry.version_id,"file_id":entry.file_id,"message":commit.message});
+            let mut event = json!({"timestamp":timestamp,"slot_id":repo.primary_slot_id,"path":display,"action":action,"principal":commit.author,"version_id":entry.version_id,"file_id":entry.file_id,"message":commit.message});
             if entry.kind == "file" {
                 event.as_object_mut().unwrap().extend(
                     content_wire(
@@ -172,7 +174,12 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
                     .clone(),
                 );
             }
-            record_event(&mut events, event);
+            record_event(
+                &mut events,
+                commit.sequence,
+                format!("{}:{}:{}", commit.commit_id, entry.entry_id, entry.path),
+                event,
+            );
         }
     }
     for operation in engine.state().operations.values().filter(|op| {
@@ -228,7 +235,9 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
         };
         record_event(
             &mut events,
-            json!({"event_id":operation.operation_id,"timestamp":operation.result.get("timestamp"),"sequence":operation.sequence.to_string(),"slot_id":repo.primary_slot_id,"path":display,"action":operation.kind,"principal":engine.operation_owner(&operation.operation_id),"file_id":file,"version_id":path_node.map(|node|json!(node.version_id)).or_else(||metadata_node.map(|node|json!(node.version_id))).or_else(||operation.result.get("version_id").cloned()),"node_id":operation.result.get("node_id"),"branch_id":operation.result.get("branch_id"),"message":operation.result.get("name").and_then(Value::as_str).unwrap_or("")}),
+            operation.sequence,
+            operation.operation_id.clone(),
+            json!({"timestamp":operation.result.get("timestamp"),"slot_id":repo.primary_slot_id,"path":display,"action":operation.kind,"principal":engine.operation_owner(&operation.operation_id),"file_id":file,"version_id":path_node.map(|node|json!(node.version_id)).or_else(||metadata_node.map(|node|json!(node.version_id))).or_else(||operation.result.get("version_id").cloned()),"node_id":operation.result.get("node_id"),"branch_id":operation.result.get("branch_id"),"message":operation.result.get("name").and_then(Value::as_str).unwrap_or("")}),
         );
     }
     for operation in engine.state().operations.values().filter(|op| {
@@ -271,9 +280,10 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
         };
         record_event(
             &mut events,
-            json!({
-                "event_id":operation.operation_id,"timestamp":operation.result.get("timestamp"),
-                "sequence":operation.sequence.to_string(),"slot_id":repo.primary_slot_id,"path":display,
+            operation.sequence,
+            operation.operation_id.clone(),
+            json!({"timestamp":operation.result.get("timestamp"),
+                "slot_id":repo.primary_slot_id,"path":display,
                 "action":operation.kind,"principal":engine.operation_owner(&operation.operation_id),
                 "file_id":"","version_id":null,"directory_branch_id":id,
                 "head_tree_id":operation.result.get("head_tree_id"),
@@ -308,8 +318,10 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
         };
         record_event(
             &mut events,
-            json!({"event_id":operation.operation_id,"timestamp":operation.result.get("timestamp"),
-            "sequence":operation.sequence.to_string(),"slot_id":repo.primary_slot_id,"path":display,"action":"backup.configure",
+            operation.sequence,
+            operation.operation_id.clone(),
+            json!({"timestamp":operation.result.get("timestamp"),
+            "slot_id":repo.primary_slot_id,"path":display,"action":"backup.configure",
             "principal":engine.operation_owner(&operation.operation_id),"file_id":operation.result["policy"]["scope_file_id"].as_str().unwrap_or(""),"version_id":null,
             "target_copies":operation.result.get("target_copies"),"message":""}),
         );
@@ -328,8 +340,10 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
         };
         record_event(
             &mut events,
-            json!({"event_id":node.node_id,"node_id":node.node_id,
-            "timestamp":node.created_at.to_string(),"sequence":node.sequence.to_string(),"slot_id":repo.primary_slot_id,
+            node.sequence,
+            node.node_id.clone(),
+            json!({"node_id":node.node_id,
+            "timestamp":node.created_at.to_string(),"slot_id":repo.primary_slot_id,
             "path":display,"previous_path":node.previous_path,"action":"file.path.rename","principal":node.author,
             "file_id":node.file_id,"version_id":node.version_id,"branch_id":node.branch_id,"message":""}),
         );
@@ -388,9 +402,10 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
         };
         record_event(
             &mut events,
-            json!({
-                "event_id":tree.tree_id,"timestamp":operation.result.get("timestamp"),
-                "sequence":tree.sequence.to_string(),"slot_id":repo.primary_slot_id,"path":display,
+            tree.sequence,
+            tree.tree_id.clone(),
+            json!({"timestamp":operation.result.get("timestamp"),
+                "slot_id":repo.primary_slot_id,"path":display,
                 "action":action,"principal":engine.operation_owner(&operation.operation_id),
                 "file_id":"","version_id":null,"directory_branch_id":tree.directory_branch_id,
                 "head_tree_id":tree.tree_id,"parent_tree_id":tree.parent_tree_id,"message":""
