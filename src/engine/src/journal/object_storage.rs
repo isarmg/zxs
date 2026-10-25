@@ -96,11 +96,19 @@ pub(crate) fn existing_object_paths(
     Ok(paths)
 }
 pub(super) fn read_object_bytes(d: &DiskConfig, kind: &str, hash: &str) -> Result<Vec<u8>> {
+    read_object_bytes_bounded(d, kind, hash, MAX_METADATA)
+}
+pub(super) fn read_object_bytes_bounded(
+    d: &DiskConfig,
+    kind: &str,
+    hash: &str,
+    maximum: usize,
+) -> Result<Vec<u8>> {
     let paths = existing_object_paths(d, kind, hash)?;
     let path = paths
         .first()
         .ok_or_else(|| Error::new("OBJECT_CORRUPT", "immutable object is missing"))?;
-    read_bytes(path, MAX_METADATA)
+    read_bytes(path, maximum.min(MAX_METADATA))
 }
 pub(super) fn write_object_bytes(
     d: &DiskConfig,
@@ -113,7 +121,7 @@ pub(super) fn write_object_bytes(
     })
 }
 
-fn write_object_bytes_with(
+pub(super) fn write_object_bytes_with(
     d: &DiskConfig,
     kind: &str,
     hash: &str,
@@ -122,11 +130,31 @@ fn write_object_bytes_with(
 ) -> Result<()> {
     let paths = existing_object_paths(d, kind, hash)?;
     for path in &paths {
-        if read_bytes(path, MAX_METADATA)? != bytes {
-            return Err(Error::new(
+        let file = open_regular(path)?;
+        let size = file.metadata()?.len();
+        if size > MAX_METADATA as u64 {
+            return Err(Error::new("RESOURCE_LIMIT", "metadata input exceeds limit"));
+        }
+        let collision = || {
+            Error::new(
                 "OBJECT_COLLISION",
                 "immutable object differs from existing bytes",
-            ));
+            )
+        };
+        if size != bytes.len() as u64 {
+            return Err(collision());
+        }
+        // Compare against the expected object's bound, not the global metadata
+        // ceiling. A corrupt target cannot inflate a small reused page buffer.
+        let existing = read_file_bytes(file, bytes.len()).map_err(|error| {
+            if error.code() == "RESOURCE_LIMIT" {
+                collision()
+            } else {
+                error
+            }
+        })?;
+        if existing != bytes {
+            return Err(collision());
         }
     }
     // Reuse still passes through the immutable writer's durability barrier.

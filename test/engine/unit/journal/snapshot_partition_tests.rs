@@ -118,7 +118,7 @@ fn event_pages_remove_scalar_cap_preserve_order_and_append_locality() {
     let prepared = prepare_snapshot(&state, maximum).unwrap();
     assert!(!prepared.descriptor.scalars.contains_key("events"));
     assert!(prepared.descriptor.pages["events"].len() > 1);
-    let hash = prepared.store(&config.disks).unwrap();
+    let hash = prepared.store(&config.disks, &state).unwrap();
     for disk in &config.disks {
         assert_eq!(load_snapshot(disk, &hash).unwrap(), state);
         assert_eq!(
@@ -136,7 +136,7 @@ fn event_pages_remove_scalar_cap_preserve_order_and_append_locality() {
     let path = object_path(&config.disks[0], "state-page", page);
     std::fs::write(&path, b"corrupt").unwrap();
     assert_eq!(
-        prepared.store(&config.disks).unwrap_err().code(),
+        prepared.store(&config.disks, &state).unwrap_err().code(),
         "OBJECT_COLLISION"
     );
     assert_eq!(std::fs::read(path).unwrap(), b"corrupt");
@@ -240,7 +240,9 @@ fn event_snapshot_rejects_gaps_and_ambiguous_scalar_page_fields() {
     ]);
     let disk = &config.disks[0];
     let prepared = prepare_snapshot(&event_state(1), MAX_METADATA).unwrap();
-    prepared.store(std::slice::from_ref(disk)).unwrap();
+    prepared
+        .store(std::slice::from_ref(disk), &event_state(1))
+        .unwrap();
     let mut descriptor = prepared.descriptor;
     let original_pages = descriptor.pages["events"].clone();
     descriptor
@@ -406,7 +408,7 @@ fn alternate_page_partitions_preserve_exact_bound_current_snapshots() {
     alternate
         .pages
         .insert("events".into(), modern.descriptor.pages["events"].clone());
-    let modern_hash = modern.store(std::slice::from_ref(disk)).unwrap();
+    let modern_hash = modern.store(std::slice::from_ref(disk), &state).unwrap();
     let alternate_hash = store_object(disk, "snapshot", &alternate).unwrap();
     assert_ne!(alternate_hash, modern_hash);
     assert_eq!(load_snapshot(disk, &alternate_hash).unwrap(), state);

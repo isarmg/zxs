@@ -10,14 +10,15 @@ use verified_payloads::{PayloadPreparation, VerifiedPayloadSet};
 /// A publication receipt, not a hash cache. Only successful decide constructs
 /// this token, and reuse requires the exact current State allocation and config.
 #[derive(Clone)]
-pub(super) struct PublishedHistoryBase {
+pub(super) struct PublishedStateBase {
     state: std::sync::Weak<State>,
     snapshot: String,
     sequence: u64,
     config_hash: String,
     roots: BTreeMap<String, String>,
+    snapshot_basis: Option<SnapshotReuse>,
 }
-impl PublishedHistoryBase {
+impl PublishedStateBase {
     fn matches(&self, engine: &Engine, config_hash: &str) -> bool {
         self.state.ptr_eq(&std::sync::Arc::downgrade(&engine.state))
             && engine.snapshot.as_deref() == Some(self.snapshot.as_str())
@@ -38,6 +39,7 @@ pub(crate) struct DetachedPublication {
     base_sequence: u64,
     base_next_slot: u64,
     config_hash: String,
+    snapshot_basis: Option<SnapshotReuse>,
 }
 
 impl Engine {
@@ -114,11 +116,28 @@ impl Engine {
         }
         // Resolve real page hashes and enforce every metadata bound without
         // publishing files or journal records. No estimate enters the decision.
-        let snapshot = prepare_snapshot(&next, maximum)?;
-        let snapshot_hash = snapshot.hash.clone();
         let config_hash = object_hash("publication-config", &self.config)?;
+        let baseline = self
+            .published_state_base
+            .as_ref()
+            .filter(|base| base.matches(self, &config_hash));
+        let snapshot = match baseline.and_then(|base| {
+            base.snapshot_basis
+                .as_ref()
+                .filter(|basis| basis.matches_snapshot(&base.snapshot))
+        }) {
+            Some(basis) => prepare_snapshot_incremental(&self.state, &next, basis, maximum)?,
+            None => prepare_snapshot(&next, maximum)?,
+        };
+        let snapshot_hash = snapshot.hash.clone();
+        #[cfg(test)]
+        assert_eq!(
+            snapshot_hash,
+            prepare_snapshot(&next, maximum)?.hash,
+            "incremental snapshot differs from full encoding"
+        );
         let (history_manifest_hashes, manifests) = match self
-            .published_history_base
+            .published_state_base
             .as_ref()
             .filter(|base| base.matches(self, &config_hash))
         {
@@ -164,7 +183,7 @@ impl Engine {
             &next,
             None,
             maximum,
-            Some(&snapshot.descriptor),
+            Some(&snapshot),
         )?;
         crate::container_storage::validate_new_projection_paths(&self.state, &next)?;
         let preparation = PayloadPreparation::new(&self.config, &candidate)?;
@@ -178,7 +197,8 @@ impl Engine {
             &next,
             cache_maximum,
         )?;
-        snapshot.store(&members)?;
+        snapshot.store(&members, &next)?;
+        let snapshot_basis = snapshot.reuse_basis();
         for manifest in manifests {
             manifest.store(&members)?;
         }
@@ -193,6 +213,7 @@ impl Engine {
             base_sequence: self.state.sequence,
             base_next_slot: self.next_slot,
             config_hash: object_hash("publication-config", &self.config)?,
+            snapshot_basis,
         })
     }
     pub(crate) fn decide_publication(
@@ -218,6 +239,7 @@ impl Engine {
             result,
             verified,
             names,
+            snapshot_basis,
             ..
         } = detached;
         verified
@@ -287,12 +309,13 @@ impl Engine {
         self.snapshot = Some(candidate.snapshot_hash.clone());
         self.update_index(&previous)?;
         // Do not install on partial publication or post-decision index failure.
-        self.published_history_base = Some(std::sync::Arc::new(PublishedHistoryBase {
+        self.published_state_base = Some(std::sync::Arc::new(PublishedStateBase {
             state: std::sync::Arc::downgrade(&self.state),
             snapshot: candidate.snapshot_hash,
             sequence: self.state.sequence,
             config_hash: object_hash("publication-config", &self.config)?,
             roots: candidate.history_manifest_hashes,
+            snapshot_basis,
         }));
         self.blocked = false;
         Ok(result)

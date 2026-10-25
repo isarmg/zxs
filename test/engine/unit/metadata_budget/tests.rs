@@ -503,3 +503,86 @@ fn snapshot_page_and_common_metadata_encoder_reject_one_byte_over_boundary() {
         "RESOURCE_LIMIT"
     );
 }
+
+#[test]
+fn reused_content_pages_have_identical_exact_tombstone_budget_without_installing_fallback() {
+    let (_temp, engine, _repo) = fixture();
+    let members = engine.members();
+    let scanned = scan(&members[0]).unwrap();
+    let (record, _) = scanned.records.last().unwrap();
+    let mut candidate: Candidate =
+        load_object(&members[0], "candidate", &record.candidate_hash).unwrap();
+    let mut result = engine.state.operations[&candidate.operation_id].clone();
+    let mut before = engine.state().clone();
+    for n in 0u32..600 {
+        before.content_states.insert(
+            blake3::hash(&n.to_le_bytes()).to_hex().to_string(),
+            if n % 3 == 0 { "MIGRATED" } else { "PURGED" }.into(),
+        );
+        before
+            .file_notes
+            .insert(format!("unrelated-{n:08}"), "note".into());
+    }
+    let prepared = prepare_snapshot(&before, MAX_METADATA).unwrap();
+    prepared.store(&members, &before).unwrap();
+    let mut after = before.clone();
+    after.begin_tracking();
+    after.sequence += 1;
+    result.sequence = after.sequence;
+    candidate.sequence = after.sequence;
+    let fresh = prepare_snapshot(&after, MAX_METADATA).unwrap();
+    let reused = prepare_snapshot_incremental(
+        &before,
+        &after,
+        &prepared.reuse_basis().unwrap(),
+        MAX_METADATA,
+    )
+    .unwrap();
+    assert_eq!(fresh.hash, reused.hash);
+    candidate.snapshot_hash = reused.hash.clone();
+    let budget = |snapshot: &PreparedSnapshot, maximum| {
+        preflight_publication_prepared(
+            &engine,
+            &candidate,
+            &result,
+            &after,
+            None,
+            maximum,
+            Some(snapshot),
+        )
+    };
+    let largest = budget(&fresh, MAX_METADATA).unwrap();
+    assert_eq!(budget(&reused, MAX_METADATA).unwrap(), largest);
+    assert_eq!(budget(&reused, largest).unwrap(), largest);
+    assert_eq!(
+        budget(&reused, largest - 1).unwrap_err().code(),
+        "RESOURCE_LIMIT"
+    );
+    let page_hashes = &prepared.descriptor.pages["content_states"];
+    assert!(page_hashes.len() > 1);
+    for hash in page_hashes {
+        for disk in &members {
+            std::fs::remove_file(object_path(disk, "state-page", hash)).unwrap();
+        }
+    }
+    // An unrelated field is not decoded merely to size content tombstones.
+    for hash in &prepared.descriptor.pages["file_notes"] {
+        for disk in &members {
+            std::fs::write(
+                object_path(disk, "state-page", hash),
+                b"unrelated corruption",
+            )
+            .unwrap();
+        }
+    }
+    assert_eq!(budget(&reused, MAX_METADATA).unwrap(), largest);
+    for disk in &members {
+        assert!(!object_path(disk, "snapshot", &reused.hash).exists());
+        for hash in page_hashes {
+            assert!(
+                !object_path(disk, "state-page", hash).exists(),
+                "preflight must not install reconstructed pages"
+            );
+        }
+    }
+}

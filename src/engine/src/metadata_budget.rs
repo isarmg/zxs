@@ -66,7 +66,7 @@ pub(crate) fn preflight_publication_prepared(
     state: &State,
     recovery: Option<RecoveryProof>,
     maximum: usize,
-    prepared_snapshot: Option<&Snapshot>,
+    prepared_snapshot: Option<&PreparedSnapshot>,
 ) -> Result<usize> {
     preflight_inner(
         engine,
@@ -84,7 +84,7 @@ pub(crate) fn preflight_publication_prepared(
 struct PreflightOptions<'a> {
     recovery: Option<RecoveryProof>,
     maximum: usize,
-    prepared_snapshot: Option<&'a Snapshot>,
+    prepared_snapshot: Option<&'a PreparedSnapshot>,
     bound_snapshot: bool,
 }
 
@@ -202,39 +202,30 @@ fn preflight_inner(
         // Decided candidates retain their original snapshot partitioning. Read
         // each exact dependency without repair so preflight precedes mutation.
         let recovering = bound_snapshot || publication.recovery.is_some();
+        let generated = if !recovering && prepared_snapshot.is_none() {
+            Some(prepare_snapshot(state, maximum)?)
+        } else {
+            None
+        };
+        let planned = prepared_snapshot.or(generated.as_ref());
         let snapshot = if recovering {
             crate::publication_evidence::verified_object(
                 &members,
                 "snapshot",
                 &candidate.snapshot_hash,
             )?
-        } else if let Some(snapshot) = prepared_snapshot {
-            snapshot.clone()
         } else {
-            snapshot_descriptor(state, maximum)?
+            planned
+                .ok_or_else(|| {
+                    Error::new(
+                        "STATE_INVALID",
+                        "normal publication lacks a prepared snapshot",
+                    )
+                })?
+                .descriptor
+                .clone()
         };
-        let states = json_codec::to_value(&state.content_states)?;
-        let states = states
-            .as_object()
-            .ok_or_else(|| Error::new("STATE_INVALID", "content states are not a map"))?;
-        let pages: Box<
-            dyn Iterator<Item = Result<json_codec::Map<String, json_codec::Value>>> + '_,
-        > = if recovering {
-            Box::new(
-                snapshot
-                    .pages
-                    .get("content_states")
-                    .into_iter()
-                    .flatten()
-                    .map(|hash| {
-                        crate::publication_evidence::verified_object(&members, "state-page", hash)
-                    }),
-            )
-        } else {
-            Box::new(state_pages(states).map(Ok))
-        };
-        for page in pages {
-            let page = page?;
+        let mut check_page = |page: json_codec::Map<String, json_codec::Value>| -> Result<()> {
             // Only pages containing a tombstone can be embedded by cleanup.
             let mut longest = None;
             for (id, status) in page.iter().filter(|(_, status)| {
@@ -257,7 +248,7 @@ fn preflight_inner(
                 }
             }
             let Some((_, id, status)) = longest else {
-                continue;
+                return Ok(());
             };
             check(encode_metadata(
                 &ContentTombstone {
@@ -271,8 +262,35 @@ fn preflight_inner(
                 },
                 maximum,
             )?);
+            Ok(())
+        };
+        if recovering {
+            // Existing decided-candidate behavior: exact bound pages, never a
+            // reconstruction or a new partition. This path is unchanged.
+            for hash in snapshot.pages.get("content_states").into_iter().flatten() {
+                check_page(crate::publication_evidence::verified_object(
+                    &members,
+                    "state-page",
+                    hash,
+                )?)?;
+            }
+        } else {
+            // The normal publisher consumes its actual page plan. Only this
+            // tombstone-bearing field is decoded, one page at a time; there is
+            // no second whole-map Value or independently chosen partition.
+            planned
+                .ok_or_else(|| {
+                    Error::new(
+                        "STATE_INVALID",
+                        "normal publication lacks a prepared snapshot",
+                    )
+                })?
+                .visit_field_pages("content_states", &members, state, |_, bytes| {
+                    check_page(decode_strict(bytes)?)
+                })?;
         }
     }
+
     for proof in proofs {
         check(encode_metadata(
             &LocalPublication {

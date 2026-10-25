@@ -602,6 +602,7 @@ pub(crate) const STATE_PAGE_ENTRIES: usize = 128;
 /// Values do not participate: updating an entity only rewrites its page.
 /// The hard cap bounds adversarial keys within the single current on-disk format.
 /// Readers verify exact bound pages; partitioning is not a format discriminator.
+#[cfg(test)]
 pub(crate) fn state_pages(
     map: &json_codec::Map<String, json_codec::Value>,
 ) -> impl Iterator<Item = json_codec::Map<String, json_codec::Value>> + '_ {
@@ -631,29 +632,42 @@ pub(crate) fn store_snapshot_bounded(
     state: &State,
     maximum: usize,
 ) -> Result<String> {
-    prepare_snapshot(state, maximum)?.store(members)
+    prepare_snapshot(state, maximum)?.store(members, state)
 }
-pub(crate) fn snapshot_descriptor(state: &State, maximum: usize) -> Result<Snapshot> {
-    Ok(prepare_snapshot(state, maximum)?.descriptor)
+/// Opaque in-process encoding provenance, never loaded from disk. Its parent
+/// Engine publication receipt is the authority to reuse it for a future state.
+#[derive(Clone)]
+pub(crate) struct SnapshotReuse {
+    descriptor: Snapshot,
+    hash: String,
+    page_maxima: BTreeMap<String, usize>,
 }
-
+struct SnapshotFieldPlan {
+    /// None means exact references to previously published canonical pages.
+    objects: Option<std::ops::Range<usize>>,
+    max_page_bytes: usize,
+}
 pub(crate) struct PreparedSnapshot {
     pub(crate) descriptor: Snapshot,
     pub(crate) hash: String,
     objects: Vec<PreparedMetadataObject>,
-}
-impl PreparedSnapshot {
-    pub(crate) fn store(&self, members: &[DiskConfig]) -> Result<String> {
-        for object in &self.objects {
-            object.store(members)?;
-        }
-        Ok(self.hash.clone())
-    }
+    fields: BTreeMap<String, SnapshotFieldPlan>,
+    maximum: usize,
 }
 #[path = "journal/snapshot.rs"]
 mod snapshot;
+#[path = "journal/snapshot_reuse.rs"]
+mod snapshot_reuse;
 pub(crate) fn prepare_snapshot(state: &State, maximum: usize) -> Result<PreparedSnapshot> {
     snapshot::prepare(state, maximum)
+}
+pub(crate) fn prepare_snapshot_incremental(
+    before: &State,
+    after: &State,
+    basis: &SnapshotReuse,
+    maximum: usize,
+) -> Result<PreparedSnapshot> {
+    snapshot::prepare_incremental(before, after, basis, maximum)
 }
 
 // Differential oracle for exact current bytes and field-specific serde rules.
@@ -666,6 +680,7 @@ fn prepare_snapshot_reference(state: &State, maximum: usize) -> Result<PreparedS
     let mut pages = BTreeMap::new();
     let mut scalars = json_codec::Map::new();
     let mut objects = Vec::new();
+    let mut fields = BTreeMap::new();
     for (field, value) in obj {
         // Event indexes are fixed-width, so lexical order is chronological.
         // Reuse ordinary object pages: dependency repair and historical proofs
@@ -680,12 +695,22 @@ fn prepare_snapshot_reference(state: &State, maximum: usize) -> Result<PreparedS
                 .collect::<json_codec::Map<_, _>>()
         });
         if let Some(map) = events.as_ref().or_else(|| value.as_object()) {
+            let start = objects.len();
+            let mut max_page_bytes = 0;
             let mut hashes = Vec::new();
             for page in state_pages(map) {
                 let object = PreparedMetadataObject::new("state-page", &page, maximum)?;
+                max_page_bytes = max_page_bytes.max(object.bytes.len());
                 hashes.push(object.hash.clone());
                 objects.push(object);
             }
+            fields.insert(
+                field.clone(),
+                SnapshotFieldPlan {
+                    objects: Some(start..objects.len()),
+                    max_page_bytes,
+                },
+            );
             pages.insert(field.clone(), hashes);
         } else {
             scalars.insert(field.clone(), value.clone());
@@ -703,6 +728,8 @@ fn prepare_snapshot_reference(state: &State, maximum: usize) -> Result<PreparedS
         descriptor,
         hash,
         objects,
+        fields,
+        maximum,
     })
 }
 
@@ -1184,3 +1211,7 @@ mod writer_tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/journal/snapshot_partition_tests.rs"]
 mod snapshot_partition_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/journal/snapshot_incremental_oracle_tests.rs"]
+mod snapshot_incremental_oracle_tests;

@@ -20,7 +20,13 @@ fn config_hash(engine: &Engine) -> String {
 fn history_baseline_requires_exact_state_allocation_snapshot_sequence_and_configuration() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = engine(temp.path());
-    let base = engine.published_history_base.clone().unwrap();
+    let base = engine.published_state_base.clone().unwrap();
+    assert!(
+        base.snapshot_basis
+            .as_ref()
+            .unwrap()
+            .matches_snapshot(&base.snapshot)
+    );
     assert!(base.matches(&engine, &config_hash(&engine)));
     assert!(!base.matches(&engine, "wrong config hash"));
     let saved = engine.snapshot.take();
@@ -37,16 +43,24 @@ fn history_baseline_requires_exact_state_allocation_snapshot_sequence_and_config
         .unwrap();
     assert!(
         engine
-            .published_history_base
+            .published_state_base
             .as_ref()
             .unwrap()
             .matches(&engine, &config_hash(&engine))
+    );
+    let published = engine.published_state_base.as_ref().unwrap();
+    assert!(
+        published
+            .snapshot_basis
+            .as_ref()
+            .unwrap()
+            .matches_snapshot(engine.snapshot.as_deref().unwrap())
     );
     let root = engine.root.clone();
     drop(engine);
     let engine = Engine::open(&root).unwrap();
     assert!(
-        engine.published_history_base.is_none(),
+        engine.published_state_base.is_none(),
         "restart never trusts an in-memory publication receipt"
     );
 }
@@ -55,7 +69,7 @@ fn history_baseline_requires_exact_state_allocation_snapshot_sequence_and_config
 fn preparation_and_indeterminate_failure_never_advance_the_baseline() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = engine(temp.path());
-    let base = engine.published_history_base.clone().unwrap();
+    let base = engine.published_state_base.clone().unwrap();
     engine.inject_fault_once("after_payloads");
     assert!(
         engine
@@ -64,7 +78,7 @@ fn preparation_and_indeterminate_failure_never_advance_the_baseline() {
     );
     assert!(Arc::ptr_eq(
         &base,
-        engine.published_history_base.as_ref().unwrap()
+        engine.published_state_base.as_ref().unwrap()
     ));
     assert!(base.matches(&engine, &config_hash(&engine)));
     engine.inject_fault_once("after_accept_1");
@@ -78,7 +92,7 @@ fn preparation_and_indeterminate_failure_never_advance_the_baseline() {
     assert!(engine.blocked);
     assert!(Arc::ptr_eq(
         &base,
-        engine.published_history_base.as_ref().unwrap()
+        engine.published_state_base.as_ref().unwrap()
     ));
 }
 
@@ -86,7 +100,7 @@ fn preparation_and_indeterminate_failure_never_advance_the_baseline() {
 fn post_publication_index_failure_does_not_mint_a_new_reuse_receipt() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = engine(temp.path());
-    let base = engine.published_history_base.clone().unwrap();
+    let base = engine.published_state_base.clone().unwrap();
     let index = engine.root.join("index.sqlite");
     std::fs::rename(&index, engine.root.join("saved-index.sqlite")).unwrap();
     std::fs::create_dir(&index).unwrap();
@@ -100,7 +114,7 @@ fn post_publication_index_failure_does_not_mint_a_new_reuse_receipt() {
     assert!(engine.state.operations.contains_key(&operation));
     assert!(Arc::ptr_eq(
         &base,
-        engine.published_history_base.as_ref().unwrap()
+        engine.published_state_base.as_ref().unwrap()
     ));
     assert!(!base.matches(&engine, &config_hash(&engine)));
 }
