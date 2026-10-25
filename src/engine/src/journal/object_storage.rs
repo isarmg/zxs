@@ -131,40 +131,8 @@ pub(super) fn write_object_bytes_with(
     bytes: &[u8],
     publish: impl FnOnce(&Path, &[u8]) -> Result<()>,
 ) -> Result<()> {
-    let paths = existing_object_paths(d, kind, hash)?;
-    for path in &paths {
-        let file = open_regular(path)?;
-        let size = file.metadata()?.len();
-        if size > MAX_METADATA as u64 {
-            return Err(Error::new(
-                storage_contract::ErrorCode::ResourceLimit,
-                "metadata input exceeds limit",
-            ));
-        }
-        let collision = || {
-            Error::new(
-                storage_contract::ErrorCode::ObjectCollision,
-                "immutable object differs from existing bytes",
-            )
-        };
-        if size != bytes.len() as u64 {
-            return Err(collision());
-        }
-        // Compare against the expected object's bound, not the global metadata
-        // ceiling. A corrupt target cannot inflate a small reused page buffer.
-        let existing = read_file_bytes(file, bytes.len()).map_err(|error| {
-            if error.code() == storage_contract::ErrorCode::ResourceLimit {
-                collision()
-            } else {
-                error
-            }
-        })?;
-        if existing != bytes {
-            return Err(collision());
-        }
-    }
-    // Reuse still passes through the immutable writer's durability barrier.
-    // An earlier visible object may have survived a failed directory sync.
+    existing_object_paths(d, kind, hash)?;
+    // The immutable writer validates existing bytes and completes durability.
     publish(&object_path(d, kind, hash), bytes)
 }
 /// Inventory both layouts, rejecting unexpected entries rather than claiming

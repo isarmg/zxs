@@ -197,22 +197,29 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8], replace: bool) -> Result<(
         )
     })?)
     .map_err(fs_error)?;
-    if !replace && path.try_exists()? {
-        if directory
-            .read_bounded(&name, bytes.len())
-            .map_err(fs_error)?
-            == bytes
-        {
-            // A prior create may have installed these bytes before its parent
-            // sync failed. Reusing an immutable object must finish that barrier.
-            open_regular(&path)?.sync_all()?;
-            directory.sync().map_err(fs_error)?;
-            return Ok(());
+    if !replace {
+        match directory.read_bounded(&name, bytes.len()) {
+            Ok(existing) if existing == bytes => {
+                // A prior create may have installed bytes before its parent sync failed.
+                open_regular(&path)?.sync_all()?;
+                return directory.sync().map_err(fs_error);
+            }
+            Ok(_) => {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::ObjectCollision,
+                    "immutable object differs from existing bytes",
+                ));
+            }
+            Err(platform_io::fs_safety::Error::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error @ platform_io::fs_safety::Error::BudgetExceeded) => {
+                return Err(fs_error(error).context(
+                    storage_contract::ErrorCode::ObjectCollision,
+                    "immutable object exceeds expected byte length",
+                ));
+            }
+            Err(error) => return Err(fs_error(error)),
         }
-        return Err(Error::new(
-            storage_contract::ErrorCode::ObjectCollision,
-            "immutable object differs from existing bytes",
-        ));
     }
     if replace {
         AtomicFile::replace(&directory, &name.as_relative(), bytes).map_err(fs_error)

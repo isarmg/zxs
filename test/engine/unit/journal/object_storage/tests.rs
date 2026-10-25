@@ -136,3 +136,41 @@ fn inventory_rejects_wrong_shards_and_symlink_fallbacks() {
     write_json(&wrong_path, &value, false).unwrap();
     assert!(list_object_hashes(disk, "publication").is_err());
 }
+
+#[test]
+fn immutable_writer_owns_existing_byte_validation() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = config(&temp);
+    let disk = &config.disks[0];
+    let value = json!({"publication": "reuse"});
+    let hash = store_object(disk, "publication", &value).unwrap();
+    let path = object_path(disk, "publication", &hash);
+    let bytes = canonical_json(&value).unwrap();
+    for corrupt in [
+        vec![b'x'; bytes.len()],
+        b"short".to_vec(),
+        vec![b'x'; bytes.len() + 1],
+    ] {
+        fs::write(&path, &corrupt).unwrap();
+        let mut reached_writer = false;
+        let error = write_object_bytes_with(disk, "publication", &hash, &bytes, |path, bytes| {
+            reached_writer = true;
+            write_atomic(path, bytes, false)
+        })
+        .unwrap_err();
+        assert!(reached_writer, "outer layer must not compare bytes again");
+        assert_eq!(error.code(), storage_contract::ErrorCode::ObjectCollision);
+        assert_eq!(fs::read(&path).unwrap(), corrupt);
+    }
+}
+
+#[test]
+fn immutable_writer_propagates_unsafe_target_errors_without_overwriting() {
+    let temp = tempfile::tempdir().unwrap();
+    let outside = temp.path().join("outside");
+    fs::write(&outside, b"untouched").unwrap();
+    let target = temp.path().join("target");
+    std::os::unix::fs::symlink(&outside, &target).unwrap();
+    assert!(write_atomic(&target, b"replacement", false).is_err());
+    assert_eq!(fs::read(&outside).unwrap(), b"untouched");
+}
