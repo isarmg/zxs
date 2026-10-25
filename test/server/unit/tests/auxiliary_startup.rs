@@ -301,7 +301,6 @@ fn invalid_server_security_and_admission_configuration_still_fails_closed() {
         "spool_limits",
         "transfer_limits",
         "upload_limit",
-        "telemetry_link",
     ] {
         let root = crate::tests::private_tempdir();
         let mut config = ServerConfig::loopback(root.path());
@@ -314,13 +313,7 @@ fn invalid_server_security_and_admission_configuration_still_fails_closed() {
             "spool_limits" => config.http_spool_limits.bytes_total = 0,
             "transfer_limits" => config.http_transfer_limits.slots = 0,
             "upload_limit" => config.max_upload_bytes = 0,
-            _ => {
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(root.path(), root.path().join("telemetry-cache"))
-                    .unwrap();
-                #[cfg(not(unix))]
-                continue;
-            }
+            _ => unreachable!("unknown invalid configuration fixture"),
         }
         let auth = AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
         let result = router(
@@ -332,4 +325,81 @@ fn invalid_server_security_and_admission_configuration_still_fails_closed() {
         );
         assert!(result.is_err(), "{invalid}");
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn combined_auxiliary_failures_preserve_management_and_rejected_cache_target() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let root = crate::tests::private_tempdir();
+    let target = root.path().join("external-cache-target");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o750)).unwrap();
+    let sentinel = target.join("sentinel");
+    std::fs::write(&sentinel, b"preserve external evidence").unwrap();
+    std::fs::set_permissions(&sentinel, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let cache = root.path().join("telemetry-cache");
+    symlink(&target, &cache).unwrap();
+    let mut config = ServerConfig::loopback(root.path());
+    config.web_dir = Some(root.path().join("missing-web"));
+    std::fs::write(&config.spool_dir, b"preserve spool evidence").unwrap();
+    let app = application_config(root.path(), config.clone());
+
+    // Optional failures compose: no fake UI or unbudgeted upload fallback,
+    // while management, authentication and in-memory telemetry stay usable.
+    assert_assets_unavailable(&app).await;
+    let status = json(response(&app, "GET", "/api/management/status", None).await).await;
+    assert_eq!(status["authentication"], "ready");
+    assert_eq!(status["auxiliary"]["http_uploads"], "unavailable");
+    let (token, _, _) = authenticated(&app).await;
+    for path in [
+        "/api/auth/me",
+        "/api/system/storage",
+        "/api/system/status",
+        "/api/system/history?range=1min",
+        "/api/capabilities",
+        "/api/versions/version/content",
+    ] {
+        let reply = response(&app, "GET", path, Some(&token)).await;
+        assert_eq!(reply.status(), StatusCode::OK, "{path}");
+        http_routing::body::to_bytes(reply.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+    }
+    for (method, path) in [
+        ("PUT", "/api/workspaces/ws/files/item/content?path=file"),
+        ("GET", "/api/workspaces/ws/files/item/upload-status"),
+    ] {
+        assert_eq!(
+            response(&app, method, path, None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let reply = response(&app, method, path, Some(&token)).await;
+        assert_eq!(reply.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            json(reply).await["error"]["code"],
+            "HTTP_UPLOADS_UNAVAILABLE"
+        );
+    }
+    drop(app);
+    assert_eq!(std::fs::read_link(&cache).unwrap(), target);
+    assert_eq!(
+        std::fs::read(&sentinel).unwrap(),
+        b"preserve external evidence"
+    );
+    assert_eq!(
+        std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o750
+    );
+    assert_eq!(
+        std::fs::metadata(&sentinel).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+    assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::read(&config.spool_dir).unwrap(),
+        b"preserve spool evidence"
+    );
+    assert!(!config.web_dir.unwrap().exists());
 }
