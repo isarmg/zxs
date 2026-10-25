@@ -5,7 +5,9 @@ use json_codec::json;
 mod changes;
 mod graph;
 mod manifest;
+mod state_read;
 pub use manifest::HistoryManifest;
+pub(crate) use state_read::RawState;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -175,6 +177,7 @@ fn bound_history_graph(
 
 /// Freeze exact candidate-bound history graphs before any recovery writes. Missing
 /// roots cannot be recreated from a flat projection or a different encoder.
+/// A supplied State has already passed snapshot admission; only project it here.
 pub(crate) fn bound_history_objects(
     members: &[DiskConfig],
     candidate: &Candidate,
@@ -195,7 +198,7 @@ pub(crate) fn bound_history_objects(
     }
     for (id, hash) in &candidate.history_manifest_hashes {
         let expected = state
-            .map(|state| HistoryManifest::from_state(state, id))
+            .map(|state| HistoryManifest::project_state(state, id))
             .transpose()?;
         let (manifest, graph) = bound_history_graph(members, hash)?;
         let manifest_bytes = canonical_json(&manifest)?;
@@ -337,7 +340,7 @@ impl Engine {
         destination: &Path,
     ) -> Result<HistoryPackageReport> {
         self.repository_for_history(history)?;
-        let manifest = HistoryManifest::from_state(&self.state, history)?;
+        let manifest = HistoryManifest::project_state(&self.state, history)?;
         let mut proof = None;
         let mut graph_objects = Vec::new();
         let members = self.trusted_evidence_members();

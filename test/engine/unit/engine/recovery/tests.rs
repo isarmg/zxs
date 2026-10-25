@@ -378,13 +378,18 @@ fn bound_snapshot_repair_preserves_alternate_page_partition() {
         temp.path().join("b"),
         temp.path().join("c"),
     ]);
-    let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
+    let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let members = engine.members();
-    let mut state = State::default();
+    let repository = engine
+        .create_repository("partition fixture", "P01", 3, "admin", &new_id("op"))
+        .unwrap();
+    let mut state = engine.state.as_ref().clone();
+    let template = state.branches[&repository.main_branch_id].clone();
     for n in 0..300 {
-        state
-            .file_notes
-            .insert(format!("file_{n:04}"), format!("note {n}"));
+        let mut branch = template.clone();
+        branch.branch_id = new_id("br");
+        branch.name = format!("branch-{n}");
+        state.branches.insert(branch.branch_id.clone(), branch);
     }
     let value = json_codec::to_value(&state).unwrap();
     let mut pages = BTreeMap::new();
@@ -408,7 +413,16 @@ fn bound_snapshot_repair_preserves_alternate_page_partition() {
         }
     }
     scalars.remove("events");
-    pages.insert("events".into(), Vec::new());
+    let events: json_codec::Map<_, _> = state
+        .events
+        .iter()
+        .enumerate()
+        .map(|(index, event)| (format!("{index:020}"), json_codec::to_value(event).unwrap()))
+        .collect();
+    pages.insert(
+        "events".into(),
+        vec![store_object(&members[0], "state-page", &events).unwrap()],
+    );
     let alternate = Snapshot {
         sequence: state.sequence,
         pages,

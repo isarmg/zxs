@@ -120,7 +120,7 @@ fn event_pages_remove_scalar_cap_preserve_order_and_append_locality() {
     assert!(prepared.descriptor.pages["events"].len() > 1);
     let hash = prepared.store(&config.disks, &state).unwrap();
     for disk in &config.disks {
-        assert_eq!(load_snapshot(disk, &hash).unwrap(), state);
+        assert_eq!(load_raw_snapshot_fixture(disk, &hash).unwrap(), state);
         assert_eq!(
             read_bytes(&object_path(disk, "snapshot", &hash), MAX_METADATA).unwrap(),
             encode_metadata(&prepared.descriptor, maximum).unwrap()
@@ -222,14 +222,16 @@ fn scalar_event_snapshots_are_rejected_without_rewriting_evidence() {
     let path = object_path(disk, "snapshot", &hash);
     let bytes = std::fs::read(&path).unwrap();
     assert_eq!(
-        load_snapshot(disk, &hash).unwrap_err().code(),
+        load_raw_snapshot_fixture(disk, &hash).unwrap_err().code(),
         storage_contract::ErrorCode::FormatUnsupported
     );
     assert_eq!(std::fs::read(path).unwrap(), bytes);
     descriptor.scalars.remove("events");
     let absent_hash = store_object(disk, "snapshot", &descriptor).unwrap();
     assert_eq!(
-        load_snapshot(disk, &absent_hash).unwrap_err().code(),
+        load_raw_snapshot_fixture(disk, &absent_hash)
+            .unwrap_err()
+            .code(),
         storage_contract::ErrorCode::FormatUnsupported
     );
 }
@@ -256,7 +258,9 @@ fn event_snapshot_rejects_gaps_and_ambiguous_scalar_page_fields() {
         .extend(original_pages);
     let duplicate_hash = store_object(disk, "snapshot", &descriptor).unwrap();
     assert_eq!(
-        load_snapshot(disk, &duplicate_hash).unwrap_err().code(),
+        load_raw_snapshot_fixture(disk, &duplicate_hash)
+            .unwrap_err()
+            .code(),
         storage_contract::ErrorCode::ObjectCorrupt
     );
     let bad_page = json_codec::json!({"00000000000000000001": event_state(1).events[0]});
@@ -266,7 +270,7 @@ fn event_snapshot_rejects_gaps_and_ambiguous_scalar_page_fields() {
     );
     let hash = store_object(disk, "snapshot", &descriptor).unwrap();
     assert_eq!(
-        load_snapshot(disk, &hash).unwrap_err().code(),
+        load_raw_snapshot_fixture(disk, &hash).unwrap_err().code(),
         storage_contract::ErrorCode::ObjectCorrupt
     );
     descriptor
@@ -274,7 +278,7 @@ fn event_snapshot_rejects_gaps_and_ambiguous_scalar_page_fields() {
         .insert("events".into(), json_codec::json!([]));
     let hash = store_object(disk, "snapshot", &descriptor).unwrap();
     assert_eq!(
-        load_snapshot(disk, &hash).unwrap_err().code(),
+        load_raw_snapshot_fixture(disk, &hash).unwrap_err().code(),
         storage_contract::ErrorCode::ObjectCorrupt
     );
 }
@@ -429,8 +433,14 @@ fn alternate_page_partitions_preserve_exact_bound_current_snapshots() {
     let modern_hash = modern.store(std::slice::from_ref(disk), &state).unwrap();
     let alternate_hash = store_object(disk, "snapshot", &alternate).unwrap();
     assert_ne!(alternate_hash, modern_hash);
-    assert_eq!(load_snapshot(disk, &alternate_hash).unwrap(), state);
-    assert_eq!(load_snapshot(disk, &modern_hash).unwrap(), state);
+    assert_eq!(
+        load_raw_snapshot_fixture(disk, &alternate_hash).unwrap(),
+        state
+    );
+    assert_eq!(
+        load_raw_snapshot_fixture(disk, &modern_hash).unwrap(),
+        state
+    );
     // Writing a later state must not change either retained snapshot.
     let mut next = state.clone();
     next.sequence += 1;
@@ -439,9 +449,15 @@ fn alternate_page_partitions_preserve_exact_bound_current_snapshots() {
         storage_contract::ContentState::Migrated,
     );
     let next_hash = store_snapshot(std::slice::from_ref(disk), &next).unwrap();
-    assert_eq!(load_snapshot(disk, &next_hash).unwrap(), next);
-    assert_eq!(load_snapshot(disk, &alternate_hash).unwrap(), state);
-    assert_eq!(load_snapshot(disk, &modern_hash).unwrap(), state);
+    assert_eq!(load_raw_snapshot_fixture(disk, &next_hash).unwrap(), next);
+    assert_eq!(
+        load_raw_snapshot_fixture(disk, &alternate_hash).unwrap(),
+        state
+    );
+    assert_eq!(
+        load_raw_snapshot_fixture(disk, &modern_hash).unwrap(),
+        state
+    );
 }
 
 // Frozen output from a real three-disk engine pool, captured before the
@@ -546,7 +562,7 @@ fn content_state_snapshot_pages_keep_string_bytes_and_reject_unknown_values() {
             canonical_json(page).unwrap()
         );
     }
-    assert_eq!(load_snapshot(disk, &hash).unwrap(), state);
+    assert_eq!(load_raw_snapshot_fixture(disk, &hash).unwrap(), state);
     for invalid in [
         json_codec::json!("available"),
         json_codec::json!("UNKNOWN"),
@@ -561,7 +577,7 @@ fn content_state_snapshot_pages_keep_string_bytes_and_reject_unknown_values() {
             .pages
             .insert("content_states".into(), vec![page_hash.clone()]);
         let bad_hash = store_object(disk, "snapshot", &damaged).unwrap();
-        assert!(load_snapshot(disk, &bad_hash).is_err());
+        assert!(load_raw_snapshot_fixture(disk, &bad_hash).is_err());
         assert_eq!(
             std::fs::read(object_path(disk, "state-page", &page_hash)).unwrap(),
             bytes

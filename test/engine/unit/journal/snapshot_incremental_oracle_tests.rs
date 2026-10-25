@@ -206,7 +206,7 @@ fn assert_complete_byte_oracle(actual: &PreparedSnapshot, state: &State, members
     for member in members {
         // Option<Value>::Some(Null) and None intentionally share wire null.
         assert_eq!(
-            canonical_json(&load_snapshot(member, &actual.hash).unwrap()).unwrap(),
+            canonical_json(&load_raw_snapshot_fixture(member, &actual.hash).unwrap()).unwrap(),
             canonical_json(state).unwrap(),
         );
     }

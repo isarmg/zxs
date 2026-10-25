@@ -4044,3 +4044,5 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
         assert_eq!(borrowed.message(), owned.message());
     }
 }
+
+mod state_read_tests;

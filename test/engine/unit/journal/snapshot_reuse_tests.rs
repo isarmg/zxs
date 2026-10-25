@@ -89,7 +89,7 @@ fn reused_fields_hold_one_page_buffer_and_never_serialize_their_records() {
     assert_eq!(snapshot::take_encoding_counts().get("file_notes"), None);
     assert_eq!(REUSED_PAGE_PEAK_BYTES.with(|peak| peak.get()), maximum);
     for disk in &config.disks {
-        assert_eq!(load_snapshot(disk, &hot.hash).unwrap(), next);
+        assert_eq!(load_raw_snapshot_fixture(disk, &hot.hash).unwrap(), next);
     }
 }
 
@@ -116,7 +116,7 @@ fn missing_pages_reconstruct_the_field_once_with_the_identical_reference_sequenc
         prepared.descriptor.pages["file_notes"]
     );
     for disk in &config.disks {
-        assert_eq!(load_snapshot(disk, &hot.hash).unwrap(), next);
+        assert_eq!(load_raw_snapshot_fixture(disk, &hot.hash).unwrap(), next);
     }
 }
 
@@ -146,7 +146,10 @@ fn field_reconstruction_cannot_substitute_different_bytes_or_a_different_page_co
     assert!(!object_path(&config.disks[0], "snapshot", &hot.hash).exists());
     let correct = next(&state);
     hot.store(&config.disks, &correct).unwrap();
-    assert_eq!(load_snapshot(&config.disks[0], &hot.hash).unwrap(), correct);
+    assert_eq!(
+        load_raw_snapshot_fixture(&config.disks[0], &hot.hash).unwrap(),
+        correct
+    );
 }
 
 #[test]
@@ -215,7 +218,10 @@ fn existing_reused_pages_cannot_bypass_a_failed_directory_barrier() {
     })
     .unwrap();
     assert!(barriers > 1);
-    assert_eq!(load_snapshot(&config.disks[0], &hot.hash).unwrap(), next);
+    assert_eq!(
+        load_raw_snapshot_fixture(&config.disks[0], &hot.hash).unwrap(),
+        next
+    );
 }
 
 #[test]
@@ -282,6 +288,9 @@ fn middle_or_last_missing_page_keeps_ordered_visitation_exactly_once() {
             "one callback per logical page, including successful prefixes"
         );
         hot.store(&config.disks, &next).unwrap();
-        assert_eq!(load_snapshot(&config.disks[0], &hot.hash).unwrap(), next);
+        assert_eq!(
+            load_raw_snapshot_fixture(&config.disks[0], &hot.hash).unwrap(),
+            next
+        );
     }
 }

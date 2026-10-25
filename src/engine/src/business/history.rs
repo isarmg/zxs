@@ -8,27 +8,12 @@ fn branch_contains_commit(state: &State, branch: &Branch, target: &str) -> Resul
             "branch moved to another history",
         ));
     }
-    let mut seen = std::collections::BTreeSet::new();
     let mut cursor = branch.head_commit_id.as_str();
     loop {
-        if !seen.insert(cursor) {
-            return Err(Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "history parent cycle",
-            ));
-        }
-        let commit = state.commits.get(cursor).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "branch ancestry contains an absent commit",
-            )
-        })?;
-        if commit.history_tree_id != branch.history_tree_id || commit.parent_commit_ids.len() > 1 {
-            return Err(Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "branch ancestry violates single history and parent invariants",
-            ));
-        }
+        let commit = state
+            .commits
+            .get(cursor)
+            .expect("invariant: branch ancestry references existing commits");
         if cursor == target {
             return Ok(true);
         }

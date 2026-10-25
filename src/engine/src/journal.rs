@@ -755,12 +755,29 @@ pub(crate) fn load_snapshot(d: &DiskConfig, hash: &str) -> Result<State> {
     resolve_snapshot(snapshot, |hash| load_object(d, "state-page", hash))
 }
 
+// Page-codec tests intentionally use partial maps, not engine-admissible state.
+#[cfg(test)]
+fn load_raw_snapshot_fixture(d: &DiskConfig, hash: &str) -> Result<State> {
+    let snapshot: Snapshot = load_object(d, "snapshot", hash)?;
+    Ok(
+        resolve_raw_snapshot(snapshot, |hash| load_object(d, "state-page", hash))?
+            .into_codec_fixture(),
+    )
+}
+
 /// Decode the complete exact root using only authenticated page objects. The
 /// resolver may select different replicas, never alternate roots or page hashes.
 pub(crate) fn resolve_snapshot(
     snapshot: Snapshot,
-    mut page: impl FnMut(&str) -> Result<json_codec::Map<String, json_codec::Value>>,
+    page: impl FnMut(&str) -> Result<json_codec::Map<String, json_codec::Value>>,
 ) -> Result<State> {
+    resolve_raw_snapshot(snapshot, page)?.try_into()
+}
+
+fn resolve_raw_snapshot(
+    snapshot: Snapshot,
+    mut page: impl FnMut(&str) -> Result<json_codec::Map<String, json_codec::Value>>,
+) -> Result<crate::history_package::RawState> {
     #[cfg(test)]
     SNAPSHOT_LOAD_COUNT.with(|count| count.set(count.get() + 1));
     if snapshot.scalars.contains_key("events") && snapshot.pages.contains_key("events") {
@@ -811,8 +828,9 @@ pub(crate) fn resolve_snapshot(
         };
         out.insert(field, value);
     }
-    let state: State = json_codec::from_value(json_codec::Value::Object(out))?;
-    if state.sequence != snapshot.sequence {
+    let state: crate::history_package::RawState =
+        json_codec::from_value(json_codec::Value::Object(out))?;
+    if state.sequence() != snapshot.sequence {
         return Err(Error::new(
             storage_contract::ErrorCode::ObjectCorrupt,
             "snapshot sequence differs",

@@ -98,6 +98,13 @@ impl HistoryManifest {
     }
 
     pub(super) fn from_state(state: &State, history_id: &str) -> Result<Self> {
+        let manifest = Self::project_state(state, history_id)?;
+        manifest.validate()?;
+        Ok(manifest)
+    }
+
+    /// Build the history projection; reference validation belongs to its caller.
+    pub(super) fn project_state(state: &State, history_id: &str) -> Result<Self> {
         let history = state.histories.get(history_id).cloned().ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::HistoryNotFound,
@@ -345,7 +352,6 @@ impl HistoryManifest {
                 .map(|(id, v)| (id.clone(), v.clone()))
                 .collect(),
         };
-        manifest.validate()?;
         Ok(manifest)
     }
     fn validate_directory_snapshot(&self, branch: &DirectoryBranch) -> Result<()> {
