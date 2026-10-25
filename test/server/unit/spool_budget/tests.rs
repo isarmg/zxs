@@ -264,3 +264,72 @@ fn private_tempdir() -> tempfile::TempDir {
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
     directory
 }
+
+#[test]
+fn rejected_batch_headroom_preserves_actual_tail_and_verified_retry_accounting() {
+    let root = private_tempdir();
+    let batch = vec![42; 256 * 1024];
+    let mut complete = b"abcdef".to_vec();
+    complete.extend_from_slice(&batch);
+    let size = complete.len() as u64;
+    let quota = METADATA_ALLOWANCE + size;
+    let budget = SpoolBudget::recover(root.path(), limits(quota, quota)).unwrap();
+    retained(&budget, "alice", "batch.data", size, b"abcdef");
+    let mut progress = record("batch.data", "alice");
+    progress.logical_size = size;
+    progress.content_hash = Some(blake3::hash(&complete).to_hex().to_string());
+    progress.state = "incomplete".into();
+    uploads::persist(root.path(), &progress).unwrap();
+    drop(budget);
+
+    // Admission saw space that is no longer available at the write boundary.
+    let mut constrained = limits(quota, quota);
+    constrained.recovery_reserve_bytes = u64::MAX;
+    let budget = SpoolBudget::recover(root.path(), constrained).unwrap();
+    let reservation = budget
+        .reserve_with_available("alice", "batch.data", size, u64::MAX)
+        .unwrap();
+    let staged =
+        StagedFile::open_budgeted(root.path().join("batch.data"), true, reservation).unwrap();
+    assert_eq!(staged.write(&batch).unwrap_err().status, 429);
+    assert_eq!(fs::read(root.path().join("batch.data")).unwrap(), b"abcdef");
+    let unchanged = uploads::load(root.path(), "ws", "item").unwrap().unwrap();
+    assert_eq!(unchanged.persisted_bytes, 3);
+    assert_eq!(
+        uploads::status(&unchanged)["durable_ranges"][0]["length"],
+        "3"
+    );
+    drop(staged);
+    assert_eq!(total(&budget), METADATA_ALLOWANCE + 6);
+    drop(budget);
+
+    let budget = SpoolBudget::recover(root.path(), limits(quota, quota)).unwrap();
+    let reservation = budget.reserve("alice", "batch.data", size).unwrap();
+    let staged =
+        StagedFile::open_budgeted(root.path().join("batch.data"), true, reservation).unwrap();
+    let mut prefix = uploads::ExistingPrefix::open(root.path(), &unchanged)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        prefix.remaining(),
+        6,
+        "retry includes the uncheckpointed tail"
+    );
+    prefix.check(&complete).unwrap();
+    assert!(prefix.complete());
+    staged.write(&batch).unwrap();
+    staged.sync().unwrap();
+    progress.persisted_bytes = size;
+    progress.persisted_hash = blake3::hash(&complete).to_hex().to_string();
+    uploads::persist_staged(root.path(), &progress, &staged).unwrap();
+    drop(staged);
+    assert_eq!(total(&budget), quota);
+    assert_eq!(fs::read(root.path().join("batch.data")).unwrap(), complete);
+    assert_eq!(
+        uploads::load(root.path(), "ws", "item")
+            .unwrap()
+            .unwrap()
+            .generation,
+        1
+    );
+}

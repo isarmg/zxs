@@ -11,10 +11,10 @@ use crate::{
     uploads,
 };
 use data_serialization::Deserialize;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use http_routing::{
     Json,
-    body::Body,
+    body::{Body, BodyDataStream},
     extract::{Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
@@ -120,6 +120,54 @@ async fn persist_upload(
     .await
     .map_err(ApiError::join)?
 }
+// Only ready frames are combined: a paused sender's accepted tail must reach
+// the file without waiting for the next frame or the idle timeout.
+fn ready_upload_batch(
+    stream: &mut futures::stream::Peekable<BodyDataStream>,
+    first: bytes::Bytes,
+    remaining: u64,
+    checkpoint: u64,
+    deadline: tokio::time::Instant,
+) -> bytes::Bytes {
+    const MAX_BYTES: usize = 256 * 1024;
+    const MAX_FRAMES: usize = 64;
+    let mut length = first.len();
+    let mut combined: Option<bytes::BytesMut> = None;
+    for _ in 1..MAX_FRAMES {
+        if length >= MAX_BYTES
+            || length as u64 >= checkpoint
+            || tokio::time::Instant::now() >= deadline
+        {
+            break;
+        }
+        let next_length = match std::pin::Pin::new(&mut *stream).peek().now_or_never() {
+            Some(Some(Ok(next))) if !next.is_empty() => next.len(),
+            Some(Some(Ok(_))) | Some(Some(Err(_))) | Some(None) | None => break,
+        };
+        // Frame sizes and the declared remaining length are HTTP boundaries.
+        if next_length > MAX_BYTES - length || next_length as u64 > remaining - length as u64 {
+            break;
+        }
+        let next = stream
+            .next()
+            .now_or_never()
+            .expect("invariant: peeked frame remains ready")
+            .expect("invariant: peeked frame remains present")
+            .expect("invariant: peeked frame is successful");
+        let buffer = combined.get_or_insert_with(|| {
+            let mut buffer = bytes::BytesMut::with_capacity(MAX_BYTES);
+            buffer.extend_from_slice(&first);
+            buffer
+        });
+        buffer.extend_from_slice(&next);
+        length += next.len();
+    }
+    match combined {
+        Some(buffer) => buffer.freeze(),
+        None => first,
+    }
+}
+
 pub(crate) async fn upload(
     State(state): State<AppState>,
     http_routing::Extension(identity): http_routing::Extension<Identity>,
@@ -347,7 +395,7 @@ async fn upload_inner(
     {
         persist_upload(&spool, &record, &admission, &staged_file).await?;
     }
-    let mut stream = request.into_body().into_data_stream();
+    let mut stream = request.into_body().into_data_stream().peekable();
     let mut length = 0u64;
     let mut last_persisted = 0u64;
     let mut hash = blake3::Hasher::new();
@@ -402,34 +450,43 @@ async fn upload_inner(
                 "received more bytes than declared; original upload is retained",
             ));
         }
+        let previous_length = length - chunk.len() as u64;
+        let checkpoint = (1024 * 1024u64)
+            .saturating_sub(previous_length - last_persisted)
+            .max(
+                prefix
+                    .as_ref()
+                    .map_or(0, uploads::ExistingPrefix::remaining),
+            );
+        let chunk = ready_upload_batch(
+            &mut stream,
+            chunk,
+            expected_length - previous_length,
+            checkpoint,
+            idle_deadline,
+        );
+        length = previous_length + chunk.len() as u64;
+        idle_deadline = (tokio::time::Instant::now() + idle).min(deadline.at);
         let skipped = prefix.as_ref().map_or(0, |existing| {
             existing.remaining().min(chunk.len() as u64) as usize
         });
-        if let Some(mut existing) = prefix.take() {
-            let bytes = chunk.clone();
-            let ownership = (admission.clone(), staged_file.clone());
-            prefix = tokio::task::spawn_blocking(move || {
-                let _ownership = ownership;
-                existing.check(&bytes)?;
-                // Only retries pay this blocking boundary, and only until the
-                // durable prefix is consumed. Fresh uploads create no read jobs.
-                Ok::<_, ApiError>((!existing.complete()).then_some(existing))
-            })
-            .await
-            .map_err(ApiError::join)??;
-        }
+        let mut existing = prefix.take();
+        let bytes = chunk.clone();
+        let staged = staged_file.clone();
+        let ownership = admission.clone();
+        prefix = tokio::task::spawn_blocking(move || {
+            let _admission = ownership;
+            if let Some(prefix) = &mut existing {
+                prefix.check(&bytes)?;
+            }
+            if skipped < bytes.len() {
+                staged.write(&bytes[skipped..])?;
+            }
+            Ok::<_, ApiError>(existing.filter(|prefix| !prefix.complete()))
+        })
+        .await
+        .map_err(ApiError::join)??;
         hash.update(&chunk);
-        if skipped < chunk.len() {
-            let bytes = chunk.slice(skipped..);
-            let staged = staged_file.clone();
-            let ownership = admission.clone();
-            tokio::task::spawn_blocking(move || {
-                let _admission = ownership;
-                staged.write(&bytes)
-            })
-            .await
-            .map_err(ApiError::join)??;
-        }
         if length.saturating_sub(last_persisted) >= 1024 * 1024
             && prefix.as_ref().is_none_or(|prefix| prefix.complete())
         {

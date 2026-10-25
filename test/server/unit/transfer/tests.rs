@@ -531,3 +531,268 @@ fn cancelled_generation_retention_keeps_item_claim_and_upload_slot_until_worker_
         json_codec::to_vec(&previous).unwrap()
     );
 }
+
+fn ready_body(frames: Vec<bytes::Bytes>) -> futures::stream::Peekable<BodyDataStream> {
+    Body::from_stream(futures::stream::iter(
+        frames.into_iter().map(Ok::<_, std::io::Error>),
+    ))
+    .into_data_stream()
+    .peekable()
+}
+
+#[tokio::test]
+async fn ready_upload_batches_bound_bytes_frames_and_checkpoint_overshoot() {
+    let future = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    for (frame_size, frames, checkpoint, expected) in [
+        (16384, 64, 1048576, 262144),
+        (1, 128, 1048576, 64),
+        (6, 10, 10, 12),
+    ] {
+        let mut stream = ready_body(vec![bytes::Bytes::from(vec![7; frame_size]); frames]);
+        let first = stream.next().await.unwrap().unwrap();
+        let batch = ready_upload_batch(&mut stream, first, 1048576, checkpoint, future);
+        assert_eq!(batch.len(), expected);
+        assert!(batch.iter().all(|byte| *byte == 7));
+        assert_eq!(stream.next().await.unwrap().unwrap().len(), frame_size);
+    }
+    let first = bytes::Bytes::from(vec![3; 2 * 1024 * 1024]);
+    let original = first.as_ptr();
+    let mut stream = ready_body(vec![bytes::Bytes::from_static(b"tail")]);
+    let batch = ready_upload_batch(&mut stream, first, 3 * 1024 * 1024, 1048576, future);
+    assert_eq!(
+        batch.as_ptr(),
+        original,
+        "large frames need no coalescing allocation"
+    );
+    assert_eq!(stream.next().await.unwrap().unwrap(), "tail");
+}
+
+#[tokio::test]
+async fn ready_upload_batch_preserves_pending_errors_empty_and_overflow_frames() {
+    let future = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut pending = Body::from_stream(futures::stream::pending::<
+        Result<bytes::Bytes, std::io::Error>,
+    >())
+    .into_data_stream()
+    .peekable();
+    assert_eq!(
+        ready_upload_batch(
+            &mut pending,
+            bytes::Bytes::from_static(b"abc"),
+            10,
+            1048576,
+            future
+        ),
+        "abc"
+    );
+    for next in [
+        Ok(bytes::Bytes::new()),
+        Err(std::io::Error::other("interrupted")),
+        Ok(bytes::Bytes::from_static(b"too long")),
+    ] {
+        let mut stream = Body::from_stream(futures::stream::iter([next]))
+            .into_data_stream()
+            .peekable();
+        assert_eq!(
+            ready_upload_batch(
+                &mut stream,
+                bytes::Bytes::from_static(b"abc"),
+                4,
+                1048576,
+                future
+            ),
+            "abc"
+        );
+        assert!(
+            stream.next().await.is_some(),
+            "terminal/control frame remains for the HTTP boundary"
+        );
+    }
+    let mut stream = ready_body(vec![bytes::Bytes::from_static(b"next")]);
+    assert_eq!(
+        ready_upload_batch(
+            &mut stream,
+            bytes::Bytes::from_static(b"abc"),
+            10,
+            1048576,
+            tokio::time::Instant::now()
+        ),
+        "abc"
+    );
+    assert_eq!(stream.next().await.unwrap().unwrap(), "next");
+}
+
+#[tokio::test]
+async fn fragmented_ready_upload_uses_one_batch_per_256k() {
+    let future = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut stream = ready_body(vec![bytes::Bytes::from(vec![42; 16 * 1024]); 256]);
+    let mut batches = 0;
+    let mut length = 0;
+    while let Some(first) = stream.next().await {
+        let batch = ready_upload_batch(
+            &mut stream,
+            first.unwrap(),
+            4 * 1024 * 1024 - length,
+            1048576,
+            future,
+        );
+        length += batch.len() as u64;
+        batches += 1;
+    }
+    assert_eq!(length, 4 * 1024 * 1024);
+    assert_eq!(
+        batches, 16,
+        "ready-stream operation count, not a real HTTP speedup claim"
+    );
+}
+
+#[tokio::test]
+async fn paced_upload_frames_are_not_held_for_coalescing() {
+    let stream = futures::stream::unfold(0, |index| async move {
+        if index == 4 {
+            return None;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        Some((
+            Ok::<_, std::io::Error>(bytes::Bytes::from(vec![42; 16384])),
+            index + 1,
+        ))
+    });
+    let mut stream = Body::from_stream(stream).into_data_stream().peekable();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut batches = 0;
+    while let Some(first) = stream.next().await {
+        let batch = ready_upload_batch(&mut stream, first.unwrap(), 65536, 1048576, deadline);
+        assert_eq!(batch.len(), 16384);
+        batches += 1;
+    }
+    assert_eq!(
+        batches, 4,
+        "paced input still needs one write task per frame"
+    );
+}
+
+#[tokio::test]
+async fn fragmented_upload_checkpoints_before_pending_and_verifies_retry_tail() {
+    use service_stack::ServiceExt;
+    let root = crate::tests::private_tempdir();
+    let mut auth =
+        crate::AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
+    let token = auth.login("admin", "a-long-test-password").unwrap().token;
+    let mut config = crate::ServerConfig::loopback(root.path());
+    config.http_spool_limits.recovery_reserve_bytes = 1;
+    let spool = config.spool_dir.clone();
+    let app = crate::router(Arc::new(RetainedGenerationBackend), auth, config).unwrap();
+    let bytes = vec![42; 2 * 1024 * 1024];
+    let request = |body| {
+        Request::builder()
+            .method("PUT")
+            .uri("/api/workspaces/ws/files/batched/content?path=file")
+            .header("authorization", format!("Bearer {token}"))
+            .header("x-zxs-logical-size", bytes.len().to_string())
+            .header(
+                "x-zxs-content-hash",
+                blake3::hash(&bytes).to_hex().to_string(),
+            )
+            .body(body)
+            .unwrap()
+    };
+    let frame = bytes::Bytes::from(vec![42; 16384]);
+    let frames = futures::stream::iter((0..65).map({
+        let frame = frame.clone();
+        move |_| Ok::<_, std::io::Error>(frame.clone())
+    }));
+    let body = Body::from_stream(frames.chain(futures::stream::pending()));
+    let upload = tokio::spawn(app.clone().oneshot(request(body)));
+    let record = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Some(record) = uploads::load(&spool, "ws", "batched").unwrap()
+                && std::fs::metadata(spool.join(&record.data_file))
+                    .unwrap()
+                    .len()
+                    == 65 * 16384
+            {
+                break record;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(record.persisted_bytes, 1048576);
+    assert_eq!(
+        record.persisted_hash,
+        blake3::hash(&bytes[..1048576]).to_hex().as_str()
+    );
+    upload.abort();
+    assert!(upload.await.unwrap_err().is_cancelled());
+    let retry = Body::from_stream(futures::stream::iter(
+        (0..128).map(move |_| Ok::<_, std::io::Error>(frame.clone())),
+    ));
+    let response = app.clone().oneshot(request(retry)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .oneshot(request(Body::from(bytes.clone())))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let current = uploads::load(&spool, "ws", "batched").unwrap().unwrap();
+    assert_eq!(current.generation, record.generation);
+    assert_eq!(current.content_hash, record.content_hash);
+    assert_eq!(current.data_file, record.data_file);
+    assert_eq!(current.persisted_bytes, bytes.len() as u64);
+    assert_eq!(std::fs::read(spool.join(current.data_file)).unwrap(), bytes);
+}
+
+// Explicit measurement: no timing assertion and no claim about network framing.
+#[tokio::test]
+#[ignore = "manual upload batching throughput measurement"]
+async fn upload_batching_ready_and_paced_measurement() {
+    use service_stack::ServiceExt;
+    use std::time::{Duration, Instant};
+    let root = crate::tests::private_tempdir();
+    let mut auth =
+        crate::AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
+    let token = auth.login("admin", "a-long-test-password").unwrap().token;
+    let mut config = crate::ServerConfig::loopback(root.path());
+    config.http_spool_limits.recovery_reserve_bytes = 1;
+    let spool = config.spool_dir.clone();
+    let app = crate::router(Arc::new(RetainedGenerationBackend), auth, config).unwrap();
+    let frame = bytes::Bytes::from(vec![42; 16384]);
+    let bytes = vec![42; 4 * 1024 * 1024];
+    let hash = blake3::hash(&bytes).to_hex().to_string();
+    for paced in [false, true] {
+        for run in 0..3 {
+            let frame = frame.clone();
+            let stream = futures::stream::unfold((0, frame), move |(index, frame)| async move {
+                if index == 256 {
+                    return None;
+                }
+                if paced {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                Some((Ok::<_, std::io::Error>(frame.clone()), (index + 1, frame)))
+            });
+            let item = format!("measurement-{paced}-{run}");
+            let request = Request::builder()
+                .method("PUT")
+                .uri(format!("/api/workspaces/ws/files/{item}/content?path=file"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("x-zxs-logical-size", bytes.len().to_string())
+                .header("x-zxs-content-hash", &hash)
+                .body(Body::from_stream(stream))
+                .unwrap();
+            let start = Instant::now();
+            let response = app.clone().oneshot(request).await.unwrap();
+            let elapsed = start.elapsed();
+            assert_eq!(response.status(), StatusCode::OK);
+            let record = uploads::load(&spool, "ws", &item).unwrap().unwrap();
+            assert_eq!(std::fs::read(spool.join(record.data_file)).unwrap(), bytes);
+            println!(
+                "upload batching: paced={paced}, run={run}, bytes={}, elapsed_us={}",
+                bytes.len(),
+                elapsed.as_micros()
+            );
+        }
+    }
+}
