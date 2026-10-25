@@ -50,7 +50,7 @@ impl ManagementShutdown {
             drop(drain);
         }
     }
-    async fn finish(&mut self) -> io::Result<()> {
+    pub(crate) async fn finish(&mut self) -> io::Result<()> {
         self.begin();
         if let Some(drain) = self.drain.take() {
             drain
@@ -122,9 +122,8 @@ where
                 drop(stop_http);
                 drop(bridge);
                 management.begin();
-                let result = http.await;
-                let drained = management.finish().await;
-                return result.and(drained);
+                tracing::info!("shutdown requested; admission closed, draining admitted work");
+                return drain(http, &mut management).await;
             }
             result = &mut http => {
                 drop(bridge);
@@ -135,6 +134,28 @@ where
             _ = &mut bridge, if !bridge_finished => {
                 // Optional bridge failure must not take management HTTP down.
                 bridge_finished = true;
+            }
+        }
+    }
+}
+
+async fn drain<Http>(http: Http, management: &mut ManagementShutdown) -> io::Result<()>
+where
+    Http: Future<Output = io::Result<()>>,
+{
+    let started = std::time::Instant::now();
+    let work = async {
+        let result = http.await;
+        let drained = management.finish().await;
+        result.and(drained)
+    };
+    tokio::pin!(work);
+    loop {
+        tokio::select! {
+            result = &mut work => return result,
+            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                tracing::warn!(elapsed_seconds = started.elapsed().as_secs(),
+                    "shutdown still awaiting admitted work; no durability operations were force-cancelled");
             }
         }
     }

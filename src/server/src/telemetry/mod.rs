@@ -148,10 +148,9 @@ impl Telemetry {
             sampler: Mutex::new(SystemSampler::new()),
             history: Mutex::new(match HistoryStore::open(directory, now) {
                 Ok(history) => history,
-                Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
-                    return Err(ApiError::io(error));
-                }
                 Err(error) => {
+                    // Unsafe cache paths remain rejected and untouched. The
+                    // optional persistence failure must not veto management.
                     tracing::warn!(%error, "monitoring cache unavailable; using bounded memory history");
                     HistoryStore::memory(now)
                 }

@@ -75,7 +75,9 @@ fn malformed_setup_identifiers_fail_before_creating_state() {
 struct ChildGuard(std::process::Child);
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        let _ = self.0.kill();
+        if !matches!(self.0.try_wait(), Ok(Some(_))) {
+            let _ = self.0.kill();
+        }
         let _ = self.0.wait();
     }
 }
@@ -271,5 +273,118 @@ fn invalid_retained_workspace_flags_do_not_create_state() {
         assert!(output.stdout.is_empty());
         assert!(!String::from_utf8_lossy(&output.stderr).contains("TOKIO_WORKER_THREADS"));
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+}
+
+// Native-host regression: this exercises daemon processes and OS signals, not
+// systemd, physical disks, host reboots, or abrupt loss of power.
+#[test]
+fn repeated_normal_daemon_stops_release_same_address_and_socket() {
+    use rustix::process::{Pid, Signal, kill_process};
+    use std::{
+        os::unix::net::UnixStream,
+        time::{Duration, Instant},
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("pool");
+    let management = directory.path().join("management");
+    let socket = directory.path().join("runtime/smb.sock");
+    drop(
+        storage_engine::Engine::initialize(
+            &root,
+            storage_contract::Config::development([directory.path().join("disk")]),
+        )
+        .unwrap(),
+    );
+    let configuration = std::fs::read(root.join("config.json")).unwrap();
+    let reservation = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = reservation.local_addr().unwrap();
+    drop(reservation);
+    // SIGINT is the shipped systemd unit's normal stop signal. Also retain
+    // SIGTERM support for supervisors using their default stop signal.
+    for (cycle, signal) in [Signal::INT, Signal::INT, Signal::INT, Signal::TERM]
+        .into_iter()
+        .enumerate()
+    {
+        let child = Command::new(env!("CARGO_BIN_EXE_zxs"))
+            .arg("--root")
+            .arg(&root)
+            .arg("--management-root")
+            .arg(&management)
+            .arg("--smb-socket")
+            .arg(&socket)
+            .args([
+                "--smb-peer-uid",
+                &smb_protocol::protocol::effective_uid().to_string(),
+            ])
+            .args([
+                "--smb-user",
+                "cycle-owner",
+                "--listen",
+                &address.to_string(),
+            ])
+            .env("TOKIO_WORKER_THREADS", "1")
+            .env_remove("RUST_LOG")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        // This guard is failure cleanup only. Passing requires a successful,
+        // already-reaped normal exit below, never Child::kill().
+        let mut child = ChildGuard(child);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            assert!(
+                child.0.try_wait().unwrap().is_none(),
+                "cycle {cycle}: early exit"
+            );
+            if response(address.port(), "/healthz")
+                .is_ok_and(|reply| reply.starts_with("HTTP/1.1 200"))
+                && socket.exists()
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "cycle {cycle}: startup timed out"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let status = response(address.port(), "/api/management/status").unwrap();
+        assert!(
+            status.starts_with("HTTP/1.1 200"),
+            "cycle {cycle}: {status}"
+        );
+        // ShutdownSignal is installed before startup I/O, so health readiness
+        // cannot precede registration of the normal-stop signal handlers.
+        let pid = Pid::from_raw(child.0.id().try_into().unwrap()).unwrap();
+        kill_process(pid, signal).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                assert!(
+                    status.success(),
+                    "cycle {cycle}: normal stop returned {status}"
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "cycle {cycle}: normal stop timed out"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!socket.exists(), "cycle {cycle}: stale SMB socket");
+        assert!(UnixStream::connect(&socket).is_err());
+        assert!(std::net::TcpStream::connect_timeout(&address, Duration::from_secs(1)).is_err());
+        assert_eq!(
+            std::fs::read(root.join("config.json")).unwrap(),
+            configuration,
+            "cycle {cycle}: restart must preserve installation configuration"
+        );
+        assert!(
+            !root.join("setup-intent.json").exists(),
+            "cycle {cycle}: must not reinitialize"
+        );
     }
 }

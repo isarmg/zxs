@@ -205,3 +205,107 @@ async fn telemetry_admission_survives_cancellation_without_consuming_management_
         assert_eq!(request(&app, path, &token).await, StatusCode::OK);
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn rejected_symlink_cache_preserves_target_and_management_across_restarts() {
+    use http_routing::{body::Body, http::Request};
+    use service_stack::ServiceExt;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let root = crate::tests::private_tempdir();
+    let target = root.path().join("external-cache-target");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o750)).unwrap();
+    let sentinel = target.join("sentinel");
+    std::fs::write(&sentinel, b"preserve external contents").unwrap();
+    std::fs::set_permissions(&sentinel, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let cache = root.path().join("telemetry-cache");
+    symlink(&target, &cache).unwrap();
+    let web = root.path().join("web");
+    std::fs::create_dir(&web).unwrap();
+    std::fs::write(web.join("index.html"), b"management page").unwrap();
+    let auth_root = root.path().join("auth");
+    drop(crate::auth::AuthStore::initialize(&auth_root, "admin", "monitor-test-password").unwrap());
+
+    for _ in 0..3 {
+        // Exercise fallback directly, including a history write, before
+        // constructing the complete router with the same rejected cache.
+        let service = Telemetry::start(Arc::new(MonitorBackend), &cache).unwrap();
+        assert!(!service.history.lock().unwrap().is_persistent());
+        service.refresh().unwrap();
+        assert!(service.current().unwrap().memory.total_bytes.is_some());
+        drop(service);
+
+        let mut config = crate::ServerConfig::loopback(root.path());
+        config.web_dir = Some(web.clone());
+        let app = crate::router(
+            Arc::new(MonitorBackend),
+            crate::auth::AuthStore::open(&auth_root).unwrap(),
+            config,
+        )
+        .expect("rejected optional cache must not block the management router");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"username":"admin","password":"monitor-test-password"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let login: Value = json_codec::from_slice(
+            &http_routing::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let token = login["token"].as_str().unwrap();
+        for path in [
+            "/",
+            "/healthz",
+            "/api/management/status",
+            "/api/auth/me",
+            "/api/system/status",
+            "/api/system/history?range=1min",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header("authorization", format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200, "{path}");
+            // Complete response lifetimes before reopening the same directories.
+            http_routing::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap();
+        }
+        drop(app);
+        assert_eq!(std::fs::read_link(&cache).unwrap(), target);
+        assert_eq!(
+            std::fs::read(&sentinel).unwrap(),
+            b"preserve external contents"
+        );
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        assert_eq!(
+            std::fs::metadata(&sentinel).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
+    }
+}

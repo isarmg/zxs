@@ -106,14 +106,25 @@ fn main() -> std::process::ExitCode {
         )
         .with_writer(std::io::stderr)
         .init();
-    run_with_runtime(args)
+    let result = run_with_runtime(args);
+    // This point is after Tokio has joined its blocking pool, not merely after
+    // the HTTP connection futures stopped. Do not log completion earlier.
+    tracing::info!("daemon runtime stopped; admitted blocking work joined");
+    result
 }
 
 #[tokio::main]
 async fn run_with_runtime(args: Args) -> std::process::ExitCode {
     // Let runtime teardown join admitted blocking work, including on errors.
     // Force-exiting here would skip its durability and recovery cleanup.
-    match run(args).await {
+    let shutdown = match storage_server::ShutdownSignal::install() {
+        Ok(shutdown) => shutdown,
+        Err(error) => {
+            eprintln!("zxs: cannot install shutdown handlers: {error}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    match run(args, shutdown).await {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             // Report the error before runtime teardown, which may need to wait.
@@ -123,7 +134,7 @@ async fn run_with_runtime(args: Args) -> std::process::ExitCode {
     }
 }
 
-async fn run(args: Args) -> Result<()> {
+async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()> {
     let retained_workspace_limits = args.workspace_limits()?;
     let Args {
         root,
@@ -204,7 +215,7 @@ async fn run(args: Args) -> Result<()> {
             retained_workspace_limits,
         },
     )?;
-    storage_server::serve(backend, auth, config).await
+    storage_server::serve_with_shutdown(backend, auth, config, shutdown).await
 }
 
 fn parse_smb_user(value: &str) -> std::result::Result<String, String> {

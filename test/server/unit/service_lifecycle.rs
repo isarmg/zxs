@@ -139,3 +139,75 @@ mod sockets;
 
 #[path = "service_lifecycle/management.rs"]
 mod management;
+
+// These are repeatable service-future cycles, not operating-system reboots.
+#[tokio::test]
+async fn repeated_normal_shutdown_preserves_bridge_and_http_drain_order() {
+    use std::sync::Mutex;
+    struct OrderedDrop(Arc<Mutex<Vec<&'static str>>>, &'static str);
+    impl Drop for OrderedDrop {
+        fn drop(&mut self) {
+            self.0.lock().unwrap().push(self.1);
+        }
+    }
+    for cycle in 0..6 {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let (http_entered, admitted) = oneshot::channel();
+        let (bridge_entered, listening) = oneshot::channel();
+        let (stop, shutdown) = oneshot::channel();
+        let (http_stopping, stopping) = oneshot::channel();
+        let (release, drained) = oneshot::channel();
+        let http_events = events.clone();
+        let bridge_guard = OrderedDrop(events.clone(), "bridge dropped");
+        let server = tokio::spawn(run(
+            move |stopped| async move {
+                let _guard = OrderedDrop(http_events.clone(), "http dropped");
+                http_entered.send(()).unwrap();
+                stopped.await.unwrap_err();
+                http_events.lock().unwrap().push("http stopping");
+                http_stopping.send(()).unwrap();
+                drained.await.unwrap();
+                http_events.lock().unwrap().push("http drained");
+                Ok(())
+            },
+            async move {
+                let _guard = bridge_guard;
+                bridge_entered.send(()).unwrap();
+                pending::<()>().await;
+            },
+            async move {
+                shutdown.await.unwrap();
+            },
+        ));
+        notice(admitted).await;
+        notice(listening).await;
+        stop.send(()).unwrap();
+        notice(stopping).await;
+        assert!(
+            !server.is_finished(),
+            "cycle {cycle}: admitted HTTP must drain"
+        );
+        assert_eq!(*events.lock().unwrap(), ["bridge dropped", "http stopping"]);
+        release.send(()).unwrap();
+        tokio::time::timeout(DEADLINE, server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                "bridge dropped",
+                "http stopping",
+                "http drained",
+                "http dropped"
+            ],
+            "cycle {cycle}: every resource must finish exactly once",
+        );
+        assert_eq!(
+            Arc::strong_count(&events),
+            1,
+            "cycle {cycle}: no retained tasks"
+        );
+    }
+}

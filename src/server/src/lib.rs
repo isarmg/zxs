@@ -5,9 +5,12 @@ pub mod engine_backend;
 mod file_manager;
 mod http_auth;
 mod http_boundary;
+mod http_shutdown;
 #[cfg(feature = "core")]
 pub mod management;
 mod service_lifecycle;
+mod shutdown;
+pub use shutdown::ShutdownSignal;
 #[cfg(feature = "core")]
 pub mod setup_recovery;
 pub use http_boundary::ApiError;
@@ -745,9 +748,40 @@ pub async fn serve(
     auth: AuthStore,
     config: ServerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let management_shutdown = service_lifecycle::ManagementShutdown::new(backend.clone());
+    let shutdown = match ShutdownSignal::install() {
+        Ok(shutdown) => shutdown,
+        Err(error) => {
+            // Embedders may already have started native management work.
+            service_lifecycle::ManagementShutdown::new(backend.clone())
+                .finish()
+                .await?;
+            return Err(error.into());
+        }
+    };
+    serve_with_shutdown(backend, auth, config, shutdown).await
+}
+
+/// Serve with handlers installed by the process before opening management state.
+pub async fn serve_with_shutdown(
+    backend: Arc<dyn Backend>,
+    auth: AuthStore,
+    config: ServerConfig,
+    mut shutdown: ShutdownSignal,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut management_shutdown = service_lifecycle::ManagementShutdown::new(backend.clone());
+    if shutdown.observed() {
+        management_shutdown.finish().await?;
+        return Ok(());
+    }
     config.validate()?;
     let spool_budget = config.open_http_spool();
+    // Skip further startup if the runtime has already delivered a stop signal.
+    // Signals still awaiting reactor dispatch are handled by shutdown.wait()
+    // below; this snapshot is not an atomic cutoff at OS signal arrival.
+    if shutdown.observed() {
+        management_shutdown.finish().await?;
+        return Ok(());
+    }
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     let ManagementRuntime {
         backend,
@@ -759,16 +793,7 @@ pub async fn serve(
     let smb_max_file_bytes = config.max_upload_bytes;
     let bridge_auth = auth.clone();
     let app = router_shared(backend.clone(), auth, config, telemetry, spool_budget)?;
-    let http = |stopped: tokio::sync::oneshot::Receiver<()>| async move {
-        http_routing::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(async move {
-            let _ = stopped.await;
-        })
-        .await
-    };
+    let http = |stopped| http_shutdown::serve(listener, app, stopped);
     let bridge = async move {
         if let Some(smb) = smb {
             let run = async move {
@@ -781,26 +806,9 @@ pub async fn serve(
             }
         }
     };
-    service_lifecycle::run_with_management(http, bridge, shutdown(), management_shutdown).await?;
+    service_lifecycle::run_with_management(http, bridge, shutdown.wait(), management_shutdown)
+        .await?;
     Ok(())
-}
-
-async fn shutdown() {
-    #[cfg(unix)]
-    {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut term) => {
-                tokio::select! {_=tokio::signal::ctrl_c()=>{},_=term.recv()=>{}}
-            }
-            Err(_) => {
-                let _ = tokio::signal::ctrl_c().await;
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
 }
 
 async fn security_headers(request: Request, next: Next) -> Response {
