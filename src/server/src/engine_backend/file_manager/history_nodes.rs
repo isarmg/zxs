@@ -1,6 +1,26 @@
 //! One presentation graph for content, path changes and metadata revisions.
 use super::*;
 
+struct PendingSummary {
+    remaining_rows: usize,
+    summary: storage_engine::Result<storage_engine::FileNodeSummary>,
+}
+
+/// Consume the last row so parent/tag buffers do not live alongside the JSON
+/// graph. Repeated or overlapping IDs retain the same facts for earlier rows.
+fn take_summary(
+    summaries: &mut BTreeMap<String, PendingSummary>,
+    node: &str,
+) -> Option<storage_engine::FileNodeSummary> {
+    let pending = summaries.get_mut(node)?;
+    if pending.remaining_rows > 1 {
+        pending.remaining_rows -= 1;
+        pending.summary.as_ref().ok().cloned()
+    } else {
+        summaries.remove(node)?.summary.ok()
+    }
+}
+
 /// Metadata UUID order is unrelated to graph order. Resolve a path through the
 /// explicit source chain and memoize it without recursive stack growth.
 struct NodePaths<'a> {
@@ -103,21 +123,43 @@ pub(super) fn unified_history(
                 .filter(|node| node.file_id == file && node.history_tree_id == history)
                 .map(|node| node.node_id.as_str()),
         )
-        .collect::<BTreeSet<_>>();
+        .fold(BTreeMap::<_, usize>::new(), |mut nodes, id| {
+            *nodes.entry(id).or_default() += 1;
+            nodes
+        });
+    let node_ids = visible.keys().copied().collect::<Vec<_>>();
+    let mut summaries = engine
+        .project_file_nodes(storage_engine::FileNodeProjectionRequest {
+            file_id: file,
+            node_ids: &node_ids,
+        })
+        .into_iter()
+        .map(|(id, summary)| {
+            let remaining_rows = visible[id.as_str()];
+            (
+                id,
+                PendingSummary {
+                    remaining_rows,
+                    summary,
+                },
+            )
+        })
+        .collect();
     let mut nodes = versions
         .iter()
         .map(|version| {
             let mut node = version.clone();
             let id = version["version_id"].as_str().unwrap_or("");
             let commit = first_commits.get(id).copied();
-            let parents = engine.file_node_parents(file, id).unwrap_or_default();
+            let summary = take_summary(&mut summaries, id).unwrap_or_default();
             node["node_id"] = id.into();
             node["kind"] = "content".into();
-            node["tags"] = json!(engine.file_node_tags(file, id).unwrap_or_default());
+            node["tags"] = json!(summary.tags);
             node["parent_node_ids"] = json!(
-                parents
+                summary
+                    .parent_node_ids
                     .into_iter()
-                    .filter(|parent| visible.contains(parent.as_str()))
+                    .filter(|parent| visible.contains_key(parent.as_str()))
                     .collect::<Vec<_>>()
             );
             node["path"] = commit
@@ -144,9 +186,10 @@ pub(super) fn unified_history(
             continue;
         };
         let metadata = version_metadata.get(path.version_id.as_str()).copied();
+        let summary = take_summary(&mut summaries, &path.node_id).unwrap_or_default();
         nodes.push(json!({
             "node_id":path.node_id,"version_id":path.version_id,"file_id":file,
-            "parent_node_ids":engine.file_node_parents(file,&path.node_id).unwrap_or_default().into_iter().filter(|parent|visible.contains(parent.as_str())).collect::<Vec<_>>(),
+            "parent_node_ids":summary.parent_node_ids.into_iter().filter(|parent|visible.contains_key(parent.as_str())).collect::<Vec<_>>(),
             "kind":"rename","path":path.path,"previous_path":path.previous_path,
             "branch_id":path.branch_id,"created_at":utc_timestamp(path.created_at)?,"sequence":path.sequence.to_string(),
             "current":current_node==Some(path.node_id.as_str()),
@@ -156,7 +199,7 @@ pub(super) fn unified_history(
             "download_name":metadata.and_then(|version|version.get("download_name")).cloned().unwrap_or_else(||body.creation_name.clone().into()),
             "storage_name":body.storage_name,
             "operation_id":path.operation_id,"author":path.author,"message":""
-            ,"tags":engine.file_node_tags(file,&path.node_id).unwrap_or_default()
+            ,"tags":summary.tags
         }));
     }
     for revision in state
@@ -169,8 +212,9 @@ pub(super) fn unified_history(
         };
         let metadata = version_metadata.get(revision.version_id.as_str()).copied();
         let path = paths.get(&revision.node_id);
+        let summary = take_summary(&mut summaries, &revision.node_id).unwrap_or_default();
         nodes.push(json!({"node_id":revision.node_id,"version_id":revision.version_id,"file_id":file,
-            "kind":revision.kind,"parent_node_ids":engine.file_node_parents(file,&revision.node_id).unwrap_or_default().into_iter().filter(|parent|visible.contains(parent.as_str())).collect::<Vec<_>>(),
+            "kind":revision.kind,"parent_node_ids":summary.parent_node_ids.into_iter().filter(|parent|visible.contains_key(parent.as_str())).collect::<Vec<_>>(),
             "tags":revision.tags,"path":path,"previous_path":null,"branch_id":revision.branch_id,
             "created_at":utc_timestamp(revision.created_at)?,"sequence":revision.sequence.to_string(),"current":current_node==Some(revision.node_id.as_str()),
             "note":state.file_path_notes.get(&revision.node_id).map(String::as_str).unwrap_or(""),
@@ -191,3 +235,7 @@ pub(super) fn unified_history(
     });
     Ok(nodes)
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/server/unit/engine_backend/file_manager/history_nodes_tests.rs"]
+mod tests;

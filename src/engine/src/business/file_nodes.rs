@@ -1,6 +1,26 @@
 //! Common identity, ancestry and inherited labels for every public file node.
 use super::*;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Explicit nodes from one caller-selected file graph. Visibility and history
+/// selection belong to the caller; ancestry retains the single-node semantics.
+pub struct FileNodeProjectionRequest<'a> {
+    pub file_id: &'a str,
+    pub node_ids: &'a [&'a str],
+}
+
+/// Derived graph facts only, without exposing the projection's state or cache.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FileNodeSummary {
+    pub parent_node_ids: Vec<String>,
+    pub tags: BTreeSet<String>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static MERGE_EVENT_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TAG_NODE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 pub(crate) fn node_version(state: &State, file: &str, node: &str) -> Result<String> {
     let version = state
@@ -51,11 +71,11 @@ pub(crate) fn base_parents(state: &State, node: &str) -> Vec<String> {
 
 pub(crate) fn node_parents(state: &State, node: &str) -> Vec<String> {
     let mut parents = base_parents(state, node);
-    for event in state
-        .file_branch_merges
-        .values()
-        .filter(|m| m.result_node_id == node)
-    {
+    for event in state.file_branch_merges.values().filter(|m| {
+        #[cfg(test)]
+        MERGE_EVENT_VISITS.set(MERGE_EVENT_VISITS.get() + 1);
+        m.result_node_id == node
+    }) {
         for parent in &event.parent_node_ids {
             if parent != node && !parents.contains(parent) {
                 parents.push(parent.clone());
@@ -71,6 +91,8 @@ pub(crate) fn node_tags(state: &State, node: &str) -> BTreeSet<String> {
     let mut current = node.to_owned();
     let mut seen = BTreeSet::new();
     while seen.insert(current.clone()) {
+        #[cfg(test)]
+        TAG_NODE_VISITS.set(TAG_NODE_VISITS.get() + 1);
         if let Some(n) = state.file_metadata_nodes.get(&current) {
             return n.tags.clone();
         }
@@ -82,7 +104,7 @@ pub(crate) fn node_tags(state: &State, node: &str) -> BTreeSet<String> {
     BTreeSet::new()
 }
 
-/// A bounded, immutable-state projection. Never reuse this across publications:
+/// A call-local, immutable-state projection. Never reuse this across publications:
 /// metadata nodes and merge provenance can change the meaning of an old node.
 pub(crate) struct NodeProjection<'a> {
     state: &'a State,
@@ -97,6 +119,8 @@ impl<'a> NodeProjection<'a> {
         let mut merges = std::collections::BTreeMap::<_, Vec<_>>::new();
         // Preserve the original map iteration order within each result node.
         for event in state.file_branch_merges.values() {
+            #[cfg(test)]
+            MERGE_EVENT_VISITS.set(MERGE_EVENT_VISITS.get() + 1);
             merges
                 .entry(event.result_node_id.as_str())
                 .or_default()
@@ -141,6 +165,7 @@ impl<'a> NodeProjection<'a> {
                 #[cfg(test)]
                 {
                     self.tag_visits += 1;
+                    TAG_NODE_VISITS.set(TAG_NODE_VISITS.get() + 1);
                 }
                 // Metadata wins even for overlapping IDs and cyclic parents.
                 if let Some(metadata) = self.state.file_metadata_nodes.get(current) {
@@ -173,6 +198,23 @@ impl<'a> NodeProjection<'a> {
             .get(node)
             .expect("visited node is memoized")
             .as_ref()
+    }
+
+    fn summaries(
+        &mut self,
+        request: FileNodeProjectionRequest<'_>,
+    ) -> BTreeMap<String, Result<FileNodeSummary>> {
+        let mut summaries = BTreeMap::new();
+        for node in request.node_ids {
+            summaries.entry((*node).to_owned()).or_insert_with(|| {
+                node_version(self.state, request.file_id, node)?;
+                Ok(FileNodeSummary {
+                    parent_node_ids: self.parents(node),
+                    tags: self.tags(node).clone(),
+                })
+            });
+        }
+        summaries
     }
 }
 
@@ -207,6 +249,18 @@ pub(crate) fn branch_head(state: &State, branch: &str) -> Result<String> {
 }
 
 impl Engine {
+    /// Project requested nodes against this immutable state in one batch.
+    /// Merge events are scanned once globally, while first-parent tag prefixes
+    /// are shared within this call. The result preserves per-node lookup errors;
+    /// one invalid node does not suppress other rows. Nothing is retained across
+    /// calls or publications, and this does not paginate or validate the graph.
+    pub fn project_file_nodes(
+        &self,
+        request: FileNodeProjectionRequest<'_>,
+    ) -> BTreeMap<String, Result<FileNodeSummary>> {
+        NodeProjection::new(&self.state).summaries(request)
+    }
+
     pub fn file_node_version(&self, file: &str, node: &str) -> Result<String> {
         node_version(&self.state, file, node)
     }
