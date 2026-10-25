@@ -72,6 +72,34 @@ impl<T> SharedRecords<T> {
         self.records.keys()
     }
 
+    /// Select an independent logical subset, sharing immutable record payloads.
+    /// Scans all records and copies only selected keys and handles, never T.
+    pub fn subset(&self, mut predicate: impl FnMut(&str, &T) -> bool) -> Self {
+        Self {
+            records: Arc::new(
+                self.records
+                    .iter()
+                    .filter(|(key, value)| predicate(key, value.as_ref()))
+                    .map(|(key, value)| (key.clone(), Arc::clone(value)))
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Merge logical records without materializing incoming or replaced values.
+    /// Later mutation remains isolated through the ordinary copy-on-write path.
+    pub fn extend_shared(&mut self, source: &Self) {
+        if source.is_empty() {
+            return;
+        }
+        Arc::make_mut(&mut self.records).extend(
+            source
+                .records
+                .iter()
+                .map(|(key, value)| (key.clone(), Arc::clone(value))),
+        );
+    }
+
     /// Remove a record without materializing its value, even when shared.
     pub fn remove_discard<Q: Ord + ?Sized>(&mut self, key: &Q) -> bool
     where

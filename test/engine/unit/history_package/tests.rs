@@ -2553,3 +2553,125 @@ fn net_zero_namespace_sequence_persists_deletion_once() {
     );
     assert_eq!(engine.state().commits.len(), count);
 }
+
+#[test]
+fn manifest_record_projection_is_scoped_shared_and_mutation_isolated() {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut engine = initialize(temporary.path());
+    let first = engine
+        .create_repository("first", "P01", 1, "alice", &new_id("op"))
+        .unwrap();
+    let second = engine
+        .create_repository("second", "P01", 1, "alice", &new_id("op"))
+        .unwrap();
+    for repo in [&first, &second] {
+        save_path(
+            &mut engine,
+            &repo.main_branch_id,
+            "folder/file.txt",
+            b"payload",
+        );
+        engine
+            .initialize_directory_scope(&repo.repository_id, "folder", "alice", &new_id("op"))
+            .unwrap();
+    }
+    let mut source = engine.state().clone();
+    let mut manifest = HistoryManifest::from_state(&source, &first.history_tree_id).unwrap();
+    assert!(!manifest.directory_trees.is_empty());
+    let expected_commits = source
+        .commits
+        .iter()
+        .filter(|(_, commit)| commit.history_tree_id == first.history_tree_id)
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    let expected_trees = source
+        .directory_trees
+        .iter()
+        .filter(|(_, tree)| {
+            source.directory_branches[&tree.directory_branch_id].repository_id
+                == first.repository_id
+        })
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        manifest.commits.keys().cloned().collect::<Vec<_>>(),
+        expected_commits
+    );
+    assert_eq!(
+        manifest.directory_trees.keys().cloned().collect::<Vec<_>>(),
+        expected_trees
+    );
+    for (id, commit) in manifest.commits.iter() {
+        assert!(std::ptr::eq(commit, &source.commits[id]));
+    }
+    for (id, tree) in manifest.directory_trees.iter() {
+        assert!(std::ptr::eq(tree, &source.directory_trees[id]));
+    }
+    let before = canonical_json(&manifest).unwrap();
+    let frozen = manifest.clone();
+    let mut destination = State::default();
+    destination.commits.extend_shared(&manifest.commits);
+    destination
+        .directory_trees
+        .extend_shared(&manifest.directory_trees);
+    let commit = manifest.commits.keys().next().unwrap().clone();
+    let tree = manifest.directory_trees.keys().next().unwrap().clone();
+    manifest
+        .commits
+        .get_mut(&commit)
+        .unwrap()
+        .message
+        .push_str(" local");
+    manifest
+        .directory_trees
+        .get_mut(&tree)
+        .unwrap()
+        .path
+        .push_str("/local");
+    source
+        .commits
+        .get_mut(&commit)
+        .unwrap()
+        .message
+        .push_str(" source");
+    source
+        .directory_trees
+        .get_mut(&tree)
+        .unwrap()
+        .path
+        .push_str("/source");
+    assert_eq!(
+        manifest.commits[&commit].message,
+        format!("{} local", frozen.commits[&commit].message)
+    );
+    assert_eq!(
+        source.commits[&commit].message,
+        format!("{} source", frozen.commits[&commit].message)
+    );
+    assert_eq!(
+        manifest.directory_trees[&tree].path,
+        format!("{}/local", frozen.directory_trees[&tree].path)
+    );
+    assert_eq!(
+        source.directory_trees[&tree].path,
+        format!("{}/source", frozen.directory_trees[&tree].path)
+    );
+    assert_eq!(canonical_json(&frozen).unwrap(), before);
+    assert_eq!(destination.commits, frozen.commits);
+    assert_eq!(destination.directory_trees, frozen.directory_trees);
+    destination
+        .commits
+        .get_mut(&commit)
+        .unwrap()
+        .message
+        .push_str(" destination");
+    destination
+        .directory_trees
+        .get_mut(&tree)
+        .unwrap()
+        .path
+        .push_str("/destination");
+    assert_eq!(canonical_json(&frozen).unwrap(), before);
+    drop(manifest);
+    assert_eq!(canonical_json(&frozen).unwrap(), before);
+}

@@ -254,3 +254,58 @@ fn no_op_mutations_preserve_shared_map_identity() {
     assert!(Arc::ptr_eq(&candidate.records, &base.records));
     assert_eq!(clone_count(&clones), 0);
 }
+
+#[test]
+fn subsets_and_shared_extension_clone_no_payloads_and_isolate_writes() {
+    let clones = Arc::new(AtomicUsize::new(0));
+    let mut source: SharedRecords<_> = [
+        ("a".into(), counted("a", &clones)),
+        ("b".into(), counted("b", &clones)),
+        ("c".into(), counted("c", &clones)),
+    ]
+    .into_iter()
+    .collect();
+    let mut subset = source.subset(|key, _| key != "c");
+    assert_eq!(
+        subset.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+    assert!(std::ptr::eq(&source["a"], &subset["a"]));
+    let mut destination = source.clone();
+    destination.extend_shared(&subset); // Overwrites shared values without cloning them.
+    assert_eq!(clone_count(&clones), 0);
+    let frozen = destination.clone();
+    source.get_mut("a").unwrap().value.push('!');
+    subset.get_mut("b").unwrap().value.push('?');
+    destination.get_mut("c").unwrap().value.push('.');
+    assert_eq!(clone_count(&clones), 3);
+    assert_eq!(subset["a"].value, "a");
+    assert_eq!(source["b"].value, "b");
+    assert_eq!(frozen["c"].value, "c");
+    drop(destination);
+    assert_eq!(frozen["a"].value, "a");
+    let empty = source.subset(|_, _| false);
+    assert!(empty.is_empty());
+    let mut no_op = frozen.clone();
+    no_op.extend_shared(&empty);
+    assert!(Arc::ptr_eq(&no_op.records, &frozen.records));
+    assert_eq!(clone_count(&clones), 3);
+}
+
+#[test]
+fn shared_projection_and_merge_support_non_clone_payloads_and_replace_values() {
+    struct NonClone(u32);
+    let source: SharedRecords<_> = [("a".into(), NonClone(1)), ("b".into(), NonClone(2))]
+        .into_iter()
+        .collect();
+    let selected = source.subset(|_, value| value.0 == 2);
+    let mut destination: SharedRecords<_> = [("b".into(), NonClone(3)), ("c".into(), NonClone(4))]
+        .into_iter()
+        .collect();
+    let previous = destination.clone();
+    destination.extend_shared(&selected);
+    assert_eq!(destination["b"].0, 2);
+    assert_eq!(destination["c"].0, 4);
+    assert_eq!(previous["b"].0, 3);
+    assert!(std::ptr::eq(&destination["b"], &source["b"]));
+}

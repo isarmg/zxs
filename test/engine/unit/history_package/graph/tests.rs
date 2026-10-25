@@ -500,3 +500,53 @@ fn changing_one_entity_reuses_unrelated_radix_pages() {
     assert_eq!(old_pages.difference(&new_pages).count(), 1);
     assert_eq!(new_pages.difference(&old_pages).count(), 1);
 }
+
+// Fixed codec fixture, independent of random IDs and wall-clock time. It need
+// not be a semantically valid history: this pins the logical/graph wire format.
+#[test]
+fn shared_manifest_projection_preserves_pre_change_golden() {
+    let mut logical = json_codec::to_value(manifest()).unwrap();
+    logical["commits"] = json!({"commit": {
+        "commit_id": "commit", "history_tree_id": "history", "kind": "save",
+        "parent_commit_ids": [], "tree_id": "tree", "sequence": "18446744073709551615",
+        "operation_id": "operation", "author": "作者", "message": "quotes: \" / 📁",
+        "entries": [], "pending_file_versions": {"file": "version"},
+        "namespace_deletions": {"timestamp": "9007199254740993", "paths": []},
+        "provenance": null
+    }});
+    logical["directory_trees"] = json!({"tree": {
+        "tree_id": "tree", "directory_branch_id": "directory-branch", "parent_tree_id": null,
+        "commit_id": "commit", "path": "目录/📁", "entries": [], "file_branches": {"file": "branch"},
+        "inherited_files": {"file": "version"}, "sequence": "9007199254740993"
+    }});
+    logical["file_selection_generations"] = json!({"file": "18446744073709551615"});
+    let manifest: HistoryManifest = json_codec::from_value(logical).unwrap();
+    let bytes = canonical_json(&manifest).unwrap();
+    let (root, _, objects) = encoded(&manifest, MAX_METADATA);
+    let bundle = json!({
+        "logical": String::from_utf8(bytes).unwrap(),
+        "root": root,
+        "objects": objects.into_iter().map(|((kind, hash), value)| json!({
+            "kind": kind, "hash": hash,
+            "bytes": String::from_utf8(canonical_json(&value).unwrap()).unwrap()
+        })).collect::<Vec<_>>()
+    });
+    assert_eq!(
+        canonical_json(&bundle).unwrap(),
+        include_bytes!("manifest-sharing-golden.json")
+    );
+}
+
+#[test]
+fn manifest_shared_maps_keep_required_and_sparse_wire_rules() {
+    let logical = json_codec::to_value(manifest()).unwrap();
+    assert_eq!(logical["commits"], json!({}));
+    assert!(logical.get("directory_trees").is_none());
+    let mut explicit = logical.clone();
+    explicit["directory_trees"] = json!({});
+    let decoded: HistoryManifest = json_codec::from_value(explicit).unwrap();
+    assert_eq!(json_codec::to_value(decoded).unwrap(), logical);
+    let mut missing = logical;
+    missing.as_object_mut().unwrap().remove("commits");
+    assert!(json_codec::from_value::<HistoryManifest>(missing).is_err());
+}

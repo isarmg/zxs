@@ -511,10 +511,10 @@ impl Engine {
             repository.file_manager_root=false;
             state.repositories.insert(repository.repository_id.clone(),repository.clone());
             state.histories.insert(manifest.history.history_tree_id.clone(),manifest.history.clone());
-            state.commits.extend(manifest.commits.clone()); state.branches.extend(manifest.branches.clone());
+            state.commits.extend_shared(&manifest.commits); state.branches.extend(manifest.branches.clone());
             state.file_selections.extend(manifest.file_selections.clone());
             state.directory_branches.extend(manifest.directory_branches.clone());
-            state.directory_trees.extend(manifest.directory_trees.clone());
+            state.directory_trees.extend_shared(&manifest.directory_trees);
             state.directory_selections.extend(manifest.directory_selections.clone());
             state.directory_selection_generations.extend(manifest.directory_selection_generations.clone());
             state.file_write_origins.extend(manifest.file_write_origins.clone());

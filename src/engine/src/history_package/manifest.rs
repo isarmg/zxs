@@ -6,7 +6,7 @@ use storage_contract::{
     Branch, Commit, DirectoryBranch, DirectoryTree, Entry, Error, FileBranchMerge, FileContext,
     FileMetadataNode, FilePathNode, FileVersion, HistoryBoundary, HistoryTree, MergeLink,
     Placement, PlacementRule, ProtectionPolicy, Repository, Result, SUPPORTED_CHECKSUM_CHUNK_BYTES,
-    State, canonical_json, validate_id,
+    SharedRecords, State, canonical_json, validate_id,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -19,8 +19,8 @@ pub struct HistoryManifest {
     pub file_selections: BTreeMap<String, String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub directory_branches: BTreeMap<String, DirectoryBranch>,
-    #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub directory_trees: BTreeMap<String, DirectoryTree>,
+    #[serialization(default, skip_serializing_if = "SharedRecords::is_empty")]
+    pub directory_trees: SharedRecords<DirectoryTree>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_write_origins: BTreeMap<String, String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -65,7 +65,7 @@ pub struct HistoryManifest {
     pub version_notes: BTreeMap<String, String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_names: BTreeMap<String, String>,
-    pub commits: BTreeMap<String, Commit>,
+    pub commits: SharedRecords<Commit>,
     pub versions: BTreeMap<String, FileVersion>,
     pub placements: BTreeMap<String, Placement>,
     pub merge_links: BTreeMap<String, MergeLink>,
@@ -260,17 +260,12 @@ impl HistoryManifest {
                 .filter(|(_, branch)| branch.repository_id == repository_id)
                 .map(|(id, branch)| (id.clone(), branch.clone()))
                 .collect(),
-            directory_trees: state
-                .directory_trees
-                .iter()
-                .filter(|(_, tree)| {
-                    state
-                        .directory_branches
-                        .get(&tree.directory_branch_id)
-                        .is_some_and(|branch| branch.repository_id == repository_id)
-                })
-                .map(|(id, tree)| (id.clone(), tree.clone()))
-                .collect(),
+            directory_trees: state.directory_trees.subset(|_, tree| {
+                state
+                    .directory_branches
+                    .get(&tree.directory_branch_id)
+                    .is_some_and(|branch| branch.repository_id == repository_id)
+            }),
             directory_selections: state
                 .directory_selections
                 .iter()
@@ -296,10 +291,7 @@ impl HistoryManifest {
                 .collect(),
             commits: state
                 .commits
-                .iter()
-                .filter(|(_, c)| c.history_tree_id == history_id)
-                .map(|(id, v)| (id.clone(), v.clone()))
-                .collect(),
+                .subset(|_, commit| commit.history_tree_id == history_id),
             placements: state
                 .placements
                 .iter()
@@ -840,7 +832,7 @@ impl HistoryManifest {
         {
             return Err(invalid("manifest uses an unsupported naming policy"));
         }
-        for (id, commit) in &self.commits {
+        for (id, commit) in self.commits.iter() {
             validate_id(id, "commit")?;
             if commit.commit_id != *id
                 || commit.history_tree_id != *history
@@ -1035,7 +1027,7 @@ impl HistoryManifest {
             }
             resolved.extend(path);
         }
-        for (id, tree) in &self.directory_trees {
+        for (id, tree) in self.directory_trees.iter() {
             validate_id(id, "dtree")?;
             let branch = self
                 .directory_branches
