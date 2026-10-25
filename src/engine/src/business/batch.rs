@@ -5,6 +5,13 @@ use crate::engine::Prepared;
 use json_codec::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
+struct CopiedFile {
+    entry_id: String,
+    file_id: String,
+    version_id: String,
+    size: u64,
+}
+
 fn contains(scope: &str, path: &str) -> bool {
     let scope = name_policy::path_key(scope);
     let path = name_policy::path_key(path);
@@ -499,8 +506,8 @@ fn apply(
         .map(|(id, b)| (id.clone(), b.head_tree_id.clone()))
         .collect::<BTreeMap<_, _>>();
     let mut owners = BTreeMap::<String, String>::new();
-    let mut copies = BTreeMap::<(String, String, String, String), Entry>::new();
-    let mut directory_copies = BTreeMap::<(String, String, String), Entry>::new();
+    let mut copies = BTreeMap::<(String, String, String, String), CopiedFile>::new();
+    let mut directory_copies = BTreeMap::<(String, String, String), String>::new();
     let mut copy_receipts = Vec::new();
     for (item, source) in planned {
         let source_scope = &originals[&item.source.directory_branch_id];
@@ -540,10 +547,10 @@ fn apply(
                         name_policy::lookup_key(&moved.name),
                     );
                     if let Some(previous) = directory_copies.get(&key) {
-                        moved = previous.clone();
+                        moved.entry_id = previous.clone();
                     } else {
                         moved.entry_id = new_id("entry");
-                        directory_copies.insert(key, moved.clone());
+                        directory_copies.insert(key, moved.entry_id.clone());
                     }
                 } else {
                     let cache_key = (
@@ -553,7 +560,13 @@ fn apply(
                         name_policy::lookup_key(&moved.name),
                     );
                     if let Some(existing) = copies.get(&cache_key) {
-                        moved = existing.clone();
+                        // Frozen target branches can name the same directory
+                        // differently. Share only the new copy's identity and
+                        // body, never another target's logical path spelling.
+                        moved.entry_id = existing.entry_id.clone();
+                        moved.file_id = existing.file_id.clone();
+                        moved.version_id = existing.version_id.clone();
+                        moved.size = existing.size;
                     } else {
                         let new_file = new_id("file");
                         let (source_path, original) = engine.valid_replica(&member.version_id)?;
@@ -579,7 +592,15 @@ fn apply(
                         moved.version_id = version.version_id;
                         moved.size = version.logical_size;
                         copy_receipts.push(json!({"source_file_id":member.file_id,"source_version_id":member.version_id,"file_id":moved.file_id,"version_id":moved.version_id,"path":moved.path}));
-                        copies.insert(cache_key, moved.clone());
+                        copies.insert(
+                            cache_key,
+                            CopiedFile {
+                                entry_id: moved.entry_id.clone(),
+                                file_id: moved.file_id.clone(),
+                                version_id: moved.version_id.clone(),
+                                size: moved.size,
+                            },
+                        );
                     }
                     let mut commit = state
                         .commits
@@ -588,6 +609,10 @@ fn apply(
                         .ok_or_else(|| {
                             Error::new("STATE_INVALID", "source directory commit missing")
                         })?;
+                    // The source snapshot supplies ancestry, not authorship:
+                    // initializing this independent file belongs to this copy.
+                    commit.operation_id = operation.into();
+                    commit.author = principal.into();
                     commit.entries = target_draft.entries.clone();
                     commit.entries.push(moved.clone());
                     ensure_parents_for_scope(state, target_draft, &mut commit.entries)?;
@@ -605,12 +630,16 @@ fn apply(
                     target_draft
                         .file_branches
                         .insert(moved.file_id.clone(), branch);
+                    // The first target created the body, placement and copy
+                    // receipt. Later logical aliases must not relocate it.
                     state
                         .file_locations
-                        .insert(moved.file_id.clone(), moved.path.clone());
+                        .entry(moved.file_id.clone())
+                        .or_insert_with(|| moved.path.clone());
                     state
                         .file_names
-                        .insert(moved.file_id.clone(), moved.name.clone());
+                        .entry(moved.file_id.clone())
+                        .or_insert_with(|| moved.name.clone());
                 }
             } else if moved.kind == "file" {
                 let context = file_context(source_scope, &member)?;

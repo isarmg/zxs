@@ -8,6 +8,8 @@ use storage_engine::{
 };
 #[path = "branch_alias_operations/batch_planning_scenarios.rs"]
 mod batch_planning_scenarios;
+#[path = "branch_alias_operations/copy_alias_scenarios.rs"]
+mod copy_alias_scenarios;
 #[path = "branch_alias_operations/deletion_rebase_scenarios.rs"]
 mod deletion_rebase_scenarios;
 #[path = "branch_alias_operations/file_merge_scenarios.rs"]
