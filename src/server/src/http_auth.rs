@@ -469,7 +469,9 @@ pub(crate) async fn change_password(
     let auth = state.auth.clone();
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        lock(&auth)?.change_password(&token.0, &body.current_password, &body.new_password)
+        let challenge = lock(&auth)?.password_change_challenge(&token.0)?;
+        let prepared = challenge.prepare(&body.current_password, &body.new_password)?;
+        lock(&auth)?.finish_password_change(prepared)
     })
     .await
     .map_err(ApiError::join)??;

@@ -21,7 +21,7 @@ const MAX_SESSIONS: usize = 64;
 /// Successful writes must remain admissible to the same bounded restart reader.
 const MAX_STORE_BYTES: usize = 4 * 1024 * 1024;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct Administrator {
     username: String,
@@ -176,6 +176,8 @@ pub struct AuthStore {
     local_authority: bool,
     backup: Option<BackupHook>,
     blocked: AtomicBool,
+    #[cfg(test)]
+    password_work_hook: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 /// Immutable password challenge. Expensive verification needs no store lock;
@@ -200,6 +202,60 @@ impl LoginChallenge {
         Ok(VerifiedLogin {
             username: self.username,
             password_hash: self.password_hash,
+            generation,
+        })
+    }
+}
+
+/// A session-authorized credential baseline; preparing its replacement requires
+/// no store lock and does not authorize publication after logout or rotation.
+pub(crate) struct PasswordChangeChallenge {
+    identity: Identity,
+    previous: Administrator,
+    #[cfg(test)]
+    password_work_hook: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+/// Both Argon2 operations have succeeded, but the live authority and original
+/// session must still be revalidated before the replacement can be published.
+pub(crate) struct PreparedPasswordChange {
+    identity: Identity,
+    previous: Administrator,
+    password_hash: String,
+    generation: u64,
+}
+
+impl PasswordChangeChallenge {
+    pub(crate) fn prepare(
+        self,
+        current_password: &str,
+        new_password: &str,
+    ) -> Result<PreparedPasswordChange, ApiError> {
+        #[cfg(test)]
+        if let Some(hook) = &self.password_work_hook {
+            hook();
+        }
+        if !primitives::verify_password(current_password, &self.previous.password_hash) {
+            return Err(ApiError::new(
+                403,
+                "CURRENT_PASSWORD_INVALID",
+                "current password is incorrect",
+            ));
+        }
+        let generation = self
+            .previous
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| ApiError::limit("administrator generation has been exhausted"))?;
+        #[cfg(test)]
+        if let Some(hook) = &self.password_work_hook {
+            hook();
+        }
+        let password_hash = primitives::hash_password(new_password).map_err(ApiError::invalid)?;
+        Ok(PreparedPasswordChange {
+            identity: self.identity,
+            previous: self.previous,
+            password_hash,
             generation,
         })
     }
@@ -387,6 +443,8 @@ impl AuthStore {
             local_authority: management,
             backup: None,
             blocked: AtomicBool::new(false),
+            #[cfg(test)]
+            password_work_hook: None,
         };
         store.persist(true)?;
         Ok(store)
@@ -476,6 +534,8 @@ impl AuthStore {
             local_authority: management,
             backup: None,
             blocked: AtomicBool::new(false),
+            #[cfg(test)]
+            password_work_hook: None,
         };
         if restore {
             store.persist(false)?;
@@ -571,6 +631,8 @@ impl AuthStore {
             local_authority: true,
             backup: None,
             blocked: AtomicBool::new(true),
+            #[cfg(test)]
+            password_work_hook: None,
         }
     }
     /// The callback maintains a disaster-recovery copy, not admission authority.
@@ -692,34 +754,50 @@ impl AuthStore {
     }
 
     /// Rotate the sole administrator's password and revoke every session.
+    /// Shared HTTP callers use challenge/prepare/finish to hash outside the lock.
     pub fn change_password(
         &mut self,
         token: &str,
         current_password: &str,
         new_password: &str,
     ) -> Result<(), ApiError> {
+        let prepared = self
+            .password_change_challenge(token)?
+            .prepare(current_password, new_password)?;
+        self.finish_password_change(prepared)
+    }
+
+    pub(crate) fn password_change_challenge(
+        &self,
+        token: &str,
+    ) -> Result<PasswordChangeChallenge, ApiError> {
         // The caller cannot select an identity, role, scope or generation.
-        self.authenticate(token)?;
-        let previous = self.database()?.administrator.clone();
-        if !primitives::verify_password(current_password, &previous.password_hash) {
-            return Err(ApiError::new(
-                403,
-                "CURRENT_PASSWORD_INVALID",
-                "current password is incorrect",
-            ));
+        Ok(PasswordChangeChallenge {
+            identity: self.authenticate(token)?,
+            previous: self.database()?.administrator.clone(),
+            #[cfg(test)]
+            password_work_hook: self.password_work_hook.clone(),
+        })
+    }
+
+    pub(crate) fn finish_password_change(
+        &mut self,
+        prepared: PreparedPasswordChange,
+    ) -> Result<(), ApiError> {
+        // Logout, session expiry, another rotation or uncertain publication may
+        // have raced either Argon2 operation. Recheck before changing any state.
+        self.revalidate_identity(&prepared.identity)?;
+        if self.database()?.administrator != prepared.previous {
+            return Err(ApiError::unauthorized());
         }
-        let generation = previous
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| ApiError::limit("administrator generation has been exhausted"))?;
-        let password_hash = primitives::hash_password(new_password).map_err(ApiError::invalid)?;
         let database = self.database_mut()?;
-        database.administrator.password_hash = password_hash;
-        database.administrator.generation = generation;
+        database.administrator.password_hash = prepared.password_hash;
+        database.administrator.generation = prepared.generation;
+        // Include sessions created while hashing, not just the original snapshot.
         let sessions = std::mem::take(&mut database.sessions);
         if let Err(error) = self.persist(false) {
             let database = self.db.as_mut().expect("initialized administrator");
-            database.administrator = previous;
+            database.administrator = prepared.previous;
             database.sessions = sessions;
             return Err(error);
         }
@@ -738,3 +816,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../test/server/unit/auth/capacity_tests.rs"]
 mod capacity_tests;
+
+#[cfg(test)]
+#[path = "../../../test/server/unit/auth/password_change_tests.rs"]
+mod password_change_tests;
