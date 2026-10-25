@@ -520,9 +520,9 @@ impl Engine {
                         .collect()
                 })
                 .unwrap_or_default(),
-            selected_directory_branches: self.state.directory_selections.clone(),
-            directory_selection_generations: self.state.directory_selection_generations.clone(),
-            file_selection_generations: self.state.file_selection_generations.clone(),
+            selected_directory_branches: (*self.state.directory_selections).clone(),
+            directory_selection_generations: (*self.state.directory_selection_generations).clone(),
+            file_selection_generations: (*self.state.file_selection_generations).clone(),
             selected_file_branches: head
                 .entries
                 .iter()

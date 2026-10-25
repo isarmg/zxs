@@ -289,15 +289,15 @@ fn workspace_capture_matches_path_lookup_for_bootstrap_and_inherited_contexts() 
         assert_eq!(workspace.selected_file_contexts, expected);
         assert_eq!(
             workspace.selected_directory_branches,
-            engine.state().directory_selections
+            *engine.state().directory_selections
         );
         assert_eq!(
             workspace.directory_selection_generations,
-            engine.state().directory_selection_generations
+            *engine.state().directory_selection_generations
         );
         assert_eq!(
             workspace.file_selection_generations,
-            engine.state().file_selection_generations
+            *engine.state().file_selection_generations
         );
         if inherited {
             assert!(

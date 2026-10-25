@@ -36,6 +36,7 @@ pub struct Engine {
     retained_workspace_limits: Option<RetainedWorkspaceLimits>,
     pub(crate) blocked: bool,
     pub(crate) snapshot: Option<String>,
+    published_history_base: Option<Arc<publication::PublishedHistoryBase>>,
     pub(crate) next_slot: u64,
     pub(crate) reads: Arc<Mutex<BTreeMap<String, usize>>>,
     pub(crate) upload_preparations: Arc<Mutex<BTreeSet<String>>>,
@@ -201,6 +202,7 @@ impl Engine {
             retained_workspace_limits: workspace_limits,
             blocked: false,
             snapshot: None,
+            published_history_base: None,
             next_slot: 1,
             reads: Arc::new(Mutex::new(BTreeMap::new())),
             upload_preparations: Arc::new(Mutex::new(BTreeSet::new())),
@@ -273,6 +275,7 @@ impl Engine {
             retained_workspace_limits: workspace_limits,
             blocked: false,
             snapshot: None,
+            published_history_base: None,
             next_slot: 1,
             reads: Arc::new(Mutex::new(BTreeMap::new())),
             upload_preparations: Arc::new(Mutex::new(BTreeSet::new())),
@@ -656,6 +659,7 @@ impl Engine {
         // Published and planning views share only the immutable base. Every
         // mutation still owns an independent next State until publication.
         let mut next = self.state.as_ref().clone();
+        next.begin_tracking();
         crate::container_storage::capture_names(&mut next);
         next.sequence = self.next_slot;
         if !kind.starts_with("auth.") {

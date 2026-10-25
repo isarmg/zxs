@@ -6,6 +6,8 @@ pub mod encoding;
 mod integer_json;
 pub mod model;
 mod shared_records;
+mod tracked;
+pub use tracked::{MapChanges, Tracked, TrackedMap, TrackedRecords};
 pub mod text;
 mod workspace_capacity;
 pub use api_path::validate_api_path;
@@ -151,3 +153,19 @@ pub mod u64_string_map {
 #[cfg(test)]
 #[path = "../../../test/contract/unit/lib/tests.rs"]
 mod tests;
+
+/// Decimal-string encoding for tracked State counters; provenance never persists.
+pub mod tracked_u64_string_map {
+    use data_serialization::{Deserializer, Serializer};
+    pub fn serialize<S: Serializer>(
+        value: &crate::TrackedMap<u64>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        crate::u64_string_map::serialize(value, serializer)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<crate::TrackedMap<u64>, D::Error> {
+        crate::u64_string_map::deserialize(deserializer).map(Into::into)
+    }
+}

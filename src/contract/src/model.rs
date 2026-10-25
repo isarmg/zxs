@@ -647,76 +647,76 @@ pub struct State {
     pub sequence: u64,
     #[serialization(with = "crate::u64_string")]
     pub business_generation: u64,
-    pub repositories: BTreeMap<String, Repository>,
-    pub histories: BTreeMap<String, HistoryTree>,
-    pub branches: BTreeMap<String, Branch>,
+    pub repositories: crate::TrackedMap<Repository>,
+    pub histories: crate::TrackedMap<HistoryTree>,
+    pub branches: crate::TrackedMap<Branch>,
     /// Selected independent content branch for each file in its disk namespace.
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_selections: BTreeMap<String, String>,
+    pub file_selections: crate::TrackedMap<String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub directory_branches: BTreeMap<String, DirectoryBranch>,
+    pub directory_branches: crate::TrackedMap<DirectoryBranch>,
     #[serialization(default, skip_serializing_if = "SharedRecords::is_empty")]
-    pub directory_trees: SharedRecords<DirectoryTree>,
+    pub directory_trees: crate::TrackedRecords<DirectoryTree>,
     /// Current projection intent, separate from each public file branch HEAD.
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_write_origins: BTreeMap<String, String>,
+    pub file_write_origins: crate::TrackedMap<String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_contexts: BTreeMap<String, FileContext>,
+    pub file_contexts: crate::TrackedMap<FileContext>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_path_nodes: BTreeMap<String, FilePathNode>,
+    pub file_path_nodes: crate::TrackedMap<FilePathNode>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_metadata_nodes: BTreeMap<String, FileMetadataNode>,
+    pub file_metadata_nodes: crate::TrackedMap<FileMetadataNode>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_branch_merges: BTreeMap<String, FileBranchMerge>,
+    pub file_branch_merges: crate::TrackedMap<FileBranchMerge>,
     /// Consumed names remain readable; writes must use the surviving branch.
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_branch_aliases: BTreeMap<String, String>,
+    pub file_branch_aliases: crate::TrackedMap<String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_node_parents: BTreeMap<String, Vec<String>>,
+    pub file_node_parents: crate::TrackedMap<Vec<String>>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_path_notes: BTreeMap<String, String>,
+    pub file_path_notes: crate::TrackedMap<String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub directory_tree_selections: BTreeMap<String, String>,
+    pub directory_tree_selections: crate::TrackedMap<String>,
     /// Physical owner path; selecting an old logical alias never relocates it.
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_locations: BTreeMap<String, String>,
+    pub file_locations: crate::TrackedMap<String>,
     /// User-chosen backup owner paths are independent of primary aliases.
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_backup_paths: BTreeMap<String, BTreeMap<String, String>>,
+    pub file_backup_paths: crate::TrackedMap<BTreeMap<String, String>>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_backup_policies: BTreeMap<String, String>,
+    pub file_backup_policies: crate::TrackedMap<String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub directory_selections: BTreeMap<String, String>,
+    pub directory_selections: crate::TrackedMap<String>,
     #[serialization(
         default,
         skip_serializing_if = "BTreeMap::is_empty",
-        with = "crate::u64_string_map"
+        with = "crate::tracked_u64_string_map"
     )]
-    pub directory_selection_generations: BTreeMap<String, u64>,
+    pub directory_selection_generations: crate::TrackedMap<u64>,
     #[serialization(
         default,
         skip_serializing_if = "BTreeMap::is_empty",
-        with = "crate::u64_string_map"
+        with = "crate::tracked_u64_string_map"
     )]
-    pub file_selection_generations: BTreeMap<String, u64>,
+    pub file_selection_generations: crate::TrackedMap<u64>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_notes: BTreeMap<String, String>,
+    pub file_notes: crate::TrackedMap<String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub version_notes: BTreeMap<String, String>,
+    pub version_notes: crate::TrackedMap<String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_names: BTreeMap<String, String>,
-    pub commits: SharedRecords<Commit>,
-    pub versions: SharedRecords<FileVersion>,
-    pub placements: BTreeMap<String, Placement>,
-    pub merge_links: BTreeMap<String, MergeLink>,
-    pub history_boundaries: BTreeMap<String, HistoryBoundary>,
-    pub content_states: BTreeMap<String, String>,
-    pub operations: BTreeMap<String, OperationResult>,
-    pub plans: BTreeMap<String, Plan>,
-    pub placement_rules: BTreeMap<String, PlacementRule>,
-    pub protection_policies: BTreeMap<String, ProtectionPolicy>,
+    pub file_names: crate::TrackedMap<String>,
+    pub commits: crate::TrackedRecords<Commit>,
+    pub versions: crate::TrackedRecords<FileVersion>,
+    pub placements: crate::TrackedMap<Placement>,
+    pub merge_links: crate::TrackedMap<MergeLink>,
+    pub history_boundaries: crate::TrackedMap<HistoryBoundary>,
+    pub content_states: crate::TrackedMap<String>,
+    pub operations: crate::TrackedMap<OperationResult>,
+    pub plans: crate::TrackedMap<Plan>,
+    pub placement_rules: crate::TrackedMap<PlacementRule>,
+    pub protection_policies: crate::TrackedMap<ProtectionPolicy>,
     /// Audit and idempotency owners of published operations, not user accounts.
-    pub operation_principals: BTreeMap<String, String>,
+    pub operation_principals: crate::TrackedMap<String>,
     /// Private authentication control state; never expose State as a public API DTO.
     #[serialization(default)]
     pub control_auth: Option<json_codec::Value>,
@@ -724,6 +724,89 @@ pub struct State {
     #[serialization(with = "crate::u64_string")]
     pub topology_generation: u64,
 }
+impl State {
+    /// Establish exact per-field provenance for one unpublished transaction.
+    pub fn begin_tracking(&mut self) {
+        let Self {
+            sequence: _,
+            business_generation: _,
+            topology_generation: _,
+            control_auth: _,
+            events: _,
+            repositories,
+            histories,
+            branches,
+            file_selections,
+            directory_branches,
+            directory_trees,
+            file_write_origins,
+            file_contexts,
+            file_path_nodes,
+            file_metadata_nodes,
+            file_branch_merges,
+            file_branch_aliases,
+            file_node_parents,
+            file_path_notes,
+            directory_tree_selections,
+            file_locations,
+            file_backup_paths,
+            file_backup_policies,
+            directory_selections,
+            directory_selection_generations,
+            file_selection_generations,
+            file_notes,
+            version_notes,
+            file_names,
+            commits,
+            versions,
+            placements,
+            merge_links,
+            history_boundaries,
+            content_states,
+            operations,
+            plans,
+            placement_rules,
+            protection_policies,
+            operation_principals,
+        } = self;
+        repositories.begin_tracking();
+        histories.begin_tracking();
+        branches.begin_tracking();
+        file_selections.begin_tracking();
+        directory_branches.begin_tracking();
+        directory_trees.begin_tracking();
+        file_write_origins.begin_tracking();
+        file_contexts.begin_tracking();
+        file_path_nodes.begin_tracking();
+        file_metadata_nodes.begin_tracking();
+        file_branch_merges.begin_tracking();
+        file_branch_aliases.begin_tracking();
+        file_node_parents.begin_tracking();
+        file_path_notes.begin_tracking();
+        directory_tree_selections.begin_tracking();
+        file_locations.begin_tracking();
+        file_backup_paths.begin_tracking();
+        file_backup_policies.begin_tracking();
+        directory_selections.begin_tracking();
+        directory_selection_generations.begin_tracking();
+        file_selection_generations.begin_tracking();
+        file_notes.begin_tracking();
+        version_notes.begin_tracking();
+        file_names.begin_tracking();
+        commits.begin_tracking();
+        versions.begin_tracking();
+        placements.begin_tracking();
+        merge_links.begin_tracking();
+        history_boundaries.begin_tracking();
+        content_states.begin_tracking();
+        operations.begin_tracking();
+        plans.begin_tracking();
+        placement_rules.begin_tracking();
+        protection_policies.begin_tracking();
+        operation_principals.begin_tracking();
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub struct Event {

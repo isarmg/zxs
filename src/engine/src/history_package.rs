@@ -2,6 +2,7 @@
 use crate::{disk::*, journal::*, *};
 use data_serialization::{Deserialize, Serialize};
 use json_codec::json;
+mod changes;
 mod graph;
 mod manifest;
 pub use manifest::HistoryManifest;
@@ -74,6 +75,85 @@ pub(crate) fn prepare_history_manifests(
         let (hash, graph) = graph::prepare(&manifest, maximum)?;
         hashes.insert(id.clone(), hash);
         objects.extend(graph);
+    }
+    Ok((hashes, objects))
+}
+
+/// Reuse is offered only by the engine's same-process published baseline.
+/// Every reused dependency is still read, hash/graph validated, admitted and
+/// installed through the original collision checks and durability barriers.
+pub(crate) fn prepare_history_manifests_incremental(
+    before: &State,
+    after: &State,
+    previous_roots: &BTreeMap<String, String>,
+    members: &[DiskConfig],
+    maximum: usize,
+) -> Result<(BTreeMap<String, String>, Vec<PreparedMetadataObject>)> {
+    if previous_roots.keys().ne(before.histories.keys()) {
+        return Err(Error::new(
+            "STATE_INVALID",
+            "published history baseline coverage differs",
+        ));
+    }
+    let changed = changes::HistoryChanges::between(before, after);
+    let mut hashes = BTreeMap::new();
+    let mut objects = Vec::new();
+    for id in after.histories.keys() {
+        if changed.histories.contains(id) || !previous_roots.contains_key(id) {
+            let manifest = HistoryManifest::from_state(after, id)?;
+            let (hash, graph) = graph::prepare(&manifest, maximum)?;
+            hashes.insert(id.clone(), hash);
+            objects.extend(graph);
+        } else {
+            let hash = &previous_roots[id];
+            let (manifest, graph) = match bound_history_graph(members, hash) {
+                Ok(graph) => graph,
+                Err(_) => {
+                    // The full publisher can recreate wholly missing replicas
+                    // from State. Preserve that ability without replacing the
+                    // candidate-bound root or bypassing store collision checks.
+                    let manifest = HistoryManifest::from_state(after, id)?;
+                    let (rebuilt_hash, rebuilt) = graph::prepare(&manifest, maximum)?;
+                    if &rebuilt_hash != hash {
+                        return Err(Error::new(
+                            "OBJECT_CORRUPT",
+                            "reconstructed history differs from published baseline",
+                        ));
+                    }
+                    hashes.insert(id.clone(), hash.clone());
+                    objects.extend(rebuilt);
+                    continue;
+                }
+            };
+            if manifest.history.history_tree_id != *id {
+                return Err(Error::new(
+                    "OBJECT_CORRUPT",
+                    "published history baseline identity differs",
+                ));
+            }
+            for (kind, expected_hash, value) in graph {
+                let kind = match kind.as_str() {
+                    "state-page" => "state-page",
+                    "history-index" => "history-index",
+                    "history-manifest" => "history-manifest",
+                    _ => {
+                        return Err(Error::new(
+                            "OBJECT_CORRUPT",
+                            "unexpected history dependency domain",
+                        ));
+                    }
+                };
+                let object = PreparedMetadataObject::new(kind, &value, maximum)?;
+                if object.hash != expected_hash {
+                    return Err(Error::new(
+                        "OBJECT_CORRUPT",
+                        "history dependency identity changed",
+                    ));
+                }
+                objects.push(object);
+            }
+            hashes.insert(id.clone(), hash.clone());
+        }
     }
     Ok((hashes, objects))
 }
@@ -562,3 +642,11 @@ impl Engine {
 #[cfg(test)]
 #[path = "../../../test/engine/unit/history_package/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/history_package/incremental_tests.rs"]
+mod incremental_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/history_package/history_changes_oracle_tests.rs"]
+mod history_changes_oracle_tests;

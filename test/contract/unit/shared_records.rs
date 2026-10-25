@@ -272,7 +272,7 @@ fn file_version_records_preserve_map_bytes_hashes_and_state_roundtrip() {
         crate::object_hash("versions", &map).unwrap()
     );
     let state = crate::State {
-        versions: records,
+        versions: records.into(),
         ..Default::default()
     };
     let mut old_state = json_codec::to_value(crate::State::default()).unwrap();

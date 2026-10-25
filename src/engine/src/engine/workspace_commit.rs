@@ -162,6 +162,7 @@ impl Engine {
             retained_workspace_limits: self.retained_workspace_limits,
             blocked: self.blocked,
             snapshot: self.snapshot.clone(),
+            published_history_base: self.published_history_base.clone(),
             next_slot: self.next_slot,
             reads: self.reads.clone(),
             upload_preparations: self.upload_preparations.clone(),

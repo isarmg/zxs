@@ -472,8 +472,12 @@ pub(crate) fn capture_names(state: &mut State) {
         })
         .collect::<Vec<_>>();
     for (file, name, path) in names {
-        state.file_names.entry(file.clone()).or_insert(name);
-        state.file_locations.entry(file).or_insert(path);
+        if !state.file_names.contains_key(&file) {
+            state.file_names.insert(file.clone(), name);
+        }
+        if !state.file_locations.contains_key(&file) {
+            state.file_locations.insert(file, path);
+        }
     }
 }
 

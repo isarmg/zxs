@@ -84,7 +84,7 @@ impl<'a> HistoryDelta<'a> {
 
 #[cfg(test)]
 fn project(path: &Path, before: Option<&State>, after: &State) -> Result<()> {
-    let delta = HistoryDelta::between(before.map(|state| &state.versions), &after.versions);
+    let delta = HistoryDelta::between(before.map(|state| &*state.versions), &after.versions);
     project_delta(path, before, after, &delta)
 }
 

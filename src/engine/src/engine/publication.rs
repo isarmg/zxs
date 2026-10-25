@@ -7,6 +7,25 @@ use std::collections::BTreeMap;
 mod verified_payloads;
 use verified_payloads::{PayloadPreparation, VerifiedPayloadSet};
 
+/// A publication receipt, not a hash cache. Only successful decide constructs
+/// this token, and reuse requires the exact current State allocation and config.
+#[derive(Clone)]
+pub(super) struct PublishedHistoryBase {
+    state: std::sync::Weak<State>,
+    snapshot: String,
+    sequence: u64,
+    config_hash: String,
+    roots: BTreeMap<String, String>,
+}
+impl PublishedHistoryBase {
+    fn matches(&self, engine: &Engine, config_hash: &str) -> bool {
+        self.state.ptr_eq(&std::sync::Arc::downgrade(&engine.state))
+            && engine.snapshot.as_deref() == Some(self.snapshot.as_str())
+            && engine.state.sequence == self.sequence
+            && self.config_hash == config_hash
+    }
+}
+
 /// An owned preparation, never serializable or constructible by callers.
 pub(crate) struct DetachedPublication {
     next: State,
@@ -97,8 +116,29 @@ impl Engine {
         // publishing files or journal records. No estimate enters the decision.
         let snapshot = prepare_snapshot(&next, maximum)?;
         let snapshot_hash = snapshot.hash.clone();
-        let (history_manifest_hashes, manifests) =
-            crate::history_package::prepare_history_manifests(&next, maximum)?;
+        let config_hash = object_hash("publication-config", &self.config)?;
+        let (history_manifest_hashes, manifests) = match self
+            .published_history_base
+            .as_ref()
+            .filter(|base| base.matches(self, &config_hash))
+        {
+            Some(base) => crate::history_package::prepare_history_manifests_incremental(
+                &self.state,
+                &next,
+                &base.roots,
+                &members,
+                maximum,
+            )?,
+            None => crate::history_package::prepare_history_manifests(&next, maximum)?,
+        };
+        // The full implementation remains an independent oracle in every
+        // engine publication test, including merge/split/restore workflows.
+        #[cfg(test)]
+        assert_eq!(
+            history_manifest_hashes,
+            crate::history_package::prepare_history_manifests(&next, maximum)?.0,
+            "incremental history roots differ from complete projection",
+        );
         let candidate = Candidate {
             pool_id: self.config.pool_id.clone(),
             sequence: next.sequence,
@@ -244,8 +284,16 @@ impl Engine {
             .retryable());
         }
         let previous = std::mem::replace(&mut self.state, std::sync::Arc::new(next));
-        self.snapshot = Some(candidate.snapshot_hash);
+        self.snapshot = Some(candidate.snapshot_hash.clone());
         self.update_index(&previous)?;
+        // Do not install on partial publication or post-decision index failure.
+        self.published_history_base = Some(std::sync::Arc::new(PublishedHistoryBase {
+            state: std::sync::Arc::downgrade(&self.state),
+            snapshot: candidate.snapshot_hash,
+            sequence: self.state.sequence,
+            config_hash: object_hash("publication-config", &self.config)?,
+            roots: candidate.history_manifest_hashes,
+        }));
         self.blocked = false;
         Ok(result)
     }
@@ -749,3 +797,7 @@ mod parallel_preparation_tests;
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/publication/cache_budget_tests.rs"]
 mod cache_budget_tests;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/engine/publication/history_baseline_tests.rs"]
+mod history_baseline_tests;
