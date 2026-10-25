@@ -101,8 +101,10 @@ impl PageRequest {
         let selected = match (string("selected_path")?, string("selected_entry_id")?) {
             (None, None) => None,
             (Some(selected_path), Some(id)) if !id.is_empty() && id.len() <= 256 => {
-                name_policy::validate_name(selected_path.rsplit('/').next().unwrap_or_default())
-                    .map_err(ApiError::invalid)?;
+                name_policy::validate_lookup_name(
+                    selected_path.rsplit('/').next().unwrap_or_default(),
+                )
+                .map_err(ApiError::invalid)?;
                 let parent = selected_path
                     .rsplit_once('/')
                     .map(|(parent, _)| parent)
@@ -112,7 +114,7 @@ impl PageRequest {
                         "selected entry must be a direct child of the requested directory",
                     ));
                 }
-                Some((selected_path.to_owned(), id.to_owned()))
+                Some((name_policy::path_key(selected_path), id.to_owned()))
             }
             _ => {
                 return Err(ApiError::invalid(
@@ -225,12 +227,9 @@ impl<T: Clone> PageSelector<T> {
         }
     }
     pub(super) fn consider(&mut self, key: SortKey, value: T) {
-        if self
-            .request
-            .selected
-            .as_ref()
-            .is_some_and(|(path, id)| *path == key.path && *id == key.identity)
-        {
+        if self.request.selected.as_ref().is_some_and(|(path, id)| {
+            *id == key.identity && *path == name_policy::path_key(&key.path)
+        }) {
             self.selected = Some(value.clone());
         }
         if !key.folded.contains(&self.request.query) {

@@ -32,6 +32,7 @@ pub(in crate::engine_backend) fn read(engine: &Engine, input: &Value) -> Result<
         .map(|branch| (branch.directory_branch_id.as_str(), branch))
         .collect::<BTreeMap<_, _>>();
     let mut selections = BTreeSet::new();
+    let mut selected_keys = BTreeSet::new();
     for entry in selected {
         keys(entry, &["entry_id", "path"])?;
         let id = field(entry, "entry_id")?;
@@ -39,7 +40,7 @@ pub(in crate::engine_backend) fn read(engine: &Engine, input: &Value) -> Result<
         if id.len() > 256 {
             return Err(ApiError::invalid("entry identity is too long"));
         }
-        name_policy::validate_path(path).map_err(ApiError::invalid)?;
+        name_policy::validate_lookup_path(path).map_err(ApiError::invalid)?;
         let parent = path
             .rsplit_once('/')
             .map(|(parent, _)| parent)
@@ -51,9 +52,10 @@ pub(in crate::engine_backend) fn read(engine: &Engine, input: &Value) -> Result<
                 "selected entries must be direct children of the requested scope",
             ));
         }
-        if !selections.insert((id, path)) {
+        if !selected_keys.insert((id, name_policy::path_key(path))) {
             return Err(ApiError::invalid("duplicate selected entry"));
         }
+        selections.insert((id, path));
     }
     let mut seen = BTreeSet::new();
     let mut branches = Vec::with_capacity(sources.len());
@@ -99,6 +101,10 @@ fn selected_entry_facts(
         .map(|(id, _)| *id)
         .collect::<BTreeSet<_>>();
     let mut matches = BTreeMap::<&str, (usize, Option<&storage_contract::Entry>)>::new();
+    let selected_keys = selections
+        .iter()
+        .map(|(id, path)| (*id, name_policy::path_key(path)))
+        .collect::<BTreeSet<_>>();
     let mut exact = BTreeMap::new();
     for entry in entries {
         if ids.contains(entry.entry_id.as_str()) {
@@ -107,8 +113,9 @@ fn selected_entry_facts(
             if value.0 == 1 {
                 value.1 = Some(entry);
             }
-            if selections.contains(&(entry.entry_id.as_str(), entry.path.as_str())) {
-                exact.insert((entry.entry_id.as_str(), entry.path.as_str()), entry);
+            let key = (entry.entry_id.as_str(), name_policy::path_key(&entry.path));
+            if selected_keys.contains(&key) {
+                exact.insert(key, entry);
             }
         }
     }
@@ -116,7 +123,7 @@ fn selected_entry_facts(
     for (id, path) in selections {
         let chosen = match matches.get(id) {
             Some((1, entry)) => *entry,
-            _ => exact.get(&(*id, *path)).copied(),
+            _ => exact.get(&(*id, name_policy::path_key(path))).copied(),
         };
         if let Some(entry) = chosen {
             facts.push(json!({"entry_id":entry.entry_id,"path":entry.path,"selected_path":path}));

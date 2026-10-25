@@ -149,3 +149,147 @@ async fn paginated_listing_rechecks_auth_and_rejects_changed_snapshots() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+#[tokio::test]
+async fn canonical_equivalent_queries_resolve_and_browse_without_rewriting_display_names() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    for path in ["Café/Å.txt", "Café/가.txt"] {
+        manager_upload(&app, &token, path, b"body").await;
+    }
+    let canonical = success(
+        &app,
+        &token,
+        "GET",
+        &endpoint(&[("path", "Café"), ("limit", "1")]),
+        None,
+    )
+    .await;
+    let queried = success(
+        &app,
+        &token,
+        "GET",
+        &endpoint(&[("path", "Cafe\u{301}"), ("limit", "1")]),
+        None,
+    )
+    .await;
+    assert_eq!(queried["entries"], canonical["entries"]);
+    assert_eq!(queried["total_entries"], "2");
+    let cursor = queried["next_cursor"].as_str().unwrap();
+    let next = success(
+        &app,
+        &token,
+        "GET",
+        &endpoint(&[("path", "Cafe\u{301}"), ("limit", "1"), ("cursor", cursor)]),
+        None,
+    )
+    .await;
+    assert_eq!(next["entries"][0]["path"], "Café/가.txt");
+    let branch = canonical["context"]["branch_id"].as_str().unwrap();
+    let resolve = format!("/api/branches/{branch}/resolve");
+    for (stored, query) in [
+        ("Café/Å.txt", "Cafe\u{301}/A\u{30a}.txt"),
+        ("Café/가.txt", "Cafe\u{301}/\u{1100}\u{1161}.txt"),
+    ] {
+        let expected = success(&app, &token, "POST", &resolve, Some(json!({"path":stored}))).await;
+        let actual = success(&app, &token, "POST", &resolve, Some(json!({"path":query}))).await;
+        assert_eq!(actual, expected);
+    }
+    let workspace = success(
+        &app,
+        &token,
+        "POST",
+        "/api/workspaces",
+        Some(json!({"branch_id":branch})),
+    )
+    .await;
+    let ws = workspace["workspace_id"].as_str().unwrap();
+    let route = format!("/api/workspaces/{ws}/namespace-operations");
+    let before = success(&app, &token, "GET", &format!("/api/workspaces/{ws}"), None).await;
+    for request in [
+        json!({"kind":"mkdir","path":"new-e\u{301}"}),
+        json!({"kind":"rename","path":"Café/Å.txt","destination":"new-e\u{301}.txt"}),
+    ] {
+        let (status, response) = send(&app, Some(&token), "POST", &route, Some(request)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+        assert_eq!(response["error"]["code"], "NAME_NOT_NORMALIZED");
+        assert_eq!(
+            success(&app, &token, "GET", &format!("/api/workspaces/{ws}"), None).await,
+            before
+        );
+    }
+    let (status, response) = send(
+        &app,
+        Some(&token),
+        "POST",
+        "/api/file-manager/disks/P01/write-sessions",
+        Some(json!({"path":"new-e\u{301}.txt"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+    assert_eq!(response["error"]["code"], "INVALID_REQUEST");
+    assert_eq!(
+        success(
+            &app,
+            &token,
+            "GET",
+            &endpoint(&[("path", "Café"), ("limit", "1")]),
+            None
+        )
+        .await,
+        canonical
+    );
+    for request in [
+        json!({"kind":"rename","path":"Cafe\u{301}/A\u{30a}.txt","destination":"renamed.txt"}),
+        json!({"kind":"delete","path":"Cafe\u{301}/\u{1100}\u{1161}.txt"}),
+    ] {
+        success(&app, &token, "POST", &route, Some(request)).await;
+    }
+    let mut commit = success(
+        &app,
+        &token,
+        "POST",
+        &format!("/api/workspaces/{ws}/seal"),
+        Some(json!({})),
+    )
+    .await;
+    commit["request_digest"] = request_digest(
+        "POST",
+        "/api/workspaces/{workspace}/commit",
+        json!({"workspace":ws}),
+        json!({}),
+        &commit,
+    )
+    .unwrap()
+    .into();
+    success(
+        &app,
+        &token,
+        "POST",
+        &format!("/api/workspaces/{ws}/commit"),
+        Some(commit),
+    )
+    .await;
+    let after = success(&app, &token, "GET", &endpoint(&[]), None).await;
+    let entries = after["entries"].as_array().unwrap();
+    assert!(entries.iter().any(|entry| entry["path"] == "Café"));
+    let renamed = entries
+        .iter()
+        .find(|entry| entry["path"] == "renamed.txt")
+        .unwrap();
+    for field in ["entry_id", "file_id", "version_id"] {
+        assert_eq!(renamed[field], canonical["entries"][0][field], "{field}");
+    }
+    assert_eq!(
+        success(
+            &app,
+            &token,
+            "GET",
+            &endpoint(&[("path", "Cafe\u{301}")]),
+            None
+        )
+        .await["entries"],
+        json!([])
+    );
+}

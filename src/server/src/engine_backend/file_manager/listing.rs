@@ -13,7 +13,7 @@ enum Candidate<'a> {
 
 pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
     let slot = field(input, "slot_id")?;
-    let value = path(input)?;
+    let value = lookup_path(input)?;
     let request = PageRequest::parse(engine, input, slot, value)?;
     if disk(engine, slot)?.level != 1 {
         return backup_namespace::entries(engine, slot, value, request);

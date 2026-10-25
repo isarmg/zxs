@@ -113,7 +113,7 @@ pub(crate) fn scope(
     path: &str,
 ) -> Result<(String, Vec<Entry>, String)> {
     if !path.is_empty() {
-        name_policy::validate_path(path)?;
+        name_policy::validate_lookup_path(path)?;
     }
     let repo = state
         .repositories
@@ -192,6 +192,20 @@ fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
         "directory snapshot commit missing",
     )?
     .clone();
+    // A source query may use an equivalent spelling. Frozen scope metadata
+    // must retain the canonical display path from the matched namespace entry.
+    let path = if path.is_empty() {
+        ""
+    } else {
+        let key = name_policy::path_key(path);
+        current
+            .entries
+            .iter()
+            .find(|entry| entry.lookup_key == key && entry.kind == "directory")
+            .ok_or_else(|| Error::new("DIRECTORY_NOT_FOUND", "directory missing"))?
+            .path
+            .as_str()
+    };
     let mut files = BTreeMap::new();
     for e in entries.iter().filter(|e| e.kind == "file") {
         files.insert(

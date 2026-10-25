@@ -208,3 +208,55 @@ fn rejected_namespace_delete_does_not_remove_entries_or_return_facts() {
         assert_eq!(entries, base);
     }
 }
+
+#[test]
+fn canonical_equivalent_namespace_sources_preserve_identity_and_strict_destinations() {
+    for (stored, query) in [
+        ("é.txt", "e\u{301}.txt"),
+        ("Å.txt", "A\u{30a}.txt"),
+        ("가.txt", "\u{1100}\u{1161}.txt"),
+    ] {
+        let original = entry(stored, "file");
+        let mut entries = vec![original.clone()];
+        let before = json_codec::to_value(&entries).unwrap();
+        for operation in [
+            NamespaceOperation {
+                kind: "mkdir".into(),
+                path: query.into(),
+                destination: None,
+            },
+            NamespaceOperation {
+                kind: "rename".into(),
+                path: stored.into(),
+                destination: Some(query.into()),
+            },
+        ] {
+            assert!(apply_namespace(&mut entries, &operation).is_err());
+            assert_eq!(json_codec::to_value(&entries).unwrap(), before);
+        }
+        apply_namespace(
+            &mut entries,
+            &NamespaceOperation {
+                kind: "rename".into(),
+                path: query.into(),
+                destination: Some("renamed.txt".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(entries[0].entry_id, original.entry_id);
+        assert_eq!(entries[0].file_id, original.file_id);
+        assert_eq!(entries[0].version_id, original.version_id);
+        assert_eq!(entries[0].path, "renamed.txt");
+        let mut entries = vec![original];
+        apply_namespace(
+            &mut entries,
+            &NamespaceOperation {
+                kind: "delete".into(),
+                path: query.into(),
+                destination: None,
+            },
+        )
+        .unwrap();
+        assert!(entries.is_empty());
+    }
+}

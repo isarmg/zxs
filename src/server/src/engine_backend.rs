@@ -490,7 +490,7 @@ impl Backend for EngineBackend {
                 repo_for_branch(&engine, branch_id)?;
                 let branch = engine.state().branches.get(branch_id).unwrap();
                 let path = field(&input, "path")?;
-                name_policy::validate_path(path).map_err(ApiError::invalid)?;
+                name_policy::validate_lookup_path(path).map_err(ApiError::invalid)?;
                 let commit_id =
                     wire::optional_identity(&input, "commit_id")?.unwrap_or(&branch.head_commit_id);
                 let commit = engine

@@ -43,6 +43,14 @@ fn case_fold(c: char) -> Option<&'static str> {
         .map(|index| unicode16::FOLD[index].1)
 }
 pub fn validate_name(name: &str) -> Result<()> {
+    validate_name_inner(name, true)
+}
+/// Validate an existing name reference without requiring NFC input. New names
+/// must still use `validate_name`; character and length restrictions are shared.
+pub fn validate_lookup_name(name: &str) -> Result<()> {
+    validate_name_inner(name, false)
+}
+fn validate_name_inner(name: &str, require_nfc: bool) -> Result<()> {
     let err = |code: &str, message: &str| Error::new(code, message);
     if name.is_empty() || [".", ".."].contains(&name) {
         return Err(err("NAME_INVALID_CHARACTER", "名称不能为空或点路径"));
@@ -85,7 +93,7 @@ pub fn validate_name(name: &str) -> Result<()> {
     if reserved.contains(&stem.as_str()) || numeric {
         return Err(err("NAME_RESERVED", "名称属于设备保留名"));
     }
-    if !unicode::is_nfc(name) {
+    if require_nfc && !unicode::is_nfc(name) {
         return Err(Error::new(
             "NAME_NOT_NORMALIZED",
             format!(
@@ -97,6 +105,15 @@ pub fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 pub fn validate_path(path: &str) -> Result<()> {
+    validate_path_inner(path, true)
+}
+/// Validate a reference to an existing name, allowing canonical-equivalent
+/// spellings. This does not authorize creating or renaming to that spelling.
+/// All character, structure and input-length restrictions remain unchanged.
+pub fn validate_lookup_path(path: &str) -> Result<()> {
+    validate_path_inner(path, false)
+}
+fn validate_path_inner(path: &str, require_nfc: bool) -> Result<()> {
     if path.starts_with('/')
         || path.ends_with('/')
         || path.contains('\\')
@@ -113,7 +130,7 @@ pub fn validate_path(path: &str) -> Result<()> {
         return Err(Error::new("PATH_TOO_DEEP", "目录层级超过32"));
     }
     for c in components {
-        validate_name(c)?;
+        validate_name_inner(c, require_nfc)?;
     }
     Ok(())
 }

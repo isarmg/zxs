@@ -1005,7 +1005,11 @@ impl Engine {
         workspace: &str,
         operation: NamespaceOperation,
     ) -> Result<Workspace> {
-        name_policy::validate_path(&operation.path)?;
+        if operation.kind == "mkdir" {
+            name_policy::validate_path(&operation.path)?;
+        } else {
+            name_policy::validate_lookup_path(&operation.path)?;
+        }
         if let Some(to) = &operation.destination {
             name_policy::validate_path(to)?;
         }

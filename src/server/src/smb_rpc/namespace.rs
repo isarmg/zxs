@@ -47,7 +47,11 @@ impl Session {
         if !["mkdir", "rename", "unlink", "rmdir"].contains(&kind.as_str()) {
             return Err(ApiError::unsupported());
         }
-        name_policy::validate_path(&path).map_err(contract)?;
+        if kind == "mkdir" {
+            name_policy::validate_path(&path).map_err(contract)?;
+        } else {
+            name_policy::validate_lookup_path(&path).map_err(contract)?;
+        }
         if kind == "rename" {
             let target = destination
                 .as_deref()

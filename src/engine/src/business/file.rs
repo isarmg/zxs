@@ -544,7 +544,11 @@ impl Engine {
         principal: &str,
         operation: &str,
     ) -> Result<OperationResult> {
-        name_policy::validate_path(&change.path)?;
+        if change.kind == "mkdir" {
+            name_policy::validate_path(&change.path)?;
+        } else {
+            name_policy::validate_lookup_path(&change.path)?;
+        }
         if let Some(destination) = &change.destination {
             name_policy::validate_path(destination)?;
         }

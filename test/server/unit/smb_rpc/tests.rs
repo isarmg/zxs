@@ -1626,3 +1626,115 @@ fn smb_flush_preserves_the_clients_shared_descriptor_cursor() {
     session.flush(opened.handle).unwrap();
     assert_eq!(file.stream_position().unwrap(), 2);
 }
+
+#[test]
+fn canonical_equivalent_writable_open_binds_stored_display_path() {
+    let (_temp, shared, _backend, branch) = fixture();
+    let mut session = session(shared, &branch);
+    session
+        .namespace(
+            "rename".into(),
+            "report.txt".into(),
+            Some("é.txt".into()),
+            false,
+            &new_id("op"),
+        )
+        .unwrap();
+    let original = session.find("é.txt").unwrap().unwrap();
+    let (result, fd) = session
+        .open("e\u{301}.txt".into(), true, false, false, false, false)
+        .unwrap();
+    let opened: OpenResult = json_codec::from_value(result).unwrap();
+    let Handle::Write(writer) = &session.handles[&opened.handle] else {
+        panic!("expected writer")
+    };
+    assert_eq!(writer.path, "é.txt");
+    let file = File::from(fd.unwrap());
+    file.write_all_at(b"new", 0).unwrap();
+    session.dirty(opened.handle).unwrap();
+    session.flush(opened.handle).unwrap();
+    session.close(opened.handle, false).unwrap();
+    let published = session.find("e\u{301}.txt").unwrap().unwrap();
+    assert_eq!(published.path, "é.txt");
+    assert_eq!(published.name, "é.txt");
+    assert_eq!(published.entry_id, original.entry_id);
+    assert_eq!(published.file_id, original.file_id);
+    assert_ne!(published.version_id, original.version_id);
+    let before = json_codec::to_value(session.entries().unwrap()).unwrap();
+    let next_handle = session.next_handle;
+    let handles = session.handles.len();
+    let spool_entries = fs::read_dir(&session.shared.spool).unwrap().count();
+    let reservations = session.shared.file_writers.lock().unwrap().clone();
+    assert!(
+        session
+            .open("new-e\u{301}.txt".into(), true, true, false, false, false)
+            .is_err()
+    );
+    assert_eq!(session.next_handle, next_handle);
+    assert_eq!(session.handles.len(), handles);
+    assert_eq!(
+        fs::read_dir(&session.shared.spool).unwrap().count(),
+        spool_entries
+    );
+    assert_eq!(*session.shared.file_writers.lock().unwrap(), reservations);
+    assert!(
+        session
+            .open("e\u{301}.txt".into(), true, true, false, true, false)
+            .is_err()
+    );
+    let (result, fd) = session
+        .open("e\u{301}.txt".into(), true, true, true, false, false)
+        .unwrap();
+    let opened: OpenResult = json_codec::from_value(result).unwrap();
+    let Handle::Write(writer) = &session.handles[&opened.handle] else {
+        panic!("expected writer")
+    };
+    assert_eq!(writer.path, "é.txt");
+    drop(fd);
+    session.close(opened.handle, true).unwrap();
+    assert!(
+        session
+            .namespace(
+                "mkdir".into(),
+                "new-e\u{301}".into(),
+                None,
+                false,
+                &new_id("op")
+            )
+            .is_err()
+    );
+    assert!(
+        session
+            .namespace(
+                "rename".into(),
+                "é.txt".into(),
+                Some("new-e\u{301}.txt".into()),
+                false,
+                &new_id("op")
+            )
+            .is_err()
+    );
+    assert_eq!(
+        json_codec::to_value(session.entries().unwrap()).unwrap(),
+        before
+    );
+    session
+        .namespace(
+            "rename".into(),
+            "e\u{301}.txt".into(),
+            Some("Å.txt".into()),
+            false,
+            &new_id("op"),
+        )
+        .unwrap();
+    session
+        .namespace(
+            "unlink".into(),
+            "A\u{30a}.txt".into(),
+            None,
+            false,
+            &new_id("op"),
+        )
+        .unwrap();
+    assert!(session.entries().unwrap().is_empty());
+}

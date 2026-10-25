@@ -193,7 +193,7 @@ impl Session {
                     self.authorize_binding()?;
                     json!({"path":"","kind":"directory","size":"0","entry_id":self.branch})
                 } else {
-                    name_policy::validate_path(&path).map_err(contract)?;
+                    name_policy::validate_lookup_path(&path).map_err(contract)?;
                     json_codec::to_value(
                         self.find(&path)?
                             .ok_or_else(|| ApiError::new(404, "NOT_FOUND", "entry missing"))?,

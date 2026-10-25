@@ -31,6 +31,12 @@ fn query<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
         .and_then(Value::as_str)
 }
 fn path(input: &Value) -> Result<&str, ApiError> {
+    checked_path(input, false)
+}
+fn lookup_path(input: &Value) -> Result<&str, ApiError> {
+    checked_path(input, true)
+}
+fn checked_path(input: &Value, lookup: bool) -> Result<&str, ApiError> {
     // An omitted path denotes the root, but an explicit malformed value must
     // never silently select it (especially for branch and backup mutations).
     let supplied = input
@@ -45,7 +51,12 @@ fn path(input: &Value) -> Result<&str, ApiError> {
         .transpose()?
         .unwrap_or("");
     if !value.is_empty() {
-        name_policy::validate_path(value).map_err(ApiError::invalid)?;
+        if lookup {
+            name_policy::validate_lookup_path(value)
+        } else {
+            name_policy::validate_path(value)
+        }
+        .map_err(ApiError::invalid)?;
     }
     Ok(value)
 }
@@ -306,7 +317,7 @@ fn scoped_directory_branches<'a>(
 ) -> Result<Vec<&'a storage_contract::DirectoryBranch>, ApiError> {
     let repository = repository(engine, repo)?;
     if let Some(path) = requested_path.filter(|path| !path.is_empty()) {
-        name_policy::validate_path(path).map_err(ApiError::invalid)?;
+        name_policy::validate_lookup_path(path).map_err(ApiError::invalid)?;
     }
     let requested_key = requested_path.map(name_policy::path_key);
     let requested_directory_id = requested_key.as_ref().and_then(|key| {
@@ -416,7 +427,7 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
         ));
     }
     if let Some(path) = requested_path {
-        name_policy::validate_path(path).map_err(ApiError::invalid)?;
+        name_policy::validate_lookup_path(path).map_err(ApiError::invalid)?;
     }
     let entries = engine.list_tree_ref(&repo.main_branch_id).map_err(error)?;
     let current = if let Some(path) = requested_path {
@@ -600,7 +611,7 @@ pub(super) fn read(
             keys(&input, &["repository_id", "path", "version_id"])?;
             let repo = repository(engine, field(&input, "repository_id")?)?;
             let path = field(&input, "path")?;
-            name_policy::validate_path(path).map_err(ApiError::invalid)?;
+            name_policy::validate_lookup_path(path).map_err(ApiError::invalid)?;
             let version = engine
                 .state()
                 .versions

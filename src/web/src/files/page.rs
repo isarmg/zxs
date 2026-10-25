@@ -21,7 +21,12 @@ pub(super) fn selected(
         Some(entry)
             if entry.is_object()
                 && entry["entry_id"] == requested["entry_id"]
-                && entry["path"] == requested["path"] =>
+                && entry["path"]
+                    .as_str()
+                    .zip(requested["path"].as_str())
+                    .is_some_and(|(actual, expected)| {
+                        name_policy::path_key(actual) == name_policy::path_key(expected)
+                    }) =>
         {
             Ok(Some(entry.clone()))
         }

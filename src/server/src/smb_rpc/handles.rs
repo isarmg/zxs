@@ -12,7 +12,7 @@ impl Session {
         write_through: bool,
     ) -> Result<(Value, Option<OwnedFd>), ApiError> {
         if !path.is_empty() {
-            name_policy::validate_path(&path).map_err(contract)?;
+            name_policy::validate_lookup_path(&path).map_err(contract)?;
         } else {
             self.authorize_binding()?;
         }
@@ -30,6 +30,17 @@ impl Session {
         if existing.is_none() && !create && !path.is_empty() {
             return Err(ApiError::new(404, "NOT_FOUND", "entry does not exist"));
         }
+        // A lookup spelling is not a proposed new name. Existing writes keep
+        // the stored display path all the way through strict upload admission.
+        // Missing create targets must pass creation rules before any allocation.
+        let path = if let Some(entry) = &existing {
+            entry.path.clone()
+        } else {
+            if create && !path.is_empty() {
+                name_policy::validate_path(&path).map_err(contract)?;
+            }
+            path
+        };
         let handle_id = self.next_handle;
         self.next_handle = self
             .next_handle

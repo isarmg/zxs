@@ -48,3 +48,20 @@ fn unselected_duplicate_aliases_do_not_become_a_single_identity() {
     assert_eq!(facts.len(), 1);
     assert_eq!(facts[0]["selected_path"], "folder/file9.txt");
 }
+
+#[test]
+fn selected_alias_facts_match_canonical_keys_without_losing_display_or_request_paths() {
+    let entries = vec![
+        entry("shared", "Café/Å.txt"),
+        entry("shared", "Other/Å.txt"),
+    ];
+    let query = "Cafe\u{301}/A\u{30a}.txt";
+    let facts = selected_entry_facts(&entries, &BTreeSet::from([("shared", query)]));
+    assert_eq!(
+        facts,
+        vec![json!({"entry_id":"shared","path":"Café/Å.txt","selected_path":query})]
+    );
+    assert!(
+        selected_entry_facts(&entries, &BTreeSet::from([("shared", "Missing/Å.txt")])).is_empty()
+    );
+}

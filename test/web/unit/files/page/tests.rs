@@ -50,3 +50,36 @@ fn selected_identity_is_independent_of_page_and_rejects_replacement() {
         None
     );
 }
+
+#[test]
+fn selected_identity_accepts_canonical_equivalence_but_not_aliases_or_malformed_paths() {
+    let requested = json!({"entry_id":"stable","path":"Cafe\u{301}/A\u{30a}.txt"});
+    let actual = json!({"entry_id":"stable","path":"Café/Å.txt"});
+    assert_eq!(
+        selected(&json!({"selected_entry":actual.clone()}), Some(&requested)).unwrap(),
+        Some(actual.clone())
+    );
+    for rejected in [
+        json!({"entry_id":"stable","path":"Other/Å.txt"}),
+        json!({"entry_id":"recreated","path":"Café/Å.txt"}),
+        json!({"entry_id":"stable"}),
+        json!({"entry_id":"stable","path":null}),
+        json!({"entry_id":"stable","path":7}),
+    ] {
+        assert!(selected(&json!({"selected_entry":rejected}), Some(&requested)).is_err());
+    }
+    for malformed in [
+        json!({"entry_id":"stable"}),
+        json!({"entry_id":"stable","path":null}),
+        json!({"entry_id":"stable","path":7}),
+    ] {
+        assert!(selected(&json!({"selected_entry":actual.clone()}), Some(&malformed)).is_err());
+        assert!(
+            selected(
+                &json!({"selected_entry":malformed.clone()}),
+                Some(&malformed)
+            )
+            .is_err()
+        );
+    }
+}
