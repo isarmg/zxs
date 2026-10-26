@@ -916,3 +916,40 @@ fn unresolved_sources_never_allow_submission_or_registration() {
             .is_none()
     );
 }
+
+#[test]
+fn batch_request_uses_the_shared_kind_without_changing_wire_tokens() {
+    for (kind, token, expected) in [
+        (
+            Kind::Move,
+            "move",
+            storage_contract::DirectoryBatchKind::Move,
+        ),
+        (
+            Kind::Copy,
+            "copy",
+            storage_contract::DirectoryBatchKind::Copy,
+        ),
+        (
+            Kind::Delete,
+            "delete",
+            storage_contract::DirectoryBatchKind::Delete,
+        ),
+        (
+            Kind::Rename,
+            "rename",
+            storage_contract::DirectoryBatchKind::Rename,
+        ),
+    ] {
+        let body = request(&draft(kind)).unwrap();
+        assert_eq!(body["kind"], token);
+        let typed: storage_contract::DirectoryNamespaceBatch =
+            json_codec::from_value(body.clone()).unwrap();
+        assert_eq!(typed.kind, expected);
+        assert_eq!(typed.items.len(), body["items"].as_array().unwrap().len());
+        // The UI has always omitted delete targets; typed HTTP admission
+        // represents the same absence as None, serialized as null.
+        assert!(typed.items.iter().all(|item| item.target.is_none()
+            == (expected == storage_contract::DirectoryBatchKind::Delete)));
+    }
+}

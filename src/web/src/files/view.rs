@@ -21,17 +21,36 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
         </section>
     }
 }
+#[derive(Debug, PartialEq, Eq)]
+enum DiskRoots {
+    Loading,
+    Empty,
+    Disks(Vec<super::model::Disk>),
+}
+
+fn disk_roots_projection(model: &super::model::Model) -> DiskRoots {
+    if model.loading_disks && !model.disks_loaded {
+        DiskRoots::Loading
+    } else if model.disks_loaded && model.disks.is_empty() {
+        DiskRoots::Empty
+    } else {
+        DiskRoots::Disks(model.disks.clone())
+    }
+}
+
 fn disk_roots(state: RwSignal<State>) -> impl IntoView {
     view! {
         <p class="zxs-row">{t("选择一个硬盘目录查看文件。","Choose a disk directory to browse its files.")}</p>
         {move ||{
-            let model=state.with(|s|s.files.clone());
-            if model.loading_disks&&!model.disks_loaded {return view!{<LoadingState/>}.into_any();}
-            if model.disks_loaded&&model.disks.is_empty(){return view!{<EmptyState message=t("没有可访问的硬盘目录。","No disk directories are available.")/>}.into_any();}
+            let disks = match state.with(|s| disk_roots_projection(&s.files)) {
+                DiskRoots::Loading => return view!{<LoadingState/>}.into_any(),
+                DiskRoots::Empty => return view!{<EmptyState message=t("没有可访问的硬盘目录。","No disk directories are available.")/>}.into_any(),
+                DiskRoots::Disks(disks) => disks,
+            };
             view!{<div class="zxs-file-layout zxs-stack zxs-surface"><section class="zxs-content-panel zxs-file-list-panel zxs-frame zxs-stack zxs-stack--flush" aria-label=t("硬盘目录","Disk directories")><div class="zxs-table-scroll">
                 <table class="zxs-table zxs-file-table zxs-disk-table">
                     <thead><tr><th scope="col">{t("名称","Name")}</th><th scope="col">{t("访问权限","Access")}</th><th scope="col">{t("可用空间","Available space")}</th><th scope="col">{t("操作","Actions")}</th></tr></thead>
-                    <tbody>{model.disks.into_iter().map(move |disk|{
+                    <tbody>{disks.into_iter().map(move |disk|{
                         let id=disk.slot_id;let data_slot=id.clone();let row_slot=id.clone();let name_slot=id.clone();let action_slot=id.clone();
                         let online=disk.online;let writable=disk.writable;
                         let available=format::bytes(disk.available_bytes);
@@ -182,3 +201,7 @@ fn file_row(
         </tr>
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/web/unit/files/view/tests.rs"]
+mod tests;

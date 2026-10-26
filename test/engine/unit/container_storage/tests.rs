@@ -439,7 +439,7 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
             })
             .collect::<Vec<_>>();
         let request = DirectoryNamespaceBatch {
-            kind: "move".into(),
+            kind: storage_contract::DirectoryBatchKind::Move,
             items: vec![DirectoryNamespaceItem {
                 source: DirectoryNamespaceSource {
                     directory_branch_id: source.clone(),

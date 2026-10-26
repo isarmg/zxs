@@ -426,11 +426,13 @@ pub struct DirectoryReference {
     pub tree_id: String,
 }
 
+string_state!(DirectoryBatchKind { Move => "move", Copy => "copy", Delete => "delete", Rename => "rename" });
+
 /// One atomic namespace request, with an explicit immutable scope per item.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct DirectoryNamespaceBatch {
-    pub kind: String,
+    pub kind: DirectoryBatchKind,
     pub items: Vec<DirectoryNamespaceItem>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]

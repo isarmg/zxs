@@ -37,7 +37,7 @@ fn active_frozen_batch_deletion_records_live_rebased_path_exactly_once() {
     );
 
     let operation = pool.batch(
-        "delete",
+        storage_contract::DirectoryBatchKind::Delete,
         vec![DirectoryNamespaceItem {
             source: pool.source(&frozen, "Straße/report.txt"),
             target: None,

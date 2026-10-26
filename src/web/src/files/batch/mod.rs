@@ -21,12 +21,12 @@ pub(crate) enum Kind {
     Rename,
 }
 impl Kind {
-    fn wire(self) -> &'static str {
+    fn contract_kind(self) -> storage_contract::DirectoryBatchKind {
         match self {
-            Self::Move => "move",
-            Self::Copy => "copy",
-            Self::Delete => "delete",
-            Self::Rename => "rename",
+            Self::Move => storage_contract::DirectoryBatchKind::Move,
+            Self::Copy => storage_contract::DirectoryBatchKind::Copy,
+            Self::Delete => storage_contract::DirectoryBatchKind::Delete,
+            Self::Rename => storage_contract::DirectoryBatchKind::Rename,
         }
     }
     fn label(self) -> String {

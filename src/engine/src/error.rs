@@ -5,6 +5,8 @@ use storage_contract::ErrorCode;
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
     #[error(transparent)]
+    Checkpoint(#[from] CheckpointError),
+    #[error(transparent)]
     Contract(#[from] storage_contract::Error),
     #[error("{}: {}", self.code(), self.message())]
     Filesystem(#[from] platform_io::fs_safety::Error),
@@ -74,7 +76,8 @@ impl Error {
                 retryable: true,
                 source,
             },
-            source @ (Self::Filesystem(_)
+            source @ (Self::Checkpoint(_)
+            | Self::Filesystem(_)
             | Self::Sqlite(_)
             | Self::Database(_)
             | Self::Payload(_)
@@ -97,7 +100,8 @@ impl Error {
             Self::Contract(source) => source.is_retryable(),
             Self::Cleanup { operation, .. } => operation.is_retryable(),
             Self::Context { retryable, .. } => *retryable,
-            Self::Filesystem(_)
+            Self::Checkpoint(_)
+            | Self::Filesystem(_)
             | Self::Sqlite(_)
             | Self::Database(_)
             | Self::Payload(_)
@@ -115,6 +119,7 @@ impl Error {
             Self::Contract(source) => source.code(),
             Self::Cleanup { operation, .. } => operation.code(),
             Self::Context { code, .. } => *code,
+            Self::Checkpoint(_) => ErrorCode::CheckpointInvalid,
             Self::Filesystem(source) => filesystem_code(source),
             Self::Sqlite(_) | Self::Database(_) => ErrorCode::IndexRebuildFailed,
             Self::Payload(_) | Self::Digest(_) => ErrorCode::ChecksumMismatch,
@@ -152,6 +157,7 @@ impl Error {
                 | platform_io::fs_safety::Error::AlreadyLocked(_)
                 | platform_io::fs_safety::Error::BudgetExceeded) => source.to_string().into(),
             },
+            Self::Checkpoint(source) => source.to_string().into(),
             Self::Sqlite(source) => source.to_string().into(),
             Self::Database(source) => source.to_string().into(),
             Self::Payload(source) => source.to_string().into(),
@@ -213,4 +219,62 @@ impl From<name_policy::Error> for Error {
     fn from(source: name_policy::Error) -> Self {
         Self::Contract(source.into())
     }
+}
+
+/// Local checkpoint rejection causes; journals remain the recovery authority.
+#[derive(Debug, error_definition::Error)]
+pub enum CheckpointError {
+    #[error("coverage byte budget exceeded ({current} + {added} bytes, limit {limit}) at {path:?}")]
+    CoverageBytes {
+        path: std::path::PathBuf,
+        current: usize,
+        added: usize,
+        limit: usize,
+    },
+    #[error("coverage entry budget exceeded (attempted {actual}, limit {limit}) at {path:?}")]
+    CoverageEntries {
+        path: std::path::PathBuf,
+        actual: usize,
+        limit: usize,
+    },
+    #[error("directory entry budget exceeded (attempted {actual}, limit {limit}) at {path:?}")]
+    DirectoryEntries {
+        path: std::path::PathBuf,
+        actual: usize,
+        limit: usize,
+    },
+    #[error("directory name byte budget exceeded (attempted {actual}, limit {limit}) at {path:?}")]
+    DirectoryNameBytes {
+        path: std::path::PathBuf,
+        actual: usize,
+        limit: usize,
+    },
+    #[error("version ID budget exceeded (actual {actual}, limit {limit})")]
+    VersionIds { actual: usize, limit: usize },
+    #[error("absent path budget exceeded (actual {actual}, limit {limit}) for disk {disk}")]
+    AbsentPaths {
+        disk: String,
+        actual: usize,
+        limit: usize,
+    },
+    #[error("invalid coverage path {0:?}")]
+    InvalidPath(std::path::PathBuf),
+    #[error("unsupported coverage file type at {0:?}")]
+    FileType(std::path::PathBuf),
+    #[error("checkpoint coverage members differ from configured disks")]
+    Members,
+    #[error("covered directory children differ at {0:?}")]
+    DirectoryChildren(std::path::PathBuf),
+    #[error("coverage exception is not permitted at {0:?}")]
+    InvalidException(std::path::PathBuf),
+    #[error("covered file length or link count differs at {0:?}")]
+    FileMetadata(std::path::PathBuf),
+    #[error("covered file content differs at {0:?}")]
+    FileContent(std::path::PathBuf),
+    #[error("covered path presence or file type differs at {0:?}")]
+    PathState(std::path::PathBuf),
+    #[error("conflicting checkpoint suffix candidates at sequence {0}")]
+    SuffixConflict(u64),
+    #[error("checkpoint suffix pool, sequence or previous snapshot differs at sequence {0}")]
+    SuffixChain(u64),
 }

@@ -564,3 +564,163 @@ fn checkpoint_save_failure_is_nonfatal_and_reported_once() {
     assert!(consumed.checkpoint_load.is_none());
     assert!(consumed.checkpoint_save.is_none());
 }
+
+#[test]
+fn coverage_byte_budget_and_overflow_keep_typed_cause() {
+    for initial in [MAX_COVERAGE_BYTES, usize::MAX] {
+        let mut entries = Vec::new();
+        let mut budget = initial;
+        let error = add_entry(
+            &mut entries,
+            CoverageEntry {
+                path: "metadata/example".into(),
+                value: Covered::Absent,
+            },
+            &mut budget,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::CheckpointInvalid);
+        assert!(matches!(
+            error,
+            Error::Checkpoint(CheckpointError::CoverageBytes {
+                limit: MAX_COVERAGE_BYTES,
+                current,
+                added,
+                ..
+            }) if current == initial && added > 0
+        ));
+        assert!(entries.is_empty());
+    }
+}
+
+#[test]
+fn directory_budgets_have_distinct_causes_at_existing_limits() {
+    let path = Path::new("metadata");
+    directory_budget(path, MAX_COVERAGE_ENTRIES - 1, MAX_COVERAGE_BYTES).unwrap();
+    assert!(matches!(
+        directory_budget(path, MAX_COVERAGE_ENTRIES, 0),
+        Err(Error::Checkpoint(CheckpointError::DirectoryEntries { .. }))
+    ));
+    assert!(matches!(
+        directory_budget(path, 0, MAX_COVERAGE_BYTES + 1),
+        Err(Error::Checkpoint(
+            CheckpointError::DirectoryNameBytes { .. }
+        ))
+    ));
+}
+
+#[test]
+fn invalid_paths_and_file_types_have_distinct_causes() {
+    assert!(matches!(
+        relative_parts(Path::new("../metadata")),
+        Err(Error::Checkpoint(CheckpointError::InvalidPath(_)))
+    ));
+    let temp = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink("missing", temp.path().join("link")).unwrap();
+    let error = inventory(temp.path(), Path::new("link"), &mut Vec::new(), &mut 0).unwrap_err();
+    assert!(matches!(
+        error,
+        Error::Checkpoint(CheckpointError::FileType(_))
+    ));
+}
+
+#[test]
+fn non_utf8_directory_name_retains_source_and_classification() {
+    use std::os::unix::ffi::OsStringExt;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join(std::ffi::OsString::from_vec(vec![0xff])),
+        b"",
+    )
+    .unwrap();
+    let error = children(temp.path(), Path::new("")).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::CheckpointInvalid);
+    match error {
+        Error::Context { source, .. } => assert!(matches!(*source, Error::PathEncoding(_))),
+        other => panic!("expected preserved path encoding source, got {other:?}"),
+    }
+}
+
+#[test]
+fn coverage_mismatch_reasons_distinguish_members_content_and_io() {
+    let (_temp, root, config) = setup();
+    let engine = reopen(&root).0;
+    let envelope: Envelope = read_json(&path(&config.disks[0])).unwrap();
+    let mut checkpoint = envelope.checkpoint;
+    let disk = &config.disks[0];
+    let entries = checkpoint.coverage.remove(&disk.disk_id).unwrap();
+    assert!(matches!(
+        verify_coverage(&engine, &checkpoint, &BTreeSet::new()),
+        Err(Error::Checkpoint(CheckpointError::Members))
+    ));
+    checkpoint.coverage.insert(disk.disk_id.clone(), entries);
+    let file = checkpoint.coverage[&disk.disk_id]
+        .iter()
+        .find(|entry| {
+            entry.path.starts_with("metadata/objects/")
+                && matches!(&entry.value, Covered::File { hash: Some(_), .. })
+        })
+        .unwrap();
+    let covered = disk.root.join(&file.path);
+    let bytes = std::fs::read(&covered).unwrap();
+    let mut changed = bytes.clone();
+    changed[0] ^= 1;
+    std::fs::write(&covered, &changed).unwrap();
+    assert!(matches!(
+        verify_coverage(&engine, &checkpoint, &BTreeSet::new()),
+        Err(Error::Checkpoint(CheckpointError::FileContent(_)))
+    ));
+    std::fs::write(&covered, &bytes).unwrap();
+    std::fs::remove_file(&covered).unwrap();
+    let error = verify_coverage(&engine, &checkpoint, &BTreeSet::new()).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::CheckpointInvalid);
+    match error {
+        Error::Context { source, .. } => {
+            assert!(std::error::Error::source(source.as_ref()).is_some())
+        }
+        other => panic!("expected covered path I/O source, got {other:?}"),
+    }
+}
+
+#[test]
+fn save_rejects_unsafe_inventory_without_reading_old_checkpoint() {
+    let (_temp, root, config) = setup();
+    let engine = reopen(&root).0;
+    let old = std::fs::read(path(&config.disks[0])).unwrap();
+    // The excluded old checkpoint can be corrupt; save only inventories current dependencies.
+    std::fs::write(path(&config.disks[0]), b"not json").unwrap();
+    let journals = config
+        .disks
+        .iter()
+        .map(|d| (d.disk_id.clone(), scan(d).unwrap().records))
+        .collect();
+    save(&engine, &journals).unwrap();
+    assert_eq!(std::fs::read(path(&config.disks[0])).unwrap(), old);
+    std::os::unix::fs::symlink("missing", config.disks[0].root.join("metadata/unsafe-link"))
+        .unwrap();
+    let error = save(&engine, &journals).unwrap_err();
+    assert!(matches!(
+        error,
+        Error::Checkpoint(CheckpointError::FileType(_))
+    ));
+    assert_eq!(std::fs::read(path(&config.disks[0])).unwrap(), old);
+}
+
+#[test]
+fn coverage_entry_budget_has_its_own_cause() {
+    let entry = CoverageEntry {
+        path: String::new(),
+        value: Covered::Absent,
+    };
+    // Small in-memory entries reach the existing count limit without disk fixtures.
+    let mut entries = vec![entry.clone(); MAX_COVERAGE_ENTRIES];
+    let error = add_entry(&mut entries, entry, &mut 0).unwrap_err();
+    assert!(matches!(
+        error,
+        Error::Checkpoint(CheckpointError::CoverageEntries {
+            limit: MAX_COVERAGE_ENTRIES,
+            ..
+        })
+    ));
+    assert_eq!(entries.len(), MAX_COVERAGE_ENTRIES);
+}

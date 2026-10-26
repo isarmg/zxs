@@ -274,7 +274,13 @@ pub fn Select(
                         _ => {}
                     }
                 }>
-                <span class="zxs-select-value">{move || options.get().iter().find(|item| item.value == value.get()).map(|item| item.label.clone()).unwrap_or_else(|| placeholder.get_value())}</span>
+                <span class="zxs-select-value">{move || {
+                    options.with(|entries| {
+                        entries.iter()
+                            .find(|item| value.with(|value| item.value == *value))
+                            .map(|item| item.label.clone())
+                    }).unwrap_or_else(|| placeholder.get_value())
+                }}</span>
                 <svg class="zxs-select-arrow" aria-hidden="true" viewBox="0 0 16 16"><path d="m6 3 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
             </button>
             <div class="zxs-select-panel zxs-frame" node_ref=panel id=list_id.get_value() role="listbox" popover="manual" aria-labelledby=label_id.get_value()>

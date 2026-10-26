@@ -236,7 +236,7 @@ fn move_transfers_following_but_retains_unselected_frozen_alias_and_identity() {
     let p_head = e.state().directory_branches[&p].head_tree_id.clone();
     let versions = e.state().versions.len();
     let request = DirectoryNamespaceBatch {
-        kind: "move".into(),
+        kind: storage_contract::DirectoryBatchKind::Move,
         items: vec![item(&e, &m, "a/f.txt", Some((&l, "b/f.txt")))],
     };
     let op = storage_contract::OperationId::generate();
@@ -283,7 +283,7 @@ fn batch_move_recovery_keeps_source_and_target_in_one_decision() {
         select(&mut e, &r, "a", "m");
         select(&mut e, &r, "b", "l");
         let request = DirectoryNamespaceBatch {
-            kind: "move".into(),
+            kind: storage_contract::DirectoryBatchKind::Move,
             items: vec![item(&e, &m, "a/f.txt", Some((&l, "b/f.txt")))],
         };
         let op = storage_contract::OperationId::generate();
@@ -346,7 +346,7 @@ fn batch_rejects_ambiguous_move_and_late_collision_without_any_branch_change() {
             .directory_namespace_batch(
                 &r.repository_id,
                 &DirectoryNamespaceBatch {
-                    kind: "move".into(),
+                    kind: storage_contract::DirectoryBatchKind::Move,
                     items,
                 },
                 "admin",

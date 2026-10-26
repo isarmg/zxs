@@ -906,7 +906,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
         )
         .unwrap();
     let request = DirectoryNamespaceBatch {
-        kind: "move".into(),
+        kind: storage_contract::DirectoryBatchKind::Move,
         items: vec![DirectoryNamespaceItem {
             source: DirectoryNamespaceSource {
                 directory_branch_id: m.clone(),

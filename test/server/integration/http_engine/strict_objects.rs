@@ -50,6 +50,21 @@ async fn namespace_batch_requires_named_nested_objects_before_mutation() {
         assert_eq!(rejected["error"]["code"], "INVALID_REQUEST");
         assert_eq!(manager_scope(&app, &token, repo, &branch).await, before);
     }
+    for kind in [
+        json!("unknown"),
+        json!({"rename":null}),
+        json!(null),
+        json!(0),
+        json!([]),
+    ] {
+        let (status, rejected) = send(
+            &app, Some(&token), "POST", route,
+            Some(json!({"kind":kind,"items":[{"source":source,"target":target}],"operation_id":new_id("op")})),
+        ).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+        assert_eq!(rejected["error"]["code"], "INVALID_REQUEST");
+        assert_eq!(manager_scope(&app, &token, repo, &branch).await, before);
+    }
     // Legitimate arrays of named records remain supported.
     success(
         &app,

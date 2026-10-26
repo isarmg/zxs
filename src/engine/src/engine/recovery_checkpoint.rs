@@ -35,13 +35,6 @@ struct Envelope {
 fn path(d: &DiskConfig) -> std::path::PathBuf {
     d.root.join("metadata/replay-checkpoint.json")
 }
-fn invalid() -> Error {
-    Error::new(
-        storage_contract::ErrorCode::CheckpointInvalid,
-        "replay checkpoint coverage differs",
-    )
-}
-
 // Read every repair-relevant byte, not metadata timestamps. Installed named
 // version payloads are excluded: recovery reconstructs their publication proof
 // without re-verifying the body. Prepared content remains hashed because replay
@@ -101,8 +94,10 @@ enum Covered {
 fn relative_parts(path: &Path) -> Result<Vec<&str>> {
     path.components()
         .map(|part| match part {
-            Component::Normal(name) => name.to_str().ok_or_else(invalid),
-            _ => Err(invalid()),
+            Component::Normal(name) => name
+                .to_str()
+                .ok_or_else(|| CheckpointError::InvalidPath(path.into()).into()),
+            _ => Err(CheckpointError::InvalidPath(path.into()).into()),
         })
         .collect()
 }
@@ -138,20 +133,37 @@ fn children(root: &Path, path: &Path) -> Result<Vec<String>> {
         let name = entry?.file_name().into_string().map_err(|name| {
             Error::PathEncoding(name).context(
                 ErrorCode::CheckpointInvalid,
-                "replay checkpoint coverage differs",
+                format!("checkpoint directory name is not UTF-8 at {path:?}"),
             )
         })?;
         if excluded(&path.join(&name)) {
             continue;
         }
         bytes += name.len();
-        if out.len() >= MAX_COVERAGE_ENTRIES || bytes > MAX_COVERAGE_BYTES {
-            return Err(invalid());
-        }
+        directory_budget(path, out.len(), bytes)?;
         out.push(name);
     }
     out.sort();
     Ok(out)
+}
+fn directory_budget(path: &Path, entries: usize, bytes: usize) -> Result<()> {
+    if entries >= MAX_COVERAGE_ENTRIES {
+        return Err(CheckpointError::DirectoryEntries {
+            path: path.into(),
+            actual: entries + 1,
+            limit: MAX_COVERAGE_ENTRIES,
+        }
+        .into());
+    }
+    if bytes > MAX_COVERAGE_BYTES {
+        return Err(CheckpointError::DirectoryNameBytes {
+            path: path.into(),
+            actual: bytes,
+            limit: MAX_COVERAGE_BYTES,
+        }
+        .into());
+    }
+    Ok(())
 }
 fn file_hash(path: &Path) -> Result<String> {
     let mut file = open_regular(path)?;
@@ -167,11 +179,32 @@ fn file_hash(path: &Path) -> Result<String> {
     Ok(h.finalize().to_hex().to_string())
 }
 fn add_entry(out: &mut Vec<CoverageEntry>, entry: CoverageEntry, budget: &mut usize) -> Result<()> {
-    *budget = budget
-        .checked_add(canonical_json(&entry)?.len())
-        .ok_or_else(invalid)?;
-    if *budget > MAX_COVERAGE_BYTES || out.len() >= MAX_COVERAGE_ENTRIES {
-        return Err(invalid());
+    let current = *budget;
+    let added = canonical_json(&entry)?.len();
+    *budget = current
+        .checked_add(added)
+        .ok_or_else(|| CheckpointError::CoverageBytes {
+            current,
+            added,
+            path: entry.path.clone().into(),
+            limit: MAX_COVERAGE_BYTES,
+        })?;
+    if *budget > MAX_COVERAGE_BYTES {
+        return Err(CheckpointError::CoverageBytes {
+            current,
+            added,
+            path: entry.path.into(),
+            limit: MAX_COVERAGE_BYTES,
+        }
+        .into());
+    }
+    if out.len() >= MAX_COVERAGE_ENTRIES {
+        return Err(CheckpointError::CoverageEntries {
+            path: entry.path.into(),
+            actual: out.len() + 1,
+            limit: MAX_COVERAGE_ENTRIES,
+        }
+        .into());
     }
     out.push(entry);
     Ok(())
@@ -185,9 +218,12 @@ fn inventory(
     use std::os::unix::fs::MetadataExt;
     let metadata = std::fs::symlink_metadata(root.join(relative))?;
     if metadata.file_type().is_symlink() || !(metadata.is_dir() || metadata.is_file()) {
-        return Err(invalid());
+        return Err(CheckpointError::FileType(root.join(relative)).into());
     }
-    let name = relative.to_str().ok_or_else(invalid)?.to_owned();
+    let name = relative
+        .to_str()
+        .ok_or_else(|| CheckpointError::InvalidPath(relative.to_path_buf()))?
+        .to_owned();
     if metadata.is_dir() {
         let names = children(root, relative)?;
         add_entry(
@@ -276,7 +312,7 @@ fn suffix_rebuilt_containers(
             })
             .collect::<Vec<_>>();
         if active.len() > 1 {
-            return Err(invalid());
+            return Err(CheckpointError::SuffixConflict(*sequence).into());
         }
         let Some((hash, records)) = active.first() else {
             continue;
@@ -295,7 +331,7 @@ fn suffix_rebuilt_containers(
             || c.sequence != *sequence
             || c.previous_snapshot != previous
         {
-            return Err(invalid());
+            return Err(CheckpointError::SuffixChain(*sequence).into());
         }
         // Only a continuous, fully sealed suffix may waive checking a derived
         // container cache. Pending/forked decisions never authorize exceptions.
@@ -326,13 +362,21 @@ fn verify_coverage(
 ) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
     if checkpoint.coverage.len() != engine.config.disks.len() {
-        return Err(invalid());
+        return Err(CheckpointError::Members.into());
     }
     for d in &engine.config.disks {
         validate_seal(&engine.config, d)?;
-        let entries = checkpoint.coverage.get(&d.disk_id).ok_or_else(invalid)?;
+        let entries = checkpoint
+            .coverage
+            .get(&d.disk_id)
+            .ok_or(CheckpointError::Members)?;
         if entries.len() > MAX_COVERAGE_ENTRIES {
-            return Err(invalid());
+            return Err(CheckpointError::CoverageEntries {
+                path: d.root.clone(),
+                actual: entries.len(),
+                limit: MAX_COVERAGE_ENTRIES,
+            }
+            .into());
         }
         for entry in entries {
             let path = Path::new(&entry.path);
@@ -341,7 +385,7 @@ fn verify_coverage(
                 .first()
                 .is_some_and(|p| matches!(*p, "metadata" | "histories"))
             {
-                return Err(invalid());
+                return Err(CheckpointError::InvalidPath(path.into()).into());
             }
             if parts.len() >= 6
                 && parts[0] == "histories"
@@ -363,10 +407,12 @@ fn verify_coverage(
                 {
                     if let Some(expected) = expected {
                         if children(&d.root, path)? != *expected {
-                            return Err(invalid());
+                            return Err(
+                                CheckpointError::DirectoryChildren(d.root.join(path)).into()
+                            );
                         }
                     } else if !append_only(&d.root, path)? {
-                        return Err(invalid());
+                        return Err(CheckpointError::InvalidException(d.root.join(path)).into());
                     }
                 }
                 (
@@ -378,7 +424,7 @@ fn verify_coverage(
                     Ok(m),
                 ) if m.is_file() && !m.file_type().is_symlink() => {
                     if m.len() != *length || m.nlink() != *links {
-                        return Err(invalid());
+                        return Err(CheckpointError::FileMetadata(d.root.join(path)).into());
                     }
                     match hash {
                         Some(hash) if file_hash(&d.root.join(path))? == *hash => {
@@ -388,28 +434,43 @@ fn verify_coverage(
                             if parts.first() == Some(&"metadata")
                                 && parts.get(1) == Some(&"objects")
                             {
-                                let kind = parts.get(2).ok_or_else(invalid)?;
+                                let kind = parts
+                                    .get(2)
+                                    .ok_or_else(|| CheckpointError::InvalidPath(path.into()))?;
                                 let object_hash = parts
                                     .last()
                                     .and_then(|name| name.strip_suffix(".json"))
-                                    .ok_or_else(invalid)?;
+                                    .ok_or_else(|| CheckpointError::InvalidPath(path.into()))?;
                                 let paths = existing_object_paths(d, kind, object_hash)?;
                                 let covered = d.root.join(path);
                                 if !paths.contains(&covered) {
-                                    return Err(invalid());
+                                    return Err(
+                                        CheckpointError::PathState(d.root.join(path)).into()
+                                    );
                                 }
                                 for alternate in paths {
                                     if alternate != covered && file_hash(&alternate)? != *hash {
-                                        return Err(invalid());
+                                        return Err(CheckpointError::FileContent(alternate).into());
                                     }
                                 }
                             }
                         }
                         None if payload(&d.root, path)? => (),
-                        _ => return Err(invalid()),
+                        Some(_) => {
+                            return Err(CheckpointError::FileContent(d.root.join(path)).into());
+                        }
+                        None => {
+                            return Err(CheckpointError::InvalidException(d.root.join(path)).into());
+                        }
                     }
                 }
-                _ => return Err(invalid()),
+                (_, Err(source)) => {
+                    return Err(Error::from(source).context(
+                        ErrorCode::CheckpointInvalid,
+                        format!("cannot inspect covered path {:?}", d.root.join(path)),
+                    ));
+                }
+                _ => return Err(CheckpointError::PathState(d.root.join(path)).into()),
             }
         }
     }
@@ -479,7 +540,11 @@ pub(super) fn save(
             for evidence in &c.versions {
                 version_ids.insert(evidence.version.version_id.clone());
                 if version_ids.len() > MAX_COVERAGE_ENTRIES {
-                    return Err(invalid());
+                    return Err(CheckpointError::VersionIds {
+                        actual: version_ids.len(),
+                        limit: MAX_COVERAGE_ENTRIES,
+                    }
+                    .into());
                 }
                 for slot in &evidence.placement.route_slot_ids {
                     let target = engine.disk(slot)?;
@@ -494,9 +559,21 @@ pub(super) fn save(
                         match std::fs::symlink_metadata(target.root.join(&relative)) {
                             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                                 let paths = absent.entry(target.disk_id.clone()).or_default();
-                                paths.insert(relative.to_str().ok_or_else(invalid)?.into());
+                                paths.insert(
+                                    relative
+                                        .to_str()
+                                        .ok_or_else(|| {
+                                            CheckpointError::InvalidPath(relative.to_path_buf())
+                                        })?
+                                        .into(),
+                                );
                                 if paths.len() > MAX_COVERAGE_ENTRIES {
-                                    return Err(invalid());
+                                    return Err(CheckpointError::AbsentPaths {
+                                        actual: paths.len(),
+                                        disk: target.disk_id.clone(),
+                                        limit: MAX_COVERAGE_ENTRIES,
+                                    }
+                                    .into());
                                 }
                             }
                             Err(e) => return Err(e.into()),

@@ -9,7 +9,7 @@ fn copied_file_branch_root_records_the_copy_actor_and_operation() {
     let untouched = pool.branch(&source);
     let operation = storage_contract::OperationId::generate();
     let request = DirectoryNamespaceBatch {
-        kind: "copy".into(),
+        kind: storage_contract::DirectoryBatchKind::Copy,
         items: vec![pool.mapping(&source, "source.txt", &target, "copy.txt")],
     };
     pool.engine
@@ -74,7 +74,7 @@ fn copied_file_aliases_keep_each_frozen_parent_and_destination_spelling() {
         }
         let first_path = items[0].target.as_ref().unwrap().path.clone();
         let request = DirectoryNamespaceBatch {
-            kind: "copy".into(),
+            kind: storage_contract::DirectoryBatchKind::Copy,
             items,
         };
         let operation = storage_contract::OperationId::generate();
@@ -144,7 +144,7 @@ fn copied_folder_aliases_share_ids_without_reusing_another_targets_paths() {
     let (before, after) = renamed_targets(&mut pool);
     let source = pool.entry(&before, "source/nested/report.txt");
     let receipt = pool.batch(
-        "copy",
+        storage_contract::DirectoryBatchKind::Copy,
         vec![
             pool.mapping(&before, "source", &before, "folder/Copied"),
             pool.mapping(&before, "source", &after, "renamed/copied"),
@@ -190,7 +190,7 @@ fn copied_file_case_only_targets_preserve_each_requested_alias_name() {
     let mut pool = Pool::new();
     let (before, after) = renamed_targets(&mut pool);
     pool.batch(
-        "copy",
+        storage_contract::DirectoryBatchKind::Copy,
         vec![
             pool.mapping(&before, "source/nested/report.txt", &before, "Copy.TXT"),
             pool.mapping(&before, "source/nested/report.txt", &after, "copy.txt"),
@@ -213,7 +213,7 @@ fn copied_alias_destination_collision_rejects_all_targets_without_mutation() {
     let mut pool = Pool::new();
     let (before, after) = renamed_targets(&mut pool);
     let request = DirectoryNamespaceBatch {
-        kind: "copy".into(),
+        kind: storage_contract::DirectoryBatchKind::Copy,
         items: vec![
             pool.mapping(&before, "source", &before, "folder/copied"),
             pool.mapping(&before, "source", &after, "renamed/copied"),

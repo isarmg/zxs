@@ -268,13 +268,10 @@ fn apply(
         )
     })?;
 
-    if !["move", "copy", "delete", "rename"].contains(&request.kind.as_str())
-        || request.items.is_empty()
-        || request.items.len() > engine.config.max_entries
-    {
+    if request.items.is_empty() || request.items.len() > engine.config.max_entries {
         return Err(Error::new(
             storage_contract::ErrorCode::InvalidRequest,
-            "batch requires supported kind and a bounded nonempty item list",
+            "batch requires a bounded nonempty item list",
         ));
     }
     let mut originals = BTreeMap::new();
@@ -294,7 +291,13 @@ fn apply(
         if let Some(target) = &item.target {
             refs.push((&target.directory_branch_id, &target.expected_tree_id));
         }
-        if (request.kind == "delete") != item.target.is_none() {
+        let requires_target = match request.kind {
+            DirectoryBatchKind::Move | DirectoryBatchKind::Copy | DirectoryBatchKind::Rename => {
+                true
+            }
+            DirectoryBatchKind::Delete => false,
+        };
+        if requires_target != item.target.is_some() {
             return Err(Error::new(
                 storage_contract::ErrorCode::InvalidRequest,
                 "only delete omits a destination",
@@ -395,14 +398,14 @@ fn apply(
                 "duplicate batch mapping",
             ));
         }
-        if request.kind == "rename"
+        if request.kind == DirectoryBatchKind::Rename
             && item.target.as_ref().is_some_and(|t| {
                 t.directory_branch_id == source_scope.directory_branch_id && t.path == source.path()
             })
         {
             continue;
         }
-        if request.kind == "delete" {
+        if request.kind == DirectoryBatchKind::Delete {
             // Capture only actual deletions, never the temporary removals used
             // to plan moves or renames. Keep request and source-entry order.
             for entry in &drafts[&source_scope.directory_branch_id].entries {
@@ -416,14 +419,17 @@ fn apply(
                 }
             }
         }
-        if request.kind != "copy" {
-            remove(
-                drafts
-                    .get_mut(&source_scope.directory_branch_id)
-                    .expect("checked"),
-                &source,
-            );
-            touched.insert(source_scope.directory_branch_id.clone());
+        match request.kind {
+            DirectoryBatchKind::Move | DirectoryBatchKind::Delete | DirectoryBatchKind::Rename => {
+                remove(
+                    drafts
+                        .get_mut(&source_scope.directory_branch_id)
+                        .expect("checked"),
+                    &source,
+                );
+                touched.insert(source_scope.directory_branch_id.clone());
+            }
+            DirectoryBatchKind::Copy => {}
         }
         let Some((target, target_path)) = target_path else {
             continue;
@@ -438,7 +444,7 @@ fn apply(
                 "destination outside selected scope",
             ));
         }
-        if request.kind == "rename"
+        if request.kind == DirectoryBatchKind::Rename
             && target.directory_branch_id != source_scope.directory_branch_id
         {
             return Err(Error::new(
@@ -512,8 +518,9 @@ fn apply(
         .filter_map(|(item, (source_path, target_path))| {
             let source = &originals[&item.source.directory_branch_id];
             let (_, destination) = target_path.as_ref()?;
-            if request.kind != "rename" && request.kind != "move" {
-                return None;
+            match request.kind {
+                DirectoryBatchKind::Rename | DirectoryBatchKind::Move => {}
+                DirectoryBatchKind::Copy | DirectoryBatchKind::Delete => return None,
             }
             if state.directory_selections.get(&source.directory_id)
                 != Some(&source.directory_branch_id)
@@ -586,7 +593,7 @@ fn apply(
             } else {
                 target_draft.directory_id.clone()
             };
-            if request.kind == "copy" {
+            if request.kind == DirectoryBatchKind::Copy {
                 if moved.kind == NamespaceEntryKind::Directory {
                     let key = (
                         member.entry_id.clone(),
@@ -741,7 +748,7 @@ fn apply(
                     &member,
                     source.path(),
                     &target.path,
-                    &request.kind,
+                    request.kind,
                     source.kind == NamespaceEntryKind::Directory,
                 );
                 // set_namespace_location above inserts this exact file identity.
@@ -881,7 +888,11 @@ fn apply(
                 sequence: state.sequence,
                 operation_id: operation,
                 author: principal.into(),
-                message: format!("{} {} branch mappings", request.kind, request.items.len()),
+                message: format!(
+                    "{} {} branch mappings",
+                    request.kind.as_str(),
+                    request.items.len()
+                ),
                 entries,
                 pending_file_versions: pending,
                 provenance: None,

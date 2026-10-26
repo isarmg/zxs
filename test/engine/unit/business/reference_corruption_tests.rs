@@ -185,7 +185,7 @@ fn batch_rejects_missing_references_without_publication() {
             .to_owned();
         let branch = engine.state.directory_branches[&branch_id].clone();
         let request = DirectoryNamespaceBatch {
-            kind: "rename".into(),
+            kind: storage_contract::DirectoryBatchKind::Rename,
             items: vec![DirectoryNamespaceItem {
                 source: DirectoryNamespaceSource {
                     directory_branch_id: branch_id.clone(),
@@ -638,7 +638,7 @@ fn exhausted_main_generation_rejects_active_namespace_batch() {
         .unwrap()
         .clone();
     let request = DirectoryNamespaceBatch {
-        kind: "rename".into(),
+        kind: storage_contract::DirectoryBatchKind::Rename,
         items: vec![DirectoryNamespaceItem {
             source: DirectoryNamespaceSource {
                 directory_branch_id: directory.directory_branch_id.clone(),

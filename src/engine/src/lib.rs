@@ -5,7 +5,7 @@
 //! bind audit authorship, workspace ownership and idempotency, never repository ACLs.
 #![forbid(unsafe_code)]
 mod error;
-pub use error::Error;
+pub use error::{CheckpointError, Error};
 pub type Result<T> = std::result::Result<T, Error>;
 mod business;
 mod container_storage;

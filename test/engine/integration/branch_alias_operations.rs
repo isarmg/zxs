@@ -135,14 +135,15 @@ impl Pool {
             target: Some(self.target(target, destination)),
         }
     }
-    fn batch(&mut self, kind: &str, items: Vec<DirectoryNamespaceItem>) -> OperationResult {
+    fn batch(
+        &mut self,
+        kind: storage_contract::DirectoryBatchKind,
+        items: Vec<DirectoryNamespaceItem>,
+    ) -> OperationResult {
         self.engine
             .directory_namespace_batch(
                 &self.repo.repository_id,
-                &DirectoryNamespaceBatch {
-                    kind: kind.into(),
-                    items,
-                },
+                &DirectoryNamespaceBatch { kind, items },
                 "admin",
                 storage_contract::OperationId::generate(),
             )
@@ -213,7 +214,7 @@ fn folder_copy_shares_one_new_folder_and_file_identity_across_target_branches() 
     let source_head = p.branch(&m).head_tree_id;
     let untouched = p.branch(&q).head_tree_id;
     let result = p.batch(
-        "copy",
+        storage_contract::DirectoryBatchKind::Copy,
         vec![
             p.mapping(&m, "a/folder", &l, "b/copied"),
             p.mapping(&m, "a/folder", &target_p, "b/copied"),
@@ -285,13 +286,13 @@ fn batch_alias_rename_keeps_one_canonical_owner_and_no_op_has_no_subtree() {
     let target_p = p.register("b", "p");
     let original = p.entry(&m, "a/report.txt");
     p.batch(
-        "move",
+        storage_contract::DirectoryBatchKind::Move,
         vec![p.mapping(&m, "a/report.txt", &l, "b/report.txt")],
     );
     let old_n = p.branch(&n);
     let old_p = p.branch(&target_p);
     p.batch(
-        "rename",
+        storage_contract::DirectoryBatchKind::Rename,
         vec![
             p.mapping(&retained, "a/report.txt", &retained, "a/new.txt"),
             p.mapping(&l, "b/report.txt", &l, "b/new.txt"),
@@ -312,7 +313,7 @@ fn batch_alias_rename_keeps_one_canonical_owner_and_no_op_has_no_subtree() {
     let trees = p.engine.state().directory_trees.len();
     let head = p.branch(&retained).head_tree_id;
     p.batch(
-        "rename",
+        storage_contract::DirectoryBatchKind::Rename,
         vec![p.mapping(&retained, "a/new.txt", &retained, "a/new.txt")],
     );
     assert_eq!(p.engine.state().directory_trees.len(), trees);
@@ -337,7 +338,7 @@ fn selected_aliases(p: &mut Pool) -> (String, String, Entry) {
     let l = p.register("b", "l");
     let original = p.entry(&m, "a/report.txt");
     p.batch(
-        "move",
+        storage_contract::DirectoryBatchKind::Move,
         vec![p.mapping(&m, "a/report.txt", &l, "b/report.txt")],
     );
     p.select("a", "n");
@@ -547,7 +548,7 @@ fn deleting_one_inactive_root_alias_preserves_the_other_alias_and_its_context() 
         source: p.source(&root, "a/report.txt"),
         target: None,
     };
-    p.batch("delete", vec![item]);
+    p.batch(storage_contract::DirectoryBatchKind::Delete, vec![item]);
     let after = p.branch(&root);
     assert!(
         after
@@ -1015,7 +1016,7 @@ fn renaming_both_alias_directories_moves_only_the_actual_physical_owner() {
         let target = p.register(owner, "target");
         let original = p.current_entry(&format!("{source}/report.txt"));
         p.batch(
-            "move",
+            storage_contract::DirectoryBatchKind::Move,
             vec![p.mapping(
                 &moved,
                 &original.path,
@@ -1137,7 +1138,7 @@ fn batch_deletion_facts_cover_active_and_inactive_alias_scopes_without_move_dele
             p.select("", "deletion scope");
         }
         let operation = p.batch(
-            "delete",
+            storage_contract::DirectoryBatchKind::Delete,
             vec![DirectoryNamespaceItem {
                 source: p.source(&root, "a/report.txt"),
                 target: None,

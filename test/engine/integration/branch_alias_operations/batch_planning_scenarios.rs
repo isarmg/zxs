@@ -18,10 +18,10 @@ fn initialize(pool: &mut Pool, path: &str) -> String {
 #[test]
 fn frozen_batch_chain_is_order_independent_and_survives_reopen() {
     for (kind, reverse) in [
-        ("rename", false),
-        ("rename", true),
-        ("move", false),
-        ("move", true),
+        (storage_contract::DirectoryBatchKind::Rename, false),
+        (storage_contract::DirectoryBatchKind::Rename, true),
+        (storage_contract::DirectoryBatchKind::Move, false),
+        (storage_contract::DirectoryBatchKind::Move, true),
     ] {
         let mut pool = Pool::new();
         pool.save("a.txt", b"A");
@@ -74,7 +74,7 @@ fn frozen_batch_swap_preserves_identities_contexts_and_retry_receipt() {
         .file_context(&pool.repo.repository_id, "b.txt")
         .unwrap();
     let request = DirectoryNamespaceBatch {
-        kind: "rename".into(),
+        kind: storage_contract::DirectoryBatchKind::Rename,
         items: vec![
             pool.mapping(&branch, "a.txt", &branch, "b.txt"),
             pool.mapping(&branch, "b.txt", &branch, "a.txt"),
@@ -130,7 +130,7 @@ fn frozen_batch_nonparticipating_target_collision_is_atomic() {
     let branch = initialize(&mut pool, "");
     let before = storage_engine::canonical_json(pool.engine.state()).unwrap();
     let request = DirectoryNamespaceBatch {
-        kind: "rename".into(),
+        kind: storage_contract::DirectoryBatchKind::Rename,
         items: vec![
             pool.mapping(&branch, "a.txt", &branch, "b.txt"),
             pool.mapping(&branch, "b.txt", &branch, "occupied.txt"),
@@ -169,7 +169,7 @@ fn frozen_batch_overlapping_active_scopes_reject_before_losing_an_item() {
     let root = initialize(&mut pool, "");
     let before = storage_engine::canonical_json(pool.engine.state()).unwrap();
     let request = DirectoryNamespaceBatch {
-        kind: "rename".into(),
+        kind: storage_contract::DirectoryBatchKind::Rename,
         items: vec![
             pool.mapping(&root, "d/a.txt", &root, "d/a2.txt"),
             pool.mapping(&child, "d/b.txt", &child, "d/b2.txt"),
@@ -224,7 +224,7 @@ fn frozen_batch_directory_swap_preserves_child_identities_and_references() {
         pool.mapping(&root, "a", &root, "b"),
         pool.mapping(&root, "b", &root, "a"),
     ];
-    pool.batch("rename", items);
+    pool.batch(storage_contract::DirectoryBatchKind::Rename, items);
     assert_eq!(pool.current_entry("b").entry_id, a.entry_id);
     assert_eq!(pool.current_entry("a").entry_id, b.entry_id);
     assert_eq!(pool.current_entry("b/one.txt").file_id, a_file.file_id);
@@ -254,7 +254,7 @@ fn frozen_batch_read_only_parent_scope_does_not_block_child_copy() {
     let root = initialize(&mut pool, "");
     let original = pool.current_entry("d/a.txt");
     let items = vec![pool.mapping(&root, "d/a.txt", &child, "d/copy.txt")];
-    pool.batch("copy", items);
+    pool.batch(storage_contract::DirectoryBatchKind::Copy, items);
     let copied = pool.current_entry("d/copy.txt");
     assert_ne!(copied.file_id, original.file_id);
     assert_eq!(pool.bytes(&copied.version_id), b"source");
@@ -276,7 +276,7 @@ fn frozen_batch_deletes_distinct_same_directory_aliases_but_rejects_duplicate_so
         (&second_source, "b/second.txt"),
     ] {
         let item = pool.mapping(source, "a/report.txt", &target, destination);
-        pool.batch("move", vec![item]);
+        pool.batch(storage_contract::DirectoryBatchKind::Move, vec![item]);
     }
     pool.select("b", "target");
     assert_eq!(
@@ -297,7 +297,7 @@ fn frozen_batch_deletes_distinct_same_directory_aliases_but_rejects_duplicate_so
     };
     let before = storage_engine::canonical_json(pool.engine.state()).unwrap();
     let duplicate = DirectoryNamespaceBatch {
-        kind: "delete".into(),
+        kind: storage_contract::DirectoryBatchKind::Delete,
         items: vec![first.clone(), first.clone()],
     };
     assert_eq!(
@@ -317,7 +317,7 @@ fn frozen_batch_deletes_distinct_same_directory_aliases_but_rejects_duplicate_so
         before
     );
     let request = DirectoryNamespaceBatch {
-        kind: "delete".into(),
+        kind: storage_contract::DirectoryBatchKind::Delete,
         items: vec![first, second],
     };
     let operation = storage_contract::OperationId::generate();

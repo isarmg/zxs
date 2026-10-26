@@ -16,6 +16,8 @@
 
 `RwSignal` 是 owner 管理的 arena 值，`ArcRwSignal` 是引用计数值。二者都使用 `reactive_state::prelude` 中的 trait 方法：`.get()` 读取并克隆，`.with(...)` 在借用期间读取，`.set(...)` 替换，`.update(...)` 原地修改并通知依赖。不需要建立响应式依赖时，使用相应 `*_untracked` 读取。不要跨 `.await` 保留 read/write guard。
 
+文件管理器磁盘根视图只投影加载／空状态和表格需要的磁盘记录，不复制目录、选择、历史及操作状态；`Select` 显示当前值时借用选项列表，只保留匹配标签，空列表仍不读取选中值。投影在构造 DOM 前结束借用，保持原 owner 与监听器生命周期；这限定了复制范围，不代表已有端到端性能或视觉测量。
+
 派生值优先用闭包或 `Memo`，副作用才用 `Effect`，避免在 effect 中反复写入另一个 signal 造成反馈循环。以下纯计算示例不需要浏览器 DOM 或执行器：
 
 ```rust

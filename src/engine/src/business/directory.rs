@@ -417,7 +417,7 @@ pub(crate) fn set_namespace_location(
     file: &Entry,
     source: &str,
     destination: &str,
-    kind: &str,
+    kind: DirectoryBatchKind,
     is_directory: bool,
 ) {
     let old = state
@@ -438,12 +438,12 @@ fn namespace_location(
     file: &Entry,
     source: &str,
     destination: &str,
-    kind: &str,
+    kind: DirectoryBatchKind,
     is_directory: bool,
 ) -> String {
     let same_parent = name_policy::path_key(source.rsplit_once('/').map(|v| v.0).unwrap_or(""))
         == name_policy::path_key(destination.rsplit_once('/').map(|v| v.0).unwrap_or(""));
-    if kind == "rename" && same_parent {
+    if kind == DirectoryBatchKind::Rename && same_parent {
         if is_directory {
             let key = name_policy::path_key(source);
             let owner = name_policy::path_key(&old);
@@ -612,7 +612,7 @@ pub(crate) fn namespace_locations(
                 &moved,
                 change.path(),
                 destination,
-                "rename",
+                DirectoryBatchKind::Rename,
                 moved.lookup_key() != source,
             );
             moved.relocate(path);

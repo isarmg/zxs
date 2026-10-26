@@ -151,7 +151,7 @@ pub(super) fn request(draft: &Draft) -> Result<Value, String> {
             }
         }
     }
-    Ok(json!({"kind":draft.kind.wire(),"items":items}))
+    Ok(json!({"kind":draft.kind.contract_kind(),"items":items}))
 }
 fn validate_name(name: &str) -> Result<(), String> {
     if valid_name(name) {

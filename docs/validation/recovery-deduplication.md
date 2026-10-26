@@ -43,6 +43,12 @@
 
 fixed1024 的六次打开都选中 seq257，而不是当前 seq1025；每次 load warning 为空、save warning 为 `CHECKPOINT_INVALID: replay checkpoint coverage differs`。这是旧 coverage 通过 load、新 checkpoint 构建失败后保留旧前缀；`save()` 本身不比较旧 checkpoint。当前通用错误不能唯一定位 8 MiB、entry 数或文件类型分支，不能据此宣称已证明某个预算耗尽或并发修改。其他正式样本的 load/save warnings 均为空。
 
+后续诊断改动将上述通用拒绝拆为 engine `CheckpointError`：coverage 字节／entry、目录 entry／名称字节、version ID／absent path 预算，非法路径／文件类型，以及成员、目录内容、文件元数据／正文、后缀候选／链不一致。仍映射 `CheckpointInvalid`，保留底层 I/O 和路径编码错误来源；load 的保守回退与 save 的非致命 warning 边界不变。没有增加校验、扩大预算、改动磁盘格式或永久收据语义。`save()` 不读取旧 checkpoint，构造失败发生于写入前时保留原文件；多成员写入阶段仍遵循原有逐成员原子写，不新增跨成员原子保证。
+
+小型拒绝路径测试直接覆盖预算边界、路径／链接、非 UTF-8 来源、成员／正文／缺文件、损坏旧 checkpoint 不影响新 save，以及新 inventory 拒绝时保留旧文件。此次不重跑 fixed1024 长基准，因此新错误分类尚未唯一诊断归档中的 fixed1024 原因；原始测量和其 warning 文本保持不变。
+
+诊断改动验证：`cargo test --locked --offline -p storage-engine --all-features` 共 632 项通过、6 项既有手动／容量测试忽略（新增 7 项；checkpoint 模块共 26 项）。`cargo clippy --locked --offline -p storage-engine --all-targets --all-features -- -D warnings`、`bash .github/scripts/check.sh static`、修改文件 rustfmt 与 `git diff --check` 通过。独占 target，`CARGO_INCREMENTAL=0`、jobs=2；未运行全仓 runtime/SDK/浏览器或物理掉电验收。
+
 growing256 的后两次确实选中当前 seq257，仍需几十秒。该改动只消除已证明的重复认证、编码、语义准入和全日志查找；逐历史根展开、snapshot 重建及历史容器修复的剩余工作没有被全面增量化，**未消除全部历史规模二次方成本**。
 
 ## 复现与原始证据
