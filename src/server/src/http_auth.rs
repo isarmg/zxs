@@ -307,24 +307,11 @@ pub(crate) async fn authorize(
             return Err(ApiError::forbidden());
         }
     }
-    let identity = authenticate(state.auth, state.authorization_slots, token.clone()).await?;
+    let identity = state.auth_reader.authenticate(&token)?;
     request.extensions_mut().insert(identity);
     request.extensions_mut().insert(SessionToken(token));
     Ok(next.run(request).await)
 }
-// Bound jobs before scheduling, including time waiting for the credential lock.
-// Ownership moves into the job so canceled HTTP futures cannot free its slot.
-async fn authenticate(
-    auth: Arc<Mutex<crate::auth::AuthStore>>,
-    slots: Arc<tokio::sync::Semaphore>,
-    credential: String,
-) -> Result<Identity, ApiError> {
-    if !authentication::is_token_shape(&credential) {
-        return Err(ApiError::unauthorized());
-    }
-    auth_job(slots, move || lock(&auth).authenticate(&credential)).await
-}
-
 async fn auth_job<T: Send + 'static>(
     slots: Arc<tokio::sync::Semaphore>,
     job: impl FnOnce() -> Result<T, ApiError> + Send + 'static,
@@ -340,8 +327,7 @@ async fn auth_job<T: Send + 'static>(
     .map_err(ApiError::join)?
 }
 
-/// Retry revalidates the current account through AuthorizedBackend. That can
-/// wait for an auth mutation/fsync, so the entire call belongs off the runtime.
+/// Retry can perform management I/O; keep its bounded job off the runtime.
 pub(crate) async fn storage_retry_job(
     backend: Arc<dyn crate::Backend>,
     slots: Arc<tokio::sync::Semaphore>,

@@ -14,6 +14,8 @@ use web_interface::components::{EmptyState, LoadingState, Select, SelectOption};
 use web_interface::{i18n::t, prelude::*};
 
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
+    inline::provide_context(state);
+    super::history_index::provide(state);
     let slot = Memo::new(move |_| state.with(|s| s.files.slot.clone()));
     view! {
         <section class="zxs-content-stack zxs-file-manager zxs-stack">

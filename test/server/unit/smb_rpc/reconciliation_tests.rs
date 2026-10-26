@@ -41,7 +41,10 @@ fn failed_publication_reconciliation_retries_without_restaging_or_second_version
             let saved = one.flush(opened.handle).unwrap();
             assert_eq!(saved["commit_state"], "PUBLISHED");
             assert_eq!(backend.uploads.load(Ordering::SeqCst), 1);
-            let entry = one.find("report.txt").unwrap().unwrap();
+            let entry = one
+                .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+                .unwrap()
+                .unwrap();
             let history = backend
                 .call(
                     crate::BackendAction::History,
@@ -87,7 +90,10 @@ fn failed_publication_reconciliation_preserves_later_bytes_for_authorized_rebase
         assert_eq!(record["published"], true);
         assert_eq!(record["dirty"], true);
         assert_eq!(backend.uploads.load(Ordering::SeqCst), 1);
-        let entry = one.find("report.txt").unwrap().unwrap();
+        let entry = one
+            .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+            .unwrap()
+            .unwrap();
         let content = backend.content(&one.identity, &entry.version_id).unwrap();
         let mut bytes = [0; 3];
         content.file.read_exact_at(&mut bytes, 0).unwrap();
@@ -96,7 +102,10 @@ fn failed_publication_reconciliation_preserves_later_bytes_for_authorized_rebase
         one.dirty(opened.handle).unwrap();
         one.flush(opened.handle).unwrap();
         assert_eq!(backend.uploads.load(Ordering::SeqCst), 2);
-        let entry = one.find("report.txt").unwrap().unwrap();
+        let entry = one
+            .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+            .unwrap()
+            .unwrap();
         let content = backend.content(&one.identity, &entry.version_id).unwrap();
         content.file.read_exact_at(&mut bytes, 0).unwrap();
         assert_eq!(&bytes, b"end");

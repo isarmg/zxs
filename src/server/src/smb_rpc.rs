@@ -62,7 +62,7 @@ enum Handle {
 struct DirectoryHandle {
     file: File,
     entry_id: String,
-    path: String,
+    path: Option<name_policy::PortablePath>,
     cursor: Option<DirectoryCursor>,
 }
 

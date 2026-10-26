@@ -486,7 +486,7 @@ fn managed_admission_never_falls_back_to_stale_disaster_recovery_identity() {
         AuthStore::initialize_management(&management, "admin", "a-long-test-password").unwrap();
     let primary = Arc::new(Mutex::new(primary));
     backend
-        .set_management_auth(Arc::downgrade(&primary))
+        .set_management_auth(crate::lock(&primary).reader())
         .unwrap();
     let caller = crate::auth::Identity {
         admission_session: None,

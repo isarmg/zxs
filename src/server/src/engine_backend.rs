@@ -60,7 +60,7 @@ impl EngineBackend {
     /// An operation already admitted may finish; queued requests see revocation.
     pub(crate) fn set_management_auth(
         &self,
-        auth: std::sync::Weak<std::sync::Mutex<crate::auth::AuthStore>>,
+        auth: crate::auth::AuthReader,
     ) -> Result<(), ApiError> {
         self.engine
             .lock()
@@ -332,6 +332,47 @@ impl Backend for EngineBackend {
             .expect("invariant: admitted commit exists under the engine lock"))
     }
 
+    fn read_directory(
+        &self,
+        identity: &Identity,
+        request: crate::ReadDirectory<'_>,
+    ) -> Result<crate::DirectorySnapshot, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        crate::DirectorySnapshot::capture(&engine, request)
+    }
+
+    fn authorize_workspace_selection(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+        path: &name_policy::PortablePath,
+    ) -> Result<(), ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        workspace_authorize(&engine, &current, workspace)?;
+        engine
+            .validate_workspace_file_selection(workspace, path)
+            .map_err(error)
+    }
+
+    fn authorize_current(&self, identity: &Identity, branch: &str) -> Result<(), ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        read_projection::authorize_current(engine.state(), branch)
+    }
+
+    fn lookup_current(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        read_projection::lookup_current(&engine, branch, path)
+    }
+
     fn lookup_at(
         &self,
         identity: &Identity,
@@ -463,19 +504,6 @@ impl Backend for EngineBackend {
             }
             crate::BackendAction::Tree => {
                 let projection = read_projection::Tree::capture(&engine, &input)?;
-                read_projection::render_unlocked(engine, projection)
-            }
-            crate::BackendAction::SmbAuthorizeRead => {
-                let authorization =
-                    read_projection::SmbReadAuthorization::capture(engine.state(), &input)?;
-                read_projection::render_unlocked(engine, authorization)
-            }
-            crate::BackendAction::SmbLookup => {
-                let projection = read_projection::SmbLookup::capture(&engine, &input)?;
-                read_projection::render_unlocked(engine, projection)
-            }
-            crate::BackendAction::SmbReadDirectory => {
-                let projection = read_projection::SmbDirectory::capture(&engine, &input)?;
                 read_projection::render_unlocked(engine, projection)
             }
             crate::BackendAction::SmbBinding => {
@@ -816,15 +844,6 @@ impl Backend for EngineBackend {
             }
             crate::BackendAction::WorkspaceAuthorize => {
                 workspace_authorize(&engine, identity, field(&input, "workspace_id")?)?;
-                Ok(json!({"authorized":true}))
-            }
-            crate::BackendAction::WorkspaceSelectionAuthorize => {
-                keys(&input, &["workspace_id", "path"])?;
-                let id = field(&input, "workspace_id")?;
-                workspace_authorize(&engine, identity, id)?;
-                engine
-                    .validate_workspace_file_selection(id, field(&input, "path")?)
-                    .map_err(error)?;
                 Ok(json!({"authorized":true}))
             }
             crate::BackendAction::UploadAuthorize => {

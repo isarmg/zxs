@@ -20,11 +20,11 @@ impl Session {
         if self.handles.len() >= MAX_HANDLES {
             return Err(ApiError::limit("too many SMB handles"));
         }
-        let existing = if path.is_empty() {
-            None
-        } else {
-            self.find(&path)?
-        };
+        let existing = lookup
+            .as_ref()
+            .map(|path| self.find(path))
+            .transpose()?
+            .flatten();
         if existing.is_some() && create && exclusive {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::NameConflict,
@@ -77,12 +77,16 @@ impl Session {
             // Freeze a directory's snapshot when its descriptor is opened,
             // not on the first read. Capture and identity validation share the
             // engine authorization lock and allocate no namespace copy.
-            let snapshot = self.call(
-                crate::BackendAction::SmbReadDirectory,
-                json!({"branch_id":self.branch,"path":canonical_path,
-                    "entry_id":entry_id,"capture_only":true}),
+            let snapshot = self.shared.backend.read_directory(
+                &self.identity,
+                crate::ReadDirectory {
+                    branch: &self.branch,
+                    entry_id: &entry_id,
+                    path: path.as_ref(),
+                    selection: crate::DirectorySelection::Capture,
+                },
             )?;
-            let commit_id = field(&snapshot, "commit_id")?.to_owned();
+            let commit_id = snapshot.commit_id;
             let file =
                 File::open(self.shared.spool.join("empty-directory")).map_err(ApiError::io)?;
             let fd = OwnedFd::from(file.try_clone().map_err(ApiError::io)?);
@@ -91,7 +95,7 @@ impl Session {
                 Handle::Directory(DirectoryHandle {
                     file,
                     entry_id: entry_id.clone(),
-                    path: canonical_path.clone(),
+                    path: path.clone(),
                     cursor: Some(DirectoryCursor {
                         commit_id,
                         after: None,
@@ -309,10 +313,9 @@ impl Session {
                 self.call(crate::BackendAction::Version, json!({"version_id":version}))?;
             }
             Some(Handle::Write(_)) | Some(Handle::Directory(_)) => {
-                self.call(
-                    crate::BackendAction::SmbAuthorizeRead,
-                    json!({"branch_id":self.branch}),
-                )?;
+                self.shared
+                    .backend
+                    .authorize_current(&self.identity, &self.branch)?;
             }
             None => {
                 return Err(ApiError::new(

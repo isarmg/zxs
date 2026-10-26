@@ -1,7 +1,7 @@
 //! Rebuildable SQLite projection; never an authority for publication.
 //!
-//! Startup rebuilds from recovered durable evidence, including migration of the
-//! old full-snapshot and generic entity projections. Only file-history candidate
+//! Startup rebuilds from recovered durable evidence, replacing disposable
+//! full-snapshot and generic entity projections without reading their data. Only file-history candidate
 //! fields and the publication sequence are stored. Shared, untouched version
 //! maps need no comparison; changed maps still scan all versions. This is not
 //! an O(delta) CPU claim. Business objects come from State.
@@ -23,6 +23,7 @@ pub(super) struct QueryProof {
     sequence: u64,
     counts: BTreeMap<String, usize>,
     healthy: bool,
+    writer: Option<IndexConnection>,
     #[cfg(test)]
     indexed_reads: usize,
 }
@@ -133,107 +134,223 @@ impl From<ProjectionFailure> for Error {
     }
 }
 
+/// The engine owns the worker until rebuild, failure, or drop. FULL commit,
+/// not worker shutdown/checkpointing, is the publication acknowledgement.
+struct IndexConnection {
+    connection: Option<sqlite_access::SqliteConnection>,
+    file: std::fs::File,
+}
+
+impl IndexConnection {
+    fn open(path: &Path, create: bool) -> std::result::Result<Self, ProjectionFailure> {
+        let mut connection = platform_io::sqlite::block_on_sqlite_connection(
+            platform_io::sqlite::open_index_connection(path, create, None),
+        )?;
+        if let Err(error) = platform_io::sqlite::block_on_sqlite_connection(
+            platform_io::sqlite::disable_checkpoint_on_close(&mut connection),
+        ) {
+            platform_io::sqlite::block_on_sqlite_connection(connection.close()).map_err(
+                |error| ProjectionFailure {
+                    source: error.into(),
+                    corrupt: false,
+                },
+            )?;
+            return Err(ProjectionFailure {
+                source: sqlite_access::Error::Io(std::io::Error::other(error)).into(),
+                corrupt: false,
+            });
+        }
+        let file = match crate::disk::open_regular(path) {
+            Ok(file) => file,
+            Err(error) => {
+                platform_io::sqlite::block_on_sqlite_connection(connection.close()).map_err(
+                    |error| ProjectionFailure {
+                        source: error.into(),
+                        corrupt: false,
+                    },
+                )?;
+                return Err(ProjectionFailure {
+                    source: error,
+                    corrupt: false,
+                });
+            }
+        };
+        Ok(Self {
+            connection: Some(connection),
+            file,
+        })
+    }
+
+    fn check_identity(&self, path: &Path) -> Result<()> {
+        use platform_io::fs_safety::linux::FileIdentity;
+        let current = crate::disk::open_regular(path)?;
+        if FileIdentity::from_fd(&self.file)? != FileIdentity::from_fd(&current)? {
+            return Err(Error::new(
+                ErrorCode::UnsafePath,
+                "index identity changed while connected",
+            ));
+        }
+        Ok(())
+    }
+
+    fn close(&mut self) -> std::result::Result<(), ProjectionFailure> {
+        if let Some(connection) = self.connection.take() {
+            // A close error must never authorize quarantine.
+            platform_io::sqlite::block_on_sqlite_connection(connection.close()).map_err(
+                |error| ProjectionFailure {
+                    source: error.into(),
+                    corrupt: false,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    fn project(
+        &mut self,
+        before: Option<&State>,
+        after: &State,
+        delta: &HistoryDelta<'_>,
+    ) -> std::result::Result<(), ProjectionFailure> {
+        let c = self
+            .connection
+            .as_mut()
+            .expect("invariant: admitted index worker is open");
+        let result = platform_io::sqlite::block_on_sqlite_connection(async {
+            // Preserve the former reopen boundary for disk reads. Cached b-tree
+            // pages must not hide in-place damage behind a valid schema cookie.
+            // This releases page memory, not the worker or prepared statements.
+            c.execute("PRAGMA shrink_memory")
+                .await
+                .map_err(ProjectionFailure::from)?;
+            let mut tx = c.begin().await.map_err(ProjectionFailure::from)?;
+            if let Some(before) = before {
+                check_projection_marker(&mut tx, before.sequence).await?;
+            } else {
+                recreate_projection(&mut tx).await?;
+            }
+            for id in &delta.deletes {
+                sqlite_access::query("DELETE FROM file_history_versions WHERE version_id=?")
+                    .bind(*id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(ProjectionFailure::from)?;
+            }
+            for id in &delta.upserts {
+                let v = &after.versions[*id];
+                sqlite_access::query("INSERT INTO file_history_versions VALUES(?,?,?,?) ON CONFLICT(version_id) DO UPDATE SET file_id=excluded.file_id,history_tree_id=excluded.history_tree_id,version_sequence_key=excluded.version_sequence_key")
+                .bind(*id).bind(&v.file_id).bind(&v.history_tree_id).bind(v.version_sequence.to_be_bytes().as_slice())
+                .execute(&mut *tx).await.map_err(ProjectionFailure::from)?;
+            }
+            // Metadata-only publications still advance the marker in this transaction.
+            sqlite_access::query("INSERT INTO current_state VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET sequence=excluded.sequence")
+            .bind(after.sequence.to_string()).execute(&mut *tx).await.map_err(ProjectionFailure::from)?;
+            tx.commit().await.map_err(ProjectionFailure::from)?;
+            Ok::<(), ProjectionFailure>(())
+        });
+        if result.is_err() {
+            self.close()?;
+        }
+        result
+    }
+}
+
+async fn check_projection_marker(
+    connection: &mut sqlite_access::SqliteConnection,
+    expected_sequence: u64,
+) -> std::result::Result<(), ProjectionFailure> {
+    // This runs after durable publication. Never evaluate a cache-supplied
+    // view while checking the marker, even if a reader already disabled
+    // its candidate path; a definite error retains write blocking/recovery.
+    let marker =
+        sqlite_access::query("SELECT type,sql FROM sqlite_schema WHERE name='current_state'")
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(ProjectionFailure::from)?;
+    if marker
+        .try_get::<String, _>(0)
+        .map_err(ProjectionFailure::from)?
+        != "table"
+        || marker
+            .try_get::<String, _>(1)
+            .map_err(ProjectionFailure::from)?
+            != CURRENT_STATE_TABLE
+    {
+        return Err(
+            "projection marker schema mismatch; reopen to rebuild from durable evidence".into(),
+        );
+    }
+    let sequence: Option<String> =
+        sqlite_access::query_scalar("SELECT sequence FROM current_state WHERE singleton=1")
+            .fetch_optional(&mut *connection)
+            .await
+            .map_err(ProjectionFailure::from)?;
+    if sequence.as_deref() != Some(expected_sequence.to_string().as_str()) {
+        return Err("projection sequence mismatch; reopen to rebuild from durable evidence".into());
+    }
+    Ok(())
+}
+
+async fn recreate_projection(
+    connection: &mut sqlite_access::SqliteConnection,
+) -> std::result::Result<(), ProjectionFailure> {
+    // Transactional replacement removes both obsolete full-State layouts.
+    // A damaged cache may have substituted views for our tables.
+    for (name, drop_view) in [
+        ("current_state", "DROP VIEW current_state"),
+        ("entities", "DROP VIEW entities"),
+        ("file_history_versions", "DROP VIEW file_history_versions"),
+    ] {
+        let kind: Option<String> =
+            sqlite_access::query_scalar("SELECT type FROM sqlite_schema WHERE name=?")
+                .bind(name)
+                .fetch_optional(&mut *connection)
+                .await
+                .map_err(ProjectionFailure::from)?;
+        if kind.as_deref() == Some("view") {
+            connection
+                .execute(drop_view)
+                .await
+                .map_err(ProjectionFailure::from)?;
+        }
+    }
+    connection.execute("DROP TABLE IF EXISTS current_state;DROP TABLE IF EXISTS entities;DROP TABLE IF EXISTS file_history_versions;")
+                .await
+                .map_err(ProjectionFailure::from)?;
+    connection
+        .execute(CURRENT_STATE_TABLE)
+        .await
+        .map_err(ProjectionFailure::from)?;
+    connection
+        .execute(HISTORY_TABLE)
+        .await
+        .map_err(ProjectionFailure::from)?;
+    connection
+        .execute(HISTORY_INDEX)
+        .await
+        .map_err(ProjectionFailure::from)?;
+    Ok(())
+}
+
+impl Drop for IndexConnection {
+    fn drop(&mut self) {
+        if let Err(error) = self.close() {
+            tracing::warn!(error = %error.source, "index worker shutdown failed");
+        }
+    }
+}
+
+#[cfg(test)]
 fn project_delta(
     path: &Path,
     before: Option<&State>,
     after: &State,
     delta: &HistoryDelta<'_>,
 ) -> Result<()> {
-    try_project_delta(path, before, after, delta).map_err(Into::into)
-}
-
-fn try_project_delta(
-    path: &Path,
-    before: Option<&State>,
-    after: &State,
-    delta: &HistoryDelta<'_>,
-) -> std::result::Result<(), ProjectionFailure> {
-    platform_io::sqlite::block_on_sqlite_connection(async {
-        let mut c = platform_io::sqlite::open_index_connection(path, before.is_none(), None)
-            .await
-            .map_err(ProjectionFailure::from)?;
-        let result = async {
-        let mut tx = c.begin().await.map_err(ProjectionFailure::from)?;
-        if let Some(before) = before {
-            // This runs after durable publication. Never evaluate a cache-supplied
-            // view while checking the marker, even if a reader already disabled
-            // its candidate path; a definite error retains write blocking/recovery.
-            let marker =
-                sqlite_access::query("SELECT type,sql FROM sqlite_schema WHERE name='current_state'")
-                    .fetch_one(&mut *tx)
-                    .await
-                    .map_err(ProjectionFailure::from)?;
-            if marker.try_get::<String, _>(0).map_err(ProjectionFailure::from)? != "table"
-                || marker.try_get::<String, _>(1).map_err(ProjectionFailure::from)? != CURRENT_STATE_TABLE
-            {
-                return Err(
-                    "projection marker schema mismatch; reopen to rebuild from durable evidence"
-                        .into(),
-                );
-            }
-            let sequence: Option<String> =
-                sqlite_access::query_scalar("SELECT sequence FROM current_state WHERE singleton=1")
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(ProjectionFailure::from)?;
-            if sequence.as_deref() != Some(before.sequence.to_string().as_str()) {
-                return Err(
-                    "projection sequence mismatch; reopen to rebuild from durable evidence".into(),
-                );
-            }
-        } else {
-            // Transactional replacement removes both obsolete full-State layouts.
-            // A damaged cache may have substituted views for our tables.
-            for (name, drop_view) in [
-                ("current_state", "DROP VIEW current_state"),
-                ("entities", "DROP VIEW entities"),
-                ("file_history_versions", "DROP VIEW file_history_versions"),
-            ] {
-                let kind: Option<String> =
-                    sqlite_access::query_scalar("SELECT type FROM sqlite_schema WHERE name=?")
-                        .bind(name)
-                        .fetch_optional(&mut *tx)
-                        .await
-                        .map_err(ProjectionFailure::from)?;
-                if kind.as_deref() == Some("view") {
-                    tx.execute(drop_view).await.map_err(ProjectionFailure::from)?;
-                }
-            }
-            tx.execute("DROP TABLE IF EXISTS current_state;DROP TABLE IF EXISTS entities;DROP TABLE IF EXISTS file_history_versions;")
-                .await
-                .map_err(ProjectionFailure::from)?;
-            tx.execute(CURRENT_STATE_TABLE).await.map_err(ProjectionFailure::from)?;
-            tx.execute(HISTORY_TABLE).await.map_err(ProjectionFailure::from)?;
-            tx.execute(HISTORY_INDEX).await.map_err(ProjectionFailure::from)?;
-        }
-        for id in &delta.deletes {
-            sqlite_access::query("DELETE FROM file_history_versions WHERE version_id=?")
-                .bind(*id)
-                .execute(&mut *tx)
-                .await
-                .map_err(ProjectionFailure::from)?;
-        }
-        for id in &delta.upserts {
-            let v = &after.versions[*id];
-            sqlite_access::query("INSERT INTO file_history_versions VALUES(?,?,?,?) ON CONFLICT(version_id) DO UPDATE SET file_id=excluded.file_id,history_tree_id=excluded.history_tree_id,version_sequence_key=excluded.version_sequence_key")
-                .bind(*id).bind(&v.file_id).bind(&v.history_tree_id).bind(v.version_sequence.to_be_bytes().as_slice())
-                .execute(&mut *tx).await.map_err(ProjectionFailure::from)?;
-        }
-        // Metadata-only publications still advance the marker in this transaction.
-        sqlite_access::query("INSERT INTO current_state VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET sequence=excluded.sequence")
-            .bind(after.sequence.to_string()).execute(&mut *tx).await.map_err(ProjectionFailure::from)?;
-        tx.commit().await.map_err(ProjectionFailure::from)?;
-        Ok::<(), ProjectionFailure>(())
-        }.await;
-        // Do not replace files if closing the native worker is uncertain.
-        if let Err(error) = c.close().await {
-            return Err(ProjectionFailure {
-                source: error.into(),
-                corrupt: false,
-            });
-        }
-        result
-    })
+    let mut writer = IndexConnection::open(path, before.is_none()).map_err(Error::from)?;
+    let result = writer.project(before, after, delta);
+    writer.close().map_err(Error::from)?;
+    result.map_err(Into::into)
 }
 
 // Move every journal before the main database. A partial quarantine must never
@@ -315,17 +432,28 @@ impl Engine {
             .lock()
             .expect("invariant: history query proof lock poisoned");
         proof.healthy = false;
+        if let Some(mut writer) = proof.writer.take() {
+            writer.close().map_err(Error::from)?;
+        }
         let delta = HistoryDelta::between(None, &self.state.versions);
         checked_index_files(&self.root)?;
         let path = self.root.join("index.sqlite");
-        if let Err(error) = try_project_delta(&path, None, &self.state, &delta) {
-            if !error.corrupt {
-                return Err(error.into());
+        let rebuild = || {
+            let mut writer = IndexConnection::open(&path, true)?;
+            writer.project(None, &self.state, &delta)?;
+            Ok::<_, ProjectionFailure>(writer)
+        };
+        proof.writer = Some(match rebuild() {
+            Ok(writer) => writer,
+            Err(error) => {
+                if !error.corrupt {
+                    return Err(error.into());
+                }
+                quarantine_corrupt_index(&self.root)?;
+                // Only recovered durable State supplies the replacement projection.
+                rebuild().map_err(Error::from)?
             }
-            quarantine_corrupt_index(&self.root)?;
-            // Only recovered durable State supplies the replacement projection.
-            project_delta(&path, None, &self.state, &delta)?;
-        }
+        });
         proof.counts.clear();
         for v in self.state.versions.values() {
             *proof.counts.entry(v.file_id.clone()).or_default() += 1;
@@ -344,13 +472,23 @@ impl Engine {
             proof.healthy = false;
             return Err(error);
         }
-        if let Err(error) = project_delta(
-            &self.root.join("index.sqlite"),
-            Some(previous),
-            &self.state,
-            &delta,
-        ) {
+        let result = (|| {
+            let writer = proof.writer.as_mut().ok_or_else(|| {
+                Error::new(
+                    ErrorCode::IndexRebuildFailed,
+                    "index worker unavailable; reopen to rebuild",
+                )
+            })?;
+            writer.check_identity(&self.root.join("index.sqlite"))?;
+            writer
+                .project(Some(previous), &self.state, &delta)
+                .map_err(Error::from)
+        })();
+        if let Err(error) = result {
             proof.healthy = false;
+            if let Some(mut writer) = proof.writer.take() {
+                writer.close().map_err(Error::from)?;
+            }
             return Err(error);
         }
         if proof.healthy && proof.sequence == previous.sequence {

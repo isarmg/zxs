@@ -126,7 +126,11 @@ fn configured_samba_account_binds_the_current_single_authority_and_fails_closed_
     let (mut live, response) = connect(shared.clone(), "samba-owner", &repository);
     assert!(matches!(response, Response::Ok { result } if result["principal"] == "alice"));
 
-    *shared.auth.lock().unwrap() = AuthStore::unavailable(&temp.path().join("recovering"));
+    shared
+        .auth
+        .lock()
+        .unwrap()
+        .replace_authority(AuthStore::unavailable(&temp.path().join("recovering")));
     live.wire
         .send(
             &Request::<String>::Stat {
@@ -146,12 +150,14 @@ fn configured_samba_account_binds_the_current_single_authority_and_fails_closed_
     disconnect(live, false);
     assert_eq!(*shared.authenticated_sessions.lock().unwrap(), 0);
 
-    *shared.auth.lock().unwrap() = AuthStore::initialize(
-        &temp.path().join("restored-auth"),
-        "restored-owner",
-        "long-test-password",
-    )
-    .unwrap();
+    shared.auth.lock().unwrap().replace_authority(
+        AuthStore::initialize(
+            &temp.path().join("restored-auth"),
+            "restored-owner",
+            "long-test-password",
+        )
+        .unwrap(),
+    );
     let (restored, response) = connect(shared.clone(), "samba-owner", &repository);
     assert!(matches!(response, Response::Ok { result } if result["principal"] == "restored-owner"));
     disconnect(restored, false);

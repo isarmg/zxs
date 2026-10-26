@@ -434,6 +434,8 @@ impl SpoolBudget {
             name: name.to_owned(),
             principal: principal.to_owned(),
             max_length: length,
+            overhead,
+            charged_bytes: bytes,
         })
     }
 }
@@ -443,6 +445,8 @@ pub(crate) struct Reservation {
     name: String,
     principal: String,
     max_length: u64,
+    overhead: u64,
+    charged_bytes: u64,
 }
 impl Reservation {
     pub(crate) fn block_admission(&self) {
@@ -518,17 +522,15 @@ impl Reservation {
 }
 impl Drop for Reservation {
     fn drop(&mut self) {
-        let mut ledger = self
-            .budget
-            .ledger
-            .lock()
-            .expect("service state lock poisoned");
-        let previous = ledger
-            .files
-            .get(&self.name)
-            .expect("invariant: a reservation owns its ledger entry");
-        let overhead = previous.overhead;
-        let maximum = previous.bytes;
+        let mut ledger = match self.budget.ledger.lock() {
+            Ok(ledger) => ledger,
+            Err(error) => {
+                tracing::error!(%error, "spool settlement skipped; ledger remains poisoned");
+                return;
+            }
+        };
+        let overhead = self.overhead;
+        let maximum = self.charged_bytes;
         // Last writer/metadata task has finished. Unknown durability and upload
         // success are irrelevant: charge every retained physical byte.
         let retained = match fs::symlink_metadata(self.budget.root.join(&self.name)) {

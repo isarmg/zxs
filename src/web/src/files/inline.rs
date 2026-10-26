@@ -88,15 +88,18 @@ impl Target {
         }
     }
 
-    fn display(&self, state: &State) -> String {
-        let value = self.initial(state);
+    fn display(&self, history: &super::history_index::HistoryIndex) -> String {
+        let node = match self {
+            Self::NodeNote(id) => history.node(id).map(|(_, node)| node),
+            Self::VersionNote(id) => history.version(id),
+            _ => unreachable!("invariant: version note displays only node or version metadata"),
+        };
+        let value = node.map(|node| text(node, &["note"])).unwrap_or_default();
         if !value.is_empty() {
             return value;
         }
-        if let Self::NodeNote(id) = self
-            && let Some(node) = super::model::history_nodes_ref(&state.files.file_history)
-                .iter()
-                .find(|node| super::model::history_node_id(node) == *id)
+        if matches!(self, Self::NodeNote(_))
+            && let Some(node) = node
         {
             match node["kind"].as_str().unwrap_or_default() {
                 "tags" => return t("标签变化", "Tags changed"),
@@ -222,6 +225,15 @@ impl Context {
         }
     }
 }
+#[derive(Clone, Copy)]
+struct SharedContext(Memo<Context>);
+
+pub(super) fn provide_context(state: RwSignal<State>) {
+    web_interface::prelude::provide_context(SharedContext(Memo::new(move |_| {
+        state.with(Context::capture)
+    })));
+}
+
 impl Draft {
     fn unobserved(state: RwSignal<State>) -> Self {
         Self {
@@ -236,9 +248,11 @@ impl Draft {
 
     pub(super) fn new(state: RwSignal<State>) -> Self {
         let draft = Self::unobserved(state);
-        let context = Memo::new(move |_| state.with(Context::capture));
+        let context = use_context::<SharedContext>()
+            .expect("invariant: file page provides its editor context")
+            .0;
         Effect::new(move |_| {
-            let _ = context.get();
+            context.with(|_| ());
             draft.cancel();
         });
         Effect::new(move |_| {
@@ -451,14 +465,18 @@ pub(super) fn version_note(
     disabled: Signal<bool>,
 ) -> (impl IntoView, impl IntoView) {
     let editor = Editor::new(state, t("编辑备注", "Edit note"), target, disabled);
+    let history = super::history_index::shared();
+    let caption = Memo::new(move |_| {
+        history.with(|history| editor.target.with_value(|target| target.display(history)))
+    });
     let note = view! {
         <div class="zxs-version-note-row zxs-row" class:zxs-inline-note=move ||editor.draft.editing.get()>
             {move ||if editor.draft.editing.get() {
                 editor_input(editor).into_any()
             } else {
                 view!{<span class="zxs-version-note">{move ||{
-                    state.with(|s|editor.target.get_value().display(s))
-                }}</span>{super::tags::chips(state,node_id.clone())}}.into_any()
+                    caption.get()
+                }}</span>{super::tags::chips(node_id.clone())}}.into_any()
             }}
         </div>
     };

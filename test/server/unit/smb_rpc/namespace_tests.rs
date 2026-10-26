@@ -82,7 +82,12 @@ fn unlink_and_rmdir_preserve_targets_of_the_wrong_kind() {
             })
             .unwrap_err();
         assert_eq!(error.code, expected);
-        assert!(session.find(path).unwrap().is_some());
+        assert!(
+            session
+                .find(&name_policy::LookupPath::parse(path).unwrap())
+                .unwrap()
+                .is_some()
+        );
         assert!(session.writer_locks.is_empty());
     }
 }
@@ -138,6 +143,41 @@ impl Backend for NamespaceFailure {
         commit: &str,
     ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
         self.inner.snapshot_at(identity, branch, commit)
+    }
+
+    fn authorize_current(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.inner.authorize_current(identity, branch)
+    }
+
+    fn read_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectory<'_>,
+    ) -> Result<crate::DirectorySnapshot, crate::ApiError> {
+        self.inner.read_directory(identity, request)
+    }
+
+    fn authorize_workspace_selection(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        path: &name_policy::PortablePath,
+    ) -> Result<(), crate::ApiError> {
+        self.inner
+            .authorize_workspace_selection(identity, workspace, path)
+    }
+
+    fn lookup_current(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        self.inner.lookup_current(identity, branch, path)
     }
 
     fn lookup_at(
@@ -322,7 +362,13 @@ fn uncertain_namespace_dispatch_never_aborts_its_workspace() {
         assert_eq!(record["principal"], "alice");
         assert_eq!(record["branch_id"], branch);
         assert!(session.writer_locks.is_empty());
-        assert_eq!(session.find("renamed.txt").unwrap().is_some(), publish);
+        assert_eq!(
+            session
+                .find(&name_policy::LookupPath::parse("renamed.txt").unwrap())
+                .unwrap()
+                .is_some(),
+            publish
+        );
         if publish {
             let operation = backend
                 .inner
@@ -366,7 +412,10 @@ fn legacy_untyped_delete_cannot_remove_files_or_directories() {
             "destination":null, "replace":false
         }));
         assert!(
-            session.find(path).unwrap().is_some(),
+            session
+                .find(&name_policy::LookupPath::parse(path).unwrap())
+                .unwrap()
+                .is_some(),
             "ambiguous legacy delete actually removed {path}: {result:?}"
         );
         assert!(result.is_err());
@@ -395,8 +444,18 @@ fn typed_removal_succeeds_and_successful_namespace_records_are_cleaned() {
             })
             .unwrap();
     }
-    assert!(session.find("empty").unwrap().is_none());
-    assert!(session.find("report.txt").unwrap().is_none());
+    assert!(
+        session
+            .find(&name_policy::LookupPath::parse("empty").unwrap())
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        session
+            .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+            .unwrap()
+            .is_none()
+    );
     assert!(!fs::read_dir(&session.shared.spool).unwrap().any(|entry| {
         entry
             .unwrap()
@@ -572,6 +631,41 @@ impl Backend for PreparationFailure {
             ));
         }
         self.inner.snapshot_at(identity, branch, commit)
+    }
+
+    fn authorize_current(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.inner.authorize_current(identity, branch)
+    }
+
+    fn read_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectory<'_>,
+    ) -> Result<crate::DirectorySnapshot, crate::ApiError> {
+        self.inner.read_directory(identity, request)
+    }
+
+    fn authorize_workspace_selection(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        path: &name_policy::PortablePath,
+    ) -> Result<(), crate::ApiError> {
+        self.inner
+            .authorize_workspace_selection(identity, workspace, path)
+    }
+
+    fn lookup_current(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        self.inner.lookup_current(identity, branch, path)
     }
 
     fn lookup_at(

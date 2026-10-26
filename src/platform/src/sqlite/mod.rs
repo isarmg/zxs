@@ -22,7 +22,7 @@ pub use native_limits::{
     ConnectionLimitError, ConnectionLimits, EffectiveConnectionLimits, apply_connection_limits,
 };
 mod native_security;
-pub use native_security::{ConnectionSecurityError, enable_defensive};
+pub use native_security::{ConnectionSecurityError, disable_checkpoint_on_close, enable_defensive};
 mod trusted_ddl;
 pub use trusted_ddl::{DdlFingerprintError, fingerprint_trusted_ddl};
 
@@ -80,8 +80,9 @@ fn index_open_options(database_path: &Path, create_if_missing: bool) -> SqliteCo
 }
 
 /// Open a direct SQLite connection, suitable for [`block_on_sqlite_connection`].
-/// The caller must explicitly close the connection before returning from its
-/// future. Filesystem permissions and index reconstruction remain engine duties.
+/// The caller must explicitly close the connection at the end of its ownership
+/// lifetime, before replacing database files. A synchronous owner may reuse the
+/// worker across calls. Filesystem permissions and reconstruction remain engine duties.
 pub async fn open_index_connection(
     database_path: &Path,
     create_if_missing: bool,

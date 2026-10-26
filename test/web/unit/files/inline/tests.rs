@@ -114,12 +114,19 @@ fn a_path_nodes_generated_caption_is_display_only_and_note_input_starts_from_met
     let target = Target::NodeNote("fnode-rename".into());
     assert_eq!(target.initial(&state), "");
     assert_eq!(
-        target.display(&state),
+        target.display(&super::super::history_index::HistoryIndex::new(
+            state.files.file_history.clone()
+        )),
         "Path changed old/report.txt → new/report.txt"
     );
     assert!(target.input_kind() == InputKind::Note);
     state.files.file_history["nodes"][0]["note"] = "Reviewed rename".into();
-    assert_eq!(target.display(&state), "Reviewed rename");
+    assert_eq!(
+        target.display(&super::super::history_index::HistoryIndex::new(
+            state.files.file_history.clone()
+        )),
+        "Reviewed rename"
+    );
     assert_eq!(
         edit_value("", target.input_kind()),
         Edit::Save(String::new())
@@ -238,4 +245,106 @@ fn queued_edits_cannot_submit_after_session_navigation_alias_or_branch_changes()
             assert!(!draft.pending());
         }
     });
+}
+
+#[test]
+fn page_context_is_shared_and_only_invalidates_on_editor_ownership_changes() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let owner = Owner::new();
+    owner.with(|| {
+        let state = RwSignal::new(active_state());
+        provide_context(state);
+        let first = use_context::<SharedContext>().unwrap().0;
+        let second = use_context::<SharedContext>().unwrap().0;
+        assert!(first == second);
+        let runs = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&runs);
+        let consumer = Memo::new(move |_| {
+            observed.fetch_add(1, Ordering::Relaxed);
+            first.with(|context| context.epoch)
+        });
+        assert_eq!(consumer.get(), 7);
+        state.update(|s| s.files.history_loading = true);
+        assert_eq!(consumer.get(), 7);
+        assert_eq!(runs.load(Ordering::Relaxed), 1);
+        state.update(|s| s.session_epoch += 1);
+        assert_eq!(consumer.get(), 8);
+        assert_eq!(runs.load(Ordering::Relaxed), 2);
+        assert_eq!(second.with(|context| context.epoch), 8);
+    });
+    owner.cleanup();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn scheduled_shared_context_effects_preserve_pending_drafts_and_follow_page_ownership() {
+    use task_dispatch::Executor;
+    Executor::init_futures_executor().expect("test initializes the native effect executor once");
+    let root = Owner::new();
+    let state = root.with(|| RwSignal::new(active_state()));
+    let page = root.with(Owner::new);
+    let (first, second, old_context) = page.with(|| {
+        provide_context(state);
+        (
+            Draft::new(state),
+            Draft::new(state),
+            use_context::<SharedContext>().unwrap().0,
+        )
+    });
+    Executor::poll_local(); // Run the real initial effects before user input.
+    for (draft, id, text) in [
+        (first, "first", "first pending text"),
+        (second, "second", "second pending text"),
+    ] {
+        draft.start(text.into());
+        draft.submit(|| Some(id.into()));
+    }
+    state.update(|s| {
+        s.files.operations = vec![
+            json_codec::json!({"operation_id":"first", "state":"in_doubt"}),
+            json_codec::json!({"operation_id":"second", "state":"in_doubt"}),
+        ];
+        s.management.storage = crate::management::Storage::ReadOnly;
+    });
+    Executor::poll_local();
+    assert_eq!(first.value.get_untracked(), "first pending text");
+    assert_eq!(second.value.get_untracked(), "second pending text");
+    assert!(first.pending() && second.pending());
+    state.update(|s| s.session_epoch += 1);
+    Executor::poll_local();
+    for draft in [first, second] {
+        assert!(!draft.editing.get_untracked());
+        assert!(!draft.pending());
+        assert!(draft.value.get_untracked().is_empty());
+        draft.start("next session draft".into());
+    }
+    state.update(|s| s.session_transition = crate::ui::SessionTransition::LoggingOut);
+    Executor::poll_local();
+    assert!(!first.editing.get_untracked());
+    assert!(!second.editing.get_untracked());
+
+    // Queue notifications, then unmount before the effects consume them.
+    state.update(|s| s.session_epoch += 1);
+    page.cleanup();
+    assert!(old_context.try_get_untracked().is_none());
+    Executor::poll_local();
+    state.set(active_state());
+    let remounted = root.with(Owner::new);
+    let (fresh, fresh_context) = remounted.with(|| {
+        provide_context(state);
+        (Draft::new(state), use_context::<SharedContext>().unwrap().0)
+    });
+    assert!(old_context != fresh_context);
+    Executor::poll_local();
+    fresh.start("new mounted draft".into());
+    state.update(|s| s.files.history_loading = true);
+    Executor::poll_local();
+    assert_eq!(fresh.value.get_untracked(), "new mounted draft");
+    assert_eq!(fresh_context.with(|context| context.epoch), 7);
+    remounted.cleanup();
+    Executor::poll_local();
+    root.cleanup();
 }

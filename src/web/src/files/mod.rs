@@ -3,6 +3,7 @@ mod backup;
 mod batch;
 mod branch;
 mod detail;
+mod history_index;
 mod inline;
 mod merge;
 mod model;

@@ -165,23 +165,20 @@ unsafe extern "C" fn free_context(data: *mut *mut c_void) {
         unsafe {
             *data = std::ptr::null_mut();
         }
-        let mut errors = Vec::new();
-        for opened in context.files.values() {
-            // SAFETY: Context owns each descriptor and this terminal callback closes it once.
-            if unsafe { libc::close(opened.fd) } < 0 {
-                errors.push(std::io::Error::last_os_error());
+        let _ = guarded(|| {
+            let mut errors = Vec::new();
+            for opened in context.files.values() {
+                // SAFETY: Context owns each descriptor; this terminal callback closes it once.
+                if unsafe { libc::close(opened.fd) } < 0 {
+                    errors.push(std::io::Error::last_os_error());
+                }
             }
-        }
-        drop(context);
-        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            drop(context);
             for error in errors {
                 eprintln!("zxs SMB context descriptor close failed: {error}");
             }
-        }))
-        .is_err()
-        {
-            errno(libc::EIO);
-        }
+            Ok(0)
+        });
     }
 }
 unsafe extern "C" fn connect(
@@ -465,7 +462,7 @@ unsafe extern "C" fn pread_send(
     count: usize,
     offset: sdk::off_t,
 ) -> *mut sdk::tevent_req {
-    let prepared = (|| -> std::io::Result<_> {
+    let prepare = || -> std::io::Result<_> {
         if count > asynchronous::MAX_IO || offset < 0 || (count > 0 && data.is_null()) {
             return Err(bad());
         }
@@ -481,28 +478,34 @@ unsafe extern "C" fn pread_send(
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::OutOfMemory, error))?;
         bytes.resize(count, 0);
         Ok((opened, bytes))
-    })();
+    };
     // SAFETY: Host mem_ctx/event remain live on this thread. The send contract retains any output
     // only until completion/cancellation; the worker owns its FD and bytes.
     unsafe {
-        asynchronous::send(mem_ctx, event, data, count, move || {
-            let (opened, mut bytes) = prepared?;
-            let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
-            opened.client.call(Request::AuthorizeRead {
-                handle: opened.info.handle,
-            })?;
-            let result = libc::pread(
-                opened.fd.as_raw_fd(),
-                bytes.as_mut_ptr().cast(),
-                bytes.len(),
-                offset,
-            );
-            if result < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            bytes.truncate(result as usize);
-            Ok(asynchronous::Completion { result, bytes })
-        })
+        asynchronous::send(
+            mem_ctx,
+            event,
+            data,
+            count,
+            prepare,
+            move |(opened, mut bytes)| {
+                let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
+                opened.client.call(Request::AuthorizeRead {
+                    handle: opened.info.handle,
+                })?;
+                let result = libc::pread(
+                    opened.fd.as_raw_fd(),
+                    bytes.as_mut_ptr().cast(),
+                    bytes.len(),
+                    offset,
+                );
+                if result < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                bytes.truncate(result as usize);
+                Ok(asynchronous::Completion { result, bytes })
+            },
+        )
     }
 }
 unsafe extern "C" fn pwrite_send(
@@ -514,7 +517,7 @@ unsafe extern "C" fn pwrite_send(
     count: usize,
     offset: sdk::off_t,
 ) -> *mut sdk::tevent_req {
-    let prepared = (|| -> std::io::Result<_> {
+    let prepare = || -> std::io::Result<_> {
         if count > asynchronous::MAX_IO || (count > 0 && data.is_null()) {
             return Err(bad());
         }
@@ -528,23 +531,29 @@ unsafe extern "C" fn pwrite_send(
         // SAFETY: host input is readable for count bytes during this callback.
         bytes.extend_from_slice(unsafe { input_bytes(data, count) }?);
         Ok((opened, bytes))
-    })();
+    };
     // SAFETY: Host mem_ctx/event remain live on this thread. The send contract retains any output
     // only until completion/cancellation; the worker owns its FD and bytes.
     unsafe {
-        asynchronous::send(mem_ctx, event, std::ptr::null_mut(), 0, move || {
-            let (opened, bytes) = prepared?;
-            let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
-            write_data(
-                &opened.client,
-                &opened.info,
-                opened.fd.as_raw_fd(),
-                opened.writable,
-                &bytes,
-                offset,
-            )
-            .map(asynchronous::Completion::done)
-        })
+        asynchronous::send(
+            mem_ctx,
+            event,
+            std::ptr::null_mut(),
+            0,
+            prepare,
+            move |(opened, bytes)| {
+                let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
+                write_data(
+                    &opened.client,
+                    &opened.info,
+                    opened.fd.as_raw_fd(),
+                    opened.writable,
+                    &bytes,
+                    offset,
+                )
+                .map(asynchronous::Completion::done)
+            },
+        )
     }
 }
 unsafe extern "C" fn io_recv(request: *mut sdk::tevent_req, aio: *mut sdk::vfs_aio_state) -> isize {
@@ -600,18 +609,24 @@ unsafe extern "C" fn fsync_send(
 ) -> *mut sdk::tevent_req {
     // SAFETY: The host handle is live on its owning event loop; snapshot duplicates the FD and
     // returns no host pointers to workers.
-    let prepared = unsafe { snapshot(handle, fsp) };
+    let prepare = || unsafe { snapshot(handle, fsp) };
     // SAFETY: Host mem_ctx/event remain live on this thread. The send contract retains any output
     // only until completion/cancellation; the worker owns its FD and bytes.
     unsafe {
-        asynchronous::send(mem_ctx, event, std::ptr::null_mut(), 0, move || {
-            let opened = prepared?;
-            let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
-            opened.client.call(Request::Flush {
-                handle: opened.info.handle,
-            })?;
-            Ok(asynchronous::Completion::done(0))
-        })
+        asynchronous::send(
+            mem_ctx,
+            event,
+            std::ptr::null_mut(),
+            0,
+            prepare,
+            move |opened| {
+                let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
+                opened.client.call(Request::Flush {
+                    handle: opened.info.handle,
+                })?;
+                Ok(asynchronous::Completion::done(0))
+            },
+        )
     }
 }
 unsafe extern "C" fn fsync_recv(

@@ -33,6 +33,40 @@ impl crate::Backend for UnusedBackend {
         unreachable!("this test backend does not serve snapshots")
     }
 
+    fn authorize_current(
+        &self,
+        _identity: &crate::auth::Identity,
+        _branch: &str,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
+    fn read_directory(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadDirectory<'_>,
+    ) -> Result<crate::DirectorySnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
+    fn authorize_workspace_selection(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _path: &name_policy::PortablePath,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
+    fn lookup_current(
+        &self,
+        _identity: &crate::auth::Identity,
+        _branch: &str,
+        _path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
     fn lookup_at(
         &self,
         _: &crate::auth::Identity,
@@ -373,4 +407,43 @@ fn failed_prepared_password_publication_restores_sessions_created_during_prepara
             assert!(store.authenticate(&concurrent.token).is_ok());
         }
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn http_session_reads_continue_during_durable_logout_then_observe_revocation() {
+    let root = crate::tests::private_tempdir();
+    let mut store = AuthStore::initialize(root.path(), "owner", OLD_PASSWORD).unwrap();
+    let login = store.login("owner", OLD_PASSWORD).unwrap();
+    let (started, mut work) = tokio::sync::mpsc::unbounded_channel();
+    let (resume, wait) = std::sync::mpsc::channel();
+    let wait = Mutex::new(wait);
+    store.backup = Some(Arc::new(move |_| {
+        started.send(()).unwrap();
+        wait.lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        Ok(())
+    }));
+    let (app, auth) = application(root.path(), store);
+    let token = login.token.clone();
+    let writer = tokio::task::spawn_blocking(move || auth.lock().unwrap().logout(&token));
+    tokio::time::timeout(Duration::from_secs(10), work.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let request = || {
+        Request::builder()
+            .uri("/api/auth/me")
+            .header("authorization", format!("Bearer {}", login.token))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let response =
+        tokio::time::timeout(Duration::from_secs(2), app.clone().oneshot(request())).await;
+    // Release the writer even if the read regresses, so the assertion cannot strand it.
+    resume.send(()).unwrap();
+    assert_eq!(response.unwrap().unwrap().status(), 200);
+    writer.await.unwrap().unwrap();
+    assert_eq!(app.oneshot(request()).await.unwrap().status(), 401);
 }

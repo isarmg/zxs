@@ -78,10 +78,7 @@ actions! {
     Repository => "repository",
     Resolve => "resolve",
     SealWorkspace => "seal_workspace",
-    SmbAuthorizeRead => "smb_authorize_read",
     SmbBinding => "smb_binding",
-    SmbLookup => "smb_lookup",
-    SmbReadDirectory => "smb_read_directory",
     SplitPlan => "split_plan",
     Topology => "topology",
     Tree => "tree",
@@ -95,7 +92,6 @@ actions! {
     Workspace => "workspace",
     WorkspaceCapacity => "workspace_capacity",
     WorkspaceAuthorize => "workspace_authorize",
-    WorkspaceSelectionAuthorize => "workspace_selection_authorize",
     WriteSession => "write_session",
 }
 

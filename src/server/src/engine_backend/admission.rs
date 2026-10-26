@@ -16,7 +16,7 @@ use storage_engine::Engine;
 
 pub(super) struct AdmissionEngine {
     engine: Engine,
-    managed_auth: Option<std::sync::Weak<std::sync::Mutex<crate::auth::AuthStore>>>,
+    managed_auth: Option<crate::auth::AuthReader>,
     admission: OnceLock<Result<Option<AdmissionSnapshot>, std::sync::Arc<ApiError>>>,
     #[cfg(test)]
     validations: std::sync::atomic::AtomicUsize,
@@ -33,16 +33,12 @@ impl AdmissionEngine {
         }
     }
 
-    pub(super) fn set_management_auth(
-        &mut self,
-        auth: std::sync::Weak<std::sync::Mutex<crate::auth::AuthStore>>,
-    ) {
+    pub(super) fn set_management_auth(&mut self, auth: crate::auth::AuthReader) {
         self.managed_auth = Some(auth);
     }
     pub(super) fn identity(&self, caller: &Identity) -> Result<Identity, ApiError> {
         if let Some(auth) = &self.managed_auth {
-            let auth = auth.upgrade().ok_or_else(ApiError::unauthorized)?;
-            return crate::lock(&auth).revalidate_identity(caller);
+            return auth.revalidate_identity(caller);
         }
 
         let projection = self.admission.get_or_init(|| {

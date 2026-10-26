@@ -128,33 +128,9 @@ fn narrow_authorization_matches_old_tree_metadata_decisions_and_error_precedence
             _ => unreachable!(),
         }
         assert_eq!(
-            decision(SmbReadAuthorization::capture(&state, &input)),
+            decision(authorize_current(&state, &repo.main_branch_id)),
             decision(old_tree_admission(&state, &input)),
             "{case}",
-        );
-    }
-    for input in [
-        json!({}),
-        json!({"branch_id":null}),
-        json!({"branch_id":23}),
-    ] {
-        assert_eq!(
-            decision(SmbReadAuthorization::capture(base, &input)),
-            decision(old_tree_admission(base, &input)),
-        );
-    }
-    // The new internal action intentionally accepts only its current-branch
-    // payload. It cannot silently become an arbitrary historical Tree query.
-    for extra in [
-        json!({"branch_id":branch,"query":{}}),
-        json!({"branch_id":branch,"path":"x"}),
-    ] {
-        assert_eq!(
-            SmbReadAuthorization::capture(base, &extra)
-                .err()
-                .unwrap()
-                .code,
-            storage_contract::ErrorCode::InvalidRequest
         );
     }
 }
@@ -168,8 +144,6 @@ fn narrow_authorization_borrows_metadata_without_tree_projection_and_keeps_paylo
     TREE_PROJECTION_WORK.with(|work| work.set((0, 0)));
     Tree::capture(&engine, &input).unwrap();
     assert_eq!(TREE_PROJECTION_WORK.with(|work| work.get()), (1, 1));
-    assert_eq!(std::mem::size_of::<SmbReadAuthorization>(), 1);
-    let expected = br#"{"authorized":true}"#;
     for count in [0, 1, 100, 1_000, 10_000] {
         let mut state = engine.state().clone();
         let head = state.branches[&repo.main_branch_id].head_commit_id.clone();
@@ -181,8 +155,7 @@ fn narrow_authorization_borrows_metadata_without_tree_projection_and_keeps_paylo
         assert_eq!(borrowed.entries.len(), count);
         TREE_PROJECTION_WORK.with(|work| work.set((0, 0)));
         for _ in 0..32 {
-            let result = SmbReadAuthorization::capture(&state, &input).unwrap();
-            assert_eq!(json_codec::to_vec(&result).unwrap(), expected);
+            authorize_current(&state, &repo.main_branch_id).unwrap();
         }
         assert_eq!(TREE_PROJECTION_WORK.with(|work| work.get()), (0, 0));
         assert_eq!(state.commits[&head].entries.len(), count);
@@ -205,15 +178,15 @@ fn narrow_authorization_rechecks_identity_sessions_and_binding_before_branch_err
     };
     let assert_equal = |identity: &Identity, input: Value| {
         let old = backend.call(BackendAction::Tree, identity, input.clone());
-        let narrow = backend.call(BackendAction::SmbAuthorizeRead, identity, input);
+        let narrow = backend.authorize_current(identity, field(&input, "branch_id").unwrap());
         assert_eq!(decision(old), decision(narrow));
     };
     assert_equal(&bound, input.clone());
     assert_eq!(
         backend
-            .call(BackendAction::SmbAuthorizeRead, &bound, input.clone())
+            .authorize_current(&bound, &repo.main_branch_id)
             .unwrap(),
-        json!({"authorized":true})
+        ()
     );
     for kind in ["principal", "session", "repository", "branch", "generation"] {
         let mut denied = bound.clone();
@@ -250,7 +223,7 @@ fn narrow_authorization_rechecks_identity_sessions_and_binding_before_branch_err
         assert_equal(&bound, input.clone());
         assert_eq!(
             backend
-                .call(BackendAction::SmbAuthorizeRead, &bound, input.clone())
+                .authorize_current(&bound, &repo.main_branch_id)
                 .unwrap_err()
                 .code,
             storage_contract::ErrorCode::Unauthorized,
@@ -271,11 +244,7 @@ fn narrow_authorization_rechecks_identity_sessions_and_binding_before_branch_err
     assert_equal(&bound, input);
     assert_eq!(
         backend
-            .call(
-                BackendAction::SmbAuthorizeRead,
-                &bound,
-                json!({"branch_id":"missing"})
-            )
+            .authorize_current(&bound, "missing")
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized
@@ -300,11 +269,7 @@ fn narrow_authorization_after_held_lock_binding_change_rechecks_current_generati
     let branch = repo.main_branch_id.clone();
     let worker = std::thread::spawn(move || {
         started_tx.send(()).unwrap();
-        worker_backend.call(
-            BackendAction::SmbAuthorizeRead,
-            &bound,
-            json!({"branch_id":branch}),
-        )
+        worker_backend.authorize_current(&bound, &branch)
     });
     started_rx.recv().unwrap();
     let generation = held.state().histories[&repo.history_tree_id].generation;

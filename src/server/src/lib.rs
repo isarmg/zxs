@@ -26,6 +26,8 @@ mod uploads;
 mod web_assets;
 
 mod backend_action;
+mod backend_read;
+pub use backend_read::{DirectorySelection, DirectorySnapshot, ReadDirectory};
 mod operation_wire;
 pub use backend_action::BackendAction;
 
@@ -240,6 +242,28 @@ pub trait Backend: Send + Sync {
         branch: &str,
         commit: &str,
     ) -> Result<Arc<storage_contract::Commit>, ApiError>;
+    /// Capture or page a directory after current admission; enforce the page byte budget.
+    fn read_directory(
+        &self,
+        identity: &Identity,
+        request: crate::ReadDirectory<'_>,
+    ) -> Result<crate::DirectorySnapshot, ApiError>;
+    /// Check the captured write destination against current selection and ownership.
+    fn authorize_workspace_selection(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+        path: &name_policy::PortablePath,
+    ) -> Result<(), ApiError>;
+    /// Revalidate current branch admission without capturing namespace entries.
+    fn authorize_current(&self, identity: &Identity, branch: &str) -> Result<(), ApiError>;
+    /// Look up one current entry after live identity and branch admission.
+    fn lookup_current(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, ApiError>;
     /// Look up one entry in a frozen published snapshot, with current admission.
     /// A missing path is `Ok(None)`; admission and snapshot failures are errors.
     fn lookup_at(
@@ -297,11 +321,11 @@ pub trait Backend: Send + Sync {
 /// Re-check current administrator credentials even for trusted local protocol adapters.
 struct AuthorizedBackend {
     backend: Arc<dyn Backend>,
-    auth: Arc<Mutex<AuthStore>>,
+    auth: auth::AuthReader,
 }
 impl AuthorizedBackend {
     fn current(&self, identity: &Identity) -> Result<Identity, ApiError> {
-        lock(&self.auth).revalidate_identity(identity)
+        self.auth.revalidate_identity(identity)
     }
 }
 impl Backend for AuthorizedBackend {
@@ -330,6 +354,40 @@ impl Backend for AuthorizedBackend {
     ) -> Result<Arc<storage_contract::Commit>, ApiError> {
         self.backend
             .snapshot_at(&self.current(identity)?, branch, commit)
+    }
+
+    fn read_directory(
+        &self,
+        identity: &Identity,
+        request: crate::ReadDirectory<'_>,
+    ) -> Result<crate::DirectorySnapshot, ApiError> {
+        self.backend
+            .read_directory(&self.current(identity)?, request)
+    }
+
+    fn authorize_workspace_selection(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+        path: &name_policy::PortablePath,
+    ) -> Result<(), ApiError> {
+        self.backend
+            .authorize_workspace_selection(&self.current(identity)?, workspace, path)
+    }
+
+    fn authorize_current(&self, identity: &Identity, branch: &str) -> Result<(), ApiError> {
+        self.backend
+            .authorize_current(&self.current(identity)?, branch)
+    }
+
+    fn lookup_current(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        self.backend
+            .lookup_current(&self.current(identity)?, branch, path)
     }
 
     fn lookup_at(
@@ -563,6 +621,7 @@ const HTTP_BACKEND_SLOTS: usize = 8;
 
 #[derive(Clone)]
 struct AppState {
+    auth_reader: auth::AuthReader,
     backend: Arc<dyn Backend>,
     auth: Arc<Mutex<AuthStore>>,
     config: ServerConfig,
@@ -638,7 +697,7 @@ impl ManagementRuntime {
         backend.start_management(auth.clone());
         let backend = Arc::new(AuthorizedBackend {
             backend,
-            auth: auth.clone(),
+            auth: lock(&auth).reader(),
         });
         Ok(Self {
             backend,
@@ -665,7 +724,9 @@ fn router_shared(
         }
     });
     let web_assets_available = static_etags.is_some();
+    let auth_reader = lock(&auth).reader();
     let state = AppState {
+        auth_reader,
         backend,
         auth,
         telemetry,

@@ -161,6 +161,10 @@ bash .github/scripts/smb-sdk.sh
 
 手写 VFS 代码启用 `unsafe_op_in_unsafe_fn` 与 `clippy::undocumented_unsafe_blocks` 的 deny 检查；仅由 bindgen 生成的 SDK 代码豁免安全注释 lint，不豁免手写模块。每个不安全边界说明有效指针、长度、所有权或宿主事件循环约束。空值检查不能证明非空裸指针有效，也不能替代匹配的 ABI。同步写入在宿主边界验证空值/长度后转为借用切片，工作线程使用自己的缓冲区；不再由安全函数接收可解引用的任意裸指针。
 
+异步 `pread_send`、`pwrite_send` 与 `fsync_send` 将宿主准备闭包交给共同的请求边界：认证快照、FD 复制、输入复制/读缓冲申请、事件 watcher 建立及入队都在同一 unwind 隔离区。准备只在宿主事件线程执行；返回的 owned 值才交给工作线程。准备或入队失败时先注销并关闭 watcher，再以原 errno（panic 为 `EIO`）完成并 post 原请求；尚未创建的 Extra 保持空，取消/接收均由已注册的析构路径处理。已入队任务仍按原完成与取消协议运行，不能持有宿主指针。此边界不捕获 abort/OOM abort，也不证明宿主指针有效。
+
+两线程、八槽工作池仅缓存成功初始化。初始化失败直接传播本次错误，关闭该次队列让已启动线程退出；同一请求不循环重试，后续新请求可重新尝试。初始化互斥只用于尚未成功的阶段，成功后的入队热路径不新增该锁。不会重放失败或结果未知的文件操作。`free_context` 的清理与诊断位于同一 FFI panic 边界，仍先关闭全部本地描述符再输出诊断，不借异常清理提交工作区。
+
 CI 的独立 `smb-sdk` job 调用 `.github/scripts/smb-sdk.sh`，下载固定官方 Samba 4.23.0 tar（SHA-256 `b0cb963a63eb1515227f3779a46d3a7f790c1bbfeeb4b31fd43e405eefe7a3af`），编译真实 SDK、生成头文件与依赖库，再执行 VFS 全目标 Clippy、SDK 单元测试及 release 模块构建。缓存包含配置后的源码与生成头文件，键包含构建脚本摘要。运行前需要脚本对应的 Ubuntu 开发依赖；脚本不自动安装包、不启动或安装 Samba，也不改宿主服务配置。
 
 ```sh

@@ -4,7 +4,7 @@
 //! private authentication data, content read plan, or publication capability.
 use super::wire::PendingSources;
 use super::{encode, error, field, repo_for_branch};
-use crate::ApiError;
+use crate::{ApiError, DirectorySnapshot};
 use data_serialization::Serialize;
 use json_codec::Value;
 use std::{collections::BTreeMap, sync::MutexGuard};
@@ -67,71 +67,45 @@ pub(super) fn branch_snapshot<'a>(
     Ok((commit, snapshot))
 }
 
-/// Request-local acknowledgment, never a cached or reusable authorization grant.
-/// This checks only the current namespace admission used by writable/directory
-/// descriptors, not workspace lifetime or write selection. Immutable readers
-/// continue to authorize their frozen version separately.
-#[derive(Serialize)]
-pub(super) struct SmbReadAuthorization {
-    authorized: bool,
+/// Check metadata only; the caller has refreshed current identity under the same lock.
+pub(super) fn authorize_current(
+    state: &storage_contract::State,
+    branch: &str,
+) -> Result<(), ApiError> {
+    branch_snapshot(state, branch, None)?;
+    Ok(())
 }
 
-impl SmbReadAuthorization {
+/// Copy only the current match; the caller holds current admission under the engine lock.
+pub(super) fn lookup_current(
+    engine: &Engine,
+    branch: &str,
+    path: &name_policy::LookupPath,
+) -> Result<Option<storage_contract::Entry>, ApiError> {
+    branch_snapshot(engine.state(), branch, None)?;
+    let tree = engine.namespace_tree(branch).map_err(error)?;
+    Ok(tree.get_key(path.key()).cloned())
+}
+
+impl DirectorySnapshot {
     pub(super) fn capture(
-        state: &storage_contract::State,
-        input: &Value,
+        engine: &Engine,
+        request: crate::ReadDirectory<'_>,
     ) -> Result<Self, ApiError> {
-        super::keys(input, &["branch_id"])?;
-        branch_snapshot(state, field(input, "branch_id")?, None)?;
-        Ok(Self { authorized: true })
-    }
-}
-
-/// One current SMB entry from the engine's canonical published namespace.
-/// The projection owns only its match, never the whole namespace or pending map.
-#[derive(Serialize)]
-#[serialization(transparent)]
-pub(super) struct SmbLookup(Option<storage_contract::Entry>);
-
-impl SmbLookup {
-    pub(super) fn capture(engine: &Engine, input: &Value) -> Result<Self, ApiError> {
-        let branch = field(input, "branch_id")?;
-        repo_for_branch(engine, branch)?;
-        let branch_info = &engine.state().branches[branch];
-        engine
-            .state()
-            .commits
-            .get(&branch_info.head_commit_id)
-            .filter(|commit| commit.history_tree_id == branch_info.history_tree_id)
-            .ok_or_else(|| {
-                ApiError::new(
-                    ::http::StatusCode::NOT_FOUND,
-                    storage_contract::ErrorCode::NotFound,
-                    "commit not found",
-                )
-            })?;
-        let tree = engine.namespace_tree(branch).map_err(error)?;
-        Ok(Self(tree.get(field(input, "path")?).cloned()))
-    }
-}
-
-/// A bounded projection over the immutable, lookup-key-sorted commit tree.
-/// It neither clones nor serializes the complete namespace for every page.
-#[derive(Serialize)]
-pub(super) struct SmbDirectory {
-    commit_id: String,
-    entries: Vec<storage_contract::Entry>,
-    more: bool,
-}
-impl SmbDirectory {
-    pub(super) fn capture(engine: &Engine, input: &Value) -> Result<Self, ApiError> {
-        let branch = field(input, "branch_id")?;
+        let crate::ReadDirectory {
+            branch,
+            entry_id,
+            path,
+            selection,
+        } = request;
         repo_for_branch(engine, branch)?;
         let branch_info = engine.state().branches.get(branch).unwrap();
-        let commit = input
-            .get("commit_id")
-            .and_then(Value::as_str)
-            .unwrap_or(&branch_info.head_commit_id);
+        let commit = match &selection {
+            crate::DirectorySelection::Capture => &branch_info.head_commit_id,
+            crate::DirectorySelection::Page { commit, .. } => {
+                commit.unwrap_or(&branch_info.head_commit_id)
+            }
+        };
         let snapshot = engine
             .state()
             .commits
@@ -145,20 +119,13 @@ impl SmbDirectory {
                 )
             })?;
         let tree = engine.namespace_tree_at(branch, commit).map_err(error)?;
-        // The synthetic share root has an intentionally empty path.
-        let path = input
-            .get("path")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ApiError::invalid("directory path must be a string"))?;
-        let key = name_policy::path_key(path);
-        let entry_id = field(input, "entry_id")?;
-        if path.is_empty() {
+        let key = path.map_or("", |path| path.key());
+        if path.is_none() {
             if entry_id != branch {
                 return Err(ApiError::invalid("invalid root directory identity"));
             }
         } else {
-            name_policy::validate_path(path).map_err(ApiError::invalid_source)?;
-            let directory = tree.get_key(&key);
+            let directory = tree.get_key(key);
             if directory.is_none_or(|entry| {
                 entry.kind != storage_contract::NamespaceEntryKind::Directory
                     || entry.entry_id != entry_id
@@ -170,19 +137,16 @@ impl SmbDirectory {
                 ));
             }
         }
-        if input.get("capture_only").and_then(Value::as_bool) == Some(true) {
-            return Ok(Self {
+        match selection {
+            crate::DirectorySelection::Capture => Ok(Self {
                 commit_id: snapshot.commit_id.clone(),
                 entries: Vec::new(),
                 more: false,
-            });
+            }),
+            crate::DirectorySelection::Page { after, .. } => {
+                Self::page(&snapshot.commit_id, tree.entries(), key, after)
+            }
         }
-        Self::page(
-            &snapshot.commit_id,
-            tree.entries(),
-            &key,
-            input.get("after").and_then(Value::as_str),
-        )
     }
 
     fn page(

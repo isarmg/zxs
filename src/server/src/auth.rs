@@ -10,7 +10,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, RwLock, Weak,
         atomic::{AtomicBool, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
@@ -40,7 +40,7 @@ struct Session {
 }
 
 /// A required singleton, never an account collection or a migration target.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct Database {
     administrator: Administrator,
@@ -171,13 +171,81 @@ pub type BackupHook = Arc<dyn Fn(json_codec::Value) -> Result<(), ApiError> + Se
 pub struct AuthStore {
     path: PathBuf,
     // An unavailable control plane has no credential authority, not a dummy account.
+    // Writer-owned candidate; never exposed through AuthReader before persistence.
     db: Option<Database>,
     _lock: Option<AdvisoryLock>,
     local_authority: bool,
     backup: Option<BackupHook>,
-    blocked: AtomicBool,
+    blocked: Arc<AtomicBool>,
+    committed: Arc<RwLock<Option<Arc<Database>>>>,
     #[cfg(test)]
     password_work_hook: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl Drop for AuthStore {
+    fn drop(&mut self) {
+        // A concurrent reader may briefly own the channel Arc. Closing admission
+        // explicitly prevents its weak handles extending authority past the OS lock.
+        self.blocked.store(true, Ordering::SeqCst);
+    }
+}
+
+/// A live view of committed authority, not a reusable admission proof. Each call
+/// takes a fresh snapshot. Weak ownership cannot keep credentials usable after
+/// the store (and its process-wide file lock) has been dropped.
+#[derive(Clone)]
+pub(crate) struct AuthReader {
+    committed: Weak<RwLock<Option<Arc<Database>>>>,
+    blocked: Weak<AtomicBool>,
+}
+
+impl AuthReader {
+    fn database(&self) -> Result<Arc<Database>, ApiError> {
+        let committed = self
+            .committed
+            .upgrade()
+            .ok_or_else(ApiError::unauthorized)?;
+        let blocked = self.blocked.upgrade().ok_or_else(ApiError::unauthorized)?;
+        let database = committed.read().expect("service state lock poisoned");
+        require_available(&blocked)?;
+        database
+            .as_ref()
+            .map(Arc::clone)
+            .ok_or_else(AuthStore::missing_authority)
+    }
+
+    pub(crate) fn authenticate(&self, token: &str) -> Result<Identity, ApiError> {
+        authenticate_database(self.database()?.as_ref(), token)
+    }
+
+    pub(crate) fn revalidate_identity(&self, caller: &Identity) -> Result<Identity, ApiError> {
+        let database = self.database()?;
+        refresh_identity(
+            &database.administrator.username,
+            database.administrator.generation,
+            &database.sessions,
+            caller,
+        )
+    }
+}
+
+fn authenticate_database(database: &Database, token: &str) -> Result<Identity, ApiError> {
+    if !primitives::is_token_shape(token) {
+        return Err(ApiError::unauthorized());
+    }
+    let key = primitives::token_hash_hex(token);
+    let current_time = now()?;
+    database
+        .sessions
+        .get(&key)
+        .filter(|session| {
+            session.expires_at > current_time
+                && session.generation == database.administrator.generation
+        })
+        .ok_or_else(ApiError::unauthorized)?;
+    let mut identity = database.identity(&database.administrator.username)?;
+    identity.admission_session = Some(key);
+    Ok(identity)
 }
 
 /// Immutable password challenge. Expensive verification needs no store lock;
@@ -328,17 +396,49 @@ fn read_credentials(path: &Path) -> Result<Vec<u8>, ApiError> {
         .map_err(ApiError::invalid_source)
 }
 
+fn require_available(blocked: &AtomicBool) -> Result<(), ApiError> {
+    if blocked.load(Ordering::SeqCst) {
+        Err(ApiError::new(
+            ::http::StatusCode::SERVICE_UNAVAILABLE,
+            storage_contract::ErrorCode::RecoveryRequired,
+            "authentication publication must be recovered before serving requests",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 impl AuthStore {
-    fn require_available(&self) -> Result<(), ApiError> {
-        if self.blocked.load(Ordering::SeqCst) {
-            Err(ApiError::new(
-                ::http::StatusCode::SERVICE_UNAVAILABLE,
-                storage_contract::ErrorCode::RecoveryRequired,
-                "authentication publication must be recovered before serving requests",
-            ))
-        } else {
-            Ok(())
+    pub(crate) fn reader(&self) -> AuthReader {
+        AuthReader {
+            committed: Arc::downgrade(&self.committed),
+            blocked: Arc::downgrade(&self.blocked),
         }
+    }
+
+    fn publish_committed(&self) {
+        let database = self.db.as_ref().map(|db| Arc::new(db.clone()));
+        *self.committed.write().expect("service state lock poisoned") = database;
+    }
+
+    /// Explicit setup/recovery replaces authority without orphaning live readers.
+    #[cfg(feature = "core")]
+    pub(crate) fn replace_authority(&mut self, mut replacement: Self) {
+        let database = replacement.db.as_ref().map(|db| Arc::new(db.clone()));
+        let mut committed = self.committed.write().expect("service state lock poisoned");
+        self.blocked
+            .store(replacement.blocked.load(Ordering::SeqCst), Ordering::SeqCst);
+        *committed = database;
+        drop(committed);
+        // The replaced store must drop only its retired channel, not block the
+        // live channel now owned by the replacement.
+        std::mem::swap(&mut self.committed, &mut replacement.committed);
+        std::mem::swap(&mut self.blocked, &mut replacement.blocked);
+        *self = replacement;
+    }
+
+    fn require_available(&self) -> Result<(), ApiError> {
+        require_available(&self.blocked)
     }
     fn database(&self) -> Result<&Database, ApiError> {
         self.require_available()?;
@@ -456,7 +556,8 @@ impl AuthStore {
             _lock: Some(auth_lock),
             local_authority: management,
             backup: None,
-            blocked: AtomicBool::new(false),
+            blocked: Arc::new(AtomicBool::new(false)),
+            committed: Arc::new(RwLock::new(None)),
             #[cfg(test)]
             password_work_hook: None,
         };
@@ -547,12 +648,15 @@ impl AuthStore {
             _lock: Some(auth_lock),
             local_authority: management,
             backup: None,
-            blocked: AtomicBool::new(false),
+            blocked: Arc::new(AtomicBool::new(false)),
+            committed: Arc::new(RwLock::new(None)),
             #[cfg(test)]
             password_work_hook: None,
         };
         if restore {
             store.persist(false)?;
+        } else {
+            store.publish_committed();
         }
         Ok(store)
     }
@@ -581,6 +685,7 @@ impl AuthStore {
             options.mode(0o600);
         }
         let mut file = options.open(&temporary).map_err(ApiError::io)?;
+        let mut local_published = false;
         let result = (|| {
             file.write_all(&bytes).map_err(ApiError::io)?;
             file.sync_all().map_err(ApiError::io)?;
@@ -606,9 +711,11 @@ impl AuthStore {
                         ApiError::io(source)
                     }
                 })?;
+                local_published = true;
                 fs::remove_file(&temporary).map_err(ApiError::io)?;
             } else {
                 fs::rename(&temporary, &self.path).map_err(ApiError::io)?;
+                local_published = true;
             }
             fs::File::open(self.path.parent().unwrap())
                 .and_then(|dir| dir.sync_all())
@@ -616,7 +723,8 @@ impl AuthStore {
             Ok(())
         })();
         if result.is_err() {
-            if self.local_authority
+            if local_published
+                || self.local_authority
                 || self.backup.is_some()
                     && result.as_ref().err().is_none_or(|error| {
                         error.code != storage_contract::ErrorCode::CommitPreparationBusy
@@ -629,6 +737,9 @@ impl AuthStore {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => tracing::warn!(error = ?error, "credential staging cleanup failed"),
             }
+        }
+        if result.is_ok() {
+            self.publish_committed();
         }
         if result.is_ok() && self.local_authority {
             // The durable system store is primary. Replica failure must never
@@ -653,7 +764,8 @@ impl AuthStore {
             _lock: None,
             local_authority: true,
             backup: None,
-            blocked: AtomicBool::new(true),
+            blocked: Arc::new(AtomicBool::new(true)),
+            committed: Arc::new(RwLock::new(None)),
             #[cfg(test)]
             password_work_hook: None,
         }
@@ -747,23 +859,7 @@ impl AuthStore {
     }
 
     pub fn authenticate(&self, token: &str) -> Result<Identity, ApiError> {
-        let database = self.database()?;
-        if !primitives::is_token_shape(token) {
-            return Err(ApiError::unauthorized());
-        }
-        let key = primitives::token_hash_hex(token);
-        let current_time = now()?;
-        database
-            .sessions
-            .get(&key)
-            .filter(|session| {
-                session.expires_at > current_time
-                    && session.generation == database.administrator.generation
-            })
-            .ok_or_else(ApiError::unauthorized)?;
-        let mut identity = database.identity(&database.administrator.username)?;
-        identity.admission_session = Some(key);
-        Ok(identity)
+        authenticate_database(self.database()?, token)
     }
 
     pub fn logout(&mut self, token: &str) -> Result<(), ApiError> {
@@ -849,3 +945,7 @@ mod capacity_tests;
 #[cfg(test)]
 #[path = "../../../test/server/unit/auth/password_change_tests.rs"]
 mod password_change_tests;
+
+#[cfg(test)]
+#[path = "../../../test/server/unit/auth/snapshot_tests.rs"]
+mod snapshot_tests;

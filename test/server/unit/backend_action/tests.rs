@@ -12,6 +12,10 @@ fn every_action_round_trips_and_unknown_actions_are_rejected() {
         "repositories ",
         "Repositories",
         "set_grants",
+        "smb_lookup",
+        "smb_authorize_read",
+        "smb_read_directory",
+        "workspace_selection_authorize",
     ] {
         assert!(BackendAction::try_from(unknown).is_err());
     }

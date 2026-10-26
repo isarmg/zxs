@@ -167,17 +167,15 @@ impl Session {
                 }
                 _ => return Err(ApiError::forbidden()),
             };
-        self.call(
-            crate::BackendAction::SmbAuthorizeRead,
-            json!({"branch_id":self.branch}),
-        )?;
+        self.shared
+            .backend
+            .authorize_current(&self.identity, &self.branch)?;
         // Even an already published handle remains bound to the selection it
         // opened. A same-content default switch must not retarget this FD.
-        self.call(
-            crate::BackendAction::WorkspaceSelectionAuthorize,
-            json!({
-                "workspace_id":captured_workspace,"path":path
-            }),
+        self.shared.backend.authorize_workspace_selection(
+            &self.identity,
+            &captured_workspace,
+            &path,
         )?;
         let new_workspace = if needs_workspace {
             let workspace = self.workspace()?;

@@ -35,28 +35,28 @@ struct Work {
 }
 
 fn pool() -> io::Result<&'static mpsc::SyncSender<Work>> {
-    static POOL: OnceLock<Result<mpsc::SyncSender<Work>, Arc<io::Error>>> = OnceLock::new();
-    POOL.get_or_init(|| {
-        let (sender, receiver) = mpsc::sync_channel::<Work>(8);
-        let receiver = Arc::new(Mutex::new(receiver));
-        for index in 0..2 {
-            let receiver = receiver.clone();
-            let started = std::thread::Builder::new()
-                .name(format!("smb-protocol-io-{index}"))
-                .spawn(move || worker_loop(receiver));
-            started.map_err(Arc::new)?;
-        }
-        Ok(sender)
-    })
-    .as_ref()
-    .map_err(cached_start_error)
-}
-
-fn cached_start_error(error: &Arc<io::Error>) -> io::Error {
-    match error.raw_os_error() {
-        Some(errno) => io::Error::from_raw_os_error(errno),
-        None => io::Error::new(error.kind(), error.clone()),
+    static POOL: OnceLock<mpsc::SyncSender<Work>> = OnceLock::new();
+    static START: Mutex<()> = Mutex::new(());
+    if let Some(sender) = POOL.get() {
+        return Ok(sender);
     }
+    let _start = START
+        .lock()
+        .expect("invariant: SMB pool startup lock is not poisoned");
+    if let Some(sender) = POOL.get() {
+        return Ok(sender);
+    }
+    // One attempt per request, never an internal retry loop. A failed attempt
+    // drops the sender so already-started workers exit; only success is cached.
+    let (sender, receiver) = mpsc::sync_channel::<Work>(8);
+    let receiver = Arc::new(Mutex::new(receiver));
+    for index in 0..2 {
+        let receiver = Arc::clone(&receiver);
+        std::thread::Builder::new()
+            .name(format!("smb-protocol-io-{index}"))
+            .spawn(move || worker_loop(receiver))?;
+    }
+    Ok(POOL.get_or_init(|| sender))
 }
 
 fn worker_loop(receiver: Arc<Mutex<mpsc::Receiver<Work>>>) {
@@ -205,13 +205,15 @@ unsafe extern "C" fn completed(
 /// Call on the owning event loop. If job returns bytes, destination must remain
 /// exclusively writable for capacity bytes until completion, or until the host
 /// cancels by freeing the request on this event loop before releasing the buffer.
-/// Workers must not capture host pointers; they may return only owned data.
-pub(super) unsafe fn send(
+/// prepare runs on the host event loop inside the panic boundary. Its result
+/// and job must not capture host pointers; workers may return only owned data.
+pub(super) unsafe fn send<P: Send + 'static>(
     mem_ctx: *mut sdk::TALLOC_CTX,
     event: *mut sdk::tevent_context,
     destination: *mut c_void,
     capacity: usize,
-    job: impl FnOnce() -> io::Result<Completion> + Send + 'static,
+    prepare: impl FnOnce() -> io::Result<P>,
+    job: impl FnOnce(P) -> io::Result<Completion> + Send + 'static,
 ) -> *mut sdk::tevent_req {
     let mut state: *mut State = std::ptr::null_mut();
     // SAFETY: The caller provides a valid talloc parent (or null); the output slot is writable and
@@ -230,23 +232,29 @@ pub(super) unsafe fn send(
         super::errno(libc::ENOMEM);
         return request;
     }
-    let shared = Arc::new(Mutex::new(None));
-    // SAFETY: Successful __tevent_req_create initialized the state allocation. Populate it before
-    // registering its destructor; Extra ownership transfers to that destructor.
+    // SAFETY: The request owns initialized State storage on this event loop.
+    // Install cleanup before entering fallible/panicking Rust preparation.
     unsafe {
         (*state).result = -1;
         (*state).error = libc::EINPROGRESS;
-        (*state).extra = Box::into_raw(Box::new(Extra {
-            request,
-            read_fd: -1,
-            shared: shared.clone(),
-            destination,
-            capacity,
-        }));
+        (*state).extra = std::ptr::null_mut();
         sdk::_talloc_set_destructor(state.cast(), Some(destroy));
     }
     let mut watcher: *mut sdk::tevent_fd = std::ptr::null_mut();
-    let prepared = (|| -> io::Result<()> {
+    let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> io::Result<()> {
+        // Preparation runs on the host thread; only its owned result crosses
+        // into the worker. Panic and ordinary errors share request cleanup.
+        let prepared = prepare()?;
+        let shared = Arc::new(Mutex::new(None));
+        let extra = Box::new(Extra {
+            request,
+            read_fd: -1,
+            shared: Arc::clone(&shared),
+            destination,
+            capacity,
+        });
+        // SAFETY: State is live; its destructor takes ownership of this Box.
+        unsafe { (*state).extra = Box::into_raw(extra) };
         // SAFETY: eventfd has no pointer arguments; the returned descriptor is checked before
         // ownership is adopted.
         let descriptor = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
@@ -291,7 +299,7 @@ pub(super) unsafe fn send(
         std::mem::forget(read); // The tevent watcher now owns this descriptor.
         pool()?
             .try_send(Work {
-                job: Box::new(job),
+                job: Box::new(move || job(prepared)),
                 shared,
                 wake,
             })
@@ -300,7 +308,8 @@ pub(super) unsafe fn send(
                 mpsc::TrySendError::Disconnected(_) => io::Error::from_raw_os_error(libc::EIO),
             })?;
         Ok(())
-    })();
+    }))
+    .unwrap_or_else(|_| Err(io::Error::from_raw_os_error(libc::EIO)));
     if let Err(error) = prepared {
         let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             eprintln!("zxs SMB async request setup failed: {error}");

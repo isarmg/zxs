@@ -63,12 +63,10 @@ impl Session {
     ) -> Result<Value, ApiError> {
         self.shared.backend.call(action, &self.identity, input)
     }
-    pub(super) fn find(&self, path: &str) -> Result<Option<Entry>, ApiError> {
-        json_codec::from_value(self.call(
-            crate::BackendAction::SmbLookup,
-            json!({"branch_id":self.branch,"path":path}),
-        )?)
-        .map_err(ApiError::invalid_source)
+    pub(super) fn find(&self, path: &name_policy::LookupPath) -> Result<Option<Entry>, ApiError> {
+        self.shared
+            .backend
+            .lookup_current(&self.identity, &self.branch, path)
     }
     pub(super) fn workspace(&self) -> Result<Workspace, ApiError> {
         json_codec::from_value(self.call(
@@ -184,9 +182,10 @@ impl Session {
                 let Some(Handle::Write(writer)) = self.handles.get(&handle) else {
                     return Err(ApiError::forbidden());
                 };
-                self.call(
-                    crate::BackendAction::WorkspaceSelectionAuthorize,
-                    json!({"workspace_id":writer.workspace.workspace_id,"path":writer.path}),
+                self.shared.backend.authorize_workspace_selection(
+                    &self.identity,
+                    &writer.workspace.workspace_id,
+                    &writer.path,
                 )?;
                 let current = writer.file.metadata().map_err(ApiError::io)?.len();
                 writer
@@ -204,7 +203,7 @@ impl Session {
                     self.authorize_binding()?;
                     json!({"path":"","kind":"directory","size":"0","entry_id":self.branch})
                 } else {
-                    name_policy::validate_lookup_path(&path)
+                    let path = name_policy::LookupPath::parse(&path)
                         .map_err(|source| contract(source.into()))?;
                     json_codec::to_value(self.find(&path)?.ok_or_else(|| {
                         ApiError::new(

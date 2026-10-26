@@ -84,7 +84,10 @@ fn new_file_published_handle_rejects_same_version_file_branch_switch() {
         let mut client = session(shared.clone(), &branch);
         let (opened, file) = first_save(&mut client, &backend, "fresh.txt", true, lose_reply);
         let original = select_same_version_draft(&shared, &branch, "fresh.txt");
-        let selected = client.find("fresh.txt").unwrap().unwrap();
+        let selected = client
+            .find(&name_policy::LookupPath::parse("fresh.txt").unwrap())
+            .unwrap()
+            .unwrap();
         assert_eq!(
             (&selected.entry_id, &selected.version_id, &selected.path),
             (&original.entry_id, &original.version_id, &original.path)
@@ -117,7 +120,10 @@ fn new_file_published_handle_rejects_same_version_file_branch_switch() {
             writer.workspace.workspace_id,
             opened.workspace_id.as_deref().unwrap()
         );
-        let current = client.find("fresh.txt").unwrap().unwrap();
+        let current = client
+            .find(&name_policy::LookupPath::parse("fresh.txt").unwrap())
+            .unwrap()
+            .unwrap();
         assert_eq!(current.version_id, original.version_id);
         let content = backend
             .content(&client.identity, &current.version_id)
@@ -161,7 +167,10 @@ fn published_handles_can_write_again_without_selection_change() {
             assert_ne!(writer.operation_id, first_operation);
             let saved = client.flush(opened.handle).unwrap();
             assert_eq!(saved["commit_state"], "PUBLISHED");
-            let current = client.find(path).unwrap().unwrap();
+            let current = client
+                .find(&name_policy::LookupPath::parse(path).unwrap())
+                .unwrap()
+                .unwrap();
             assert_eq!(current.entry_id, opened.entry_id);
             let content = backend
                 .content(&client.identity, &current.version_id)

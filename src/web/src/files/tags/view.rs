@@ -8,16 +8,17 @@ fn cancel(state: &mut State) {
     }
 }
 
-pub(crate) fn chips(state: RwSignal<State>, id: String) -> impl IntoView {
+pub(crate) fn chips(id: String) -> impl IntoView {
     let id = StoredValue::new(id);
-    let history = Memo::new(move |_| state.with(|s| s.files.file_history.clone()));
+    let history = super::super::history_index::shared();
     let labels = Memo::new(move |_| {
         history.with(|history| {
-            super::super::model::history_nodes_ref(history)
-                .iter()
-                .find(|node| history_node_id(node) == id.get_value())
-                .map(tags)
-                .unwrap_or_default()
+            id.with_value(|id| {
+                history
+                    .node(id)
+                    .map(|(_, node)| tags(node))
+                    .unwrap_or_default()
+            })
         })
     });
     view! {<span class="zxs-node-tags zxs-flow" aria-label=t("节点标签","Node tags")>{move ||labels.get().into_iter().map(|name|view!{<span class="zxs-node-tag zxs-input zxs-input--compact">{name}</span>}).collect_view()}</span>}

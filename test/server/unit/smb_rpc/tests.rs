@@ -39,6 +39,7 @@ const RECONCILIATION_CONTENT: usize = 2;
 struct LostCommitReply {
     inner: EngineBackend,
     calls: Mutex<Vec<(crate::BackendAction, Value)>>,
+    authorizations: Mutex<Vec<String>>,
     fail: AtomicBool,
     reconciliation_failure: AtomicUsize,
     uploads: AtomicUsize,
@@ -46,6 +47,10 @@ struct LostCommitReply {
     change_before_workspace: AtomicBool,
 }
 impl LostCommitReply {
+    fn take_authorizations(&self) -> Vec<String> {
+        std::mem::take(&mut *self.authorizations.lock().unwrap())
+    }
+
     fn take_calls(&self) -> Vec<(crate::BackendAction, Value)> {
         std::mem::take(&mut *self.calls.lock().unwrap())
     }
@@ -97,6 +102,42 @@ impl Backend for LostCommitReply {
             ));
         }
         self.inner.snapshot_at(identity, branch, commit)
+    }
+
+    fn authorize_current(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.authorizations.lock().unwrap().push(branch.to_owned());
+        self.inner.authorize_current(identity, branch)
+    }
+
+    fn read_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectory<'_>,
+    ) -> Result<crate::DirectorySnapshot, crate::ApiError> {
+        self.inner.read_directory(identity, request)
+    }
+
+    fn authorize_workspace_selection(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        path: &name_policy::PortablePath,
+    ) -> Result<(), crate::ApiError> {
+        self.inner
+            .authorize_workspace_selection(identity, workspace, path)
+    }
+
+    fn lookup_current(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        self.inner.lookup_current(identity, branch, path)
     }
 
     fn lookup_at(
@@ -224,6 +265,7 @@ fn fixture() -> (tempfile::TempDir, Arc<Shared>, Arc<LostCommitReply>, String) {
     let backend = Arc::new(LostCommitReply {
         inner: EngineBackend::new(engine),
         calls: Mutex::new(Vec::new()),
+        authorizations: Mutex::new(Vec::new()),
         fail: AtomicBool::new(false),
         reconciliation_failure: AtomicUsize::new(0),
         uploads: AtomicUsize::new(0),
@@ -232,7 +274,7 @@ fn fixture() -> (tempfile::TempDir, Arc<Shared>, Arc<LostCommitReply>, String) {
     });
     backend
         .inner
-        .set_management_auth(Arc::downgrade(&auth))
+        .set_management_auth(crate::lock(&auth).reader())
         .unwrap();
     let budget = budget::Budget::recover(
         &spool,
@@ -385,7 +427,13 @@ fn directory_default_switch_fences_open_and_already_published_writers() {
     assert!(writer.source.is_file());
     assert!(writer.source.with_extension("work.json").is_file());
     assert_eq!(backend.uploads.load(Ordering::SeqCst), 0);
-    assert_eq!(one.find("report.txt").unwrap().unwrap().size, 3);
+    assert_eq!(
+        one.find(&name_policy::LookupPath::parse("report.txt").unwrap())
+            .unwrap()
+            .unwrap()
+            .size,
+        3
+    );
     one.close(opened.handle, true).unwrap();
 
     let (opened, file) = open_file(&mut one, true);
@@ -408,7 +456,10 @@ fn directory_default_switch_fences_open_and_already_published_writers() {
     };
     assert!(writer.dirty && writer.source.is_file());
     one.close(opened.handle, true).unwrap();
-    let current = one.find("report.txt").unwrap().unwrap();
+    let current = one
+        .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+        .unwrap()
+        .unwrap();
     let content = backend.content(&one.identity, &current.version_id).unwrap();
     let mut bytes = [0; 3];
     content.file.read_exact_at(&mut bytes, 0).unwrap();
@@ -473,7 +524,10 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
     let n0 = scope(&a_n);
     let l0 = scope(&b_l);
     let p0 = scope(&b_p);
-    let source = client.find("a/report.txt").unwrap().unwrap();
+    let source = client
+        .find(&name_policy::LookupPath::parse("a/report.txt").unwrap())
+        .unwrap()
+        .unwrap();
     let (opened, fd) = client
         .open("a/report.txt".into(), false, false, false, false, false)
         .unwrap();
@@ -488,8 +542,16 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
             replace: false,
         })
         .unwrap();
-    assert!(client.find("a/report.txt").unwrap().is_none());
-    let moved = client.find("b/report.txt").unwrap().unwrap();
+    assert!(
+        client
+            .find(&name_policy::LookupPath::parse("a/report.txt").unwrap())
+            .unwrap()
+            .is_none()
+    );
+    let moved = client
+        .find(&name_policy::LookupPath::parse("b/report.txt").unwrap())
+        .unwrap()
+        .unwrap();
     assert_eq!(moved.file_id, source.file_id);
     assert_eq!(moved.version_id, source.version_id);
     let m1 = scope(&a_m);
@@ -571,7 +633,12 @@ fn newly_created_ancestor_selection_fences_an_existing_create_handle() {
         _ => unreachable!(),
     };
     assert!(writer.source.is_file() && writer.dirty);
-    assert!(original.find("future/new.txt").unwrap().is_none());
+    assert!(
+        original
+            .find(&name_policy::LookupPath::parse("future/new.txt").unwrap())
+            .unwrap()
+            .is_none()
+    );
     original.close(opened.handle, true).unwrap();
 }
 
@@ -612,7 +679,10 @@ fn nested_directory_switch_does_not_fence_an_unrelated_open_file() {
     file.write_all_at(b"new", 0).unwrap();
     one.dirty(opened.handle).unwrap();
     one.close(opened.handle, false).unwrap();
-    let current = one.find("report.txt").unwrap().unwrap();
+    let current = one
+        .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+        .unwrap()
+        .unwrap();
     let content = backend.content(&one.identity, &current.version_id).unwrap();
     let mut bytes = [0; 3];
     content.file.read_exact_at(&mut bytes, 0).unwrap();
@@ -725,14 +795,20 @@ fn unix_rpc_default_switch_preserves_read_fds_and_targets_new_writes() {
     drop(wire);
     server.join().unwrap();
     let observer = session(shared.clone(), &branch);
-    let entry = observer.find("report.txt").unwrap().unwrap();
+    let entry = observer
+        .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+        .unwrap()
+        .unwrap();
     let content = backend
         .content(&observer.identity, &entry.version_id)
         .unwrap();
     content.file.read_exact_at(&mut bytes, 0).unwrap();
     assert_eq!(&bytes, b"smb");
     select_directory(&shared, &repository, &draft);
-    let entry = observer.find("report.txt").unwrap().unwrap();
+    let entry = observer
+        .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+        .unwrap()
+        .unwrap();
     backend
         .content(&observer.identity, &entry.version_id)
         .unwrap()
@@ -993,7 +1069,10 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
     let (_temp, shared, _backend, branch) = fixture();
     let mut one = session(shared.clone(), &branch);
     let mut two = session(shared, &branch);
-    let before = one.find("report.txt").unwrap().unwrap();
+    let before = one
+        .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+        .unwrap()
+        .unwrap();
     two.dispatch(Request::Namespace {
         operation_id: new_id("op"),
         kind: smb_protocol::protocol::NamespaceOperation::Rename,
@@ -1002,7 +1081,10 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
         replace: true,
     })
     .unwrap();
-    let after = two.find("REPORT.txt").unwrap().unwrap();
+    let after = two
+        .find(&name_policy::LookupPath::parse("REPORT.txt").unwrap())
+        .unwrap()
+        .unwrap();
     assert_eq!(after.entry_id, before.entry_id);
     assert_eq!(after.version_id, before.version_id);
     assert_eq!(after.path, "REPORT.txt");
@@ -1034,8 +1116,16 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
     file.write_all_at(b"bytes", 0).unwrap();
     one.dirty(opened.handle).unwrap();
     one.close(opened.handle, false).unwrap();
-    assert!(two.find("unrelated").unwrap().is_some());
-    assert!(two.find("dir/file.txt").unwrap().is_some());
+    assert!(
+        two.find(&name_policy::LookupPath::parse("unrelated").unwrap())
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        two.find(&name_policy::LookupPath::parse("dir/file.txt").unwrap())
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(
         two.dispatch(Request::Namespace {
             operation_id: new_id("op"),
@@ -1147,7 +1237,10 @@ fn changed_bytes_after_lost_publication_reply_are_retained_for_a_second_save() {
     );
     one.dirty(opened.handle).unwrap();
     one.flush(opened.handle).unwrap();
-    let current = one.find("report.txt").unwrap().unwrap();
+    let current = one
+        .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+        .unwrap()
+        .unwrap();
     let content = backend.content(&one.identity, &current.version_id).unwrap();
     let mut bytes = [0u8; 3];
     content.file.read_exact_at(&mut bytes, 0).unwrap();
@@ -1412,7 +1505,10 @@ fn writable_open_rejects_entry_changed_before_workspace_snapshot() {
         );
         assert!(client.handles.is_empty());
         assert!(client.writer_locks.is_empty());
-        let entry = client.find("report.txt").unwrap().unwrap();
+        let entry = client
+            .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+            .unwrap()
+            .unwrap();
         let content = backend
             .content(&client.identity, &entry.version_id)
             .unwrap();
@@ -1459,7 +1555,10 @@ fn unchanged_writable_close_cleans_up_but_disconnect_remains_uncertain() {
     for disconnect in [false, true] {
         let (_temp, shared, backend, branch) = fixture();
         let mut client = session(shared, &branch);
-        let before = client.find("report.txt").unwrap().unwrap();
+        let before = client
+            .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+            .unwrap()
+            .unwrap();
         let (opened, _file) = open_file(&mut client, true);
         let source = match &client.handles[&opened.handle] {
             Handle::Write(writer) => writer.source.clone(),
@@ -1468,7 +1567,11 @@ fn unchanged_writable_close_cleans_up_but_disconnect_remains_uncertain() {
         if !disconnect {
             client.close(opened.handle, false).unwrap();
             assert_eq!(
-                client.find("report.txt").unwrap().unwrap().version_id,
+                client
+                    .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+                    .unwrap()
+                    .unwrap()
+                    .version_id,
                 before.version_id
             );
         }
@@ -1697,7 +1800,10 @@ fn replaced_smb_source_or_spool_is_rejected_before_backend_publication() {
         fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
         assert!(session.flush(opened.handle).is_err());
         assert_eq!(backend.uploads.load(Ordering::SeqCst), 0);
-        let entry = session.find("report.txt").unwrap().unwrap();
+        let entry = session
+            .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+            .unwrap()
+            .unwrap();
         let published = backend
             .content(&session.identity, &entry.version_id)
             .unwrap();
@@ -1731,7 +1837,10 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
             storage_contract::OperationId::generate(),
         )
         .unwrap();
-    let original = session.find("é.txt").unwrap().unwrap();
+    let original = session
+        .find(&name_policy::LookupPath::parse("é.txt").unwrap())
+        .unwrap()
+        .unwrap();
     let (result, fd) = session
         .open("e\u{301}.txt".into(), true, false, false, false, false)
         .unwrap();
@@ -1750,7 +1859,10 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
     session.dirty(opened.handle).unwrap();
     session.flush(opened.handle).unwrap();
     session.close(opened.handle, false).unwrap();
-    let published = session.find("e\u{301}.txt").unwrap().unwrap();
+    let published = session
+        .find(&name_policy::LookupPath::parse("e\u{301}.txt").unwrap())
+        .unwrap()
+        .unwrap();
     assert_eq!(published.path, "é.txt");
     assert_eq!(published.name(), "é.txt");
     assert_eq!(published.entry_id, original.entry_id);

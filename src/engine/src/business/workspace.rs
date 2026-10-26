@@ -453,13 +453,17 @@ pub(crate) struct VersionBuild<'a> {
 impl Engine {
     /// Check a captured destination before SMB reopens a successfully saved
     /// workspace. This also accepts committed workspaces as immutable receipts.
-    pub fn validate_workspace_file_selection(&self, workspace: &str, path: &str) -> Result<()> {
-        let key = name_policy::path_key(path);
-        let workspace = self.workspace(workspace)?;
-        validate_directory_selection_key(&self.state, &workspace, &key)?;
+    pub fn validate_workspace_file_selection(
+        &self,
+        workspace: &str,
+        path: &name_policy::PortablePath,
+    ) -> Result<()> {
+        let key = path.key();
+        let workspace = self.workspace_ref(workspace)?;
+        validate_directory_selection_key(&self.state, workspace, key)?;
         let mut entry = self
             .commit_namespace(&workspace.base_head)
-            .and_then(|tree| tree.get_key(&key));
+            .and_then(|tree| tree.get_key(key));
         // First-created files are absent from the original base, but completion
         // records their published destination. The current entry supplies only
         // its identity; the saved context still decides whether it is writable.
@@ -468,7 +472,7 @@ impl Engine {
                 repo.main_branch_id == workspace.branch_id
                     && workspace
                         .selected_file_contexts
-                        .contains_key(&directory::context_key_from_key(&repo.repository_id, &key))
+                        .contains_key(&directory::context_key_from_key(&repo.repository_id, key))
             })
         {
             entry = Some(
@@ -476,7 +480,7 @@ impl Engine {
                     .branches
                     .get(&workspace.branch_id)
                     .and_then(|branch| self.commit_namespace(&branch.head_commit_id))
-                    .and_then(|tree| tree.get_key(&key))
+                    .and_then(|tree| tree.get_key(key))
                     .ok_or_else(|| {
                         Error::new(
                             storage_contract::ErrorCode::FileNotFound,
@@ -486,7 +490,7 @@ impl Engine {
             );
         }
         if let Some(entry) = entry {
-            validate_file_context(&self.state, &workspace, &entry.file_id, &key)?;
+            validate_file_context(&self.state, workspace, &entry.file_id, key)?;
         }
         Ok(())
     }

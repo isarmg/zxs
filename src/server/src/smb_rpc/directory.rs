@@ -25,25 +25,25 @@ impl Session {
                 ));
             }
         };
-        let mut input = json!({"branch_id":self.branch,"entry_id":entry_id,"path":path});
-        if let Some(cursor) = &cursor {
-            input["commit_id"] = json!(cursor.commit_id);
-            input["after"] = json!(cursor.after);
-        }
-        // Backend revalidates the account and binding under the engine lock,
-        // then copies only one page from the immutable commit. The client never
-        // supplies a snapshot id, path alias or cursor key for an open handle.
-        let mut result = self.call(crate::BackendAction::SmbReadDirectory, input)?;
-        let commit_id = field(&result, "commit_id")?.to_owned();
-        result
-            .as_object_mut()
-            .ok_or_else(|| ApiError::invalid("invalid directory page"))?
-            .remove("commit_id");
-        let page: DirectoryPage =
-            json_codec::from_value(result.clone()).map_err(ApiError::invalid_source)?;
-        if page.more && page.entries.is_empty() {
-            return Err(ApiError::invalid("nonterminal directory page is empty"));
-        }
+        // The cursor comes only from this connection's handle, never from the peer.
+        let snapshot = self.shared.backend.read_directory(
+            &self.identity,
+            crate::ReadDirectory {
+                branch: &self.branch,
+                entry_id: &entry_id,
+                path: path.as_ref(),
+                selection: crate::DirectorySelection::Page {
+                    commit: cursor.as_ref().map(|cursor| cursor.commit_id.as_str()),
+                    after: cursor.as_ref().and_then(|cursor| cursor.after.as_deref()),
+                },
+            },
+        )?;
+        let crate::DirectorySnapshot {
+            commit_id,
+            entries,
+            more,
+        } = snapshot;
+        let page = DirectoryPage { entries, more };
         let after = page
             .entries
             .last()
@@ -52,6 +52,6 @@ impl Session {
         if let Some(Handle::Directory(directory)) = self.handles.get_mut(&handle) {
             directory.cursor = Some(DirectoryCursor { commit_id, after });
         }
-        Ok(result)
+        Ok(json_codec::to_value(page).expect("invariant: directory page serializes"))
     }
 }

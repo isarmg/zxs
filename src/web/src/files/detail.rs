@@ -15,6 +15,8 @@ use web_interface::components::{EmptyState, LoadingState, Select, SelectOption};
 use web_interface::{i18n::t, prelude::*};
 
 pub(crate) fn page(state: RwSignal<State>) -> impl IntoView {
+    inline::provide_context(state);
+    super::history_index::provide(state);
     let selected = detail_selection(state);
     view! {
         <section class="zxs-content-stack zxs-entry-page zxs-stack">
@@ -172,7 +174,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                 <section class="zxs-entry-section zxs-entry-version-history zxs-stack"><h3 class="zxs-row">{t("版本历史","Version history")}</h3><Show when=move ||state.with(|s|s.files.history_loading)><LoadingState/></Show>
                     <Show when=move ||can_modify.get()>{tags::view(state)}</Show>
                     {version_tree::view(state)}
-                    {merge::history(state)}
+                    {merge::history()}
                     <Show when=move ||state.with(|s|!s.files.history_loading&&history_nodes_ref(&s.files.file_history).is_empty())><p class="zxs-row">{t("尚无版本记录。","No versions have been recorded.")}</p></Show>
                 </section>
             })}

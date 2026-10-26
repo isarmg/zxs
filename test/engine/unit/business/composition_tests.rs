@@ -402,16 +402,25 @@ fn first_lazy_save_receipt_allows_the_same_writer_to_continue_but_fences_later_s
         request_digest: None,
     })
     .unwrap();
-    e.validate_workspace_file_selection(&w.workspace_id, "a/f.txt")
-        .unwrap();
+    e.validate_workspace_file_selection(
+        &w.workspace_id,
+        &name_policy::PortablePath::parse("a/f.txt").unwrap(),
+    )
+    .unwrap();
     save(&mut e, &r, "a/f.txt", b"own2");
-    e.validate_workspace_file_selection(&w.workspace_id, "a/f.txt")
-        .unwrap();
+    e.validate_workspace_file_selection(
+        &w.workspace_id,
+        &name_policy::PortablePath::parse("a/f.txt").unwrap(),
+    )
+    .unwrap();
     select(&mut e, &r, "a", "main");
     assert_eq!(
-        e.validate_workspace_file_selection(&w.workspace_id, "a/f.txt")
-            .unwrap_err()
-            .code(),
+        e.validate_workspace_file_selection(
+            &w.workspace_id,
+            &name_policy::PortablePath::parse("a/f.txt").unwrap()
+        )
+        .unwrap_err()
+        .code(),
         storage_contract::ErrorCode::DirectoryBranchConflict
     );
 }

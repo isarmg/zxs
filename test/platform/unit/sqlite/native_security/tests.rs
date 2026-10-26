@@ -49,3 +49,37 @@ async fn defensive_mode_rejects_schema_writes_and_keeps_normal_sql_working()
     other.close().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn no_checkpoint_on_close_retains_wal_and_releases_native_connection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let path = temp.path().join("index.sqlite");
+    let mut connection = crate::sqlite::open_index_connection(&path, true, None).await?;
+    disable_checkpoint_on_close(&mut connection).await?;
+    disable_checkpoint_on_close(&mut connection).await?;
+    sqlite_access::query("CREATE TABLE items(value INTEGER);INSERT INTO items VALUES(7)")
+        .execute(&mut connection)
+        .await?;
+    let wal = path.with_file_name("index.sqlite-wal");
+    let shm = path.with_file_name("index.sqlite-shm");
+    let committed = std::fs::read(&wal)?;
+    connection.close().await?;
+    assert_eq!(std::fs::read(&wal)?, committed);
+    assert!(shm.is_file());
+    // A new default-policy consumer can recover the committed WAL and acquire
+    // an exclusive journal-mode transition: the first native worker is closed,
+    // not deliberately leaked to avoid its final checkpoint.
+    let mut reopened = crate::sqlite::open_index_connection(&path, false, None).await?;
+    let value: i64 = sqlite_access::query_scalar("SELECT value FROM items")
+        .fetch_one(&mut reopened)
+        .await?;
+    assert_eq!(value, 7);
+    sqlite_access::query("PRAGMA journal_mode=DELETE")
+        .execute(&mut reopened)
+        .await?;
+    reopened.close().await?;
+    assert!(!wal.exists());
+    assert!(!shm.exists());
+    Ok(())
+}

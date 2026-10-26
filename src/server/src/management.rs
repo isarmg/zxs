@@ -497,7 +497,7 @@ impl Inner {
                 Ok(())
             }));
         }
-        backend.set_management_auth(Arc::downgrade(&auth))?;
+        backend.set_management_auth(crate::lock(&auth).reader())?;
         self.set(Some(backend.clone()), StorageState::RecoveryRequired);
         loop {
             let mut snapshot = crate::lock(&auth).snapshot()?;
@@ -623,6 +623,38 @@ impl Backend for ManagementBackend {
         commit: &str,
     ) -> Result<Arc<storage_contract::Commit>, ApiError> {
         self.inner.backend()?.snapshot_at(identity, branch, commit)
+    }
+
+    fn read_directory(
+        &self,
+        identity: &Identity,
+        request: crate::ReadDirectory<'_>,
+    ) -> Result<crate::DirectorySnapshot, ApiError> {
+        self.inner.backend()?.read_directory(identity, request)
+    }
+
+    fn authorize_workspace_selection(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+        path: &name_policy::PortablePath,
+    ) -> Result<(), ApiError> {
+        self.inner
+            .backend()?
+            .authorize_workspace_selection(identity, workspace, path)
+    }
+
+    fn authorize_current(&self, identity: &Identity, branch: &str) -> Result<(), ApiError> {
+        self.inner.backend()?.authorize_current(identity, branch)
+    }
+
+    fn lookup_current(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        self.inner.backend()?.lookup_current(identity, branch, path)
     }
 
     fn lookup_at(
@@ -767,7 +799,7 @@ impl Backend for ManagementBackend {
                 AuthStore::initialize_management(&self.inner.management_root, username, password)?;
             let mut snapshot = new_auth.snapshot()?;
             snapshot["sessions"] = json!({});
-            *crate::lock(&auth) = new_auth;
+            crate::lock(&auth).replace_authority(new_auth);
             EngineBackend::new(engine).replicate_auth(snapshot)
         };
         let result = match action {
@@ -820,7 +852,7 @@ impl Backend for ManagementBackend {
                             &self.inner.management_root,
                             snapshot.clone(),
                         )?;
-                        *crate::lock(&auth) = restored;
+                        crate::lock(&auth).replace_authority(restored);
                         snapshot
                     };
                     let mut snapshot = snapshot;

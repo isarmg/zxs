@@ -76,6 +76,41 @@ impl Backend for CloseFailure {
         self.inner.snapshot_at(identity, branch, commit)
     }
 
+    fn authorize_current(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.inner.authorize_current(identity, branch)
+    }
+
+    fn read_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectory<'_>,
+    ) -> Result<crate::DirectorySnapshot, crate::ApiError> {
+        self.inner.read_directory(identity, request)
+    }
+
+    fn authorize_workspace_selection(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        path: &name_policy::PortablePath,
+    ) -> Result<(), crate::ApiError> {
+        self.inner
+            .authorize_workspace_selection(identity, workspace, path)
+    }
+
+    fn lookup_current(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        self.inner.lookup_current(identity, branch, path)
+    }
+
     fn lookup_at(
         &self,
         identity: &crate::auth::Identity,

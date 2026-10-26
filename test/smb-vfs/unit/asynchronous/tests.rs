@@ -1,6 +1,28 @@
 use super::*;
 use std::time::Duration;
 
+// Keep worker-only test setup concise while exercising the same production
+// preparation/queue boundary as the VFS callbacks.
+unsafe fn send(
+    mem_ctx: *mut sdk::TALLOC_CTX,
+    event: *mut sdk::tevent_context,
+    destination: *mut c_void,
+    capacity: usize,
+    job: impl FnOnce() -> io::Result<Completion> + Send + 'static,
+) -> *mut sdk::tevent_req {
+    // SAFETY: The test caller retains the production send ownership contract.
+    unsafe {
+        super::send(
+            mem_ctx,
+            event,
+            destination,
+            capacity,
+            || Ok(()),
+            move |()| job(),
+        )
+    }
+}
+
 // tevent.c initializes a process-global backend list without synchronization.
 // Samba initializes it on the host event loop; Rust's parallel test threads
 // must not race the first backend registration. Only context creation is
@@ -321,28 +343,14 @@ fn worker_panic_completes_as_io_error_without_unwinding_through_host() {
 }
 
 #[test]
-fn second_worker_start_failure_releases_the_first_worker() {
-    fn start_with(
-        spawn: &mut impl FnMut(usize, Arc<Mutex<mpsc::Receiver<Work>>>) -> io::Result<()>,
-    ) -> io::Result<mpsc::SyncSender<Work>> {
-        let (sender, receiver) = mpsc::sync_channel(8);
-        let receiver = Arc::new(Mutex::new(receiver));
-        for index in 0..2 {
-            spawn(index, receiver.clone())?;
-        }
-        Ok(sender)
+fn concurrent_pool_callers_share_one_successful_sender() {
+    let callers = (0..8)
+        .map(|_| std::thread::spawn(|| pool().unwrap() as *const _ as usize))
+        .collect::<Vec<_>>();
+    let expected = pool().unwrap() as *const _ as usize;
+    for caller in callers {
+        assert_eq!(caller.join().unwrap(), expected);
     }
-    let mut first = None;
-    let error = start_with(&mut |index, receiver| {
-        if index == 1 {
-            return Err(io::Error::from_raw_os_error(libc::EAGAIN));
-        }
-        first = Some(std::thread::spawn(move || worker_loop(receiver)));
-        Ok(())
-    })
-    .unwrap_err();
-    assert_eq!(error.raw_os_error(), Some(libc::EAGAIN));
-    first.unwrap().join().unwrap();
 }
 
 #[test]
@@ -399,11 +407,105 @@ fn worker_reporting_failure_still_completes() {
 }
 
 #[test]
-fn cached_worker_start_failure_keeps_native_errno() {
-    for errno in [libc::EAGAIN, libc::ENOMEM] {
-        let source = Arc::new(io::Error::from_raw_os_error(errno));
-        let reported = cached_start_error(&source);
-        assert_eq!(reported.raw_os_error(), Some(errno));
-        assert_eq!(error_errno(&reported), errno);
+fn preparation_failure_completes_on_host_and_releases_owned_resources() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct OwnedPreparation(Arc<AtomicBool>);
+    impl Drop for OwnedPreparation {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    for panic in [false, true] {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let preparation_resource = OwnedPreparation(Arc::clone(&dropped));
+        let host_thread = std::thread::current().id();
+        let mut destination = [7_u8; 2];
+        // SAFETY: Real SDK objects and the output buffer stay live on this
+        // thread until received/freed; the failing preparation never queues I/O.
+        unsafe {
+            let event = event_context();
+            assert!(!event.is_null());
+            let request = super::send(
+                std::ptr::null_mut(),
+                event,
+                destination.as_mut_ptr().cast(),
+                destination.len(),
+                move || -> io::Result<()> {
+                    let _resource = preparation_resource;
+                    assert_eq!(std::thread::current().id(), host_thread);
+                    if panic {
+                        panic!("host preparation panic");
+                    }
+                    Err(io::Error::from_raw_os_error(libc::ENOMEM))
+                },
+                |()| panic!("failed preparation must not reach the worker"),
+            );
+            assert!(!request.is_null());
+            assert!(dropped.load(Ordering::SeqCst));
+            assert!(!sdk::tevent_req_is_in_progress(request));
+            let mut aio: sdk::vfs_aio_state = Default::default();
+            assert_eq!(recv(request, &mut aio), -1);
+            assert_eq!(aio.error, if panic { libc::EIO } else { libc::ENOMEM });
+            assert_eq!(destination, [7; 2]);
+            sdk::_talloc_free(request.cast(), c"preparation failure test".as_ptr());
+            sdk::_talloc_free(event.cast(), c"preparation failure test".as_ptr());
+        }
+    }
+}
+
+#[test]
+fn invalid_host_preparation_is_reported_by_all_send_callbacks() {
+    use super::super as vfs;
+    // SAFETY: Each null handle is rejected by preparation before dereference.
+    // The real SDK event/request remains live and is received/freed on this thread.
+    unsafe {
+        let event = event_context();
+        assert!(!event.is_null());
+        let requests = [
+            vfs::pread_send(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                event,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+                0,
+            ),
+            vfs::pwrite_send(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                event,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                0,
+                0,
+            ),
+            vfs::fsync_send(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                event,
+                std::ptr::null_mut(),
+            ),
+        ];
+        for request in requests {
+            assert!(!request.is_null());
+            assert!(!sdk::tevent_req_is_in_progress(request));
+            let mut aio: sdk::vfs_aio_state = Default::default();
+            assert_eq!(recv(request, &mut aio), -1);
+            assert_eq!(aio.error, libc::EACCES);
+            sdk::_talloc_free(request.cast(), c"invalid preparation test".as_ptr());
+        }
+        // A host may cancel without recv; a failed preparation has no Extra box.
+        let request = super::send(
+            std::ptr::null_mut(),
+            event,
+            std::ptr::null_mut(),
+            0,
+            || -> io::Result<()> { panic!("cancel failed preparation") },
+            |()| panic!("must not queue"),
+        );
+        assert!(!request.is_null());
+        sdk::_talloc_free(request.cast(), c"cancel failed preparation".as_ptr());
+        sdk::_talloc_free(event.cast(), c"invalid preparation test".as_ptr());
     }
 }

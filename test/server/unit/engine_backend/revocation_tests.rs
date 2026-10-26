@@ -49,6 +49,45 @@ impl Backend for PausedBackend {
         self.inner.snapshot_at(identity, branch, commit)
     }
 
+    fn authorize_current(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.enter();
+        self.inner.authorize_current(identity, branch)
+    }
+
+    fn read_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectory<'_>,
+    ) -> Result<crate::DirectorySnapshot, crate::ApiError> {
+        self.enter();
+        self.inner.read_directory(identity, request)
+    }
+
+    fn authorize_workspace_selection(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        path: &name_policy::PortablePath,
+    ) -> Result<(), crate::ApiError> {
+        self.enter();
+        self.inner
+            .authorize_workspace_selection(identity, workspace, path)
+    }
+
+    fn lookup_current(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        self.enter();
+        self.inner.lookup_current(identity, branch, path)
+    }
+
     fn lookup_at(
         &self,
         identity: &crate::auth::Identity,
@@ -230,6 +269,9 @@ enum Request {
     Tree,
     SmbAuthorizeRead,
     SnapshotLookup,
+    CurrentLookup,
+    DirectoryRead,
+    WorkspaceSelection,
     Snapshot,
     Version,
     Namespace,
@@ -286,18 +328,22 @@ impl Request {
             Self::Snapshot => backend.snapshot_at(
                 identity, &fixture.repo.main_branch_id, &fixture.workspace.base_head,
             ).map(|_| ()),
+            Self::WorkspaceSelection => backend.authorize_workspace_selection(identity,
+                &fixture.workspace.workspace_id, &name_policy::PortablePath::parse("file.txt").unwrap()),
+            Self::DirectoryRead => backend.read_directory(identity, crate::ReadDirectory {
+                branch: &fixture.repo.main_branch_id, entry_id: &fixture.repo.main_branch_id,
+                path: None, selection: crate::DirectorySelection::Capture,
+            }).map(|_| ()),
+            Self::CurrentLookup => backend.lookup_current(
+                identity, &fixture.repo.main_branch_id,
+                &name_policy::LookupPath::parse("file.txt").unwrap(),
+            ).map(|_| ()),
             Self::SnapshotLookup => backend.lookup_at(
                 identity, &fixture.repo.main_branch_id, &fixture.workspace.base_head,
                 &name_policy::LookupPath::parse("file.txt").unwrap(),
             ).map(|_| ()),
             // SMB directory/write handles need current admission, not a tree.
-            Self::SmbAuthorizeRead => backend
-                .call(
-                    BackendAction::SmbAuthorizeRead,
-                    identity,
-                    json!({"branch_id":fixture.repo.main_branch_id}),
-                )
-                .map(|_| ()),
+            Self::SmbAuthorizeRead => backend.authorize_current(identity, &fixture.repo.main_branch_id),
             // Immutable SMB file handles still authorize their pinned version.
             Self::Version => backend
                 .call(
@@ -364,74 +410,85 @@ enum Revocation {
 
 #[test]
 fn completed_account_revocation_precedes_all_engine_admissions() {
-    for revocation in [Revocation::Logout, Revocation::PasswordChange] {
-        let fixture = Arc::new(Fixture::new(true));
-        let requests = vec![
-            Request::Operation,
-            Request::CommitWorkspace,
-            Request::Metadata,
-            Request::Administrator,
-            Request::Tree,
-            Request::SmbAuthorizeRead,
-            Request::SnapshotLookup,
-            Request::Snapshot,
-            Request::Version,
-            Request::Namespace,
-            Request::Content,
-            Request::RangeContent,
-            Request::WorkspaceContent,
-            Request::Checksums,
-            Request::Upload,
-            Request::UploadGeneration,
-        ];
-        let captured = Arc::new(Barrier::new(requests.len() + 1));
-        let released = Arc::new(Barrier::new(requests.len() + 1));
-        let backend = Arc::new(AuthorizedBackend {
-            backend: Arc::new(PausedBackend {
-                inner: fixture.backend.clone(),
-                captured: captured.clone(),
-                released: released.clone(),
-            }),
-            auth: fixture.auth.clone(),
-        });
-        let threads = requests
-            .into_iter()
-            .map(|request| {
-                let fixture = fixture.clone();
-                let backend = backend.clone();
-                (
-                    request,
-                    std::thread::spawn(move || request.execute(&fixture, backend.as_ref())),
-                )
-            })
-            .collect::<Vec<_>>();
-        captured.wait();
-        let revoked = match revocation {
-            Revocation::Logout => fixture.auth.lock().unwrap().logout(&fixture.token),
-            Revocation::PasswordChange => fixture.auth.lock().unwrap().change_password(
-                &fixture.token,
-                "integration-test-password",
-                "new-integration-test-password",
-            ),
-        };
-        let before = fixture.snapshot();
-        released.wait();
-        revoked.unwrap();
-        for (request, thread) in threads {
-            let error = thread
-                .join()
-                .unwrap()
-                .expect_err("revoked request must be rejected");
-            assert_eq!(
-                error.code,
-                storage_contract::ErrorCode::Unauthorized,
-                "{revocation:?}: {request:?}"
+    for protected in [true, false] {
+        for revocation in [Revocation::Logout, Revocation::PasswordChange] {
+            let fixture = Arc::new(Fixture::new(protected));
+            if !protected {
+                fixture
+                    .backend
+                    .set_management_auth(crate::lock(&fixture.auth).reader())
+                    .unwrap();
+            }
+            let requests = vec![
+                Request::Operation,
+                Request::CommitWorkspace,
+                Request::Metadata,
+                Request::Administrator,
+                Request::Tree,
+                Request::SmbAuthorizeRead,
+                Request::CurrentLookup,
+                Request::DirectoryRead,
+                Request::WorkspaceSelection,
+                Request::SnapshotLookup,
+                Request::Snapshot,
+                Request::Version,
+                Request::Namespace,
+                Request::Content,
+                Request::RangeContent,
+                Request::WorkspaceContent,
+                Request::Checksums,
+                Request::Upload,
+                Request::UploadGeneration,
+            ];
+            let captured = Arc::new(Barrier::new(requests.len() + 1));
+            let released = Arc::new(Barrier::new(requests.len() + 1));
+            let backend = Arc::new(AuthorizedBackend {
+                backend: Arc::new(PausedBackend {
+                    inner: fixture.backend.clone(),
+                    captured: captured.clone(),
+                    released: released.clone(),
+                }),
+                auth: crate::lock(&fixture.auth).reader(),
+            });
+            let threads = requests
+                .into_iter()
+                .map(|request| {
+                    let fixture = fixture.clone();
+                    let backend = backend.clone();
+                    (
+                        request,
+                        std::thread::spawn(move || request.execute(&fixture, backend.as_ref())),
+                    )
+                })
+                .collect::<Vec<_>>();
+            captured.wait();
+            let revoked = match revocation {
+                Revocation::Logout => fixture.auth.lock().unwrap().logout(&fixture.token),
+                Revocation::PasswordChange => fixture.auth.lock().unwrap().change_password(
+                    &fixture.token,
+                    "integration-test-password",
+                    "new-integration-test-password",
+                ),
+            };
+            let before = fixture.snapshot();
+            released.wait();
+            revoked.unwrap();
+            for (request, thread) in threads {
+                let error = thread
+                    .join()
+                    .unwrap()
+                    .expect_err("revoked request must be rejected");
+                assert_eq!(
+                    error.code,
+                    storage_contract::ErrorCode::Unauthorized,
+                    "{revocation:?}: {request:?}"
+                );
+            }
+            assert!(
+                fixture.snapshot() == before,
+                "rejected requests changed state, workspace or journals"
             );
         }
-        assert!(
-            fixture.snapshot() == before,
-            "rejected requests changed state, workspace or journals"
-        );
     }
 }
 
@@ -509,6 +566,9 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::Administrator,
         Request::Tree,
         Request::SmbAuthorizeRead,
+        Request::CurrentLookup,
+        Request::DirectoryRead,
+        Request::WorkspaceSelection,
         Request::Snapshot,
         Request::Version,
         Request::Namespace,
@@ -608,5 +668,44 @@ fn both_upload_adapters_bind_the_copied_snapshot_before_acceptance() {
             storage_contract::ErrorCode::ChecksumMismatch
         );
         assert_eq!(fixture.snapshot(), before);
+    }
+}
+
+#[test]
+fn managed_reads_use_committed_authority_without_waiting_for_the_writer_mutex() {
+    let fixture = Arc::new(Fixture::new(false));
+    fixture
+        .backend
+        .set_management_auth(crate::lock(&fixture.auth).reader())
+        .unwrap();
+    let mut writer = fixture.auth.lock().unwrap();
+    let (done, result) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn({
+        let fixture = Arc::clone(&fixture);
+        move || {
+            done.send(
+                [Request::Tree, Request::Snapshot, Request::Content]
+                    .into_iter()
+                    .map(|request| request.execute(&fixture, fixture.backend.as_ref()))
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        }
+    });
+    let reads = result.recv_timeout(std::time::Duration::from_secs(5));
+    writer.logout(&fixture.token).unwrap();
+    drop(writer);
+    worker.join().unwrap();
+    for read in reads.expect("committed reads must not acquire the credential writer mutex") {
+        read.unwrap();
+    }
+    for request in [Request::Tree, Request::Snapshot, Request::Content] {
+        assert_eq!(
+            request
+                .execute(&fixture, fixture.backend.as_ref())
+                .unwrap_err()
+                .status,
+            401
+        );
     }
 }

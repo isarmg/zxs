@@ -43,6 +43,40 @@ impl Backend for Probe {
         unreachable!("this test backend does not serve snapshots")
     }
 
+    fn authorize_current(
+        &self,
+        _identity: &crate::auth::Identity,
+        _branch: &str,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
+    fn read_directory(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadDirectory<'_>,
+    ) -> Result<crate::DirectorySnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
+    fn authorize_workspace_selection(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _path: &name_policy::PortablePath,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
+    fn lookup_current(
+        &self,
+        _identity: &crate::auth::Identity,
+        _branch: &str,
+        _path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
     fn lookup_at(
         &self,
         _: &crate::auth::Identity,

@@ -67,12 +67,12 @@ fn create(path: &str) -> Request {
 // extra workspace-selection check cannot hide behind a successful response.
 fn open_authorization_handles(
     wire: &mut FrameStream,
-) -> [(OpenResult, File, crate::BackendAction); 3] {
-    use crate::BackendAction::{SmbAuthorizeRead, Version};
+) -> [(OpenResult, File, Option<crate::BackendAction>); 3] {
+    use crate::BackendAction::Version;
     [
-        ("report.txt", false, Version),
-        ("report.txt", true, SmbAuthorizeRead),
-        ("", false, SmbAuthorizeRead),
+        ("report.txt", false, Some(Version)),
+        ("report.txt", true, None),
+        ("", false, None),
     ]
     .map(|(path, writable, action)| {
         let (reply, descriptor) = exchange(
@@ -100,11 +100,12 @@ fn check_read_authorization(
     wire: &mut FrameStream,
     backend: &LostCommitReply,
     branch: &str,
-    handles: &[(OpenResult, File, crate::BackendAction)],
+    handles: &[(OpenResult, File, Option<crate::BackendAction>)],
     error: Option<&str>,
 ) {
     for (opened, _, action) in handles {
         backend.take_calls();
+        backend.take_authorizations();
         let (reply, descriptor) = exchange(
             wire,
             Request::AuthorizeRead {
@@ -119,12 +120,18 @@ fn check_read_authorization(
                 panic!("unexpected authorization reply: {reply:?}, error={expected:?}")
             }
         }
-        let input = if *action == crate::BackendAction::Version {
+        let input = if *action == Some(crate::BackendAction::Version) {
             json!({"version_id":opened.version_id.as_ref().unwrap()})
         } else {
             json!({"branch_id":branch})
         };
-        assert_eq!(backend.take_calls(), vec![(*action, input)]);
+        if let Some(action) = action {
+            assert_eq!(backend.take_calls(), vec![(*action, input)]);
+            assert!(backend.take_authorizations().is_empty());
+        } else {
+            assert!(backend.take_calls().is_empty());
+            assert_eq!(backend.take_authorizations(), vec![branch.to_owned()]);
+        }
     }
 }
 fn missing_read_handle(wire: &mut FrameStream, backend: &LostCommitReply, handle: u64) {
@@ -140,7 +147,7 @@ fn missing_read_handle(wire: &mut FrameStream, backend: &LostCommitReply, handle
 }
 fn close_authorization_handles(
     wire: &mut FrameStream,
-    handles: &[(OpenResult, File, crate::BackendAction)],
+    handles: &[(OpenResult, File, Option<crate::BackendAction>)],
 ) {
     for (opened, _, _) in handles {
         let (reply, descriptor) = exchange(
@@ -194,11 +201,12 @@ fn authorize_read_rechecks_current_owner_and_account_for_every_open_handle_kind(
                 "RECOVERY_REQUIRED",
             )
         };
-        let original = std::mem::replace(&mut *shared.auth.lock().unwrap(), replacement);
+        shared.auth.lock().unwrap().replace_authority(replacement);
         check_read_authorization(&mut client, &backend, &branch, &handles, Some(error));
         // A missing handle still fails locally, even while admission is denied.
         missing_read_handle(&mut client, &backend, u64::MAX);
-        *shared.auth.lock().unwrap() = original;
+        let original = AuthStore::open(&temp.path().join("auth")).unwrap();
+        shared.auth.lock().unwrap().replace_authority(original);
         // Failed authorization did not consume or retarget any existing handle.
         check_read_authorization(&mut client, &backend, &branch, &handles, None);
         close_authorization_handles(&mut client, &handles);

@@ -142,6 +142,64 @@ impl Backend for RecordingBackend {
         }))
     }
 
+    fn authorize_current(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.record(
+            "authorize_current",
+            Some(identity),
+            json!({"branch":branch}),
+        )
+        .map(|_| ())
+    }
+
+    fn read_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectory<'_>,
+    ) -> Result<crate::DirectorySnapshot, crate::ApiError> {
+        self.record(
+            "read_directory",
+            Some(identity),
+            json!({"branch":request.branch,"entry_id":request.entry_id}),
+        )?;
+        Ok(crate::DirectorySnapshot {
+            commit_id: "commit".into(),
+            entries: Vec::new(),
+            more: false,
+        })
+    }
+
+    fn authorize_workspace_selection(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        path: &name_policy::PortablePath,
+    ) -> Result<(), crate::ApiError> {
+        self.record(
+            "authorize_workspace_selection",
+            Some(identity),
+            json!({"workspace":workspace,"path":path.as_str(),"key":path.key()}),
+        )
+        .map(|_| ())
+    }
+
+    fn lookup_current(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        self.record(
+            "lookup_current",
+            Some(identity),
+            json!({"branch":branch,"path":path.as_str(),"key":path.key()}),
+        )?;
+        Ok(None)
+    }
+
     fn lookup_at(
         &self,
         identity: &Identity,
@@ -252,6 +310,7 @@ impl Backend for RecordingBackend {
 }
 
 struct Fixture {
+    auth: Arc<Mutex<AuthStore>>,
     _root: tempfile::TempDir,
     backend: AuthorizedBackend,
     probe: Arc<RecordingBackend>,
@@ -279,12 +338,14 @@ impl Fixture {
             fail: AtomicBool::new(false),
             file: source.file.try_clone().unwrap(),
         });
+        let auth = Arc::new(Mutex::new(auth));
         let backend = AuthorizedBackend {
             backend: probe.clone(),
-            auth: Arc::new(Mutex::new(auth)),
+            auth: crate::lock(&auth).reader(),
         };
         Self {
             _root: root,
+            auth,
             backend,
             probe,
             identity,
@@ -345,6 +406,54 @@ impl Fixture {
                     .map(|snapshot| {
                         assert_eq!(snapshot.commit_id, "commit");
                         json!({"returned_by":"snapshot_at"})
+                    }),
+            ),
+            (
+                "authorize_workspace_selection",
+                backend
+                    .authorize_workspace_selection(
+                        identity,
+                        "workspace",
+                        &name_policy::PortablePath::parse("File.txt").unwrap(),
+                    )
+                    .map(|()| json!({"returned_by":"authorize_workspace_selection"})),
+            ),
+            (
+                "authorize_current",
+                backend
+                    .authorize_current(identity, "branch")
+                    .map(|()| json!({"returned_by":"authorize_current"})),
+            ),
+            (
+                "read_directory",
+                backend
+                    .read_directory(
+                        identity,
+                        crate::ReadDirectory {
+                            branch: "branch",
+                            entry_id: "branch",
+                            path: None,
+                            selection: crate::DirectorySelection::Capture,
+                        },
+                    )
+                    .map(|snapshot| {
+                        assert_eq!(snapshot.commit_id, "commit");
+                        assert!(snapshot.entries.is_empty());
+                        assert!(!snapshot.more);
+                        json!({"returned_by":"read_directory"})
+                    }),
+            ),
+            (
+                "lookup_current",
+                backend
+                    .lookup_current(
+                        identity,
+                        "branch",
+                        &name_policy::LookupPath::parse("File.txt").unwrap(),
+                    )
+                    .map(|entry| {
+                        assert!(entry.is_none());
+                        json!({"returned_by":"lookup_current"})
                     }),
             ),
             (
@@ -449,6 +558,10 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"action": "status", "input": {"probe": 3}, "bootstrap": "bootstrap-probe"}),
         Value::Null,
         json!({"branch":"branch","commit":"commit"}),
+        json!({"workspace":"workspace","path":"File.txt","key":"file.txt"}),
+        json!({"branch":"branch"}),
+        json!({"branch":"branch","entry_id":"branch"}),
+        json!({"branch":"branch","path":"File.txt","key":"file.txt"}),
         json!({"branch":"branch","commit":"commit","path":"File.txt","key":"file.txt"}),
         json!({"action": BackendAction::Repositories.as_str(), "input": {"probe": 7}}),
         upload,
@@ -460,6 +573,7 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
     ];
     let calls = std::mem::take(&mut *fixture.probe.calls.lock().unwrap());
     assert_eq!(calls.len(), results.len());
+    assert_eq!(arguments.len(), results.len());
     for ((call, (method, _)), arguments) in calls.iter().zip(&results).zip(arguments) {
         assert_eq!(call.method, *method);
         assert_identity(call.identity.as_ref(), &fixture.identity);
@@ -475,13 +589,7 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
 #[test]
 fn revoked_sessions_never_reach_protected_backend_methods() {
     let fixture = Fixture::new();
-    fixture
-        .backend
-        .auth
-        .lock()
-        .unwrap()
-        .logout(&fixture.token)
-        .unwrap();
+    fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
     for (method, result) in fixture.protected_calls() {
         let error = result.unwrap_err();
         assert_eq!(error.status, 401, "{method}");
@@ -497,13 +605,7 @@ fn revoked_sessions_never_reach_protected_backend_methods() {
 #[test]
 fn public_probes_and_bootstrap_setup_keep_their_explicit_exceptions() {
     let fixture = Fixture::new();
-    fixture
-        .backend
-        .auth
-        .lock()
-        .unwrap()
-        .logout(&fixture.token)
-        .unwrap();
+    fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
     for action in [BackendAction::Capabilities, BackendAction::Ready] {
         assert_eq!(
             fixture
@@ -544,9 +646,7 @@ fn public_probes_and_bootstrap_setup_keep_their_explicit_exceptions() {
 #[test]
 fn lifecycle_delegation_preserves_errors_and_private_hook_boundaries() {
     let fixture = Fixture::new();
-    fixture
-        .backend
-        .start_management(fixture.backend.auth.clone());
+    fixture.backend.start_management(fixture.auth.clone());
     assert_eq!(
         fixture
             .backend

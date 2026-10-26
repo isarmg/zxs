@@ -78559,7 +78559,7 @@
     "e37e4ee6074dabae4638f15f4926b9af9c67c0b100fd2d7db4e45d323be61509"
   ],
   "lockfiles_sha256": {
-    "Cargo.lock": "5a3c79884d18d3763a5c8b45bafb6bca8a176109e86b7f06e78fa9a29b404a82"
+    "Cargo.lock": "25d182029ac7735d182c5f877b8d36de33fb0b0a1864b24c0ae1e9cce8164ba2"
   },
   "manifests_sha256": {
     "Cargo.toml": "fc4ae6b06dcf41b39717d94857e9b078e4857d69af0cb36d3cdccd81d31730e3",
@@ -78794,7 +78794,7 @@
     "src/server/Cargo.toml": "14cd6309e4c425f5021dc0624f7548fcf86dc312d35bf62e614b1b0c0dff53f5",
     "src/smb-vfs/Cargo.toml": "0106d55c98c1383db6d579eb9c7ed7ac0d91e069e6e6bd2722bc670b2cdef1cd",
     "src/smb/Cargo.toml": "66ca64b286cff2b2a6b2f551145e267b2eac6017affcd4c239605a9d080ecec4",
-    "src/web/Cargo.toml": "35e83bd2ad4fbe5d2985ee856fc7679edaeb6a35ecb02291e78390bcb9e5bfbf",
+    "src/web/Cargo.toml": "7c4df96d1394001afba4c79b03e4d91e2a1c785236b227188c55852cccc1631d",
     "tools/browser-smoke/Cargo.toml": "fe0db8d33c6a8143d67cfb4a4fbf2d528a113e078a51f88b31e7b5e70d85baa8",
     "tools/contract-check/Cargo.toml": "db127e20e1e01f96ba91c6960aef31c3b1082a40f8695f01ef615c21e748bcda",
     "tools/perf-check/Cargo.toml": "0711cfa82680a487e214f0c125e181144bb8bb0944a60c11051a8b751a079694",
@@ -111963,6 +111963,7 @@
             "shared-state",
             "sink",
             "std",
+            "thread-pool",
             "utilities"
           ],
           "roles": [
@@ -113174,6 +113175,7 @@
             "shared-state",
             "sink",
             "std",
+            "thread-pool",
             "utilities"
           ],
           "roles": [
@@ -113225,6 +113227,7 @@
         },
         "src/foundation/concurrency/task-dispatch": {
           "features": [
+            "futures-executor",
             "wasm-bindgen"
           ],
           "roles": [
@@ -114850,6 +114853,7 @@
             "shared-state",
             "sink",
             "std",
+            "thread-pool",
             "utilities"
           ],
           "roles": [
@@ -116147,6 +116151,7 @@
             "shared-state",
             "sink",
             "std",
+            "thread-pool",
             "utilities"
           ],
           "roles": [
@@ -117043,6 +117048,7 @@
             "shared-state",
             "sink",
             "std",
+            "thread-pool",
             "utilities"
           ],
           "roles": [

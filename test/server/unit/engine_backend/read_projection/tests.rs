@@ -611,7 +611,7 @@ fn large_directory_is_paginated_by_actual_bytes_and_count_without_full_tree_copi
     let mut after = None;
     let mut seen = Vec::new();
     loop {
-        let page = SmbDirectory::page(
+        let page = DirectorySnapshot::page(
             "commit_00000000000000000000000000000000",
             &entries,
             "",
@@ -657,7 +657,7 @@ fn directory_byte_bound_applies_to_utf8_and_long_paths_before_the_count_limit() 
     for entry in &entries {
         name_policy::validate_path(&entry.path).unwrap();
     }
-    let page = SmbDirectory::page(
+    let page = DirectorySnapshot::page(
         "commit_00000000000000000000000000000000",
         &entries,
         &parent,
@@ -713,30 +713,23 @@ fn smb_lookup_matches_legacy_on_published_and_reopened_unicode_trees() {
                 .iter()
                 .find(|entry| name_policy::path_key(&entry.path) == key)
                 .cloned();
-            let projected = SmbLookup::capture(
-                &engine,
-                &json!({
-                    "branch_id":repo.main_branch_id,"path":path
-                }),
-            );
-            // An empty transport path is rejected before lookup, as before.
             if path.is_empty() {
-                assert!(projected.is_err());
+                assert!(name_policy::LookupPath::parse(path).is_err());
                 continue;
             }
-            let projected = projected.unwrap();
-            assert_eq!(projected.0, legacy);
-            assert_eq!(
-                encode(projected).unwrap(),
-                json_codec::to_value(legacy).unwrap()
-            );
+            let projected = lookup_current(
+                &engine,
+                &repo.main_branch_id,
+                &name_policy::LookupPath::parse(path).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(projected, legacy);
         }
         let projected = encode(
-            SmbLookup::capture(
+            lookup_current(
                 &engine,
-                &json!({
-                    "branch_id":repo.main_branch_id,"path":"strasse/CAFÉ.TXT"
-                }),
+                &repo.main_branch_id,
+                &name_policy::LookupPath::parse("strasse/CAFÉ.TXT").unwrap(),
             )
             .unwrap(),
         )
@@ -757,24 +750,24 @@ fn smb_lookup_rechecks_admission_and_returns_only_current_entry() {
         .unwrap()
         .into_iter()
         .find(|entry| name_policy::path_key(&entry.path) == "strasse.txt");
-    let input = json!({"branch_id":repo.main_branch_id,"path":"STRASSE.TXT"});
-    let frozen = SmbLookup::capture(&engine, &input).unwrap();
+    let path = name_policy::LookupPath::parse("STRASSE.TXT").unwrap();
+    let frozen = lookup_current(&engine, &repo.main_branch_id, &path).unwrap();
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
     assert_eq!(
         backend
-            .call(BackendAction::SmbLookup, &identity, input.clone())
+            .lookup_current(&identity, &repo.main_branch_id, &path)
             .unwrap(),
-        json_codec::to_value(&expected).unwrap()
+        expected
     );
     assert_eq!(
         backend
-            .call(
-                BackendAction::SmbLookup,
+            .lookup_current(
                 &identity,
-                json!({"branch_id":repo.main_branch_id,"path":"missing"})
+                &repo.main_branch_id,
+                &name_policy::LookupPath::parse("missing").unwrap()
             )
             .unwrap(),
-        json!(null)
+        None
     );
     let denied = Identity {
         principal: "other".into(),
@@ -782,7 +775,7 @@ fn smb_lookup_rechecks_admission_and_returns_only_current_entry() {
     };
     assert_eq!(
         backend
-            .call(BackendAction::SmbLookup, &denied, input.clone())
+            .lookup_current(&denied, &repo.main_branch_id, &path)
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized
@@ -797,9 +790,12 @@ fn smb_lookup_rechecks_admission_and_returns_only_current_entry() {
         );
     }
     let current = backend
-        .call(BackendAction::SmbLookup, &identity, input.clone())
+        .lookup_current(&identity, &repo.main_branch_id, &path)
         .unwrap();
-    assert_ne!(current["version_id"], expected.as_ref().unwrap().version_id);
+    assert_ne!(
+        current.unwrap().version_id,
+        expected.as_ref().unwrap().version_id
+    );
     auth.logout(&token).unwrap();
     assert_eq!(
         encode(frozen).unwrap(),
@@ -807,7 +803,7 @@ fn smb_lookup_rechecks_admission_and_returns_only_current_entry() {
     );
     assert_eq!(
         backend
-            .call(BackendAction::SmbLookup, &identity, input)
+            .lookup_current(&identity, &repo.main_branch_id, &path)
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized
@@ -845,12 +841,19 @@ fn namespace_reads_preserve_migrated_branch_error() {
             .code,
         storage_contract::ErrorCode::TreeMoved
     );
+    assert_eq!(
+        backend
+            .lookup_current(
+                &identity,
+                &repo.main_branch_id,
+                &name_policy::LookupPath::parse("file.txt").unwrap()
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::TreeMoved
+    );
     let input = json!({"branch_id":repo.main_branch_id,"path":"file.txt"});
-    for action in [
-        BackendAction::Tree,
-        BackendAction::SmbLookup,
-        BackendAction::Resolve,
-    ] {
+    for action in [BackendAction::Tree, BackendAction::Resolve] {
         assert_eq!(
             backend
                 .call(action, &identity, input.clone())
@@ -866,3 +869,94 @@ mod lookup_at_tests;
 
 #[path = "snapshot_at_tests.rs"]
 mod snapshot_at_tests;
+
+#[test]
+fn typed_directory_reads_pin_snapshots_and_refresh_on_restart() {
+    let (_root, mut engine, repo, identity) = fixture();
+    save_projection_file(&mut engine, &repo.main_branch_id, "before.txt", b"first");
+    let backend = EngineBackend::new(engine);
+    let read = |selection| {
+        backend.read_directory(
+            &identity,
+            crate::ReadDirectory {
+                branch: &repo.main_branch_id,
+                entry_id: &repo.main_branch_id,
+                path: None,
+                selection,
+            },
+        )
+    };
+    let captured = read(crate::DirectorySelection::Capture).unwrap();
+    assert!(captured.entries.is_empty());
+    assert!(!captured.more);
+    {
+        let mut engine = backend.engine.lock().unwrap();
+        save_projection_file(&mut engine, &repo.main_branch_id, "after.txt", b"second");
+    }
+    let pinned = read(crate::DirectorySelection::Page {
+        commit: Some(&captured.commit_id),
+        after: None,
+    })
+    .unwrap();
+    assert_eq!(pinned.commit_id, captured.commit_id);
+    assert_eq!(
+        pinned
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["before.txt"]
+    );
+    let restarted = read(crate::DirectorySelection::Page {
+        commit: None,
+        after: None,
+    })
+    .unwrap();
+    assert_ne!(restarted.commit_id, captured.commit_id);
+    assert_eq!(
+        restarted
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["after.txt", "before.txt"]
+    );
+    let exhausted = read(crate::DirectorySelection::Page {
+        commit: Some(&restarted.commit_id),
+        after: Some("before.txt"),
+    })
+    .unwrap();
+    assert!(exhausted.entries.is_empty());
+    assert!(!exhausted.more);
+    assert_eq!(
+        backend
+            .read_directory(
+                &identity,
+                crate::ReadDirectory {
+                    branch: &repo.main_branch_id,
+                    entry_id: "not-the-root",
+                    path: None,
+                    selection: crate::DirectorySelection::Capture,
+                }
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::InvalidRequest
+    );
+    let path = name_policy::PortablePath::parse("before.txt").unwrap();
+    assert_eq!(
+        backend
+            .read_directory(
+                &identity,
+                crate::ReadDirectory {
+                    branch: &repo.main_branch_id,
+                    entry_id: &pinned.entries[0].entry_id,
+                    path: Some(&path),
+                    selection: crate::DirectorySelection::Capture,
+                }
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::SmbRebindRequired
+    );
+}

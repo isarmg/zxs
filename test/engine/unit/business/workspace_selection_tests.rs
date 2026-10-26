@@ -251,7 +251,10 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
         )
         .unwrap();
     engine
-        .validate_workspace_file_selection(&workspace.workspace_id, "Folder/Child/file.txt")
+        .validate_workspace_file_selection(
+            &workspace.workspace_id,
+            &name_policy::PortablePath::parse("Folder/Child/file.txt").unwrap(),
+        )
         .unwrap();
     for selection in ["draft", "main"] {
         engine
@@ -267,14 +270,20 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
     for path in ["folder", "FOLDER/CHILD/file.txt", "Folder/Child/new.txt"] {
         assert_eq!(
             engine
-                .validate_workspace_file_selection(&workspace.workspace_id, path)
+                .validate_workspace_file_selection(
+                    &workspace.workspace_id,
+                    &name_policy::PortablePath::parse(path).unwrap()
+                )
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::DirectoryBranchConflict
         );
     }
     engine
-        .validate_workspace_file_selection(&workspace.workspace_id, "Folderish/file.txt")
+        .validate_workspace_file_selection(
+            &workspace.workspace_id,
+            &name_policy::PortablePath::parse("Folderish/file.txt").unwrap(),
+        )
         .unwrap();
 }
 

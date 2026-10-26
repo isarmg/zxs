@@ -85,30 +85,25 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
 /// The acyclic tree may deliberately omit an edge when reusing an ancestor.
 /// Preserve all inputs in a separate provenance list instead of inventing
 /// another content node or hiding the source branch history.
-pub(crate) fn history(state: RwSignal<State>) -> impl IntoView {
+pub(crate) fn history() -> impl IntoView {
+    let history = super::super::history_index::shared();
     let records = Memo::new(move |_| {
-        state.with(|s| {
-            let history = &s.files.file_history;
-            history["merges"]
+        history.with(|history| {
+            history.snapshot["merges"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .map(|record| {
                     let branch_name = |id: &str| {
-                        history["branches"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .find(|branch| branch["branch_id"] == id)
+                        history
+                            .branch(id)
                             .map(|branch| text(branch, &["name"]))
                             .filter(|name| !name.is_empty())
                             .unwrap_or_else(|| t("历史分支", "Historical branch"))
                     };
                     let node_name = |id: &str| {
-                        super::super::model::history_nodes_ref(history)
-                            .iter()
-                            .enumerate()
-                            .find(|(_, node)| history_node_id(node) == id)
+                        history
+                            .node(id)
                             .map(|(index, node)| node_label(node, index))
                             .unwrap_or_else(|| t("历史节点", "Historical node"))
                     };

@@ -65,7 +65,10 @@ fn published_new_file_context_fences_same_version_branch_switch() {
             engine = Engine::open(&temporary.path().join("system")).unwrap();
         }
         engine
-            .validate_workspace_file_selection(&workspace.workspace_id, "fresh.txt")
+            .validate_workspace_file_selection(
+                &workspace.workspace_id,
+                &name_policy::PortablePath::parse("fresh.txt").unwrap(),
+            )
             .unwrap();
         let source = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
         let draft = engine
@@ -109,7 +112,10 @@ fn published_new_file_context_fences_same_version_branch_switch() {
         );
         assert_eq!(
             engine
-                .validate_workspace_file_selection(&workspace.workspace_id, "fresh.txt")
+                .validate_workspace_file_selection(
+                    &workspace.workspace_id,
+                    &name_policy::PortablePath::parse("fresh.txt").unwrap()
+                )
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::FileBranchConflict
@@ -129,7 +135,10 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
     let (_temporary, mut engine, repo) = fixture();
     let first = save(&mut engine, &repo.main_branch_id, b"old");
     engine
-        .validate_workspace_file_selection(&first.workspace_id, "fresh.txt")
+        .validate_workspace_file_selection(
+            &first.workspace_id,
+            &name_policy::PortablePath::parse("fresh.txt").unwrap(),
+        )
         .unwrap();
     let source = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
     let draft = engine
@@ -166,7 +175,10 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
                 .as_ref()
         );
         engine
-            .validate_workspace_file_selection(&completed.workspace_id, "fresh.txt")
+            .validate_workspace_file_selection(
+                &completed.workspace_id,
+                &name_policy::PortablePath::parse("fresh.txt").unwrap(),
+            )
             .unwrap();
         let next = engine
             .create_workspace(&repo.main_branch_id, "admin")
@@ -212,7 +224,10 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
     );
     assert_eq!(
         engine
-            .validate_workspace_file_selection(&completed.workspace_id, "fresh.txt")
+            .validate_workspace_file_selection(
+                &completed.workspace_id,
+                &name_policy::PortablePath::parse("fresh.txt").unwrap()
+            )
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::FileBranchConflict
@@ -294,7 +309,10 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
             Some(&published_context)
         );
         engine
-            .validate_workspace_file_selection(&workspace.workspace_id, "fresh.txt")
+            .validate_workspace_file_selection(
+                &workspace.workspace_id,
+                &name_policy::PortablePath::parse("fresh.txt").unwrap(),
+            )
             .unwrap();
         // Recovery does not rewrite either manifest. A later reopen must still
         // use the original publication, not a newer same-content selection.
@@ -338,7 +356,10 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
         );
         assert_eq!(
             engine
-                .validate_workspace_file_selection(&workspace.workspace_id, "fresh.txt")
+                .validate_workspace_file_selection(
+                    &workspace.workspace_id,
+                    &name_policy::PortablePath::parse("fresh.txt").unwrap()
+                )
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::FileBranchConflict

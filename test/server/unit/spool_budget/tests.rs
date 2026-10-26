@@ -333,3 +333,60 @@ fn rejected_batch_headroom_preserves_actual_tail_and_verified_retry_accounting()
         1
     );
 }
+
+#[test]
+fn reservation_drop_does_not_panic_again_during_unwind() {
+    let root = private_tempdir();
+    let budget = SpoolBudget::recover(
+        root.path(),
+        limits(2 * METADATA_ALLOWANCE, 2 * METADATA_ALLOWANCE),
+    )
+    .unwrap();
+    let reservation = budget
+        .reserve_with_available("alice", "unwind.data", 10, u64::MAX)
+        .unwrap();
+    reservation.persist_owner().unwrap();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _reservation = reservation;
+        let _ledger = budget.ledger.lock().unwrap();
+        panic!("writer panic while holding the ledger");
+    }));
+    assert!(panic.is_err());
+    assert!(budget.ledger.is_poisoned());
+    let retained = match budget.ledger.lock() {
+        Err(error) => error.into_inner(),
+        Ok(_) => panic!("ledger must remain poisoned"),
+    };
+    assert_eq!(retained.total, METADATA_ALLOWANCE + 10);
+    assert_ne!(retained.files["unwind.data"].reserved, 0);
+    assert!(root.path().join("unwind.data.owner.json").is_file());
+}
+
+#[test]
+fn recovered_metadata_and_longer_payload_survive_short_retry_settlement() {
+    let root = private_tempdir();
+    let payload = b"retained payload";
+    fs::write(root.path().join("retained.data"), payload).unwrap();
+    let metadata = json_codec::to_vec(&record("retained.data", "alice")).unwrap();
+    let count = METADATA_ALLOWANCE as usize / metadata.len() + 1;
+    for index in 0..count {
+        fs::write(root.path().join(format!("record-{index}.json")), &metadata).unwrap();
+    }
+    let overhead = (count * metadata.len()) as u64;
+    let expected = overhead + payload.len() as u64;
+    let budget = SpoolBudget::recover(root.path(), limits(expected, expected)).unwrap();
+    assert_eq!(total(&budget), expected);
+    let reservation = budget
+        .reserve_with_available("alice", "retained.data", 1, u64::MAX)
+        .unwrap();
+    drop(reservation);
+    let ledger = budget.ledger.lock().unwrap();
+    assert!(!ledger.uncertain);
+    assert_eq!(ledger.total, expected);
+    assert_eq!(ledger.files["retained.data"].overhead, overhead);
+    assert_eq!(ledger.files["retained.data"].reserved, 0);
+    assert_eq!(
+        fs::read(root.path().join("retained.data")).unwrap(),
+        payload
+    );
+}

@@ -363,8 +363,16 @@ fn expired_attempts_are_removed_and_key_capacity_is_never_exceeded() {
     assert!(!attempts.lock().unwrap().contains_key("new:one"));
 }
 
+async fn queued_session_job(
+    auth: Arc<Mutex<crate::auth::AuthStore>>,
+    slots: Arc<tokio::sync::Semaphore>,
+    token: String,
+) -> Result<(), ApiError> {
+    auth_job(slots, move || lock(&auth).logout(&token)).await
+}
+
 #[tokio::test]
-async fn authorization_admission_survives_cancellation_and_rejects_without_waiting() {
+async fn session_write_admission_survives_cancellation_and_rejects_without_waiting() {
     let root = crate::tests::private_tempdir();
     let auth = Arc::new(Mutex::new(
         crate::auth::AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap(),
@@ -385,7 +393,7 @@ async fn authorization_admission_survives_cancellation_and_rejects_without_waiti
     held.acquire().await.unwrap().forget();
     let mut jobs = Vec::new();
     for _ in 0..2 {
-        jobs.push(tokio::spawn(authenticate(
+        jobs.push(tokio::spawn(queued_session_job(
             auth.clone(),
             slots.clone(),
             token.clone(),
@@ -399,7 +407,7 @@ async fn authorization_admission_survives_cancellation_and_rejects_without_waiti
     .await
     .unwrap();
     assert_eq!(
-        authenticate(auth.clone(), slots.clone(), token.clone())
+        queued_session_job(auth.clone(), slots.clone(), token.clone())
             .await
             .unwrap_err()
             .status,
@@ -415,18 +423,11 @@ async fn authorization_admission_survives_cancellation_and_rejects_without_waiti
         429
     );
     assert_eq!(
-        authenticate(auth.clone(), slots.clone(), token.clone())
+        queued_session_job(auth.clone(), slots.clone(), token.clone())
             .await
             .unwrap_err()
             .status,
         429
-    );
-    assert_eq!(
-        authenticate(auth.clone(), slots.clone(), "malformed".into())
-            .await
-            .unwrap_err()
-            .status,
-        401
     );
     release.send(()).unwrap();
     holder.join().unwrap();
@@ -437,14 +438,12 @@ async fn authorization_admission_survives_cancellation_and_rejects_without_waiti
     })
     .await
     .unwrap();
-    assert_eq!(
-        authenticate(auth, slots, token).await.unwrap_err().status,
-        401
-    );
+    queued_session_job(auth, slots, token).await.unwrap();
 }
 
 #[derive(Default)]
 struct RetryProbe {
+    gate: Mutex<()>,
     calls: std::sync::atomic::AtomicUsize,
 }
 
@@ -473,6 +472,40 @@ impl crate::Backend for RetryProbe {
         unreachable!("this test backend does not serve snapshots")
     }
 
+    fn authorize_current(
+        &self,
+        _identity: &crate::auth::Identity,
+        _branch: &str,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
+    fn read_directory(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadDirectory<'_>,
+    ) -> Result<crate::DirectorySnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
+    fn authorize_workspace_selection(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _path: &name_policy::PortablePath,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
+    fn lookup_current(
+        &self,
+        _identity: &crate::auth::Identity,
+        _branch: &str,
+        _path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
     fn lookup_at(
         &self,
         _: &crate::auth::Identity,
@@ -484,6 +517,7 @@ impl crate::Backend for RetryProbe {
     }
 
     fn retry_storage(&self, _: &Identity) -> Result<Value, ApiError> {
+        let _gate = self.gate.lock().unwrap();
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(json!({"retryable":true}))
     }
@@ -506,7 +540,7 @@ impl crate::Backend for RetryProbe {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn storage_retry_auth_contention_never_blocks_runtime_or_releases_cancelled_capacity() {
+async fn storage_retry_backend_contention_never_blocks_runtime_or_releases_cancelled_capacity() {
     let root = crate::tests::private_tempdir();
     let mut store =
         crate::auth::AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
@@ -516,15 +550,16 @@ async fn storage_retry_auth_contention_never_blocks_runtime_or_releases_cancelle
     let probe = Arc::new(RetryProbe::default());
     let backend: Arc<dyn crate::Backend> = Arc::new(crate::AuthorizedBackend {
         backend: probe.clone(),
-        auth: auth.clone(),
+        auth: crate::lock(&auth).reader(),
     });
     let slots = Arc::new(tokio::sync::Semaphore::new(2));
     let held = Arc::new(tokio::sync::Semaphore::new(0));
     let (release, wait) = std::sync::mpsc::channel();
     let holder = std::thread::spawn({
         let held = held.clone();
+        let probe = probe.clone();
         move || {
-            let _guard = auth.lock().unwrap();
+            let _guard = probe.gate.lock().unwrap();
             held.add_permits(1);
             // Independent watchdog also releases the lock on a regression that
             // blocks this test's sole Tokio worker, rather than hanging the suite.
@@ -583,42 +618,26 @@ async fn storage_retry_auth_contention_never_blocks_runtime_or_releases_cancelle
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn storage_retry_rechecks_a_session_revoked_while_waiting_for_auth() {
+async fn storage_retry_rechecks_a_completed_session_revocation() {
     let root = crate::tests::private_tempdir();
     let mut store =
         crate::auth::AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
     let login = store.login("admin", "a-long-test-password").unwrap();
     let identity = store.authenticate(&login.token).unwrap();
-    let auth = Arc::new(Mutex::new(store));
     let probe = Arc::new(RetryProbe::default());
     let backend: Arc<dyn crate::Backend> = Arc::new(crate::AuthorizedBackend {
         backend: probe.clone(),
-        auth: auth.clone(),
+        auth: store.reader(),
     });
+    store.logout(&login.token).unwrap();
     let slots = Arc::new(tokio::sync::Semaphore::new(1));
-    let held = Arc::new(tokio::sync::Semaphore::new(0));
-    let (release, wait) = std::sync::mpsc::channel();
-    let holder = std::thread::spawn({
-        let held = held.clone();
-        move || {
-            let mut guard = auth.lock().unwrap();
-            held.add_permits(1);
-            let _ = wait.recv_timeout(Duration::from_secs(10));
-            guard.logout(&login.token).unwrap();
-        }
-    });
-    held.acquire().await.unwrap().forget();
-    let job = tokio::spawn(storage_retry_job(backend, slots.clone(), identity));
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while slots.available_permits() != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    release.send(()).unwrap();
-    assert_eq!(job.await.unwrap().unwrap_err().status, 401);
-    holder.join().unwrap();
+    assert_eq!(
+        storage_retry_job(backend, slots.clone(), identity)
+            .await
+            .unwrap_err()
+            .status,
+        401
+    );
     assert_eq!(slots.available_permits(), 1);
     assert_eq!(probe.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }

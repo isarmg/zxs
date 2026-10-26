@@ -201,6 +201,17 @@ fn busy_history_read_has_short_budget_and_latches() {
     let mut engine = engine(&temp);
     populate(&mut engine);
     let path = engine.root.join("index.sqlite");
+    // Isolate the reader's external rollback-journal lock boundary. A live WAL
+    // writer prevents switching journal mode, before this read even starts.
+    engine
+        .history_query_proof
+        .lock()
+        .unwrap()
+        .writer
+        .take()
+        .unwrap()
+        .close()
+        .unwrap();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
@@ -720,9 +731,10 @@ fn failed_delta_rolls_back_rows_and_sequence_then_rebuilds_from_state() {
             .unwrap()
             .is::<sqlite_access::Error>()
     );
-    // The failed transaction's native worker has closed before returning.
-    assert!(!path.with_file_name("index.sqlite-wal").exists());
-    assert!(!path.with_file_name("index.sqlite-shm").exists());
+    // Shutdown preserves the journal names; an independent read still observes
+    // only the committed baseline, not either row of the failed transaction.
+    assert!(path.with_file_name("index.sqlite-wal").exists());
+    assert!(path.with_file_name("index.sqlite-shm").exists());
     assert_eq!(rows(&path), baseline);
     // Full rebuild discards failed/stale projection and its triggers.
     project(&path, None, &next).unwrap();
@@ -810,8 +822,11 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
     let published = engine.state().clone();
     assert_eq!(rows(&path), baseline);
     drop(engine);
-    let engine = Engine::open(&root).unwrap();
+    let mut engine = Engine::open(&root).unwrap();
     assert!(!engine.is_read_only());
+    engine
+        .create_repository("second", "P01", 1, "admin", operation)
+        .unwrap();
     assert_eq!(*engine.state, published);
     assert_projection(&path, &published);
     drop(engine);
@@ -837,6 +852,12 @@ fn startup_rebuilds_a_corrupt_disposable_database_from_durable_evidence() {
             .unwrap();
         let root = engine.root.clone();
         let published = engine.state().clone();
+        // Materialize the current b-tree before damaging main-file bytes; normal
+        // shutdown deliberately retains FULL-committed WAL rather than applying it.
+        sql(
+            &root.join("index.sqlite"),
+            "PRAGMA wal_checkpoint(TRUNCATE)",
+        );
         drop(engine);
         let corrupt_bytes = if corrupt_page {
             let mut bytes = std::fs::read(root.join("index.sqlite")).unwrap();
@@ -874,6 +895,9 @@ fn corrupt_reader_closes_before_immediate_rebuild() {
     let temp = tempfile::tempdir().unwrap();
     let engine = engine(&temp);
     let path = engine.root.join("index.sqlite");
+    // Corrupt the actual current b-tree, not an older main-file page shadowed
+    // by valid committed WAL frames. Keep the admitted writer alive throughout.
+    sql(&path, "PRAGMA wal_checkpoint(TRUNCATE)");
     let mut bytes = std::fs::read(&path).unwrap();
     bytes[100] = 0xff;
     std::fs::write(&path, &bytes).unwrap();
@@ -943,6 +967,20 @@ fn rebuild_refuses_linked_index_or_sidecar_without_touching_target() {
                     .to_string_lossy()
                     .starts_with("index-corrupt-")
             }));
+            use std::os::unix::fs::MetadataExt;
+            let before = std::fs::symlink_metadata(&path).unwrap();
+            drop(engine);
+            let after = std::fs::symlink_metadata(&path).unwrap();
+            assert_eq!(before.ino(), after.ino(), "{name} hard_link={hard_link}");
+            assert_eq!(
+                before.nlink(),
+                after.nlink(),
+                "{name} hard_link={hard_link}"
+            );
+            assert_eq!(std::fs::read(&target).unwrap(), b"do not change");
+            if !hard_link {
+                assert_eq!(std::fs::read_link(&path).unwrap(), target);
+            }
         }
     }
 }
@@ -980,6 +1018,20 @@ fn runtime_linked_cache_falls_back_and_blocks_publication_without_touching_targe
             assert_eq!(error.code(), storage_contract::ErrorCode::UnsafePath);
             assert!(engine.is_read_only());
             assert_eq!(std::fs::read(&target).unwrap(), b"do not change");
+            let metadata = std::fs::symlink_metadata(&path).unwrap();
+            drop(engine);
+            assert_eq!(std::fs::read(&target).unwrap(), b"do not change");
+            let after = std::fs::symlink_metadata(&path).unwrap();
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(metadata.ino(), after.ino(), "{name} hard_link={hard_link}");
+            assert_eq!(
+                metadata.nlink(),
+                after.nlink(),
+                "{name} hard_link={hard_link}"
+            );
+            if !hard_link {
+                assert_eq!(std::fs::read_link(&path).unwrap(), target);
+            }
         }
     }
 }
@@ -1041,5 +1093,182 @@ fn startup_removes_obsolete_snapshot_and_entity_projections() {
             );
             c.close().await.unwrap();
         });
+    }
+}
+
+#[test]
+fn publications_reuse_admitted_worker_and_full_commit_policy() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(&temp);
+    {
+        let mut proof = engine.history_query_proof.lock().unwrap();
+        let connection = proof.writer.as_mut().unwrap().connection.as_mut().unwrap();
+        platform_io::sqlite::block_on_sqlite_connection(async {
+            // TEMP objects belong to this native connection, not the database.
+            connection.execute("CREATE TEMP TABLE lifetime_probe(value INTEGER);INSERT INTO lifetime_probe VALUES(73)").await.unwrap();
+        });
+    }
+    for n in 0..3 {
+        engine
+            .create_repository(
+                &format!("repo-{n}"),
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
+            .unwrap();
+        let mut proof = engine.history_query_proof.lock().unwrap();
+        let connection = proof.writer.as_mut().unwrap().connection.as_mut().unwrap();
+        platform_io::sqlite::block_on_sqlite_connection(async {
+            let value: i64 = sqlite_access::query_scalar("SELECT value FROM temp.lifetime_probe")
+                .fetch_one(&mut *connection)
+                .await
+                .unwrap();
+            assert_eq!(value, 73);
+            let synchronous: i64 = sqlite_access::query_scalar("PRAGMA synchronous")
+                .fetch_one(&mut *connection)
+                .await
+                .unwrap();
+            assert_eq!(
+                synchronous, 2,
+                "FULL acknowledgement must not become NORMAL"
+            );
+            let journal: String = sqlite_access::query_scalar("PRAGMA journal_mode")
+                .fetch_one(&mut *connection)
+                .await
+                .unwrap();
+            assert_eq!(journal, "wal");
+        });
+    }
+    let path = engine.root.join("index.sqlite");
+    assert!(path.with_file_name("index.sqlite-wal").exists());
+    drop(engine);
+    let root = path.parent().unwrap();
+    for entry in std::fs::read_dir("/proc/self/fd").unwrap() {
+        if let Ok(target) = std::fs::read_link(entry.unwrap().path()) {
+            assert!(
+                !target.starts_with(root),
+                "index/root descriptor leaked: {target:?}"
+            );
+        }
+    }
+    assert!(path.with_file_name("index.sqlite-wal").exists());
+    assert!(path.with_file_name("index.sqlite-shm").exists());
+    platform_io::sqlite::block_on_sqlite_connection(async {
+        let mut connection = platform_io::sqlite::open_index_connection(&path, false, None)
+            .await
+            .unwrap();
+        // Switching out of WAL needs the exclusive lock; this would fail if the
+        // engine leaked its worker/connection instead of actually closing it.
+        connection
+            .execute("PRAGMA journal_mode=DELETE")
+            .await
+            .unwrap();
+        let sequence: String =
+            sqlite_access::query_scalar("SELECT sequence FROM current_state WHERE singleton=1")
+                .fetch_one(&mut connection)
+                .await
+                .unwrap();
+        assert_eq!(sequence, "3");
+        connection.close().await.unwrap();
+    });
+}
+
+#[test]
+fn replaced_database_identity_blocks_publication_and_retains_receipt() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(&temp);
+    let path = engine.root.join("index.sqlite");
+    let replacement = temp.path().join("replacement.sqlite");
+    project(&replacement, None, engine.state()).unwrap();
+    std::fs::rename(&replacement, &path).unwrap();
+    let operation = storage_contract::OperationId::generate();
+    let error = engine
+        .create_repository("published", "P01", 1, "admin", operation)
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::UnsafePath);
+    assert!(error.to_string().contains("identity changed"));
+    assert!(engine.is_read_only());
+    assert!(engine.state.operations.contains_key(&operation));
+}
+
+#[test]
+#[ignore = "manual writer lifecycle measurement"]
+fn measure_history_writer_lifecycle() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("index.sqlite");
+    let mut state = State::default();
+    let delta = HistoryDelta::default();
+    project(&path, None, &state).unwrap();
+    for retained in [false, true] {
+        let mut writer = retained.then(|| IndexConnection::open(&path, false).unwrap());
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            let previous = state.clone();
+            state.sequence += 1;
+            if let Some(writer) = writer.as_mut() {
+                writer.project(Some(&previous), &state, &delta).unwrap();
+            } else {
+                project(&path, Some(&previous), &state).unwrap();
+            }
+        }
+        let elapsed = start.elapsed();
+        if let Some(writer) = writer.as_mut() {
+            writer.close().unwrap();
+        }
+        eprintln!(
+            "metadata-marker publications=100 retained={retained} elapsed_us={} (FULL/WAL, excludes retained final close)",
+            elapsed.as_micros()
+        );
+    }
+}
+
+#[test]
+fn live_writer_rejects_corrupt_current_main_page() {
+    for marker_page in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut engine = engine(&temp);
+        let path = engine.root.join("index.sqlite");
+        let offset = {
+            let mut proof = engine.history_query_proof.lock().unwrap();
+            let connection = proof.writer.as_mut().unwrap().connection.as_mut().unwrap();
+            platform_io::sqlite::block_on_sqlite_connection(async {
+                connection
+                    .execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    .await
+                    .unwrap();
+                // Warm the exact writer's schema and marker pages before damaging
+                // their disk bytes, without updating the SQLite schema cookie.
+                check_projection_marker(connection, engine.state.sequence)
+                    .await
+                    .unwrap();
+                if marker_page {
+                    let page: i64 = sqlite_access::query_scalar(
+                        "SELECT rootpage FROM sqlite_schema WHERE name='current_state'",
+                    )
+                    .fetch_one(&mut *connection)
+                    .await
+                    .unwrap();
+                    let size: i64 = sqlite_access::query_scalar("PRAGMA page_size")
+                        .fetch_one(&mut *connection)
+                        .await
+                        .unwrap();
+                    ((page - 1) * size) as usize
+                } else {
+                    100
+                }
+            })
+        };
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[offset] = 0xff;
+        std::fs::write(&path, &bytes).unwrap();
+        let previous = engine.state().clone();
+        std::sync::Arc::make_mut(&mut engine.state).sequence += 1;
+        assert!(
+            engine.update_index(&previous).is_err(),
+            "marker_page={marker_page}"
+        );
+        assert!(!engine.history_query_proof.lock().unwrap().healthy);
     }
 }

@@ -11,8 +11,10 @@ use std::future::Future;
 ///
 /// The future must contain only direct SQLite connection work. Pools, Tokio
 /// timers/network/filesystem futures and recursively calling this function are
-/// outside this contract. The caller must explicitly close every connection
-/// before completing its future; this function does not replace that ownership.
+/// outside this contract. The caller owns the connection lifecycle: either close
+/// it before completing the future, or retain it in a synchronous owner that
+/// explicitly closes it before replacing its files or releasing its root lock.
+/// This executor does not replace that ownership.
 pub fn block_on_sqlite_connection<F: Future>(future: F) -> F::Output {
     futures::executor::block_on(future)
 }
