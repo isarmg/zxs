@@ -21,7 +21,6 @@ macro_rules! actions {
 actions! {
     Archive => "archive",
     Check => "check",
-    Commit => "commit",
     Compare => "compare",
     CreateBranch => "create_branch",
     CreateRepository => "create_repository",
@@ -64,7 +63,6 @@ actions! {
     PurgePlan => "purge_plan",
     RegisterDisk => "register_disk",
     RenameDirectoryBranch => "rename_directory_branch",
-    Resolve => "resolve",
     SmbBinding => "smb_binding",
     SplitPlan => "split_plan",
     Topology => "topology",

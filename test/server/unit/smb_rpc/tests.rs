@@ -51,6 +51,7 @@ struct LostCommitReply {
     uploads: AtomicUsize,
     revoked: AtomicBool,
     change_before_workspace: AtomicBool,
+    obstruct_work_record: Mutex<Option<PathBuf>>,
 }
 impl LostCommitReply {
     fn take_version_authorizations(&self) -> Vec<String> {
@@ -120,6 +121,9 @@ impl Backend for LostCommitReply {
         branch: &str,
     ) -> Result<(), crate::ApiError> {
         self.authorizations.lock().unwrap().push(branch.to_owned());
+        if self.revoked.load(Ordering::SeqCst) {
+            return Err(ApiError::forbidden());
+        }
         self.inner.authorize_current(identity, branch)
     }
 
@@ -169,7 +173,12 @@ impl Backend for LostCommitReply {
                 },
             )?;
         }
-        self.inner.create_workspace(identity, command)
+        let workspace = self.inner.create_workspace(identity, command)?;
+        if let Some(path) = self.obstruct_work_record.lock().unwrap().take() {
+            fs::remove_file(&path).unwrap();
+            fs::create_dir(&path).unwrap();
+        }
+        Ok(workspace)
     }
     fn abort_workspace(
         &self,
@@ -263,6 +272,20 @@ impl Backend for LostCommitReply {
         identity: &crate::auth::Identity,
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         self.inner.workspace_capacity(identity)
+    }
+    fn commit_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        self.inner.commit_snapshot(identity, id)
+    }
+    fn resolve_entry(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ResolveEntry<'_>,
+    ) -> Result<crate::ResolvedEntry, crate::ApiError> {
+        self.inner.resolve_entry(identity, request)
     }
     fn branch_snapshot(
         &self,
@@ -449,6 +472,7 @@ fn fixture() -> (tempfile::TempDir, Arc<Shared>, Arc<LostCommitReply>, String) {
         uploads: AtomicUsize::new(0),
         revoked: AtomicBool::new(false),
         change_before_workspace: AtomicBool::new(false),
+        obstruct_work_record: Mutex::new(None),
     });
     backend
         .inner

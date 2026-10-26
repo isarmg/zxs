@@ -165,6 +165,14 @@ fn published_handles_can_write_again_without_selection_change() {
                 opened.workspace_id.as_deref().unwrap()
             );
             assert_ne!(writer.operation_id, first_operation);
+            let record: Value = json_codec::from_slice(
+                &fs::read(writer.source.with_extension("work.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(record["workspace_id"], writer.workspace.workspace_id);
+            assert_eq!(record["operation_id"], writer.operation_id.to_string());
+            assert_eq!(record["published"], false);
+            assert_eq!(record["dirty"], true);
             let saved = client.flush(opened.handle).unwrap();
             assert_eq!(saved["commit_state"], "PUBLISHED");
             let current = client
@@ -181,4 +189,97 @@ fn published_handles_can_write_again_without_selection_change() {
             client.close(opened.handle, false).unwrap();
         }
     }
+}
+
+#[test]
+fn unpublished_dirty_preserves_generation_and_records_before_authorization_failure() {
+    let (_temporary, shared, backend, branch) = fixture();
+    let mut client = session(shared, &branch);
+    let (opened, file) = open_file(&mut client, true);
+    let (source, operation) = match &client.handles[&opened.handle] {
+        Handle::Write(writer) => (writer.source.clone(), writer.operation_id),
+        _ => unreachable!(),
+    };
+    let record_path = source.with_extension("work.json");
+    for bytes in [b"one", b"two"] {
+        file.write_all_at(bytes, 0).unwrap();
+        client.dirty(opened.handle).unwrap();
+        let record: Value = json_codec::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+        assert_eq!(
+            record["workspace_id"],
+            opened.workspace_id.as_deref().unwrap()
+        );
+        assert_eq!(record["operation_id"], operation.to_string());
+        assert_eq!(record["dirty"], true);
+        assert_eq!(record["published"], false);
+    }
+    // Remove the previous record so it cannot satisfy this observation.
+    fs::remove_file(&record_path).unwrap();
+    backend.revoked.store(true, Ordering::SeqCst);
+    file.write_all_at(b"end", 0).unwrap();
+    client.dirty(opened.handle).unwrap_err();
+    let record: Value = json_codec::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+    assert_eq!(record["operation_id"], operation.to_string());
+    assert_eq!(record["dirty"], true);
+    assert_eq!(backend.uploads.load(Ordering::SeqCst), 0);
+    assert_eq!(fs::read(source).unwrap(), b"end");
+}
+
+#[test]
+fn failed_initial_dirty_record_retains_source_and_retry_records_generation() {
+    let (_temporary, shared, _backend, branch) = fixture();
+    let mut client = session(shared, &branch);
+    let (opened, file) = open_file(&mut client, true);
+    let source = match &client.handles[&opened.handle] {
+        Handle::Write(writer) => writer.source.clone(),
+        _ => unreachable!(),
+    };
+    let record_path = source.with_extension("work.json");
+    fs::remove_file(&record_path).unwrap();
+    fs::create_dir(&record_path).unwrap();
+    file.write_all_at(b"new", 0).unwrap();
+    let error = client.dirty(opened.handle).unwrap_err();
+    assert!(std::error::Error::source(&error).is_some());
+    assert_eq!(fs::read(&source).unwrap(), b"new");
+    fs::remove_dir(&record_path).unwrap();
+    client.dirty(opened.handle).unwrap();
+    let record: Value = json_codec::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+    assert_eq!(
+        record["workspace_id"],
+        opened.workspace_id.as_deref().unwrap()
+    );
+    assert_eq!(record["dirty"], true);
+    client.close(opened.handle, false).unwrap();
+}
+
+#[test]
+fn failed_new_generation_record_is_retried_without_another_workspace() {
+    let (_temporary, shared, backend, branch) = fixture();
+    let mut client = session(shared, &branch);
+    let (opened, file) = first_save(&mut client, &backend, "report.txt", false, false);
+    let source = match &client.handles[&opened.handle] {
+        Handle::Write(writer) => writer.source.clone(),
+        _ => unreachable!(),
+    };
+    let record_path = source.with_extension("work.json");
+    *backend.obstruct_work_record.lock().unwrap() = Some(record_path.clone());
+    file.write_all_at(b"two", 0).unwrap();
+    let error = client.dirty(opened.handle).unwrap_err();
+    assert!(std::error::Error::source(&error).is_some());
+    let (workspace, operation) = match &client.handles[&opened.handle] {
+        Handle::Write(writer) => {
+            assert!(writer.dirty && !writer.committed);
+            (writer.workspace.workspace_id.clone(), writer.operation_id)
+        }
+        _ => unreachable!(),
+    };
+    assert_ne!(Some(&workspace), opened.workspace_id.as_ref());
+    assert_eq!(fs::read(&source).unwrap(), b"two");
+    fs::remove_dir(&record_path).unwrap();
+    client.dirty(opened.handle).unwrap();
+    let record: Value = json_codec::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+    assert_eq!(record["workspace_id"], workspace);
+    assert_eq!(record["operation_id"], operation.to_string());
+    assert_eq!(record["dirty"], true);
+    client.close(opened.handle, false).unwrap();
 }

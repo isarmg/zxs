@@ -8,6 +8,13 @@ use crate::SpoolLimits;
 use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::{AdvisoryLock, EntryName, PrivateDirectory, RelativePath};
 
+mod persistence;
+#[cfg(not(test))]
+use persistence as persist;
+#[cfg(test)]
+#[path = "../../../../test/server/unit/smb_rpc/budget_persist.rs"]
+mod persist;
+
 const OVERHEAD: u64 = 64 * 1024;
 const RECORD_LIMIT: u64 = 16 * 1024;
 
@@ -105,6 +112,34 @@ pub(super) struct Lease {
     max_length: u64,
     principal: String,
 }
+// A charged extent may already have reached disk when I/O fails or unwinds.
+// Keep that charge and close admission until startup inventories the evidence.
+struct Pending<'a> {
+    budget: &'a Budget,
+    complete: bool,
+}
+impl Pending<'_> {
+    fn finish(mut self) -> Result<(), ApiError> {
+        let ledger = self.budget.lock_ledger();
+        self.complete = true;
+        if ledger.uncertain {
+            return Err(invalid("SMB spool needs reconciliation"));
+        }
+        Ok(())
+    }
+}
+impl Drop for Pending<'_> {
+    fn drop(&mut self) {
+        if !self.complete {
+            match self.budget.ledger.lock() {
+                Ok(mut ledger) => ledger.uncertain = true,
+                Err(error) => {
+                    tracing::error!(%error, "SMB admission remains blocked by poisoned ledger");
+                }
+            }
+        }
+    }
+}
 fn invalid(message: &str) -> ApiError {
     ApiError::new(
         ::http::StatusCode::SERVICE_UNAVAILABLE,
@@ -124,6 +159,9 @@ fn source_name(name: &str) -> bool {
     !name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\\', '.'])
 }
 impl Budget {
+    fn lock_ledger(&self) -> std::sync::MutexGuard<'_, Ledger> {
+        self.ledger.lock().expect("service state lock poisoned")
+    }
     pub(super) fn recover(root: &Path, limits: SpoolLimits) -> Result<Arc<Self>, ApiError> {
         if limits.bytes_per_account < OVERHEAD
             || limits.bytes_total < limits.bytes_per_account
@@ -273,7 +311,7 @@ impl Budget {
         {
             return Err(invalid("invalid SMB reservation identity"));
         }
-        let mut ledger = self.ledger.lock().expect("service state lock poisoned");
+        let mut ledger = self.lock_ledger();
         if ledger.uncertain || ledger.files.contains_key(source) {
             return Err(invalid("SMB spool needs reconciliation"));
         }
@@ -285,33 +323,21 @@ impl Budget {
                 bytes: charge(admitted_end)?,
             }),
         )?;
-        let persist = (|| {
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut file = fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .mode(0o600)
-                .open(record_path(source))
-                .map_err(ApiError::io)?;
-            let value = Owner {
+        let pending = Pending {
+            budget: self,
+            complete: false,
+        };
+        drop(ledger);
+        persist::create(
+            &self.root,
+            source,
+            &Owner {
                 principal: principal.into(),
                 source: name.into(),
                 admitted_end,
-            };
-            file.write_all(
-                &json_codec::to_vec(&value)
-                    .expect("invariant: internal JSON serialization succeeds"),
-            )
-            .map_err(ApiError::io)?;
-            file.sync_all().map_err(ApiError::io)?;
-            File::open(&self.root)
-                .and_then(|directory| directory.sync_all())
-                .map_err(ApiError::io)
-        })();
-        if let Err(error) = persist {
-            ledger.uncertain = true;
-            return Err(error);
-        }
+            },
+        )?;
+        pending.finish()?;
         Ok(Lease {
             budget: self.clone(),
             source: source.to_owned(),
@@ -361,11 +387,17 @@ impl Budget {
         Ok(info.f_bavail.saturating_mul(info.f_frsize))
     }
 }
+// Exclusive lease access serializes one source without a second writer lock.
 impl Lease {
-    pub(super) fn before_write(&self, end: u64, bytes: u64) -> Result<(), ApiError> {
+    pub(super) fn before_write(&mut self, end: u64, bytes: u64) -> Result<(), ApiError> {
         self.before_write_available(end, bytes, self.budget.available()?)
     }
-    fn before_write_available(&self, end: u64, bytes: u64, available: u64) -> Result<(), ApiError> {
+    fn before_write_available(
+        &mut self,
+        end: u64,
+        bytes: u64,
+        available: u64,
+    ) -> Result<(), ApiError> {
         if end > self.max_length {
             return Err(ApiError::limit("write exceeds SMB byte reservation"));
         }
@@ -378,11 +410,7 @@ impl Lease {
         {
             return Err(ApiError::limit("SMB write must preserve recovery headroom"));
         }
-        let mut ledger = self
-            .budget
-            .ledger
-            .lock()
-            .expect("service state lock poisoned");
+        let mut ledger = self.budget.lock_ledger();
         if ledger.uncertain {
             return Err(invalid("SMB spool needs reconciliation"));
         }
@@ -400,36 +428,23 @@ impl Lease {
                     bytes: charge(end)?,
                 }),
             )?;
+            let pending = Pending {
+                budget: &self.budget,
+                complete: false,
+            };
+            drop(ledger);
             // Persist the enlarged extent before acknowledging permission to
             // mutate the FD. Unknown metadata outcomes block further admission.
-            let persist = (|| {
-                let mut temporary = tempfile::Builder::new()
-                    .prefix(".budget-grow-")
-                    .tempfile_in(&self.budget.root)
-                    .map_err(ApiError::io)?;
-                let value = Owner {
+            persist::grow(
+                &self.budget.root,
+                &self.source,
+                &Owner {
                     principal: self.principal.clone(),
                     source: self.source.file_name().unwrap().to_str().unwrap().into(),
                     admitted_end: end,
-                };
-                temporary
-                    .write_all(
-                        &json_codec::to_vec(&value)
-                            .expect("invariant: internal JSON serialization succeeds"),
-                    )
-                    .map_err(ApiError::io)?;
-                temporary.as_file().sync_all().map_err(ApiError::io)?;
-                temporary
-                    .persist(record_path(&self.source))
-                    .map_err(|error| ApiError::io(error.error))?;
-                File::open(&self.budget.root)
-                    .and_then(|directory| directory.sync_all())
-                    .map_err(ApiError::io)
-            })();
-            if let Err(error) = persist {
-                ledger.uncertain = true;
-                return Err(error);
-            }
+                },
+            )?;
+            pending.finish()?;
         }
         Ok(())
     }
@@ -450,6 +465,14 @@ impl Lease {
 }
 impl Drop for Lease {
     fn drop(&mut self) {
+        let mut ledger = match self.budget.ledger.lock() {
+            Ok(ledger) if !ledger.uncertain => ledger,
+            Ok(_) => return,
+            Err(error) => {
+                tracing::error!(%error, "SMB cleanup skipped; ledger remains poisoned");
+                return;
+            }
+        };
         match self.evidence_absent() {
             Ok(false) => return,
             Err(error) => {
@@ -466,11 +489,6 @@ impl Drop for Lease {
                 return;
             }
         }
-        let mut ledger = self
-            .budget
-            .ledger
-            .lock()
-            .expect("service state lock poisoned");
         if let Err(error) = ledger.replace(self.source.clone(), None) {
             ledger.uncertain = true;
             tracing::warn!(error = ?error, "SMB spool accounting could not settle; admission blocked");

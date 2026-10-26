@@ -8,6 +8,29 @@ use crate::{disk::*, *};
 use platform_io::fs_safety::linux::{MountPolicy, OpenAt2Root};
 use std::collections::BTreeMap;
 
+/// Current metadata identity probes, detached from the engine lock.
+/// This is an observation, never admission for a write.
+pub struct MetadataMemberProbe {
+    config: ValidatedConfig,
+}
+
+impl MetadataMemberProbe {
+    pub fn member_count(&self) -> usize {
+        self.config.metadata_members().len()
+    }
+
+    /// Verify all configured metadata identities at observation time.
+    ///
+    /// # Errors
+    /// Returns the first unavailable or mismatched member, preserving its source.
+    pub fn verify(&self) -> Result<()> {
+        for disk in self.config.metadata_members() {
+            validate_seal(&self.config, disk)?;
+        }
+        Ok(())
+    }
+}
+
 pub struct DiskObservationPlan {
     config: ValidatedConfig,
     used_bytes: BTreeMap<String, u64>,
@@ -21,6 +44,13 @@ pub struct DiskObservation {
 }
 
 impl Engine {
+    /// Capture shared immutable configuration without inspecting historical state.
+    pub fn prepare_metadata_member_probe(&self) -> MetadataMemberProbe {
+        MetadataMemberProbe {
+            config: self.config.clone(),
+        }
+    }
+
     pub fn prepare_disk_observation(&self) -> DiskObservationPlan {
         let mut used_bytes: BTreeMap<String, u64> = BTreeMap::new();
         for placement in self.state.placements.values() {

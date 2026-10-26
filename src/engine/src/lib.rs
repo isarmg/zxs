@@ -32,8 +32,8 @@ pub use business::{
 pub use degraded_recovery::RecoveryPlan;
 pub use disk::{offline_check, offline_export};
 pub use engine::{
-    ContentReadPlan, DiskObservation, DiskObservationPlan, Engine, OpenedContent,
-    OperationReadPlan, OperationRecord, RangeContent, ReadLease, RecoveryWarnings,
+    ContentReadPlan, DiskObservation, DiskObservationPlan, Engine, MetadataMemberProbe,
+    OpenedContent, OperationReadPlan, OperationRecord, RangeContent, ReadLease, RecoveryWarnings,
     RetainedWorkspaceLimits, ValidatedConfig, WorkspaceReadPlan,
 };
 pub use historical_save::HistoricalSaveOptions;

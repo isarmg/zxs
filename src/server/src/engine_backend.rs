@@ -21,7 +21,7 @@ mod wire;
 pub(crate) use wire::error;
 use wire::{
     branch_wire, content_wire, current_entry_source, encode, field, keys, operation,
-    operation_wire, pending_entry_source, sanitized,
+    operation_wire, sanitized,
 };
 
 pub(crate) fn report_recovery_warnings(engine: &mut Engine) {
@@ -510,29 +510,20 @@ impl Backend for EngineBackend {
                 "storage is open for verified recovery reads only",
             ));
         }
-        let configured_members = engine
-            .config()
-            .disks
-            .iter()
-            .filter(|disk| disk.metadata_member)
-            .count();
+        let probe = engine.prepare_metadata_member_probe();
+        let configured_members = probe.member_count();
         let storage_disks = engine.config().disks.len();
         let mode = engine.config().mode.clone();
         let sequence = engine.state().sequence;
-        let observation = engine.prepare_disk_observation();
         drop(engine);
-        let status = observation.status().map_err(error)?;
-        let members = status
-            .iter()
-            .filter(|disk| disk.metadata_member && disk.online)
-            .count();
-        if members != configured_members {
-            return Err(ApiError::new(
+        probe.verify().map_err(|source| {
+            ApiError::new(
                 ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::MetadataUnavailable,
                 "all configured metadata members are required for normal writes",
-            ));
-        }
+            )
+            .with_source(source)
+        })?;
         Ok(crate::Readiness::Engine(crate::EngineReadiness {
             mode,
             sequence,
@@ -547,6 +538,32 @@ impl Backend for EngineBackend {
         let engine = self.engine.lock().expect("service state lock poisoned");
         let current = current_protected_identity(&engine, identity)?;
         Ok(engine.workspace_capacity(&current.principal))
+    }
+    fn commit_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        let commit = engine.state().commits.get_shared(id).ok_or_else(|| {
+            ApiError::new(
+                ::http::StatusCode::NOT_FOUND,
+                storage_contract::ErrorCode::NotFound,
+                "commit not found",
+            )
+        })?;
+        repo_for_history(&engine, &commit.history_tree_id)?;
+        Ok(commit)
+    }
+    fn resolve_entry(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ResolveEntry<'_>,
+    ) -> Result<crate::ResolvedEntry, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        read_projection::resolve_entry(&engine, request)
     }
     fn branch_snapshot(
         &self,
@@ -919,56 +936,6 @@ impl Backend for EngineBackend {
                     .map_err(error)?;
                 operation_wire(result)
             }
-            crate::BackendAction::Resolve => {
-                keys(&input, &["branch_id", "path", "commit_id"])?;
-                let branch_id = field(&input, "branch_id")?;
-                repo_for_branch(&engine, branch_id)?;
-                let branch = engine.state().branches.get(branch_id).unwrap();
-                let path = field(&input, "path")?;
-                name_policy::validate_lookup_path(path).map_err(ApiError::invalid_source)?;
-                let commit_id =
-                    wire::optional_identity(&input, "commit_id")?.unwrap_or(&branch.head_commit_id);
-                let commit = engine
-                    .state()
-                    .commits
-                    .get(commit_id)
-                    .filter(|commit| commit.history_tree_id == branch.history_tree_id)
-                    .ok_or_else(|| {
-                        ApiError::new(
-                            ::http::StatusCode::NOT_FOUND,
-                            storage_contract::ErrorCode::NotFound,
-                            "commit not found",
-                        )
-                    })?;
-                let key = name_policy::path_key(path);
-                let entries = engine
-                    .list_tree_at_ref(branch_id, commit_id)
-                    .map_err(error)?;
-                let entry = entries
-                    .iter()
-                    .find(|entry| entry.lookup_key() == key)
-                    .ok_or_else(|| {
-                        ApiError::new(
-                            ::http::StatusCode::NOT_FOUND,
-                            storage_contract::ErrorCode::NotFound,
-                            "entry not found",
-                        )
-                    })?;
-                let mut response = json!({"branch_id":branch_id,"commit_id":commit_id,"entry":entry,"version":engine.state().versions.get(&entry.version_id)});
-                if entry.kind == storage_contract::NamespaceEntryKind::File {
-                    response.as_object_mut().unwrap().extend(
-                        content_wire(
-                            &engine,
-                            Some(&entry.version_id),
-                            pending_entry_source(&engine, branch_id, commit, entry),
-                        )
-                        .as_object()
-                        .unwrap()
-                        .clone(),
-                    );
-                }
-                Ok(response)
-            }
             crate::BackendAction::Plan => {
                 let plan = engine.plan(field(&input, "plan_id")?).map_err(error)?;
                 if plan.principal != identity.principal {
@@ -1105,21 +1072,6 @@ impl Backend for EngineBackend {
                 let history = field(&input, "history_tree_id")?;
                 repo_for_history(&engine, history)?;
                 encode(engine.graph(history).map_err(error)?)
-            }
-            crate::BackendAction::Commit => {
-                let commit = engine
-                    .state()
-                    .commits
-                    .get(field(&input, "commit_id")?)
-                    .ok_or_else(|| {
-                        ApiError::new(
-                            ::http::StatusCode::NOT_FOUND,
-                            storage_contract::ErrorCode::NotFound,
-                            "commit not found",
-                        )
-                    })?;
-                repo_for_history(&engine, &commit.history_tree_id)?;
-                encode(commit)
             }
             crate::BackendAction::Placement => {
                 let id = field(&input, "version_id")?;

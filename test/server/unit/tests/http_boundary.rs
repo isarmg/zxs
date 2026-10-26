@@ -451,6 +451,20 @@ impl Backend for PanickingBackend {
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         panic!("private workspace capacity panic detail")
     }
+    fn commit_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        panic!("private commit snapshot panic detail")
+    }
+    fn resolve_entry(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ResolveEntry<'_>,
+    ) -> Result<crate::ResolvedEntry, crate::ApiError> {
+        panic!("private resolve entry panic detail")
+    }
     fn branch_snapshot(
         &self,
         _identity: &crate::auth::Identity,
@@ -586,6 +600,12 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         ("POST", "/api/system/storage/retry", Some(json!({}))),
         ("GET", "/api/repositories", None),
         ("GET", "/api/branches/branch", None),
+        ("GET", "/api/commits/commit", None),
+        (
+            "POST",
+            "/api/branches/branch/resolve",
+            Some(json!({"path":"file.txt"})),
+        ),
         ("GET", "/api/repositories/repository/branches", None),
         ("GET", "/api/branches/branch/tree?commit_id=commit", None),
         ("GET", "/api/versions/version/content", None),

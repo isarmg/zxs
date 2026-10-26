@@ -84,11 +84,11 @@ SMB RPC 入口一次解析路径并直接构造同一类型，替换目标删除
 
 ## 剩余 Value 调用清单
 
-此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 53 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
+此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 51 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
 
 - **工作区 seal／公开发布已接续迁移。** 见[公开提交边界](detached-workspace-commits.md#public-commit-envelope-and-seal)；HTTP 与 SMB 保留各自摘要契约。上传 publication 结果也已接续类型化；namespace 暂存也已接续迁移；write-session 已接续迁移，通用读取仍有 Value，不能据当前迁移宣称全部工作区接口已经分层。
 - **SMB 绑定／只读冻结版本。** Capabilities、Repository 与冻结版本已使用 typed snapshot/准入，生产 Session::call 已删除。不是本次 typed 当前查询的后备路径。
-- **HTTP 通用读取。** resolve/history/commit/graph/events/compare、目录分支及选择、拓扑／放置／策略／磁盘／健康查询，仍由 HTTP 通用分派调用 `Backend::call`。
+- **HTTP 通用读取。** history/graph/events/compare、目录分支及选择、拓扑／放置／策略／磁盘／健康查询，仍由 HTTP 通用分派调用 `Backend::call`。
 - **HTTP 写入与计划。** 仓库／分支／目录分支创建和选择、SMB binding 配置、policy/placement，以及 split/purge/historical-save/plan 的请求与结果仍需逐组迁移。operation HTTP 入口已接续到既有 typed 方法；其余 action 仍需逐项迁移。
 - **文件管理与管理控制面。** `FileManager*` action、setup_operation 等仍有独立 Value 协议；management_status/retry_storage 已接续类型化；需要核对每个 HTTP 消费者，不能以新增一个包裹枚举代替拆除旧 JSON 路径。
 
@@ -186,3 +186,21 @@ Branch/Branches 两个 HTTP 读取动作已删除。branch_snapshot 在当前身
 显式 BranchResponse 在 HTTP 边界输出字符串 generation、可省略 file_id/file_node_id 和始终存在的合并 pending。文件分支独立捕获可见/源版本、存储 disposition、别名及 node_id，保留旧 LIVE（合法 disposition 缺失）、PENDING（继承）与已有 ContentState 的差异；显式空 source 不降级到 visible；alias_of 在文件分支无别名时是 null，在非文件分支省略。归档/迁移状态和别名决定 read_only，node_id 保留显式节点优先与可见版本回退。
 
 内容归属字段由共享 ContentDispositionSnapshot/Response 生成，旧 content_wire 也仅在原 generic 输出点序列化该类型，不维护第二份继承/状态派生逻辑。显式空 source 的选择/过滤仅在 capture_content 中做一次，响应只消费已捕获选择。CreateBranch 和 FileManager 文件历史仍使用通用 JSON action，其原输出点复用同一 typed 捕获及显式 BranchResponse；这不是已迁移读方法的 JSON 后备路径，也不宣称这些写入口已完全类型化。独立冻结旧 wire oracle 覆盖普通/文件分支、pending覆盖、空/缺失版本、全部ContentState、状态/别名/显式node组合及 u64::MAX；HTTP核对历史fork、列表排序/字段、query不可覆盖路径与具体缺失错误。实际panic/取消准入/撤权矩阵随方法迁移。
+
+
+## 路径解析结果
+
+Resolve action 与内部 optional_identity Value 解析删除。HTTP 在原 bounded strict JSON（重复键拒绝）和路径/body branch绑定后，以明确边界构造器按 unknown字段→path非空/LookupPath→显式commit非空顺序生成 ResolveEntry；使用小型构造器而非通用derive是为保留具体消息与字段失败优先级。LookupPath只构造一次，核心直接使用缓存key，删除 validate_lookup_path 后再 path_key 的重复规范化。静态字段错误先于 Backend 当前准入/仓库存在性；中间件认证仍先执行，合法请求的当前身份→branch/history/repository→commit→entry错误顺序不变。
+
+核心同锁返回 ResolvedEntry，不构造Value；Entry、原entry.version_id对应的Option<FileVersion>和可选文件内容归属均为owned响应快照。目录version为null且没有文件content扩展是合法缺失；不把继承可见版本偷换成原version对象，也不把缺失记录补成默认版本。HTTP ResolveResponse复用ContentDispositionResponse及穷尽VersionRecordResponse；单版本metadata仍在同一record之上额外输出content_state。版本字段和字符串整数只在wire映射，持久化/canonical不变，尚未迁移的通用接口继续列入库存。
+
+真实HTTP覆盖当前/历史完整version投影、等价路径、缺失/非法身份、unknown/path/commit优先级和重复键；真实core目录解析验证Option缺失和具体entry错误；真实panic/取消槽占用/排队撤权装饰器走resolve_entry。没有加入泛化JSONfallback或把旧Action留作并行内部路径。
+
+
+## 公开提交记录读取
+
+这里迁移的是 GET /api/commits/{commit}，不是此前已经返回Arc的SMB snapshot_at。commit_snapshot 在同一当前身份准入锁内查找共享提交、复核history→repository归属，再返回Arc<Commit>；不存在的提交仍先返回具体commit not found，未额外要求分支存在或将历史提交限制为当前HEAD。Commit action删除，HTTP保留原query政策、backend_slots生命周期与panic隔离。
+
+CommitResponse拥有Arc，Serialize时仅穷尽借用CommitRecord字段：entries/parent_commit_ids是slice，pending map与可选namespace_deletions借用，不clone整个Commit或条目。序列化在引擎返回并解锁后；已准入响应可在撤权后完成，但下一次commit_snapshot必须重新准入。公开core.schema的Commit.kind仍为开放string，响应保留任意kind、字符串sequence、provenance=null和namespace_deletions/pending的原省略规则；未改持久化或canonical编码。
+
+回归同时核对真实state Arc/entries指针、DTO集合借用指针、序列化期间跨线程可取得实际引擎锁、撤权拒绝后续读取、u64::MAX与未知kind的固定字段/规范字节、完整HTTP当前/历史commit与独立Graph记录一致性。Graph仍是独立remaining action，不把本次Arc改造说成所有历史接口已去全量复制，也不改变History可见性过滤。

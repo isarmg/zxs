@@ -175,7 +175,7 @@ impl Session {
                     initial_size,
                     self.max_file_bytes,
                 )?);
-                let reservation = pending_reservation.as_ref().unwrap();
+                let reservation = pending_reservation.as_mut().unwrap();
                 if let Some(mut content) = content {
                     let mut copied = 0u64;
                     let mut buffer = [0u8; 65536];

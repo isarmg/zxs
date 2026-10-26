@@ -125,21 +125,7 @@ impl Backend for RecordingBackend {
             Some(identity),
             json!({"branch":branch,"commit":commit}),
         )?;
-        Ok(Arc::new(storage_contract::Commit {
-            commit_id: commit.into(),
-            history_tree_id: "history".into(),
-            kind: "snapshot".into(),
-            parent_commit_ids: vec![],
-            tree_id: "tree".into(),
-            sequence: 1,
-            operation_id: storage_contract::OperationId::generate(),
-            author: "author".into(),
-            message: "snapshot fixture".into(),
-            entries: vec![],
-            namespace_deletions: None,
-            pending_file_versions: Default::default(),
-            provenance: None,
-        }))
+        Ok(recorded_commit(commit))
     }
 
     fn authorize_current(
@@ -352,6 +338,22 @@ impl Backend for RecordingBackend {
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         self.record("workspace_capacity", Some(identity), Value::Null)?;
         Ok(recorded_capacity())
+    }
+    fn commit_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        self.record("commit_snapshot", Some(identity), json!({"commit_id":id}))?;
+        Ok(recorded_commit(id))
+    }
+    fn resolve_entry(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ResolveEntry<'_>,
+    ) -> Result<crate::ResolvedEntry, crate::ApiError> {
+        self.record("resolve_entry",Some(identity),json!({"branch_id":request.branch,"path":request.path.as_str(),"key":request.path.key(),"commit_id":request.commit}))?;
+        Ok(recorded_resolved())
     }
     fn branch_snapshot(
         &self,
@@ -771,6 +773,29 @@ impl Fixture {
                 }),
             ),
             (
+                "commit_snapshot",
+                backend.commit_snapshot(identity, "commit").map(|commit| {
+                    assert_eq!(commit.commit_id, "commit");
+                    json!({"returned_by":"commit_snapshot"})
+                }),
+            ),
+            (
+                "resolve_entry",
+                backend
+                    .resolve_entry(
+                        identity,
+                        crate::ResolveEntry {
+                            branch: "branch",
+                            path: &name_policy::LookupPath::parse("File.txt").unwrap(),
+                            commit: Some("commit"),
+                        },
+                    )
+                    .map(|resolved| {
+                        assert_eq!(resolved.version.unwrap().logical_size, u64::MAX);
+                        json!({"returned_by":"resolve_entry"})
+                    }),
+            ),
+            (
                 "branch_snapshot",
                 backend.branch_snapshot(identity, "branch").map(|snapshot| {
                     assert_eq!(snapshot.generation, u64::MAX);
@@ -1056,6 +1081,8 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"repository_id":"repository"}),
         json!({"repository_id":"repository"}),
         Value::Null,
+        json!({"commit_id":"commit"}),
+        json!({"branch_id":"branch","path":"File.txt","key":"file.txt","commit_id":"commit"}),
         json!({"id":"branch"}),
         json!({"id":"repository"}),
         Value::Null,
@@ -1305,4 +1332,43 @@ fn recorded_branch() -> crate::BranchSnapshot {
         state: storage_contract::BranchState::Active,
         file: None,
     }
+}
+
+fn recorded_resolved() -> crate::ResolvedEntry {
+    crate::ResolvedEntry {
+        branch_id: "branch".into(),
+        commit_id: "commit".into(),
+        entry: storage_contract::Entry {
+            entry_id: "entry".into(),
+            path: name_policy::PortablePath::parse("File.txt").unwrap(),
+            kind: storage_contract::NamespaceEntryKind::File,
+            file_id: "file".into(),
+            version_id: "version".into(),
+            size: u64::MAX,
+        },
+        version: Some(recorded_version("version").version),
+        content: Some(crate::ContentDispositionSnapshot {
+            version_id: Some("version".into()),
+            source_version_id: None,
+            stored_state: Some(storage_contract::ContentState::Available),
+        }),
+    }
+}
+
+fn recorded_commit(commit: &str) -> Arc<storage_contract::Commit> {
+    Arc::new(storage_contract::Commit {
+        commit_id: commit.into(),
+        history_tree_id: "history".into(),
+        kind: "snapshot".into(),
+        parent_commit_ids: vec![],
+        tree_id: "tree".into(),
+        sequence: 1,
+        operation_id: storage_contract::OperationId::generate(),
+        author: "author".into(),
+        message: "snapshot fixture".into(),
+        entries: vec![],
+        namespace_deletions: None,
+        pending_file_versions: Default::default(),
+        provenance: None,
+    })
 }

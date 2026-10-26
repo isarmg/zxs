@@ -1,7 +1,7 @@
 use super::*;
 use crate::engine_backend::{encode, field};
 use crate::{
-    Backend, BackendAction,
+    Backend,
     auth::{AuthStore, Identity},
     engine_backend::{EngineBackend, install_test_administrator},
 };
@@ -870,7 +870,6 @@ fn namespace_reads_preserve_migrated_branch_error() {
             .code,
         storage_contract::ErrorCode::TreeMoved
     );
-    let input = json!({"branch_id":repo.main_branch_id,"path":"file.txt"});
     assert_eq!(
         backend
             .tree_snapshot(
@@ -886,7 +885,14 @@ fn namespace_reads_preserve_migrated_branch_error() {
     );
     assert_eq!(
         backend
-            .call(BackendAction::Resolve, &identity, input)
+            .resolve_entry(
+                &identity,
+                crate::ResolveEntry {
+                    branch: &repo.main_branch_id,
+                    path: &name_policy::LookupPath::parse("file.txt").unwrap(),
+                    commit: None
+                }
+            )
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::TreeMoved
@@ -988,4 +994,64 @@ fn typed_directory_reads_pin_snapshots_and_refresh_on_restart() {
             .code,
         storage_contract::ErrorCode::SmbRebindRequired
     );
+}
+
+#[test]
+fn typed_resolve_preserves_directory_absence_and_missing_entry_errors() {
+    let (root, mut engine, repo, _) = fixture();
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "owner")
+        .unwrap();
+    engine
+        .namespace_operation(
+            &workspace.workspace_id,
+            storage_contract::NamespaceOperation::Mkdir {
+                path: name_policy::PortablePath::parse("Directory").unwrap(),
+            },
+        )
+        .unwrap();
+    engine
+        .commit_workspace(storage_engine::CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: storage_contract::OperationId::generate(),
+            principal: "owner".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: String::new(),
+            request_digest: None,
+        })
+        .unwrap();
+    let (backend, _auth, _token, identity) = authenticated_backend(engine, root.path());
+    let resolved = backend
+        .resolve_entry(
+            &identity,
+            crate::ResolveEntry {
+                branch: &repo.main_branch_id,
+                path: &name_policy::LookupPath::parse("DIRECTORY").unwrap(),
+                commit: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        resolved.entry.kind,
+        storage_contract::NamespaceEntryKind::Directory
+    );
+    assert!(resolved.version.is_none());
+    assert!(resolved.content.is_none());
+    let wire = json_codec::to_value(crate::backend_read::ResolveResponse::from(resolved)).unwrap();
+    assert_eq!(wire.as_object().unwrap().len(), 4);
+    assert!(wire["version"].is_null());
+    assert_eq!(wire["entry"]["path"], "Directory");
+    let missing = backend
+        .resolve_entry(
+            &identity,
+            crate::ResolveEntry {
+                branch: &repo.main_branch_id,
+                path: &name_policy::LookupPath::parse("missing").unwrap(),
+                commit: None,
+            },
+        )
+        .unwrap_err();
+    assert_eq!(missing.code, storage_contract::ErrorCode::NotFound);
+    assert_eq!(missing.message, "entry not found");
 }

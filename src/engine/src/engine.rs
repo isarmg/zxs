@@ -14,7 +14,7 @@ pub(crate) use planning::PlanningContext;
 mod index;
 mod observations;
 mod operations;
-pub use observations::{DiskObservation, DiskObservationPlan};
+pub use observations::{DiskObservation, DiskObservationPlan, MetadataMemberProbe};
 pub use operations::{OperationReadPlan, OperationRecord};
 mod publication;
 pub(crate) use publication::DetachedPublication;

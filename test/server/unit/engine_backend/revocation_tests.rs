@@ -174,6 +174,22 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.workspace_capacity(identity)
     }
+    fn commit_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        self.enter();
+        self.inner.commit_snapshot(identity, id)
+    }
+    fn resolve_entry(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ResolveEntry<'_>,
+    ) -> Result<crate::ResolvedEntry, crate::ApiError> {
+        self.enter();
+        self.inner.resolve_entry(identity, request)
+    }
     fn branch_snapshot(
         &self,
         identity: &crate::auth::Identity,
@@ -445,6 +461,8 @@ enum Request {
     RepositorySnapshot,
     RepositoriesSnapshot,
     BranchSnapshot,
+    Resolve,
+    CommitSnapshot,
     BranchesSnapshot,
     RepositoryAuthorization,
     Namespace,
@@ -542,6 +560,8 @@ impl Request {
             Self::SmbAuthorizeRead => backend.authorize_current(identity, &fixture.repo.main_branch_id),
             // Immutable SMB file handles still authorize their pinned version.
             Self::Version => backend.version_snapshot(identity,&fixture.version).map(|_| ()),
+            Self::CommitSnapshot => backend.commit_snapshot(identity,&fixture.workspace.base_head).map(|_|()),
+            Self::Resolve => backend.resolve_entry(identity,crate::ResolveEntry {branch:&fixture.repo.main_branch_id,path:&name_policy::LookupPath::parse("file.txt").unwrap(),commit:None}).map(|_|()),
             Self::BranchSnapshot => backend.branch_snapshot(identity,&fixture.repo.main_branch_id).map(|_|()),
             Self::BranchesSnapshot => backend.branches_snapshot(identity,&fixture.repo.repository_id).map(|_|()),
             Self::RepositoriesSnapshot => backend.repositories_snapshot(identity).map(|_|()),
@@ -641,6 +661,8 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::RepositorySnapshot,
                 Request::RepositoriesSnapshot,
                 Request::BranchSnapshot,
+                Request::Resolve,
+                Request::CommitSnapshot,
                 Request::BranchesSnapshot,
                 Request::RepositoryAuthorization,
                 Request::Namespace,
@@ -797,6 +819,8 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::RepositorySnapshot,
         Request::RepositoriesSnapshot,
         Request::BranchSnapshot,
+        Request::Resolve,
+        Request::CommitSnapshot,
         Request::BranchesSnapshot,
         Request::RepositoryAuthorization,
         Request::Namespace,

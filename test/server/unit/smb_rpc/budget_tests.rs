@@ -136,7 +136,7 @@ fn orphan_bytes_charge_every_account_without_deletion() {
 fn ceiling_checks_happen_before_write_and_metadata_corruption_fails_closed() {
     let root = crate::tests::private_tempdir();
     let budget = Budget::recover(root.path(), limits(OVERHEAD + 100, OVERHEAD + 100)).unwrap();
-    let lease = reserve(&budget, "alice", "copy", 100).unwrap();
+    let mut lease = reserve(&budget, "alice", "copy", 100).unwrap();
     assert!(lease.before_write_available(101, 0, u64::MAX).is_err());
     assert!(lease.before_write_available(100, 100, 100).is_err());
     assert!(lease.before_write_available(100, 100, 101).is_ok());
@@ -182,7 +182,7 @@ fn tiny_open_reserves_current_extent_not_static_maximum_and_growth_is_durable() 
     let root = crate::tests::private_tempdir();
     let limit = 2 * OVERHEAD + 20;
     let budget = Budget::recover(root.path(), limits(limit, limit)).unwrap();
-    let lease = budget
+    let mut lease = budget
         .reserve_available(
             "alice",
             &root.path().join("tiny"),
@@ -224,7 +224,7 @@ fn tiny_open_reserves_current_extent_not_static_maximum_and_growth_is_durable() 
 fn failed_growth_record_keeps_data_and_blocks_new_admission() {
     let root = crate::tests::private_tempdir();
     let budget = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
-    let lease = budget
+    let mut lease = budget
         .reserve_available("alice", &root.path().join("copy"), 3, 100, u64::MAX)
         .unwrap();
     fs::write(&lease.source, b"old").unwrap();
@@ -240,4 +240,263 @@ fn failed_growth_record_keeps_data_and_blocks_new_admission() {
     drop(budget);
     assert!(Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD)).is_err());
     assert_eq!(fs::read(root.path().join("copy")).unwrap(), b"old");
+}
+
+#[test]
+fn pending_unwind_closes_admission_without_releasing_high_water() {
+    let root = crate::tests::private_tempdir();
+    let budget = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+    let lease = reserve(&budget, "alice", "copy", 100).unwrap();
+    fs::write(&lease.source, b"old").unwrap();
+    let outcome = std::panic::catch_unwind(|| {
+        let _pending = Pending {
+            budget: &budget,
+            complete: false,
+        };
+        panic!("persistence unwound");
+    });
+    assert!(outcome.is_err());
+    assert!(budget.ledger.lock().unwrap().uncertain);
+    assert!(reserve(&budget, "alice", "other", 0).is_err());
+    drop(lease);
+    assert_eq!(total(&budget), OVERHEAD + 100);
+    assert!(root.path().join("copy.budget.json").is_file());
+    assert_eq!(fs::read(root.path().join("copy")).unwrap(), b"old");
+}
+
+#[test]
+fn poisoned_pending_and_lease_drop_preserve_evidence_without_second_panic() {
+    let root = crate::tests::private_tempdir();
+    let budget = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+    let lease = reserve(&budget, "alice", "copy", 100).unwrap();
+    let outcome = std::panic::catch_unwind(|| {
+        let _pending = Pending {
+            budget: &budget,
+            complete: false,
+        };
+        let _ledger = budget.ledger.lock().unwrap();
+        panic!("ledger invariant failed");
+    });
+    assert!(outcome.is_err());
+    assert!(budget.ledger.is_poisoned());
+    assert!(std::panic::catch_unwind(|| reserve(&budget, "alice", "other", 0)).is_err());
+    drop(lease);
+    assert!(root.path().join("copy.budget.json").is_file());
+    let ledger = budget.ledger.lock().err().unwrap().into_inner();
+    assert_eq!(ledger.total, OVERHEAD + 100);
+    assert_eq!(ledger.accounts["alice"], OVERHEAD + 100);
+}
+
+#[test]
+fn failed_reservation_never_clobbers_existing_record_and_keeps_charge() {
+    let root = crate::tests::private_tempdir();
+    let budget = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+    let source = root.path().join("copy");
+    fs::write(&source, b"old").unwrap();
+    fs::write(record_path(&source), b"existing evidence").unwrap();
+    let error = reserve(&budget, "alice", "copy", 100).err().unwrap();
+    assert!(std::error::Error::source(&error).is_some());
+    assert_eq!(
+        fs::read(record_path(&source)).unwrap(),
+        b"existing evidence"
+    );
+    assert_eq!(fs::read(&source).unwrap(), b"old");
+    assert_eq!(total(&budget), OVERHEAD + 100);
+    assert!(budget.ledger.lock().unwrap().uncertain);
+    assert!(reserve(&budget, "bob", "other", 0).is_err());
+}
+
+#[test]
+fn pending_persistence_charges_capacity_but_does_not_block_other_sources() {
+    for grow in [false, true] {
+        let root = crate::tests::private_tempdir();
+        let limit = 2 * (OVERHEAD + 100);
+        let budget = Budget::recover(root.path(), limits(limit, limit)).unwrap();
+        let source = root.path().join("a");
+        let lease = grow.then(|| {
+            budget
+                .reserve_available("alice", &source, 0, 100, u64::MAX)
+                .unwrap()
+        });
+        fs::write(&source, b"old").unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let a = {
+            let budget = budget.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                persist::pause_at(persist::Point::Before, barrier);
+                if let Some(mut lease) = lease {
+                    lease.before_write_available(100, 100, u64::MAX).unwrap();
+                    lease
+                } else {
+                    reserve(&budget, "alice", "a", 100).unwrap()
+                }
+            })
+        };
+        barrier.wait();
+        let (sent, received) = std::sync::mpsc::channel();
+        let b = {
+            let budget = budget.clone();
+            std::thread::spawn(move || {
+                assert!(reserve(&budget, "alice", "a", 0).is_err());
+                let lease = reserve(&budget, "alice", "b", 100).unwrap();
+                assert!(reserve(&budget, "alice", "c", 0).is_err());
+                let ledger = budget.ledger.lock().unwrap();
+                assert_eq!(ledger.total, limit);
+                assert_eq!(ledger.accounts["alice"], limit);
+                assert_eq!(ledger.unknown, 0);
+                drop(ledger);
+                sent.send(()).unwrap();
+                lease
+            })
+        };
+        let progressed = received.recv_timeout(std::time::Duration::from_secs(5));
+        // Always release A, including when a lock regression prevented B's progress.
+        barrier.wait();
+        let _a = a.join().unwrap();
+        let _b = b.join().unwrap();
+        assert!(
+            progressed.is_ok(),
+            "different source waited for persistence"
+        );
+    }
+}
+
+#[test]
+fn completed_persistence_cannot_issue_permission_after_concurrent_failure() {
+    for grow in [false, true] {
+        let root = crate::tests::private_tempdir();
+        let budget = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+        let source = root.path().join("a");
+        let lease = grow.then(|| {
+            budget
+                .reserve_available("alice", &source, 0, 100, u64::MAX)
+                .unwrap()
+        });
+        fs::write(&source, b"one").unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let worker = {
+            let budget = budget.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                persist::pause_at(persist::Point::After, barrier);
+                if let Some(mut lease) = lease {
+                    lease.before_write_available(100, 100, u64::MAX)
+                } else {
+                    reserve(&budget, "alice", "a", 100).map(|_| ())
+                }
+            })
+        };
+        barrier.wait();
+        let failed_source = root.path().join("b");
+        fs::write(&failed_source, b"two").unwrap();
+        fs::write(record_path(&failed_source), b"conflicting evidence").unwrap();
+        let error = reserve(&budget, "alice", "b", 100).err().unwrap();
+        assert!(std::error::Error::source(&error).is_some());
+        barrier.wait();
+        assert_eq!(
+            worker.join().unwrap().unwrap_err().code,
+            storage_contract::ErrorCode::SmbSpoolUnavailable
+        );
+        assert!(reserve(&budget, "bob", "c", 0).is_err());
+        assert_eq!(total(&budget), 2 * (OVERHEAD + 100));
+        assert_eq!(fs::read(&source).unwrap(), b"one");
+        assert_eq!(fs::read(&failed_source).unwrap(), b"two");
+        let owner: Owner =
+            storage_contract::decode_strict(&fs::read(record_path(&source)).unwrap()).unwrap();
+        assert_eq!(owner.admitted_end, 100);
+    }
+}
+
+#[test]
+fn temporary_creation_failure_retains_growth_and_original_evidence() {
+    let root = crate::tests::private_tempdir();
+    let directory = root.path().join("spool");
+    fs::create_dir(&directory).unwrap();
+    fs::set_permissions(
+        &directory,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    let budget = Budget::recover(&directory, limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+    let mut lease = budget
+        .reserve_available("alice", &directory.join("copy"), 3, 100, u64::MAX)
+        .unwrap();
+    fs::write(&lease.source, b"old").unwrap();
+    let moved = root.path().join("retained");
+    fs::rename(&directory, &moved).unwrap();
+    fs::write(&directory, b"not a directory").unwrap();
+    let error = lease.before_write_available(100, 97, u64::MAX).unwrap_err();
+    assert!(std::error::Error::source(&error).is_some());
+    assert_eq!(total(&budget), OVERHEAD + 100);
+    assert!(budget.ledger.lock().unwrap().uncertain);
+    drop(lease);
+    assert_eq!(fs::read(moved.join("copy")).unwrap(), b"old");
+    assert!(moved.join("copy.budget.json").is_file());
+}
+
+#[test]
+#[ignore = "requires budget_io_eio.c in an isolated LD_PRELOAD child"]
+fn real_budget_io_failure_preserves_source_charge_and_error() {
+    let root = PathBuf::from(std::env::var_os("ZXS_SMB_BUDGET_FAULT_ROOT").unwrap());
+    let grow = std::env::var("ZXS_SMB_BUDGET_GROW").unwrap() == "1";
+    let budget = Budget::recover(&root, limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+    let source = root.join("copy");
+    let lease = grow.then(|| {
+        budget
+            .reserve_available("alice", &source, 3, 100, u64::MAX)
+            .unwrap()
+    });
+    fs::write(&source, b"old").unwrap();
+    fs::write(root.join(".inject"), b"enable child-only interposer").unwrap();
+    let result = if let Some(mut lease) = lease {
+        lease.before_write_available(100, 97, u64::MAX)
+    } else {
+        reserve(&budget, "alice", "copy", 100).map(|_| ())
+    };
+    let error = result.unwrap_err();
+    let cause = std::error::Error::source(&error).unwrap().source().unwrap();
+    assert_eq!(
+        cause.downcast_ref::<io::Error>().unwrap().raw_os_error(),
+        Some(5)
+    );
+    assert_eq!(total(&budget), OVERHEAD + 100);
+    let ledger = budget.ledger.lock().unwrap();
+    assert_eq!(ledger.accounts["alice"], OVERHEAD + 100);
+    assert_eq!(ledger.unknown, 0);
+    assert!(ledger.uncertain);
+    drop(ledger);
+    assert!(reserve(&budget, "bob", "other", 0).is_err());
+    assert_eq!(fs::read(&source).unwrap(), b"old");
+    assert!(record_path(&source).is_file());
+}
+
+#[test]
+fn unshared_preparation_cleanup_cannot_release_uncertain_budget() {
+    let root = crate::tests::private_tempdir();
+    let budget = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+    let lease = reserve(&budget, "alice", "copy", 100).unwrap();
+    fs::write(&lease.source, b"unshared preparation").unwrap();
+    drop(Pending {
+        budget: &budget,
+        complete: false,
+    });
+    // Open's error cleanup owns this newly created source: no FD was handed out.
+    fs::remove_file(&lease.source).unwrap();
+    drop(lease);
+    assert_eq!(total(&budget), OVERHEAD + 100);
+    assert!(root.path().join("copy.budget.json").is_file());
+    assert!(reserve(&budget, "bob", "other", 0).is_err());
+}
+
+#[test]
+fn failed_budget_cleanup_keeps_accounted_high_water() {
+    let root = crate::tests::private_tempdir();
+    let budget = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+    let lease = reserve(&budget, "alice", "copy", 100).unwrap();
+    fs::remove_file(record_path(&lease.source)).unwrap();
+    fs::create_dir(record_path(&lease.source)).unwrap();
+    drop(lease);
+    assert_eq!(total(&budget), OVERHEAD + 100);
+    assert!(root.path().join("copy.budget.json").is_dir());
 }

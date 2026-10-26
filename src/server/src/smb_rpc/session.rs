@@ -173,7 +173,7 @@ impl Session {
             } => return self.open(path, writable, create, truncate, exclusive, write_through),
             Request::AuthorizeRead { handle } => self.authorize_read(handle)?,
             Request::PrepareWrite { handle, end, bytes } => {
-                let Some(Handle::Write(writer)) = self.handles.get(&handle) else {
+                let Some(Handle::Write(writer)) = self.handles.get_mut(&handle) else {
                     return Err(ApiError::forbidden());
                 };
                 self.shared.backend.authorize_workspace_selection(

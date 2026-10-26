@@ -33,11 +33,14 @@ pub fn new_id(prefix: &str) -> String {
     format!("{prefix}_{}", uuid::Uuid::new_v4().simple())
 }
 pub fn validate_id(value: &str, prefix: &str) -> Result<()> {
-    let valid = value.strip_prefix(&format!("{prefix}_")).is_some_and(|v| {
-        v.len() == 32
-            && v.bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    });
+    let valid = value
+        .strip_prefix(prefix)
+        .and_then(|suffix| suffix.strip_prefix('_'))
+        .is_some_and(|v| {
+            v.len() == 32
+                && v.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        });
     if valid {
         Ok(())
     } else {

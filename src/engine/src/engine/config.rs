@@ -6,6 +6,7 @@ use std::{
     fs::File,
     ops::Deref,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 /// A pool configuration admitted at a file or public API boundary.
@@ -19,7 +20,8 @@ use std::{
 #[derive(Clone, Debug, Deserialize)]
 #[serialization(try_from = "Config")]
 pub struct ValidatedConfig {
-    config: Config,
+    config: Arc<Config>,
+    metadata_members: Arc<[usize]>,
     workspace_limits: Option<super::RetainedWorkspaceLimits>,
 }
 
@@ -28,8 +30,15 @@ impl TryFrom<Config> for ValidatedConfig {
 
     fn try_from(config: Config) -> Result<Self> {
         validate_config(&config)?;
+        let metadata_members = config
+            .disks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, disk)| disk.metadata_member.then_some(index))
+            .collect();
         Ok(Self {
-            config,
+            config: Arc::new(config),
+            metadata_members,
             workspace_limits: None,
         })
     }
@@ -40,7 +49,7 @@ impl Serialize for ValidatedConfig {
         &self,
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
-        self.config.serialize(serializer)
+        self.config.as_ref().serialize(serializer)
     }
 }
 
@@ -53,6 +62,12 @@ impl Deref for ValidatedConfig {
 }
 
 impl ValidatedConfig {
+    pub(super) fn metadata_members(&self) -> impl ExactSizeIterator<Item = &DiskConfig> {
+        self.metadata_members
+            .iter()
+            .map(|&index| &self.config.disks[index])
+    }
+
     /// Rebind the existing disks in order, preserving membership and resource limits.
     ///
     /// # Errors
@@ -65,7 +80,7 @@ impl ValidatedConfig {
             ));
         }
         validate_disk_roots(roots.iter().map(PathBuf::as_path))?;
-        for (disk, root) in self.config.disks.iter_mut().zip(roots) {
+        for (disk, root) in Arc::make_mut(&mut self.config).disks.iter_mut().zip(roots) {
             disk.root = root;
         }
         Ok(self)

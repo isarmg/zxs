@@ -269,24 +269,6 @@ pub(super) fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, ApiError
         .filter(|v| !v.is_empty())
         .ok_or_else(|| ApiError::invalid(format!("missing string field {key}")))
 }
-/// Only an absent identity selects the caller's default. Explicit null or a
-/// malformed value must not silently change a historical request to HEAD.
-pub(super) fn optional_identity<'a>(
-    value: &'a Value,
-    key: &str,
-) -> Result<Option<&'a str>, ApiError> {
-    value
-        .get(key)
-        .map(|value| {
-            value
-                .as_str()
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    ApiError::invalid(format!("{key} must be a nonempty string when supplied"))
-                })
-        })
-        .transpose()
-}
 pub(super) fn operation(input: &Value) -> Result<storage_contract::OperationId, ApiError> {
     field(input, "operation_id")?
         .parse::<storage_contract::OperationId>()

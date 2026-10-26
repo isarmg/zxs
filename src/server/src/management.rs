@@ -723,6 +723,20 @@ impl Backend for ManagementBackend {
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         self.inner.backend()?.workspace_capacity(identity)
     }
+    fn commit_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        self.inner.backend()?.commit_snapshot(identity, id)
+    }
+    fn resolve_entry(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ResolveEntry<'_>,
+    ) -> Result<crate::ResolvedEntry, crate::ApiError> {
+        self.inner.backend()?.resolve_entry(identity, request)
+    }
     fn branch_snapshot(
         &self,
         identity: &crate::auth::Identity,

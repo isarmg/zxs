@@ -341,3 +341,58 @@ fn measure_shared_snapshot_against_publication_and_namespace_tree_round_trips() 
         }
     }
 }
+
+#[test]
+fn public_commit_snapshot_reuses_state_arc_and_serializes_after_unlock_and_revocation() {
+    let (root, mut engine, repo, _) = fixture();
+    save_projection_file(&mut engine, &repo.main_branch_id, "file.txt", b"first");
+    let commit = engine.state().branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
+    let frozen = backend.commit_snapshot(&identity, &commit).unwrap();
+    {
+        let engine = backend.engine.lock().unwrap();
+        assert!(std::ptr::eq(
+            frozen.as_ref(),
+            &engine.state().commits[&commit]
+        ));
+        assert_eq!(
+            frozen.entries.as_ptr(),
+            engine.state().commits[&commit].entries.as_ptr()
+        );
+    }
+    struct Probe<'a>(&'a EngineBackend, crate::commit_wire::CommitResponse);
+    impl Serialize for Probe<'_> {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            let available = std::thread::scope(|scope| {
+                scope
+                    .spawn(|| self.0.engine.try_lock().is_ok())
+                    .join()
+                    .unwrap()
+            });
+            if !available {
+                return Err(S::Error::custom(
+                    "commit serialization retained admission mutex",
+                ));
+            }
+            self.1.serialize(serializer)
+        }
+    }
+    let expected = json_codec::to_value(frozen.as_ref()).unwrap();
+    auth.logout(&token).unwrap();
+    assert_eq!(
+        backend
+            .commit_snapshot(&identity, &commit)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Unauthorized
+    );
+    // An admitted immutable response may finish; it grants no later request admission.
+    let encoded = json_codec::to_value(Probe(
+        &backend,
+        crate::commit_wire::CommitResponse::from(frozen),
+    ))
+    .unwrap();
+    assert_eq!(encoded, expected);
+}

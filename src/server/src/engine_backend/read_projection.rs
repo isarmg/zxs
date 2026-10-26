@@ -25,6 +25,42 @@ impl TreeSnapshot {
     }
 }
 
+pub(super) fn resolve_entry(
+    engine: &Engine,
+    request: crate::ResolveEntry<'_>,
+) -> Result<crate::ResolvedEntry, ApiError> {
+    let (commit_id, commit) = branch_snapshot(engine.state(), request.branch, request.commit)?;
+    let entries = engine
+        .list_tree_at_ref(request.branch, commit_id)
+        .map_err(error)?;
+    let entry = entries
+        .iter()
+        .find(|entry| entry.lookup_key() == request.path.key())
+        .ok_or_else(|| {
+            ApiError::new(
+                ::http::StatusCode::NOT_FOUND,
+                storage_contract::ErrorCode::NotFound,
+                "entry not found",
+            )
+        })?;
+    let content = if entry.kind == storage_contract::NamespaceEntryKind::File {
+        Some(super::branch::capture_content(
+            engine.state(),
+            Some(&entry.version_id),
+            super::wire::pending_entry_source(engine, request.branch, commit, entry),
+        ))
+    } else {
+        None
+    };
+    Ok(crate::ResolvedEntry {
+        branch_id: request.branch.to_owned(),
+        commit_id: commit_id.to_owned(),
+        entry: entry.clone(),
+        version: engine.state().versions.get(&entry.version_id).cloned(),
+        content,
+    })
+}
+
 /// The same branch/head checks as Tree, without inspecting or copying entries.
 /// Callers must hold the engine admission lock; a snapshot is not an auth grant.
 pub(super) fn branch_snapshot<'a>(

@@ -431,3 +431,49 @@ fn measure_operation_id_formatting_cost() {
         );
     }
 }
+
+#[test]
+fn validate_id_matches_formatted_prefix_oracle() {
+    // Preserve the original public API semantics, including arbitrary caller prefixes.
+    let prefixes = [
+        "boundary", "br", "commit", "dbr", "disk", "dtree", "entry", "fence", "file", "fmerge",
+        "fmeta", "fnode", "history", "link", "plan", "policy", "pool", "recovery", "repo", "rule",
+        "ver", "ws", "", "_", "__", "file_", "fi", "文件", "é", "e\u{301}", "\0",
+    ];
+    let suffixes = [
+        "0123456789abcdef0123456789abcdef".to_owned(),
+        "0".repeat(32),
+        "f".repeat(32),
+        String::new(),
+        "0".repeat(31),
+        "0".repeat(33),
+        "A".repeat(32),
+        format!("{}g", "0".repeat(31)),
+        format!("{}é", "0".repeat(30)),
+        format!("{}０", "0".repeat(29)),
+        format!("{}\0", "0".repeat(31)),
+        format!("{}\n", "0".repeat(31)),
+        format!("{} ", "0".repeat(31)),
+    ];
+    for value_prefix in prefixes {
+        for separator in ["_", "", "__", "＿"] {
+            for suffix in &suffixes {
+                let value = format!("{value_prefix}{separator}{suffix}");
+                for prefix in prefixes {
+                    let expected = value.strip_prefix(&format!("{prefix}_")).is_some_and(|v| {
+                        v.len() == 32
+                            && v.bytes()
+                                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                    });
+                    let actual = validate_id(&value, prefix);
+                    assert_eq!(actual.is_ok(), expected, "{value:?}, {prefix:?}");
+                    if let Err(error) = actual {
+                        assert_eq!(error.code(), ErrorCode::InvalidId);
+                        assert_eq!(error.message(), format!("invalid {prefix} identifier"));
+                        assert!(!error.is_retryable());
+                    }
+                }
+            }
+        }
+    }
+}

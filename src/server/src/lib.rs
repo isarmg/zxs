@@ -39,9 +39,12 @@ pub use backend_workspace::{
 mod http_workspace;
 pub use backend_read::{
     DirectorySelection, DirectorySnapshot, DownloadContext, ReadContent, ReadDirectory, ReadTree,
-    TreeSnapshot, VersionSnapshot,
+    ResolveEntry, ResolvedEntry, TreeSnapshot, VersionSnapshot,
 };
 use http_workspace::{abort, commit, namespace, seal, workspace, workspace_info, write_session};
+mod http_read;
+use http_read::resolve;
+mod commit_wire;
 mod http_operation;
 mod operation_wire;
 pub use backend_action::BackendAction;
@@ -294,6 +297,16 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
     ) -> Result<storage_contract::WorkspaceCapacity, ApiError>;
+    fn commit_snapshot(
+        &self,
+        identity: &Identity,
+        commit: &str,
+    ) -> Result<Arc<storage_contract::Commit>, ApiError>;
+    fn resolve_entry(
+        &self,
+        identity: &Identity,
+        request: ResolveEntry<'_>,
+    ) -> Result<ResolvedEntry, ApiError>;
     fn branch_snapshot(
         &self,
         identity: &Identity,
@@ -546,6 +559,21 @@ impl Backend for AuthorizedBackend {
         identity: &crate::auth::Identity,
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         self.backend.workspace_capacity(&self.current(identity)?)
+    }
+    fn commit_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        self.backend.commit_snapshot(&self.current(identity)?, id)
+    }
+    fn resolve_entry(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ResolveEntry<'_>,
+    ) -> Result<crate::ResolvedEntry, crate::ApiError> {
+        self.backend
+            .resolve_entry(&self.current(identity)?, request)
     }
     fn branch_snapshot(
         &self,
@@ -1528,7 +1556,28 @@ async fn version(
 }
 read_handler!(placement, crate::BackendAction::Placement, "version_id");
 read_handler!(history, crate::BackendAction::History, "file_id");
-read_handler!(commit_info, crate::BackendAction::Commit, "commit_id");
+async fn commit_info(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiPath(commit): ApiPath<String>,
+    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<commit_wire::CommitResponse>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state
+            .backend
+            .commit_snapshot(&identity, &commit)
+            .map(commit_wire::CommitResponse::from)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
 read_handler!(graph, crate::BackendAction::Graph, "history_tree_id");
 read_handler!(topology, crate::BackendAction::Topology, "topology_id");
 
@@ -1557,7 +1606,7 @@ id_post_handler!(
     crate::BackendAction::CreateBranch,
     "repository_id"
 );
-id_post_handler!(resolve, crate::BackendAction::Resolve, "branch_id");
+
 id_post_handler!(
     update_smb_binding,
     crate::BackendAction::UpdateSmbBinding,

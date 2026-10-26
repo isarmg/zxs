@@ -214,6 +214,22 @@ impl Backend for BackendProbe {
         self.wait()?;
         Ok(probe_capacity())
     }
+    fn commit_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn resolve_entry(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ResolveEntry<'_>,
+    ) -> Result<crate::ResolvedEntry, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn branch_snapshot(
         &self,
         _identity: &crate::auth::Identity,
@@ -587,6 +603,8 @@ async fn upload_status_retains_read_admission_after_cancellation() {
 async fn workspace_request(app: Router, path: &str) -> Response {
     let body = if path == "/api/workspaces" {
         json!({"branch_id":"branch"})
+    } else if path.ends_with("/resolve") {
+        json!({"path":"file.txt"})
     } else if path.ends_with("/namespace-operations") {
         json!({"kind":"mkdir","path":"directory"})
     } else if path.ends_with("/commit") {
@@ -602,6 +620,7 @@ async fn workspace_request(app: Router, path: &str) -> Response {
                     || path.starts_with("/api/branches/branch/tree")
                     || path == "/api/repositories/repository"
                     || path == "/api/branches/branch"
+                    || path == "/api/commits/commit"
                     || path == "/api/repositories/repository/branches"
                     || path.starts_with("/api/operations/")
                 {
@@ -623,10 +642,12 @@ async fn workspace_request(app: Router, path: &str) -> Response {
 async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation() {
     for path in [
         "/api/branches/branch/write-sessions",
+        "/api/branches/branch/resolve",
         "/api/versions/version",
         "/api/branches/branch/tree?commit_id=commit",
         "/api/repositories/repository",
         "/api/branches/branch",
+        "/api/commits/commit",
         "/api/repositories/repository/branches",
         "/api/operations/op_00000000000000000000000000000000",
         "/api/workspaces",

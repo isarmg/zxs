@@ -33,7 +33,7 @@ pub struct VersionSnapshot {
 }
 
 #[derive(Serialize)]
-pub(crate) struct VersionResponse {
+pub(crate) struct VersionRecordResponse {
     history_tree_id: String,
     version_id: String,
     file_id: String,
@@ -50,14 +50,9 @@ pub(crate) struct VersionResponse {
     created_at: String,
     source_version_ids: Vec<String>,
     created_as_full_checkpoint: bool,
-    content_state: storage_contract::ContentState,
 }
-impl From<VersionSnapshot> for VersionResponse {
-    fn from(snapshot: VersionSnapshot) -> Self {
-        let VersionSnapshot {
-            version,
-            content_state,
-        } = snapshot;
+impl From<storage_contract::FileVersion> for VersionRecordResponse {
+    fn from(version: storage_contract::FileVersion) -> Self {
         let storage_contract::FileVersion {
             history_tree_id,
             version_id,
@@ -89,6 +84,24 @@ impl From<VersionSnapshot> for VersionResponse {
             created_at,
             source_version_ids,
             created_as_full_checkpoint,
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub(crate) struct VersionResponse {
+    #[serialization(flatten)]
+    version: VersionRecordResponse,
+    content_state: storage_contract::ContentState,
+}
+impl From<VersionSnapshot> for VersionResponse {
+    fn from(snapshot: VersionSnapshot) -> Self {
+        let VersionSnapshot {
+            version,
+            content_state,
+        } = snapshot;
+        Self {
+            version: version.into(),
             content_state,
         }
     }
@@ -176,4 +189,45 @@ pub struct TreeSnapshot {
 #[derive(Serialize)]
 pub(crate) struct RepositoryListResponse {
     pub repositories: Vec<RepositoryResponse>,
+}
+
+pub struct ResolveEntry<'a> {
+    pub branch: &'a str,
+    pub path: &'a name_policy::LookupPath,
+    pub commit: Option<&'a str>,
+}
+#[derive(Clone, Debug)]
+pub struct ResolvedEntry {
+    pub branch_id: String,
+    pub commit_id: String,
+    pub entry: storage_contract::Entry,
+    pub version: Option<storage_contract::FileVersion>,
+    pub content: Option<crate::ContentDispositionSnapshot>,
+}
+#[derive(Serialize)]
+pub(crate) struct ResolveResponse {
+    branch_id: String,
+    commit_id: String,
+    entry: storage_contract::Entry,
+    version: Option<VersionRecordResponse>,
+    #[serialization(flatten)]
+    content: Option<crate::backend_branch::ContentDispositionResponse>,
+}
+impl From<ResolvedEntry> for ResolveResponse {
+    fn from(resolved: ResolvedEntry) -> Self {
+        let ResolvedEntry {
+            branch_id,
+            commit_id,
+            entry,
+            version,
+            content,
+        } = resolved;
+        Self {
+            branch_id,
+            commit_id,
+            entry,
+            version: version.map(VersionRecordResponse::from),
+            content: content.map(crate::backend_branch::ContentDispositionResponse::from),
+        }
+    }
 }

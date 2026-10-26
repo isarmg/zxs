@@ -235,8 +235,8 @@ impl Session {
             writer.workspace = workspace;
             writer.committed = false;
             writer.operation_id = OperationId::generate();
+            recovery_record(writer, &self.identity.principal, &self.branch)?;
         }
-        recovery_record(writer, &self.identity.principal, &self.branch)?;
         if writer.file.metadata().map_err(ApiError::io)?.len() > self.max_file_bytes {
             return Err(ApiError::limit("file exceeds SMB byte limit"));
         }

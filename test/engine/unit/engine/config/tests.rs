@@ -259,3 +259,43 @@ fn restore_rejects_rebound_metadata_root_nested_in_an_unsupplied_data_root() {
     assert_eq!(error.code(), ErrorCode::ConfigInvalid);
     assert!(!system.exists());
 }
+
+#[test]
+fn validated_config_shares_large_topology_and_rebinds_roots_without_changing_snapshot() {
+    let mut draft = Config::development((0..96).map(|i| PathBuf::from(format!("/draft/disk-{i}"))));
+    for disk in &mut draft.disks[1..] {
+        disk.metadata_member = false;
+    }
+    let config = ValidatedConfig::try_from(draft).unwrap();
+    let snapshot = config.clone();
+    assert!(Arc::ptr_eq(&config.config, &snapshot.config));
+    assert!(Arc::ptr_eq(
+        &config.metadata_members,
+        &snapshot.metadata_members
+    ));
+    assert_eq!(&*snapshot.metadata_members, &[0]);
+    let rebound = config
+        .with_disk_roots(
+            (0..96)
+                .map(|i| PathBuf::from(format!("/new/disk-{i}")))
+                .collect(),
+        )
+        .unwrap();
+    assert!(!Arc::ptr_eq(&rebound.config, &snapshot.config));
+    assert!(Arc::ptr_eq(
+        &rebound.metadata_members,
+        &snapshot.metadata_members
+    ));
+    assert_eq!(
+        snapshot.metadata_members().next().unwrap().root,
+        Path::new("/draft/disk-0")
+    );
+    assert_eq!(
+        rebound.metadata_members().next().unwrap().root,
+        Path::new("/new/disk-0")
+    );
+    let encoded = json_codec::to_vec(&snapshot).unwrap();
+    let decoded: ValidatedConfig = json_codec::from_slice(&encoded).unwrap();
+    assert_eq!(&*decoded.metadata_members, &[0]);
+    assert_eq!(encoded, json_codec::to_vec(&*snapshot).unwrap());
+}

@@ -45,3 +45,27 @@ fn backend_reports_and_consumes_nonfatal_recovery_checkpoint_warnings() {
     assert!(warnings.checkpoint_load.is_none());
     assert!(warnings.checkpoint_save.is_none());
 }
+
+#[test]
+fn readiness_ignores_missing_nonmember_and_preserves_member_failure_source() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = Config::development([temp.path().join("member"), temp.path().join("backup")]);
+    config.disks[1].metadata_member = false;
+    let engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
+    let sequence = engine.state().sequence;
+    let backend = EngineBackend::new(engine);
+    std::fs::rename(&config.disks[1].root, temp.path().join("missing-backup")).unwrap();
+    let crate::Readiness::Engine(ready) = backend.ready().unwrap() else {
+        panic!("expected engine readiness")
+    };
+    assert_eq!(ready.metadata_member_count, 1);
+    assert_eq!(ready.storage_disk_count, 2);
+    assert_eq!(ready.sequence, sequence);
+    assert_eq!(ready.mode, config.mode);
+    std::fs::rename(&config.disks[0].root, temp.path().join("missing-member")).unwrap();
+    let error = backend.ready().unwrap_err();
+    assert_eq!(error.status, ::http::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error.code, storage_contract::ErrorCode::MetadataUnavailable);
+    assert!(error.retryable);
+    assert!(std::error::Error::source(&error).is_some());
+}

@@ -176,3 +176,62 @@ fn observation_exposes_dangling_internal_placement() {
         .remove(&id);
     engine.prepare_disk_observation();
 }
+
+#[test]
+fn metadata_probe_observes_current_identity_without_engine_or_capacity_accounting() {
+    let root = tempfile::tempdir().unwrap();
+    let config = Config::development([root.path().join("member")]);
+    let engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
+    let probe = engine.prepare_metadata_member_probe();
+    drop(engine);
+    assert_eq!(probe.member_count(), 1);
+    probe.verify().unwrap();
+    let member = &config.disks[0].root;
+    let removed = root.path().join("removed");
+    std::fs::rename(member, &removed).unwrap();
+    let error = probe.verify().unwrap_err();
+    assert!(std::error::Error::source(&error).is_some());
+    std::fs::create_dir(member).unwrap();
+    assert!(probe.verify().is_err());
+    // Even a copied, otherwise valid seal must not bless a replacement root.
+    std::fs::copy(removed.join("disk.json"), member.join("disk.json")).unwrap();
+    assert_eq!(
+        probe.verify().unwrap_err().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    std::fs::remove_file(member.join("disk.json")).unwrap();
+    std::fs::remove_dir(member).unwrap();
+    std::fs::rename(&removed, member).unwrap();
+    probe.verify().unwrap();
+    std::fs::write(member.join("disk.json"), b"broken seal").unwrap();
+    assert!(probe.verify().is_err());
+}
+
+#[test]
+fn metadata_probe_ignores_nonmembers_and_unrelated_historical_placements() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = Config::development([root.path().join("member"), root.path().join("backup")]);
+    config.disks[1].metadata_member = false;
+    let mut engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
+    // Deliberately dangling internal sentinels: observing identity must not touch
+    // placement/version accounting. This is not a valid large-pool benchmark.
+    let state = std::sync::Arc::make_mut(&mut engine.state);
+    for n in 0..10_000 {
+        let version_id = format!("unrelated-{n}");
+        state.placements.insert(
+            version_id.clone(),
+            storage_contract::Placement {
+                version_id,
+                primary_slot_id: "P01".into(),
+                target_copies: 1,
+                route_slot_ids: vec!["P01".into()],
+                topology_generation: 1,
+                binding_generations: BTreeMap::new(),
+            },
+        );
+    }
+    let probe = engine.prepare_metadata_member_probe();
+    assert_eq!(probe.member_count(), 1);
+    std::fs::rename(&config.disks[1].root, root.path().join("removed-backup")).unwrap();
+    probe.verify().unwrap();
+}

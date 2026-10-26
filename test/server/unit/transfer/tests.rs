@@ -473,6 +473,20 @@ impl crate::Backend for RetainedGenerationBackend {
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn commit_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn resolve_entry(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ResolveEntry<'_>,
+    ) -> Result<crate::ResolvedEntry, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn branch_snapshot(
         &self,
         _identity: &crate::auth::Identity,

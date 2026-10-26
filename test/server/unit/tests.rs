@@ -153,6 +153,20 @@ impl Backend for TestBackend {
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn commit_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn resolve_entry(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ResolveEntry<'_>,
+    ) -> Result<crate::ResolvedEntry, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn branch_snapshot(
         &self,
         _identity: &crate::auth::Identity,
@@ -1012,6 +1026,20 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             identity: &crate::auth::Identity,
         ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
             self.delegate.workspace_capacity(identity)
+        }
+        fn commit_snapshot(
+            &self,
+            identity: &crate::auth::Identity,
+            id: &str,
+        ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+            self.delegate.commit_snapshot(identity, id)
+        }
+        fn resolve_entry(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::ResolveEntry<'_>,
+        ) -> Result<crate::ResolvedEntry, crate::ApiError> {
+            self.delegate.resolve_entry(identity, request)
         }
         fn branch_snapshot(
             &self,

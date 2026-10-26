@@ -206,6 +206,20 @@ impl Backend for NamespaceAfterWorkspace {
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         self.inner.workspace_capacity(identity)
     }
+    fn commit_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        self.inner.commit_snapshot(identity, id)
+    }
+    fn resolve_entry(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ResolveEntry<'_>,
+    ) -> Result<crate::ResolvedEntry, crate::ApiError> {
+        self.inner.resolve_entry(identity, request)
+    }
     fn branch_snapshot(
         &self,
         identity: &crate::auth::Identity,

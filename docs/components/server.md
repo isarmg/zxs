@@ -71,6 +71,10 @@ HTTP 监听地址必须是回环地址。对外部署由同机反向代理终止
 
 后台主机采样使用服务内部只读观测能力，在引擎锁内捕获 `DiskObservationPlan`、锁外查询磁盘，不伪造管理员或发布业务状态。监控容量来自身份校验后的真实采样；未知值保持空值。此能力不能从 HTTP/SMB 请求构造，系统状态及历史响应仍需当前有效管理员会话。
 
+公开 `/readyz` 不需要版本放置账本或磁盘容量：锁内捕获共享不可变配置、mode、sequence 和成员计数，锁外只逐个校验配置中的 metadata member 当前 seal/设备身份，不采样 `statvfs`、不扫描非 metadata 盘及历史 placements。配置准入时建立私有成员索引；配置克隆只共享 `Arc`，root rebinding 使用 copy-on-write 保留旧快照，成员关系不变。捕获为 O(1)，探测随 metadata 成员数增长，与历史量无关；这不是吞吐实测结论，也不是在线状态缓存。
+
+只读恢复仍返回 503 `RECOVERY_REQUIRED`；任一配置 metadata member 不可用仍返回 503 `METADATA_UNAVAILABLE`，现在保留首个失败的内部 source，公开消息不暴露本机路径。没有 metadata member 的配置仍在输入边界拒绝。非 metadata 盘离线不改变 ready 的判断（此前也只统计 metadata 的 online）；移除无消费者的容量采样不改变判定。正常响应 mode、sequence、storage/member counts 和 Management 状态语义不变。此观测不是写入许可，写侧仍在实际使用/提交处校验实时身份及完整性。
+
 ## 已实现的路由
 
 除公开探针、登录及独立 bootstrap 入口外，业务路由都需要当前唯一管理员认证；操作还须满足存储准入与业务约束。

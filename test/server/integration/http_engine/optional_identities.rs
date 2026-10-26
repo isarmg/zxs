@@ -776,3 +776,126 @@ async fn typed_branch_snapshots_preserve_forks_list_order_and_missing_errors() {
         assert_eq!(error["error"]["message"], message);
     }
 }
+
+#[tokio::test]
+async fn typed_resolve_keeps_complete_version_wire_and_static_error_priority() {
+    let (_root, app, branch, old_commit, current_commit) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let route = format!("/api/branches/{branch}/resolve");
+    for (commit, size) in [(&old_commit, "3"), (&current_commit, "11")] {
+        let resolved = success(
+            &app,
+            &token,
+            "POST",
+            &route,
+            Some(json!({"path":"DATA.TXT","commit_id":commit})),
+        )
+        .await;
+        assert_eq!(resolved.as_object().unwrap().len(), 11);
+        assert_eq!(resolved["entry"]["size"], size);
+        assert_eq!(resolved["entry"]["path"], "data.txt");
+        assert_eq!(resolved["version_id"], resolved["entry"]["version_id"]);
+        assert_eq!(resolved["own_version_id"], resolved["version_id"]);
+        assert!(resolved["source_version_id"].is_null());
+        assert_eq!(resolved["materialized"], true);
+        assert_eq!(resolved["inherited"], false);
+        assert_eq!(resolved["content_state"], "AVAILABLE");
+        assert_eq!(resolved["visible_content_state"], "AVAILABLE");
+        let version = resolved["version_id"].as_str().unwrap();
+        let mut metadata = success(
+            &app,
+            &token,
+            "GET",
+            &format!("/api/versions/{version}"),
+            None,
+        )
+        .await;
+        metadata.as_object_mut().unwrap().remove("content_state");
+        assert_eq!(resolved["version"], metadata);
+    }
+    for (route, body, code, message) in [
+        (
+            "/api/branches/missing/resolve",
+            json!({"path":"../bad","unknown":true}),
+            "INVALID_REQUEST",
+            Some("unknown field unknown"),
+        ),
+        (
+            "/api/branches/missing/resolve",
+            json!({"path":"../bad","commit_id":null}),
+            "INVALID_REQUEST",
+            None,
+        ),
+        (
+            "/api/branches/missing/resolve",
+            json!({"path":"file.txt"}),
+            "NOT_FOUND",
+            Some("branch not found"),
+        ),
+    ] {
+        let (_, error) = send(&app, Some(&token), "POST", route, Some(body)).await;
+        assert_eq!(error["error"]["code"], code);
+        if let Some(message) = message {
+            assert_eq!(error["error"]["message"], message);
+        }
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&route)
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"path":"data.txt","path":"other.txt"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn typed_commit_snapshot_matches_graph_records_and_keeps_missing_errors() {
+    let (_root, app, _, old_commit, new_commit) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let repositories = success(&app, &token, "GET", "/api/repositories", None).await;
+    let history = repositories["repositories"][0]["history_tree_id"]
+        .as_str()
+        .unwrap();
+    let graph = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/history-trees/{history}/graph"),
+        None,
+    )
+    .await;
+    for id in [old_commit, new_commit] {
+        let expected = graph["commits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|commit| commit["commit_id"] == id)
+            .unwrap();
+        let actual = success(
+            &app,
+            &token,
+            "GET",
+            &format!("/api/commits/{id}?commit_id=missing&unused=yes"),
+            None,
+        )
+        .await;
+        assert_eq!(actual, *expected);
+        assert_eq!(
+            storage_contract::canonical_json_value(&actual).unwrap(),
+            storage_contract::canonical_json_value(expected).unwrap()
+        );
+        assert!(actual["kind"].is_string());
+        assert!(actual["sequence"].is_string());
+    }
+    let (status, error) = send(&app, Some(&token), "GET", "/api/commits/missing", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error"]["code"], "NOT_FOUND");
+    assert_eq!(error["error"]["message"], "commit not found");
+}
