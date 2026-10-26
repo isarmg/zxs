@@ -953,16 +953,18 @@ impl Directory {
         let mut entries = Vec::new();
         for node in page.entries {
             let mut entry: sdk::dirent = Default::default();
-            if node.name.len() >= entry.d_name.len() || node.name.as_bytes().contains(&0) {
-                return Err(bad());
-            }
+            let name = node.name();
+            debug_assert!(
+                name.len() < entry.d_name.len(),
+                "invariant: portable names fit the supported SDK dirent"
+            );
             entry.d_ino = inode(&node.entry_id) as _;
             entry.d_type = match node.kind {
                 NamespaceEntryKind::Directory => libc::DT_DIR,
                 NamespaceEntryKind::File => libc::DT_REG,
             };
             entry.d_reclen = std::mem::size_of::<sdk::dirent>() as _;
-            for (index, byte) in node.name.bytes().enumerate() {
+            for (index, byte) in name.bytes().enumerate() {
                 entry.d_name[index] = byte as _;
             }
             entries.push(entry);
