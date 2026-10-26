@@ -8,7 +8,13 @@ fn engine(root: &std::path::Path) -> Engine {
     )
     .unwrap();
     engine
-        .create_repository("first", "P01", 1, "alice", &new_id("op"))
+        .create_repository(
+            "first",
+            "P01",
+            1,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     engine
 }
@@ -39,7 +45,11 @@ fn history_baseline_requires_exact_state_allocation_snapshot_sequence_and_config
     assert_eq!(canonical_json(engine.state()).unwrap(), bytes);
     assert!(!base.matches(&engine.planning_context(), &config_hash(&engine)));
     engine
-        .persist_auth_state(json!({"auth":"next"}), "alice", &new_id("op"))
+        .persist_auth_state(
+            json!({"auth":"next"}),
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     assert!(
         engine
@@ -73,7 +83,11 @@ fn preparation_and_indeterminate_failure_never_advance_the_baseline() {
     engine.inject_fault_once("after_payloads");
     assert!(
         engine
-            .persist_auth_state(json!({"auth":"prepared"}), "alice", &new_id("op"))
+            .persist_auth_state(
+                json!({"auth":"prepared"}),
+                "alice",
+                storage_contract::OperationId::generate()
+            )
             .is_err()
     );
     assert!(Arc::ptr_eq(
@@ -83,7 +97,11 @@ fn preparation_and_indeterminate_failure_never_advance_the_baseline() {
     assert!(base.matches(&engine.planning_context(), &config_hash(&engine)));
     engine.inject_fault_once("after_accept_1");
     let error = engine
-        .persist_auth_state(json!({"auth":"accepted"}), "alice", &new_id("op"))
+        .persist_auth_state(
+            json!({"auth":"accepted"}),
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap_err();
     assert_eq!(error.code(), storage_contract::ErrorCode::InDoubt);
     assert!(error.is_retryable());
@@ -104,10 +122,10 @@ fn post_publication_index_failure_does_not_mint_a_new_reuse_receipt() {
     let index = engine.root.join("index.sqlite");
     std::fs::rename(&index, engine.root.join("saved-index.sqlite")).unwrap();
     std::fs::create_dir(&index).unwrap();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     assert!(
         engine
-            .persist_auth_state(json!({"auth":"published"}), "alice", &operation)
+            .persist_auth_state(json!({"auth":"published"}), "alice", operation)
             .is_err()
     );
     assert!(engine.blocked);

@@ -15,7 +15,7 @@ fn path_policy(
         target_copies: copies,
         expected_generation: generation,
         principal: "admin",
-        operation_id: &new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
     })
 }
 
@@ -39,7 +39,7 @@ fn configure_scope(
             backup_prefixes: &values,
             expected_generation: generation,
             principal: "admin",
-            operation_id: &new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
         })
         .unwrap()
         .result["policy"]["policy_id"]

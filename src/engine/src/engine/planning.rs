@@ -170,7 +170,7 @@ impl<'a> PlanningContext<'a> {
         &self,
         kind: &str,
         principal: &str,
-        operation_id: &str,
+        operation_id: OperationId,
         digest: String,
         change: F,
     ) -> Result<MutationPlan>
@@ -221,7 +221,7 @@ impl<'a> PlanningContext<'a> {
             ProtectionAtPublish::TargetMet
         };
         let op = OperationResult {
-            operation_id: operation_id.into(),
+            operation_id,
             kind: kind.into(),
             commit_id: result
                 .get("commit_id")
@@ -242,18 +242,18 @@ impl<'a> PlanningContext<'a> {
             sequence: next.sequence,
             result,
         };
-        next.operations.insert(operation_id.into(), op.clone());
+        next.operations.insert(operation_id, op.clone());
         next.operation_principals
-            .insert(operation_id.into(), principal.into());
+            .insert(operation_id, principal.into());
         next.events.push(Event {
             sequence: next.sequence,
-            operation_id: operation_id.into(),
+            operation_id,
             kind: kind.into(),
             object_id: op
                 .commit_id
                 .clone()
                 .or_else(|| op.history_tree_id.clone())
-                .unwrap_or_else(|| operation_id.into()),
+                .unwrap_or_else(|| operation_id.to_string()),
         });
         Ok(MutationPlan::Prepared {
             next: Box::new(next),

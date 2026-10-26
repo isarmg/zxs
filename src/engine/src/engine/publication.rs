@@ -791,7 +791,7 @@ impl crate::engine::PlanningContext<'_> {
             pool_id: self.config.pool_id.clone(),
             sequence: next.sequence,
             transaction_id: new_id("tx"),
-            operation_id: result.operation_id.clone(),
+            operation_id: result.operation_id,
             request_digest: result.request_digest.clone(),
             previous_snapshot: self.snapshot.clone(),
             snapshot_hash,
@@ -882,7 +882,10 @@ impl crate::engine::PlanningContext<'_> {
                 | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
                     if error.kind() == std::io::ErrorKind::NotFound =>
                 {
-                    let staging = disk.root.join("staging").join(new_id("op"));
+                    let staging = disk
+                        .root
+                        .join("staging")
+                        .join(OperationId::generate().to_string());
                     private_dir(&staging.join("content"))?;
                     let target = staging.join("content").join(&p.version.creation_name);
                     let copied = verified_full_copy(

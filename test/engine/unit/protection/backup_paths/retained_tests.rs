@@ -17,7 +17,7 @@ fn configure(
             backup_prefixes: &prefixes(values),
             expected_generation: generation,
             principal: "admin",
-            operation_id: &new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
         })
         .unwrap()
 }
@@ -107,7 +107,7 @@ fn source_reconfiguration_preserves_one_shared_snapshot_for_moved_files() {
                 target_copies: 1,
                 expected_generation: policy.generation,
                 principal: "admin",
-                operation_id: &new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
             })
             .unwrap_err();
         assert_eq!(
@@ -143,7 +143,7 @@ fn retained_settings_replay_once_and_restore_without_becoming_inherited() {
     let (mut engine, repo, _, current) = configured_source(&temp.path().join("original"));
     let moved = save(&mut engine, &repo, "source/moved.txt", b"moved");
     rename(&mut engine, &repo, "source/moved.txt", "moved.txt");
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let values = prefixes(&[("B01", "new"), ("C01", "cold")]);
     let request = BackupConfigurationRequest {
         repository_id: &repo.repository_id,
@@ -152,7 +152,7 @@ fn retained_settings_replay_once_and_restore_without_becoming_inherited() {
         backup_prefixes: &values,
         expected_generation: 1,
         principal: "admin",
-        operation_id: &operation,
+        operation_id: operation,
     };
     engine.inject_fault_once("after_finalize");
     assert_eq!(
@@ -193,7 +193,13 @@ fn retained_settings_replay_once_and_restore_without_becoming_inherited() {
     )
     .unwrap();
     restored
-        .restore_history_package(&package, "P01", 2, "admin", &new_id("op"))
+        .restore_history_package(
+            &package,
+            "P01",
+            2,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     assert!(restored.state.protection_policies[&current].inheritable);
     assert!(!restored.state.protection_policies[&retained].inheritable);
@@ -241,7 +247,7 @@ fn protection_policy_role_is_required_and_empty_current_rules_survive_pruning() 
             )
             .unwrap(),
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let empty = configure(&mut engine, &repo, "empty", 1, &[], 0);

@@ -571,7 +571,7 @@ fn completed_disk_observation_releases_engine_before_retry() {
         .persist_auth_state(
             auth.snapshot().unwrap(),
             "system_auth",
-            &storage_contract::new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     drop(auth);
@@ -980,7 +980,13 @@ async fn background_reopen_uses_local_workspace_limits_and_authenticated_capacit
     config.max_retained_workspaces_per_principal = 1;
     let mut engine = storage_engine::Engine::initialize(&data, config.clone()).unwrap();
     let repo = engine
-        .create_repository("capacity", "P01", 1, "admin", &storage_engine::new_id("op"))
+        .create_repository(
+            "capacity",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     engine
         .create_workspace(&repo.main_branch_id, "admin")

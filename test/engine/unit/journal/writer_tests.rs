@@ -24,7 +24,7 @@ fn serialized_engine_mutations_preserve_one_verified_hash_chain() {
                         "P01",
                         1,
                         "admin",
-                        &new_id("op"),
+                        storage_contract::OperationId::generate(),
                     )
                     .unwrap();
             });
@@ -52,7 +52,13 @@ fn detached_preparation_retains_writer_ownership_without_appending() {
     let disk = config.disks[0].clone();
     let mut engine = Engine::initialize(&root, config).unwrap();
     let repo = engine
-        .create_repository("repo", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "repo",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -64,7 +70,7 @@ fn detached_preparation_retains_writer_ownership_without_appending() {
         .prepare_workspace_commit(
             CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,

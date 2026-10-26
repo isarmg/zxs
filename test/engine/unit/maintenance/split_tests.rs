@@ -10,7 +10,13 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     ]);
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
-        .create_repository("项目", "P01", 3, "alice", &new_id("op"))
+        .create_repository(
+            "项目",
+            "P01",
+            3,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     (temp, engine, repo)
 }
@@ -22,7 +28,7 @@ fn save(engine: &mut Engine, branch: &str, bytes: &[u8]) -> String {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -86,7 +92,7 @@ fn split_closes_source_policy_scopes_without_dropping_valid_empty_rules() {
                 },
                 expected_generation: 0,
                 principal: "alice",
-                operation_id: &new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
             })
             .unwrap()
             .result["policy"]["policy_id"]
@@ -105,7 +111,7 @@ fn split_closes_source_policy_scopes_without_dropping_valid_empty_rules() {
                 )
                 .unwrap(),
                 "alice",
-                &new_id("op"),
+                storage_contract::OperationId::generate(),
             )
             .unwrap();
     };
@@ -125,7 +131,11 @@ fn split_closes_source_policy_scopes_without_dropping_valid_empty_rules() {
         .create_split_plan(&repo.history_tree_id, &cut, "alice")
         .unwrap();
     let result = engine
-        .commit_plan(&plan.plan_id, "alice", &new_id("op"))
+        .commit_plan(
+            &plan.plan_id,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let destination = result.history_tree_id.unwrap();
     let source_policy = &engine.state.protection_policies[&bound];
@@ -190,7 +200,7 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
                     )
                     .unwrap(),
                     "alice",
-                    &new_id("op"),
+                    storage_contract::OperationId::generate(),
                 )
                 .unwrap();
             let configured = engine
@@ -201,7 +211,7 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
                     backup_prefixes: &BTreeMap::from([("B01".into(), path.into())]),
                     expected_generation: 0,
                     principal: "alice",
-                    operation_id: &new_id("op"),
+                    operation_id: storage_contract::OperationId::generate(),
                 })
                 .unwrap();
             policies.push(
@@ -220,7 +230,7 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
                     )
                     .unwrap(),
                     "alice",
-                    &new_id("op"),
+                    storage_contract::OperationId::generate(),
                 )
                 .unwrap();
         }
@@ -235,7 +245,7 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
                 ]),
                 expected_generation: 0,
                 principal: "alice",
-                operation_id: &new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
             })
             .unwrap();
         let cut = save(&mut engine, &repo.main_branch_id, b"split body");
@@ -252,7 +262,7 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
             .mutate(
                 "fixture.bound_settings",
                 "alice",
-                &new_id("op"),
+                storage_contract::OperationId::generate(),
                 json!({}),
                 |_, state, _| {
                     state
@@ -276,7 +286,11 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
             .create_split_plan(&repo.history_tree_id, &cut, "alice")
             .unwrap();
         let split = engine
-            .commit_plan(&plan.plan_id, "alice", &new_id("op"))
+            .commit_plan(
+                &plan.plan_id,
+                "alice",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let history = split.history_tree_id.unwrap();
         let copied = engine
@@ -347,7 +361,13 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
         )
         .unwrap();
         restored
-            .restore_history_package(&package, "P01", 2, "alice", &new_id("op"))
+            .restore_history_package(
+                &package,
+                "P01",
+                2,
+                "alice",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         assert!(!restored.state.protection_policies[&bound].inheritable);
         assert_eq!(restored.state.file_backup_policies[&file.file_id], bound);
@@ -375,7 +395,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
             &source.version_id,
             "shared",
             "alice",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap()
         .branch_id
@@ -397,7 +417,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
         .mutate(
             "fixture.directory_composition",
             "alice",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
             json!({}),
             |_, state, _| {
                 let parent = DirectoryBranch {
@@ -476,7 +496,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
         .mutate(
             "fixture.directory_complete",
             "alice",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
             json!({}),
             |_, state, _| {
                 let branch = state.directory_branches.get_mut(&record).unwrap();
@@ -519,7 +539,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
         .mutate(
             "fixture.directory_select",
             "alice",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
             json!({}),
             |_, state, _| {
                 state
@@ -544,7 +564,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
         .mutate(
             "fixture.directory_unselect",
             "alice",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
             json!({}),
             |_, state, _| {
                 state.directory_selections.remove(&repo.repository_id);
@@ -570,7 +590,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
         .mutate(
             "fixture.directory_advance",
             "alice",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
             json!({}),
             |_, state, _| {
                 for id in [&parent_record, &record] {
@@ -610,7 +630,11 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
         )
         .unwrap();
     engine
-        .commit_plan(&plan.plan_id, "alice", &new_id("op"))
+        .commit_plan(
+            &plan.plan_id,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     assert_eq!(
         engine
@@ -644,7 +668,12 @@ fn inherited_branches_and_their_workspaces_pin_sources_until_first_own_content()
         .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     let pending = engine
-        .create_branch(&source, "pending", "alice", &new_id("op"))
+        .create_branch(
+            &source,
+            "pending",
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&pending.branch_id, "alice")
@@ -673,7 +702,7 @@ fn inherited_branches_and_their_workspaces_pin_sources_until_first_own_content()
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -700,7 +729,11 @@ fn inherited_branches_and_their_workspaces_pin_sources_until_first_own_content()
         .create_purge_plan(&repo.history_tree_id, vec![old.version_id.clone()], "alice")
         .unwrap();
     engine
-        .commit_plan(&plan.plan_id, "alice", &new_id("op"))
+        .commit_plan(
+            &plan.plan_id,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     assert_eq!(
         engine.open_content(&old.version_id).err().unwrap().code(),
@@ -726,12 +759,17 @@ fn selected_inherited_file_pins_source_through_directory_main_until_materialized
             &old.version_id,
             "pending",
             "alice",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let branch = created.branch_id.unwrap();
     engine
-        .select_file_branch(&old.file_id, &branch, "alice", &new_id("op"))
+        .select_file_branch(
+            &old.file_id,
+            &branch,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "alice")
@@ -753,7 +791,7 @@ fn selected_inherited_file_pins_source_through_directory_main_until_materialized
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -780,7 +818,11 @@ fn selected_inherited_file_pins_source_through_directory_main_until_materialized
         .create_purge_plan(&repo.history_tree_id, vec![old.version_id.clone()], "alice")
         .unwrap();
     engine
-        .commit_plan(&plan.plan_id, "alice", &new_id("op"))
+        .commit_plan(
+            &plan.plan_id,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     assert_eq!(
         engine.open_content(&old.version_id).err().unwrap().code(),
@@ -800,14 +842,23 @@ fn split_remaps_inherited_references_without_creating_placeholder_files() {
         .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     let pending = engine
-        .create_branch(&cut, "pending", "alice", &new_id("op"))
+        .create_branch(
+            &cut,
+            "pending",
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"second");
     let plan = engine
         .create_split_plan(&repo.history_tree_id, &cut, "alice")
         .unwrap();
     let result = engine
-        .commit_plan(&plan.plan_id, "alice", &new_id("op"))
+        .commit_plan(
+            &plan.plan_id,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let history = result.history_tree_id.unwrap();
     let moved = engine
@@ -898,7 +949,12 @@ fn split_keeps_pending_prefix_snapshots_and_remaps_mixed_snapshot_reservations()
         .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     let pending = engine
-        .create_branch(&source, "pending", "alice", &new_id("op"))
+        .create_branch(
+            &source,
+            "pending",
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let prefix = pending.head_commit_id.clone();
     let workspace = engine
@@ -910,7 +966,7 @@ fn split_keeps_pending_prefix_snapshots_and_remaps_mixed_snapshot_reservations()
     let cut = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -924,7 +980,11 @@ fn split_keeps_pending_prefix_snapshots_and_remaps_mixed_snapshot_reservations()
         .create_split_plan(&repo.history_tree_id, &cut, "alice")
         .unwrap();
     let result = engine
-        .commit_plan(&plan.plan_id, "alice", &new_id("op"))
+        .commit_plan(
+            &plan.plan_id,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let history = result.history_tree_id.unwrap();
     let moved = engine
@@ -973,13 +1033,13 @@ fn split_preserves_identity_per_file_and_requires_explicit_rebinding() {
     let plan = engine
         .create_split_plan(&repo.history_tree_id, &cut, "alice")
         .unwrap();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let result = engine
-        .commit_plan(&plan.plan_id, "alice", &operation)
+        .commit_plan(&plan.plan_id, "alice", operation)
         .unwrap();
     assert_eq!(
         engine
-            .commit_plan(&plan.plan_id, "alice", &operation)
+            .commit_plan(&plan.plan_id, "alice", operation)
             .unwrap()
             .sequence,
         result.sequence
@@ -1043,7 +1103,12 @@ fn split_merge_links_have_local_branch_stubs_and_explicit_crossing_boundaries() 
         .root_commit_id
         .clone();
     let outside = engine
-        .create_branch(&root, "前缀分支", "alice", &new_id("op"))
+        .create_branch(
+            &root,
+            "前缀分支",
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let cut = save(&mut engine, &repo.main_branch_id, b"first");
     let last = save(&mut engine, &repo.main_branch_id, b"second");
@@ -1058,7 +1123,7 @@ fn split_merge_links_have_local_branch_stubs_and_explicit_crossing_boundaries() 
         target_branch_id: repo.main_branch_id.clone(),
         target_commit_id: last.clone(),
         author: "alice".into(),
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
     };
     std::sync::Arc::make_mut(&mut engine.state)
         .merge_links
@@ -1070,14 +1135,18 @@ fn split_merge_links_have_local_branch_stubs_and_explicit_crossing_boundaries() 
             &repo.main_branch_id,
             &cut,
             "alice",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let plan = engine
         .create_split_plan(&repo.history_tree_id, &cut, "alice")
         .unwrap();
     let result = engine
-        .commit_plan(&plan.plan_id, "alice", &new_id("op"))
+        .commit_plan(
+            &plan.plan_id,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let history = result.history_tree_id.unwrap();
     assert_graph_closed(&engine, &repo.history_tree_id);
@@ -1113,7 +1182,12 @@ fn split_preserves_archived_branches_and_selects_an_active_main() {
             .root_commit_id
             .clone();
         let side = engine
-            .create_branch(&root, "side", "alice", &new_id("op"))
+            .create_branch(
+                &root,
+                "side",
+                "alice",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let archived = if scenario == "archived_main" {
             engine
@@ -1123,7 +1197,7 @@ fn split_preserves_archived_branches_and_selects_an_active_main() {
                     true,
                     1,
                     "alice",
-                    &new_id("op"),
+                    storage_contract::OperationId::generate(),
                 )
                 .unwrap();
             repo.main_branch_id.clone()
@@ -1133,18 +1207,31 @@ fn split_preserves_archived_branches_and_selects_an_active_main() {
         let cut = save(&mut engine, &archived, b"archived body");
         let active = (scenario == "active_survivor").then(|| {
             engine
-                .create_branch(&cut, "live", "alice", &new_id("op"))
+                .create_branch(
+                    &cut,
+                    "live",
+                    "alice",
+                    storage_contract::OperationId::generate(),
+                )
                 .unwrap()
                 .branch_id
         });
         engine
-            .archive_branch(&archived, "alice", &new_id("op"))
+            .archive_branch(
+                &archived,
+                "alice",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let plan = engine
             .create_split_plan(&repo.history_tree_id, &cut, "alice")
             .unwrap();
         let result = engine
-            .commit_plan(&plan.plan_id, "alice", &new_id("op"))
+            .commit_plan(
+                &plan.plan_id,
+                "alice",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let history = result.history_tree_id.as_ref().unwrap();
         let main = result.branch_id.as_ref().unwrap();
@@ -1205,7 +1292,14 @@ fn split_preserves_archived_branches_and_selects_an_active_main() {
             "archived"
         );
         engine
-            .set_smb_binding(&new_repo, &main, true, 1, "alice", &new_id("op"))
+            .set_smb_binding(
+                &new_repo,
+                &main,
+                true,
+                1,
+                "alice",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let workspace = engine.create_workspace(&main, "alice").unwrap();
         engine
@@ -1242,7 +1336,11 @@ fn split_rejects_root_and_rechecks_active_read_before_publication() {
     let generation = engine.state.business_generation;
     assert_eq!(
         engine
-            .commit_plan(&plan.plan_id, "alice", &new_id("op"))
+            .commit_plan(
+                &plan.plan_id,
+                "alice",
+                storage_contract::OperationId::generate()
+            )
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::ContentPinned
@@ -1250,7 +1348,11 @@ fn split_rejects_root_and_rechecks_active_read_before_publication() {
     assert_eq!(engine.state.business_generation, generation);
     drop(read);
     engine
-        .commit_plan(&plan.plan_id, "alice", &new_id("op"))
+        .commit_plan(
+            &plan.plan_id,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
 }
 
@@ -1280,7 +1382,7 @@ fn split_at_deletion_preserves_facts_without_copying_deleted_content() {
     let cut = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -1298,7 +1400,11 @@ fn split_at_deletion_preserves_facts_without_copying_deleted_content() {
         .create_split_plan(&repo.history_tree_id, &cut, "alice")
         .unwrap();
     let result = engine
-        .commit_plan(&plan.plan_id, "alice", &new_id("op"))
+        .commit_plan(
+            &plan.plan_id,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let history = result.history_tree_id.unwrap();
     let graph = engine.graph(&history).unwrap();
@@ -1324,7 +1430,13 @@ fn split_at_deletion_preserves_facts_without_copying_deleted_content() {
     crate::history_package::offline_check_history_package(&package).unwrap();
     let (_target, mut restored, _) = fixture();
     restored
-        .restore_history_package(&package, "P01", 1, "alice", &new_id("op"))
+        .restore_history_package(
+            &package,
+            "P01",
+            1,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     assert_eq!(
         restored.state.commits[&root.commit_id]

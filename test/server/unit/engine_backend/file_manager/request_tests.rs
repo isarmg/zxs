@@ -146,7 +146,13 @@ fn destructive_path_only_requests_never_mutate_or_create_a_disk_root() {
         assert_eq!(engine.state().sequence, 0);
     }
     let repo = engine
-        .create_repository("Existing", "P01", 3, "owner", &storage_engine::new_id("op"))
+        .create_repository(
+            "Existing",
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     engine
         .file_namespace(
@@ -158,7 +164,7 @@ fn destructive_path_only_requests_never_mutate_or_create_a_disk_root() {
             )
             .unwrap(),
             "owner",
-            &storage_engine::new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let before = json_codec::to_value(engine.state()).unwrap();
@@ -254,9 +260,9 @@ fn baseline_name_and_used_operation_are_rejected_before_root_initialization() {
         assert_eq!(engine.state().sequence, 0);
         assert_eq!(disk_files(&disks), before);
     }
-    let used = storage_engine::new_id("op");
+    let used = storage_contract::OperationId::generate();
     engine
-        .create_repository("Existing", "P01", 3, "owner", &used)
+        .create_repository("Existing", "P01", 3, "owner", used)
         .unwrap();
     let before = json_codec::to_value(engine.state()).unwrap();
     let bytes = disk_files(&disks);
@@ -411,12 +417,18 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
             .unwrap();
             let create_named = |engine: &mut Engine| {
                 engine
-                    .create_repository(named_name, "P01", 1, "owner", &storage_engine::new_id("op"))
+                    .create_repository(
+                        named_name,
+                        "P01",
+                        1,
+                        "owner",
+                        storage_contract::OperationId::generate(),
+                    )
                     .unwrap()
             };
             let named = named_first.then(|| create_named(&mut engine));
             let root = engine
-                .create_disk_root("P01", "owner", &storage_engine::new_id("op"))
+                .create_disk_root("P01", "owner", storage_contract::OperationId::generate())
                 .unwrap();
             let mut paths = vec![format!("{root_name}-other")];
             if root_is_file {
@@ -429,7 +441,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                 engine
                     .commit_workspace(storage_engine::CommitRequest {
                         workspace_id: workspace.workspace_id,
-                        operation_id: storage_engine::new_id("op"),
+                        operation_id: storage_contract::OperationId::generate(),
                         principal: "owner".into(),
                         expected_head: workspace.base_head,
                         fencing_token: workspace.fencing_token,
@@ -451,7 +463,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                         )
                         .unwrap(),
                         "owner",
-                        &storage_engine::new_id("op"),
+                        storage_contract::OperationId::generate(),
                     )
                     .unwrap();
             }
@@ -466,7 +478,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                     )
                     .unwrap(),
                     "owner",
-                    &storage_engine::new_id("op"),
+                    storage_contract::OperationId::generate(),
                 )
                 .unwrap();
             let identity = Identity {
@@ -554,7 +566,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                     )
                     .unwrap(),
                     "owner",
-                    &storage_engine::new_id("op"),
+                    storage_contract::OperationId::generate(),
                 )
                 .unwrap();
             let listing = listing::entries(&engine, &json!({"slot_id":"P01","path":""})).unwrap();

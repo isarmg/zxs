@@ -601,6 +601,21 @@ impl Inner {
     }
 }
 impl Backend for ManagementBackend {
+    fn operation(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.inner.backend()?.operation(identity, operation_id)
+    }
+    fn commit_workspace(
+        &self,
+        identity: &Identity,
+        command: crate::CommitWorkspace,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.inner.backend()?.commit_workspace(identity, command)
+    }
+
     fn snapshot_at(
         &self,
         identity: &Identity,
@@ -682,6 +697,7 @@ impl Backend for ManagementBackend {
                 .preview_preset(permit.as_ref().ok_or_else(ApiError::unauthorized)?, request);
         }
         // Reject malformed DTOs before changing the optional engine lifecycle.
+        let mut recovery_preview = None;
         match action {
             "initialize" => {
                 json_codec::from_value::<SetupRequest>(input.clone())
@@ -700,8 +716,7 @@ impl Backend for ManagementBackend {
                     .map_err(ApiError::invalid_source)?;
             }
             "recovery_preview" => {
-                json_codec::from_value::<RecoveryPreviewRequest>(input.clone())
-                    .map_err(ApiError::invalid_source)?;
+                recovery_preview = Some(RecoveryPreviewRequest::parse(input.clone())?);
             }
             "recovery_commit" => {
                 json_codec::from_value::<RecoveryCommitRequest>(input.clone())
@@ -841,8 +856,8 @@ impl Backend for ManagementBackend {
                 })
             }
             "recovery_preview" => {
-                let request: RecoveryPreviewRequest =
-                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+                let request = recovery_preview
+                    .expect("invariant: recovery preview was parsed before lifecycle changes");
                 setup
                     .recovery_preview(
                         identity.as_ref().ok_or_else(ApiError::unauthorized)?,

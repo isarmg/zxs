@@ -11,7 +11,7 @@ impl Engine {
         enabled: bool,
         expected_generation: u64,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         self.mutate(
             "smb.binding.update",
@@ -117,7 +117,7 @@ impl Engine {
         primary: &str,
         copies: u32,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<Repository> {
         self.create_repository_kind(name, primary, copies, principal, operation, false)
     }
@@ -125,15 +125,14 @@ impl Engine {
         &mut self,
         primary: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<Repository> {
-        validate_id(operation, "op")?;
         Self::require_actor(principal)?;
         let primary = self.disk(primary)?.slot_id.clone();
         // An unused operation may resolve the existing disk root. A published
         // operation must first match its original owner and creation request,
         // and return that receipt rather than the root's current SMB binding.
-        if !self.state.operations.contains_key(operation)
+        if !self.state.operations.contains_key(&operation)
             && let Some(repo) = self
                 .state
                 .repositories
@@ -159,7 +158,7 @@ impl Engine {
         primary: &str,
         copies: u32,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
         file_manager_root: bool,
     ) -> Result<Repository> {
         name_policy::validate_name(name)?;
@@ -239,7 +238,7 @@ impl Engine {
                         parent_commit_ids: Vec::new(),
                         tree_id: new_id("tree"),
                         sequence: state.sequence,
-                        operation_id: operation.into(),
+                        operation_id: operation,
                         author: principal.into(),
                         message: "Create repository".into(),
                         entries: Vec::new(),

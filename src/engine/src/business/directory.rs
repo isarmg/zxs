@@ -552,7 +552,7 @@ pub(crate) fn namespace_locations(
     after: &[Entry],
     changes: &[NamespaceOperation],
     principal: &str,
-    operation: &str,
+    operation: OperationId,
 ) -> Result<()> {
     // Workspace entries may not be sorted yet. Keep the first path match,
     // just like `find`, without rescanning all siblings for every file.
@@ -717,7 +717,7 @@ pub(crate) fn prepare_file_write(
     file_id: &str,
     key: &str,
     principal: &str,
-    operation: &str,
+    operation: OperationId,
 ) -> Result<()> {
     let Some(repository) = state
         .repositories
@@ -889,7 +889,7 @@ pub(crate) fn select_change(
     repository: &str,
     branch_id: &str,
     principal: &str,
-    operation: &str,
+    operation: OperationId,
     max_entries: usize,
 ) -> Result<Value> {
     let selected = state
@@ -1058,7 +1058,7 @@ pub(crate) fn select_change(
             parent_commit_ids: vec![previous.commit_id],
             tree_id: new_id("tree"),
             sequence: state.sequence,
-            operation_id: operation.into(),
+            operation_id: operation,
             author: principal.into(),
             message: format!("Select directory branch {}", selected.name),
             entries,
@@ -1134,7 +1134,7 @@ impl Engine {
         repository: &str,
         path: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         self.mutate(
             "directory.scope.initialize",
@@ -1164,7 +1164,7 @@ impl Engine {
         path: &str,
         name: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         validate_branch_name(name)?;
         self.mutate(
@@ -1254,7 +1254,7 @@ impl Engine {
         path: &str,
         name: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         validate_branch_name(name)?;
         self.mutate(
@@ -1318,7 +1318,7 @@ impl Engine {
         repository: &str,
         branch: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         self.mutate(
             "directory.default.select",
@@ -1360,7 +1360,7 @@ impl Engine {
         branch: &str,
         name: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         validate_branch_name(name)?;
         self.mutate(

@@ -235,7 +235,13 @@ fn workspace_commit_exposes_corrupted_admitted_source() {
     )
     .unwrap();
     let repo = engine
-        .create_repository("Draft", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "Draft",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let initial = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -246,7 +252,7 @@ fn workspace_commit_exposes_corrupted_admitted_source() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: initial.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: initial.base_head,
             fencing_token: initial.fencing_token,
@@ -269,7 +275,7 @@ fn workspace_commit_exposes_corrupted_admitted_source() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,

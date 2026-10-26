@@ -7,7 +7,7 @@ use std::{
 
 #[test]
 fn hello_requires_an_explicit_capability_list() {
-    let request = Request::Hello {
+    let request: Request = Request::Hello {
         protocol: PROTOCOL.into(),
         capabilities: REQUIRED_CAPABILITIES
             .iter()
@@ -56,7 +56,7 @@ fn unlinkat_flags_preserve_target_kind_and_reject_unknown_flags() {
         else {
             panic!("expected namespace request");
         };
-        storage_contract::validate_id(&operation_id, "op").unwrap();
+        assert_eq!(operation_id.to_string().len(), 35);
         assert_eq!(kind, expected);
         assert_eq!(path, "entry");
         assert!(destination.is_none());
@@ -161,7 +161,7 @@ fn established_idle_wait_is_cancellable_and_does_not_consume_frame_deadline() {
     let mut sender = FrameStream::new(one).unwrap();
     sender
         .send(
-            &Request::Stat {
+            &Request::<String>::Stat {
                 path: "file".into(),
             },
             None,
@@ -229,7 +229,7 @@ fn partial_payload_progress_does_not_restart_the_frame_deadline() {
 
 #[test]
 fn directory_reads_use_only_session_handles_and_do_not_accept_client_snapshots() {
-    let request = Request::ReadDirectory {
+    let request: Request = Request::ReadDirectory {
         handle: u64::MAX,
         restart: false,
     };
@@ -475,4 +475,18 @@ fn unrepresentable_external_timeout_is_an_error_not_a_panic() {
         stream.receive::<Response>().unwrap_err().kind(),
         io::ErrorKind::InvalidInput
     );
+}
+
+#[test]
+fn raw_and_domain_namespace_requests_preserve_identical_wire_bytes() {
+    let bytes = br#"{"op":"namespace","operation_id":"op_00000000000000000000000000000000","kind":"mkdir","path":"entry","destination":null,"replace":false}"#;
+    let raw: Request<String> = json_codec::from_slice(bytes).unwrap();
+    let domain = raw.parse_operation_id().unwrap();
+    assert_eq!(json_codec::to_vec(&domain).unwrap(), bytes);
+    for id in ["", "op_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "../outside"] {
+        let raw: Request<String> = json_codec::from_value(json_codec::json!({
+            "op":"namespace","operation_id":id,"kind":"mkdir","path":"entry","destination":null,"replace":false
+        })).unwrap();
+        assert!(raw.parse_operation_id().is_err());
+    }
 }

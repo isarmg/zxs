@@ -1,5 +1,6 @@
 [package]
 name = "perf-check"
+default-run = "perf-check"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
@@ -11,3 +12,4 @@ platform-io.workspace = true
 json-codec = {version = "1", path = "../../src/foundation/data-storage/json-codec"}
 sqlite-access = { version = "=0.9.0", default-features = false, features = ["sqlite-bundled"], path = "../../src/foundation/data-storage/sqlite-access"}
 tempfile = {version = "3", path = "../../src/foundation/platform/tempfile"}
+tracing = { version = "0.1", default-features = false, features = ["fmt", "json"], path = "../../src/foundation/diagnostics/tracing" }

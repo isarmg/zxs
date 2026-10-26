@@ -173,9 +173,9 @@ impl Engine {
         &mut self,
         id: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
-        if let Some(op) = self.state.operations.get(operation) {
+        if let Some(op) = self.state.operations.get(&operation) {
             if op.kind == "plan.cancel"
                 && op.result["plan_id"].as_str() == Some(id)
                 && self.operation_owner(operation)?.as_deref() == Some(principal)
@@ -257,9 +257,9 @@ impl Engine {
         &mut self,
         id: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
-        if let Some(op) = self.state.operations.get(operation) {
+        if let Some(op) = self.state.operations.get(&operation) {
             if matches!(
                 op.kind.as_str(),
                 "content.purge" | "history.split" | "history.historical_save"
@@ -557,7 +557,7 @@ impl Engine {
         history: &str,
         cut: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
         plan: &Plan,
     ) -> Result<OperationResult> {
         self.check_directory_split(history)?;

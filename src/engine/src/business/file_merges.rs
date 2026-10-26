@@ -77,7 +77,7 @@ impl Engine {
                         node_id:result.clone(),history_tree_id:body.history_tree_id.clone(),file_id:file.into(),
                         version_id:version.clone(),parent_node_ids:edges.clone(),branch_id:survivor.into(),
                         kind:FileMetadataKind::Merge,tags:super::file_nodes::node_tags(state,chosen_node),
-                        operation_id:operation.into(),author:principal.into(),sequence:state.sequence,created_at:now(),
+                        operation_id:operation,author:principal.into(),sequence:state.sequence,created_at:now(),
                     });
                 }
                 let merge_id = new_id("fmerge");
@@ -85,7 +85,7 @@ impl Engine {
                     merge_id:merge_id.clone(),history_tree_id:body.history_tree_id.clone(),file_id:file.into(),
                     input_branch_ids:inputs.iter().map(|input|input.branch_id.clone()).collect(),input_node_ids:heads,
                     chosen_node_id:chosen_node.into(),result_node_id:result.clone(),surviving_branch_id:survivor.into(),
-                    reused_node:reused,parent_node_ids:edges,operation_id:operation.into(),sequence:state.sequence,
+                    reused_node:reused,parent_node_ids:edges,operation_id:operation,sequence:state.sequence,
                 });
                 super::file_publication::advance_branch_node(state,survivor,&result,true,principal,operation)?;
                 let affected = super::file_publication::publish_node(state, crate::business::file_publication::NodePublication { file, matching_branches: &branches, matching_node: None, target_branch: survivor, target_node: &result, principal, operation, maximum: engine.config.max_entries })?;

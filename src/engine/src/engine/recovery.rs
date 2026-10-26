@@ -65,7 +65,7 @@ impl Engine {
     /// Read the complete exact candidate-bound object closure across replicas.
     /// A damaged preferred member must not hide healthy metadata dependencies.
     pub(crate) fn load_bound_snapshot(&self, hash: &str) -> Result<State> {
-        verified_snapshot(&self.members(), hash)
+        Ok(verified_snapshot(&self.members(), hash)?.into_state())
     }
 
     /// Preserve the candidate's original snapshot layout when completing a
@@ -94,7 +94,7 @@ impl Engine {
         let mut opened_journals = BTreeMap::new();
         let mut scanned_journals = BTreeMap::new();
         let mut torn_tail = false;
-        let mut records = BTreeMap::<u64, BTreeMap<String, Vec<(String, Record)>>>::new();
+        let mut records = super::recovery_checkpoint::Records::new();
         for d in &members {
             if validate_seal(&self.config, d).is_err() {
                 continue;
@@ -110,7 +110,7 @@ impl Engine {
                     .map(|(_, hash)| hash.clone())
                     .collect(),
             );
-            for (r, _) in &scanned.records {
+            for (r, frame_hash) in &scanned.records {
                 self.next_slot =
                     self.next_slot.max(r.sequence.checked_add(1).ok_or_else(|| {
                         Error::new(
@@ -123,7 +123,12 @@ impl Engine {
                     .or_default()
                     .entry(r.candidate_hash.clone())
                     .or_default()
-                    .push((d.slot_id.clone(), r.clone()));
+                    .push(Receipt {
+                        disk_id: d.disk_id.clone(),
+                        slot_id: d.slot_id.clone(),
+                        frame_hash: frame_hash.clone(),
+                        record: r.clone(),
+                    });
             }
             opened_journals.insert(d.disk_id.clone(), opened);
             online.push(d.clone());
@@ -140,9 +145,9 @@ impl Engine {
                 candidates
                     .iter()
                     .filter(|(_, records)| {
-                        records.iter().any(|(_, record)| {
+                        records.iter().any(|receipt| {
                             matches!(
-                                record.record_type,
+                                receipt.record.record_type,
                                 RecordType::Accept | RecordType::Publication
                             )
                         })
@@ -174,6 +179,14 @@ impl Engine {
         } else {
             None
         };
+        tracing::info!(
+            target: "storage_engine::recovery_checkpoint",
+            checkpoint_selected = checkpoint.is_some(),
+            checkpoint_sequence = checkpoint.as_ref().map(|value| value.sequence),
+            checkpoint_candidate_hash = checkpoint.as_ref().map(|value| value.candidate_hash.as_str()),
+            checkpoint_snapshot_hash = checkpoint.as_ref().map(|value| value.snapshot_hash.as_str()),
+            "recovery checkpoint selection"
+        );
         // Recovery holds the pool writer locks. Immutable page replicas repaired
         // in this invocation need not be decoded and compared again for each
         // historical root that references them. Never persist this evidence.
@@ -183,9 +196,11 @@ impl Engine {
             let active = candidates
                 .into_iter()
                 .filter(|(_, rs)| {
-                    rs.iter().any(|(_, r)| {
-                        r.record_type == RecordType::Accept
-                            || r.record_type == RecordType::Publication
+                    rs.iter().any(|receipt| {
+                        matches!(
+                            receipt.record.record_type,
+                            RecordType::Accept | RecordType::Publication
+                        )
                     })
                 })
                 .collect::<Vec<_>>();
@@ -210,12 +225,12 @@ impl Engine {
             }
             let publication_record = rs
                 .iter()
-                .find(|(_, r)| r.record_type == RecordType::Publication);
-            let publication = if let Some((_, r)) = publication_record {
+                .find(|receipt| receipt.record.record_type == RecordType::Publication);
+            let publication = if let Some(receipt) = publication_record {
                 Some(verified_object::<Publication>(
                     &online,
                     "publication",
-                    &r.object_hash,
+                    &receipt.record.object_hash,
                 )?)
             } else {
                 crate::degraded_recovery::discover_publication(self, &candidate, &hash)?
@@ -248,19 +263,24 @@ impl Engine {
                             "checkpoint boundary differs from journal",
                         ));
                     }
-                    let mut next = verified_snapshot(&online, &candidate.snapshot_hash)?;
+                    let mut next =
+                        verified_snapshot(&online, &candidate.snapshot_hash)?.into_state();
                     if publication.recovery.is_some() {
                         next.operations
-                            .insert(candidate.operation_id.clone(), publication.result.clone());
+                            .insert(candidate.operation_id, publication.result.clone());
                     }
                     self.state = std::sync::Arc::new(next);
                 }
                 self.snapshot = Some(candidate.snapshot_hash);
                 continue;
             }
-            let mut next = verified_snapshot(&online, &candidate.snapshot_hash)?;
-            let history_objects =
-                crate::history_package::bound_history_objects(&online, &candidate, Some(&next))?;
+            let admitted = verified_snapshot(&online, &candidate.snapshot_hash)?;
+            let history_objects = crate::history_package::bound_history_objects(
+                &online,
+                &candidate,
+                Some(&admitted),
+            )?;
+            let mut next = admitted.into_state();
             if publication.is_none() && mode == RecoveryMode::PreservePending {
                 self.blocked = true;
                 break;
@@ -326,20 +346,13 @@ impl Engine {
                         &next,
                         publication,
                         |engine, d, pub_hash| {
-                            if let Some((record, frame_hash)) =
-                                scanned_journals[&d.disk_id].iter().find(|(record, _)| {
-                                    record.record_type == RecordType::Publication
-                                        && record.sequence == candidate.sequence
-                                        && record.candidate_hash == hash
-                                        && record.object_hash == pub_hash
-                                })
-                            {
-                                Ok(Receipt {
-                                    disk_id: d.disk_id.clone(),
-                                    slot_id: d.slot_id.clone(),
-                                    frame_hash: frame_hash.clone(),
-                                    record: record.clone(),
-                                })
+                            if let Some(receipt) = rs.iter().find(|receipt| {
+                                receipt.disk_id == d.disk_id
+                                    && receipt.record.record_type == RecordType::Publication
+                                    && receipt.record.sequence == candidate.sequence
+                                    && receipt.record.object_hash == pub_hash
+                            }) {
+                                Ok(receipt.clone())
                             } else {
                                 match mode {
                                     RecoveryMode::CompletePending => engine
@@ -365,8 +378,7 @@ impl Engine {
                     self.complete_candidate(&candidate, &hash, &next, None)?;
                 }
                 if let Some(result) = recovered_result {
-                    next.operations
-                        .insert(candidate.operation_id.clone(), result);
+                    next.operations.insert(candidate.operation_id, result);
                 }
                 self.state = std::sync::Arc::new(next);
                 self.snapshot = Some(candidate.snapshot_hash);
@@ -387,7 +399,7 @@ impl Engine {
                 }
                 if p.recovery.is_some() {
                     next.operations
-                        .insert(candidate.operation_id.clone(), p.result.clone());
+                        .insert(candidate.operation_id, p.result.clone());
                 }
                 self.state = std::sync::Arc::new(next);
                 self.snapshot = Some(candidate.snapshot_hash);

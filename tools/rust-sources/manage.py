@@ -18,6 +18,7 @@ import source_naming
 import source_moves
 import proof_routing
 import proof_maintenance
+import proof_legacy_maintenance
 import source_consolidation
 import external_transfers
 import source_relocation
@@ -726,7 +727,7 @@ def refresh(root, retire_plan=None, upgrade_plan_data=None, rename_plan_data=Non
             raise ValueError('layout requires a separate reviewed transition')
         layout, previous = source_layout.prepare(root, previous, layout_plan_data, digest(previous_raw))
     else:
-        layout = source_layout.load(root, previous, pending_upgrade=upgrade_plan_data)
+        layout = source_layout.load(root, previous, pending_upgrade=upgrade_plan_data, prospective_maintenance=True)
     if layout is not None and layout_plan_data is None:
         layout.require_supported_plan(previous, retirement=retire_plan, moves=move_plan_data,
                                       rename=rename_plan_data, upgrade=upgrade_plan_data,
@@ -871,6 +872,9 @@ def _refresh(root, retire_plan=None, upgrade_plan_data=None, rename_plan_data=No
                    upstream_identities=[record["upstream"] for record in records.values()], merges=merges,
                    retired=retired, retired_records_sha256=origin_hashes(retired),
                    superseded=superseded, superseded_records_sha256=origin_hashes(superseded))
+    layout = source_layout.load(root)
+    if layout is not None and layout.legacy_maintenance is not None:
+        catalog[proof_legacy_maintenance.KEY] = list(proof_legacy_maintenance.RECEIPTS)
     if proof_maintenance.RECEIPTS:
         catalog[proof_maintenance.KEY] = list(proof_maintenance.RECEIPTS)
     if source_layout.KEY in previous:
@@ -886,6 +890,8 @@ def _refresh(root, retire_plan=None, upgrade_plan_data=None, rename_plan_data=No
     source_trimming.check_append_only(previous, catalog)
     source_trimming.validate(root, catalog)
     benchmark_relocation.validate(root, catalog, files)
+    if layout is not None and layout.legacy_maintenance is not None:
+        layout.legacy_maintenance.validate_refresh(previous, catalog)
     proof_routing.validate_refresh(root, previous, catalog)
     source_consolidation.validate_origins(source_consolidation.validate_history(root, catalog, validate_external=external_transfers.validate), records)
     source_naming.validate_history(root, catalog)

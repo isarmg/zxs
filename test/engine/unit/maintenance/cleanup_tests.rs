@@ -10,7 +10,7 @@ fn save(engine: &mut Engine, branch: &str, bytes: &[u8]) -> String {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -41,7 +41,13 @@ fn fixture() -> (
     )
     .unwrap();
     let repo = engine
-        .create_repository("cleanup", "P01", 3, "admin", &new_id("op"))
+        .create_repository(
+            "cleanup",
+            "P01",
+            3,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let cut = save(&mut engine, &repo.main_branch_id, b"old body");
     let first = engine.list_tree(&repo.main_branch_id).unwrap()[0]
@@ -85,16 +91,16 @@ fn published_maintenance_retry_finishes_cleanup_without_republishing() {
                 .unwrap()
         };
         let (blocker, payloads) = blocked_cleanup(&engine, &first);
-        let operation = new_id("op");
+        let operation = storage_contract::OperationId::generate();
         assert_eq!(
             engine
-                .commit_plan(&plan.plan_id, "admin", &operation)
+                .commit_plan(&plan.plan_id, "admin", operation)
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::UnsafePath,
             "{kind}"
         );
-        let receipt = engine.operation(&operation).unwrap();
+        let receipt = engine.operation(operation).unwrap();
         assert_eq!(
             receipt.commit_state,
             storage_contract::CommitState::Published
@@ -110,7 +116,7 @@ fn published_maintenance_retry_finishes_cleanup_without_republishing() {
         for (id, actor) in [(new_id("plan"), "admin"), (plan.plan_id.clone(), "other")] {
             assert_eq!(
                 engine
-                    .commit_plan(&id, actor, &operation)
+                    .commit_plan(&id, actor, operation)
                     .unwrap_err()
                     .code(),
                 storage_contract::ErrorCode::IdempotencyKeyReused
@@ -118,7 +124,7 @@ fn published_maintenance_retry_finishes_cleanup_without_republishing() {
         }
         assert_eq!(
             engine
-                .commit_plan(&plan.plan_id, "admin", &operation)
+                .commit_plan(&plan.plan_id, "admin", operation)
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::UnsafePath,
@@ -126,7 +132,7 @@ fn published_maintenance_retry_finishes_cleanup_without_republishing() {
         );
         fs::remove_dir(&blocker).unwrap();
         let retried = engine
-            .commit_plan(&plan.plan_id, "admin", &operation)
+            .commit_plan(&plan.plan_id, "admin", operation)
             .unwrap();
         assert_eq!(retried.result, receipt.result);
         assert_eq!(retried.request_digest, receipt.request_digest);
@@ -144,7 +150,7 @@ fn published_maintenance_retry_finishes_cleanup_without_republishing() {
         assert_eq!(bytes, b"latest body");
         assert_eq!(
             engine
-                .commit_plan(&plan.plan_id, "admin", &operation)
+                .commit_plan(&plan.plan_id, "admin", operation)
                 .unwrap()
                 .result,
             receipt.result
@@ -159,10 +165,10 @@ fn purge_retry_preserves_active_workspace_and_respects_detached_preparation() {
         .create_purge_plan(&repo.history_tree_id, vec![first.clone()], "admin")
         .unwrap();
     let (blocker, payloads) = blocked_cleanup(&engine, &first);
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     assert!(
         engine
-            .commit_plan(&plan.plan_id, "admin", &operation)
+            .commit_plan(&plan.plan_id, "admin", operation)
             .is_err()
     );
     fs::remove_dir(&blocker).unwrap();
@@ -177,7 +183,7 @@ fn purge_retry_preserves_active_workspace_and_respects_detached_preparation() {
         .prepare_workspace_commit(
             CommitRequest {
                 workspace_id: workspace.workspace_id.clone(),
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -189,7 +195,7 @@ fn purge_retry_preserves_active_workspace_and_respects_detached_preparation() {
         .unwrap();
     assert_eq!(
         engine
-            .commit_plan(&plan.plan_id, "admin", &operation)
+            .commit_plan(&plan.plan_id, "admin", operation)
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::CommitPreparationBusy
@@ -197,7 +203,7 @@ fn purge_retry_preserves_active_workspace_and_respects_detached_preparation() {
     assert!(payloads.iter().all(|path| path.exists()));
     drop(preparation);
     engine
-        .commit_plan(&plan.plan_id, "admin", &operation)
+        .commit_plan(&plan.plan_id, "admin", operation)
         .unwrap();
     assert!(payloads.iter().all(|path| !path.exists()));
     assert_eq!(

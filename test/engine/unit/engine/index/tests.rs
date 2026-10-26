@@ -746,9 +746,9 @@ fn publication_rejects_substituted_marker_view_and_reopen_recovers() {
     );
     assert!(engine.indexed_file_history("absent").is_none());
     assert!(!engine.history_query_proof.lock().unwrap().healthy);
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let error = engine
-        .create_repository("published", "P01", 1, "admin", &operation)
+        .create_repository("published", "P01", 1, "admin", operation)
         .unwrap_err();
     assert_eq!(
         error.code(),
@@ -782,7 +782,13 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
     ]);
     let mut engine = Engine::initialize(&root, config).unwrap();
     engine
-        .create_repository("first", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "first",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let path = root.join("index.sqlite");
     assert_projection(&path, engine.state());
@@ -791,9 +797,9 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
         &path,
         "CREATE TRIGGER fail_write BEFORE INSERT ON current_state BEGIN SELECT RAISE(ABORT,'injected projection failure');END;",
     );
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let error = engine
-        .create_repository("second", "P01", 1, "admin", &operation)
+        .create_repository("second", "P01", 1, "admin", operation)
         .unwrap_err();
     assert_eq!(
         error.code(),
@@ -821,7 +827,13 @@ fn startup_rebuilds_a_corrupt_disposable_database_from_durable_evidence() {
         let temp = tempfile::tempdir().unwrap();
         let mut engine = engine(&temp);
         engine
-            .create_repository("published", "P01", 1, "admin", &new_id("op"))
+            .create_repository(
+                "published",
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let root = engine.root.clone();
         let published = engine.state().clone();
@@ -957,7 +969,13 @@ fn runtime_linked_cache_falls_back_and_blocks_publication_without_touching_targe
             assert_eq!(engine.file_history("file").unwrap(), scan(&engine, "file"));
             assert!(!engine.history_query_proof.lock().unwrap().healthy);
             let error = engine
-                .create_repository("published", "P01", 1, "admin", &new_id("op"))
+                .create_repository(
+                    "published",
+                    "P01",
+                    1,
+                    "admin",
+                    storage_contract::OperationId::generate(),
+                )
                 .unwrap_err();
             assert_eq!(error.code(), storage_contract::ErrorCode::UnsafePath);
             assert!(engine.is_read_only());

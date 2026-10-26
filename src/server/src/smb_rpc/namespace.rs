@@ -6,15 +6,15 @@ use smb_protocol::protocol::NamespaceOperation;
 // record lifetime and workspace submission without holding a mutex across I/O.
 struct OperationReservation {
     shared: Arc<Shared>,
-    operation_id: String,
+    operation_id: OperationId,
 }
 impl OperationReservation {
-    fn acquire(shared: &Arc<Shared>, operation_id: &str) -> Result<Self, ApiError> {
+    fn acquire(shared: &Arc<Shared>, operation_id: OperationId) -> Result<Self, ApiError> {
         let mut operations = shared
             .namespace_operations
             .lock()
             .expect("service state lock poisoned");
-        if !operations.insert(operation_id.to_owned()) {
+        if !operations.insert(operation_id) {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::RecoveryRequired,
                 "namespace operation is already active; query it instead of replaying",
@@ -22,7 +22,7 @@ impl OperationReservation {
         }
         Ok(Self {
             shared: shared.clone(),
-            operation_id: operation_id.to_owned(),
+            operation_id,
         })
     }
 }
@@ -46,10 +46,8 @@ impl Session {
         path: String,
         destination: Option<String>,
         replace: bool,
-        operation_id: &str,
+        operation_id: OperationId,
     ) -> Result<Value, ApiError> {
-        // Validate before this client-provided identifier can reach a path.
-        storage_contract::validate_id(operation_id, "op").map_err(contract)?;
         let source_path = if kind == NamespaceOperation::Mkdir {
             name_policy::LookupPath::from(
                 name_policy::PortablePath::parse(&path)
@@ -77,10 +75,7 @@ impl Session {
         let _operation = OperationReservation::acquire(&self.shared, operation_id)?;
         // Namespace is not a replay API. An existing operation or recovery
         // record must be reconciled, not staged into a new workspace.
-        match self.call(
-            crate::BackendAction::Operation,
-            json!({"operation_id":operation_id}),
-        ) {
+        match self.shared.backend.operation(&self.identity, operation_id) {
             Ok(_) => {
                 return Err(ApiError::conflict(
                     storage_contract::ErrorCode::OperationIdConflict,
@@ -108,7 +103,7 @@ impl Session {
         }
         let _budget = self.shared.budget.reserve(
             &self.identity.principal,
-            &self.shared.spool.join(operation_id),
+            &self.shared.spool.join(operation_id.to_string()),
             0,
             0,
         )?;
@@ -123,11 +118,14 @@ impl Session {
         let result = (|| {
             let workspace = self.workspace()?;
             pending_workspace = Some(workspace.workspace_id.clone());
-            let commit = json!({
-                "workspace_id":workspace.workspace_id,"operation_id":operation_id,
-                "expected_head":workspace.base_head,"fencing_token":workspace.fencing_token.to_string(),
-                "message":"SMB namespace change"
-            });
+            let commit = crate::CommitWorkspace {
+                workspace_id: workspace.workspace_id.clone(),
+                operation_id,
+                expected_head: workspace.base_head.clone(),
+                fencing_token: workspace.fencing_token,
+                message: "SMB namespace change".into(),
+                request_digest: None,
+            };
             // Record intent before staging: if preparation and Abort both
             // fail, the workspace still has a recoverable association. A record
             // is not proof that staging or submission started; never replay it.
@@ -137,7 +135,11 @@ impl Session {
                     "format":"smb-protocol-namespace","principal":self.identity.principal,
                     "branch_id":self.branch,"kind":kind,"path":path,
                     "destination":destination,"replace":replace,"operation_id":operation_id,
-                    "publication_outcome":"unconfirmed","commit_request":commit
+                    "publication_outcome":"unconfirmed","commit_request":{
+                        "workspace_id":commit.workspace_id,"operation_id":commit.operation_id,
+                        "expected_head":commit.expected_head,"fencing_token":commit.fencing_token.to_string(),
+                        "message":commit.message
+                    }
                 }),
             )?;
             record_durable = true;
@@ -236,7 +238,10 @@ impl Session {
                 "workspace_id":workspace.workspace_id,"kind":core_kind,"path":path,"destination":destination
             }))?;
             submission_started = true;
-            self.call(crate::BackendAction::CommitWorkspaceInternal, commit)
+            self.shared
+                .backend
+                .commit_workspace(&self.identity, commit)
+                .and_then(crate::operation_wire::operation_wire)
         })();
         if result.is_ok() {
             cleanup_namespace_record(&record);
@@ -247,10 +252,10 @@ impl Session {
             ) {
                 Ok(_) if record_durable => cleanup_namespace_record(&record),
                 Ok(_) => {
-                    tracing::warn!(operation_id, workspace, path=%record.display(), "SMB namespace record durability failed; retaining available recovery evidence after abort")
+                    tracing::warn!(%operation_id, workspace, path=%record.display(), "SMB namespace record durability failed; retaining available recovery evidence after abort")
                 }
                 Err(error) => {
-                    tracing::warn!(operation_id, workspace, path=%record.display(), error = ?error, "SMB namespace preparation abort failed; recovery required")
+                    tracing::warn!(%operation_id, workspace, path=%record.display(), error = ?error, "SMB namespace preparation abort failed; recovery required")
                 }
             }
         }

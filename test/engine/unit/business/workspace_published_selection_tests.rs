@@ -9,7 +9,13 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     )
     .unwrap();
     let repo = engine
-        .create_repository("Published selections", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "Published selections",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     (temporary, engine, repo)
 }
@@ -22,7 +28,7 @@ fn save(engine: &mut Engine, branch: &str, bytes: &[u8]) -> Workspace {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id.clone(),
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -68,14 +74,19 @@ fn published_new_file_context_fences_same_version_branch_switch() {
                 &source.version_id,
                 "same version draft",
                 "admin",
-                &new_id("op"),
+                storage_contract::OperationId::generate(),
             )
             .unwrap()
             .branch_id
             .unwrap();
         let directory_generations = engine.state().directory_selection_generations.clone();
         engine
-            .select_file_branch(&source.file_id, &draft, "admin", &new_id("op"))
+            .select_file_branch(
+                &source.file_id,
+                &draft,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let selected = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
         assert_eq!(
@@ -127,13 +138,18 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
             &source.version_id,
             "first write",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap()
         .branch_id
         .unwrap();
     engine
-        .select_file_branch(&source.file_id, &draft, "admin", &new_id("op"))
+        .select_file_branch(
+            &source.file_id,
+            &draft,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let mut completed = first;
     for bytes in [b"one".as_slice(), b"two".as_slice()] {
@@ -168,14 +184,19 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
             &current.version_id,
             "round trip",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap()
         .branch_id
         .unwrap();
     for selected in [&alternative, &draft] {
         engine
-            .select_file_branch(&current.file_id, selected, "admin", &new_id("op"))
+            .select_file_branch(
+                &current.file_id,
+                selected,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
     }
     assert_eq!(
@@ -220,8 +241,8 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
             workspace_id: workspace.workspace_id.clone(),
             operation_id: body
                 .as_ref()
-                .map(|body| body["operation_id"].as_str().unwrap().to_owned())
-                .unwrap_or_else(|| new_id("op")),
+                .map(|body| body["operation_id"].as_str().unwrap().parse().unwrap())
+                .unwrap_or_else(storage_contract::OperationId::generate),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -288,13 +309,18 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
                 &source.version_id,
                 "later draft",
                 "admin",
-                &new_id("op"),
+                storage_contract::OperationId::generate(),
             )
             .unwrap()
             .branch_id
             .unwrap();
         engine
-            .select_file_branch(&source.file_id, &draft, "admin", &new_id("op"))
+            .select_file_branch(
+                &source.file_id,
+                &draft,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         assert_ne!(
             engine

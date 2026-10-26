@@ -34,6 +34,14 @@ class InactiveHttpSources(unittest.TestCase):
             for row in layout.corrections.receipt['files']:
                 cls.correction_evidence.add(row['path'])
                 cls.correction_evidence.update(ref['target'] for ref in row['references'])
+        # Keep the marked maintenance proof and its full live owner in the fixture.
+        cls.maintenance_evidence = set()
+        if layout.legacy_maintenance is not None:
+            from proof_maintenance import _inventory
+            adapter = layout.legacy_maintenance
+            cls.maintenance_evidence.add('compliance/proof-maintenance/' + adapter.sha + '.json.gz')
+            inventory, _ = _inventory(ROOT, adapter.row['after'])
+            cls.maintenance_evidence.update(inventory)
         with GATE.source_layout.activate(layout):
             cls.original_sources = {
                 relative: GATE.source_layout.read(ROOT, cls.historical + '/' + relative)
@@ -78,7 +86,8 @@ class InactiveHttpSources(unittest.TestCase):
         catalog = json.loads((ROOT / 'compliance/rust-sources.json').read_text())
         receipt = GATE.source_layout.receipt_path(catalog[GATE.source_layout.KEY])
         files = ['compliance/rust-sources.json', receipt, *self.frozen_evidence,
-                 *sorted(self.correction_evidence), *sorted(self.upgrade_evidence)]
+                 *sorted(self.correction_evidence), *sorted(self.upgrade_evidence),
+                 *sorted(self.maintenance_evidence)]
         owner = 'src/foundation/networking/http-routing'
         files += [owner + '/' + relative for relative in
                   (*GATE.INACTIVE_SOURCES, 'Cargo.toml', 'src/lib.rs', 'src/extract/mod.rs')]

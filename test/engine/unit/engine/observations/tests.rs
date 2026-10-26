@@ -72,7 +72,13 @@ fn accounting_snapshot_preserves_purge_and_duplicate_route_semantics() {
     ]);
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
-        .create_repository("Accounting", "P01", 3, "owner", &new_id("op"))
+        .create_repository(
+            "Accounting",
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "owner")
@@ -85,7 +91,7 @@ fn accounting_snapshot_preserves_purge_and_duplicate_route_semantics() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -139,7 +145,13 @@ fn observation_exposes_dangling_internal_placement() {
     )
     .unwrap();
     let repo = engine
-        .create_repository("Accounting", "P01", 3, "owner", &new_id("op"))
+        .create_repository(
+            "Accounting",
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "owner")
@@ -150,7 +162,7 @@ fn observation_exposes_dangling_internal_placement() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,

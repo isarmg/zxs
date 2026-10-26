@@ -8,7 +8,7 @@ fn commit(id: &str, parent: Option<&str>) -> Commit {
         parent_commit_ids: parent.into_iter().map(str::to_owned).collect(),
         tree_id: "tree".into(),
         sequence: 0,
-        operation_id: "operation".into(),
+        operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
         author: "author".into(),
         message: String::new(),
         entries: Vec::new(),

@@ -8,7 +8,7 @@ mod graph;
 mod manifest;
 mod state_read;
 pub use manifest::HistoryManifest;
-pub(crate) use state_read::RawState;
+pub(crate) use state_read::{AdmittedState, RawState};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -134,26 +134,8 @@ pub(crate) fn prepare_history_manifests_incremental(
                     "published history baseline identity differs",
                 ));
             }
-            for (kind, expected_hash, value) in graph {
-                let kind = match kind.as_str() {
-                    "state-page" => "state-page",
-                    "history-index" => "history-index",
-                    "history-manifest" => "history-manifest",
-                    _ => {
-                        return Err(Error::new(
-                            storage_contract::ErrorCode::ObjectCorrupt,
-                            "unexpected history dependency domain",
-                        ));
-                    }
-                };
-                let object = PreparedMetadataObject::new(kind, &value, maximum)?;
-                if object.hash != expected_hash {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::ObjectCorrupt,
-                        "history dependency identity changed",
-                    ));
-                }
-                objects.push(object);
+            for object in graph {
+                objects.push(object.into_prepared(maximum)?);
             }
             hashes.insert(id.clone(), hash.clone());
         }
@@ -161,31 +143,39 @@ pub(crate) fn prepare_history_manifests_incremental(
     Ok((hashes, objects))
 }
 
-type HistoryGraphObjects = Vec<(String, String, json_codec::Value)>;
+type HistoryGraphObjects = Vec<AuthenticatedMetadataObject>;
 
 /// Select every dependency independently from trusted replicas, without repair.
 fn bound_history_graph(
     members: &[DiskConfig],
     hash: &str,
 ) -> Result<(HistoryManifest, HistoryGraphObjects)> {
-    let root = crate::publication_evidence::verified_object(members, "history-manifest", hash)?;
-    let (manifest, objects) = graph::resolve_with_objects(root, |kind, hash| {
-        crate::publication_evidence::verified_object(members, kind, hash)
-    })?;
+    let (manifest, objects) = read_history_graph(members, hash)?;
     manifest.validate()?;
     Ok((manifest, objects))
 }
 
-/// Freeze exact candidate-bound history graphs before any recovery writes. Missing
-/// roots cannot be recreated from a flat projection or a different encoder.
-/// A supplied State has already passed snapshot admission; only project it here.
+fn read_history_graph(
+    members: &[DiskConfig],
+    hash: &str,
+) -> Result<(HistoryManifest, HistoryGraphObjects)> {
+    let root =
+        crate::publication_evidence::verified_graph_object(members, "history-manifest", hash)?;
+    graph::resolve_with_objects(root, |kind, hash| {
+        crate::publication_evidence::verified_graph_object(members, kind, hash)
+    })
+}
+
+/// Bind the exact authenticated graph to an admitted snapshot projection, or
+/// independently admit its semantics when replay has no snapshot projection.
 pub(crate) fn bound_history_objects(
     members: &[DiskConfig],
     candidate: &Candidate,
-    state: Option<&State>,
+    admitted: Option<&AdmittedState>,
 ) -> Result<HistoryGraphObjects> {
     let mut objects = Vec::new();
     let mut seen = BTreeSet::new();
+    let state = admitted.map(AdmittedState::state);
     if let Some(state) = state
         && candidate
             .history_manifest_hashes
@@ -198,27 +188,28 @@ pub(crate) fn bound_history_objects(
         ));
     }
     for (id, hash) in &candidate.history_manifest_hashes {
-        let expected = state
-            .map(|state| HistoryManifest::project_state(state, id))
-            .transpose()?;
-        let (manifest, graph) = bound_history_graph(members, hash)?;
-        let manifest_bytes = canonical_json(&manifest)?;
-        if manifest.history.history_tree_id != *id
-            || expected
-                .as_ref()
-                .map(canonical_json)
-                .transpose()?
-                .is_some_and(|expected| expected != manifest_bytes)
-        {
+        let (manifest, graph) = read_history_graph(members, hash)?;
+        if manifest.history.history_tree_id != *id {
             return Err(Error::new(
                 storage_contract::ErrorCode::ObjectCorrupt,
-                "bound history projection differs",
+                "bound history identity differs",
             ));
         }
-        for (kind, hash, value) in graph {
-            encode_metadata(&value, MAX_METADATA)?;
-            if seen.insert((kind.clone(), hash.clone())) {
-                objects.push((kind, hash, value));
+        match state {
+            Some(state) => {
+                let expected = HistoryManifest::project_state(state, id)?;
+                if canonical_json(&expected)? != canonical_json(&manifest)? {
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::ObjectCorrupt,
+                        "bound history projection differs",
+                    ));
+                }
+            }
+            None => manifest.validate()?,
+        }
+        for object in graph {
+            if seen.insert((object.kind(), object.hash().to_owned())) {
+                objects.push(object);
             }
         }
     }
@@ -231,12 +222,12 @@ pub(crate) fn repair_history_objects(
     repaired: &mut BTreeSet<(String, String)>,
 ) -> Result<()> {
     // Resolver output is dependency-first, including child indexes before parents.
-    for (kind, hash, value) in objects {
-        if !repaired.contains(&(kind.clone(), hash.clone())) {
-            crate::publication_evidence::repair_object_copies(members, kind, hash, value)?;
-            // Optimization only: overflow objects remain fully verified and repaired.
+    for object in objects {
+        let address = (object.kind().to_owned(), object.hash().to_owned());
+        if !repaired.contains(&address) {
+            crate::publication_evidence::repair_authenticated_object(members, object)?;
             if repaired.len() < 16_384 {
-                repaired.insert((kind.clone(), hash.clone()));
+                repaired.insert(address);
             }
         }
     }
@@ -266,24 +257,37 @@ fn package_object(package: &Path, kind: &str, hash: &str) -> Result<PathBuf> {
 }
 
 fn load_package(package: &Path) -> Result<(HistoryManifest, PackageProof, HistoryPackageReport)> {
-    let root: json_codec::Value = read_json(&package.join("manifest.json"))?;
-    let hash = object_hash("history-manifest", &root)?;
-    let manifest = graph::resolve(root, |kind, hash| {
-        read_json(&package_object(package, kind, hash)?)
+    let proof: PackageProof = read_json(&package.join("publication.json"))?;
+    let root = AuthenticatedMetadataObject::authenticate(
+        "history-manifest",
+        &proof.manifest_hash,
+        read_json(&package.join("manifest.json"))?,
+    )
+    .map_err(|error| {
+        error.context(
+            storage_contract::ErrorCode::HistoryPackageInvalid,
+            "manifest is not bound by the published candidate",
+        )
+    })?;
+    let hash = root.hash().to_owned();
+    let (manifest, _) = graph::resolve_with_objects(root, |kind, hash| {
+        AuthenticatedMetadataObject::authenticate(
+            kind,
+            hash,
+            read_json(&package_object(package, kind, hash)?)?,
+        )
     })?;
     manifest.validate()?;
-    let proof: PackageProof = read_json(&package.join("publication.json"))?;
     verify_publication_seal(
         &proof.candidate,
         &proof.publication,
         &proof.publication_seal,
     )?;
-    if proof.manifest_hash != hash
-        || proof
-            .candidate
-            .history_manifest_hashes
-            .get(&manifest.history.history_tree_id)
-            != Some(&hash)
+    if proof
+        .candidate
+        .history_manifest_hashes
+        .get(&manifest.history.history_tree_id)
+        != Some(&hash)
     {
         return Err(Error::new(
             storage_contract::ErrorCode::HistoryPackageInvalid,
@@ -437,13 +441,13 @@ impl Engine {
                 write_atomic(&dir.join("checksums.bin"), &checksums.encode()?, false)?;
                 sync_dir(&dir)?;
             }
-            for (kind, hash, value) in &graph_objects {
-                let path = if kind == "history-manifest" {
+            for object in &graph_objects {
+                let path = if object.kind() == "history-manifest" {
                     staging.join("manifest.json")
                 } else {
-                    package_object(&staging, kind, hash)?
+                    package_object(&staging, object.kind(), object.hash())?
                 };
-                write_json(&path, value, false)?;
+                write_atomic(&path, object.bytes(), false)?;
             }
             write_json(&staging.join("publication.json"), &proof, false)?;
             sync_dir(&staging)?;
@@ -479,7 +483,7 @@ impl Engine {
         primary: &str,
         copies: u32,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         self.require_write()?;
         let (manifest, proof, report) = load_package(package)?;

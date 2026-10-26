@@ -10,7 +10,7 @@ pub(super) fn wire(shared: Arc<Shared>) -> (FrameStream, JoinHandle<io::Result<(
     let mut stream = FrameStream::new(client).unwrap();
     stream
         .send(
-            &Request::Hello {
+            &Request::<String>::Hello {
                 protocol: PROTOCOL.into(),
                 capabilities: REQUIRED_CAPABILITIES
                     .iter()

@@ -16,6 +16,21 @@ use tokio::{
 
 struct BackendProbe;
 impl Backend for BackendProbe {
+    fn operation(
+        &self,
+        _: &crate::auth::Identity,
+        _: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        unreachable!("this test backend does not query operations")
+    }
+    fn commit_workspace(
+        &self,
+        _: &crate::auth::Identity,
+        _: crate::CommitWorkspace,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        unreachable!("this test backend does not commit workspaces")
+    }
+
     fn snapshot_at(
         &self,
         _: &crate::auth::Identity,
@@ -146,7 +161,7 @@ async fn shutdown_closes_idle_smb_and_http_listener_while_http_request_is_stalle
             let mut wire =
                 FrameStream::with_timeout(UnixStream::connect(socket).unwrap(), DEADLINE).unwrap();
             wire.send(
-                &Request::Hello {
+                &Request::<String>::Hello {
                     protocol: PROTOCOL.into(),
                     capabilities: REQUIRED_CAPABILITIES
                         .iter()

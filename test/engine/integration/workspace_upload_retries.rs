@@ -25,7 +25,13 @@ fn upload_retry_recovers_published_bytes_after_manifest_failure() {
         config.max_workspace_bytes = 4;
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
-            .create_repository("Retry uploads", "P01", 1, "admin", &new_id("op"))
+            .create_repository(
+                "Retry uploads",
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let workspace = engine
             .create_workspace(&repo.main_branch_id, "admin")
@@ -135,7 +141,13 @@ fn same_generation_retry_rejects_missing_or_corrupt_retained_bytes() {
             )
             .unwrap();
             let repo = engine
-                .create_repository("Retained upload", "P01", 1, "admin", &new_id("op"))
+                .create_repository(
+                    "Retained upload",
+                    "P01",
+                    1,
+                    "admin",
+                    storage_contract::OperationId::generate(),
+                )
                 .unwrap();
             let workspace = engine
                 .create_workspace(&repo.main_branch_id, "admin")
@@ -187,7 +199,13 @@ fn same_generation_retry_revalidates_held_target_before_acknowledging() {
         )
         .unwrap();
         let repo = engine
-            .create_repository("Retained upload", "P01", 1, "admin", &new_id("op"))
+            .create_repository(
+                "Retained upload",
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let workspace = engine
             .create_workspace(&repo.main_branch_id, "admin")
@@ -241,7 +259,13 @@ fn detached_upload_keeps_writer_locks_until_cancelled() {
         )
         .unwrap();
         let repo = engine
-            .create_repository("Detached upload", "P01", 1, "admin", &new_id("op"))
+            .create_repository(
+                "Detached upload",
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let workspace = engine
             .create_workspace(&repo.main_branch_id, "admin")
@@ -301,7 +325,13 @@ fn first_upload_revalidates_prepared_bytes_before_acknowledging() {
         let primary = temporary.path().join("primary");
         let mut engine = Engine::initialize(&root, Config::development([primary.clone()])).unwrap();
         let repo = engine
-            .create_repository("Prepared upload", "P01", 1, "admin", &new_id("op"))
+            .create_repository(
+                "Prepared upload",
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let workspace = engine
             .create_workspace(&repo.main_branch_id, "admin")
@@ -369,7 +399,13 @@ fn interrupted_copy_temporaries_consume_workspace_bytes_and_generation_slots() {
         config.max_entries = if count_limit { 1 } else { 8 };
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
-            .create_repository("Interrupted upload", "P01", 1, "admin", &new_id("op"))
+            .create_repository(
+                "Interrupted upload",
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let workspace = engine
             .create_workspace(&repo.main_branch_id, "admin")

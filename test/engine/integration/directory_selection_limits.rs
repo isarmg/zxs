@@ -1,7 +1,7 @@
 //! Directory selection admits the complete composed tree, not just its subtree.
 //! All namespace, publication, and restart checks use disposable storage pools.
 use std::path::PathBuf;
-use storage_engine::{CommitRequest, Config, Engine, NamespaceOperation, Repository, new_id};
+use storage_engine::{CommitRequest, Config, Engine, NamespaceOperation, Repository};
 
 struct Pool {
     _temporary: tempfile::TempDir,
@@ -22,7 +22,13 @@ impl Pool {
         config.max_entries = 4;
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
-            .create_repository("Directory quota", "P01", 3, "admin", &new_id("op"))
+            .create_repository(
+                "Directory quota",
+                "P01",
+                3,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         Self {
             _temporary: temporary,
@@ -38,7 +44,7 @@ impl Pool {
                 &self.repo.repository_id,
                 NamespaceOperation::parse(kind, path, None).unwrap(),
                 "admin",
-                &new_id("op"),
+                storage_contract::OperationId::generate(),
             )
             .unwrap();
     }
@@ -54,7 +60,7 @@ impl Pool {
         self.engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -66,7 +72,13 @@ impl Pool {
 
     fn register(&mut self, path: &str, name: &str) -> String {
         self.engine
-            .create_directory_branches(&self.repo.repository_id, path, name, "admin", &new_id("op"))
+            .create_directory_branches(
+                &self.repo.repository_id,
+                path,
+                name,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap()
             .result["directory_branch_id"]
             .as_str()
@@ -147,7 +159,7 @@ fn sibling_compositions() -> (Pool, String, String) {
 #[test]
 fn oversized_sibling_selection_preserves_state_journals_and_operation_id() {
     let (mut pool, _, _) = sibling_compositions();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let before = pool.state_bytes();
     let journals = pool.journals();
     assert_eq!(journals.len(), 3);
@@ -155,13 +167,7 @@ fn oversized_sibling_selection_preserves_state_journals_and_operation_id() {
     for _ in 0..2 {
         let error = pool
             .engine
-            .select_directory_branches(
-                &pool.repo.repository_id,
-                "left",
-                "full",
-                "admin",
-                &operation,
-            )
+            .select_directory_branches(&pool.repo.repository_id, "left", "full", "admin", operation)
             .unwrap_err();
         assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
         // Includes commits, branch heads, file contexts, directory selections,
@@ -169,10 +175,10 @@ fn oversized_sibling_selection_preserves_state_journals_and_operation_id() {
         assert_eq!(pool.state_bytes(), before);
         assert_eq!(pool.journals(), journals);
         assert_eq!(
-            pool.engine.operation(&operation).unwrap_err().code(),
+            pool.engine.operation(operation).unwrap_err().code(),
             storage_contract::ErrorCode::OperationNotFound
         );
-        assert_eq!(pool.engine.operation_owner(&operation).unwrap(), None);
+        assert_eq!(pool.engine.operation_owner(operation).unwrap(), None);
     }
 
     // The rejected operation did not reserve its key and can succeed once the
@@ -187,33 +193,21 @@ fn oversized_sibling_selection_preserves_state_journals_and_operation_id() {
     );
     let result = pool
         .engine
-        .select_directory_branches(
-            &pool.repo.repository_id,
-            "left",
-            "full",
-            "admin",
-            &operation,
-        )
+        .select_directory_branches(&pool.repo.repository_id, "left", "full", "admin", operation)
         .unwrap();
     assert_eq!(
         pool.paths(),
         ["left", "left/one.txt", "left/two.txt", "right"]
     );
     assert_eq!(
-        pool.engine.operation(&operation).unwrap().result,
+        pool.engine.operation(operation).unwrap().result,
         result.result
     );
     let after = pool.state_bytes();
     let journals = pool.journals();
     assert_eq!(
         pool.engine
-            .select_directory_branches(
-                &pool.repo.repository_id,
-                "left",
-                "full",
-                "admin",
-                &operation
-            )
+            .select_directory_branches(&pool.repo.repository_id, "left", "full", "admin", operation)
             .unwrap()
             .result,
         result.result
@@ -230,7 +224,7 @@ fn root_selection_replaces_the_tree_at_the_entry_limit_and_survives_restart() {
             &pool.repo.repository_id,
             &left_root,
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     assert_eq!(
@@ -243,7 +237,7 @@ fn root_selection_replaces_the_tree_at_the_entry_limit_and_survives_restart() {
             "",
             "right-full",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     assert_eq!(

@@ -27,7 +27,6 @@ actions! {
     Check => "check",
     Commit => "commit",
     CommitWorkspace => "commit_workspace",
-    CommitWorkspaceInternal => "commit_workspace_internal",
     Compare => "compare",
     CreateBranch => "create_branch",
     CreateRepository => "create_repository",

@@ -1,7 +1,7 @@
 //! Test-only persisted file fixture. No product upload/download CLI is required.
 //! The caller owns a fresh private TempDir; never accept a user pool path.
 use super::{Read, Result};
-use storage_engine::{CommitRequest, Engine, new_id};
+use storage_engine::{CommitRequest, Engine};
 
 const PRINCIPAL: &str = "smoke-admin";
 const FILE: &str = "browser-smoke.txt";
@@ -80,14 +80,19 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
     if !engine.state().repositories.is_empty() {
         return Err("browser fixture requires a fresh disposable pool with no repositories".into());
     }
-    let repository =
-        engine.create_repository("browser-fixtures", "P01", 3, PRINCIPAL, &new_id("op"))?;
+    let repository = engine.create_repository(
+        "browser-fixtures",
+        "P01",
+        3,
+        PRINCIPAL,
+        storage_engine::OperationId::generate(),
+    )?;
     for payload in PAYLOADS {
         let workspace = engine.create_workspace(&repository.main_branch_id, PRINCIPAL)?;
         engine.stage_bytes(&workspace.workspace_id, FILE, payload.as_bytes())?;
         engine.commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_engine::OperationId::generate(),
             principal: PRINCIPAL.into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,

@@ -71,7 +71,49 @@ fn upload_arguments(workspace: &str, item: &str, path: &str, source: &UploadSour
         "fd": source.file.as_raw_fd(), "size": source.size, "hash": source.hash})
 }
 
+fn recorded_operation(
+    operation_id: storage_contract::OperationId,
+    method: &str,
+) -> storage_contract::OperationResult {
+    storage_contract::OperationResult {
+        operation_id,
+        kind: method.into(),
+        commit_id: None,
+        history_tree_id: None,
+        branch_id: None,
+        commit_state: storage_contract::CommitState::Published,
+        protection_at_publish: storage_contract::ProtectionAtPublish::NotApplicable,
+        current_health: storage_contract::CurrentHealth::Healthy,
+        request_digest: "digest".into(),
+        sequence: 7,
+        result: json!({"returned_by":method}),
+    }
+}
+
 impl Backend for RecordingBackend {
+    fn operation(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.record(
+            "operation",
+            Some(identity),
+            json!({"operation_id":operation_id}),
+        )?;
+        Ok(recorded_operation(operation_id, "operation"))
+    }
+    fn commit_workspace(
+        &self,
+        identity: &Identity,
+        command: crate::CommitWorkspace,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.record("commit_workspace", Some(identity), json!({"operation_id":command.operation_id,
+            "workspace_id":command.workspace_id,"expected_head":command.expected_head,
+            "fencing_token":command.fencing_token,"message":command.message,"request_digest":command.request_digest}))?;
+        Ok(recorded_operation(command.operation_id, "commit_workspace"))
+    }
+
     fn snapshot_at(
         &self,
         identity: &Identity,
@@ -90,7 +132,7 @@ impl Backend for RecordingBackend {
             parent_commit_ids: vec![],
             tree_id: "tree".into(),
             sequence: 1,
-            operation_id: "operation".into(),
+            operation_id: storage_contract::OperationId::generate(),
             author: "author".into(),
             message: "snapshot fixture".into(),
             entries: vec![],
@@ -258,7 +300,34 @@ impl Fixture {
             assert_eq!(value.download_name.as_deref(), Some("sentinel.bin"));
             json!({"returned_by": value.hash})
         };
+        let operation_id = "op_00000000000000000000000000000000".parse().unwrap();
         vec![
+            (
+                "operation",
+                backend.operation(identity, operation_id).map(|result| {
+                    assert_eq!(result, recorded_operation(operation_id, "operation"));
+                    result.result
+                }),
+            ),
+            (
+                "commit_workspace",
+                backend
+                    .commit_workspace(
+                        identity,
+                        crate::CommitWorkspace {
+                            operation_id,
+                            workspace_id: "workspace".into(),
+                            expected_head: "head".into(),
+                            fencing_token: 41,
+                            message: "commit".into(),
+                            request_digest: Some("digest".into()),
+                        },
+                    )
+                    .map(|result| {
+                        assert_eq!(result, recorded_operation(operation_id, "commit_workspace"));
+                        result.result
+                    }),
+            ),
             (
                 "setup_operation",
                 backend.setup_operation(
@@ -375,6 +444,8 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
     let mut generation = upload.clone();
     generation["generation"] = 37.into();
     let arguments = [
+        json!({"operation_id":"op_00000000000000000000000000000000"}),
+        json!({"operation_id":"op_00000000000000000000000000000000", "workspace_id":"workspace", "expected_head":"head", "fencing_token":41, "message":"commit", "request_digest":"digest"}),
         json!({"action": "status", "input": {"probe": 3}, "bootstrap": "bootstrap-probe"}),
         Value::Null,
         json!({"branch":"branch","commit":"commit"}),

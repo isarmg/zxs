@@ -2160,7 +2160,7 @@ async fn historical_plan_publishes_atomically_and_management_rules_use_generatio
     )
     .await;
     let plan_id = plan["plan_id"].as_str().unwrap();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let body = json!({"plan_digest":plan["digest"],"operation_id":operation});
     let result = success(
         &app,
@@ -2239,7 +2239,11 @@ fn capture_wire(name: &str, wire: &Value) {
 fn seed_engine_authority(engine: &mut Engine, system: &Path) {
     let auth = AuthStore::initialize(system, "admin", "integration-test-password").unwrap();
     engine
-        .persist_auth_state(auth.snapshot().unwrap(), "system_auth", &new_id("op"))
+        .persist_auth_state(
+            auth.snapshot().unwrap(),
+            "system_auth",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
 }
 
@@ -2263,7 +2267,13 @@ fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavailable_s
     let mut engine = Engine::initialize(&system, config).unwrap();
     seed_engine_authority(&mut engine, &system);
     let repo = engine
-        .create_repository("Lost candidate", "P01", 3, "admin", &new_id("op"))
+        .create_repository(
+            "Lost candidate",
+            "P01",
+            3,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -2282,13 +2292,13 @@ fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavailable_s
             b"separately retained full payload",
         )
         .unwrap();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     engine.inject_fault_once("after_accept_2");
     assert!(
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: operation.clone(),
+                operation_id: operation,
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -2323,7 +2333,7 @@ fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavailable_s
     let mut engine = Engine::open_for_recovery(&system).unwrap();
     let plan = engine
         .prepare_degraded_recovery(
-            &operation,
+            operation,
             "admin",
             "All fixed copies and the independent staged source were permanently lost",
         )
@@ -2381,7 +2391,13 @@ fn damage_after_normal_publication_keeps_original_target_met_in_save_wire() {
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     seed_engine_authority(&mut engine, &root.path().join("system"));
     let repo = engine
-        .create_repository("Published evidence", "P01", 3, "admin", &new_id("op"))
+        .create_repository(
+            "Published evidence",
+            "P01",
+            3,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -2393,11 +2409,11 @@ fn damage_after_normal_publication_keeps_original_target_met_in_save_wire() {
             b"normal full protected publication",
         )
         .unwrap();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let saved = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: operation.clone(),
+            operation_id: operation,
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,

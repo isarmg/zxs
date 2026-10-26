@@ -11,7 +11,7 @@ pub(crate) fn advance_branch_node(
     node: &str,
     materialize: bool,
     principal: &str,
-    operation: &str,
+    operation: OperationId,
 ) -> Result<()> {
     let previous = state.branches.get(branch).cloned().ok_or_else(|| {
         Error::new(
@@ -66,7 +66,7 @@ pub(crate) fn advance_branch_node(
             parent_commit_ids: vec![current.commit_id.clone()],
             tree_id: new_id("tree"),
             sequence: state.sequence,
-            operation_id: operation.into(),
+            operation_id: operation,
             author: principal.into(),
             message: "Advance file metadata node".into(),
             entries,
@@ -124,7 +124,7 @@ struct Publication<'a> {
     version: &'a str,
     size: u64,
     principal: &'a str,
-    operation: &'a str,
+    operation: OperationId,
     maximum: usize,
     rewrites: BTreeMap<String, String>,
     visiting: BTreeSet<String>,
@@ -268,7 +268,7 @@ impl Publication<'_> {
                     parent_commit_ids: vec![previous.commit_id.clone()],
                     tree_id: new_id("tree"),
                     sequence: state.sequence,
-                    operation_id: self.operation.into(),
+                    operation_id: self.operation,
                     author: self.principal.into(),
                     message: "Publish exact file references".into(),
                     entries: full,
@@ -300,7 +300,7 @@ pub(crate) struct NodePublication<'a> {
     pub(crate) target_branch: &'a str,
     pub(crate) target_node: &'a str,
     pub(crate) principal: &'a str,
-    pub(crate) operation: &'a str,
+    pub(crate) operation: OperationId,
     pub(crate) maximum: usize,
 }
 
@@ -453,7 +453,7 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
                 parent_commit_ids: vec![previous.commit_id.clone()],
                 tree_id: new_id("tree"),
                 sequence: state.sequence,
-                operation_id: operation.into(),
+                operation_id: operation,
                 author: principal.into(),
                 message: "Publish current file references".into(),
                 entries,

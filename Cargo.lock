@@ -854,6 +854,7 @@ dependencies = [
  "sqlite-access",
  "storage-engine",
  "tempfile",
+ "tracing",
 ]
 
 [[package]]
@@ -1562,6 +1563,8 @@ dependencies = [
 name = "tracing"
 version = "0.1.44"
 dependencies = [
+ "data-serialization",
+ "json-codec",
  "log",
  "nu-ansi-term",
  "once_cell",

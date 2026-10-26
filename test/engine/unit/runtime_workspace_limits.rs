@@ -195,7 +195,7 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
     engine
         .commit_workspace(CommitRequest {
             workspace_id: third.workspace_id.clone(),
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "writer".into(),
             expected_head: third.base_head,
             fencing_token: third.fencing_token,
@@ -233,7 +233,7 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
     }
     let engine = Engine::open_for_recovery_with_workspace_limits(&f.root, Some(raised)).unwrap();
     assert_eq!(engine.workspace_capacity("admin"), report);
-    assert_eq!(engine.operation(&first.operation_id).unwrap(), first);
+    assert_eq!(engine.operation(first.operation_id).unwrap(), first);
     drop(engine);
     let before = files(f.temp.path());
     let restored = f.temp.path().join("restored");
@@ -292,7 +292,7 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
             .as_str(),
         "committed"
     );
-    assert_eq!(engine.operation(&first.operation_id).unwrap(), first);
+    assert_eq!(engine.operation(first.operation_id).unwrap(), first);
     assert_eq!(
         fs::read(restored.join("config.json")).unwrap(),
         config_bytes

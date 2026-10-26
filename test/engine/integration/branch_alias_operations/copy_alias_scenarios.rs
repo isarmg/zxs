@@ -7,18 +7,13 @@ fn copied_file_branch_root_records_the_copy_actor_and_operation() {
     let source = pool.register("", "source");
     let target = pool.register("", "target");
     let untouched = pool.branch(&source);
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let request = DirectoryNamespaceBatch {
         kind: "copy".into(),
         items: vec![pool.mapping(&source, "source.txt", &target, "copy.txt")],
     };
     pool.engine
-        .directory_namespace_batch(
-            &pool.repo.repository_id,
-            &request,
-            "copy-author",
-            &operation,
-        )
+        .directory_namespace_batch(&pool.repo.repository_id, &request, "copy-author", operation)
         .unwrap();
     let copied = pool.entry(&target, "copy.txt");
     let branch = pool.branch(&target).file_contexts[copied.lookup_key()]
@@ -50,7 +45,7 @@ fn renamed_targets(pool: &mut Pool) -> (String, String) {
             )
             .unwrap(),
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let after = pool.register("", "after rename");
@@ -82,10 +77,10 @@ fn copied_file_aliases_keep_each_frozen_parent_and_destination_spelling() {
             kind: "copy".into(),
             items,
         };
-        let operation = new_id("op");
+        let operation = storage_contract::OperationId::generate();
         let receipt = pool
             .engine
-            .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", &operation)
+            .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", operation)
             .unwrap();
         let left = pool.entry(&before, "folder/Copied.txt");
         let right = pool.entry(&after, "renamed/copied.txt");
@@ -120,7 +115,7 @@ fn copied_file_aliases_keep_each_frozen_parent_and_destination_spelling() {
         let state = storage_engine::canonical_json(pool.engine.state()).unwrap();
         assert_eq!(
             pool.engine
-                .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", &operation)
+                .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", operation)
                 .unwrap()
                 .result,
             receipt.result
@@ -228,7 +223,12 @@ fn copied_alias_destination_collision_rejects_all_targets_without_mutation() {
     let state = storage_engine::canonical_json(pool.engine.state()).unwrap();
     assert_eq!(
         pool.engine
-            .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", &new_id("op"))
+            .directory_namespace_batch(
+                &pool.repo.repository_id,
+                &request,
+                "admin",
+                storage_contract::OperationId::generate()
+            )
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::NameCollision

@@ -68,7 +68,7 @@ impl Engine {
                 }
                 Err(_) => continue,
             };
-            if body["operation_id"].as_str() == Some(request.operation_id.as_str())
+            if body["operation_id"].as_str() == Some(request.operation_id.to_string().as_str())
                 && body["workspace_id"].as_str() == Some(workspace.workspace_id.as_str())
                 && body["branch_id"].as_str() == Some(workspace.branch_id.as_str())
                 && body["expected_head"].as_str() == Some(request.expected_head.as_str())

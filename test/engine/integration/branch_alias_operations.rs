@@ -32,7 +32,13 @@ impl Pool {
         ]);
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
-            .create_repository("Alias fixtures", "P01", 3, "admin", &new_id("op"))
+            .create_repository(
+                "Alias fixtures",
+                "P01",
+                3,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         Self {
             _temporary: temporary,
@@ -55,7 +61,7 @@ impl Pool {
         self.engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -66,7 +72,13 @@ impl Pool {
     }
     fn register(&mut self, path: &str, name: &str) -> String {
         self.engine
-            .create_directory_branches(&self.repo.repository_id, path, name, "admin", &new_id("op"))
+            .create_directory_branches(
+                &self.repo.repository_id,
+                path,
+                name,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap()
             .result["directory_branch_id"]
             .as_str()
@@ -75,7 +87,13 @@ impl Pool {
     }
     fn select(&mut self, path: &str, name: &str) {
         self.engine
-            .select_directory_branches(&self.repo.repository_id, path, name, "admin", &new_id("op"))
+            .select_directory_branches(
+                &self.repo.repository_id,
+                path,
+                name,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
     }
     fn branch(&self, id: &str) -> DirectoryBranch {
@@ -126,7 +144,7 @@ impl Pool {
                     items,
                 },
                 "admin",
-                &new_id("op"),
+                storage_contract::OperationId::generate(),
             )
             .unwrap()
     }
@@ -331,7 +349,7 @@ fn selected_aliases(p: &mut Pool) -> (String, String, Entry) {
             &original.version_id,
             "explicit draft",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap()
         .result["branch_id"]
@@ -345,7 +363,7 @@ fn selected_aliases(p: &mut Pool) -> (String, String, Entry) {
             &original.file_id,
             &draft,
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     (n, l, original)
@@ -370,10 +388,10 @@ fn archive_respects_each_selected_alias_and_preserves_closed_branch_head() {
         a.branch_id
     );
     let before = p.engine.state().branches[&b.branch_id].clone();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     assert_eq!(
         p.engine
-            .archive_branch(&b.branch_id, "admin", &operation)
+            .archive_branch(&b.branch_id, "admin", operation)
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::FileBranchSelected
@@ -395,11 +413,15 @@ fn archive_respects_each_selected_alias_and_preserves_closed_branch_head() {
             &original.file_id,
             &a.branch_id,
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     p.engine
-        .archive_branch(&b.branch_id, "admin", &new_id("op"))
+        .archive_branch(
+            &b.branch_id,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     p.save("b/report.txt", b"new active branch content");
     assert_eq!(
@@ -577,7 +599,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
         .iter()
         .map(|(id, branch)| (id.clone(), branch.head_tree_id.clone()))
         .collect::<std::collections::BTreeMap<_, _>>();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let renamed = p
         .engine
         .rename_file_branch(
@@ -585,7 +607,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
             &branch.branch_id,
             "客户主稿",
             "admin",
-            &operation,
+            operation,
         )
         .unwrap();
     assert_eq!(renamed.result["previous_name"], branch.name);
@@ -597,7 +619,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
                 &branch.branch_id,
                 "客户主稿",
                 "admin",
-                &operation
+                operation
             )
             .unwrap()
             .result,
@@ -626,7 +648,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
                     &branch.branch_id,
                     &invalid,
                     "admin",
-                    &new_id("op")
+                    storage_contract::OperationId::generate()
                 )
                 .is_err()
         );
@@ -638,7 +660,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
             &branch.branch_id,
             "EXPLICIT DRAFT",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap_err();
     assert_eq!(collision.code(), storage_contract::ErrorCode::NameCollision);
@@ -649,7 +671,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
             &branch.branch_id,
             "Missing actor",
             "",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap_err();
     assert_eq!(denied.code(), storage_contract::ErrorCode::Unauthenticated);
@@ -660,7 +682,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
             &branch.branch_id,
             "Wrong file",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap_err();
     assert_eq!(
@@ -675,7 +697,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
             &branch.branch_id,
             &boundary,
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     assert_eq!(p.engine.state().directory_trees.len(), trees);
@@ -722,7 +744,7 @@ fn workspace_conflicting_alias_names_reject_the_complete_namespace_decision() {
         .engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id.clone(),
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -1051,7 +1073,7 @@ fn exact_no_op_rename_of_stale_alias_preserves_physical_name() {
             )
             .unwrap(),
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     assert_eq!(

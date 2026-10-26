@@ -1,0 +1,12 @@
+{
+  "verified_utc": "2026-10-26T04:49:12.028866+00:00",
+  "baseline_recovery_source_equals_remote_base_after_removing_only_observation_event": true,
+  "observation_event_identical_in_both_variants": true,
+  "observation_event_sha256": "3709d3bfb4879ba540a434b437032ed01f5901016584b2db8d4bc9fbb5049348",
+  "baseline_overlay_files": [
+    "Cargo.lock",
+    "src/engine/src/engine/recovery.rs",
+    "tools/perf-check/Cargo.toml",
+    "tools/perf-check/src/bin/recovery-startup.rs"
+  ]
+}

@@ -20,6 +20,21 @@ const DEADLINE: Duration = Duration::from_secs(10);
 #[derive(Default)]
 struct Probe(AtomicUsize);
 impl Backend for Probe {
+    fn operation(
+        &self,
+        _: &crate::auth::Identity,
+        _: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        unreachable!("this test backend does not query operations")
+    }
+    fn commit_workspace(
+        &self,
+        _: &crate::auth::Identity,
+        _: crate::CommitWorkspace,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        unreachable!("this test backend does not commit workspaces")
+    }
+
     fn snapshot_at(
         &self,
         _: &crate::auth::Identity,

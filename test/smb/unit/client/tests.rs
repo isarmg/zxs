@@ -67,7 +67,7 @@ fn namespace_transport_failure_retains_identity_and_disconnects_every_clone() {
         let Request::Namespace { operation_id, .. } = &request else {
             unreachable!()
         };
-        let expected = operation_id.clone();
+        let expected = *operation_id;
         let (one, two) = UnixStream::pair().unwrap();
         let (done, disconnected) = std::sync::mpsc::channel();
         let server = std::thread::spawn(move || {
@@ -103,7 +103,10 @@ fn namespace_transport_failure_retains_identity_and_disconnects_every_clone() {
             .get_ref()
             .and_then(|error| error.downcast_ref::<RemoteError>())
             .expect("transport failure lost the caller's operation identity");
-        assert_eq!(remote.operation_id.as_deref(), Some(expected.as_str()));
+        assert_eq!(
+            remote.operation_id.as_deref(),
+            Some(expected.to_string().as_str())
+        );
         assert_eq!(remote.code, RemoteErrorCode::RpcOutcomeUnknown);
         assert!(!remote.retryable);
         assert_eq!(

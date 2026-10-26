@@ -91,3 +91,24 @@ fn oversized_keys_and_bulk_mutation_have_bounded_tracking() {
     }
     assert_eq!(next.changes_since(&before), MapChanges::All);
 }
+
+#[test]
+fn operation_map_insert_tracks_change_without_string_keys() {
+    let id = crate::OperationId::generate();
+    let before = Tracked::new(BTreeMap::from([(id, "owner".to_owned())]));
+    let mut next = before.clone();
+    next.begin_tracking();
+    assert!(next.changes_since(&before).is_empty());
+    assert_eq!(
+        next.insert(id, "replacement".to_owned()),
+        Some("owner".to_owned())
+    );
+    assert!(matches!(next.changes_since(&before), MapChanges::All));
+    assert_eq!(before.get(&id).unwrap(), "owner");
+    assert_eq!(next.get(&id).unwrap(), "replacement");
+    let expected = BTreeMap::from([(id.to_string(), "replacement")]);
+    assert_eq!(
+        crate::canonical_json(&next).unwrap(),
+        crate::canonical_json(&expected).unwrap()
+    );
+}

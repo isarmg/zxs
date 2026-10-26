@@ -1,5 +1,5 @@
 use super::*;
-use storage_engine::{CommitRequest, Config, FileNodeTagsUpdateRequest, FileTagTarget, new_id};
+use storage_engine::{CommitRequest, Config, FileNodeTagsUpdateRequest, FileTagTarget};
 
 fn save(
     engine: &mut Engine,
@@ -15,7 +15,7 @@ fn save(
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -65,7 +65,7 @@ fn file_history_matches_preprojection_graph_json() {
     )
     .unwrap();
     let repo = engine
-        .create_disk_root("P01", "owner", &new_id("op"))
+        .create_disk_root("P01", "owner", storage_contract::OperationId::generate())
         .unwrap();
     // Both sequence-tied initial commits carry the same message, so random
     // commit IDs cannot make the graph fixture nondeterministic.
@@ -92,7 +92,7 @@ fn file_history_matches_preprojection_graph_json() {
             remove: &[],
             location: None,
             principal: "owner",
-            operation_id: &new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
         })
         .unwrap()
         .result["nodes"][0]["node_id"]
@@ -109,7 +109,7 @@ fn file_history_matches_preprojection_graph_json() {
             )
             .unwrap(),
             "owner",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let renamed = engine
@@ -200,7 +200,7 @@ fn display_order_retains_full_typed_sequences_and_id_ties() {
     )
     .unwrap();
     let repo = engine
-        .create_disk_root("P01", "owner", &new_id("op"))
+        .create_disk_root("P01", "owner", storage_contract::OperationId::generate())
         .unwrap();
     let first = save(
         &mut engine,

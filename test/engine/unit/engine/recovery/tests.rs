@@ -13,16 +13,22 @@ fn recovery_rejects_lost_published_journals_before_rewriting_projection() {
             )
             .unwrap();
             engine
-                .create_repository("first", "P01", 1, "admin", &new_id("op"))
+                .create_repository(
+                    "first",
+                    "P01",
+                    1,
+                    "admin",
+                    storage_contract::OperationId::generate(),
+                )
                 .unwrap();
             let members = engine.members();
             let prefix: Vec<_> = members
                 .iter()
                 .map(|disk| std::fs::read(log_path(disk)).unwrap())
                 .collect();
-            let operation = new_id("op");
+            let operation = storage_contract::OperationId::generate();
             engine
-                .create_repository("second", "P01", 1, "admin", &operation)
+                .create_repository("second", "P01", 1, "admin", operation)
                 .unwrap();
             let complete: Vec<_> = members
                 .iter()
@@ -67,7 +73,7 @@ fn recovery_rejects_lost_published_journals_before_rewriting_projection() {
             }
             let reopened = Engine::open(&root).unwrap();
             assert_eq!(reopened.state.repositories.len(), 2);
-            assert!(reopened.operation(&operation).is_ok());
+            assert!(reopened.operation(operation).is_ok());
         }
     }
 }
@@ -83,7 +89,13 @@ fn recovery_allows_new_empty_pools_and_unpublished_preparation_artifacts() {
             engine.inject_fault_once(fault);
             assert!(
                 engine
-                    .create_repository("unpublished", "P01", 1, "admin", &new_id("op"))
+                    .create_repository(
+                        "unpublished",
+                        "P01",
+                        1,
+                        "admin",
+                        storage_contract::OperationId::generate()
+                    )
                     .is_err()
             );
             assert!(
@@ -96,7 +108,13 @@ fn recovery_allows_new_empty_pools_and_unpublished_preparation_artifacts() {
         let mut reopened = Engine::open(&root).unwrap();
         assert!(reopened.state.repositories.is_empty());
         reopened
-            .create_repository("published", "P01", 1, "admin", &new_id("op"))
+            .create_repository(
+                "published",
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
     }
 }
@@ -110,9 +128,9 @@ fn recovery_rejects_dangling_journal_paths_instead_of_an_empty_history() {
         let root = temp.path().join("system");
         let mut engine =
             Engine::initialize(&root, Config::development([temp.path().join("primary")])).unwrap();
-        let operation = new_id("op");
+        let operation = storage_contract::OperationId::generate();
         engine
-            .create_repository("repo", "P01", 1, "admin", &operation)
+            .create_repository("repo", "P01", 1, "admin", operation)
             .unwrap();
         let journal = log_path(&engine.members()[0]);
         let journal_bytes = std::fs::read(&journal).unwrap();
@@ -140,7 +158,7 @@ fn recovery_rejects_dangling_journal_paths_instead_of_an_empty_history() {
         assert_eq!(std::fs::read(&journal).unwrap(), journal_bytes);
         let reopened = Engine::open(&root).unwrap();
         assert_eq!(reopened.state.repositories.len(), 1);
-        assert!(reopened.operation(&operation).is_ok());
+        assert!(reopened.operation(operation).is_ok());
     }
 }
 
@@ -160,7 +178,13 @@ fn recovery_repairs_exact_candidate_and_publication_replicas() {
                 if interrupted {
                     engine.inject_fault_once("after_publication_3");
                 }
-                let result = engine.create_repository("repo", "P01", 3, "admin", &new_id("op"));
+                let result = engine.create_repository(
+                    "repo",
+                    "P01",
+                    3,
+                    "admin",
+                    storage_contract::OperationId::generate(),
+                );
                 assert_eq!(result.is_err(), interrupted);
                 let members = engine.members();
                 let record = scan(&members[0])
@@ -209,10 +233,10 @@ fn pending_candidate_recovers_from_healthy_exact_replica() {
             ]);
             let mut engine = Engine::initialize(&root, config).unwrap();
             engine.inject_fault_once(fault);
-            let operation = new_id("op");
+            let operation = storage_contract::OperationId::generate();
             assert!(
                 engine
-                    .create_repository("repo", "P01", 3, "admin", &operation)
+                    .create_repository("repo", "P01", 3, "admin", operation)
                     .is_err()
             );
             let members = engine.members();
@@ -233,7 +257,7 @@ fn pending_candidate_recovers_from_healthy_exact_replica() {
             }
             let recovered = Engine::open(&root).unwrap();
             assert_eq!(
-                recovered.operation(&operation).unwrap().commit_state,
+                recovered.operation(operation).unwrap().commit_state,
                 storage_contract::CommitState::Published
             );
             assert_eq!(recovered.state.repositories.len(), 1);
@@ -256,7 +280,13 @@ fn recovery_rejects_all_digest_mismatched_object_replicas_without_rewriting_them
         ]);
         let mut engine = Engine::initialize(&root, config).unwrap();
         engine
-            .create_repository("repo", "P01", 3, "admin", &new_id("op"))
+            .create_repository(
+                "repo",
+                "P01",
+                3,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let members = engine.members();
         let record = scan(&members[0])
@@ -274,7 +304,7 @@ fn recovery_rejects_all_digest_mismatched_object_replicas_without_rewriting_them
         let mut wrong: json_codec::Value =
             read_json(&object_path(&members[0], kind, &hash)).unwrap();
         if kind == "candidate" {
-            wrong["operation_id"] = json_codec::json!(new_id("op"));
+            wrong["operation_id"] = json_codec::json!(storage_contract::OperationId::generate());
         } else {
             wrong["candidate_hash"] = json_codec::json!("0".repeat(64));
         }
@@ -312,7 +342,13 @@ fn recovery_rejects_flat_objects_without_repair_or_deletion() {
     ]);
     let mut engine = Engine::initialize(&root, config).unwrap();
     engine
-        .create_repository("repo", "P01", 3, "admin", &new_id("op"))
+        .create_repository(
+            "repo",
+            "P01",
+            3,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let members = engine.members();
     let record = scan(&members[0])
@@ -382,7 +418,13 @@ fn bound_snapshot_repair_preserves_alternate_page_partition() {
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let members = engine.members();
     let repository = engine
-        .create_repository("partition fixture", "P01", 3, "admin", &new_id("op"))
+        .create_repository(
+            "partition fixture",
+            "P01",
+            3,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let mut state = engine.state.as_ref().clone();
     let template = state.branches[&repository.main_branch_id].clone();
@@ -508,7 +550,13 @@ fn shared_pages_are_repaired_once_per_recovery_and_rechecked_next_time() {
     ]);
     let mut engine = Engine::initialize(&root, config).unwrap();
     engine
-        .create_repository("files", "P01", 3, "admin", &new_id("op"))
+        .create_repository(
+            "files",
+            "P01",
+            3,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let branch = engine
         .state
@@ -529,7 +577,7 @@ fn shared_pages_are_repaired_once_per_recovery_and_rechecked_next_time() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -539,7 +587,13 @@ fn shared_pages_are_repaired_once_per_recovery_and_rechecked_next_time() {
         .unwrap();
     for n in 0..6 {
         engine
-            .create_repository(&format!("repo{n}"), "P01", 3, "admin", &new_id("op"))
+            .create_repository(
+                &format!("repo{n}"),
+                "P01",
+                3,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
     }
     let members = engine.members();
@@ -603,7 +657,13 @@ fn single_storage_disk_publishes_reopens_rebuilds_index_and_restores_system() {
     let config = Config::development([disk.clone()]);
     let mut engine = Engine::initialize(&root, config).unwrap();
     let repo = engine
-        .create_repository("single", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "single",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -614,7 +674,7 @@ fn single_storage_disk_publishes_reopens_rebuilds_index_and_restores_system() {
     let result = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -668,7 +728,13 @@ fn configured_metadata_majority_does_not_shrink_when_disks_disappear() {
             .collect();
         let mut engine = Engine::initialize(&root, Config::development(disks.clone())).unwrap();
         engine
-            .create_repository("majority", "P01", 1, "admin", &new_id("op"))
+            .create_repository(
+                "majority",
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         drop(engine);
         for disk in disks.iter().rev().take(lost) {
@@ -704,7 +770,13 @@ fn publication_proofs_require_exact_nonempty_unique_membership() {
         let mut engine =
             Engine::initialize(&temp.path().join("system"), Config::development(disks)).unwrap();
         engine
-            .create_repository("proof", "P01", 1, "admin", &new_id("op"))
+            .create_repository(
+                "proof",
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let member = &engine.members()[0];
         let record = scan(member)
@@ -744,18 +816,18 @@ fn single_storage_disk_completes_pending_accept_but_never_invents_lost_metadata(
     let root = temp.path().join("system");
     let mut engine =
         Engine::initialize(&root, Config::development([temp.path().join("disk")])).unwrap();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     engine.inject_fault_once("after_accept_1");
     assert!(
         engine
-            .create_repository("pending", "P01", 1, "admin", &operation)
+            .create_repository("pending", "P01", 1, "admin", operation)
             .is_err()
     );
     let member = engine.members().remove(0);
     drop(engine);
     let engine = Engine::open(&root).unwrap();
     assert_eq!(
-        engine.operation(&operation).unwrap().commit_state,
+        engine.operation(operation).unwrap().commit_state,
         storage_contract::CommitState::Published
     );
     let record = scan(&member)
@@ -783,7 +855,13 @@ fn self_consistent_one_member_seal_cannot_downgrade_configured_three_members() {
     reduced.disks[0].root = temp.path().join("forged-disk");
     let mut forged = Engine::initialize(&temp.path().join("forged-system"), reduced).unwrap();
     forged
-        .create_repository("forged", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "forged",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let member = forged.members().remove(0);
     let record = scan(&member)
@@ -833,7 +911,13 @@ fn nonmetadata_payload_disk_offline_proofs_require_saved_membership() {
     let payload_disk = config.disks[3].clone();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repo = engine
-        .create_repository("offline", "P01", 4, "admin", &new_id("op"))
+        .create_repository(
+            "offline",
+            "P01",
+            4,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let mut old = None;
     for content in [b"old", b"new"] {
@@ -846,7 +930,7 @@ fn nonmetadata_payload_disk_offline_proofs_require_saved_membership() {
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -883,7 +967,11 @@ fn nonmetadata_payload_disk_offline_proofs_require_saved_membership() {
         .create_purge_plan(&repo.history_tree_id, vec![old], "admin")
         .unwrap();
     engine
-        .commit_plan(&plan.plan_id, "admin", &new_id("op"))
+        .commit_plan(
+            &plan.plan_id,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     verify_tombstone(&directory, &version).unwrap();
     std::fs::remove_file(&anchor).unwrap();
@@ -899,7 +987,13 @@ fn empty_unmounted_root_is_unavailable_without_writes() {
         let config = Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}"))));
         let mut engine = Engine::initialize(&root, config.clone()).unwrap();
         let repo = engine
-            .create_repository("majority", "P01", 1, "admin", &new_id("op"))
+            .create_repository(
+                "majority",
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         drop(engine);
         for disk in config.disks.iter().rev().take(lost) {
@@ -977,7 +1071,13 @@ fn missing_payload_only_replica_preserves_history_but_not_new_copy_admission() {
             config.disks[3].metadata_member = false;
             let mut engine = Engine::initialize(&root, config.clone()).unwrap();
             let repo = engine
-                .create_repository("history", "P01", 4, "admin", &new_id("op"))
+                .create_repository(
+                    "history",
+                    "P01",
+                    4,
+                    "admin",
+                    storage_contract::OperationId::generate(),
+                )
                 .unwrap();
             let mut versions = Vec::new();
             for content in [b"old", b"new"] {
@@ -990,7 +1090,7 @@ fn missing_payload_only_replica_preserves_history_but_not_new_copy_admission() {
                 engine
                     .commit_workspace(CommitRequest {
                         workspace_id: workspace.workspace_id.clone(),
-                        operation_id: new_id("op"),
+                        operation_id: storage_contract::OperationId::generate(),
                         principal: "admin".into(),
                         expected_head: workspace.base_head,
                         fencing_token: workspace.fencing_token,
@@ -1052,7 +1152,7 @@ fn missing_payload_only_replica_preserves_history_but_not_new_copy_admission() {
                 let error = engine
                     .commit_workspace(CommitRequest {
                         workspace_id: workspace.workspace_id.clone(),
-                        operation_id: new_id("op"),
+                        operation_id: storage_contract::OperationId::generate(),
                         principal: "admin".into(),
                         expected_head: workspace.base_head,
                         fencing_token: workspace.fencing_token,
@@ -1143,7 +1243,13 @@ fn transient_seal_read_failure_requires_reopening_missing_journal_admission() {
     let config = Config::development((0..3).map(|i| temp.path().join(format!("disk-{i}"))));
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     engine
-        .create_repository("published", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "published",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     drop(engine);
     let mut engine =
@@ -1157,7 +1263,11 @@ fn transient_seal_read_failure_requires_reopening_missing_journal_admission() {
     assert!(engine.is_read_only());
     assert_eq!(
         engine
-            .prepare_degraded_recovery(&new_id("op"), "admin", "retry after transient I/O")
+            .prepare_degraded_recovery(
+                storage_contract::OperationId::generate(),
+                "admin",
+                "retry after transient I/O"
+            )
             .unwrap_err()
             .code(),
         ErrorCode::RecoveryRequired
@@ -1175,7 +1285,13 @@ fn preservation_mode_keeps_partially_written_publication_bytes() {
     let config = Config::development((0..3).map(|i| temp.path().join(format!("disk-{i}"))));
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     engine
-        .create_repository("published", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "published",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     drop(engine);
     let path = log_path(&config.disks[0]);

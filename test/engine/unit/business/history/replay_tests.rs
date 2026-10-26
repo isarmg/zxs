@@ -9,14 +9,20 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
     )
     .unwrap();
     let repo = engine
-        .create_repository("Branch replay", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "Branch replay",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let source = engine.state().histories[&repo.history_tree_id]
         .root_commit_id
         .clone();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let original = engine
-        .create_branch(&source, "side", "admin", &operation)
+        .create_branch(&source, "side", "admin", operation)
         .unwrap();
     let workspace = engine
         .create_workspace(&original.branch_id, "admin")
@@ -27,7 +33,7 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -36,7 +42,11 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
         })
         .unwrap();
     engine
-        .archive_branch(&original.branch_id, "admin", &new_id("op"))
+        .archive_branch(
+            &original.branch_id,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     assert_ne!(engine.state().branches[&original.branch_id], original);
     for reopened in [false, true] {
@@ -47,14 +57,14 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
         let before = canonical_json(engine.state()).unwrap();
         assert_eq!(
             engine
-                .create_branch(&source, "side", "admin", &operation)
+                .create_branch(&source, "side", "admin", operation)
                 .unwrap(),
             original
         );
         for (name, principal) in [("different", "admin"), ("side", "other")] {
             assert_eq!(
                 engine
-                    .create_branch(&source, name, principal, &operation)
+                    .create_branch(&source, name, principal, operation)
                     .unwrap_err()
                     .code(),
                 storage_contract::ErrorCode::IdempotencyKeyReused
@@ -78,7 +88,13 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
         )
         .unwrap();
         let repo = engine
-            .create_repository("Replay", "P01", 3, "admin", &new_id("op"))
+            .create_repository(
+                "Replay",
+                "P01",
+                3,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let root_commit = engine.state().histories[&repo.history_tree_id]
             .root_commit_id
@@ -92,7 +108,7 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
         let cut = engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -107,10 +123,10 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
                 if crossing { &root_commit } else { &cut },
                 "side",
                 "admin",
-                &new_id("op"),
+                storage_contract::OperationId::generate(),
             )
             .unwrap();
-        let operation = new_id("op");
+        let operation = storage_contract::OperationId::generate();
         let original = engine
             .add_merge_link(
                 &side.branch_id,
@@ -118,14 +134,18 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
                 &repo.main_branch_id,
                 &cut,
                 "admin",
-                &operation,
+                operation,
             )
             .unwrap();
         let plan = engine
             .create_split_plan(&repo.history_tree_id, &cut, "admin")
             .unwrap();
         engine
-            .commit_plan(&plan.plan_id, "admin", &new_id("op"))
+            .commit_plan(
+                &plan.plan_id,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         assert!(
             !engine
@@ -146,7 +166,7 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
                     &repo.main_branch_id,
                     &cut,
                     "admin",
-                    &operation,
+                    operation,
                 )
                 .unwrap();
             assert_eq!(
@@ -162,7 +182,7 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
                             &repo.main_branch_id,
                             target,
                             actor,
-                            &operation,
+                            operation,
                         )
                         .unwrap_err()
                         .code(),

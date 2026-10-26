@@ -66,11 +66,31 @@ pub struct RestoreRequest {
     pub accept_stale_credentials: bool,
 }
 
-#[derive(Deserialize)]
-#[serialization(deny_unknown_fields)]
 pub struct RecoveryPreviewRequest {
-    pub operation_id: String,
+    pub operation_id: storage_contract::OperationId,
     pub reason: String,
+}
+
+impl RecoveryPreviewRequest {
+    pub(crate) fn parse(input: json_codec::Value) -> Result<Self, ApiError> {
+        #[derive(Deserialize)]
+        #[serialization(deny_unknown_fields)]
+        struct Raw {
+            operation_id: String,
+            reason: String,
+        }
+        let raw: Raw = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+        if raw.operation_id.is_empty() {
+            return Err(ApiError::invalid("operation_id must be a nonempty string"));
+        }
+        Ok(Self {
+            operation_id: raw
+                .operation_id
+                .parse::<storage_contract::OperationId>()
+                .map_err(|source| engine_error(source.into()))?,
+            reason: raw.reason,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -849,7 +869,7 @@ impl SetupRecovery {
         // this new recovery action only after the engine and its locks exist.
         revalidate(identity)?;
         engine
-            .prepare_degraded_recovery(&request.operation_id, &identity.principal, &request.reason)
+            .prepare_degraded_recovery(request.operation_id, &identity.principal, &request.reason)
             .map_err(engine_error)
     }
 

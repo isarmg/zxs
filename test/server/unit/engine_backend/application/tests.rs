@@ -17,7 +17,13 @@ fn fixture() -> (
     ]);
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
-        .create_repository("Application", "P01", 3, "owner", &new_id("op"))
+        .create_repository(
+            "Application",
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let identity = crate::engine_backend::install_test_administrator(&mut engine, "owner");
     (root, engine, repo, identity)
@@ -81,7 +87,7 @@ fn protection_commands_validate_wire_types_and_unknown_fields() {
 fn protection_commands_preserve_core_replay_and_transport_contract() {
     for is_policy in [true, false] {
         let (_root, mut engine, repo, owner) = fixture();
-        let operation = new_id("op");
+        let operation = storage_contract::OperationId::generate();
         let id = new_id(if is_policy { "policy" } else { "rule" });
         let (action, input, original) = if is_policy {
             let original = engine
@@ -92,7 +98,7 @@ fn protection_commands_preserve_core_replay_and_transport_contract() {
                     target_copies: 3,
                     expected_generation: 0,
                     principal: &owner.principal,
-                    operation_id: &operation,
+                    operation_id: operation,
                 })
                 .unwrap();
             (
@@ -110,7 +116,7 @@ fn protection_commands_preserve_core_replay_and_transport_contract() {
                     primary_slot_id: "P01",
                     expected_generation: 0,
                     principal: &owner.principal,
-                    operation_id: &operation,
+                    operation_id: operation,
                 })
                 .unwrap();
             (
@@ -266,7 +272,7 @@ fn workspace_ownership_and_session_admission_apply_to_typed_and_wire_paths() {
     };
     let result = Application::new(&mut engine, &intruder).commit_workspace(CommitWorkspace {
         workspace_id: workspace.workspace_id.clone(),
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         expected_head: workspace.base_head.clone(),
         fencing_token: workspace.fencing_token,
         message: String::new(),
@@ -336,7 +342,13 @@ fn public_commit_decode_rejects_unknown_missing_and_numeric_decimal_fields() {
 fn typed_branch_rejects_cross_repository_source() {
     let (_root, mut engine, repo, owner) = fixture();
     let other = engine
-        .create_repository("Other", "P01", 3, &owner.principal, &new_id("op"))
+        .create_repository(
+            "Other",
+            "P01",
+            3,
+            &owner.principal,
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let source = engine.state().branches[&other.main_branch_id]
         .head_commit_id
@@ -445,7 +457,12 @@ fn merge_link_retry_replays_original_scope_after_split_and_restart() {
         .root_commit_id
         .clone();
     let side = engine
-        .create_branch(&root_commit, "side", &owner.principal, &new_id("op"))
+        .create_branch(
+            &root_commit,
+            "side",
+            &owner.principal,
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, &owner.principal)
@@ -456,7 +473,7 @@ fn merge_link_retry_replays_original_scope_after_split_and_restart() {
     let cut = engine
         .commit_workspace(storage_engine::CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: owner.principal.clone(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -481,7 +498,11 @@ fn merge_link_retry_replays_original_scope_after_split_and_restart() {
         .create_split_plan(&repo.history_tree_id, &cut, &owner.principal)
         .unwrap();
     let split = engine
-        .commit_plan(&plan.plan_id, &owner.principal, &new_id("op"))
+        .commit_plan(
+            &plan.plan_id,
+            &owner.principal,
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     for reopened in [false, true] {
         if reopened {
@@ -599,20 +620,27 @@ fn commit_preparation_releases_engine_and_rechecks_completed_revocation() {
             engine
                 .stage_bytes(&workspace.workspace_id, "file.txt", b"commit bytes")
                 .unwrap();
-            let operation = new_id("op");
+            let operation = storage_contract::OperationId::generate();
+            let command = CommitWorkspace {
+                workspace_id: workspace.workspace_id.clone(),
+                operation_id: operation,
+                expected_head: workspace.base_head.clone(),
+                fencing_token: workspace.fencing_token,
+                message: "commit".into(),
+                request_digest: None,
+            };
             let input = if public {
                 let mut input = engine
                     .seal_workspace(&workspace.workspace_id, &owner.principal)
                     .unwrap();
-                input["operation_id"] = operation.clone().into();
+                input["operation_id"] = operation.to_string().into();
                 input["request_digest"] =
                     storage_engine::commit_request_digest(&workspace.workspace_id, &input)
                         .unwrap()
                         .into();
                 input
             } else {
-                json!({"workspace_id":workspace.workspace_id,"operation_id":operation,
-                        "expected_head":workspace.base_head,"fencing_token":workspace.fencing_token.to_string(),"message":"commit"})
+                json_codec::Value::Null
             };
             let backend = Arc::new(EngineBackend::new(engine));
             let auth = crate::auth::AuthStore::initialize(
@@ -641,15 +669,13 @@ fn commit_preparation_releases_engine_and_rechecks_completed_revocation() {
                 } else {
                     auth.logout(&token).unwrap();
                 }
-                let result = backend.call(
-                    if public {
-                        crate::BackendAction::CommitWorkspace
-                    } else {
-                        crate::BackendAction::CommitWorkspaceInternal
-                    },
-                    &owner,
-                    input,
-                );
+                let result = if public {
+                    backend
+                        .call(crate::BackendAction::CommitWorkspace, &owner, input)
+                        .map(|_| ())
+                } else {
+                    backend.commit_workspace(&owner, command).map(|_| ())
+                };
                 assert_eq!(
                     result.unwrap_err().code,
                     storage_contract::ErrorCode::Unauthorized
@@ -669,15 +695,15 @@ fn commit_preparation_releases_engine_and_rechecks_completed_revocation() {
             let writer_backend = backend.clone();
             let writer_owner = owner.clone();
             let writer = std::thread::spawn(move || {
-                writer_backend.call(
-                    if public {
-                        crate::BackendAction::CommitWorkspace
-                    } else {
-                        crate::BackendAction::CommitWorkspaceInternal
-                    },
-                    &writer_owner,
-                    input,
-                )
+                if public {
+                    writer_backend
+                        .call(crate::BackendAction::CommitWorkspace, &writer_owner, input)
+                        .map(|_| ())
+                } else {
+                    writer_backend
+                        .commit_workspace(&writer_owner, command)
+                        .map(|_| ())
+                }
             });
             started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
             let reader_backend = backend.clone();
@@ -792,7 +818,7 @@ fn namespace_wire_carries_lookup_spelling_and_creation_spelling_into_commit() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: identity.principal,
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,

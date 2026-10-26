@@ -15,7 +15,13 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     )
     .unwrap();
     let repository = engine
-        .create_repository("replica recovery", "P01", 3, "admin", &new_id("op"))
+        .create_repository(
+            "replica recovery",
+            "P01",
+            3,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     (temp, engine, repository)
 }
@@ -28,7 +34,7 @@ fn save(engine: &mut Engine, branch: &str, content: &[u8]) -> String {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -62,7 +68,7 @@ fn snapshot_recovers_disjoint_page_replicas_without_read_repair() {
             .all(|member| load_snapshot(member, &hash).is_err())
     );
     let state = verified_snapshot(&members, &hash).unwrap();
-    assert_eq!(canonical_json(&state).unwrap(), expected);
+    assert_eq!(canonical_json(state.state()).unwrap(), expected);
     assert!(missing.iter().all(|(path, _)| !path.exists()));
     drop(engine);
     let recovered = Engine::open(&root).unwrap();
@@ -88,7 +94,11 @@ fn purged_state_reopens_with_one_damaged_and_one_offline_metadata_member() {
             .create_purge_plan(&repository.history_tree_id, vec![old.clone()], "admin")
             .unwrap();
         engine
-            .commit_plan(&purge.plan_id, "admin", &new_id("op"))
+            .commit_plan(
+                &purge.plan_id,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let root = engine.root.clone();
         let members = engine.members();
@@ -148,7 +158,11 @@ fn migrated_content_does_not_consume_live_payload_budget() {
         .create_split_plan(&repository.history_tree_id, &cut, "admin")
         .unwrap();
     let result = engine
-        .commit_plan(&split.plan_id, "admin", &new_id("op"))
+        .commit_plan(
+            &split.plan_id,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     assert_eq!(
         engine.state.content_states[&original],

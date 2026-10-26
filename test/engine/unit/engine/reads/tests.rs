@@ -10,7 +10,13 @@ fn fixture() -> (tempfile::TempDir, Engine, Workspace) {
     ]);
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
-        .create_repository("reads", "P01", 3, "admin", &new_id("op"))
+        .create_repository(
+            "reads",
+            "P01",
+            3,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -27,7 +33,7 @@ fn verified_replica_holds_checked_inode_and_rewinds_before_returning() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -129,7 +135,7 @@ fn partial_write_from_published_replica_keeps_verified_untouched_bytes() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -153,7 +159,7 @@ fn copy_build_rejects_replacement_after_replica_verification_before_candidate_mu
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -201,7 +207,7 @@ fn read_leases_release_once_across_plan_moves_and_engine_drop() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -296,7 +302,7 @@ fn accounting_exposes_dangling_internal_placement() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -316,7 +322,7 @@ fn commit_fixture() -> (tempfile::TempDir, Engine, FileVersion) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -435,7 +441,7 @@ fn prepare_rejects_source_growth_after_planning_without_installing_payload() {
         .plan_workspace_commit_inner(
             CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,

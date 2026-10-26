@@ -1,5 +1,5 @@
 //! A workspace acts on the stable entries it opened, not later namesakes.
-use storage_engine::{CommitRequest, Config, Engine, NamespaceOperation, new_id};
+use storage_engine::{CommitRequest, Config, Engine, NamespaceOperation};
 
 #[test]
 fn stale_namespace_operations_preserve_recreated_same_name_directories() {
@@ -13,7 +13,13 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
         ]);
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
-            .create_repository("Namespace preconditions", "P01", 3, "admin", &new_id("op"))
+            .create_repository(
+                "Namespace preconditions",
+                "P01",
+                3,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let change = |kind: &str| {
             NamespaceOperation::parse(
@@ -24,7 +30,12 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
             .unwrap()
         };
         engine
-            .file_namespace(&repo.repository_id, change("mkdir"), "admin", &new_id("op"))
+            .file_namespace(
+                &repo.repository_id,
+                change("mkdir"),
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let original = engine.list_tree(&repo.main_branch_id).unwrap()[0].clone();
         let workspace = engine
@@ -38,11 +49,16 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
                 &repo.repository_id,
                 change("delete"),
                 "admin",
-                &new_id("op"),
+                storage_contract::OperationId::generate(),
             )
             .unwrap();
         engine
-            .file_namespace(&repo.repository_id, change("mkdir"), "admin", &new_id("op"))
+            .file_namespace(
+                &repo.repository_id,
+                change("mkdir"),
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let replacement = engine.list_tree(&repo.main_branch_id).unwrap()[0].clone();
         assert_ne!(original.entry_id, replacement.entry_id);
@@ -52,7 +68,7 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
         let error = engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id.clone(),
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -93,7 +109,13 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
     )
     .unwrap();
     let repo = engine
-        .create_repository("Canonical queries", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "Canonical queries",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let change = |kind: &str, path: &str, destination: Option<&str>| {
         NamespaceOperation::parse(
@@ -108,7 +130,7 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
             &repo.repository_id,
             change("mkdir", "Café/Å", None),
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let original = engine.list_tree(&repo.main_branch_id).unwrap();
@@ -131,7 +153,7 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
             &repo.repository_id,
             change("rename", "Cafe\u{301}/A\u{30a}", Some("Café/가")),
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let moved = engine.list_tree(&repo.main_branch_id).unwrap();
@@ -147,7 +169,7 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
             &repo.repository_id,
             change("delete", "Cafe\u{301}/\u{1100}\u{1161}", None),
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let remaining = engine.list_tree(&repo.main_branch_id).unwrap();
@@ -169,7 +191,13 @@ fn canonical_equivalent_workspace_source_survives_reopen_before_commit() {
     )
     .unwrap();
     let repo = engine
-        .create_repository("Persisted query", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "Persisted query",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let initial = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -180,7 +208,7 @@ fn canonical_equivalent_workspace_source_survives_reopen_before_commit() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: initial.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: initial.base_head,
             fencing_token: initial.fencing_token,
@@ -213,7 +241,7 @@ fn canonical_equivalent_workspace_source_survives_reopen_before_commit() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,

@@ -16,7 +16,7 @@ pub struct BackupConfigurationRequest<'a> {
     pub backup_prefixes: &'a BTreeMap<String, String>,
     pub expected_generation: u64,
     pub principal: &'a str,
-    pub operation_id: &'a str,
+    pub operation_id: OperationId,
 }
 
 /// Backup placement with an additional stable file/directory identity fence.
@@ -29,7 +29,7 @@ pub struct ScopedBackupConfigurationRequest<'a> {
     pub backup_prefixes: &'a BTreeMap<String, String>,
     pub expected_generation: u64,
     pub principal: &'a str,
-    pub operation_id: &'a str,
+    pub operation_id: OperationId,
 }
 
 fn namespace<'a>(state: &'a State, repository: &str) -> Result<&'a Commit> {

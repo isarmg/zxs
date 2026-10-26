@@ -6,6 +6,36 @@ use crate::{
 use crate::{encode_hashed_object, object_hash};
 use json_codec::json;
 
+type ResolvedGraph = (HistoryManifest, Vec<(String, String, Value)>);
+
+fn resolve_with_objects(
+    root: Value,
+    mut load: impl FnMut(&str, &str) -> Result<Value>,
+) -> Result<ResolvedGraph> {
+    let hash = object_hash("history-manifest", &root)?;
+    let root = AuthenticatedMetadataObject::authenticate("history-manifest", &hash, root)?;
+    let (manifest, objects) = super::resolve_with_objects(root, |kind, hash| {
+        AuthenticatedMetadataObject::authenticate(kind, hash, load(kind, hash)?)
+    })?;
+    Ok((
+        manifest,
+        objects
+            .into_iter()
+            .map(|object| {
+                (
+                    object.kind().to_owned(),
+                    object.hash().to_owned(),
+                    object.value().clone(),
+                )
+            })
+            .collect(),
+    ))
+}
+
+fn resolve(root: Value, load: impl FnMut(&str, &str) -> Result<Value>) -> Result<HistoryManifest> {
+    resolve_with_objects(root, load).map(|(manifest, _)| manifest)
+}
+
 fn manifest() -> HistoryManifest {
     let mut value = json!({
         "repository": {
@@ -515,12 +545,12 @@ fn changing_one_entity_reuses_unrelated_radix_pages() {
 // Fixed codec fixture, independent of random IDs and wall-clock time. It need
 // not be a semantically valid history: this pins the logical/graph wire format.
 #[test]
-fn shared_manifest_projection_preserves_pre_change_golden() {
+fn shared_manifest_projection_preserves_canonical_golden() {
     let mut logical = json_codec::to_value(manifest()).unwrap();
     logical["commits"] = json!({"commit": {
         "commit_id": "commit", "history_tree_id": "history", "kind": "save",
         "parent_commit_ids": [], "tree_id": "tree", "sequence": "18446744073709551615",
-        "operation_id": "operation", "author": "作者", "message": "quotes: \" / 📁",
+        "operation_id": "op_00000000000000000000000000000000", "author": "作者", "message": "quotes: \" / 📁",
         "entries": [], "pending_file_versions": {"file": "version"},
         "namespace_deletions": {"timestamp": "9007199254740993", "paths": []},
         "provenance": null

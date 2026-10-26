@@ -25,7 +25,7 @@ const PROTECTION_STATES: &[&str] = &[
 ];
 
 fn frozen_operation(commit: &str, protection: &str) -> Vec<u8> {
-    format!(r#"{{"branch_id":null,"commit_id":null,"commit_state":"{commit}","current_health":"HEALTHY","history_tree_id":null,"kind":"workspace.commit","operation_id":"operation_fixture","protection_at_publish":"{protection}","request_digest":"fixture","result":{{}},"sequence":"18446744073709551615"}}"#).into_bytes()
+    format!(r#"{{"branch_id":null,"commit_id":null,"commit_state":"{commit}","current_health":"HEALTHY","history_tree_id":null,"kind":"workspace.commit","operation_id":"op_00000000000000000000000000000000","protection_at_publish":"{protection}","request_digest":"fixture","result":{{}},"sequence":"18446744073709551615"}}"#).into_bytes()
 }
 
 #[test]

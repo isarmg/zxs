@@ -14,7 +14,7 @@ pub struct PlacementRuleUpdate<'a> {
     pub primary_slot_id: &'a str,
     pub expected_generation: u64,
     pub principal: &'a str,
-    pub operation_id: &'a str,
+    pub operation_id: OperationId,
 }
 
 /// A conditional protection update for future immutable versions.
@@ -26,7 +26,7 @@ pub struct ProtectionPolicyUpdate<'a> {
     pub target_copies: u32,
     pub expected_generation: u64,
     pub principal: &'a str,
-    pub operation_id: &'a str,
+    pub operation_id: OperationId,
 }
 
 fn applies(prefix: &str, path: &str) -> bool {

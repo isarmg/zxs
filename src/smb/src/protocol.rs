@@ -49,7 +49,7 @@ pub fn effective_uid() -> u32 {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Request {
+pub enum Request<O = String> {
     Hello {
         protocol: String,
         capabilities: Vec<String>,
@@ -107,12 +107,71 @@ pub enum Request {
         restart: bool,
     },
     Namespace {
-        operation_id: String,
+        operation_id: O,
         kind: NamespaceOperation,
         path: String,
         destination: Option<String>,
         replace: bool,
     },
+}
+
+impl Request<String> {
+    pub fn parse_operation_id(
+        self,
+    ) -> storage_contract::Result<Request<storage_contract::OperationId>> {
+        Ok(match self {
+            Self::Hello {
+                protocol,
+                capabilities,
+                username,
+                repository_id,
+            } => Request::Hello {
+                protocol,
+                capabilities,
+                username,
+                repository_id,
+            },
+            Self::Open {
+                path,
+                writable,
+                create,
+                truncate,
+                exclusive,
+                write_through,
+            } => Request::Open {
+                path,
+                writable,
+                create,
+                truncate,
+                exclusive,
+                write_through,
+            },
+            Self::PrepareWrite { handle, end, bytes } => {
+                Request::PrepareWrite { handle, end, bytes }
+            }
+            Self::Dirty { handle } => Request::Dirty { handle },
+            Self::AuthorizeRead { handle } => Request::AuthorizeRead { handle },
+            Self::Flush { handle } => Request::Flush { handle },
+            Self::Close { handle } => Request::Close { handle },
+            Self::Detach { handle } => Request::Detach { handle },
+            Self::Abort { handle } => Request::Abort { handle },
+            Self::Stat { path } => Request::Stat { path },
+            Self::ReadDirectory { handle, restart } => Request::ReadDirectory { handle, restart },
+            Self::Namespace {
+                operation_id,
+                kind,
+                path,
+                destination,
+                replace,
+            } => Request::Namespace {
+                operation_id: operation_id.parse()?,
+                kind,
+                path,
+                destination,
+                replace,
+            },
+        })
+    }
 }
 
 /// Namespace operations admitted by the bridge protocol.
@@ -150,9 +209,9 @@ pub fn namespace_request(
     path: String,
     destination: Option<String>,
     replace: bool,
-) -> Request {
+) -> Request<storage_contract::OperationId> {
     Request::Namespace {
-        operation_id: storage_contract::new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         kind,
         path,
         destination,
@@ -162,7 +221,10 @@ pub fn namespace_request(
 
 /// Preserve unlinkat's target-kind contract across the RPC boundary.
 /// Unknown flags are rejected before a request can mutate the namespace.
-pub fn remove_request(path: String, flags: i32) -> io::Result<Request> {
+pub fn remove_request(
+    path: String,
+    flags: i32,
+) -> io::Result<Request<storage_contract::OperationId>> {
     if flags & !libc::AT_REMOVEDIR != 0 {
         return Err(io::Error::from_raw_os_error(libc::EINVAL));
     }

@@ -1,11 +1,11 @@
 use super::*;
-fn fixture(point: &str) -> (tempfile::TempDir, Engine, String, Candidate) {
+fn fixture(point: &str) -> (tempfile::TempDir, Engine, OperationId, Candidate) {
     fixture_with_history(point, 0)
 }
 fn fixture_with_history(
     point: &str,
     retained: usize,
-) -> (tempfile::TempDir, Engine, String, Candidate) {
+) -> (tempfile::TempDir, Engine, OperationId, Candidate) {
     let temp = tempfile::tempdir().unwrap();
     let config = Config::development([
         temp.path().join("p"),
@@ -14,7 +14,13 @@ fn fixture_with_history(
     ]);
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
-        .create_repository("恢复测试", "P01", 3, "alice", &new_id("op"))
+        .create_repository(
+            "恢复测试",
+            "P01",
+            3,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     if retained > 0 {
         let mut next = engine.state().clone();
@@ -30,10 +36,9 @@ fn fixture_with_history(
             next.commits.insert(commit.commit_id.clone(), commit);
         }
         let mut result = next.operations.values().next().unwrap().clone();
-        result.operation_id = new_id("op");
+        result.operation_id = storage_contract::OperationId::generate();
         result.sequence = next.sequence;
-        next.operations
-            .insert(result.operation_id.clone(), result.clone());
+        next.operations.insert(result.operation_id, result.clone());
         engine.persist(next, Vec::new(), result).unwrap();
     }
     let workspace = engine
@@ -53,13 +58,13 @@ fn fixture_with_history(
             b"retained full bytes",
         )
         .unwrap();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     engine.inject_fault_once(point);
     assert!(
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: operation.clone(),
+                operation_id: operation,
                 principal: "alice".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -121,7 +126,7 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
     assert!(engine.is_read_only());
     let plan = engine
         .prepare_degraded_recovery(
-            &operation,
+            operation,
             "alice",
             "all registered copies and staged source were permanently lost",
         )
@@ -234,7 +239,7 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
     assert!(engine.open_content(&lost.version.version_id).is_err());
     drop(engine);
     let engine = Engine::open(&temp.path().join("state")).unwrap();
-    let replay = engine.operation(&operation).unwrap();
+    let replay = engine.operation(operation).unwrap();
     assert_eq!(
         replay.commit_state,
         storage_contract::CommitState::PublishedDegraded
@@ -260,7 +265,7 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
         crate::journal::SNAPSHOT_LOAD_COUNT.with(|count| count.get()),
         1
     );
-    let replay = engine.operation(&operation).unwrap();
+    let replay = engine.operation(operation).unwrap();
     assert_eq!(
         replay.commit_state,
         storage_contract::CommitState::PublishedDegraded
@@ -292,7 +297,7 @@ fn degraded_recovery_uses_verified_snapshot_replica_and_repairs_missing_page() {
         let root = temp.path().join("state");
         let mut engine = Engine::open_for_recovery(&root).unwrap();
         let plan = engine
-            .prepare_degraded_recovery(&operation, "alice", "permanent loss")
+            .prepare_degraded_recovery(operation, "alice", "permanent loss")
             .unwrap();
         let result = engine
             .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", true)
@@ -306,7 +311,7 @@ fn degraded_recovery_uses_verified_snapshot_replica_and_repairs_missing_page() {
         drop(engine);
         let engine = Engine::open(&root).unwrap();
         assert_eq!(
-            engine.operation(&operation).unwrap().commit_state,
+            engine.operation(operation).unwrap().commit_state,
             storage_contract::CommitState::PublishedDegraded
         );
     }
@@ -322,13 +327,11 @@ fn degraded_recovery_verifies_and_repairs_exact_history_graph_before_reprotect()
             let members = engine.members();
             let objects =
                 crate::history_package::bound_history_objects(&members, &candidate, None).unwrap();
-            let (_, hash, value) = objects
-                .iter()
-                .find(|(domain, _, _)| domain == kind)
-                .unwrap();
-            let expected = canonical_json(value).unwrap();
+            let object = objects.iter().find(|object| object.kind() == kind).unwrap();
+            let hash = object.hash();
+            let expected = object.bytes();
             let plan = engine
-                .prepare_degraded_recovery(&operation, "alice", "permanent loss")
+                .prepare_degraded_recovery(operation, "alice", "permanent loss")
                 .unwrap();
             let logs = members
                 .iter()
@@ -363,7 +366,7 @@ fn degraded_recovery_rejects_unverifiable_snapshot_before_reprotect() {
     let (_temp, mut engine, operation, candidate) = fixture("after_accept_2");
     lose(&engine, &candidate, true);
     let plan = engine
-        .prepare_degraded_recovery(&operation, "alice", "permanent loss")
+        .prepare_degraded_recovery(operation, "alice", "permanent loss")
         .unwrap();
     let members = engine.members();
     let snapshot: Snapshot =
@@ -397,7 +400,7 @@ fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
         let root = temp.path().join("state");
         let mut engine = Engine::open_for_recovery(&root).unwrap();
         let plan = engine
-            .prepare_degraded_recovery(&operation, "alice", "permanent loss")
+            .prepare_degraded_recovery(operation, "alice", "permanent loss")
             .unwrap();
         let obstruction = if fail_index {
             let path = root.join("index.sqlite");
@@ -421,12 +424,18 @@ fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
             "failed reconciliation must retain the write fence"
         );
         assert_eq!(
-            engine.operation(&operation).unwrap().commit_state,
+            engine.operation(operation).unwrap().commit_state,
             storage_contract::CommitState::PublishedDegraded
         );
         assert_eq!(
             engine
-                .create_repository("must-not-write", "P01", 3, "alice", &new_id("op"))
+                .create_repository(
+                    "must-not-write",
+                    "P01",
+                    3,
+                    "alice",
+                    storage_contract::OperationId::generate()
+                )
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::RecoveryRequired
@@ -443,7 +452,7 @@ fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
         assert!(!engine.is_read_only());
         assert_eq!(*engine.state, expected);
         assert_eq!(
-            engine.operation(&operation).unwrap().commit_state,
+            engine.operation(operation).unwrap().commit_state,
             storage_contract::CommitState::PublishedDegraded
         );
     }
@@ -457,7 +466,7 @@ fn insufficient_accepts_or_repairable_bytes_never_authorize_degraded_publication
     let mut engine = Engine::open_for_recovery(&temp.path().join("state")).unwrap();
     assert_eq!(
         engine
-            .prepare_degraded_recovery(&operation, "alice", "loss")
+            .prepare_degraded_recovery(operation, "alice", "loss")
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::RecoveryRequired
@@ -468,7 +477,7 @@ fn insufficient_accepts_or_repairable_bytes_never_authorize_degraded_publication
     let mut engine = Engine::open_for_recovery(&temp.path().join("state")).unwrap();
     assert_eq!(
         engine
-            .prepare_degraded_recovery(&operation, "alice", "one copy lost")
+            .prepare_degraded_recovery(operation, "alice", "one copy lost")
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::RecoveryRequired
@@ -480,7 +489,7 @@ fn original_normal_publication_is_preserved_when_content_was_lost_later() {
     lose(&engine, &candidate, true);
     drop(engine);
     let mut engine = Engine::open_for_recovery(&temp.path().join("state")).unwrap();
-    let result = engine.operation(&operation).unwrap();
+    let result = engine.operation(operation).unwrap();
     assert_eq!(
         result.commit_state,
         storage_contract::CommitState::Published
@@ -492,7 +501,7 @@ fn original_normal_publication_is_preserved_when_content_was_lost_later() {
     assert_eq!(result.current_health.as_str(), "UNAVAILABLE");
     assert_eq!(
         engine
-            .prepare_degraded_recovery(&operation, "alice", "later loss")
+            .prepare_degraded_recovery(operation, "alice", "later loss")
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::RecoveryRequired
@@ -511,7 +520,7 @@ fn degraded_recovery_resumes_the_same_plan_after_each_durable_boundary() {
         let root = temp.path().join("state");
         let mut engine = Engine::open_for_recovery(&root).unwrap();
         let plan = engine
-            .prepare_degraded_recovery(&operation, "alice", "permanent loss")
+            .prepare_degraded_recovery(operation, "alice", "permanent loss")
             .unwrap();
         engine.inject_fault_once(point);
         assert!(
@@ -552,7 +561,7 @@ fn incomplete_log_cannot_prove_absence_and_unknown_record_types_are_rejected() {
     let mut engine = Engine::open_for_recovery(&temp.path().join("state")).unwrap();
     assert_eq!(
         engine
-            .prepare_degraded_recovery(&operation, "alice", "loss")
+            .prepare_degraded_recovery(operation, "alice", "loss")
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::RecoveryRequired
@@ -607,10 +616,10 @@ fn prepare_only_failure_reserves_its_slot_and_is_not_an_indeterminate_operation(
     let (temp, mut engine, operation, _candidate) = fixture("after_prepare_1");
     assert!(!engine.is_read_only());
     assert_eq!(
-        engine.operation(&operation).unwrap_err().code(),
+        engine.operation(operation).unwrap_err().code(),
         storage_contract::ErrorCode::OperationNotFound
     );
-    assert!(engine.operation_owner(&operation).unwrap().is_none());
+    assert!(engine.operation_owner(operation).unwrap().is_none());
     let branch = engine
         .state
         .repositories
@@ -626,7 +635,7 @@ fn prepare_only_failure_reserves_its_slot_and_is_not_an_indeterminate_operation(
     let result = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -688,7 +697,7 @@ fn failed_pending_preflight_preserves_torn_evidence_after_published_history() {
     let mut evidence = Engine::open_for_recovery(&temp.path().join("state")).unwrap();
     assert_eq!(
         evidence
-            .prepare_degraded_recovery(&operation, "alice", "loss")
+            .prepare_degraded_recovery(operation, "alice", "loss")
             .unwrap_err()
             .code(),
         ErrorCode::RecoveryRequired
@@ -711,7 +720,7 @@ fn recoverable_pending_torn_tail_completes_without_leaving_engine_blocked() {
     let engine = Engine::open(&temp.path().join("state")).unwrap();
     assert!(!engine.is_read_only());
     assert_eq!(
-        engine.operation(&operation).unwrap().commit_state,
+        engine.operation(operation).unwrap().commit_state,
         storage_contract::CommitState::Published
     );
     assert!(!scan(&disk).unwrap().torn_tail);

@@ -19,13 +19,31 @@ impl RawState {
     }
 }
 
+pub(crate) struct AdmittedState(State);
+
+impl AdmittedState {
+    pub(crate) fn state(&self) -> &State {
+        &self.0
+    }
+    pub(crate) fn into_state(self) -> State {
+        self.0
+    }
+}
+
+impl TryFrom<RawState> for AdmittedState {
+    type Error = Error;
+
+    fn try_from(raw: RawState) -> Result<Self> {
+        validate(&raw.0)?;
+        Ok(Self(raw.0))
+    }
+}
+
 impl TryFrom<RawState> for State {
     type Error = Error;
 
     fn try_from(raw: RawState) -> Result<Self> {
-        let state = raw.0;
-        validate(&state)?;
-        Ok(state)
+        Ok(AdmittedState::try_from(raw)?.into_state())
     }
 }
 

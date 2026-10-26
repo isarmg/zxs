@@ -13,7 +13,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String) {
     )
     .unwrap();
     let repo = engine
-        .create_disk_root("P01", "admin", &new_id("op"))
+        .create_disk_root("P01", "admin", storage_contract::OperationId::generate())
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -24,7 +24,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -38,7 +38,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String) {
             "folder",
             "draft",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap()
         .result["directory_branch_id"]
@@ -119,7 +119,7 @@ fn missing_directory_selection_references_return_errors_without_publication() {
                 "folder",
                 "draft",
                 "admin",
-                &new_id("op"),
+                storage_contract::OperationId::generate(),
             )
         }));
         if matches!(corruption, "branch" | "commit") {
@@ -159,7 +159,12 @@ fn missing_baseline_branch_or_tree_cannot_initialize_or_fork() {
         }
         let before = canonical_json(engine.state()).unwrap();
         let error = engine
-            .initialize_directory_scope(&repo.repository_id, "folder", "admin", &new_id("op"))
+            .initialize_directory_scope(
+                &repo.repository_id,
+                "folder",
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap_err();
         assert_eq!(error.code(), storage_contract::ErrorCode::StateInvalid);
         let error = engine
@@ -168,7 +173,7 @@ fn missing_baseline_branch_or_tree_cannot_initialize_or_fork() {
                 "folder",
                 "another",
                 "admin",
-                &new_id("op"),
+                storage_contract::OperationId::generate(),
             )
             .unwrap_err();
         assert_eq!(error.code(), storage_contract::ErrorCode::StateInvalid);
@@ -185,7 +190,7 @@ fn unchanged_selection_still_rejects_unavailable_file_branch() {
             "folder",
             "draft",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let file_branch = engine.state.directory_branches[&selected]
@@ -204,7 +209,7 @@ fn unchanged_selection_still_rejects_unavailable_file_branch() {
             "folder",
             "draft",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap_err();
     assert_eq!(

@@ -1,17 +1,23 @@
 use super::*;
 use json_codec::json;
 fn contract(path: &str, body: Value) -> Contract {
-    Contract::new("POST", path, Some(&body), "original", "admin")
+    Contract::new(
+        "POST",
+        path,
+        Some(&body),
+        "op_00000000000000000000000000000001",
+        "admin",
+    )
 }
 fn raw_operation() -> Value {
-    json!({"operation_id":"original", "kind":"plan.cancel", "commit_id":null,"history_tree_id":null,"branch_id":null,"commit_state":"PUBLISHED","protection_at_publish":"NOT_APPLICABLE","current_health":"UNKNOWN","request_digest":"digest","sequence":"4","result":{}})
+    json!({"operation_id":"op_00000000000000000000000000000001", "kind":"plan.cancel", "commit_id":null,"history_tree_id":null,"branch_id":null,"commit_state":"PUBLISHED","protection_at_publish":"NOT_APPLICABLE","current_health":"UNKNOWN","request_digest":"digest","sequence":"4","result":{}})
 }
 fn wire_operation() -> Value {
     let mut value: Value = json_codec::from_str(include_str!(
         "../files/fixtures/namespace-batch-operation.json"
     ))
     .unwrap();
-    value["operation_id"] = "original".into();
+    value["operation_id"] = "op_00000000000000000000000000000001".into();
     value
 }
 #[test]
@@ -43,33 +49,48 @@ fn operation_contracts_reject_missing_wrong_and_nonterminal_receipts() {
 }
 #[test]
 fn inspection_must_match_original_operation_and_terminal_state() {
-    let c = Contract::new("GET", "/api/operations/original", None, "", "admin");
+    let c = Contract::new(
+        "GET",
+        "/api/operations/op_00000000000000000000000000000001",
+        None,
+        "",
+        "admin",
+    );
     assert!(c.validate(wire_operation()).is_ok());
-    assert!(terminal(&wire_operation(), "original"));
+    assert!(terminal(
+        &wire_operation(),
+        "op_00000000000000000000000000000001"
+    ));
     let mut value = wire_operation();
     value["operation_id"] = "other".into();
     assert!(c.validate(value.clone()).is_err());
-    assert!(!terminal(&value, "original"));
-    value["operation_id"] = "original".into();
+    assert!(!terminal(&value, "op_00000000000000000000000000000001"));
+    value["operation_id"] = "op_00000000000000000000000000000001".into();
     value["commit_state"] = "IN_DOUBT".into();
     value["state"] = "in_doubt".into();
     value["protection_at_publish"] = "UNCONFIRMED".into();
     assert!(c.validate(value.clone()).is_ok());
-    assert!(!terminal(&value, "original"));
+    assert!(!terminal(&value, "op_00000000000000000000000000000001"));
 }
 
 #[test]
 fn administration_uses_the_shared_current_wire_evidence() {
     use storage_contract::client_protocol::{OperationStatus, operation_status};
-    let c = Contract::new("GET", "/api/operations/original", None, "", "admin");
+    let c = Contract::new(
+        "GET",
+        "/api/operations/op_00000000000000000000000000000001",
+        None,
+        "",
+        "admin",
+    );
     let mut content: Value = json_codec::from_str(include_str!(
         "../files/fixtures/damaged-published-save-operation.json"
     ))
     .unwrap();
-    content["operation_id"] = "original".into();
+    content["operation_id"] = "op_00000000000000000000000000000001".into();
     for valid in [wire_operation(), content] {
         assert!(c.validate(valid.clone()).is_ok());
-        assert!(terminal(&valid, "original"));
+        assert!(terminal(&valid, "op_00000000000000000000000000000001"));
         assert_eq!(operation_status(&valid), Some(OperationStatus::Published));
         let mut malformed = valid.clone();
         malformed["result"] = Value::Null;
@@ -85,10 +106,10 @@ fn administration_uses_the_shared_current_wire_evidence() {
             contradictory,
             extra,
             json!({"operation":valid}),
-            json!({"operation_id":"original", "state":"SUCCEEDED"}),
+            json!({"operation_id":"op_00000000000000000000000000000001", "state":"SUCCEEDED"}),
         ] {
             assert!(c.validate(invalid.clone()).is_err());
-            assert!(!terminal(&invalid, "original"));
+            assert!(!terminal(&invalid, "op_00000000000000000000000000000001"));
             assert_eq!(operation_status(&invalid), None);
         }
     }
@@ -119,7 +140,7 @@ fn domain_and_preview_contracts_accept_real_shapes_not_generic_receipts() {
         .validate(branch)
         .is_ok()
     );
-    let link = json!({"merge_link_id":"m","history_tree_id":"h","source_branch_id":"s","source_commit_id":"sc","target_branch_id":"t","target_commit_id":"tc","author":"admin","operation_id":"original"});
+    let link = json!({"merge_link_id":"m","history_tree_id":"h","source_branch_id":"s","source_commit_id":"sc","target_branch_id":"t","target_commit_id":"tc","author":"admin","operation_id":"op_00000000000000000000000000000001"});
     assert!(
         contract("/api/history-trees/h/merge-links", link.clone())
             .validate(link)

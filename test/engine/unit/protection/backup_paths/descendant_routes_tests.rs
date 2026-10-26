@@ -7,7 +7,7 @@ fn mkdir(engine: &mut Engine, repo: &Repository, path: &str) {
             NamespaceOperation::parse(storage_contract::NamespaceOperationKind::Mkdir, path, None)
                 .unwrap(),
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
 }
@@ -21,7 +21,7 @@ fn place(engine: &mut Engine, repo: &Repository, path: &str) {
             primary_slot_id: "P02",
             expected_generation: 0,
             principal: "admin",
-            operation_id: &new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
         })
         .unwrap();
 }
@@ -41,7 +41,7 @@ fn configure(
         backup_prefixes: &prefixes(values),
         expected_generation: generation,
         principal: "admin",
-        operation_id: &new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
     })
 }
 
@@ -231,7 +231,13 @@ fn sibling_prefixes_and_other_repositories_do_not_add_parent_routes() {
         place(&mut engine, &repo, path);
     }
     let other = engine
-        .create_repository("other routes", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "other routes",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     place(&mut engine, &other, "docs/empty");
     let read = engine
@@ -269,7 +275,7 @@ fn shadowed_ancestor_placement_does_not_add_a_phantom_route() {
             primary_slot_id: "P01",
             expected_generation: 0,
             principal: "admin",
-            operation_id: &new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
         })
         .unwrap();
     let read = engine

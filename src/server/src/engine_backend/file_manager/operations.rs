@@ -55,7 +55,7 @@ pub(super) fn call(
                     surviving_branch_id: field(input, "surviving_branch_id")?.into(),
                     confirmed: input.get("confirmed").and_then(Value::as_bool) == Some(true),
                     location: location(input)?,
-                    operation_id: operation(input)?.into(),
+                    operation_id: operation(input)?,
                 },
             )?;
             operation_wire(result)

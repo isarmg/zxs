@@ -119,6 +119,23 @@ Web 在浏览器中提供认证、文件元数据、历史与管理状态界面�
 
 元数据成员由用户显式指定，N ≥ 1 个不同物理存储盘可兼任控制日志成员，不要求另外增加硬盘。最小部署只需系统盘和一块一级存储盘，不必设置任何备份级别；二、三、四及后续级别仍按需要配置。数据盘各自独立，不组成跨盘条带。单盘目标达标只表示已持久保存一份，不提供冗余或永久丢盘恢复保证；唯一数据盘不可用也不应阻止系统盘上的管理登录与诊断。
 
+### 恢复与历史包的验证边界
+
+启动读取的盘上字节和离线历史包均是外部输入。历史图对象在文件边界严格解码、限制大小并核对引用的 domain hash；私有字段的 `AuthenticatedMetadataObject` 同时持有 JSON 值及其 canonical bytes。图解析器检查 schema、radix 路由、实体唯一性与页格式，字节长度检查、精确副本修复和导出复用这份已认证字节。
+
+完整快照的引用闭包及 history 语义通过后产生 `AdmittedState`，消费前仅提供只读访问。冷恢复将候选绑定的精确历史图与该快照投影作 canonical equality 比较，因此不再对同一逻辑 history 再执行一遍语义准入。没有已准入快照的 checkpoint 路径，以及离线包和独立历史图读取，仍执行完整 history 语义验证。日志扫描产出的帧哈希随已有 sequence/candidate 分组传递，回放只在当前候选的成员 receipts 中查找发布证据。
+
+这些复用均限于当前读取/恢复过程，保留四阶段持久化、损坏副本选择、fork、torn-tail 和缺失证据处理。逐历史根的图展开及派生容器修复仍可能重复全量工作；这里没有消除全部历史规模二次方成本。 测量与边界回归见[恢复路径去重验证](validation/recovery-deduplication.md)。
+### 操作标识的信任边界
+
+`storage_contract::OperationId` 用私有 16 字节 UUID 表示操作身份，内部直接生成并按值传递。HTTP 字段提取、已认证 SMB 会话的请求分派、救援 CLI 参数解析，以及启动/恢复/导入时的反序列化，把外部字符串解析一次；核心的变更、查询、计划、提交与恢复接口依赖该类型，不再检查 `op_` 前缀。
+
+外部及磁盘格式仍为 `op_` 加 32 个小写十六进制字符；全零和非 v4 值继续有效。普通业务 HTTP 变更的格式错误保持 `INVALID_ID`，缺失、空值或非字符串保持 `INVALID_REQUEST`；操作查询中的非空畸形 ID 保持 `OPERATION_NOT_FOUND`。SMB 帧层接收 `Request<String>`，会话内转换为 `Request<OperationId>`；畸形 ID 返回不含 operation_id 的 `INVALID_REQUEST`，保留会话和现有句柄，且不创建工作区或暂存数据。
+
+SMB 的操作查询和工作区提交通过 `Backend::operation`、`Backend::commit_workspace` 直接传递领域记录；HTTP 单独负责 wire 编码。当前身份、操作所有者、工作区所有权、fence 及解锁 I/O 后重新鉴权仍按原流程执行。`principal`/actor 仍是另一项约束，本次操作标识类型化不替代它。
+
+仅 `State.operations` 和 `operation_principals` 改用操作标识键。两者不属于历史 manifest，快照增量逻辑只消费其变更集是否为空；显式 `Tracked::insert` 标记 `All`，保持原来的整字段重新编码行为。快照分页边界仍对规范 `op_...` 字符串字节哈希，UUID 字节排序与旧小写定长字符串排序一致，原有 wire、请求摘要及内容寻址格式保持不变。
+
 <a id="s03-03"></a>
 
 ## 3.3 技术基线

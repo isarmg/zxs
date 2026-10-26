@@ -1,6 +1,8 @@
 use crate::protocol::{
-    FrameStream, OpenResult, PROTOCOL, REQUIRED_CAPABILITIES, Request, Response,
+    FrameStream, OpenResult, PROTOCOL, REQUIRED_CAPABILITIES, Request as RawRequest, Response,
 };
+
+type Request = RawRequest<storage_contract::OperationId>;
 use data_serialization::Deserialize;
 use json_codec::Value;
 use std::{
@@ -450,7 +452,7 @@ impl Client {
                             message: format!(
                                 "{error}; query the original operation before retrying"
                             ),
-                            operation_id: Some(operation_id),
+                            operation_id: Some(operation_id.to_string()),
                             retryable: false,
                             errno: error.raw_os_error().unwrap_or(libc::EIO),
                             source: Some(error),

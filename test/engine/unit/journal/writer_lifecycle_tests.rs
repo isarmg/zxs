@@ -122,7 +122,13 @@ fn real_enospc_blocks_engine_before_first_prepare_and_preserves_publication() {
         .open("/dev/full")
         .unwrap();
     let error = engine
-        .create_repository("failed", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "failed",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap_err();
     assert!(error.source().is_some());
     assert!(engine.is_read_only());
@@ -132,7 +138,13 @@ fn real_enospc_blocks_engine_before_first_prepare_and_preserves_publication() {
     let mut recovered = Engine::open(&root).unwrap();
     assert!(!recovered.is_read_only());
     recovered
-        .create_repository("saved", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "saved",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     assert_eq!(scan(&disk).unwrap().records.len(), 4);
 }
@@ -145,7 +157,13 @@ fn full_recovery_keeps_historical_receipts_and_wire_bytes() {
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     for i in 0..6 {
         engine
-            .create_repository(&format!("repo-{i}"), "P01", 1, "admin", &new_id("op"))
+            .create_repository(
+                &format!("repo-{i}"),
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
     }
     let expected = canonical_json(engine.state()).unwrap();
@@ -162,7 +180,13 @@ fn full_recovery_keeps_historical_receipts_and_wire_bytes() {
         assert_eq!(std::fs::read(log_path(disk)).unwrap(), bytes);
     }
     recovered
-        .create_repository("after-recovery", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "after-recovery",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     drop(recovered);
     assert_eq!(Engine::open(&root).unwrap().state().repositories.len(), 7);
@@ -175,29 +199,29 @@ fn prepare_io_failure_requires_reopen_and_retry_keeps_operation_identity() {
         let root = temp.path().join("system");
         let config = Config::development([temp.path().join("disk")]);
         let mut engine = Engine::initialize(&root, config).unwrap();
-        let operation = new_id("op");
+        let operation = storage_contract::OperationId::generate();
         engine.inject_journal_fault_once("P01", fault).unwrap();
         assert!(
             engine
-                .create_repository("retry", "P01", 1, "admin", &operation)
+                .create_repository("retry", "P01", 1, "admin", operation)
                 .is_err()
         );
         assert!(engine.is_read_only());
         assert!(engine.state().operations.is_empty());
         assert!(
             engine
-                .create_repository("retry", "P01", 1, "admin", &operation)
+                .create_repository("retry", "P01", 1, "admin", operation)
                 .is_err()
         );
         drop(engine);
         let mut recovered = Engine::open(&root).unwrap();
         let repo = recovered
-            .create_repository("retry", "P01", 1, "admin", &operation)
+            .create_repository("retry", "P01", 1, "admin", operation)
             .unwrap();
         assert_eq!(recovered.state().repositories.len(), 1);
         assert_eq!(
             recovered
-                .create_repository("retry", "P01", 1, "admin", &operation)
+                .create_repository("retry", "P01", 1, "admin", operation)
                 .unwrap()
                 .repository_id,
             repo.repository_id
@@ -205,7 +229,7 @@ fn prepare_io_failure_requires_reopen_and_retry_keeps_operation_identity() {
         drop(recovered);
         let recovered = Engine::open(&root).unwrap();
         assert_eq!(recovered.state().operations.len(), 1);
-        assert!(recovered.operation(&operation).is_ok());
+        assert!(recovered.operation(operation).is_ok());
     }
 }
 
@@ -217,7 +241,13 @@ fn recovery_modes_preserve_evidence_or_repair_the_same_torn_tail() {
     let disk = config.disks[0].clone();
     let mut engine = Engine::initialize(&root, config).unwrap();
     engine
-        .create_repository("published", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "published",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     drop(engine);
     let path = log_path(&disk);
@@ -239,7 +269,13 @@ fn recovery_modes_preserve_evidence_or_repair_the_same_torn_tail() {
     assert!(!recovered.is_read_only());
     assert_eq!(std::fs::read(&path).unwrap(), valid);
     recovered
-        .create_repository("next", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "next",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     assert!(!scan(&disk).unwrap().torn_tail);
     assert_eq!(scan(&disk).unwrap().records.len(), 8);
@@ -272,7 +308,13 @@ fn leftover_created_leaf_requires_both_opening_durability_fences() {
         let mut recovered = Engine::open(&root).unwrap();
         assert!(!recovered.is_read_only());
         recovered
-            .create_repository("durable", "P01", 1, "admin", &new_id("op"))
+            .create_repository(
+                "durable",
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         drop(recovered);
         assert_eq!(Engine::open(&root).unwrap().state().repositories.len(), 1);

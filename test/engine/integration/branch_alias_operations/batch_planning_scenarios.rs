@@ -2,7 +2,12 @@ use super::*;
 
 fn initialize(pool: &mut Pool, path: &str) -> String {
     pool.engine
-        .initialize_directory_scope(&pool.repo.repository_id, path, "admin", &new_id("op"))
+        .initialize_directory_scope(
+            &pool.repo.repository_id,
+            path,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap()
         .result["directory_branch_id"]
         .as_str()
@@ -75,15 +80,15 @@ fn frozen_batch_swap_preserves_identities_contexts_and_retry_receipt() {
             pool.mapping(&branch, "b.txt", &branch, "a.txt"),
         ],
     };
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let result = pool
         .engine
-        .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", &operation)
+        .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", operation)
         .unwrap();
     let after = storage_engine::canonical_json(pool.engine.state()).unwrap();
     assert_eq!(
         pool.engine
-            .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", &operation)
+            .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", operation)
             .unwrap()
             .result,
         result.result
@@ -133,7 +138,12 @@ fn frozen_batch_nonparticipating_target_collision_is_atomic() {
     };
     assert_eq!(
         pool.engine
-            .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", &new_id("op"))
+            .directory_namespace_batch(
+                &pool.repo.repository_id,
+                &request,
+                "admin",
+                storage_contract::OperationId::generate()
+            )
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::NameCollision
@@ -169,7 +179,7 @@ fn frozen_batch_overlapping_active_scopes_reject_before_losing_an_item() {
         &pool.repo.repository_id,
         &request,
         "admin",
-        &new_id("op"),
+        storage_contract::OperationId::generate(),
     );
     match result {
         Err(error) => assert_eq!(
@@ -296,7 +306,7 @@ fn frozen_batch_deletes_distinct_same_directory_aliases_but_rejects_duplicate_so
                 &pool.repo.repository_id,
                 &duplicate,
                 "admin",
-                &new_id("op"),
+                storage_contract::OperationId::generate(),
             )
             .unwrap_err()
             .code(),
@@ -310,14 +320,14 @@ fn frozen_batch_deletes_distinct_same_directory_aliases_but_rejects_duplicate_so
         kind: "delete".into(),
         items: vec![first, second],
     };
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let receipt = pool
         .engine
-        .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", &operation)
+        .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", operation)
         .unwrap();
     assert_eq!(
         pool.engine
-            .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", &operation)
+            .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", operation)
             .unwrap()
             .result,
         receipt.result

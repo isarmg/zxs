@@ -95,9 +95,12 @@ pub(super) fn finish_publication(
     identity: &Identity,
     branch: &str,
     writer: &mut Writer,
-    result: Value,
+    result: storage_contract::OperationResult,
 ) -> Result<Value, ApiError> {
-    writer.last_head = field(result.get("result").unwrap_or(&result), "commit_id")?.to_owned();
+    writer.last_head = result
+        .commit_id
+        .clone()
+        .expect("invariant: published workspace operation identifies its commit");
     // Bytes may have changed after a response was lost. Never acknowledge the
     // earlier publication as if it included those later FD-backed writes.
     let snapshot = shared
@@ -143,7 +146,7 @@ pub(super) fn finish_publication(
             "original save published; later changed bytes are retained and need a new dirty request",
         ));
     }
-    Ok(result)
+    crate::operation_wire::operation_wire(result)
 }
 
 impl Session {
@@ -231,7 +234,7 @@ impl Session {
         if let Some(workspace) = new_workspace {
             writer.workspace = workspace;
             writer.committed = false;
-            writer.operation_id = new_id("op");
+            writer.operation_id = OperationId::generate();
         }
         recovery_record(writer, &self.identity.principal, &self.branch)?;
         if writer.file.metadata().map_err(ApiError::io)?.len() > self.max_file_bytes {
@@ -273,14 +276,12 @@ impl Session {
         }
         // A lost response must not restage under a new dirty generation and
         // thereby change the original request digest. Reconcile by operation id.
-        match self.shared.backend.call(
-            crate::BackendAction::Operation,
-            &self.identity,
-            json!({"operation_id":writer.operation_id}),
-        ) {
-            Ok(result)
-                if result.get("commit_state").and_then(Value::as_str) == Some("PUBLISHED") =>
-            {
+        match self
+            .shared
+            .backend
+            .operation(&self.identity, writer.operation_id)
+        {
+            Ok(result) if result.commit_state == storage_contract::CommitState::Published => {
                 return finish_publication(
                     &self.shared,
                     &self.identity,
@@ -328,16 +329,16 @@ impl Session {
                 self.max_file_bytes,
             )?,
         )?;
-        let result = self.shared.backend.call(
-            crate::BackendAction::CommitWorkspaceInternal,
+        let result = self.shared.backend.commit_workspace(
             &self.identity,
-            json!({
-                "workspace_id": writer.workspace.workspace_id,
-                "operation_id": writer.operation_id,
-                "expected_head": writer.workspace.base_head,
-                "fencing_token": writer.workspace.fencing_token.to_string(),
-                "message": "SMB full-file save"
-            }),
+            crate::CommitWorkspace {
+                workspace_id: writer.workspace.workspace_id.clone(),
+                operation_id: writer.operation_id,
+                expected_head: writer.workspace.base_head.clone(),
+                fencing_token: writer.workspace.fencing_token,
+                message: "SMB full-file save".into(),
+                request_digest: None,
+            },
         )?;
         finish_publication(&self.shared, &self.identity, &self.branch, writer, result)
     }

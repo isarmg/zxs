@@ -255,13 +255,13 @@ impl Giver {
     /// means of being notified is left to the user.
     #[inline]
     pub fn is_wanting(&self) -> bool {
-        self.inner.state.load(SeqCst) == State::Want.into()
+        self.inner.state.load(SeqCst) == usize::from(State::Want)
     }
 
     /// Check if the `Taker` has canceled interest without parking a task.
     #[inline]
     pub fn is_canceled(&self) -> bool {
-        self.inner.state.load(SeqCst) == State::Closed.into()
+        self.inner.state.load(SeqCst) == usize::from(State::Closed)
     }
 
     /// Converts this into a `SharedGiver`.
@@ -288,13 +288,13 @@ impl SharedGiver {
     /// means of being notified is left to the user.
     #[inline]
     pub fn is_wanting(&self) -> bool {
-        self.inner.state.load(SeqCst) == State::Want.into()
+        self.inner.state.load(SeqCst) == usize::from(State::Want)
     }
 
     /// Check if the `Taker` has canceled interest without parking a task.
     #[inline]
     pub fn is_canceled(&self) -> bool {
-        self.inner.state.load(SeqCst) == State::Closed.into()
+        self.inner.state.load(SeqCst) == usize::from(State::Closed)
     }
 }
 
@@ -322,7 +322,7 @@ impl Taker {
     #[inline]
     pub fn want(&mut self) {
         debug_assert!(
-            self.inner.state.load(SeqCst) != State::Closed.into(),
+            self.inner.state.load(SeqCst) != usize::from(State::Closed),
             "want called after cancel"
         );
         self.signal(State::Want)

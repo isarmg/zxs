@@ -12,7 +12,7 @@ fn setup() -> (tempfile::TempDir, Engine, Repository) {
     )
     .unwrap();
     let repo = engine
-        .create_disk_root("P01", "admin", &new_id("op"))
+        .create_disk_root("P01", "admin", storage_contract::OperationId::generate())
         .unwrap();
     (root, engine, repo)
 }
@@ -22,7 +22,7 @@ fn save(engine: &mut Engine, branch: &str, path: &str, bytes: &[u8]) -> Entry {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: w.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: w.base_head,
             fencing_token: w.fencing_token,
@@ -61,7 +61,7 @@ fn edit(
             remove: &remove.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
             location: None,
             principal: "admin",
-            operation_id: &new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
         })
         .unwrap()
         .result["nodes"][0]["node_id"]
@@ -117,7 +117,7 @@ fn labels_inherit_across_content_path_events_and_recovery_without_new_bodies() {
         )
         .unwrap(),
         "admin",
-        &new_id("op"),
+        storage_contract::OperationId::generate(),
     )
     .unwrap();
     let path = e
@@ -177,7 +177,7 @@ fn stale_and_over_capacity_batches_are_atomic_and_retry_is_idempotent() {
     let first = save(&mut e, &r.main_branch_id, "a.txt", b"A");
     let branch = e.file_context(&r.repository_id, "a.txt").unwrap().branch_id;
     let mut t = target(&e, &branch, &first.version_id);
-    let op = new_id("op");
+    let op = storage_contract::OperationId::generate();
     let add = vec!["one".into()];
     let receipt = e
         .update_file_node_tags(crate::FileNodeTagsUpdateRequest {
@@ -187,7 +187,7 @@ fn stale_and_over_capacity_batches_are_atomic_and_retry_is_idempotent() {
             remove: &[],
             location: None,
             principal: "admin",
-            operation_id: &op,
+            operation_id: op,
         })
         .unwrap();
     let state = canonical_json(e.state()).unwrap();
@@ -199,7 +199,7 @@ fn stale_and_over_capacity_batches_are_atomic_and_retry_is_idempotent() {
             remove: &[],
             location: None,
             principal: "admin",
-            operation_id: &op,
+            operation_id: op,
         })
         .unwrap();
     assert_eq!(receipt.result, retry.result);
@@ -217,7 +217,7 @@ fn stale_and_over_capacity_batches_are_atomic_and_retry_is_idempotent() {
                 remove: &[],
                 location,
                 principal,
-                operation_id: &op,
+                operation_id: op,
             })
             .unwrap_err()
             .code(),
@@ -233,7 +233,7 @@ fn stale_and_over_capacity_batches_are_atomic_and_retry_is_idempotent() {
             remove: &[],
             location: None,
             principal: "admin",
-            operation_id: &new_id("op")
+            operation_id: storage_contract::OperationId::generate()
         })
         .unwrap_err()
         .code(),
@@ -253,7 +253,7 @@ fn stale_and_over_capacity_batches_are_atomic_and_retry_is_idempotent() {
             remove: &[],
             location: None,
             principal: "admin",
-            operation_id: &new_id("op")
+            operation_id: storage_contract::OperationId::generate()
         })
         .unwrap_err()
         .code(),
@@ -275,15 +275,20 @@ fn pending_file_labels_preserve_first_write_and_batches_keep_branch_snapshots_in
             &file.version_id,
             "review",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap()
         .result["branch_id"]
         .as_str()
         .unwrap()
         .to_owned();
-    e.select_file_branch(&file.file_id, &pending, "admin", &new_id("op"))
-        .unwrap();
+    e.select_file_branch(
+        &file.file_id,
+        &pending,
+        "admin",
+        storage_contract::OperationId::generate(),
+    )
+    .unwrap();
     let tagged = edit(
         &mut e,
         &file.file_id,
@@ -332,7 +337,7 @@ fn pending_file_labels_preserve_first_write_and_batches_keep_branch_snapshots_in
             remove: &[],
             location: None,
             principal: "admin",
-            operation_id: &new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
         })
         .unwrap();
     assert_eq!(receipt.result["nodes"].as_array().unwrap().len(), 2);

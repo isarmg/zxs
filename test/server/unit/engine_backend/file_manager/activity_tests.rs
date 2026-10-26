@@ -125,7 +125,7 @@ fn utc_history_projection_formats_seconds_and_preserves_missing_times() {
 
 #[test]
 fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() {
-    use storage_contract::{CommitRequest, Config, NamespaceOperation, new_id};
+    use storage_contract::{CommitRequest, Config, NamespaceOperation};
     use storage_engine::Engine;
 
     let root = crate::tests::private_tempdir();
@@ -135,7 +135,13 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
     )
     .unwrap();
     let repo = engine
-        .create_repository("Audit", "P01", 1, "owner", &new_id("op"))
+        .create_repository(
+            "Audit",
+            "P01",
+            1,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "owner")
@@ -148,11 +154,11 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
             )
             .unwrap();
     }
-    let operation_id = new_id("op");
+    let operation_id = storage_contract::OperationId::generate();
     let published = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: operation_id.clone(),
+            operation_id,
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -196,7 +202,13 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
     )
     .unwrap();
     restored
-        .restore_history_package(&package, "P01", 1, "owner", &new_id("op"))
+        .restore_history_package(
+            &package,
+            "P01",
+            1,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     assert!(!restored.state().operations.contains_key(&operation_id));
     assert!(restored.state().versions.is_empty());

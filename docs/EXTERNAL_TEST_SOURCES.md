@@ -335,3 +335,22 @@ before/after 路径、摘要及 base64 `old` / `new` 唯一可逆替换；不能
 
 本轮 Tokio 收据认证 `fs::asyncify` 保留 `JoinError` 的源码改动、Cargo 测试
 目标及 `fs_asyncify` 取消回归。其证明是字节与归属关系，不替代运行时测试。
+
+HTTP demand 的同根维护使用窄范围适配器
+`tools/rust-sources/proof_legacy_maintenance.py`：它仅接受现有 HTTP legacy
+consolidation `9a4a44802e8f493dcc1a1546caa723ea774c956de5d18c474076f85fd1280ac4`
+及其精确 layout owner，不把它伪装成新增的 routing terminal。独立仅追加固定列表
+与清单字段 `legacy_proof_maintenance_receipts` 登记同一 `proof-maintenance`
+目录中的 schema 1 收据；当前只支持这一初始维护步骤。
+
+收据绑定完整物理 before/after owner、layout/corrections 标识及唯一允许改变的
+`src/common/demand.rs`。before 生产清单必须等于不可变 layout 安装清单，外测
+逆既有 correction 后必须等于原 layout owner。当前完整生产/外测文件清单与
+字节先核验 after，再仅在历史投影中逆维护补丁，随后执行原 layout 严格逆变换。
+当前来源清单仍记录新字节，旧 origins、consolidation、layout 和收据均不改写。
+
+本次五处 `usize::from(State::Want/Closed)` 明确原子状态比较的操作数类型，
+避免现有 tracing fmt/json 组合引入 `json-codec` 的 `usize` 比较实现后产生类型
+推断歧义；不改变 `SeqCst`、状态转换或增加运行时检查。独立回放与篡改负测见
+`test/tools/rust-sources/test_legacy_http_maintenance.py`；证明不替代实际组合编译
+和 demand 行为回归。

@@ -43,9 +43,28 @@ impl<K: Serialize, V: Serialize> Serialize for CountedPage<'_, K, V> {
     }
 }
 
+trait SnapshotKey {
+    fn partition_hash(&self) -> blake3::Hash;
+}
+impl SnapshotKey for String {
+    fn partition_hash(&self) -> blake3::Hash {
+        blake3::hash(self.as_bytes())
+    }
+}
+impl SnapshotKey for OperationId {
+    fn partition_hash(&self) -> blake3::Hash {
+        blake3::hash(self.to_string().as_bytes())
+    }
+}
+impl<T: SnapshotKey> SnapshotKey for &T {
+    fn partition_hash(&self) -> blake3::Hash {
+        (*self).partition_hash()
+    }
+}
+
 /// The sole typed map partitioner. The callback never retains the borrowed
 /// entry map, and fallback installation can discard each encoded page in turn.
-fn encode_map<K: AsRef<str> + Ord + Serialize, V: Serialize>(
+fn encode_map<K: SnapshotKey + Ord + Serialize, V: Serialize>(
     field: &str,
     entries: impl IntoIterator<Item = (K, V)>,
     maximum: usize,
@@ -64,7 +83,7 @@ fn encode_map<K: AsRef<str> + Ord + Serialize, V: Serialize>(
         Ok(())
     };
     for (key, value) in entries {
-        let boundary = blake3::hash(key.as_ref().as_bytes()).as_bytes()[0] & 31 == 0;
+        let boundary = key.partition_hash().as_bytes()[0] & 31 == 0;
         if !page.is_empty() && (page.len() == STATE_PAGE_ENTRIES || boundary) {
             flush(&mut page)?;
         }
@@ -85,7 +104,7 @@ struct SnapshotBuilder {
     fields: BTreeMap<String, SnapshotFieldPlan>,
 }
 impl SnapshotBuilder {
-    fn map<K: AsRef<str> + Ord + Serialize, V: Serialize>(
+    fn map<K: SnapshotKey + Ord + Serialize, V: Serialize>(
         &mut self,
         field: &str,
         entries: impl IntoIterator<Item = (K, V)>,

@@ -1,0 +1,8 @@
+2026-10-26T04:41:57.022056+00:00 starting baseline-fixed-1024-r1; free=9.93 GiB
+finished baseline-fixed-1024-r1: 591.618 s; checkpoints=[(64, [None, 65, 65]), (256, [65, 257, 257]), (1024, [257, 257, 257])]
+2026-10-26T04:51:48.640793+00:00 starting recovery-fixed-1024-r1; free=9.93 GiB
+finished recovery-fixed-1024-r1: 510.267 s; checkpoints=[(64, [None, 65, 65]), (256, [65, 257, 257]), (1024, [257, 257, 257])]
+2026-10-26T05:00:18.908489+00:00 starting baseline-growing-256-r1; free=9.93 GiB
+finished baseline-growing-256-r1: 375.099 s; checkpoints=[(64, [None, 65, 65]), (256, [65, 257, 257])]
+2026-10-26T05:06:34.008094+00:00 starting recovery-growing-256-r1; free=9.93 GiB
+finished recovery-growing-256-r1: 260.718 s; checkpoints=[(64, [None, 65, 65]), (256, [65, 257, 257])]

@@ -230,7 +230,7 @@ fn committed_file_context_receipt_fits_exact_reserved_metadata_budget() {
     crate::disk::write_json(&f.root.join("config.json"), &e.config, true).unwrap();
     e.commit_workspace(CommitRequest {
         workspace_id: w.workspace_id.clone(),
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: w.base_head,
         fencing_token: w.fencing_token,

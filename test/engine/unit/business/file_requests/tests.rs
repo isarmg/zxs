@@ -13,7 +13,7 @@ fn metadata_request_bodies_bind_absent_and_supplied_location() {
         remove: &[],
         location: None,
         principal: "owner",
-        operation_id: "operation",
+        operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
     };
     let mut merge = FileBranchMergeRequest {
         file_id: "file",
@@ -22,7 +22,7 @@ fn metadata_request_bodies_bind_absent_and_supplied_location() {
         surviving_branch_id: "branch",
         location: None,
         principal: "owner",
-        operation_id: "operation",
+        operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
     };
     for unscoped in [tags.body(), merge.body()] {
         assert_eq!(unscoped.get("location"), Some(&Value::Null));

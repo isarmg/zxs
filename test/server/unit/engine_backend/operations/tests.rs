@@ -29,7 +29,13 @@ fn fixture() -> (
     ]);
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
-        .create_repository("Operation", "P01", 3, "owner", &new_id("op"))
+        .create_repository(
+            "Operation",
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "owner")
@@ -41,11 +47,11 @@ fn fixture() -> (
             b"fully verified content",
         )
         .unwrap();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: operation.clone(),
+            operation_id: operation,
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -107,12 +113,12 @@ fn unauthorized_operations_never_start_payload_observation() {
     );
     // Account admission does not waive durable operation ownership. This is a
     // storage fixture owned by another principal, not a second login account.
-    let foreign_operation = new_id("op");
+    let foreign_operation = storage_contract::OperationId::generate();
     backend
         .engine
         .lock()
         .unwrap()
-        .create_repository("Foreign receipt", "P01", 3, "other", &foreign_operation)
+        .create_repository("Foreign receipt", "P01", 3, "other", foreign_operation)
         .unwrap();
     assert_eq!(
         backend
@@ -290,13 +296,13 @@ fn operation_observation_preserves_publication_wire_facts() {
 fn pending_owner_discovery_failure_is_not_a_missing_operation_response() {
     use std::error::Error as _;
     let (_root, backend, _auth, _token, identity, _published) = fixture();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     {
         let mut engine = backend.engine.lock().unwrap();
         engine.inject_fault_once("after_accept_1");
         assert!(
             engine
-                .create_repository("pending-owner", "P01", 3, &identity.principal, &operation)
+                .create_repository("pending-owner", "P01", 3, &identity.principal, operation)
                 .is_err()
         );
         for disk in &engine.config().disks {

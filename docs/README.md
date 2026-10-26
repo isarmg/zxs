@@ -24,6 +24,7 @@
 
 ## 开发与验证
 
+- [编码与优化规范](../禁止防御性编程.md)、[项目指令入口](../AGENTS.md)。
 - [单仓库结构](monorepo.md)、[工程规范](20-engineering.md)、[命名规范](NAMING.md)、[测试布局](architecture/test-layout.md)。
 - [实现架构](architecture/README.md)、[组件](components/README.md)、[开发工具](tools/README.md)。
 - [第三方依赖文档](dependencies/README.md)：按职能查阅当前用法、匹配版本的本地原文与实际 API。

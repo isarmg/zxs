@@ -27,6 +27,46 @@ struct CloseFailure {
 }
 
 impl Backend for CloseFailure {
+    fn operation(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        if self.enabled.load(Ordering::SeqCst) {
+            if matches!(self.failure, Failure::PendingOperation) {
+                return Ok(storage_contract::OperationResult {
+                    operation_id,
+                    kind: "workspace.commit".into(),
+                    commit_id: None,
+                    history_tree_id: None,
+                    branch_id: None,
+                    commit_state: storage_contract::CommitState::Prepared,
+                    protection_at_publish: storage_contract::ProtectionAtPublish::NotApplicable,
+                    current_health: storage_contract::CurrentHealth::Healthy,
+                    request_digest: "0".repeat(64),
+                    sequence: 0,
+                    result: json!({}),
+                });
+            }
+            if matches!(self.failure, Failure::UnknownOperation) {
+                return Err(ApiError::new(
+                    ::http::StatusCode::SERVICE_UNAVAILABLE,
+                    storage_contract::ErrorCode::RecoveryRequired,
+                    "original operation outcome is unavailable",
+                ));
+            }
+        }
+        self.inner.operation(identity, operation_id)
+    }
+    fn commit_workspace(
+        &self,
+        identity: &Identity,
+        command: crate::CommitWorkspace,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.commits.fetch_add(1, Ordering::SeqCst);
+        self.inner.commit_workspace(identity, command)
+    }
+
     fn snapshot_at(
         &self,
         identity: &crate::auth::Identity,
@@ -52,36 +92,18 @@ impl Backend for CloseFailure {
         identity: &Identity,
         input: Value,
     ) -> Result<Value, ApiError> {
-        if action == crate::BackendAction::CommitWorkspaceInternal {
-            self.commits.fetch_add(1, Ordering::SeqCst);
-        }
         if action == crate::BackendAction::AbortWorkspace {
             self.aborts.fetch_add(1, Ordering::SeqCst);
         }
-        if self.enabled.load(Ordering::SeqCst) {
-            if action == crate::BackendAction::Operation
-                && matches!(self.failure, Failure::PendingOperation)
-            {
-                return Ok(json!({"commit_state":"COMMITTING"}));
-            }
-            if action == crate::BackendAction::Operation
-                && matches!(self.failure, Failure::UnknownOperation)
-            {
-                return Err(ApiError::new(
-                    ::http::StatusCode::SERVICE_UNAVAILABLE,
-                    storage_contract::ErrorCode::RecoveryRequired,
-                    "original operation outcome is unavailable",
-                ));
-            }
-            if action == crate::BackendAction::AbortWorkspace
-                && matches!(self.failure, Failure::Abort)
-            {
-                return Err(ApiError::new(
-                    ::http::StatusCode::SERVICE_UNAVAILABLE,
-                    storage_contract::ErrorCode::WorkspaceBusy,
-                    "injected abort failure",
-                ));
-            }
+        if self.enabled.load(Ordering::SeqCst)
+            && action == crate::BackendAction::AbortWorkspace
+            && matches!(self.failure, Failure::Abort)
+        {
+            return Err(ApiError::new(
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
+                storage_contract::ErrorCode::WorkspaceBusy,
+                "injected abort failure",
+            ));
         }
         self.inner.call(action, identity, input)
     }

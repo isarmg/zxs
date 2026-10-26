@@ -275,11 +275,11 @@ fn typed_phases_survive_normal_publication_and_recovery() {
         Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))),
     )
     .unwrap();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     engine
-        .create_repository("typed phases", "P01", 1, "alice", &operation)
+        .create_repository("typed phases", "P01", 1, "alice", operation)
         .unwrap();
-    let result = engine.operation(&operation).unwrap();
+    let result = engine.operation(operation).unwrap();
     for disk in engine.members() {
         let phases = scan(&disk)
             .unwrap()
@@ -300,7 +300,7 @@ fn typed_phases_survive_normal_publication_and_recovery() {
     }
     drop(engine);
     let engine = Engine::open(&root).unwrap();
-    let recovered = engine.operation(&operation).unwrap();
+    let recovered = engine.operation(operation).unwrap();
     assert_eq!(recovered.sequence, result.sequence);
     assert_eq!(
         recovered.commit_state,
@@ -318,5 +318,19 @@ fn valid_checksum_does_not_admit_noncanonical_receipt_payload() {
     assert_eq!(
         scan_frames(frame.as_slice()).err().unwrap().code(),
         ErrorCode::LogCorrupt
+    );
+}
+
+#[test]
+fn operation_id_candidate_preserves_legacy_canonical_bytes_and_digest() {
+    let bytes = br#"{"metadata_disk_ids":["disk"],"operation_id":"op_0123456789abcdef0123456789abcdef","pool_id":"pool","previous_snapshot":null,"request_digest":"request","sequence":"1","snapshot_hash":"snapshot","transaction_id":"transaction","versions":[]}"#;
+    let candidate: Candidate = json_codec::from_slice(bytes).unwrap();
+    assert_eq!(canonical_json(&candidate).unwrap(), bytes);
+    let mut expected = blake3::Hasher::new();
+    expected.update(b"zxs:candidate\0");
+    expected.update(bytes);
+    assert_eq!(
+        object_hash("candidate", &candidate).unwrap(),
+        expected.finalize().to_hex().as_str()
     );
 }

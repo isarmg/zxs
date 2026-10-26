@@ -78,7 +78,7 @@ fn payload(root: &Path, relative: &Path) -> Result<bool> {
 const MAX_CHECKPOINT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_COVERAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_COVERAGE_ENTRIES: usize = 32_768;
-pub(super) type Records = BTreeMap<u64, BTreeMap<String, Vec<(String, Record)>>>;
+pub(super) type Records = BTreeMap<u64, BTreeMap<String, Vec<Receipt>>>;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serialization(deny_unknown_fields)]
 struct CoverageEntry {
@@ -267,8 +267,11 @@ fn suffix_rebuilt_containers(
         let active = candidates
             .iter()
             .filter(|(_, records)| {
-                records.iter().any(|(_, r)| {
-                    matches!(r.record_type, RecordType::Accept | RecordType::Publication)
+                records.iter().any(|receipt| {
+                    matches!(
+                        receipt.record.record_type,
+                        RecordType::Accept | RecordType::Publication
+                    )
                 })
             })
             .collect::<Vec<_>>();
@@ -278,16 +281,16 @@ fn suffix_rebuilt_containers(
         let Some((hash, records)) = active.first() else {
             continue;
         };
-        let Some((slot, r)) = records
+        let Some(receipt) = records
             .iter()
-            .find(|(_, r)| r.record_type == RecordType::Publication)
+            .find(|receipt| receipt.record.record_type == RecordType::Publication)
         else {
             break;
         };
-        let disk = engine.disk(slot)?;
+        let disk = engine.disk(&receipt.slot_id)?;
         let c: Candidate = load_object(disk, "candidate", hash)?;
         engine.verify_candidate_membership(&c)?;
-        let p: Publication = load_object(disk, "publication", &r.object_hash)?;
+        let p: Publication = load_object(disk, "publication", &receipt.record.object_hash)?;
         if c.pool_id != engine.config.pool_id
             || c.sequence != *sequence
             || c.previous_snapshot != previous

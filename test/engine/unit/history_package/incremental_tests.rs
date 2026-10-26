@@ -254,9 +254,10 @@ fn incremental_history_roots_equal_full_oracle_and_reuse_checks_existing_bytes()
     // Losing every replica must retain the full publisher's ability to
     // reconstruct from State, but only under the identical published root.
     let (_, graph) = bound_history_graph(&config.disks, hash).unwrap();
-    for (kind, object_hash, _) in graph {
+    for object in graph {
+        let (kind, object_hash) = (object.kind(), object.hash());
         for disk in &config.disks {
-            fs::remove_file(object_path(disk, &kind, &object_hash)).unwrap();
+            fs::remove_file(object_path(disk, kind, object_hash)).unwrap();
         }
     }
     let (recreated, objects) =

@@ -12,12 +12,12 @@ fn disk_root_creation_replay_checks_owner_input_and_returns_original_binding() {
     config.disks[1].level = 1;
     config.disks[1].upstream_slot_id = None;
     let mut engine = Engine::initialize(&root, config).unwrap();
-    let operation = new_id("op");
-    let original = engine.create_disk_root("p01", "admin", &operation).unwrap();
+    let operation = storage_contract::OperationId::generate();
+    let original = engine.create_disk_root("p01", "admin", operation).unwrap();
     let other = engine
-        .create_disk_root("P02", "admin", &new_id("op"))
+        .create_disk_root("P02", "admin", storage_contract::OperationId::generate())
         .unwrap();
-    let binding_operation = new_id("op");
+    let binding_operation = storage_contract::OperationId::generate();
     engine
         .set_smb_binding(
             &original.repository_id,
@@ -25,7 +25,7 @@ fn disk_root_creation_replay_checks_owner_input_and_returns_original_binding() {
             false,
             1,
             "admin",
-            &binding_operation,
+            binding_operation,
         )
         .unwrap();
     for reopened in [false, true] {
@@ -35,13 +35,13 @@ fn disk_root_creation_replay_checks_owner_input_and_returns_original_binding() {
         }
         let before = canonical_json(engine.state()).unwrap();
         assert_eq!(
-            engine.create_disk_root("P01", "admin", &operation).unwrap(),
+            engine.create_disk_root("P01", "admin", operation).unwrap(),
             original
         );
         for (slot, principal, operation) in [
-            ("P01", "other", operation.as_str()),
-            ("P02", "admin", operation.as_str()),
-            ("P01", "admin", binding_operation.as_str()),
+            ("P01", "other", operation),
+            ("P02", "admin", operation),
+            ("P01", "admin", binding_operation),
         ] {
             assert_eq!(
                 engine
@@ -52,22 +52,22 @@ fn disk_root_creation_replay_checks_owner_input_and_returns_original_binding() {
             );
         }
         assert_eq!(
-            engine
-                .create_disk_root("P01", "admin", "not-an-operation")
+            "not-an-operation"
+                .parse::<OperationId>()
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::InvalidId
         );
         assert_eq!(
             engine
-                .create_disk_root("P01", "", &new_id("op"))
+                .create_disk_root("P01", "", storage_contract::OperationId::generate())
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::Unauthenticated
         );
         assert_eq!(
             engine
-                .create_disk_root("P02", "admin", &new_id("op"))
+                .create_disk_root("P02", "admin", storage_contract::OperationId::generate())
                 .unwrap(),
             other
         );
@@ -75,7 +75,7 @@ fn disk_root_creation_replay_checks_owner_input_and_returns_original_binding() {
         assert_ne!(current, original);
         assert_eq!(
             engine
-                .create_disk_root("P01", "admin", &new_id("op"))
+                .create_disk_root("P01", "admin", storage_contract::OperationId::generate())
                 .unwrap(),
             current
         );
@@ -91,15 +91,20 @@ fn repository_creation_replay_returns_original_binding_after_changes_and_reopen(
         Config::development([root.path().join("primary")]),
     )
     .unwrap();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let original = engine
-        .create_repository("Replay", "P01", 1, "admin", &operation)
+        .create_repository("Replay", "P01", 1, "admin", operation)
         .unwrap();
     let source = engine.state().histories[&original.history_tree_id]
         .root_commit_id
         .clone();
     let side = engine
-        .create_branch(&source, "side", "admin", &new_id("op"))
+        .create_branch(
+            &source,
+            "side",
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     engine
         .set_smb_binding(
@@ -108,7 +113,7 @@ fn repository_creation_replay_returns_original_binding_after_changes_and_reopen(
             false,
             1,
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     assert_ne!(
@@ -123,14 +128,14 @@ fn repository_creation_replay_returns_original_binding_after_changes_and_reopen(
         let before = canonical_json(engine.state()).unwrap();
         assert_eq!(
             engine
-                .create_repository("Replay", "P01", 1, "admin", &operation)
+                .create_repository("Replay", "P01", 1, "admin", operation)
                 .unwrap(),
             original
         );
         for (name, principal) in [("Different", "admin"), ("Replay", "other")] {
             assert_eq!(
                 engine
-                    .create_repository(name, "P01", 1, principal, &operation)
+                    .create_repository(name, "P01", 1, principal, operation)
                     .unwrap_err()
                     .code(),
                 storage_contract::ErrorCode::IdempotencyKeyReused
@@ -153,14 +158,14 @@ fn disk_root_uses_one_explicit_primary_on_short_and_complete_routes() {
         config.disks.truncate(disks);
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
-            .create_disk_root("p01", "admin", &new_id("op"))
+            .create_disk_root("p01", "admin", storage_contract::OperationId::generate())
             .unwrap();
         assert!(repo.file_manager_root);
         assert_eq!(repo.primary_slot_id, "P01");
         assert_eq!(repo.target_copies, 1);
         assert_eq!(
             engine
-                .create_disk_root("P01", "admin", &new_id("op"))
+                .create_disk_root("P01", "admin", storage_contract::OperationId::generate())
                 .unwrap()
                 .repository_id,
             repo.repository_id
@@ -171,7 +176,7 @@ fn disk_root_uses_one_explicit_primary_on_short_and_complete_routes() {
                 NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "Documents", None)
                     .unwrap(),
                 "admin",
-                &new_id("op"),
+                storage_contract::OperationId::generate(),
             )
             .unwrap();
         let workspace = engine
@@ -187,7 +192,7 @@ fn disk_root_uses_one_explicit_primary_on_short_and_complete_routes() {
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -227,12 +232,12 @@ fn explicit_smb_binding_changes_advance_a_persistent_independent_revision() {
     )
     .unwrap();
     let repo = engine
-        .create_disk_root("P01", "admin", &new_id("op"))
+        .create_disk_root("P01", "admin", storage_contract::OperationId::generate())
         .unwrap();
     assert_eq!(repo.smb_binding_generation, 1);
     for (index, enabled) in [true, false, true].into_iter().enumerate() {
         let expected = engine.state().histories[&repo.history_tree_id].generation;
-        let operation = new_id("op");
+        let operation = storage_contract::OperationId::generate();
         let first = engine
             .set_smb_binding(
                 &repo.repository_id,
@@ -240,7 +245,7 @@ fn explicit_smb_binding_changes_advance_a_persistent_independent_revision() {
                 enabled,
                 expected,
                 "admin",
-                &operation,
+                operation,
             )
             .unwrap();
         assert_eq!(
@@ -254,7 +259,7 @@ fn explicit_smb_binding_changes_advance_a_persistent_independent_revision() {
                 enabled,
                 expected,
                 "admin",
-                &operation,
+                operation,
             )
             .unwrap();
         assert_eq!(first.result, replay.result);

@@ -42,7 +42,11 @@ fn snapshot(session_count: usize) -> Value {
 
 fn publish(engine: &mut AdmissionEngine, value: Value) {
     engine
-        .persist_auth_state(value, "system_auth", &new_id("op"))
+        .persist_auth_state(
+            value,
+            "system_auth",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
 }
 
@@ -133,7 +137,11 @@ fn rejected_publication_drops_projection_and_revalidates_unchanged_authority() {
     let before = engine.validations.load(Ordering::Relaxed);
     assert!(
         engine
-            .persist_auth_state(json!(false), "system_auth", &new_id("op"))
+            .persist_auth_state(
+                json!(false),
+                "system_auth",
+                storage_contract::OperationId::generate()
+            )
             .is_err()
     );
     assert!(engine.admission.get().is_none());
@@ -153,7 +161,11 @@ fn interrupted_revocation_is_revalidated_from_recovered_authority() {
     engine.identity(&caller()).unwrap();
     assert!(
         engine
-            .persist_auth_state(revoked, "system_auth", &new_id("op"))
+            .persist_auth_state(
+                revoked,
+                "system_auth",
+                storage_contract::OperationId::generate()
+            )
             .is_err()
     );
     assert!(engine.admission.get().is_none());
@@ -218,7 +230,13 @@ fn backend_fixture() -> (
 ) {
     let (root, mut holder) = fixture();
     let repo = holder
-        .create_repository("ReadFixture", "P01", 3, "owner", &new_id("op"))
+        .create_repository(
+            "ReadFixture",
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = holder
         .create_workspace(&repo.main_branch_id, "owner")
@@ -229,7 +247,7 @@ fn backend_fixture() -> (
     holder
         .commit_workspace(storage_engine::CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,

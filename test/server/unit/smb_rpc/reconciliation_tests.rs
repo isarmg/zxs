@@ -11,7 +11,7 @@ fn failed_publication_reconciliation_retries_without_restaging_or_second_version
             file.write_all_at(b"new", 0).unwrap();
             one.dirty(opened.handle).unwrap();
             let operation_id = match &one.handles[&opened.handle] {
-                Handle::Write(writer) => writer.operation_id.clone(),
+                Handle::Write(writer) => writer.operation_id,
                 _ => unreachable!(),
             };
             backend

@@ -1,0 +1,45 @@
+    Finished `test` profile [unoptimized] target(s) in 0.07s
+     Running unittests src/lib.rs (../targets/r5-recovery/debug/deps/storage_engine-b79c46d75a6999f3)
+
+running 1 test
+history codec capacity: flat_bytes=70580229, reader_limit=67108864, graph_objects=1739, leaf_pages=1301, total_graph_bytes=70772126, largest_object_bytes=54293
+test history_package::graph::tests::distributed_history_larger_than_real_reader_limit_roundtrips ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 556 filtered out; finished in 16.04s
+
+     Running ../../test/engine/integration/branch_alias_operations.rs (../targets/r5-recovery/debug/deps/branch_alias_operations-9b346354ca80453b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.00s
+
+     Running ../../test/engine/integration/directory_selection_limits.rs (../targets/r5-recovery/debug/deps/directory_selection_limits-cbc7ae59da9e05e2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running ../../test/engine/integration/hash_table_compatibility.rs (../targets/r5-recovery/debug/deps/hash_table_compatibility-442677a955c1c078)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running ../../test/engine/integration/workspace_commit_replay.rs (../targets/r5-recovery/debug/deps/workspace_commit_replay-80f18e0905755ff0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.00s
+
+     Running ../../test/engine/integration/workspace_namespace_preconditions.rs (../targets/r5-recovery/debug/deps/workspace_namespace_preconditions-dbf4ff118c7f04cb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running ../../test/engine/integration/workspace_upload_retries.rs (../targets/r5-recovery/debug/deps/workspace_upload_retries-da283be9cf649c22)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+

@@ -11,7 +11,13 @@ fn snapshot_lookup_preserves_frozen_identity_equivalent_spelling_and_absence() {
     let expected = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
     save_projection_file(&mut engine, &repo.main_branch_id, "Café.txt", b"second");
     let other = engine
-        .create_repository("Other", "P01", 3, "owner", &new_id("op"))
+        .create_repository(
+            "Other",
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let foreign = engine.state().branches[&other.main_branch_id]
         .head_commit_id
@@ -114,7 +120,7 @@ fn measure_snapshot_lookup_against_tree_round_trip() {
         engine
             .commit_workspace(storage_engine::CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "owner".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,

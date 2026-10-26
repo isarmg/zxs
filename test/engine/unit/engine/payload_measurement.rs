@@ -30,7 +30,13 @@ fn fixture() -> (tempfile::TempDir, Engine, Workspace, u64) {
     ]);
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
-        .create_repository("payload-measurement", "P01", 3, "admin", &new_id("op"))
+        .create_repository(
+            "payload-measurement",
+            "P01",
+            3,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -44,7 +50,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Workspace, u64) {
 fn request(workspace: &Workspace) -> CommitRequest {
     CommitRequest {
         workspace_id: workspace.workspace_id.clone(),
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: workspace.base_head.clone(),
         fencing_token: workspace.fencing_token,

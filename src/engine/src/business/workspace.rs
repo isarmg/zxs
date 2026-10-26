@@ -1147,7 +1147,7 @@ impl Engine {
     ) -> Result<WorkspaceMutation> {
         let workspace = self.workspace(&request.workspace_id)?;
         let replay = if self.state.operations.contains_key(&request.operation_id) {
-            Some(self.prepare_operation_health(self.operation_record(&request.operation_id)?))
+            Some(self.prepare_operation_health(self.operation_record(request.operation_id)?))
         } else {
             None
         };
@@ -1490,10 +1490,10 @@ impl crate::engine::PlanningContext<'_> {
                 "server request digest differs",
             ));
         }
-        validate_id(&request.operation_id, "op")?;
+
         Engine::require_actor(&request.principal)?;
         let mutation = self.plan_new_mutation(
-            "workspace.commit", &request.principal, &request.operation_id, digest,
+            "workspace.commit", &request.principal, request.operation_id, digest,
             |engine, state, pending| {
                 let branch = state.branches.get(&w.branch_id).cloned()
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::BranchNotFound, "branch disappeared"))?;
@@ -1551,7 +1551,7 @@ impl crate::engine::PlanningContext<'_> {
                     let path = location.as_str();
                     written_paths.push(path.to_owned());
                     let file_id = existing.as_ref().map(|entry| entry.file_id.clone()).unwrap_or_else(|| new_id("file"));
-                    super::directory::prepare_file_write(engine,state,&w.branch_id,&file_id,location.key(),&request.principal,&request.operation_id)?;
+                    super::directory::prepare_file_write(engine,state,&w.branch_id,&file_id,location.key(),&request.principal,request.operation_id)?;
                     let file_context=directory::branch_context_at_key(state,&w.branch_id,location.key());
                     let pending_source = file_context.as_ref().and_then(|c|state.branches.get(&c.branch_id)).and_then(|b|b.pending_file_versions.get(&file_id)).cloned()
                         .or_else(||directory::unwritten_source_at(state,&w.branch_id,location.key()).map(str::to_owned));
@@ -1593,7 +1593,7 @@ impl crate::engine::PlanningContext<'_> {
                 let mut entries = draft.into_entries();
                 let renamed_directories=directory::prepare_renamed_directories(state,&repo.repository_id,&current.entries,&w.namespace_operations)?;
                 let deleted = apply_workspace_namespace(&mut entries, &current.entries, &w.namespace_operations)?;
-                super::directory::namespace_locations(state,&repo.repository_id,&current.entries,&entries,&w.namespace_operations,&request.principal,&request.operation_id)?;
+                super::directory::namespace_locations(state,&repo.repository_id,&current.entries,&entries,&w.namespace_operations,&request.principal,request.operation_id)?;
                 validate_entries(&mut entries, engine.config.max_entries)?;
                 if entries == current.entries && deleted.is_empty() {
                     return Ok(json!({"commit_id":current.commit_id,"branch_id":branch.branch_id,"history_tree_id":branch.history_tree_id,"no_change":true}));
@@ -1606,7 +1606,7 @@ impl crate::engine::PlanningContext<'_> {
                     namespace_deletions: namespace::deletion_record(deleted, now()),
                     commit_id: commit_id.clone(), history_tree_id: branch.history_tree_id.clone(),
                     kind: "content".into(), parent_commit_ids: vec![current.commit_id.clone()],
-                    tree_id: new_id("tree"), sequence: state.sequence, operation_id: request.operation_id.clone(),
+                    tree_id: new_id("tree"), sequence: state.sequence, operation_id: request.operation_id,
                     author: request.principal.clone(), message: request.message.clone(), entries, pending_file_versions: snapshot_pending, provenance: None,
                 });
                 let target = state.branches.get_mut(&w.branch_id).expect("branch checked");
@@ -1616,17 +1616,17 @@ impl crate::engine::PlanningContext<'_> {
                 if !written_files.is_empty(){target.file_node_id=None;}
                 if branch.file_id.is_some() {
                     if let Some(path)=w.files.values().find(|file|directory::context_at_key(state,&repo.repository_id, file.path.key()).is_some_and(|c|c.branch_id==w.branch_id&&c.inherited_from.is_none())).map(|f|f.path.clone()) {
-                        super::file::publish_selected_file_at(state,&w.branch_id,Some(&path),&request.principal,&request.operation_id)?;
+                        super::file::publish_selected_file_at(state,&w.branch_id,Some(&path),&request.principal,request.operation_id)?;
                     }
                 } else if repo.main_branch_id == w.branch_id {
-                    super::file::synchronize_directory_edits(state, &commit_id, &written_paths, &request.principal, &request.operation_id)?;
+                    super::file::synchronize_directory_edits(state, &commit_id, &written_paths, &request.principal, request.operation_id)?;
                     let changed_paths = written_paths.into_iter()
                         .chain(w.namespace_operations.iter().flat_map(|n| std::iter::once(n.path().to_owned()).chain(n.destination().map(|path|path.as_str().to_owned()))))
                         .chain(renamed_directories)
                         .collect::<Vec<_>>();
                     super::directory::record_directory_edits(state, &repo.repository_id, &changed_paths, None)?;
                 }
-                Ok(json!({"commit_id":commit_id,"branch_id":w.branch_id,"history_tree_id":branch.history_tree_id,"file_node_ids":file_paths::operation_nodes(state,&request.operation_id)}))
+                Ok(json!({"commit_id":commit_id,"branch_id":w.branch_id,"history_tree_id":branch.history_tree_id,"file_node_ids":file_paths::operation_nodes(state,request.operation_id)}))
             },
         )?;
         Ok(WorkspaceMutation {

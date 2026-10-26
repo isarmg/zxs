@@ -119,7 +119,7 @@ impl Engine {
             );
         }
         Ok(
-            json!({"operation_id":new_id("op"),"workspace_id":id,"repository_id":repository.repository_id,"branch_id":w.branch_id,"expected_head":w.base_head,"fencing_token":w.fencing_token.to_string(),"message":"","requested_protection":"strict","file_placement":placement,"expected_topology_generation":self.state.topology_generation.to_string(),"sealed_manifest_hash":manifest_hash(&w)?}),
+            json!({"operation_id":OperationId::generate(),"workspace_id":id,"repository_id":repository.repository_id,"branch_id":w.branch_id,"expected_head":w.base_head,"fencing_token":w.fencing_token.to_string(),"message":"","requested_protection":"strict","file_placement":placement,"expected_topology_generation":self.state.topology_generation.to_string(),"sealed_manifest_hash":manifest_hash(&w)?}),
         )
     }
     pub fn commit_workspace_wire(
@@ -150,7 +150,7 @@ impl Engine {
         let envelope = ParsedWireEnvelope::parse(&request, &self.state, body)?;
         let workspace = self.workspace(&request.workspace_id)?;
         let replay = if self.state.operations.contains_key(&request.operation_id) {
-            Some(self.prepare_operation_health(self.operation_record(&request.operation_id)?))
+            Some(self.prepare_operation_health(self.operation_record(request.operation_id)?))
         } else {
             None
         };
@@ -214,7 +214,7 @@ impl crate::engine::PlanningContext<'_> {
         // binding between the authenticated request and its original body.
         let w = workspace;
         let repo = self.repository_for_branch(&w.branch_id)?;
-        if text(&body, "operation_id")? != request.operation_id
+        if text(&body, "operation_id")? != request.operation_id.to_string()
             || text(&body, "workspace_id")? != w.workspace_id
             || text(&body, "repository_id")? != repo.repository_id
             || text(&body, "branch_id")? != w.branch_id

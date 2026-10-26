@@ -1,0 +1,381 @@
+{
+  "complete": true,
+  "scope": "one fresh fixture per variant/mode, three complete Engine::open observations per history; process exit verifies final integrity; no profiler attribution or production timing gate",
+  "comparisons": [
+    {
+      "mode": "fixed",
+      "history": 64,
+      "baseline": {
+        "engine_open_seconds": [
+          0.974524954,
+          0.403604494,
+          0.401259628
+        ],
+        "selected_checkpoint_sequences": [
+          null,
+          65,
+          65
+        ],
+        "checkpoint_load_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "checkpoint_save_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "median_open_seconds": 0.403604494,
+        "state_json_bytes": 210330,
+        "post_probe_memory": {
+          "peak_rss_kib": 24416,
+          "rss_kib": 24416
+        }
+      },
+      "recovery": {
+        "engine_open_seconds": [
+          0.887970587,
+          0.345704961,
+          0.352213938
+        ],
+        "selected_checkpoint_sequences": [
+          null,
+          65,
+          65
+        ],
+        "checkpoint_load_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "checkpoint_save_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "median_open_seconds": 0.352213938,
+        "state_json_bytes": 210330,
+        "post_probe_memory": {
+          "peak_rss_kib": 24796,
+          "rss_kib": 24796
+        }
+      },
+      "median_ratio_recovery_over_baseline": 0.87267100152755
+    },
+    {
+      "mode": "fixed",
+      "history": 256,
+      "baseline": {
+        "engine_open_seconds": [
+          9.020807424,
+          4.591578538,
+          4.679125741
+        ],
+        "selected_checkpoint_sequences": [
+          65,
+          257,
+          257
+        ],
+        "checkpoint_load_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "checkpoint_save_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "median_open_seconds": 4.679125741,
+        "state_json_bytes": 832435,
+        "post_probe_memory": {
+          "peak_rss_kib": 75232,
+          "rss_kib": 75232
+        }
+      },
+      "recovery": {
+        "engine_open_seconds": [
+          8.142059485,
+          3.412352447,
+          3.453144151
+        ],
+        "selected_checkpoint_sequences": [
+          65,
+          257,
+          257
+        ],
+        "checkpoint_load_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "checkpoint_save_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "median_open_seconds": 3.453144151,
+        "state_json_bytes": 832435,
+        "post_probe_memory": {
+          "peak_rss_kib": 76080,
+          "rss_kib": 76080
+        }
+      },
+      "median_ratio_recovery_over_baseline": 0.7379891762135058
+    },
+    {
+      "mode": "fixed",
+      "history": 1024,
+      "baseline": {
+        "engine_open_seconds": [
+          162.6162794,
+          162.860223791,
+          161.76966721
+        ],
+        "selected_checkpoint_sequences": [
+          257,
+          257,
+          257
+        ],
+        "checkpoint_load_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "checkpoint_save_warning_codes": [
+          "CHECKPOINT_INVALID",
+          "CHECKPOINT_INVALID",
+          "CHECKPOINT_INVALID"
+        ],
+        "median_open_seconds": 162.6162794,
+        "state_json_bytes": 3321656,
+        "post_probe_memory": {
+          "peak_rss_kib": 96580,
+          "rss_kib": 89780
+        }
+      },
+      "recovery": {
+        "engine_open_seconds": [
+          134.528322842,
+          130.61502223,
+          135.393536143
+        ],
+        "selected_checkpoint_sequences": [
+          257,
+          257,
+          257
+        ],
+        "checkpoint_load_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "checkpoint_save_warning_codes": [
+          "CHECKPOINT_INVALID",
+          "CHECKPOINT_INVALID",
+          "CHECKPOINT_INVALID"
+        ],
+        "median_open_seconds": 134.528322842,
+        "state_json_bytes": 3321656,
+        "post_probe_memory": {
+          "peak_rss_kib": 99524,
+          "rss_kib": 88992
+        }
+      },
+      "median_ratio_recovery_over_baseline": 0.8272746328864784
+    },
+    {
+      "mode": "growing",
+      "history": 64,
+      "baseline": {
+        "engine_open_seconds": [
+          2.199225239,
+          1.106703822,
+          1.119161337
+        ],
+        "selected_checkpoint_sequences": [
+          null,
+          65,
+          65
+        ],
+        "checkpoint_load_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "checkpoint_save_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "median_open_seconds": 1.119161337,
+        "state_json_bytes": 748758,
+        "post_probe_memory": {
+          "peak_rss_kib": 32156,
+          "rss_kib": 32156
+        }
+      },
+      "recovery": {
+        "engine_open_seconds": [
+          1.899345355,
+          1.03405034,
+          0.896950564
+        ],
+        "selected_checkpoint_sequences": [
+          null,
+          65,
+          65
+        ],
+        "checkpoint_load_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "checkpoint_save_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "median_open_seconds": 1.03405034,
+        "state_json_bytes": 748758,
+        "post_probe_memory": {
+          "peak_rss_kib": 32108,
+          "rss_kib": 32108
+        }
+      },
+      "median_ratio_recovery_over_baseline": 0.9239510924956122
+    },
+    {
+      "mode": "growing",
+      "history": 256,
+      "baseline": {
+        "engine_open_seconds": [
+          170.658018523,
+          78.605804716,
+          84.748175477
+        ],
+        "selected_checkpoint_sequences": [
+          65,
+          257,
+          257
+        ],
+        "checkpoint_load_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "checkpoint_save_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "median_open_seconds": 84.748175477,
+        "state_json_bytes": 9474415,
+        "post_probe_memory": {
+          "peak_rss_kib": 187324,
+          "rss_kib": 163996
+        }
+      },
+      "recovery": {
+        "engine_open_seconds": [
+          122.933494087,
+          49.212255263,
+          46.402349978
+        ],
+        "selected_checkpoint_sequences": [
+          65,
+          257,
+          257
+        ],
+        "checkpoint_load_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "checkpoint_save_warning_codes": [
+          null,
+          null,
+          null
+        ],
+        "median_open_seconds": 49.212255263,
+        "state_json_bytes": 9474415,
+        "post_probe_memory": {
+          "peak_rss_kib": 199608,
+          "rss_kib": 176920
+        }
+      },
+      "median_ratio_recovery_over_baseline": 0.5806880795487547
+    }
+  ],
+  "process_resources": {
+    "baseline-fixed-1024-r1": {
+      "binary_sha256": "3908db91470eb51ead6d553443dcc125284b9f779dfc9b247626a6df4db6e5e2",
+      "argv": [
+        "/workspace/scratch/08a6fde47383/r5-recovery-measurement/baseline-startup",
+        "fixed",
+        "1024"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 591.6182090330003,
+      "user_cpu_seconds": 522.822009,
+      "system_cpu_seconds": 67.283516,
+      "max_rss_kib": 96580,
+      "minor_faults": 45613,
+      "major_faults": 0,
+      "voluntary_context_switches": 35136,
+      "involuntary_context_switches": 5672
+    },
+    "recovery-fixed-1024-r1": {
+      "binary_sha256": "ad39f4abdb0c782ed463fc827351897121aafdd0702cfebbe9729450d1c7f76a",
+      "argv": [
+        "/workspace/scratch/08a6fde47383/r5-recovery-measurement/recovery-startup",
+        "fixed",
+        "1024"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 510.26717455700054,
+      "user_cpu_seconds": 436.57616,
+      "system_cpu_seconds": 72.121036,
+      "max_rss_kib": 99524,
+      "minor_faults": 40506,
+      "major_faults": 0,
+      "voluntary_context_switches": 35132,
+      "involuntary_context_switches": 6229
+    },
+    "baseline-growing-256-r1": {
+      "binary_sha256": "3908db91470eb51ead6d553443dcc125284b9f779dfc9b247626a6df4db6e5e2",
+      "argv": [
+        "/workspace/scratch/08a6fde47383/r5-recovery-measurement/baseline-startup",
+        "growing",
+        "256"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 375.09907036000004,
+      "user_cpu_seconds": 356.437324,
+      "system_cpu_seconds": 18.268714,
+      "max_rss_kib": 187324,
+      "minor_faults": 370240,
+      "major_faults": 0,
+      "voluntary_context_switches": 8898,
+      "involuntary_context_switches": 2105
+    },
+    "recovery-growing-256-r1": {
+      "binary_sha256": "ad39f4abdb0c782ed463fc827351897121aafdd0702cfebbe9729450d1c7f76a",
+      "argv": [
+        "/workspace/scratch/08a6fde47383/r5-recovery-measurement/recovery-startup",
+        "growing",
+        "256"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 260.71782016400175,
+      "user_cpu_seconds": 242.05715,
+      "system_cpu_seconds": 18.276184,
+      "max_rss_kib": 199608,
+      "minor_faults": 404143,
+      "major_faults": 0,
+      "voluntary_context_switches": 8883,
+      "involuntary_context_switches": 1908
+    }
+  }
+}

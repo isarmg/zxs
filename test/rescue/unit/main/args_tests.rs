@@ -115,7 +115,12 @@ fn retained_workspace_flags_are_global_for_every_engine_command() {
         vec!["package", "export", "history", "/package"],
         vec!["package", "restore", "/package", "--primary-slot", "P01"],
         vec!["restore-system", "--disks", "/disk"],
-        vec!["recovery-preview", "operation", "--reason", "review"],
+        vec![
+            "recovery-preview",
+            "op_00000000000000000000000000000000",
+            "--reason",
+            "review",
+        ],
         vec![
             "recovery-commit",
             "recovery",
@@ -142,6 +147,79 @@ fn retained_workspace_flags_are_global_for_every_engine_command() {
                     .workspace_limits()
                     .unwrap()
                     .is_some()
+            );
+        }
+    }
+}
+
+#[test]
+fn operation_identifiers_are_parsed_at_the_command_line_boundary() {
+    for value in [
+        "op_00000000000000000000000000000000",
+        "op_ffffffffffffffffffffffffffffffff",
+    ] {
+        let args = Args::try_parse_from([
+            "zxs-rescue",
+            "recovery-preview",
+            value,
+            "--reason",
+            "review",
+        ])
+        .unwrap();
+        let Command::RecoveryPreview { operation, .. } = args.command else {
+            panic!("wrong command")
+        };
+        assert_eq!(operation.to_string(), value);
+        let args = Args::try_parse_from([
+            "zxs-rescue",
+            "package",
+            "restore",
+            "/package",
+            "--primary-slot",
+            "P01",
+            "--operation-id",
+            value,
+        ])
+        .unwrap();
+        let Command::Package {
+            command: PackageCommand::Restore { operation_id, .. },
+        } = args.command
+        else {
+            panic!("wrong command")
+        };
+        assert_eq!(operation_id, Some(operation));
+    }
+    for value in [
+        "",
+        "operation",
+        "op_0000000000000000000000000000000A",
+        "op_000000000000000000000000000000000",
+    ] {
+        for argv in [
+            vec![
+                "zxs-rescue",
+                "recovery-preview",
+                value,
+                "--reason",
+                "review",
+            ],
+            vec![
+                "zxs-rescue",
+                "package",
+                "restore",
+                "/package",
+                "--primary-slot",
+                "P01",
+                "--operation-id",
+                value,
+            ],
+        ] {
+            let error = Args::try_parse_from(argv)
+                .err()
+                .expect("invalid external operation ID");
+            assert_eq!(
+                error.kind(),
+                command_line::error::ErrorKind::ValueValidation
             );
         }
     }

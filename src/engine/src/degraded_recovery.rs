@@ -11,7 +11,7 @@ use std::{collections::BTreeSet, fs};
 pub struct RecoveryPlan {
     pub recovery_id: String,
     pub digest: String,
-    pub operation_id: String,
+    pub operation_id: OperationId,
     pub candidate_hash: String,
     pub principal: String,
     pub reason: String,
@@ -377,9 +377,14 @@ impl RecoveryProof {
 impl Engine {
     fn pending_recovery_candidate(
         &self,
-        operation: &str,
+        operation: OperationId,
         resume: Option<&RecoveryPlan>,
-    ) -> Result<(Candidate, State, Vec<MemberWitness>, Vec<Receipt>)> {
+    ) -> Result<(
+        Candidate,
+        crate::history_package::AdmittedState,
+        Vec<MemberWitness>,
+        Vec<Receipt>,
+    )> {
         self.require_recovery_locks()?;
         let mut candidate = None;
         let mut witnesses = Vec::new();
@@ -511,13 +516,16 @@ impl Engine {
         let candidate = candidate.ok_or_else(|| required("candidate missing"))?;
         let hash = object_hash("candidate", &candidate)?;
         exclude_publication(self, &candidate, &hash)?;
-        let state = self.load_bound_snapshot(&candidate.snapshot_hash)?;
+        let state = crate::publication_evidence::verified_snapshot(
+            &self.members(),
+            &candidate.snapshot_hash,
+        )?;
         crate::history_package::bound_history_objects(&self.members(), &candidate, Some(&state))?;
         Ok((candidate, state, witnesses, accepts))
     }
     pub fn prepare_degraded_recovery(
         &mut self,
-        operation: &str,
+        operation: OperationId,
         principal: &str,
         reason: &str,
     ) -> Result<RecoveryPlan> {
@@ -569,7 +577,7 @@ impl Engine {
         let mut plan = RecoveryPlan {
             recovery_id: new_id("recovery"),
             digest: String::new(),
-            operation_id: operation.into(),
+            operation_id: operation,
             candidate_hash: hash.clone(),
             principal: principal.into(),
             reason: reason.into(),
@@ -660,14 +668,14 @@ impl Engine {
         }
         if let Some(result) = self.state.operations.get(&plan.operation_id) {
             if result.result["recovery_id"].as_str() == Some(id) {
-                return self.operation(&plan.operation_id);
+                return self.operation(plan.operation_id);
             }
             return Err(required(
                 "the original operation already has a different published result",
             ));
         }
-        let (candidate, mut next, members, accepts) =
-            self.pending_recovery_candidate(&plan.operation_id, Some(&plan))?;
+        let (candidate, admitted, members, accepts) =
+            self.pending_recovery_candidate(plan.operation_id, Some(&plan))?;
         let (observed, loss_details) = freeze_observation(observe(self, &candidate)?);
         if canonical_json(&members)? != canonical_json(&plan.members)?
             || canonical_json(&accepts)? != canonical_json(&plan.original_accepts)?
@@ -681,8 +689,12 @@ impl Engine {
         }
         require_permanent_loss(self, &candidate, &plan.version_protection)?;
         let member_disks = self.members();
-        let history_objects =
-            crate::history_package::bound_history_objects(&member_disks, &candidate, Some(&next))?;
+        let history_objects = crate::history_package::bound_history_objects(
+            &member_disks,
+            &candidate,
+            Some(&admitted),
+        )?;
+        let mut next = admitted.into_state();
         let mut result = next
             .operations
             .get(&candidate.operation_id)
@@ -817,7 +829,7 @@ impl Engine {
             .verify(&candidate, &publication)?;
         self.complete_candidate(&candidate, &plan.candidate_hash, &next, Some(publication))?;
         next.operations
-            .insert(candidate.operation_id.clone(), result.clone());
+            .insert(candidate.operation_id, result.clone());
         self.state = std::sync::Arc::new(next);
         self.snapshot = Some(candidate.snapshot_hash);
         self.next_slot = self.next_slot.max(
@@ -832,7 +844,7 @@ impl Engine {
         self.rebuild_index()?;
         self.load_workspaces()?;
         self.blocked = false;
-        self.operation(&result.operation_id)
+        self.operation(result.operation_id)
     }
 }
 

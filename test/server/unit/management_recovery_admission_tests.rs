@@ -1,6 +1,6 @@
 //! Revoke only after offline open, before a new recovery action reaches the core.
 use super::*;
-use storage_engine::{CommitRequest, Config, Engine, new_id};
+use storage_engine::{CommitRequest, Config, Engine};
 
 const PASSWORD: &str = "recovery-admission-password";
 const NEW_PASSWORD: &str = "rotated-recovery-password";
@@ -53,10 +53,20 @@ impl Fixture {
         let mut engine =
             Engine::initialize(&data, Config::development(disks.values().cloned())).unwrap();
         engine
-            .persist_auth_state(auth.snapshot().unwrap(), "system_auth", &new_id("op"))
+            .persist_auth_state(
+                auth.snapshot().unwrap(),
+                "system_auth",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let repo = engine
-            .create_repository("Recovery admission", "P01", 3, "admin", &new_id("op"))
+            .create_repository(
+                "Recovery admission",
+                "P01",
+                3,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let workspace = engine
             .create_workspace(&repo.main_branch_id, "admin")
@@ -78,13 +88,13 @@ impl Fixture {
                     .join(&workspace.workspace_id)
             )
         );
-        let operation = new_id("op");
+        let operation = storage_contract::OperationId::generate();
         engine.inject_fault_once("after_accept_2");
         assert!(
             engine
                 .commit_workspace(CommitRequest {
                     workspace_id: workspace.workspace_id,
-                    operation_id: operation.clone(),
+                    operation_id: operation,
                     principal: "admin".into(),
                     expected_head: workspace.base_head,
                     fencing_token: workspace.fencing_token,
@@ -137,7 +147,7 @@ impl Fixture {
         let input = if action == "recovery_commit" {
             let mut engine = Engine::open_for_recovery(&data).unwrap();
             let plan = engine
-                .prepare_degraded_recovery(&operation, "admin", "all original bytes are lost")
+                .prepare_degraded_recovery(operation, "admin", "all original bytes are lost")
                 .unwrap();
             json!({"recovery_id":plan.recovery_id,"digest":plan.digest,"accept_permanent_loss":true})
         } else {
@@ -235,4 +245,153 @@ fn offline_recovery_revalidates_after_open_before_new_plan_or_publication() {
             }
         }
     }
+}
+
+#[tokio::test]
+async fn recovery_preview_http_parses_ids_before_lifecycle_and_keeps_auth_precedence() {
+    use http_routing::{body::Body, http::Request};
+    use service_stack::ServiceExt;
+
+    let fixture = Fixture::new("recovery_preview");
+    let config = crate::ServerConfig::loopback(&fixture.backend.inner.management_root);
+    let spool = crate::http_spool::HttpSpool::open_blocking(&config);
+    let telemetry = crate::telemetry::Telemetry::start(
+        fixture.backend.clone(),
+        &fixture._root.path().join("telemetry"),
+    )
+    .unwrap();
+    let app = crate::router_shared(
+        Arc::new(crate::AuthorizedBackend {
+            backend: fixture.backend.clone(),
+            auth: fixture.auth.clone(),
+        }),
+        fixture.auth.clone(),
+        config,
+        telemetry,
+        spool,
+    )
+    .unwrap();
+    let token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .login("admin", PASSWORD)
+        .unwrap()
+        .token;
+    let request = |token: Option<&str>, input: Value| {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/management/recovery-preview")
+            .header("content-type", "application/json");
+        if let Some(token) = token {
+            request = request.header("authorization", format!("Bearer {token}"));
+        }
+        request
+            .body(Body::from(json_codec::to_vec(&input).unwrap()))
+            .unwrap()
+    };
+    let before = evidence(
+        &fixture.backend.inner.data_root,
+        &fixture.backend.inner.setup_disks,
+    );
+    let system_before = files(&fixture.backend.inner.data_root);
+    // A valid request hits this existing lifecycle reservation; malformed IDs must not.
+    fixture
+        .backend
+        .inner
+        .recovering
+        .store(true, Ordering::SeqCst);
+    let cases = [
+        (json!({"reason":"boundary test"}), "INVALID_REQUEST"),
+        (
+            json!({"operation_id":"","reason":"boundary test"}),
+            "INVALID_REQUEST",
+        ),
+        (
+            json!({"operation_id":null,"reason":"boundary test"}),
+            "INVALID_REQUEST",
+        ),
+        (
+            json!({"operation_id":17,"reason":"boundary test"}),
+            "INVALID_REQUEST",
+        ),
+        (
+            json!({"operation_id":"op_short","reason":"boundary test"}),
+            "INVALID_ID",
+        ),
+        (
+            json!({"operation_id":"../../outside","reason":"boundary test"}),
+            "INVALID_ID",
+        ),
+        (
+            json!({"operation_id":"op_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","reason":"boundary test"}),
+            "INVALID_ID",
+        ),
+        (
+            json!({"operation_id":"ws_00000000000000000000000000000000","reason":"boundary test"}),
+            "INVALID_ID",
+        ),
+    ];
+    for (input, code) in &cases {
+        let response = app
+            .clone()
+            .oneshot(request(Some(&token), input.clone()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), ::http::StatusCode::BAD_REQUEST);
+        let bytes = http_routing::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let body: Value = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["code"], *code, "{input}");
+        assert!(fixture.backend.inner.recovering.load(Ordering::SeqCst));
+        assert_eq!(
+            evidence(
+                &fixture.backend.inner.data_root,
+                &fixture.backend.inner.setup_disks
+            ),
+            before
+        );
+        assert_eq!(files(&fixture.backend.inner.data_root), system_before);
+    }
+    let response = app
+        .clone()
+        .oneshot(request(Some(&token), fixture.input.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), ::http::StatusCode::CONFLICT);
+    let bytes = http_routing::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let body: Value = json_codec::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"]["code"], "STORAGE_RETRY_RUNNING");
+    fixture.auth.lock().unwrap().logout(&token).unwrap();
+    for token in [None, Some(token.as_str())] {
+        for (input, _) in &cases {
+            let response = app
+                .clone()
+                .oneshot(request(token, input.clone()))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), ::http::StatusCode::UNAUTHORIZED);
+            let bytes = http_routing::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap();
+            let body: Value = json_codec::from_slice(&bytes).unwrap();
+            assert_eq!(body["error"]["code"], "UNAUTHORIZED");
+        }
+    }
+    assert_eq!(
+        evidence(
+            &fixture.backend.inner.data_root,
+            &fixture.backend.inner.setup_disks
+        ),
+        before
+    );
+    assert_eq!(files(&fixture.backend.inner.data_root), system_before);
+    fixture
+        .backend
+        .inner
+        .recovering
+        .store(false, Ordering::SeqCst);
 }

@@ -222,7 +222,13 @@ fn published_fixture() -> (tempfile::TempDir, Engine, Repository) {
     )
     .unwrap();
     let repo = engine
-        .create_repository("Lookup", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "Lookup",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -235,7 +241,7 @@ fn published_fixture() -> (tempfile::TempDir, Engine, Repository) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -289,7 +295,7 @@ fn published_and_reopened_trees_preserve_unicode_identity_and_historical_lookup(
             NamespaceOperation::parse(NamespaceOperationKind::Rename, "STRASSE", Some("Moved"))
                 .unwrap(),
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let renamed = engine
@@ -312,7 +318,7 @@ fn published_and_reopened_trees_preserve_unicode_identity_and_historical_lookup(
             &repo.repository_id,
             NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "MOVED", None).unwrap(),
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap_err();
     assert_eq!(collision.code(), storage_contract::ErrorCode::NameCollision);
@@ -349,11 +355,11 @@ fn publication_rejects_bad_keys_unsorted_entries_and_normalized_collisions() {
         .clone();
     let before = canonical_json(engine.state()).unwrap();
     for corruption in ["order", "duplicate", "folded_duplicate"] {
-        let operation = new_id("op");
+        let operation = storage_contract::OperationId::generate();
         let result = engine.mutate(
             "test.invalid.namespace",
             "admin",
-            &operation,
+            operation,
             json_codec::json!({"corruption":corruption}),
             |_, state, _| {
                 let entries = &mut state.commits.get_mut(&head).unwrap().entries;
@@ -397,7 +403,13 @@ fn publication_rejects_bad_keys_unsorted_entries_and_normalized_collisions() {
 fn query_views_keep_missing_foreign_and_migrated_branch_errors() {
     let (_temporary, mut engine, repo) = published_fixture();
     let other = engine
-        .create_repository("Other lookup", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "Other lookup",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let foreign = engine.state().branches[&other.main_branch_id]
         .head_commit_id

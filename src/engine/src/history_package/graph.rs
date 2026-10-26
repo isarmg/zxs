@@ -3,7 +3,8 @@
 use super::HistoryManifest;
 use crate::{
     Error, HistoryTree, Repository, Result, canonical_json, canonical_json_value,
-    disk::MAX_METADATA, encode_hashed_value, journal::PreparedMetadataObject, object_hash_value,
+    disk::MAX_METADATA,
+    journal::{AuthenticatedMetadataObject, PreparedMetadataObject},
 };
 use data_serialization::{Deserialize, Serialize};
 use json_codec::{Map, Value};
@@ -94,7 +95,7 @@ struct HistoryIndex {
     children: BTreeMap<String, Reference>,
 }
 
-pub(super) type GraphObject = (String, String, Value);
+pub(super) type GraphObject = AuthenticatedMetadataObject;
 pub(super) type ResolvedGraph = (HistoryManifest, Vec<GraphObject>);
 
 fn invalid(message: &str) -> Error {
@@ -256,7 +257,7 @@ struct Resolver<F> {
     objects: Vec<GraphObject>,
     seen: BTreeMap<(String, String), usize>,
 }
-impl<F: FnMut(&str, &str) -> Result<Value>> Resolver<F> {
+impl<F: FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>> Resolver<F> {
     fn map(
         &mut self,
         reference: &Reference,
@@ -271,27 +272,22 @@ impl<F: FnMut(&str, &str) -> Result<Value>> Resolver<F> {
         }
         let domain = reference.kind.domain();
         let address = (domain.to_owned(), reference.hash.clone());
-        let value = match self.seen.get(&address) {
-            Some(index) => self.objects[*index].2.clone(),
-            None => {
-                let value = (self.load)(domain, &reference.hash)?;
-                if object_hash_value(domain, &value)? != reference.hash {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::ObjectCorrupt,
-                        "history graph object digest differs",
-                    ));
-                }
-                value
-            }
+        let loaded = match self.seen.get(&address) {
+            Some(_) => None,
+            None => Some((self.load)(domain, &reference.hash)?),
         };
+        let object = match &loaded {
+            Some(object) => object,
+            None => &self.objects[self.seen[&address]],
+        };
+        let value = object.value();
         match reference.kind {
             ReferenceKind::Page => {
                 let page = value
                     .as_object()
                     .ok_or_else(|| invalid("history graph leaf is not a map"))?;
-                let bytes = canonical_json_value(&value)?.len();
+                let bytes = object.bytes().len();
                 if page.len() > PAGE_ENTRIES
-                    || bytes > MAX_METADATA
                     || (bytes > PAGE_TARGET_BYTES && page.len() != 1)
                     || (page.is_empty() && !prefix.is_empty())
                 {
@@ -326,41 +322,21 @@ impl<F: FnMut(&str, &str) -> Result<Value>> Resolver<F> {
                 }
             }
         }
-        if !self.seen.contains_key(&address) {
+        if let Some(object) = loaded {
             self.seen.insert(address, self.objects.len());
-            self.objects
-                .push((domain.to_owned(), reference.hash.clone(), value));
+            self.objects.push(object);
         }
         Ok(())
     }
 }
 
-/// The caller must verify the root against the candidate's expected hash, and
-/// strictly decode JSON before passing Values (duplicate JSON fields cannot be
-/// recovered after parsing). Every referenced object's domain hash is checked
-/// here independently of any verification performed by the loader.
-pub(super) fn resolve(
-    root: Value,
-    load: impl FnMut(&str, &str) -> Result<Value>,
-) -> Result<HistoryManifest> {
-    resolve_with_objects(root, load).map(|(manifest, _)| manifest)
-}
-
-/// Return the exact reachable immutable values, deduplicated by domain and
-/// hash, with dependencies first and the exact paged root last. The expanded
-/// logical model is not an alternate root representation.
+/// Sources authenticate each address once before the resolver checks graph shape
+/// and route-dependent constraints. Returned objects retain their canonical bytes.
 pub(super) fn resolve_with_objects(
-    root: Value,
-    load: impl FnMut(&str, &str) -> Result<Value>,
+    root: AuthenticatedMetadataObject,
+    load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
 ) -> Result<ResolvedGraph> {
-    let hash = {
-        let (bytes, hash) = encode_hashed_value("history-manifest", &root)?;
-        if bytes.len() > MAX_METADATA {
-            return Err(invalid("history root exceeds the metadata reader limit"));
-        }
-        hash
-    };
-    let decoded: PagedHistoryRoot = json_codec::from_value(root.clone())?;
+    let decoded: PagedHistoryRoot = json_codec::from_value(root.value().clone())?;
     if decoded.maps.len() != MAP_FIELDS.len()
         || MAP_FIELDS
             .iter()
@@ -388,9 +364,7 @@ pub(super) fn resolve_with_objects(
         logical.insert(field, Value::Object(entries));
     }
     let manifest = json_codec::from_value(Value::Object(logical))?;
-    resolver
-        .objects
-        .push(("history-manifest".to_owned(), hash, root));
+    resolver.objects.push(root);
     Ok((manifest, resolver.objects))
 }
 

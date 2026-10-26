@@ -146,7 +146,7 @@ impl Engine {
         source_commit: &str,
         name: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<Branch> {
         super::validate_branch_name(name)?;
         let op = self.mutate(
@@ -201,7 +201,7 @@ impl Engine {
                         parent_commit_ids: vec![source_commit.into()],
                         tree_id: new_id("tree"),
                         sequence: state.sequence,
-                        operation_id: operation.into(),
+                        operation_id: operation,
                         author: principal.into(),
                         message: format!("Create pending branch {name}"),
                         entries,
@@ -249,7 +249,7 @@ impl Engine {
         target_branch: &str,
         target_commit: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<MergeLink> {
         let op = self.mutate(
             "merge-link.create",
@@ -316,7 +316,7 @@ impl Engine {
                     target_branch_id: target_branch.into(),
                     target_commit_id: target_commit.into(),
                     author: principal.into(),
-                    operation_id: operation.into(),
+                    operation_id: operation,
                 };
                 let id = link.merge_link_id.clone();
                 let history = link.history_tree_id.clone();
@@ -348,14 +348,14 @@ impl Engine {
             target_branch_id: target_branch.into(),
             target_commit_id: target_commit.into(),
             author: principal.into(),
-            operation_id: operation.into(),
+            operation_id: operation,
         })
     }
     pub fn archive_branch(
         &mut self,
         id: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         self.mutate(
             "branch.archive",

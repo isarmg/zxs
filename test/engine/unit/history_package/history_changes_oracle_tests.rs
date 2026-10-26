@@ -60,7 +60,7 @@ fn dependency_fixture() -> State {
         })));
         state.commits.insert(commit.into(), record(json!({
             "commit_id":commit,"history_tree_id":history,"kind":"save","parent_commit_ids":[],
-            "tree_id":"tree","sequence":"1","operation_id":"op","author":"author","message":"message",
+            "tree_id":"tree","sequence":"1","operation_id":"op_00000000000000000000000000000000","author":"author","message":"message",
             "entries":[{"entry_id":directory,"path":"directory","name":"directory","lookup_key":"directory",
                 "kind":"directory","file_id":"","version_id":"","size":"0"}],"provenance":null
         })));
@@ -91,21 +91,21 @@ fn dependency_fixture() -> State {
     );
     state.file_path_nodes.insert("node".into(), record(json!({
         "node_id":"node","history_tree_id":"h1","file_id":"shared-file","version_id":"v1",
-        "parent_node_ids":[],"branch_id":"b1","path":"new","previous_path":"old","operation_id":"op",
+        "parent_node_ids":[],"branch_id":"b1","path":"new","previous_path":"old","operation_id":"op_00000000000000000000000000000000",
         "author":"author","sequence":"1","created_at":"1"
     })));
     state.file_metadata_nodes.insert(
         "node".into(),
         record(json!({
             "node_id":"node","history_tree_id":"h2","file_id":"shared-file","version_id":"v2",
-            "parent_node_ids":[],"branch_id":"b2","kind":"tags","tags":[],"operation_id":"op",
+            "parent_node_ids":[],"branch_id":"b2","kind":"tags","tags":[],"operation_id":"op_00000000000000000000000000000000",
             "author":"author","sequence":"1","created_at":"1"
         })),
     );
     state.file_branch_merges.insert("merge".into(), record(json!({
         "merge_id":"merge","history_tree_id":"h1","file_id":"shared-file","input_branch_ids":[],
         "input_node_ids":[],"chosen_node_id":"node","result_node_id":"node","surviving_branch_id":"b1",
-        "reused_node":true,"parent_node_ids":[],"operation_id":"op","sequence":"1"
+        "reused_node":true,"parent_node_ids":[],"operation_id":"op_00000000000000000000000000000000","sequence":"1"
     })));
     state.placements.insert(
         "v1".into(),
@@ -116,7 +116,7 @@ fn dependency_fixture() -> State {
     );
     state.merge_links.insert("link".into(), record(json!({
         "merge_link_id":"link","history_tree_id":"h1","source_branch_id":"b1","source_commit_id":"c1",
-        "target_branch_id":"b1","target_commit_id":"c1","author":"author","operation_id":"op"
+        "target_branch_id":"b1","target_commit_id":"c1","author":"author","operation_id":"op_00000000000000000000000000000000"
     })));
     state.history_boundaries.insert("boundary".into(), record(json!({
         "boundary_id":"boundary","history_tree_id":"h1","local_commit_id":"c1","local_branch_id":null,
@@ -343,7 +343,7 @@ fn replacement_all_and_lost_lineage_are_conservative_but_control_state_is_indepe
         after.control_auth = Some(json!({"revision": "new"}));
         after.events.push(Event {
             sequence: 9,
-            operation_id: "op".into(),
+            operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
             kind: "file.save".into(),
             object_id: "h1".into(),
         });
@@ -351,7 +351,7 @@ fn replacement_all_and_lost_lineage_are_conservative_but_control_state_is_indepe
         after.plans = Default::default();
         after
             .operation_principals
-            .insert("op".into(), "author".into());
+            .insert(OperationId::generate(), "author".into());
     });
 }
 
@@ -363,7 +363,7 @@ fn save_oracle_file(engine: &mut Engine, branch: &str) -> String {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "oracle".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -417,10 +417,11 @@ fn assert_full_encoder_oracle(
     }
     for hash in expected.values() {
         let (_, graph) = bound_history_graph(oracle, hash).unwrap();
-        for (kind, digest, _) in graph {
+        for object in graph {
+            let (kind, digest) = (object.kind(), object.hash());
             assert_eq!(
-                fs::read(object_path(&members[0], &kind, &digest)).unwrap(),
-                fs::read(object_path(&oracle[0], &kind, &digest)).unwrap()
+                fs::read(object_path(&members[0], kind, digest)).unwrap(),
+                fs::read(object_path(&oracle[0], kind, digest)).unwrap()
             );
         }
     }
@@ -437,11 +438,23 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
     ]);
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let first = engine
-        .create_repository("first", "P01", 1, "oracle", &new_id("op"))
+        .create_repository(
+            "first",
+            "P01",
+            1,
+            "oracle",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let file = save_oracle_file(&mut engine, &first.main_branch_id);
     let second = engine
-        .create_repository("second", "P01", 1, "oracle", &new_id("op"))
+        .create_repository(
+            "second",
+            "P01",
+            1,
+            "oracle",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     save_oracle_file(&mut engine, &second.main_branch_id);
     let members = engine.members();
@@ -494,7 +507,13 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
     let base = engine.state().clone();
     let original_roots = store_history_manifests_bounded(&members, &base, MAX_METADATA).unwrap();
     let third = engine
-        .create_repository("third", "P01", 1, "oracle", &new_id("op"))
+        .create_repository(
+            "third",
+            "P01",
+            1,
+            "oracle",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let new_state = engine.state().clone();
     assert_eq!(
@@ -535,10 +554,11 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
     // A missing leaf (with an intact root on every replica) exercises failure
     // after the loader has already authenticated the published root.
     let (_, graph) = bound_history_graph(&config.disks, hash).unwrap();
-    let (kind, leaf, _) = graph
+    let object = graph
         .iter()
-        .find(|(kind, _, _)| kind == "state-page")
+        .find(|object| object.kind() == "state-page")
         .unwrap();
+    let (kind, leaf) = (object.kind(), object.hash());
     for disk in &config.disks {
         fs::remove_file(object_path(disk, kind, leaf)).unwrap();
     }
@@ -577,15 +597,15 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
     // the reconstructed State, even when the claimed object is wholly absent.
     let mut wrong_roots = roots.clone();
     wrong_roots.insert(history.clone(), "0".repeat(64));
-    let error = prepare_history_manifests_incremental(
+    let Err(error) = prepare_history_manifests_incremental(
         &before,
         &after,
         &wrong_roots,
         &config.disks,
         MAX_METADATA,
-    )
-    .err()
-    .expect("fallback must retain the exact published root");
+    ) else {
+        panic!("fallback must retain the exact published root");
+    };
     assert_eq!(error.code(), storage_contract::ErrorCode::ObjectCorrupt);
     assert!(error.message().contains("published baseline"));
 
@@ -615,4 +635,39 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
                 .is_symlink()
         );
     }
+}
+
+#[test]
+fn typed_operation_map_inserts_are_history_independent_even_with_all_tracking() {
+    let before = dependency_fixture();
+    let id = OperationId::generate();
+    assert_changes(&before, &[], |after| {
+        after.operations.insert(
+            id,
+            OperationResult {
+                operation_id: id,
+                kind: "file.save".into(),
+                commit_id: Some("c1".into()),
+                history_tree_id: Some("h1".into()),
+                branch_id: Some("b1".into()),
+                commit_state: CommitState::Published,
+                protection_at_publish: ProtectionAtPublish::NotApplicable,
+                current_health: CurrentHealth::Healthy,
+                request_digest: "digest".into(),
+                sequence: 1,
+                result: json!({}),
+            },
+        );
+        after.operation_principals.insert(id, "author".into());
+        assert!(matches!(
+            after.operations.changes_since(&before.operations),
+            MapChanges::All
+        ));
+        assert!(matches!(
+            after
+                .operation_principals
+                .changes_since(&before.operation_principals),
+            MapChanges::All
+        ));
+    });
 }

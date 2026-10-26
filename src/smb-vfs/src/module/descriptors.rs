@@ -1,8 +1,10 @@
 //! Owned descriptor snapshots and close/save ordering.
 use super::{Context, Open, authentication, bad, context, sdk};
+
+type Request = RawRequest<storage_contract::OperationId>;
 use smb_protocol::{
     client::{Client, close_descriptor},
-    protocol::{OpenResult, Request},
+    protocol::{OpenResult, Request as RawRequest},
 };
 use std::{
     os::fd::{FromRawFd, OwnedFd},

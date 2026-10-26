@@ -91,7 +91,7 @@ fn rescue_restores_from_two_old_members_without_management_commands() {
             "P01",
             3,
             "admin",
-            &storage_engine::new_id("op"),
+            storage_engine::OperationId::generate(),
         )
         .unwrap();
     let backend = std::sync::Arc::new(EngineBackend::new(engine));
@@ -154,7 +154,7 @@ fn rescue_restores_from_two_old_members_without_management_commands() {
 #[test]
 fn history_package_round_trip_preserves_checks_and_refuses_overwrite() {
     use std::os::unix::fs::PermissionsExt;
-    use storage_engine::{CommitRequest, Config, Engine, new_id};
+    use storage_engine::{CommitRequest, Config, Engine};
     let directory = tempfile::tempdir().unwrap();
     std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let source = directory.path().join("source");
@@ -165,7 +165,13 @@ fn history_package_round_trip_preserves_checks_and_refuses_overwrite() {
     };
     let mut engine = initialize(&source, "source");
     let repository = engine
-        .create_repository("package-fixture", "P01", 3, "admin", &new_id("op"))
+        .create_repository(
+            "package-fixture",
+            "P01",
+            3,
+            "admin",
+            storage_engine::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repository.main_branch_id, "admin")
@@ -180,7 +186,7 @@ fn history_package_round_trip_preserves_checks_and_refuses_overwrite() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_engine::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -362,5 +368,37 @@ fn invalid_retained_workspace_flags_do_not_create_state() {
         assert!(output.stdout.is_empty());
         assert!(!String::from_utf8_lossy(&output.stderr).contains("TOKIO_WORKER_THREADS"));
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn malformed_operation_id_is_rejected_before_opening_the_pool() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("unopened-pool");
+    for args in [
+        vec!["recovery-preview", "op_BAD", "--reason", "review"],
+        vec![
+            "package",
+            "restore",
+            "/unused-package",
+            "--primary-slot",
+            "P01",
+            "--operation-id",
+            "op_BAD",
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+            .arg("--root")
+            .arg(&root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("invalid op identifier")
+        );
+        assert!(!root.exists());
     }
 }

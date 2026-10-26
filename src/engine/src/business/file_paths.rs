@@ -20,7 +20,7 @@ pub(crate) fn rename_node(
     new: &Entry,
     context: Option<FileContext>,
     principal: &str,
-    operation: &str,
+    operation: OperationId,
 ) -> Result<FileContext> {
     let repo = state.repositories.get(repository).cloned().ok_or_else(|| {
         Error::new(
@@ -82,7 +82,7 @@ pub(crate) fn rename_node(
             previous_path: old.path().to_owned(),
             sequence: state.sequence,
             created_at: now(),
-            operation_id: operation.into(),
+            operation_id: operation,
             author: principal.into(),
         },
     );
@@ -100,7 +100,7 @@ pub(crate) fn rename_node(
     Ok(context)
 }
 
-pub(crate) fn operation_nodes(state: &State, operation: &str) -> Vec<String> {
+pub(crate) fn operation_nodes(state: &State, operation: OperationId) -> Vec<String> {
     state
         .file_path_nodes
         .values()
@@ -117,7 +117,7 @@ impl Engine {
         node: &str,
         note: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         self.set_file_node_note(file, node, note, principal, operation)
     }
@@ -127,7 +127,7 @@ impl Engine {
         node: &str,
         note: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         validate_note(note)?;
         self.mutate(
@@ -171,7 +171,7 @@ impl Engine {
         node: &str,
         name: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         validate_branch_name(name)?;
         self.mutate(

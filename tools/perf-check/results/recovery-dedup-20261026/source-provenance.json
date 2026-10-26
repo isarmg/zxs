@@ -1,0 +1,32 @@
+{
+  "created_utc": "2026-10-26T04:41:20.924267+00:00",
+  "remote_base": "3fd13d3e205e59b7b8f840ae164ad947e9a06533",
+  "toolchain": "rustc 1.99.0 (b940084d7 2026-09-28); cargo 1.99.0 (5f94df478 2026-08-27)",
+  "build_command": "CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo build --release -p perf-check --bin recovery-startup",
+  "variants": {
+    "baseline": {
+      "commit": "ff394c0326f0b2fe4ff652c4e188491e9d840276",
+      "tree": "04e4f0ef68eee446b82a4af375568d63ed234a68",
+      "base": "3fd13d3e205e59b7b8f840ae164ad947e9a06533",
+      "clean_worktree": true,
+      "overlay_sha256": "a1fe487c44a60f3cafab58521da895f8a0419518bcc584a9b3bd07d88396e121",
+      "fixture_sha256": "922c2b7523cea77010c7209e7878341bdf94ac086c1f72c64f4f0f6748beb31e",
+      "cargo_lock_sha256": "5a3c79884d18d3763a5c8b45bafb6bca8a176109e86b7f06e78fa9a29b404a82",
+      "target": "/workspace/scratch/08a6fde47383/targets/r5-recovery-baseline",
+      "binary_sha256": "3908db91470eb51ead6d553443dcc125284b9f779dfc9b247626a6df4db6e5e2"
+    },
+    "recovery": {
+      "commit": "de187851aff545ad9684916407e1724f820beacb",
+      "tree": "e596bcb921e75713fda1af2144df44eca3ee45e4",
+      "base": "3fd13d3e205e59b7b8f840ae164ad947e9a06533",
+      "clean_worktree": true,
+      "overlay_sha256": "4b332eb1e1d1f49e44a76a58b524d6492d1046fa5c33afbe8fe4d62297c4a979",
+      "fixture_sha256": "922c2b7523cea77010c7209e7878341bdf94ac086c1f72c64f4f0f6748beb31e",
+      "cargo_lock_sha256": "5a3c79884d18d3763a5c8b45bafb6bca8a176109e86b7f06e78fa9a29b404a82",
+      "target": "/workspace/scratch/08a6fde47383/targets/r5-recovery",
+      "binary_sha256": "ad39f4abdb0c782ed463fc827351897121aafdd0702cfebbe9729450d1c7f76a"
+    }
+  },
+  "scope": "Development fixture only; full Engine::open, not payload/physical redundancy evidence; one fixture per mode/variant, three opens at each history size; static audit, no profiler attribution",
+  "fixture_origin": "original state-sharing actual transaction workload, with unrelated clone/write/cursor/replay microbenchmarks removed identically from both variants; existing workload labels and default budgets unchanged"
+}

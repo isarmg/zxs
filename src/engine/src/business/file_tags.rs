@@ -123,7 +123,7 @@ impl Engine {
                     state.file_metadata_nodes.insert(node.clone(),FileMetadataNode {
                         node_id:node.clone(),history_tree_id:history,file_id:file.into(),version_id:version,
                         parent_node_ids:vec![target.source_node_id.clone()],branch_id:target.branch_id.clone(),
-                        kind:FileMetadataKind::Tags,tags:tags.clone(),operation_id:operation.into(),author:principal.into(),sequence:state.sequence,created_at:now(),
+                        kind:FileMetadataKind::Tags,tags:tags.clone(),operation_id:operation,author:principal.into(),sequence:state.sequence,created_at:now(),
                     });
                     if advance {
                         file_publication::advance_branch_node(state,&target.branch_id,&node,false,principal,operation)?;

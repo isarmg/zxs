@@ -15,8 +15,10 @@ use data_serialization::Deserialize;
 use json_codec::Value;
 use smb_protocol::{
     client::{Client, error_errno},
-    protocol::{DirectoryPage, NamespaceOperation, OpenResult, Request},
+    protocol::{DirectoryPage, NamespaceOperation, OpenResult, Request as RawRequest},
 };
+
+type Request = RawRequest<storage_contract::OperationId>;
 use std::{
     collections::BTreeMap,
     ffi::c_void,

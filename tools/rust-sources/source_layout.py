@@ -265,7 +265,8 @@ def inverse(path, data, row, moves):
 
 
 class Layout:
-    def __init__(self, root, receipt, receipt_id, catalog=None, pending_upgrade=None):
+    def __init__(self, root, receipt, receipt_id, catalog=None, pending_upgrade=None, prospective_maintenance=False):
+        self.legacy_maintenance = None
         self.pending_upgrade = pending_upgrade
         self.appended_origins = {}
         self.upgraded_owners = {}
@@ -288,6 +289,8 @@ class Layout:
         self.corrections = source_layout_corrections.load(self.root, self, catalog) if catalog is not None else None
         if catalog is not None:
             self.check_current_identity(catalog)
+            import proof_legacy_maintenance
+            self.legacy_maintenance = proof_legacy_maintenance.load(self, catalog, prospective_maintenance)
 
     def check_disk_catalog(self, force=False):
         path = safe(self.root, 'compliance/rust-sources.json')
@@ -432,6 +435,8 @@ class Layout:
 
     def project_bytes(self, path, data):
         """Apply the original exact layout inverse to supplied physical bytes."""
+        if self.legacy_maintenance is not None:
+            data = self.legacy_maintenance.read(path, data)
         if self.corrections is not None:
             data = self.corrections.read(path, data)
         if path in self.descendant_files and digest(data) != self.descendant_files[path]:
@@ -478,6 +483,8 @@ class Layout:
         return (old + '/',)
 
     def _project_hash(self, path, sha):
+        if self.legacy_maintenance is not None:
+            sha = self.legacy_maintenance.project_hash(path, sha)
         if self.corrections is not None:
             sha = self.corrections.project_hash(path, sha)
         edit = self.edits.get(path)
@@ -525,6 +532,8 @@ class Layout:
         return result
 
     def check_current_identity(self, catalog):
+        if self.legacy_maintenance is not None:
+            self.legacy_maintenance.validate_catalog(catalog)
         if catalog.get(KEY) != self.receipt_id:
             raise ValueError('missing or changed layout catalog binding')
         if self.corrections is not None:
@@ -803,7 +812,7 @@ def read_receipt(root, receipt_id):
     return json.loads(data)
 
 
-def load(root, catalog=None, pending_upgrade=None):
+def load(root, catalog=None, pending_upgrade=None, prospective_maintenance=False):
     root = Path(root).resolve()
     active = _ACTIVE.get()
     if active is not None and active.root == root and catalog is None:
@@ -817,7 +826,7 @@ def load(root, catalog=None, pending_upgrade=None):
         if any(safe(root, receipt_path(key)).exists() for key in PINNED_RECEIPTS):
             raise ValueError('layout receipt present but catalog binding removed')
         return None
-    return Layout(root, read_receipt(root, marker), marker, catalog, pending_upgrade)
+    return Layout(root, read_receipt(root, marker), marker, catalog, pending_upgrade, prospective_maintenance)
 
 
 @contextmanager

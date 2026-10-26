@@ -13,7 +13,13 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String, String) {
     )
     .unwrap();
     let repo = engine
-        .create_repository("split", "P01", 3, "admin", &new_id("op"))
+        .create_repository(
+            "split",
+            "P01",
+            3,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let mut commits = Vec::new();
     for bytes in [b"first".as_slice(), b"second".as_slice()] {
@@ -27,7 +33,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String, String) {
             engine
                 .commit_workspace(CommitRequest {
                     workspace_id: workspace.workspace_id,
-                    operation_id: new_id("op"),
+                    operation_id: storage_contract::OperationId::generate(),
                     principal: "admin".into(),
                     expected_head: workspace.base_head,
                     fencing_token: workspace.fencing_token,
@@ -176,7 +182,12 @@ fn snapshot_admission_rejects_broken_crossing_merge_endpoints() {
         let (_temporary, mut engine, repo, cut, _) = fixture();
         let prefix = engine.state.commits[&cut].parent_commit_ids[0].clone();
         let outside = engine
-            .create_branch(&prefix, "prefix", "admin", &new_id("op"))
+            .create_branch(
+                &prefix,
+                "prefix",
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let _plan = engine
             .create_split_plan(&repo.history_tree_id, &cut, "admin")
@@ -189,7 +200,7 @@ fn snapshot_admission_rejects_broken_crossing_merge_endpoints() {
             target_branch_id: outside.branch_id.clone(),
             target_commit_id: prefix.clone(),
             author: "admin".into(),
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
         };
         match corruption {
             "prefix_branch" => link.target_branch_id = "missing".into(),
@@ -260,7 +271,11 @@ fn split_generation_overflow_does_not_wrap_or_publish_migration() {
         }
         let before = canonical_json(engine.state()).unwrap();
         let error = engine
-            .commit_plan(&plan.plan_id, "admin", &new_id("op"))
+            .commit_plan(
+                &plan.plan_id,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap_err();
         assert_eq!(
             error.code(),

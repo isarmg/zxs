@@ -19,7 +19,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
-use storage_contract::{Entry, Workspace, new_id, parse_u64_decimal};
+use storage_contract::{Entry, OperationId, Workspace, new_id, parse_u64_decimal};
 
 const MAX_CONNECTIONS: usize = 64;
 const MAX_AUTHENTICATED_SESSIONS: usize = 8;
@@ -50,7 +50,7 @@ struct Shared {
     max_file_bytes: u64,
     authenticated_sessions: Mutex<usize>,
     file_writers: Mutex<BTreeSet<(String, String)>>,
-    namespace_operations: Mutex<BTreeSet<String>>,
+    namespace_operations: Mutex<BTreeSet<OperationId>>,
 }
 
 enum Handle {
@@ -82,7 +82,7 @@ struct Writer {
     workspace: Workspace,
     dirty: bool,
     committed: bool,
-    operation_id: String,
+    operation_id: OperationId,
     last_head: String,
     write_through: bool,
 }

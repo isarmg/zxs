@@ -341,7 +341,7 @@ pub struct FilePathNode {
     pub branch_id: String,
     pub path: String,
     pub previous_path: String,
-    pub operation_id: String,
+    pub operation_id: crate::OperationId,
     pub author: String,
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
@@ -362,7 +362,7 @@ pub struct FileMetadataNode {
     pub branch_id: String,
     pub kind: FileMetadataKind,
     pub tags: BTreeSet<String>,
-    pub operation_id: String,
+    pub operation_id: crate::OperationId,
     pub author: String,
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
@@ -386,7 +386,7 @@ pub struct FileBranchMerge {
     pub surviving_branch_id: String,
     pub reused_node: bool,
     pub parent_node_ids: Vec<String>,
-    pub operation_id: String,
+    pub operation_id: crate::OperationId,
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
 }
@@ -590,7 +590,7 @@ pub struct Commit {
     pub tree_id: String,
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
-    pub operation_id: String,
+    pub operation_id: crate::OperationId,
     pub author: String,
     pub message: String,
     pub entries: Vec<Entry>,
@@ -644,7 +644,7 @@ pub struct MergeLink {
     pub target_branch_id: String,
     pub target_commit_id: String,
     pub author: String,
-    pub operation_id: String,
+    pub operation_id: crate::OperationId,
 }
 /// Audit-only edge across a split boundary. External identifiers are provenance,
 /// never traversed as live commits or branches of this history.
@@ -828,7 +828,7 @@ pub struct Workspace {
 #[serialization(deny_unknown_fields)]
 pub struct CommitRequest {
     pub workspace_id: String,
-    pub operation_id: String,
+    pub operation_id: crate::OperationId,
     pub principal: String,
     pub expected_head: String,
     #[serialization(with = "crate::u64_string")]
@@ -995,7 +995,7 @@ impl CurrentHealth {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub struct OperationResult {
-    pub operation_id: String,
+    pub operation_id: crate::OperationId,
     pub kind: String,
     pub commit_id: Option<String>,
     pub history_tree_id: Option<String>,
@@ -1119,12 +1119,12 @@ pub struct State {
     pub merge_links: crate::TrackedMap<MergeLink>,
     pub history_boundaries: crate::TrackedMap<HistoryBoundary>,
     pub content_states: crate::TrackedMap<ContentState>,
-    pub operations: crate::TrackedMap<OperationResult>,
+    pub operations: crate::Tracked<BTreeMap<crate::OperationId, OperationResult>>,
     pub plans: crate::TrackedMap<Plan>,
     pub placement_rules: crate::TrackedMap<PlacementRule>,
     pub protection_policies: crate::TrackedMap<ProtectionPolicy>,
     /// Audit and idempotency owners of published operations, not user accounts.
-    pub operation_principals: crate::TrackedMap<String>,
+    pub operation_principals: crate::Tracked<BTreeMap<crate::OperationId, String>>,
     /// Private authentication control state; never expose State as a public API DTO.
     #[serialization(default)]
     pub control_auth: Option<json_codec::Value>,
@@ -1220,7 +1220,7 @@ impl State {
 pub struct Event {
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
-    pub operation_id: String,
+    pub operation_id: crate::OperationId,
     pub kind: String,
     pub object_id: String,
 }

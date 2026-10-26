@@ -150,7 +150,7 @@ impl Engine {
             published_state_base: self.published_state_base.clone(),
             next_slot: self.next_slot,
             replay: if replay {
-                Some(self.prepare_operation_health(self.operation_record(&request.operation_id)?))
+                Some(self.prepare_operation_health(self.operation_record(request.operation_id)?))
             } else {
                 None
             },
@@ -195,7 +195,7 @@ impl Engine {
             .contains_key(&prepared.request.operation_id)
         {
             self.validate_workspace_commit_replay(&prepared.request, &prepared.expected_digest)?;
-            return self.operation(&prepared.request.operation_id);
+            return self.operation(prepared.request.operation_id);
         }
         self.require_write()?;
         self.repository_for_branch(&workspace.branch_id)?;

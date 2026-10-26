@@ -4,6 +4,8 @@ pub mod api_path;
 pub mod client_protocol;
 pub mod encoding;
 mod integer_json;
+mod operation_id;
+pub use operation_id::OperationId;
 pub mod model;
 mod shared_records;
 mod tracked;

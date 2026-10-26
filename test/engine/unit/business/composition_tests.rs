@@ -8,7 +8,9 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
         Config::development([t.path().join("p"), t.path().join("b"), t.path().join("c")]),
     )
     .unwrap();
-    let r = e.create_disk_root("P01", "admin", &new_id("op")).unwrap();
+    let r = e
+        .create_disk_root("P01", "admin", storage_contract::OperationId::generate())
+        .unwrap();
     (t, e, r)
 }
 fn save(e: &mut Engine, r: &Repository, path: &str, bytes: &[u8]) {
@@ -16,7 +18,7 @@ fn save(e: &mut Engine, r: &Repository, path: &str, bytes: &[u8]) {
     e.stage_bytes(&w.workspace_id, path, bytes).unwrap();
     e.commit_workspace(CommitRequest {
         workspace_id: w.workspace_id,
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: w.base_head,
         fencing_token: w.fencing_token,
@@ -41,16 +43,28 @@ fn body(e: &Engine, id: &str) -> Vec<u8> {
     o
 }
 fn create(e: &mut Engine, r: &Repository, path: &str, name: &str) -> String {
-    e.create_directory_branches(&r.repository_id, path, name, "admin", &new_id("op"))
-        .unwrap()
-        .result["directory_branch_id"]
+    e.create_directory_branches(
+        &r.repository_id,
+        path,
+        name,
+        "admin",
+        storage_contract::OperationId::generate(),
+    )
+    .unwrap()
+    .result["directory_branch_id"]
         .as_str()
         .unwrap()
         .into()
 }
 fn select(e: &mut Engine, r: &Repository, path: &str, name: &str) {
-    e.select_directory_branches(&r.repository_id, path, name, "admin", &new_id("op"))
-        .unwrap();
+    e.select_directory_branches(
+        &r.repository_id,
+        path,
+        name,
+        "admin",
+        storage_contract::OperationId::generate(),
+    )
+    .unwrap();
 }
 #[test]
 fn directory_registration_reuses_nodes_and_lazy_first_write_forks_one_public_file() {
@@ -113,7 +127,7 @@ fn selecting_old_directory_restores_names_membership_and_hierarchy() {
         )
         .unwrap(),
         "admin",
-        &new_id("op"),
+        storage_contract::OperationId::generate(),
     )
     .unwrap();
     save(&mut e, &r, "folder/nested/added.txt", b"added");
@@ -134,8 +148,13 @@ fn explicit_same_node_selection_changes_intent_once_and_fences_old_workspaces() 
     select(&mut e, &r, "folder", "draft");
     let old = e.create_workspace(&r.main_branch_id, "admin").unwrap();
     let count = e.state().directory_trees.len();
-    e.select_file_branch(&file.file_id, &main, "admin", &new_id("op"))
-        .unwrap();
+    e.select_file_branch(
+        &file.file_id,
+        &main,
+        "admin",
+        storage_contract::OperationId::generate(),
+    )
+    .unwrap();
     assert!(e.state().directory_trees.len() > count);
     assert!(!e.state().file_write_origins.contains_key(&file.file_id));
     assert_eq!(
@@ -145,8 +164,13 @@ fn explicit_same_node_selection_changes_intent_once_and_fences_old_workspaces() 
         storage_contract::ErrorCode::FileBranchConflict
     );
     let count = e.state().directory_trees.len();
-    e.select_file_branch(&file.file_id, &main, "admin", &new_id("op"))
-        .unwrap();
+    e.select_file_branch(
+        &file.file_id,
+        &main,
+        "admin",
+        storage_contract::OperationId::generate(),
+    )
+    .unwrap();
     assert_eq!(e.state().directory_trees.len(), count);
     save(&mut e, &r, "folder/a.txt", b"B");
     assert_eq!(e.state().file_selections[&file.file_id], main);
@@ -215,12 +239,12 @@ fn move_transfers_following_but_retains_unselected_frozen_alias_and_identity() {
         kind: "move".into(),
         items: vec![item(&e, &m, "a/f.txt", Some((&l, "b/f.txt")))],
     };
-    let op = new_id("op");
+    let op = storage_contract::OperationId::generate();
     let receipt = e
-        .directory_namespace_batch(&r.repository_id, &request, "admin", &op)
+        .directory_namespace_batch(&r.repository_id, &request, "admin", op)
         .unwrap();
     assert_eq!(
-        e.directory_namespace_batch(&r.repository_id, &request, "admin", &op)
+        e.directory_namespace_batch(&r.repository_id, &request, "admin", op)
             .unwrap()
             .result,
         receipt.result
@@ -262,10 +286,10 @@ fn batch_move_recovery_keeps_source_and_target_in_one_decision() {
             kind: "move".into(),
             items: vec![item(&e, &m, "a/f.txt", Some((&l, "b/f.txt")))],
         };
-        let op = new_id("op");
+        let op = storage_contract::OperationId::generate();
         e.inject_fault_once(fault);
         let error = e
-            .directory_namespace_batch(&r.repository_id, &request, "admin", &op)
+            .directory_namespace_batch(&r.repository_id, &request, "admin", op)
             .unwrap_err();
         assert_eq!(
             error.code(),
@@ -282,7 +306,7 @@ fn batch_move_recovery_keeps_source_and_target_in_one_decision() {
         assert_eq!(view.contains_key("a/f.txt"), !published);
         assert_eq!(body(&e, &f.version_id), b"source");
         let result = e
-            .directory_namespace_batch(&r.repository_id, &request, "admin", &op)
+            .directory_namespace_batch(&r.repository_id, &request, "admin", op)
             .unwrap();
         assert_eq!(
             result.commit_state,
@@ -326,7 +350,7 @@ fn batch_rejects_ambiguous_move_and_late_collision_without_any_branch_change() {
                     items,
                 },
                 "admin",
-                &new_id("op"),
+                storage_contract::OperationId::generate(),
             )
             .unwrap_err();
         assert_eq!(error.code(), expected);
@@ -343,8 +367,14 @@ fn inherited_automatic_file_branch_name_is_utf8_safe_and_collision_free() {
     save(&mut e, &r, "a/f.txt", b"first");
     let original = entries(&e, &r)["a/f.txt"].clone();
     let existing = e.state().file_selections[&original.file_id].clone();
-    e.rename_directory_branch(&r.repository_id, &first, "renamed", "admin", &new_id("op"))
-        .unwrap();
+    e.rename_directory_branch(
+        &r.repository_id,
+        &first,
+        "renamed",
+        "admin",
+        storage_contract::OperationId::generate(),
+    )
+    .unwrap();
     create(&mut e, &r, "a", &name);
     select(&mut e, &r, "a", &name);
     save(&mut e, &r, "a/f.txt", b"second");
@@ -364,7 +394,7 @@ fn first_lazy_save_receipt_allows_the_same_writer_to_continue_but_fences_later_s
     e.stage_bytes(&w.workspace_id, "a/f.txt", b"own1").unwrap();
     e.commit_workspace(CommitRequest {
         workspace_id: w.workspace_id.clone(),
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: w.base_head,
         fencing_token: w.fencing_token,
@@ -393,7 +423,7 @@ fn a_directory_created_after_workspace_open_still_fences_new_file_staging() {
         &r.repository_id,
         NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "new", None).unwrap(),
         "admin",
-        &new_id("op"),
+        storage_contract::OperationId::generate(),
     )
     .unwrap();
     create(&mut e, &r, "new", "draft");
@@ -449,7 +479,7 @@ fn content_save_with_equivalent_spelling_preserves_the_existing_display_path() {
             )
             .unwrap(),
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
         assert_eq!(entries(&e, &r)[lookup_path].version_id, current.version_id);
@@ -506,7 +536,7 @@ fn namespace_bookkeeping_uses_paths_and_keeps_the_first_match_in_unsorted_entrie
         &after,
         &[NamespaceOperation::parse(NamespaceOperationKind::Delete, "Gone.txt", None).unwrap()],
         "admin",
-        "op",
+        OperationId::generate(),
     )
     .unwrap();
     assert_eq!(state.file_contexts.len(), 2);

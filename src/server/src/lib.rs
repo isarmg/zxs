@@ -26,6 +26,7 @@ mod uploads;
 mod web_assets;
 
 mod backend_action;
+mod operation_wire;
 pub use backend_action::BackendAction;
 
 use auth::{AuthStore, Identity};
@@ -178,7 +179,28 @@ fn verify_content_file(
 /// this request. It is not a user identity and has no public dispatch action.
 pub struct InternalDiskObservation(());
 
+#[derive(Debug, Clone)]
+pub struct CommitWorkspace {
+    pub workspace_id: String,
+    pub operation_id: storage_contract::OperationId,
+    pub expected_head: String,
+    pub fencing_token: u64,
+    pub message: String,
+    pub request_digest: Option<String>,
+}
+
 pub trait Backend: Send + Sync {
+    fn operation(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn commit_workspace(
+        &self,
+        identity: &Identity,
+        command: CommitWorkspace,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+
     fn setup_operation(
         &self,
         _action: &'static str,
@@ -283,6 +305,23 @@ impl AuthorizedBackend {
     }
 }
 impl Backend for AuthorizedBackend {
+    fn operation(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend
+            .operation(&self.current(identity)?, operation_id)
+    }
+    fn commit_workspace(
+        &self,
+        identity: &Identity,
+        command: CommitWorkspace,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend
+            .commit_workspace(&self.current(identity)?, command)
+    }
+
     fn snapshot_at(
         &self,
         identity: &Identity,

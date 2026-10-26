@@ -27,15 +27,19 @@ fn publish_namespace(
             json!({"workspace_id":workspace.workspace_id,"kind":kind,"path":path}),
         )?;
     }
-    backend.call(
-        crate::BackendAction::CommitWorkspaceInternal,
-        identity,
-        json!({
-            "workspace_id":workspace.workspace_id,"operation_id":new_id("op"),
-            "expected_head":workspace.base_head,"fencing_token":workspace.fencing_token.to_string(),
-            "message":"concurrent namespace fixture"
-        }),
-    )
+    backend
+        .commit_workspace(
+            identity,
+            crate::CommitWorkspace {
+                workspace_id: workspace.workspace_id,
+                operation_id: OperationId::generate(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: "concurrent namespace fixture".into(),
+                request_digest: None,
+            },
+        )
+        .map(|result| json!(result))
 }
 
 struct NamespaceAfterWorkspace {
@@ -46,6 +50,21 @@ struct NamespaceAfterWorkspace {
 }
 
 impl Backend for NamespaceAfterWorkspace {
+    fn operation(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.inner.operation(identity, operation_id)
+    }
+    fn commit_workspace(
+        &self,
+        identity: &Identity,
+        command: crate::CommitWorkspace,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.inner.commit_workspace(identity, command)
+    }
+
     fn snapshot_at(
         &self,
         identity: &Identity,
@@ -276,15 +295,19 @@ fn publication_comparison_uses_entry_identity_in_renamed_commit() {
             }),
         )
         .unwrap();
-    let renamed_publication = backend.call(
-        crate::BackendAction::CommitWorkspaceInternal,
-        &session.identity,
-        json!({
-            "workspace_id":workspace.workspace_id,"operation_id":new_id("op"),
-            "expected_head":workspace.base_head,"fencing_token":workspace.fencing_token.to_string(),
-            "message":"rename identity fixture"
-        }),
-    ).unwrap();
+    let renamed_publication = backend
+        .commit_workspace(
+            &session.identity,
+            crate::CommitWorkspace {
+                workspace_id: workspace.workspace_id,
+                operation_id: OperationId::generate(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: "rename identity fixture".into(),
+                request_digest: None,
+            },
+        )
+        .unwrap();
     assert!(session.find("report.txt").unwrap().is_none());
     let renamed = session.find("renamed.txt").unwrap().unwrap();
     assert_eq!(renamed.entry_id, opened.entry_id);

@@ -95,7 +95,7 @@ fn event_state(count: usize) -> State {
         events: (0..count)
             .map(|index| Event {
                 sequence: index as u64,
-                operation_id: format!("op-{index}"),
+                operation_id: format!("op_{index:032x}").parse().unwrap(),
                 kind: "MUTATION".into(),
                 object_id: "retained-history".into(),
             })
@@ -153,7 +153,7 @@ fn current_snapshot_and_candidate_are_strict_unversioned_structures() {
         pool_id: new_id("pool"),
         sequence: 1,
         transaction_id: new_id("tx"),
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         request_digest: "a".repeat(64),
         previous_snapshot: None,
         snapshot_hash: prepared.hash,
@@ -583,4 +583,22 @@ fn content_state_snapshot_pages_keep_string_bytes_and_reject_unknown_values() {
             bytes
         );
     }
+}
+
+#[test]
+fn operation_id_pages_keep_legacy_string_key_bytes_and_boundaries() {
+    let mut state = State::default();
+    let mut legacy = json_codec::Map::new();
+    for index in 0..4096u64 {
+        let raw = format!("op_{index:032x}");
+        let id = raw.parse().unwrap();
+        state.operation_principals.insert(id, "owner".into());
+        legacy.insert(raw, json_codec::json!("owner"));
+    }
+    let prepared = prepare_snapshot(&state, MAX_METADATA).unwrap();
+    let expected = partition(&legacy)
+        .iter()
+        .map(|page| object_hash("state-page", page).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(prepared.descriptor.pages["operation_principals"], expected);
 }

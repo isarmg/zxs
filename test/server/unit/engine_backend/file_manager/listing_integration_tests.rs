@@ -11,7 +11,13 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
     ]);
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
-        .create_repository("Files", "P01", 3, "owner", &new_id("op"))
+        .create_repository(
+            "Files",
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "owner")
@@ -31,7 +37,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -78,7 +84,12 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
         assert_eq!(back["snapshot"], first["snapshot"]);
     }
     engine
-        .initialize_directory_scope(&repo.repository_id, "", "owner", &new_id("op"))
+        .initialize_directory_scope(
+            &repo.repository_id,
+            "",
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let initial =
         listing::entries(&engine, &json!({"slot_id":"P01","query":{"path":"Files"}})).unwrap();
@@ -142,7 +153,13 @@ fn selected_display_path_may_include_a_repository_prefix_beyond_stored_path_limi
     )
     .unwrap();
     let repo = engine
-        .create_repository("Repository", "P01", 1, "owner", &new_id("op"))
+        .create_repository(
+            "Repository",
+            "P01",
+            1,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "owner")
@@ -154,7 +171,7 @@ fn selected_display_path_may_include_a_repository_prefix_beyond_stored_path_limi
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,

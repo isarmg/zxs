@@ -1,0 +1,17 @@
+{
+  "binary_sha256": "ad39f4abdb0c782ed463fc827351897121aafdd0702cfebbe9729450d1c7f76a",
+  "argv": [
+    "/workspace/scratch/08a6fde47383/r5-recovery-measurement/recovery-startup",
+    "fixed",
+    "1024"
+  ],
+  "exit_code": 0,
+  "wall_seconds": 510.26717455700054,
+  "user_cpu_seconds": 436.57616,
+  "system_cpu_seconds": 72.121036,
+  "max_rss_kib": 99524,
+  "minor_faults": 40506,
+  "major_faults": 0,
+  "voluntary_context_switches": 35132,
+  "involuntary_context_switches": 6229
+}

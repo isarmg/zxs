@@ -95,6 +95,42 @@ struct NamespaceFailure {
     aborts: AtomicUsize,
 }
 impl Backend for NamespaceFailure {
+    fn operation(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.inner.operation(identity, operation_id)
+    }
+    fn commit_workspace(
+        &self,
+        identity: &Identity,
+        command: crate::CommitWorkspace,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let input = json!({"workspace_id":command.workspace_id,"operation_id":command.operation_id,
+            "expected_head":command.expected_head,"fencing_token":command.fencing_token.to_string(),"message":command.message});
+
+        let path = self.spool.join(format!(
+            "{}.namespace.json",
+            input["operation_id"].as_str().unwrap()
+        ));
+        let record: Value = json_codec::from_slice(
+            &fs::read(&path).expect("recovery record must precede submission"),
+        )
+        .unwrap();
+        assert_eq!(record["commit_request"], input);
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o7777, 0o600);
+        self.commits.lock().unwrap().push(input.clone());
+        if self.publish {
+            self.inner.commit_workspace(identity, command)?;
+        }
+        Err(ApiError::new(
+            ::http::StatusCode::SERVICE_UNAVAILABLE,
+            storage_contract::ErrorCode::InjectedFailure,
+            "injected uncertain publication outcome",
+        ))
+    }
+
     fn snapshot_at(
         &self,
         identity: &crate::auth::Identity,
@@ -123,27 +159,7 @@ impl Backend for NamespaceFailure {
         if action == crate::BackendAction::AbortWorkspace {
             self.aborts.fetch_add(1, Ordering::SeqCst);
         }
-        if action == crate::BackendAction::CommitWorkspaceInternal {
-            let path = self.spool.join(format!(
-                "{}.namespace.json",
-                input["operation_id"].as_str().unwrap()
-            ));
-            let record: Value = json_codec::from_slice(
-                &fs::read(&path).expect("recovery record must precede submission"),
-            )
-            .unwrap();
-            assert_eq!(record["commit_request"], input);
-            assert_eq!(fs::metadata(&path).unwrap().mode() & 0o7777, 0o600);
-            self.commits.lock().unwrap().push(input.clone());
-            if self.publish {
-                self.inner.call(action, identity, input)?;
-            }
-            return Err(ApiError::new(
-                ::http::StatusCode::SERVICE_UNAVAILABLE,
-                storage_contract::ErrorCode::InjectedFailure,
-                "injected uncertain publication outcome",
-            ));
-        }
+
         self.inner.call(action, identity, input)
     }
     fn upload(
@@ -481,7 +497,7 @@ fn write_through_dirty_error_identifies_the_new_submitted_generation() {
         })
         .unwrap();
     let first = match &session.handles[&opened.handle] {
-        Handle::Write(writer) => writer.operation_id.clone(),
+        Handle::Write(writer) => writer.operation_id,
         _ => unreachable!(),
     };
     backend.fail.store(true, Ordering::SeqCst);
@@ -493,11 +509,14 @@ fn write_through_dirty_error_identifies_the_new_submitted_generation() {
         .unwrap_err();
     assert_eq!(error.code, storage_contract::ErrorCode::InjectedFailure);
     let current = match &session.handles[&opened.handle] {
-        Handle::Write(writer) => writer.operation_id.clone(),
+        Handle::Write(writer) => writer.operation_id,
         _ => unreachable!(),
     };
     assert_ne!(current, first);
-    assert_eq!(error.operation_id.as_deref(), Some(current.as_str()));
+    assert_eq!(
+        error.operation_id.as_deref(),
+        Some(current.to_string().as_str())
+    );
     let operation = backend
         .inner
         .call(
@@ -523,6 +542,22 @@ struct PreparationFailure {
     commits: AtomicUsize,
 }
 impl Backend for PreparationFailure {
+    fn operation(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.inner.operation(identity, operation_id)
+    }
+    fn commit_workspace(
+        &self,
+        identity: &Identity,
+        command: crate::CommitWorkspace,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.commits.fetch_add(1, Ordering::SeqCst);
+        self.inner.commit_workspace(identity, command)
+    }
+
     fn snapshot_at(
         &self,
         identity: &crate::auth::Identity,
@@ -555,9 +590,6 @@ impl Backend for PreparationFailure {
         identity: &Identity,
         input: Value,
     ) -> Result<Value, ApiError> {
-        if action == crate::BackendAction::CommitWorkspaceInternal {
-            self.commits.fetch_add(1, Ordering::SeqCst);
-        }
         if action == crate::BackendAction::AbortWorkspace {
             self.aborts.fetch_add(1, Ordering::SeqCst);
             if self.abort_fails {
@@ -706,7 +738,7 @@ fn dropped_successful_rpc_frame_keeps_the_client_allocated_operation_queryable()
     let operation_id = new_id("op");
     client
         .send(
-            &Request::Namespace {
+            &Request::<String>::Namespace {
                 operation_id: operation_id.clone(),
                 kind: smb_protocol::protocol::NamespaceOperation::Rename,
                 path: "report.txt".into(),
@@ -773,15 +805,15 @@ fn namespace_identity_validation_and_replay_admission_precede_workspace_creation
         fs::read(record).unwrap(),
         b"existing evidence must not be altered"
     );
-    let active_operation = new_id("op");
+    let active_operation = OperationId::generate();
     shared
         .namespace_operations
         .lock()
         .unwrap()
-        .insert(active_operation.clone());
+        .insert(active_operation);
     assert_eq!(
         session
-            .dispatch(request(active_operation.clone()))
+            .dispatch(request(active_operation.to_string()))
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::RecoveryRequired
@@ -818,4 +850,135 @@ fn namespace_identity_validation_and_replay_admission_precede_workspace_creation
     );
     assert!(backend.change_before_workspace.load(Ordering::SeqCst));
     assert!(shared.namespace_operations.lock().unwrap().is_empty());
+}
+
+#[test]
+fn malformed_raw_operation_ids_keep_handles_and_reject_before_side_effects() {
+    let (_temp, shared, backend, branch) = fixture();
+    let mut session = session(shared.clone(), &branch);
+    let (opened, descriptor) = session
+        .open("report.txt".into(), false, false, false, false, false)
+        .unwrap();
+    let opened: OpenResult = json_codec::from_value(opened).unwrap();
+    let file = File::from(descriptor.unwrap());
+    let spool = || {
+        fs::read_dir(&shared.spool)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<BTreeSet<_>>()
+    };
+    let before = spool();
+    backend
+        .change_before_workspace
+        .store(true, Ordering::SeqCst);
+    for operation_id in [
+        "",
+        "../../outside",
+        "op_short",
+        "ws_0123456789abcdef0123456789abcdef",
+        "op_0123456789ABCDEF0123456789ABCDEF",
+    ] {
+        let bytes = json_codec::to_vec(&json!({"op":"namespace", "operation_id":operation_id,
+            "kind":"mkdir", "path":"untouched", "destination":null, "replace":false}))
+        .unwrap();
+        let raw: Request<String> = json_codec::from_slice(&bytes).unwrap();
+        let error = session.dispatch(raw).unwrap_err();
+        assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
+        assert!(error.operation_id.is_none());
+        assert_eq!(session.handles.len(), 1);
+        session
+            .dispatch(Request::AuthorizeRead {
+                handle: opened.handle,
+            })
+            .unwrap();
+        let mut byte = [0];
+        assert_eq!(file.read_at(&mut byte, 0).unwrap(), 1);
+        assert_eq!(spool(), before);
+        assert!(backend.change_before_workspace.load(Ordering::SeqCst));
+        assert!(session.writer_locks.is_empty());
+        assert!(shared.namespace_operations.lock().unwrap().is_empty());
+    }
+    session
+        .dispatch(Request::Close {
+            handle: opened.handle,
+        })
+        .unwrap();
+    assert!(session.handles.is_empty());
+}
+
+#[test]
+fn malformed_namespace_id_frames_keep_the_authenticated_stream_and_reader_alive() {
+    let (_temp, shared, backend, _branch) = fixture();
+    let (mut wire, worker) = connect(shared.clone());
+    wire.send(
+        &Request::<String>::Open {
+            path: "report.txt".into(),
+            writable: false,
+            create: false,
+            truncate: false,
+            exclusive: false,
+            write_through: false,
+        },
+        None,
+    )
+    .unwrap();
+    let (response, descriptor) = wire.receive::<Response>().unwrap();
+    let Response::Ok { result } = response else {
+        panic!("reader must open")
+    };
+    let opened: OpenResult = json_codec::from_value(result).unwrap();
+    let file = File::from(descriptor.unwrap());
+    let spool = || {
+        fs::read_dir(&shared.spool)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<BTreeSet<_>>()
+    };
+    let before = spool();
+    backend
+        .change_before_workspace
+        .store(true, Ordering::SeqCst);
+    for operation_id in [
+        "",
+        "op_short",
+        "../../outside",
+        "op_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    ] {
+        wire.send(
+            &json!({"op":"namespace", "operation_id":operation_id,"kind":"mkdir",
+            "path":"untouched", "destination":null, "replace":false}),
+            None,
+        )
+        .unwrap();
+        let (response, descriptor) = wire.receive::<Response>().unwrap();
+        assert!(descriptor.is_none());
+        let Response::Error {
+            code, operation_id, ..
+        } = response
+        else {
+            panic!("invalid ID must fail")
+        };
+        assert_eq!(code, storage_contract::ErrorCode::InvalidRequest);
+        assert!(operation_id.is_none());
+        call(
+            &mut wire,
+            Request::AuthorizeRead {
+                handle: opened.handle,
+            },
+        )
+        .unwrap();
+        let mut byte = [0];
+        assert_eq!(file.read_at(&mut byte, 0).unwrap(), 1);
+        assert_eq!(spool(), before);
+        assert!(backend.change_before_workspace.load(Ordering::SeqCst));
+    }
+    call(
+        &mut wire,
+        Request::Close {
+            handle: opened.handle,
+        },
+    )
+    .unwrap();
+    drop(wire);
+    worker.join().unwrap();
 }

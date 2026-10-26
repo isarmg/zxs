@@ -20,6 +20,21 @@ struct TestBackend {
     path: PathBuf,
 }
 impl Backend for TestBackend {
+    fn operation(
+        &self,
+        _: &crate::auth::Identity,
+        _: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        unreachable!("this test backend does not query operations")
+    }
+    fn commit_workspace(
+        &self,
+        _: &crate::auth::Identity,
+        _: crate::CommitWorkspace,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        unreachable!("this test backend does not commit workspaces")
+    }
+
     fn snapshot_at(
         &self,
         _: &crate::auth::Identity,
@@ -649,6 +664,21 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         gate: Arc<(Mutex<bool>, std::sync::Condvar)>,
     }
     impl Backend for BlockingUpload {
+        fn operation(
+            &self,
+            _: &crate::auth::Identity,
+            _: storage_contract::OperationId,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            unreachable!("this test backend does not query operations")
+        }
+        fn commit_workspace(
+            &self,
+            _: &crate::auth::Identity,
+            _: crate::CommitWorkspace,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            unreachable!("this test backend does not commit workspaces")
+        }
+
         fn snapshot_at(
             &self,
             _: &crate::auth::Identity,

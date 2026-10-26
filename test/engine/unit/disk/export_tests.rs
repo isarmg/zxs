@@ -84,7 +84,13 @@ fn published_body() -> (tempfile::TempDir, PathBuf, FileVersion) {
     ]);
     let mut engine = Engine::initialize(&temporary.path().join("system"), config.clone()).unwrap();
     let repository = engine
-        .create_repository("Export", "P01", 3, "owner", &new_id("op"))
+        .create_repository(
+            "Export",
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repository.main_branch_id, "owner")
@@ -95,7 +101,7 @@ fn published_body() -> (tempfile::TempDir, PathBuf, FileVersion) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -195,7 +201,13 @@ fn tombstoned_body(state: &str) -> (tempfile::TempDir, Engine, Config, FileVersi
     ]);
     let mut engine = Engine::initialize(&root.join("system"), config.clone()).unwrap();
     let repository = engine
-        .create_repository("Tombstones", "P01", 3, "owner", &new_id("op"))
+        .create_repository(
+            "Tombstones",
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let mut saved = Vec::new();
     for bytes in [b"old", b"new"] {
@@ -208,7 +220,7 @@ fn tombstoned_body(state: &str) -> (tempfile::TempDir, Engine, Config, FileVersi
         let committed = engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "owner".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -234,7 +246,11 @@ fn tombstoned_body(state: &str) -> (tempfile::TempDir, Engine, Config, FileVersi
         _ => panic!("unexpected tombstone state"),
     };
     engine
-        .commit_plan(&plan.plan_id, "owner", &new_id("op"))
+        .commit_plan(
+            &plan.plan_id,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     assert_eq!(engine.state().content_states[old].as_str(), state);
     let version = engine.state().versions[old].clone();
@@ -353,7 +369,13 @@ fn restored_tombstones_need_no_source_payload_proofs() {
         ]);
         let mut restored = Engine::initialize(&root.join("system"), config.clone()).unwrap();
         restored
-            .restore_history_package(&package, "P01", 3, "owner", &new_id("op"))
+            .restore_history_package(
+                &package,
+                "P01",
+                3,
+                "owner",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         assert_eq!(
             restored.state().content_states[&version.version_id].as_str(),

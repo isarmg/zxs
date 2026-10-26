@@ -2,7 +2,7 @@
 use crate::{Engine, Error, FileMergeInput, FileTagTarget, Result};
 use data_serialization::Serialize;
 use json_codec::{Value, json};
-use storage_contract::NamespaceEntryKind;
+use storage_contract::{NamespaceEntryKind, OperationId};
 
 /// Current namespace context is a mutation precondition, not stored graph data.
 #[derive(Debug, Clone, Serialize)]
@@ -18,7 +18,7 @@ pub struct FileNodeTagsUpdateRequest<'a> {
     pub remove: &'a [String],
     pub location: Option<&'a FileLocation>,
     pub principal: &'a str,
-    pub operation_id: &'a str,
+    pub operation_id: OperationId,
 }
 
 impl FileNodeTagsUpdateRequest<'_> {
@@ -37,7 +37,7 @@ pub struct FileBranchMergeRequest<'a> {
     pub surviving_branch_id: &'a str,
     pub location: Option<&'a FileLocation>,
     pub principal: &'a str,
-    pub operation_id: &'a str,
+    pub operation_id: OperationId,
 }
 
 impl FileBranchMergeRequest<'_> {

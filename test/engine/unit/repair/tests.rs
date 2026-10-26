@@ -1,6 +1,6 @@
 use super::*;
 use std::io::Read;
-fn pending() -> (tempfile::TempDir, PathBuf, Config, String, String) {
+fn pending() -> (tempfile::TempDir, PathBuf, Config, String, OperationId) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");
     let config = Config::development([
@@ -10,7 +10,13 @@ fn pending() -> (tempfile::TempDir, PathBuf, Config, String, String) {
     ]);
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     let repo = engine
-        .create_repository("repair", "P01", 3, "admin", &new_id("op"))
+        .create_repository(
+            "repair",
+            "P01",
+            3,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -18,13 +24,13 @@ fn pending() -> (tempfile::TempDir, PathBuf, Config, String, String) {
     engine
         .stage_bytes(&workspace.workspace_id, "a", b"verified original bytes")
         .unwrap();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     engine.inject_fault_once("after_accept_2");
     assert_eq!(
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: operation.clone(),
+                operation_id: operation,
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -64,7 +70,7 @@ fn recovery_repairs_missing_replicas_without_replacing_the_candidate_or_route() 
     fs::remove_file(backup.join("checksums.bin")).unwrap();
     let engine = Engine::open(&root).unwrap();
     assert_eq!(
-        engine.operation(&operation).unwrap().commit_state,
+        engine.operation(operation).unwrap().commit_state,
         storage_contract::CommitState::Published
     );
     let entries = engine.list_tree(&branch).unwrap();
@@ -89,7 +95,7 @@ fn recovery_uses_retained_workspace_bytes_when_all_candidate_replicas_are_lost()
     }
     let engine = Engine::open(&root).unwrap();
     assert_eq!(
-        engine.operation(&operation).unwrap().commit_state,
+        engine.operation(operation).unwrap().commit_state,
         storage_contract::CommitState::Published
     );
     assert_eq!(engine.list_tree(&branch).unwrap().len(), 1);

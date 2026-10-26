@@ -24,7 +24,7 @@ fn first_save(
     file.write_all_at(b"one", 0).unwrap();
     client.dirty(opened.handle).unwrap();
     let operation = match &client.handles[&opened.handle] {
-        Handle::Write(writer) => writer.operation_id.clone(),
+        Handle::Write(writer) => writer.operation_id,
         _ => unreachable!(),
     };
     if lose_reply {
@@ -37,7 +37,7 @@ fn first_save(
     let uploads = backend.uploads.load(Ordering::SeqCst);
     let saved = client.flush(opened.handle).unwrap();
     assert_eq!(saved["commit_state"], "PUBLISHED");
-    assert_eq!(saved["operation_id"], operation);
+    assert_eq!(saved["operation_id"], operation.to_string());
     if lose_reply {
         assert_eq!(backend.uploads.load(Ordering::SeqCst), uploads);
     }
@@ -138,7 +138,7 @@ fn published_handles_can_write_again_without_selection_change() {
             let path = if create { "fresh.txt" } else { "report.txt" };
             let (opened, file) = first_save(&mut client, &backend, path, create, lose_reply);
             let first_operation = match &client.handles[&opened.handle] {
-                Handle::Write(writer) => writer.operation_id.clone(),
+                Handle::Write(writer) => writer.operation_id,
                 _ => unreachable!(),
             };
             client

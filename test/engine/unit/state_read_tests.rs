@@ -190,7 +190,7 @@ fn merge_ancestry_still_rejects_user_supplied_foreign_or_missing_endpoints() {
             &repo.main_branch_id,
             &head,
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap_err();
     assert_eq!(error.code(), ErrorCode::CommitNotFound);
@@ -201,7 +201,7 @@ fn merge_ancestry_still_rejects_user_supplied_foreign_or_missing_endpoints() {
             &repo.main_branch_id,
             &head,
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap_err();
     assert_eq!(error.code(), ErrorCode::BranchNotFound);
@@ -214,7 +214,13 @@ fn stored_snapshot_rejects_file_identity_reused_across_histories() {
     let first = repository(&mut engine, 3);
     save(&mut engine, &first.main_branch_id, "first.txt", b"first");
     let second = engine
-        .create_repository("second", "P01", 3, "admin", &new_id("op"))
+        .create_repository(
+            "second",
+            "P01",
+            3,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     save(&mut engine, &second.main_branch_id, "second.txt", b"second");
     let mut state = engine.state.as_ref().clone();

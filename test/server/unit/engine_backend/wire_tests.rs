@@ -8,7 +8,7 @@ fn domain(value: &Value) -> OperationResult {
     let content = value["operation_kind"] == "content_save";
     let result = &value["result"];
     OperationResult {
-        operation_id: value["operation_id"].as_str().unwrap().into(),
+        operation_id: value["operation_id"].as_str().unwrap().parse().unwrap(),
         kind: if content {
             "workspace.commit"
         } else {

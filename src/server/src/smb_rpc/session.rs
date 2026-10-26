@@ -123,24 +123,22 @@ impl Session {
         &mut self,
         request: Request,
     ) -> Result<(Value, Option<OwnedFd>), DispatchError> {
+        let request = request
+            .parse_operation_id()
+            .map_err(|error| DispatchError {
+                error: ApiError::invalid_source(error),
+                operation_id: None,
+            })?;
         let is_namespace = matches!(&request, Request::Namespace { .. });
         let dirty_handle = match &request {
             Request::Dirty { handle } => Some(*handle),
             _ => None,
         };
         let mut operation_id = match &request {
-            Request::Namespace { operation_id, .. } => {
-                storage_contract::validate_id(operation_id, "op").map_err(|error| {
-                    DispatchError {
-                        error: contract(error),
-                        operation_id: None,
-                    }
-                })?;
-                Some(operation_id.clone())
-            }
+            Request::Namespace { operation_id, .. } => Some(operation_id.to_string()),
             Request::Flush { handle } | Request::Close { handle } | Request::Dirty { handle } => {
                 match self.handles.get(handle) {
-                    Some(Handle::Write(writer)) => Some(writer.operation_id.clone()),
+                    Some(Handle::Write(writer)) => Some(writer.operation_id.to_string()),
                     _ => None,
                 }
             }
@@ -152,7 +150,7 @@ impl Session {
         if let Some(handle) = dirty_handle
             && let Some(Handle::Write(writer)) = self.handles.get(&handle)
         {
-            operation_id = Some(writer.operation_id.clone());
+            operation_id = Some(writer.operation_id.to_string());
         }
         result.map_err(|mut error| {
             // Namespace has no replay protocol. Even a transient error must
@@ -167,7 +165,10 @@ impl Session {
         })
     }
 
-    fn dispatch_request(&mut self, request: Request) -> Result<(Value, Option<OwnedFd>), ApiError> {
+    fn dispatch_request(
+        &mut self,
+        request: Request<OperationId>,
+    ) -> Result<(Value, Option<OwnedFd>), ApiError> {
         let value = match request {
             Request::Hello { .. } => return Err(ApiError::invalid("hello is allowed only once")),
             Request::Open {
@@ -222,7 +223,7 @@ impl Session {
                 destination,
                 replace,
                 operation_id,
-            } => self.namespace(kind, path, destination, replace, &operation_id)?,
+            } => self.namespace(kind, path, destination, replace, operation_id)?,
         };
         Ok((value, None))
     }

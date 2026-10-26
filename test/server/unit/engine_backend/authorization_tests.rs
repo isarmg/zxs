@@ -118,7 +118,7 @@ fn workspace_authorization_borrows_records_and_preserves_owner_checks() {
             "P01",
             1,
             "owner",
-            &storage_engine::new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let workspace = engine

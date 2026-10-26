@@ -1,0 +1,17 @@
+{
+  "binary_sha256": "3908db91470eb51ead6d553443dcc125284b9f779dfc9b247626a6df4db6e5e2",
+  "argv": [
+    "/workspace/scratch/08a6fde47383/r5-recovery-measurement/baseline-startup",
+    "growing",
+    "256"
+  ],
+  "exit_code": 0,
+  "wall_seconds": 375.09907036000004,
+  "user_cpu_seconds": 356.437324,
+  "system_cpu_seconds": 18.268714,
+  "max_rss_kib": 187324,
+  "minor_faults": 370240,
+  "major_faults": 0,
+  "voluntary_context_switches": 8898,
+  "involuntary_context_switches": 2105
+}

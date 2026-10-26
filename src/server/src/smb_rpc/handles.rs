@@ -220,7 +220,7 @@ impl Session {
                     workspace,
                     dirty: existing.is_none() || truncate,
                     committed: false,
-                    operation_id: new_id("op"),
+                    operation_id: OperationId::generate(),
                     write_through,
                 };
                 if let Err(error) =

@@ -162,7 +162,7 @@ fn save_inactive(
     state: &mut State,
     branch: &DirectoryBranch,
     principal: &str,
-    operation: &str,
+    operation: OperationId,
     maximum: usize,
     namespace_deletions: Option<NamespaceDeletions>,
 ) -> Result<()> {
@@ -216,7 +216,7 @@ fn save_inactive(
             parent_commit_ids: vec![previous.commit_id],
             tree_id: new_id("tree"),
             sequence: state.sequence,
-            operation_id: operation.into(),
+            operation_id: operation,
             author: principal.into(),
             message: "Branch-scoped namespace edit".into(),
             entries,
@@ -259,7 +259,7 @@ fn apply(
     repository: &str,
     request: &DirectoryNamespaceBatch,
     principal: &str,
-    operation: &str,
+    operation: OperationId,
 ) -> Result<Value> {
     let repo = state.repositories.get(repository).cloned().ok_or_else(|| {
         Error::new(
@@ -671,7 +671,7 @@ fn apply(
                         })?;
                     // The source snapshot supplies ancestry, not authorship:
                     // initializing this independent file belongs to this copy.
-                    commit.operation_id = operation.into();
+                    commit.operation_id = operation;
                     commit.author = principal.into();
                     commit.entries = target_draft.entries.clone();
                     commit.entries.push(moved.clone());
@@ -879,7 +879,7 @@ fn apply(
                 parent_commit_ids: vec![previous.commit_id],
                 tree_id: new_id("tree"),
                 sequence: state.sequence,
-                operation_id: operation.into(),
+                operation_id: operation,
                 author: principal.into(),
                 message: format!("{} {} branch mappings", request.kind, request.items.len()),
                 entries,
@@ -959,7 +959,7 @@ impl Engine {
         repository: &str,
         request: &DirectoryNamespaceBatch,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         self.mutate(
             "directory.namespace.batch",

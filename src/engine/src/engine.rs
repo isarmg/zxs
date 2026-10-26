@@ -531,7 +531,7 @@ impl Engine {
         &mut self,
         snapshot: json_codec::Value,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<()> {
         if !snapshot.is_object() || canonical_json(&snapshot)?.len() > 4 * 1024 * 1024 {
             return Err(Error::new(
@@ -647,7 +647,7 @@ impl Engine {
         &mut self,
         kind: &str,
         principal: &str,
-        operation_id: &str,
+        operation_id: OperationId,
         input: json_codec::Value,
         change: F,
     ) -> Result<OperationResult>
@@ -660,7 +660,7 @@ impl Engine {
         &mut self,
         kind: &str,
         principal: &str,
-        operation_id: &str,
+        operation_id: OperationId,
         input: json_codec::Value,
         digest_override: Option<String>,
         change: F,
@@ -691,7 +691,7 @@ impl Engine {
         &self,
         kind: &str,
         principal: &str,
-        operation_id: &str,
+        operation_id: OperationId,
         input: json_codec::Value,
         digest_override: Option<String>,
         change: F,
@@ -699,7 +699,6 @@ impl Engine {
     where
         F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
     {
-        validate_id(operation_id, "op")?;
         Self::require_actor(principal)?;
         let digest = digest_override.map(Ok).unwrap_or_else(|| {
             object_hash(
@@ -707,7 +706,7 @@ impl Engine {
                 &json!({"kind":kind,"principal":principal,"body":input}),
             )
         })?;
-        if let Some(result) = self.state.operations.get(operation_id) {
+        if let Some(result) = self.state.operations.get(&operation_id) {
             if result.request_digest == digest
                 && self.operation_owner(operation_id)?.as_deref() == Some(principal)
             {

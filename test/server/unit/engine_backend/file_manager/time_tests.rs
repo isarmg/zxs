@@ -1,6 +1,6 @@
 use super::*;
 use crate::BackendAction;
-use storage_contract::{CommitRequest, Config, FileTagTarget, new_id};
+use storage_contract::{CommitRequest, Config, FileTagTarget};
 
 #[test]
 fn utc_history_timestamp_formats_seconds() {
@@ -21,7 +21,13 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
     )
     .unwrap();
     let repo = engine
-        .create_repository("UTC", "P01", 1, "owner", &new_id("op"))
+        .create_repository(
+            "UTC",
+            "P01",
+            1,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "owner")
@@ -32,7 +38,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -56,7 +62,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
             )
             .unwrap(),
             "owner",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let context = engine
@@ -75,7 +81,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
             remove: &[],
             location: None,
             principal: "owner",
-            operation_id: &new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
         })
         .unwrap();
     let before = json_codec::to_value(engine.state()).unwrap();

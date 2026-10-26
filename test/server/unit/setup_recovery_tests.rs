@@ -1074,7 +1074,7 @@ fn recoverable_fixture() -> Fixture {
             .snapshot()
             .unwrap(),
             "system_auth",
-            &storage_engine::new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     drop(engine);

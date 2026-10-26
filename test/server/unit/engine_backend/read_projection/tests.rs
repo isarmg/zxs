@@ -7,7 +7,7 @@ use crate::{
 use data_serialization::{Serializer, ser::Error};
 use json_codec::json;
 use std::sync::{Arc, Mutex};
-use storage_contract::{Config, new_id};
+use storage_contract::Config;
 
 #[path = "authorization_tests.rs"]
 mod authorization_tests;
@@ -39,7 +39,13 @@ fn fixture() -> (
     ]);
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
-        .create_repository("Projection", "P01", 3, "owner", &new_id("op"))
+        .create_repository(
+            "Projection",
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let identity = install_test_administrator(&mut engine, "owner");
     (root, engine, repo, identity)
@@ -92,7 +98,13 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
     });
     let projection = Tree::capture(&engine, &input).unwrap();
     let other = engine
-        .create_repository("Other", "P01", 3, "owner", &new_id("op"))
+        .create_repository(
+            "Other",
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let foreign = &engine.state().branches[&other.main_branch_id].head_commit_id;
     assert_eq!(
@@ -315,7 +327,7 @@ fn save_projection_file(engine: &mut Engine, branch: &str, path: &str, body: &[u
     engine
         .commit_workspace(storage_engine::CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -412,12 +424,17 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
             &original.version_id,
             "pending-view",
             "owner",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let pending = created.result["branch_id"].as_str().unwrap().to_owned();
     engine
-        .select_file_branch(&original.file_id, &pending, "owner", &new_id("op"))
+        .select_file_branch(
+            &original.file_id,
+            &pending,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let old_pending = engine.state().branches[&pending].head_commit_id.clone();
     let assert_sources = |engine: &Engine, branch: &str, commit_id: &str| {
@@ -482,7 +499,7 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
             "folder",
             "inherited-view",
             "owner",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     engine
@@ -491,7 +508,7 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
             "folder",
             "inherited-view",
             "owner",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let head = engine.state().branches[&repo.main_branch_id]
@@ -809,7 +826,11 @@ fn namespace_reads_preserve_migrated_branch_error() {
         .create_split_plan(&repo.history_tree_id, &cut, "owner")
         .unwrap();
     engine
-        .commit_plan(&plan.plan_id, "owner", &new_id("op"))
+        .commit_plan(
+            &plan.plan_id,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let backend = EngineBackend::new(engine);
     assert_eq!(

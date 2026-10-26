@@ -19,7 +19,13 @@ impl Fixture {
         ]);
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
-            .create_repository("Projection paths", "P01", 3, "admin", &new_id("op"))
+            .create_repository(
+                "Projection paths",
+                "P01",
+                3,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         Self {
             _temporary: temporary,
@@ -37,7 +43,7 @@ impl Fixture {
             .stage_bytes(&workspace.workspace_id, path, b"preserved body")?;
         self.engine.commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -56,7 +62,7 @@ impl Fixture {
             )
             .unwrap(),
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
     }
 
@@ -71,7 +77,7 @@ impl Fixture {
             ]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: &new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
         })
     }
 
@@ -223,7 +229,7 @@ fn rejected_save_retains_workspace_without_installing_replicas() {
         .engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id.clone(),
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,

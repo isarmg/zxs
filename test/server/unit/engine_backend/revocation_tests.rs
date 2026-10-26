@@ -22,6 +22,23 @@ impl PausedBackend {
     }
 }
 impl Backend for PausedBackend {
+    fn operation(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.enter();
+        self.inner.operation(identity, operation_id)
+    }
+    fn commit_workspace(
+        &self,
+        identity: &Identity,
+        command: crate::CommitWorkspace,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.enter();
+        self.inner.commit_workspace(identity, command)
+    }
+
     fn snapshot_at(
         &self,
         identity: &crate::auth::Identity,
@@ -107,6 +124,7 @@ struct Fixture {
     token: String,
     repo: Repository,
     version: String,
+    operation: storage_contract::OperationId,
     workspace: Workspace,
     item: String,
     source: PathBuf,
@@ -121,7 +139,13 @@ impl Fixture {
         ]);
         let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
         let repo = engine
-            .create_repository("Authorization", "P01", 3, "owner", &new_id("op"))
+            .create_repository(
+                "Authorization",
+                "P01",
+                3,
+                "owner",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let workspace = engine
             .create_workspace(&repo.main_branch_id, "owner")
@@ -129,10 +153,11 @@ impl Fixture {
         engine
             .stage_bytes(&workspace.workspace_id, "file.txt", b"published")
             .unwrap();
+        let operation = storage_contract::OperationId::generate();
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: new_id("op"),
+                operation_id: operation,
                 principal: "owner".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -172,6 +197,7 @@ impl Fixture {
             token,
             repo,
             version,
+            operation,
             workspace,
             item: staged.item_id,
             source,
@@ -197,6 +223,8 @@ impl Fixture {
 
 #[derive(Clone, Copy, Debug)]
 enum Request {
+    Operation,
+    CommitWorkspace,
     Metadata,
     Administrator,
     Tree,
@@ -217,6 +245,15 @@ impl Request {
         let identity = &fixture.identity;
         let workspace = &fixture.workspace.workspace_id;
         match self {
+            Self::Operation => backend.operation(identity, fixture.operation).map(|_| ()),
+            Self::CommitWorkspace => backend.commit_workspace(identity, crate::CommitWorkspace {
+                workspace_id: workspace.clone(),
+                operation_id: storage_contract::OperationId::generate(),
+                expected_head: fixture.workspace.base_head.clone(),
+                fencing_token: fixture.workspace.fencing_token,
+                message: String::new(),
+                request_digest: None,
+            }).map(|_| ()),
             Self::Metadata => backend
                 .call(
                     BackendAction::UpdatePlacementRule,
@@ -330,6 +367,8 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
     for revocation in [Revocation::Logout, Revocation::PasswordChange] {
         let fixture = Arc::new(Fixture::new(true));
         let requests = vec![
+            Request::Operation,
+            Request::CommitWorkspace,
             Request::Metadata,
             Request::Administrator,
             Request::Tree,

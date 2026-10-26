@@ -226,7 +226,13 @@ async fn web_purge_and_split_preview_digest_cancel_and_commit_use_real_engine() 
         )
         .unwrap();
         let repo = engine
-            .create_repository("Maintenance fixture", "P01", 1, "admin", &new_id("op"))
+            .create_repository(
+                "Maintenance fixture",
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let mut first = String::new();
         let mut cut = String::new();
@@ -240,7 +246,7 @@ async fn web_purge_and_split_preview_digest_cancel_and_commit_use_real_engine() 
             let op = engine
                 .commit_workspace(CommitRequest {
                     workspace_id: ws.workspace_id,
-                    operation_id: new_id("op"),
+                    operation_id: storage_contract::OperationId::generate(),
                     principal: "admin".into(),
                     expected_head: ws.base_head,
                     fencing_token: ws.fencing_token,

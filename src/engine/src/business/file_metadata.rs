@@ -9,7 +9,7 @@ impl Engine {
         branch_id: &str,
         name: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         validate_branch_name(name)?;
         self.mutate(

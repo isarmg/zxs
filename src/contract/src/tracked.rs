@@ -273,3 +273,15 @@ impl<V> IntoIterator for TrackedMap<V> {
 #[cfg(test)]
 #[path = "../../../test/contract/unit/tracked.rs"]
 mod tests;
+
+impl<V> Tracked<BTreeMap<crate::OperationId, V>> {
+    pub fn insert(&mut self, key: crate::OperationId, value: V) -> Option<V> {
+        self.all_changed();
+        self.value.insert(key, value)
+    }
+}
+impl<V> FromIterator<(crate::OperationId, V)> for Tracked<BTreeMap<crate::OperationId, V>> {
+    fn from_iter<I: IntoIterator<Item = (crate::OperationId, V)>>(iter: I) -> Self {
+        Self::new(iter.into_iter().collect())
+    }
+}

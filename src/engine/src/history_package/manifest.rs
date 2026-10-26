@@ -584,7 +584,7 @@ impl HistoryManifest {
         }
         for (id, node) in &self.file_path_nodes {
             validate_id(id, "fnode")?;
-            validate_id(&node.operation_id, "op")?;
+
             name_policy::validate_path(&node.path)?;
             name_policy::validate_path(&node.previous_path)?;
             let body = self
@@ -620,7 +620,7 @@ impl HistoryManifest {
         }
         for (id, node) in &self.file_metadata_nodes {
             validate_id(id, "fmeta")?;
-            validate_id(&node.operation_id, "op")?;
+
             let body = self
                 .versions
                 .get(&node.version_id)
@@ -657,7 +657,7 @@ impl HistoryManifest {
         }
         for (id, event) in &self.file_branch_merges {
             validate_id(id, "fmerge")?;
-            validate_id(&event.operation_id, "op")?;
+
             let result = self.file_node_version(&event.result_node_id)?;
             let chosen = self.file_node_version(&event.chosen_node_id)?;
             let inputs = event.input_branch_ids.iter().collect::<BTreeSet<_>>();

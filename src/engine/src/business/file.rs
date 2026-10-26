@@ -47,7 +47,7 @@ pub(crate) fn synchronize_directory_edits(
     commit_id: &str,
     written_paths: &[String],
     principal: &str,
-    operation: &str,
+    operation: OperationId,
 ) -> Result<()> {
     let current = state.commits.get(commit_id).cloned().ok_or_else(|| {
         Error::new(
@@ -119,7 +119,7 @@ pub(crate) fn synchronize_directory_edits(
                 parent_commit_ids: vec![branch.head_commit_id],
                 tree_id: new_id("tree"),
                 sequence: state.sequence,
-                operation_id: operation.into(),
+                operation_id: operation,
                 author: principal.into(),
                 message: current.message.clone(),
                 entries: file_snapshot(&current.entries, file),
@@ -147,7 +147,7 @@ pub(crate) fn publish_selected_file(
     state: &mut State,
     branch_id: &str,
     principal: &str,
-    operation: &str,
+    operation: OperationId,
 ) -> Result<String> {
     publish_selected_file_at(state, branch_id, None, principal, operation)
 }
@@ -156,7 +156,7 @@ pub(crate) fn publish_selected_file_at(
     branch_id: &str,
     path: Option<&str>,
     principal: &str,
-    operation: &str,
+    operation: OperationId,
 ) -> Result<String> {
     let branch = state.branches.get(branch_id).cloned().ok_or_else(|| {
         Error::new(
@@ -296,7 +296,7 @@ pub(crate) fn publish_selected_file_at(
             parent_commit_ids: vec![current.commit_id],
             tree_id: new_id("tree"),
             sequence: state.sequence,
-            operation_id: operation.into(),
+            operation_id: operation,
             author: principal.into(),
             message: format!("Select file branch {}", branch.name),
             entries,
@@ -398,7 +398,7 @@ pub(crate) fn ensure_shared_file_branch(
                 parent_commit_ids: vec![current.commit_id.clone()],
                 tree_id: new_id("tree"),
                 sequence: state.sequence,
-                operation_id: current.operation_id.clone(),
+                operation_id: current.operation_id,
                 author: current.author.clone(),
                 message: "Initialize file main branch".into(),
                 entries: file_snapshot(&current.entries, original),
@@ -448,7 +448,7 @@ pub(crate) fn create_file_branch_change(
     source_version: &str,
     name: &str,
     principal: &str,
-    operation: &str,
+    operation: OperationId,
 ) -> Result<json_codec::Value> {
     let source = state
         .versions
@@ -537,7 +537,7 @@ pub(crate) fn create_file_branch_change(
             parent_commit_ids: vec![current.commit_id.clone()],
             tree_id: new_id("tree"),
             sequence: state.sequence,
-            operation_id: operation.into(),
+            operation_id: operation,
             author: principal.into(),
             message: format!("Create file branch {name}"),
             entries,
@@ -573,7 +573,7 @@ impl Engine {
         version_id: Option<&str>,
         note: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         validate_note(note)?;
         self.mutate(
@@ -619,7 +619,7 @@ impl Engine {
         repository: &str,
         change: NamespaceOperation,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         self.mutate("file.namespace",principal,operation,json!({"repository_id":repository,"change":change}),|engine,state,_|{
             let repo=engine.state.repositories.get(repository).ok_or_else(||Error::new(storage_contract::ErrorCode::RepositoryNotFound,"directory namespace missing"))?;
@@ -633,7 +633,7 @@ impl Engine {
             super::directory::namespace_locations(state,repository,&previous.entries,&entries,std::slice::from_ref(&change),principal,operation)?;
             let pending_file_versions=previous.pending_file_versions.iter().filter(|(file,_)|entries.iter().any(|entry|entry.kind == NamespaceEntryKind::File&&entry.file_id==file.as_str())).map(|(file,source)|(file.clone(),source.clone())).collect();
             let id=new_id("commit");
-            state.commits.insert(id.clone(),Commit{ namespace_deletions: namespace::deletion_record(deleted, now()),commit_id:id.clone(),history_tree_id:branch.history_tree_id.clone(),kind:"namespace".into(),parent_commit_ids:vec![previous.commit_id],tree_id:new_id("tree"),sequence:state.sequence,operation_id:operation.into(),author:principal.into(),message:format!("{} {}",change.kind().as_str(),change.path()),entries,pending_file_versions,provenance:None});
+            state.commits.insert(id.clone(),Commit{ namespace_deletions: namespace::deletion_record(deleted, now()),commit_id:id.clone(),history_tree_id:branch.history_tree_id.clone(),kind:"namespace".into(),parent_commit_ids:vec![previous.commit_id],tree_id:new_id("tree"),sequence:state.sequence,operation_id:operation,author:principal.into(),message:format!("{} {}",change.kind().as_str(),change.path()),entries,pending_file_versions,provenance:None});
             let live_files=state.commits[&id].entries.iter().filter(|entry|entry.kind == NamespaceEntryKind::File).map(|entry|entry.file_id.clone()).collect::<std::collections::BTreeSet<_>>();
             let branch=state.branches.get_mut(&repo.main_branch_id).expect("checked");branch.head_commit_id=id.clone();branch.generation = branch.generation.checked_add(1).ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "branch generation exhausted"))?;
             branch.pending_file_versions.retain(|file,_|live_files.contains(file));
@@ -650,7 +650,7 @@ impl Engine {
         source_version: &str,
         name: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         super::validate_branch_name(name)?;
         self.mutate(
@@ -679,7 +679,7 @@ impl Engine {
         file_id: &str,
         branch_id: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         name_policy::validate_path(path)?;
         self.mutate(
@@ -723,7 +723,7 @@ impl Engine {
         file_id: &str,
         branch_id: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
         self.mutate(
             "file.branch.select", principal, operation,

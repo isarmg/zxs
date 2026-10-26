@@ -8,7 +8,7 @@ use std::{
     path::Path,
     time::Instant,
 };
-use storage_engine::{CommitRequest, Config, Engine, new_id};
+use storage_engine::{CommitRequest, Config, Engine};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn save(engine: &mut Engine, branch: &str, bytes: &[u8]) -> Result<()> {
@@ -16,7 +16,7 @@ fn save(engine: &mut Engine, branch: &str, bytes: &[u8]) -> Result<()> {
     engine.stage_bytes(&w.workspace_id, "sample.bin", bytes)?;
     engine.commit_workspace(CommitRequest {
         workspace_id: w.workspace_id,
-        operation_id: new_id("op"),
+        operation_id: storage_engine::OperationId::generate(),
         principal: "admin".into(),
         expected_head: w.base_head,
         fencing_token: w.fencing_token,
@@ -156,7 +156,13 @@ fn main() -> Result<()> {
         temp.path().join("tertiary"),
     ]);
     let mut engine = Engine::initialize(&root, config)?;
-    let repo = engine.create_repository("Architecture probe", "P01", 3, "admin", &new_id("op"))?;
+    let repo = engine.create_repository(
+        "Architecture probe",
+        "P01",
+        3,
+        "admin",
+        storage_engine::OperationId::generate(),
+    )?;
     let branch = repo.main_branch_id;
     let mut checkpoints = vec![1, history / 4, history / 2, history];
     checkpoints.sort_unstable();

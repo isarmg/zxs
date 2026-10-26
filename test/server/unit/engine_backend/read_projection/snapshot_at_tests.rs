@@ -46,7 +46,13 @@ fn shared_snapshot_preserves_tree_errors_and_current_identity_admission() {
         .head_commit_id
         .clone();
     let other = engine
-        .create_repository("Other", "P01", 3, "owner", &new_id("op"))
+        .create_repository(
+            "Other",
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let foreign = engine.state().branches[&other.main_branch_id]
         .head_commit_id
@@ -125,10 +131,19 @@ fn shared_snapshot_preserves_archived_reads_and_migrated_branch_rejection() {
         .head_commit_id
         .clone();
     let archived = engine
-        .create_branch(&cut, "Archive", "owner", &new_id("op"))
+        .create_branch(
+            &cut,
+            "Archive",
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     engine
-        .archive_branch(&archived.branch_id, "owner", &new_id("op"))
+        .archive_branch(
+            &archived.branch_id,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let backend = EngineBackend::new(engine);
     let frozen = backend
@@ -152,7 +167,11 @@ fn shared_snapshot_preserves_archived_reads_and_migrated_branch_rejection() {
             .create_split_plan(&repo.history_tree_id, &cut, "owner")
             .unwrap();
         engine
-            .commit_plan(&plan.plan_id, "owner", &new_id("op"))
+            .commit_plan(
+                &plan.plan_id,
+                "owner",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
     }
     let old = backend
@@ -232,7 +251,7 @@ fn measure_shared_snapshot_against_publication_and_namespace_tree_round_trips() 
         engine
             .commit_workspace(storage_engine::CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "owner".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,

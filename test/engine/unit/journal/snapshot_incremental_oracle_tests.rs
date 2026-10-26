@@ -115,7 +115,7 @@ fn populated_state() -> State {
     value["merge_links"] = json_codec::json!({"merge": {
         "merge_link_id": "merge", "history_tree_id": "history", "source_branch_id": "source",
         "source_commit_id": "source-commit", "target_branch_id": "target",
-        "target_commit_id": "target-commit", "author": "作者", "operation_id": "operation"
+        "target_commit_id": "target-commit", "author": "作者", "operation_id": "op_00000000000000000000000000000000"
     }});
     value["history_boundaries"] = json_codec::json!({"boundary": {
         "boundary_id": "boundary", "history_tree_id": "history", "local_commit_id": "commit",
@@ -140,18 +140,18 @@ fn populated_state() -> State {
     value["file_path_nodes"] = json_codec::json!({"path-node": {
         "node_id": "path-node", "history_tree_id": "history", "file_id": "file", "version_id": "version",
         "parent_node_ids": ["parent"], "branch_id": "branch", "path": "目录/新", "previous_path": "目录/旧",
-        "operation_id": "operation", "author": "作者", "sequence": "9007199254740992", "created_at": "18446744073709551615"
+        "operation_id": "op_00000000000000000000000000000000", "author": "作者", "sequence": "9007199254740992", "created_at": "18446744073709551615"
     }});
     value["file_metadata_nodes"] = json_codec::json!({"metadata-node": {
         "node_id": "metadata-node", "history_tree_id": "history", "file_id": "file", "version_id": "version",
         "parent_node_ids": ["parent"], "branch_id": "branch", "kind": "tags", "tags": ["标签", "\u{10000}"],
-        "operation_id": "operation", "author": "作者", "sequence": "9007199254740992", "created_at": "18446744073709551615"
+        "operation_id": "op_00000000000000000000000000000000", "author": "作者", "sequence": "9007199254740992", "created_at": "18446744073709551615"
     }});
     value["file_branch_merges"] = json_codec::json!({"branch-merge": {
         "merge_id": "branch-merge", "history_tree_id": "history", "file_id": "file",
         "input_branch_ids": ["source", "target"], "input_node_ids": ["first", "second"],
         "chosen_node_id": "first", "result_node_id": "result", "surviving_branch_id": "target",
-        "reused_node": false, "parent_node_ids": ["first", "second"], "operation_id": "operation",
+        "reused_node": false, "parent_node_ids": ["first", "second"], "operation_id": "op_00000000000000000000000000000000",
         "sequence": "18446744073709551615"
     }});
     let mut state: State = json_codec::from_value(value).unwrap();
@@ -313,7 +313,7 @@ fn incremental_snapshot_unchanged_maps_have_zero_page_serde_with_all_auth_shapes
         after.control_auth = auth;
         after.events.push(Event {
             sequence: u64::MAX,
-            operation_id: "事件".into(),
+            operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
             kind: "MUTATION".into(),
             object_id: "\u{10000}".into(),
         });
@@ -330,6 +330,17 @@ fn incremental_snapshot_each_tracked_field_mutation_reencodes_only_that_field() 
     let config = config(temp.path());
     let basis = baseline(&before, &config.disks);
     let descriptor = prepare_snapshot(&before, MAX_METADATA).unwrap().descriptor;
+    macro_rules! new_key {
+        (operations) => {
+            "op_ffffffffffffffffffffffffffffffff".parse().unwrap()
+        };
+        (operation_principals) => {
+            "op_ffffffffffffffffffffffffffffffff".parse().unwrap()
+        };
+        ($other:ident) => {
+            "new-字段-\u{10000}".into()
+        };
+    }
     macro_rules! check_field {
         ($field:ident) => {{
             let mut after = before.clone();
@@ -337,12 +348,7 @@ fn incremental_snapshot_each_tracked_field_mutation_reencodes_only_that_field() 
             let value = before.$field.iter().next().unwrap().1.clone();
             // Adding an entry changes bytes for every field type; mutating only
             // its tracker would not catch accidental reuse of dirty contents.
-            assert!(
-                after
-                    .$field
-                    .insert("new-字段-\u{10000}".into(), value)
-                    .is_none()
-            );
+            assert!(after.$field.insert(new_key!($field), value).is_none());
             let (actual, counts) = incremental(&before, &after, &basis, &config.disks);
             assert_only_field_encoded(&counts, Some(stringify!($field)));
             assert_ne!(

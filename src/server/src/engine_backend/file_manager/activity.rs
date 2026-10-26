@@ -243,8 +243,8 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
         record_event(
             &mut events,
             operation.sequence,
-            operation.operation_id.clone(),
-            json!({"timestamp":operation.result.get("timestamp"),"slot_id":repo.primary_slot_id,"path":display,"action":operation.kind,"principal":engine.operation_owner(&operation.operation_id).map_err(crate::engine_backend::error)?,"file_id":file,"version_id":path_node.map(|node|json!(node.version_id)).or_else(||metadata_node.map(|node|json!(node.version_id))).or_else(||operation.result.get("version_id").cloned()),"node_id":operation.result.get("node_id"),"branch_id":operation.result.get("branch_id"),"message":operation.result.get("name").and_then(Value::as_str).unwrap_or("")}),
+            operation.operation_id.to_string(),
+            json!({"timestamp":operation.result.get("timestamp"),"slot_id":repo.primary_slot_id,"path":display,"action":operation.kind,"principal":engine.operation_owner(operation.operation_id).map_err(crate::engine_backend::error)?,"file_id":file,"version_id":path_node.map(|node|json!(node.version_id)).or_else(||metadata_node.map(|node|json!(node.version_id))).or_else(||operation.result.get("version_id").cloned()),"node_id":operation.result.get("node_id"),"branch_id":operation.result.get("branch_id"),"message":operation.result.get("name").and_then(Value::as_str).unwrap_or("")}),
         );
     }
     for operation in engine.state().operations.values().filter(|op| {
@@ -288,10 +288,10 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
         record_event(
             &mut events,
             operation.sequence,
-            operation.operation_id.clone(),
+            operation.operation_id.to_string(),
             json!({"timestamp":operation.result.get("timestamp"),
                 "slot_id":repo.primary_slot_id,"path":display,
-                "action":operation.kind,"principal":engine.operation_owner(&operation.operation_id).map_err(crate::engine_backend::error)?,
+                "action":operation.kind,"principal":engine.operation_owner(operation.operation_id).map_err(crate::engine_backend::error)?,
                 "file_id":"","version_id":null,"directory_branch_id":id,
                 "head_tree_id":operation.result.get("head_tree_id"),
                 "message":operation.result.get("name").and_then(Value::as_str).unwrap_or("")
@@ -328,10 +328,10 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
         record_event(
             &mut events,
             operation.sequence,
-            operation.operation_id.clone(),
+            operation.operation_id.to_string(),
             json!({"timestamp":operation.result.get("timestamp"),
             "slot_id":repo.primary_slot_id,"path":display,"action":"backup.configure",
-            "principal":engine.operation_owner(&operation.operation_id).map_err(crate::engine_backend::error)?,"file_id":operation.result["policy"]["scope_file_id"].as_str().unwrap_or(""),"version_id":null,
+            "principal":engine.operation_owner(operation.operation_id).map_err(crate::engine_backend::error)?,"file_id":operation.result["policy"]["scope_file_id"].as_str().unwrap_or(""),"version_id":null,
             "target_copies":operation.result.get("target_copies"),"message":""}),
         );
     }
@@ -413,7 +413,7 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
             tree.tree_id.clone(),
             json!({"timestamp":operation.result.get("timestamp"),
                 "slot_id":repo.primary_slot_id,"path":display,
-                "action":action,"principal":engine.operation_owner(&operation.operation_id).map_err(crate::engine_backend::error)?,
+                "action":action,"principal":engine.operation_owner(operation.operation_id).map_err(crate::engine_backend::error)?,
                 "file_id":"","version_id":null,"directory_branch_id":tree.directory_branch_id,
                 "head_tree_id":tree.tree_id,"parent_tree_id":tree.parent_tree_id,"message":""
             }),

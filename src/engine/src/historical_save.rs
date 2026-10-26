@@ -357,9 +357,9 @@ impl Engine {
         &mut self,
         id: &str,
         principal: &str,
-        operation: &str,
+        operation: OperationId,
     ) -> Result<OperationResult> {
-        if let Some(previous) = self.state.operations.get(operation) {
+        if let Some(previous) = self.state.operations.get(&operation) {
             if previous.kind == "history.historical_save"
                 && previous.result["plan_id"].as_str() == Some(id)
                 && self.operation_owner(operation)?.as_deref() == Some(principal)
@@ -497,7 +497,7 @@ impl Engine {
                     namespace_deletions: deletion_record(deleted, now()),
                     commit_id: commit_id.clone(), history_tree_id: history.clone(),
                     kind: "historical_save".into(), parent_commit_ids: vec![source_id.clone()],
-                    tree_id: new_id("tree"), sequence: state.sequence, operation_id: operation.into(),
+                    tree_id: new_id("tree"), sequence: state.sequence, operation_id: operation,
                     author: principal.into(), message: format!("Save written content to historical branch {name}"),
                     entries, pending_file_versions: pending_file_versions.clone(), provenance: Some(source_id.clone()),
                 });

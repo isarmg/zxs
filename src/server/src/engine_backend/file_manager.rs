@@ -113,9 +113,9 @@ fn admit_root_operation(
     engine: &Engine,
     slot: &str,
     path: &str,
-    operation: &str,
+    operation: storage_contract::OperationId,
 ) -> Result<(), ApiError> {
-    if needs_disk_root(engine, slot, path) && engine.state().operations.contains_key(operation) {
+    if needs_disk_root(engine, slot, path) && engine.state().operations.contains_key(&operation) {
         return Err(ApiError::conflict(
             storage_contract::ErrorCode::IdempotencyKeyReused,
             "operation is already bound to another request",
@@ -245,7 +245,11 @@ fn resolve(
     }
 
     let repo = engine
-        .create_disk_root(slot, &identity.principal, &storage_engine::new_id("op"))
+        .create_disk_root(
+            slot,
+            &identity.principal,
+            storage_contract::OperationId::generate(),
+        )
         .map_err(error)?;
     Ok((repo, value.into()))
 }
@@ -718,8 +722,9 @@ pub(super) fn call(
             let display = path(&input)?;
             let name = field(&input, "name")?;
             storage_engine::validate_branch_name(name).map_err(error)?;
-            let operation = operation(&input)?;
-            storage_contract::validate_id(operation, "op").map_err(ApiError::invalid_source)?;
+            let operation = field(&input, "operation_id")?
+                .parse()
+                .map_err(ApiError::invalid_source)?;
             if display.is_empty() && root_has_virtual_directories(engine, slot) {
                 return Err(ApiError::new(
                     ::http::StatusCode::CONFLICT,
@@ -846,8 +851,9 @@ pub(super) fn call(
                     "only mkdir is supported; use identity-bound namespace-batch for existing entries",
                 ));
             }
-            let operation = operation(&input)?;
-            storage_contract::validate_id(operation, "op").map_err(ApiError::invalid_source)?;
+            let operation = field(&input, "operation_id")?
+                .parse()
+                .map_err(ApiError::invalid_source)?;
             let display = path(&input)?;
             if display.is_empty() {
                 return Err(ApiError::invalid("disk namespace root cannot be changed"));
@@ -890,7 +896,7 @@ pub(super) fn call(
                 application::NamespaceBatch {
                     slot_id: slot.into(),
                     request,
-                    operation_id: operation(&input)?.into(),
+                    operation_id: operation(&input)?,
                 },
             )?;
             operation_wire(result)

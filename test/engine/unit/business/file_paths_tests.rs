@@ -7,7 +7,9 @@ fn setup() -> (tempfile::TempDir, Engine, Repository) {
         Config::development([t.path().join("p"), t.path().join("b"), t.path().join("c")]),
     )
     .unwrap();
-    let r = e.create_disk_root("P01", "admin", &new_id("op")).unwrap();
+    let r = e
+        .create_disk_root("P01", "admin", storage_contract::OperationId::generate())
+        .unwrap();
     (t, e, r)
 }
 fn save(e: &mut Engine, r: &Repository, path: &str, data: &[u8]) {
@@ -15,7 +17,7 @@ fn save(e: &mut Engine, r: &Repository, path: &str, data: &[u8]) {
     e.stage_bytes(&w.workspace_id, path, data).unwrap();
     e.commit_workspace(CommitRequest {
         workspace_id: w.workspace_id,
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: w.base_head,
         fencing_token: w.fencing_token,
@@ -36,7 +38,7 @@ fn rename(e: &mut Engine, r: &Repository, from: &str, to: &str) -> OperationResu
         &r.repository_id,
         NamespaceOperation::parse(NamespaceOperationKind::Rename, from, Some(to)).unwrap(),
         "admin",
-        &new_id("op"),
+        storage_contract::OperationId::generate(),
     )
     .unwrap()
 }
@@ -49,7 +51,7 @@ fn folder_and_file_rename_append_path_nodes_reusing_bodies_then_write_follows_th
         &r.repository_id,
         NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "folder/empty", None).unwrap(),
         "admin",
-        &new_id("op"),
+        storage_contract::OperationId::generate(),
     )
     .unwrap();
     let old = entries(&e, &r);
@@ -62,7 +64,7 @@ fn folder_and_file_rename_append_path_nodes_reusing_bodies_then_write_follows_th
             "folder",
             "untouched",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap()
         .result["directory_branch_id"]
@@ -159,8 +161,14 @@ fn path_node_note_and_new_branch_are_metadata_and_preserve_the_named_source_node
         .unwrap();
     let trees = e.state().directory_trees.len();
     let versions = e.state().versions.len();
-    e.set_file_path_note(&file.file_id, &node, "rename note", "admin", &new_id("op"))
-        .unwrap();
+    e.set_file_path_note(
+        &file.file_id,
+        &node,
+        "rename note",
+        "admin",
+        storage_contract::OperationId::generate(),
+    )
+    .unwrap();
     assert_eq!(e.state().directory_trees.len(), trees);
     assert_eq!(e.state().versions.len(), versions);
     assert_eq!(
@@ -169,7 +177,7 @@ fn path_node_note_and_new_branch_are_metadata_and_preserve_the_named_source_node
             &node,
             &"x".repeat(129),
             "admin",
-            &new_id("op")
+            storage_contract::OperationId::generate()
         )
         .unwrap_err()
         .code(),
@@ -182,7 +190,7 @@ fn path_node_note_and_new_branch_are_metadata_and_preserve_the_named_source_node
             &node,
             "from rename",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap()
         .result["branch_id"]
@@ -195,7 +203,7 @@ fn path_node_note_and_new_branch_are_metadata_and_preserve_the_named_source_node
         &file.file_id,
         &branch,
         "admin",
-        &new_id("op"),
+        storage_contract::OperationId::generate(),
     )
     .unwrap();
     assert_eq!(
@@ -223,7 +231,7 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
             &original.version_id,
             "other",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap()
         .result["branch_id"]
@@ -236,7 +244,7 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
         &original.file_id,
         &branch,
         "admin",
-        &new_id("op"),
+        storage_contract::OperationId::generate(),
     )
     .unwrap();
     save(&mut e, &r, "a.txt", b"available body");
@@ -247,9 +255,14 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
     }
     let before = canonical_json(e.state()).unwrap();
     assert_eq!(
-        e.select_file_branch(&original.file_id, &original_branch, "admin", &new_id("op"))
-            .unwrap_err()
-            .code(),
+        e.select_file_branch(
+            &original.file_id,
+            &original_branch,
+            "admin",
+            storage_contract::OperationId::generate()
+        )
+        .unwrap_err()
+        .code(),
         storage_contract::ErrorCode::ContentUnavailable
     );
     assert_eq!(
@@ -259,7 +272,7 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
             &original.file_id,
             &original_branch,
             "admin",
-            &new_id("op")
+            storage_contract::OperationId::generate()
         )
         .unwrap_err()
         .code(),

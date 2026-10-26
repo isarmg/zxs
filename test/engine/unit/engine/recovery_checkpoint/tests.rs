@@ -13,7 +13,13 @@ fn setup() -> (tempfile::TempDir, std::path::PathBuf, Config) {
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     for n in 0..6 {
         engine
-            .create_repository(&format!("repo{n}"), "P01", 3, "admin", &new_id("op"))
+            .create_repository(
+                &format!("repo{n}"),
+                "P01",
+                3,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
     }
     drop(engine);
@@ -129,6 +135,54 @@ fn clean_checkpoint_reopens_decode_one_snapshot_and_preserve_state() {
     assert_eq!(canonical_json(engine.state()).unwrap(), expected);
 }
 #[test]
+fn cold_replay_reuses_member_specific_receipts_across_decision_slots() {
+    let (_temp, root, config) = setup();
+    let disk = &config.disks[0];
+    let (last, _) = scan(disk).unwrap().records.pop().unwrap();
+    // Give one member a different journal chain without adding a decision.
+    append(
+        disk,
+        RecordType::Reprotect,
+        last.sequence,
+        &last.candidate_hash,
+        &last.object_hash,
+    )
+    .unwrap();
+    let (mut engine, _) = reopen(&root);
+    for name in ["suffix-a", "suffix-b", "suffix-c"] {
+        engine
+            .create_repository(name, "P01", 3, "admin", OperationId::generate())
+            .unwrap();
+    }
+    let expected = canonical_json(engine.state()).unwrap();
+    drop(engine);
+    let first_tip = scan(&config.disks[0]).unwrap().records.pop().unwrap().1;
+    let second_tip = scan(&config.disks[1]).unwrap().records.pop().unwrap().1;
+    assert_ne!(first_tip, second_tip);
+    let journals: Vec<_> = config
+        .disks
+        .iter()
+        .map(|disk| {
+            std::fs::remove_file(path(disk)).unwrap();
+            std::fs::read(log_path(disk)).unwrap()
+        })
+        .collect();
+    let (mut engine, full) = reopen(&root);
+    assert!(full >= 9);
+    assert_eq!(canonical_json(engine.state()).unwrap(), expected);
+    let warnings = engine.take_recovery_warnings();
+    assert!(warnings.checkpoint_load.is_none());
+    assert!(warnings.checkpoint_save.is_none());
+    for (disk, before) in config.disks.iter().zip(&journals) {
+        assert_eq!(&std::fs::read(log_path(disk)).unwrap(), before);
+    }
+    drop(engine);
+    let (engine, fast) = reopen(&root);
+    assert_eq!(fast, 1);
+    assert_eq!(canonical_json(engine.state()).unwrap(), expected);
+}
+
+#[test]
 fn added_conflicting_layout_cannot_hide_behind_checkpoint_coverage() {
     let (_temp, root, config) = setup();
     drop(reopen(&root).0);
@@ -186,7 +240,7 @@ fn save_file(engine: &mut Engine, branch: &str, name: &str, bytes: &[u8]) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -235,16 +289,18 @@ fn forked_suffix_cannot_authorize_derived_cache_exception() {
     for hash in ["a".repeat(64), "b".repeat(64)] {
         candidates.insert(
             hash.clone(),
-            vec![(
-                config.disks[0].slot_id.clone(),
-                Record {
+            vec![Receipt {
+                disk_id: config.disks[0].disk_id.clone(),
+                slot_id: config.disks[0].slot_id.clone(),
+                frame_hash: "0".repeat(64),
+                record: Record {
                     record_type: RecordType::Accept,
                     sequence,
                     candidate_hash: hash.clone(),
                     object_hash: hash,
                     previous_frame_hash: "0".repeat(64),
                 },
-            )],
+            }],
         );
     }
     assert!(
@@ -358,7 +414,7 @@ fn missing_local_publication_proof_falls_back_and_repairs() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -465,7 +521,13 @@ fn sealed_suffix_replays_only_new_decision_and_refreshes_checkpoint() {
     let (_temp, root, _config) = setup();
     let (mut engine, _) = reopen(&root);
     engine
-        .create_repository("newer", "P01", 3, "admin", &new_id("op"))
+        .create_repository(
+            "newer",
+            "P01",
+            3,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let expected = canonical_json(engine.state()).unwrap();
     drop(engine);

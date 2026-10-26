@@ -318,3 +318,116 @@ fn namespace_operation_variants_parse_only_their_required_paths() {
     assert_eq!(read.key(), rename.key());
     assert_eq!(read.destination(), rename.destination());
 }
+
+#[test]
+fn operation_id_preserves_exact_wire_language_and_copy_representation() {
+    assert_eq!(std::mem::size_of::<OperationId>(), 16);
+    fn copied(value: OperationId) -> (OperationId, OperationId) {
+        (value, value)
+    }
+    for raw in [
+        "op_00000000000000000000000000000000",
+        "op_ffffffffffffffffffffffffffffffff",
+        "op_0123456789abcdef0123456789abcdef",
+    ] {
+        let id: OperationId = raw.parse().unwrap();
+        assert_eq!(copied(id), (id, id));
+        assert_eq!(id.to_string(), raw);
+        assert_eq!(json_codec::to_string(&id).unwrap(), format!("\"{raw}\""));
+        assert_eq!(
+            json_codec::from_str::<OperationId>(&format!("\"{raw}\"")).unwrap(),
+            id
+        );
+    }
+    for raw in [
+        "",
+        "op_",
+        "op_0123456789ABCDEF0123456789abcdef",
+        "op_0123456789abcdef0123456789abcdeg",
+        "op_01234567-89ab-cdef-0123-456789abcdef",
+        "op_000000000000000000000000000000000",
+        "br_00000000000000000000000000000000",
+        " op_00000000000000000000000000000000",
+    ] {
+        assert_eq!(
+            raw.parse::<OperationId>().unwrap_err().code(),
+            ErrorCode::InvalidId
+        );
+        assert!(json_codec::from_str::<OperationId>(&format!("\"{raw}\"")).is_err());
+    }
+    for raw in ["null", "1", "{}", "[]"] {
+        assert!(json_codec::from_str::<OperationId>(raw).is_err());
+    }
+    let generated = OperationId::generate();
+    assert_eq!(
+        generated.to_string().parse::<OperationId>().unwrap(),
+        generated
+    );
+}
+
+#[test]
+#[ignore = "manual canonical operation-key formatting cost; run optimized with --nocapture"]
+fn measure_operation_id_formatting_cost() {
+    use std::{hint::black_box, time::Instant};
+    const ITERATIONS: usize = 1_000_000;
+    fn sample(mut run: impl FnMut()) -> f64 {
+        let start = Instant::now();
+        for _ in 0..ITERATIONS {
+            run();
+        }
+        start.elapsed().as_nanos() as f64 / ITERATIONS as f64
+    }
+    let wire = String::from("op_0123456789abcdef0123456789abcdef");
+    let id: OperationId = wire.parse().unwrap();
+    assert_eq!(id.to_string(), wire);
+    assert_eq!(
+        blake3::hash(id.to_string().as_bytes()),
+        blake3::hash(wire.as_bytes())
+    );
+    println!(
+        "OperationId bytes={}, String header bytes={}, canonical wire bytes={}, iterations/sample={ITERATIONS}",
+        std::mem::size_of::<OperationId>(),
+        std::mem::size_of::<String>(),
+        wire.len()
+    );
+    for round in 0..7 {
+        let format = || {
+            sample(|| {
+                black_box(black_box(id).to_string());
+            })
+        };
+        let clone = || {
+            sample(|| {
+                black_box(String::clone(black_box(&wire)));
+            })
+        };
+        let (format_ns, clone_ns) = if round % 2 == 0 {
+            (format(), clone())
+        } else {
+            let cloned = clone();
+            (format(), cloned)
+        };
+        let copy_ns = sample(|| {
+            black_box(black_box(id));
+        });
+        let old_hash = || {
+            sample(|| {
+                black_box(blake3::hash(black_box(wire.as_bytes())));
+            })
+        };
+        let typed_hash = || {
+            sample(|| {
+                black_box(blake3::hash(black_box(id).to_string().as_bytes()));
+            })
+        };
+        let (old_hash_ns, typed_hash_ns) = if round % 2 == 0 {
+            (old_hash(), typed_hash())
+        } else {
+            let typed = typed_hash();
+            (old_hash(), typed)
+        };
+        println!(
+            "round={round} format_ns={format_ns:.3} old_string_clone_ns={clone_ns:.3} typed_copy_ns={copy_ns:.3} old_borrowed_key_hash_ns={old_hash_ns:.3} typed_format_key_hash_ns={typed_hash_ns:.3}"
+        );
+    }
+}

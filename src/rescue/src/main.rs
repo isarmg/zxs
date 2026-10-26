@@ -4,7 +4,7 @@ mod private_io;
 use command_line::{Parser, Subcommand};
 use json_codec::json;
 use std::path::PathBuf;
-use storage_engine::Engine;
+use storage_engine::{Engine, OperationId};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 #[derive(Parser)]
 #[command(
@@ -47,7 +47,7 @@ enum Command {
         disks: Vec<PathBuf>,
     },
     RecoveryPreview {
-        operation: String,
+        operation: OperationId,
         #[arg(long)]
         reason: String,
     },
@@ -89,7 +89,7 @@ enum PackageCommand {
         #[arg(long, default_value_t = 1, value_parser = command_line::value_parser!(u32).range(1..))]
         copies: u32,
         #[arg(long)]
-        operation_id: Option<String>,
+        operation_id: Option<OperationId>,
     },
 }
 fn print(value: impl data_serialization::Serialize) -> Result<()> {
@@ -185,13 +185,13 @@ fn run(args: Args) -> Result<()> {
                 let mut engine =
                     Engine::open_with_workspace_limits(&root, retained_workspace_limits)?;
                 report_recovery_warnings(&mut engine);
-                let operation = operation_id.unwrap_or_else(|| storage_engine::new_id("op"));
+                let operation = operation_id.unwrap_or_else(OperationId::generate);
                 let restored = engine.restore_history_package(
                     &package,
                     &primary_slot,
                     copies,
                     &args.principal,
-                    &operation,
+                    operation,
                 );
                 report_recovery_warnings(&mut engine);
                 print(restored?)
@@ -215,7 +215,7 @@ fn run(args: Args) -> Result<()> {
             let mut engine =
                 Engine::open_for_recovery_with_workspace_limits(&root, retained_workspace_limits)?;
             report_recovery_warnings(&mut engine);
-            let result = engine.prepare_degraded_recovery(&operation, &args.principal, &reason);
+            let result = engine.prepare_degraded_recovery(operation, &args.principal, &reason);
             report_recovery_warnings(&mut engine);
             print(result?)
         }

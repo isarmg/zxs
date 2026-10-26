@@ -518,6 +518,74 @@ impl PreparedMetadataObject {
     }
 }
 
+/// An immutable JSON object authenticated against its referenced domain digest.
+pub(crate) struct AuthenticatedMetadataObject {
+    prepared: PreparedMetadataObject,
+    value: json_codec::Value,
+}
+impl AuthenticatedMetadataObject {
+    pub(crate) fn authenticate(
+        kind: &'static str,
+        hash: &str,
+        value: json_codec::Value,
+    ) -> Result<Self> {
+        let (bytes, actual) = encode_hashed_value(kind, &value)?;
+        if bytes.len() > MAX_METADATA {
+            return Err(Error::new(
+                storage_contract::ErrorCode::ResourceLimit,
+                "serialized metadata exceeds reader limit",
+            ));
+        }
+        if actual != hash {
+            return Err(Error::new(
+                storage_contract::ErrorCode::ObjectCorrupt,
+                "immutable object digest differs",
+            ));
+        }
+        Ok(Self {
+            prepared: PreparedMetadataObject {
+                kind,
+                hash: actual,
+                bytes,
+            },
+            value,
+        })
+    }
+    pub(crate) fn kind(&self) -> &'static str {
+        self.prepared.kind
+    }
+    pub(crate) fn hash(&self) -> &str {
+        &self.prepared.hash
+    }
+    pub(crate) fn value(&self) -> &json_codec::Value {
+        &self.value
+    }
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.prepared.bytes
+    }
+    pub(crate) fn into_prepared(self, maximum: usize) -> Result<PreparedMetadataObject> {
+        if self.bytes().len() > maximum {
+            return Err(Error::new(
+                storage_contract::ErrorCode::ResourceLimit,
+                format!("serialized metadata exceeds {maximum} byte reader limit"),
+            ));
+        }
+        Ok(self.prepared)
+    }
+}
+
+pub(crate) fn load_authenticated_object(
+    disk: &DiskConfig,
+    kind: &'static str,
+    hash: &str,
+) -> Result<AuthenticatedMetadataObject> {
+    AuthenticatedMetadataObject::authenticate(
+        kind,
+        hash,
+        decode_strict(&read_object_bytes(disk, kind, hash)?)?,
+    )
+}
+
 pub(crate) fn load_object<T: data_serialization::de::DeserializeOwned + Serialize>(
     d: &DiskConfig,
     kind: &str,
@@ -703,10 +771,18 @@ fn load_raw_snapshot_fixture(d: &DiskConfig, hash: &str) -> Result<State> {
 
 /// Decode the complete exact root using only authenticated page objects. The
 /// resolver may select different replicas, never alternate roots or page hashes.
+#[cfg(test)]
 pub(crate) fn resolve_snapshot(
     snapshot: Snapshot,
     page: impl FnMut(&str) -> Result<json_codec::Map<String, json_codec::Value>>,
 ) -> Result<State> {
+    Ok(resolve_admitted_snapshot(snapshot, page)?.into_state())
+}
+
+pub(crate) fn resolve_admitted_snapshot(
+    snapshot: Snapshot,
+    page: impl FnMut(&str) -> Result<json_codec::Map<String, json_codec::Value>>,
+) -> Result<crate::history_package::AdmittedState> {
     resolve_raw_snapshot(snapshot, page)?.try_into()
 }
 
@@ -787,7 +863,7 @@ pub(crate) struct Candidate {
     #[serialization(with = "storage_contract::u64_string")]
     pub sequence: u64,
     pub transaction_id: String,
-    pub operation_id: String,
+    pub operation_id: OperationId,
     pub request_digest: String,
     pub previous_snapshot: Option<String>,
     pub snapshot_hash: String,

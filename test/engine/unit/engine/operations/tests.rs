@@ -11,7 +11,13 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     ]);
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
-        .create_repository("Health", "P01", 3, "owner", &new_id("op"))
+        .create_repository(
+            "Health",
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     (root, engine, repo)
 }
@@ -24,7 +30,7 @@ fn save(engine: &mut Engine, branch: &str, bytes: &[u8]) -> OperationResult {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -52,11 +58,15 @@ fn operation_read_plan_blocks_purge_until_observation_finishes() {
         .create_purge_plan(&repo.history_tree_id, vec![version.clone()], "owner")
         .unwrap();
     let plan =
-        engine.prepare_operation_health(engine.operation_record(&original.operation_id).unwrap());
+        engine.prepare_operation_health(engine.operation_record(original.operation_id).unwrap());
     assert_eq!(engine.reads.lock().unwrap().get(&version), Some(&1));
     assert_eq!(
         engine
-            .commit_plan(&purge.plan_id, "owner", &new_id("op"))
+            .commit_plan(
+                &purge.plan_id,
+                "owner",
+                storage_contract::OperationId::generate()
+            )
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::ContentPinned
@@ -66,9 +76,13 @@ fn operation_read_plan_blocks_purge_until_observation_finishes() {
     assert_frozen(&observed, &original);
     assert!(!engine.reads.lock().unwrap().contains_key(&version));
     engine
-        .commit_plan(&purge.plan_id, "owner", &new_id("op"))
+        .commit_plan(
+            &purge.plan_id,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
-    let observed = engine.operation(&original.operation_id).unwrap();
+    let observed = engine.operation(original.operation_id).unwrap();
     assert_eq!(observed.current_health.as_str(), "UNAVAILABLE");
     assert_frozen(&observed, &original);
 }
@@ -90,7 +104,7 @@ fn operation_capture_is_metadata_only_deduplicated_and_cancel_safe() {
     }
     SNAPSHOT_LOAD_COUNT.with(|count| count.set(0));
     let plan =
-        engine.prepare_operation_health(engine.operation_record(&operation.operation_id).unwrap());
+        engine.prepare_operation_health(engine.operation_record(operation.operation_id).unwrap());
     assert_eq!(plan.versions.len(), 1);
     assert_eq!(
         engine.reads.lock().unwrap().get(&entry.version_id),
@@ -99,7 +113,7 @@ fn operation_capture_is_metadata_only_deduplicated_and_cancel_safe() {
     SNAPSHOT_LOAD_COUNT.with(|count| assert_eq!(count.get(), 0));
     drop(plan);
     assert!(engine.reads.lock().unwrap().is_empty());
-    let observed = engine.operation(&operation.operation_id).unwrap();
+    let observed = engine.operation(operation.operation_id).unwrap();
     assert_eq!(observed.current_health.as_str(), "UNAVAILABLE");
     assert_frozen(&observed, &operation);
 }
@@ -119,7 +133,7 @@ fn health_reverifies_each_replica_and_never_rewrites_publication_facts() {
         .map(|disk| version_dir(disk, &version.history_tree_id, &version_id))
         .collect();
     let plan =
-        engine.prepare_operation_health(engine.operation_record(&operation.operation_id).unwrap());
+        engine.prepare_operation_health(engine.operation_record(operation.operation_id).unwrap());
     // Corrupt the complete payload after capture, keeping its length. The
     // observation must actually hash bytes, not trust a prior good result.
     let path = crate::container_storage::content_path(&directories[0], version).unwrap();
@@ -132,7 +146,7 @@ fn health_reverifies_each_replica_and_never_rewrites_publication_facts() {
     // proof are not sufficient health evidence, even if a body is present.
     fs::write(directories[1].join("checksums.bin"), b"untrusted").unwrap();
     fs::write(directories[2].join("publication-proof.json"), b"{}").unwrap();
-    let observed = engine.operation(&operation.operation_id).unwrap();
+    let observed = engine.operation(operation.operation_id).unwrap();
     assert_eq!(observed.current_health.as_str(), "UNAVAILABLE");
     assert_frozen(&observed, &operation);
     assert_eq!(engine.state.operations[&operation.operation_id], operation);
@@ -142,14 +156,14 @@ fn health_reverifies_each_replica_and_never_rewrites_publication_facts() {
 #[test]
 fn pending_receipt_reads_only_exact_operation_pages_and_owner_first() {
     let (_root, mut engine, _repo) = fixture();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     engine.inject_fault_once("after_accept_1");
     assert!(
         engine
-            .create_repository("pending", "P01", 3, "owner", &operation)
+            .create_repository("pending", "P01", 3, "owner", operation)
             .is_err()
     );
-    let (members, snapshot, _) = engine.pending_operation_snapshot(&operation).unwrap();
+    let (members, snapshot, _) = engine.pending_operation_snapshot(operation).unwrap();
     for field in ["repositories", "commits"] {
         for hash in &snapshot.pages[field] {
             for disk in &members {
@@ -162,7 +176,7 @@ fn pending_receipt_reads_only_exact_operation_pages_and_owner_first() {
         }
     }
     SNAPSHOT_LOAD_COUNT.with(|count| count.set(0));
-    let record = engine.operation_record(&operation).unwrap();
+    let record = engine.operation_record(operation).unwrap();
     assert_eq!(record.owner(), Some("owner"));
     assert_eq!(
         record.result().commit_state,
@@ -184,27 +198,27 @@ fn pending_receipt_reads_only_exact_operation_pages_and_owner_first() {
         }
     }
     assert_eq!(
-        engine.operation_owner(&operation).unwrap().as_deref(),
+        engine.operation_owner(operation).unwrap().as_deref(),
         Some("owner")
     );
-    assert!(engine.operation_record(&operation).is_err());
+    assert!(engine.operation_record(operation).is_err());
 }
 
 #[test]
 fn pending_receipt_does_not_turn_corrupt_journals_into_not_found() {
     let (_root, mut engine, _repo) = fixture();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     engine.inject_fault_once("after_accept_1");
     assert!(
         engine
-            .create_repository("pending", "P01", 3, "owner", &operation)
+            .create_repository("pending", "P01", 3, "owner", operation)
             .is_err()
     );
     for disk in engine.members() {
         fs::write(log_path(&disk), b"invalid journal frame").unwrap();
     }
-    let error = engine.operation_record(&operation).err().unwrap();
+    let error = engine.operation_record(operation).err().unwrap();
     assert_eq!(error.code(), storage_contract::ErrorCode::LogCorrupt);
-    let owner_error = engine.operation_owner(&operation).unwrap_err();
+    let owner_error = engine.operation_owner(operation).unwrap_err();
     assert_eq!(owner_error.code(), storage_contract::ErrorCode::LogCorrupt);
 }

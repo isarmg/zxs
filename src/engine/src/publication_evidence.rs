@@ -30,13 +30,38 @@ pub(crate) fn verified_object<
     }))
 }
 
+pub(crate) fn verified_graph_object(
+    members: &[DiskConfig],
+    kind: &'static str,
+    hash: &str,
+) -> Result<AuthenticatedMetadataObject> {
+    let mut first_error = None;
+    for member in members {
+        match load_authenticated_object(member, kind, hash) {
+            Ok(object) => return Ok(object),
+            Err(error) => {
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+    Err(first_error.unwrap_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::RecoveryRequired,
+            "no trusted object replica",
+        )
+    }))
+}
+
 // A candidate binds one exact root and every referenced page digest. Resolve
 // each object independently across trusted members: no member needs to retain
 // the whole closure, but every dependency must authenticate before returning.
 // This read path never repairs or rewrites any replica.
-pub(crate) fn verified_snapshot(members: &[DiskConfig], hash: &str) -> Result<State> {
+pub(crate) fn verified_snapshot(
+    members: &[DiskConfig],
+    hash: &str,
+) -> Result<crate::history_package::AdmittedState> {
     let snapshot: Snapshot = verified_object(members, "snapshot", hash)?;
-    resolve_snapshot(snapshot, |hash| {
+    resolve_admitted_snapshot(snapshot, |hash| {
         verified_object(members, "state-page", hash)
     })
 }
@@ -82,6 +107,17 @@ pub(crate) fn repair_object_copies<T: data_serialization::Serialize>(
         ));
     }
     let bytes = encode_metadata(value, MAX_METADATA)?;
+    repair_object_bytes(members, kind, hash, &bytes)
+}
+
+pub(crate) fn repair_authenticated_object(
+    members: &[DiskConfig],
+    object: &AuthenticatedMetadataObject,
+) -> Result<()> {
+    repair_object_bytes(members, object.kind(), object.hash(), object.bytes())
+}
+
+fn repair_object_bytes(members: &[DiskConfig], kind: &str, hash: &str, bytes: &[u8]) -> Result<()> {
     for member in members {
         let mut paths = existing_object_paths(member, kind, hash)?;
         if paths.is_empty() {
@@ -105,10 +141,10 @@ pub(crate) fn repair_object_copies<T: data_serialization::Serialize>(
                     };
                     // Matching bytes may be the visible result of a previous
                     // repair whose directory sync failed. Complete its barrier.
-                    write_atomic(&path, &bytes, replace)?;
+                    write_atomic(&path, bytes, replace)?;
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    write_atomic(&path, &bytes, false)?;
+                    write_atomic(&path, bytes, false)?;
                 }
                 Err(e) => return Err(e.into()),
                 Ok(_) => {

@@ -15,7 +15,7 @@ fn connect(shared: Arc<Shared>, username: &str, repository: &str) -> (Connection
         std::thread::spawn(move || run_connection(FrameStream::new(server).unwrap(), shared));
     let mut wire = FrameStream::with_timeout(client, Duration::from_secs(2)).unwrap();
     wire.send(
-        &Request::Hello {
+        &Request::<String>::Hello {
             protocol: PROTOCOL.into(),
             capabilities: REQUIRED_CAPABILITIES
                 .iter()
@@ -129,7 +129,7 @@ fn configured_samba_account_binds_the_current_single_authority_and_fails_closed_
     *shared.auth.lock().unwrap() = AuthStore::unavailable(&temp.path().join("recovering"));
     live.wire
         .send(
-            &Request::Stat {
+            &Request::<String>::Stat {
                 path: "report.txt".into(),
             },
             None,

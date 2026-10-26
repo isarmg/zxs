@@ -349,7 +349,13 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
         .unwrap();
         let mut engine = Engine::initialize_validated(&root, config.clone()).unwrap();
         let repo = engine
-            .create_repository("移动恢复", "P01", 3, "alice", &new_id("op"))
+            .create_repository(
+                "移动恢复",
+                "P01",
+                3,
+                "alice",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let workspace = engine
             .create_workspace(&repo.main_branch_id, "alice")
@@ -363,7 +369,7 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "alice".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -378,21 +384,37 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
             .find(|entry| entry.path == "a/f.txt")
             .unwrap();
         let source = engine
-            .initialize_directory_scope(&repo.repository_id, "a", "alice", &new_id("op"))
+            .initialize_directory_scope(
+                &repo.repository_id,
+                "a",
+                "alice",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap()
             .result["directory_branch_id"]
             .as_str()
             .unwrap()
             .to_owned();
         let target = engine
-            .initialize_directory_scope(&repo.repository_id, "b", "alice", &new_id("op"))
+            .initialize_directory_scope(
+                &repo.repository_id,
+                "b",
+                "alice",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap()
             .result["directory_branch_id"]
             .as_str()
             .unwrap()
             .to_owned();
         let retained = engine
-            .create_directory_branches(&repo.repository_id, "a", "retained", "alice", &new_id("op"))
+            .create_directory_branches(
+                &repo.repository_id,
+                "a",
+                "retained",
+                "alice",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap()
             .result["directory_branch_id"]
             .as_str()
@@ -436,11 +458,11 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
                 }),
             }],
         };
-        let operation = new_id("op");
+        let operation = storage_contract::OperationId::generate();
         engine.inject_fault_once(fault);
         assert_eq!(
             engine
-                .directory_namespace_batch(&repo.repository_id, &request, "alice", &operation)
+                .directory_namespace_batch(&repo.repository_id, &request, "alice", operation)
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::InDoubt
@@ -448,9 +470,9 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
         drop(engine);
         let mut engine = Engine::open(&root).unwrap();
         let receipt = engine
-            .directory_namespace_batch(&repo.repository_id, &request, "alice", &operation)
+            .directory_namespace_batch(&repo.repository_id, &request, "alice", operation)
             .unwrap();
-        assert_eq!(engine.operation(&operation).unwrap().result, receipt.result);
+        assert_eq!(engine.operation(operation).unwrap().result, receipt.result);
         assert!(
             !engine.state.directory_branches[&source]
                 .entries
@@ -831,7 +853,13 @@ fn capture_fixture() -> (State, String, String) {
     )
     .unwrap();
     let repo = engine
-        .create_repository("Names", "P01", 1, "owner", &new_id("op"))
+        .create_repository(
+            "Names",
+            "P01",
+            1,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let mut state = engine.state().clone();
     let head = state.branches[&repo.main_branch_id].head_commit_id.clone();

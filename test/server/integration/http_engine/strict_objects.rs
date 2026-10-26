@@ -79,3 +79,89 @@ async fn namespace_batch_requires_named_nested_objects_before_mutation() {
             .all(|entry| entry["path"] != "report.txt")
     );
 }
+
+#[tokio::test]
+async fn operation_id_boundary_preserves_error_codes_and_canonical_wire() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let before = success(&app, &token, "GET", "/api/repositories", None).await;
+    for (operation, code) in [
+        (None, "INVALID_REQUEST"),
+        (Some(Value::Null), "INVALID_REQUEST"),
+        (Some(json!(7)), "INVALID_REQUEST"),
+        (Some(json!("")), "INVALID_REQUEST"),
+        (
+            Some(json!("op_0000000000000000000000000000000A")),
+            "INVALID_ID",
+        ),
+        (
+            Some(json!("op_000000000000000000000000000000000")),
+            "INVALID_ID",
+        ),
+        (Some(json!("wrong")), "INVALID_ID"),
+    ] {
+        let mut body = json!({"name":"Boundary","primary_slot_id":"P01","target_copies":1});
+        if let Some(operation) = operation {
+            body["operation_id"] = operation;
+        }
+        let (status, rejected) =
+            send(&app, Some(&token), "POST", "/api/repositories", Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+        assert_eq!(rejected["error"]["code"], code);
+        assert_eq!(
+            success(&app, &token, "GET", "/api/repositories", None).await,
+            before
+        );
+    }
+    for operation in ["wrong", "op_0000000000000000000000000000000A"] {
+        let (status, rejected) = send(
+            &app,
+            Some(&token),
+            "GET",
+            &format!("/api/operations/{operation}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(rejected["error"]["code"], "OPERATION_NOT_FOUND");
+        let (status, rejected) = send(
+            &app,
+            Some(&token),
+            "POST",
+            "/api/file-manager/disks/P01/namespace",
+            Some(json!({"kind":"mkdir","path":"invalid","operation_id":operation})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(rejected["error"]["code"], "INVALID_REQUEST");
+    }
+    for (name, operation) in [
+        ("Zero", "op_00000000000000000000000000000000"),
+        ("NonV4", "op_ffffffffffffffffffffffffffffffff"),
+    ] {
+        let body =
+            json!({"name":name,"primary_slot_id":"P01","target_copies":1,"operation_id":operation});
+        let created = success(
+            &app,
+            &token,
+            "POST",
+            "/api/repositories",
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(
+            success(&app, &token, "POST", "/api/repositories", Some(body)).await,
+            created
+        );
+        let receipt = success(
+            &app,
+            &token,
+            "GET",
+            &format!("/api/operations/{operation}"),
+            None,
+        )
+        .await;
+        assert_eq!(receipt["operation_id"], operation);
+    }
+}

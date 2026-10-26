@@ -17,7 +17,13 @@ fn detached_snapshot_keeps_only_target_and_preserves_live_retained_evidence() {
     };
     let mut engine = Engine::initialize_with_workspace_limits(&root, config, Some(limits)).unwrap();
     let repo = engine
-        .create_repository("planning", "P01", 1, "alice", &new_id("op"))
+        .create_repository(
+            "planning",
+            "P01",
+            1,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     for (principal, abort) in [("alice", true), ("bob", true), ("bob", false)] {
         let workspace = engine
@@ -41,7 +47,7 @@ fn detached_snapshot_keeps_only_target_and_preserves_live_retained_evidence() {
         .unwrap();
     let request = CommitRequest {
         workspace_id: target.workspace_id.clone(),
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "alice".into(),
         expected_head: target.base_head,
         fencing_token: target.fencing_token,
@@ -108,7 +114,7 @@ fn detached_snapshot_keeps_only_target_and_preserves_live_retained_evidence() {
     let mut engine = Engine::open_with_workspace_limits(&root, Some(limits)).unwrap();
     assert_eq!(canonical_json(engine.state()).unwrap(), published_state);
     assert_eq!(canonical_json(&engine.workspaces).unwrap(), committed);
-    assert_eq!(engine.operation(&request.operation_id).unwrap(), result);
+    assert_eq!(engine.operation(request.operation_id).unwrap(), result);
     let replay = engine
         .prepare_workspace_commit(request, None)
         .unwrap()
@@ -132,7 +138,13 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
     )
     .unwrap();
     let repo = engine
-        .create_repository("shared state", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "shared state",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let mut commits = Vec::new();
     for bytes in [b"first".as_slice(), b"second".as_slice()] {
@@ -145,7 +157,7 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
         let result = engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -173,7 +185,7 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
         .unwrap();
     let request = CommitRequest {
         workspace_id: workspace.workspace_id,
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: workspace.base_head,
         fencing_token: workspace.fencing_token,
@@ -252,7 +264,13 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
     )
     .unwrap();
     let repo = engine
-        .create_repository("record isolation", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "record isolation",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -263,7 +281,7 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -272,7 +290,12 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
         })
         .unwrap();
     engine
-        .initialize_directory_scope(&repo.repository_id, "nested", "admin", &new_id("op"))
+        .initialize_directory_scope(
+            &repo.repository_id,
+            "nested",
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let frozen = Arc::clone(&engine.state);
     let before = canonical_json(frozen.as_ref()).unwrap();
@@ -310,11 +333,11 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
         assert!(next.directory_trees.remove_discard("candidate-only-tree"));
         assert!(next.versions.remove_discard("candidate-only-version"));
     };
-    let failed_operation = new_id("op");
+    let failed_operation = storage_contract::OperationId::generate();
     let failed = engine.plan_mutation_digest(
         "test.record_isolation",
         "admin",
-        &failed_operation,
+        failed_operation,
         json_codec::json!({}),
         None,
         |_, next, _| {
@@ -332,12 +355,12 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
     assert!(Arc::ptr_eq(&frozen, &engine.state));
     assert!(!engine.state.operations.contains_key(&failed_operation));
 
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let planned = engine
         .plan_mutation_digest(
             "test.record_isolation",
             "admin",
-            &operation,
+            operation,
             json_codec::json!({}),
             None,
             |_, next, _| {
@@ -378,16 +401,22 @@ fn plan_failed_change_can_abandon_a_temporarily_missing_main_head() {
     )
     .unwrap();
     let repo = engine
-        .create_repository("abandoned head", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "abandoned head",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let frozen = Arc::clone(&engine.state);
     let before = canonical_json(frozen.as_ref()).unwrap();
     let head = frozen.branches[&repo.main_branch_id].head_commit_id.clone();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let result = engine.plan_mutation_digest(
         "test.abandon_head",
         "admin",
-        &operation,
+        operation,
         json_codec::json!({}),
         None,
         |_, next, _| {
@@ -417,7 +446,13 @@ fn plan_successful_change_must_restore_main_head_before_returning() {
     )
     .unwrap();
     let repo = engine
-        .create_repository("broken successful head", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "broken successful head",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let head = engine.state.branches[&repo.main_branch_id]
         .head_commit_id
@@ -426,7 +461,7 @@ fn plan_successful_change_must_restore_main_head_before_returning() {
         .plan_mutation_digest(
             "test.broken_head",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
             json_codec::json!({}),
             None,
             |_, next, _| {
@@ -445,7 +480,7 @@ fn wire_envelope_errors_precede_missing_workspace_lookup() {
         Engine::initialize(&root, Config::development([temp.path().join("disk")])).unwrap();
     let mut request = CommitRequest {
         workspace_id: new_id("ws"),
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "alice".into(),
         expected_head: new_id("commit"),
         fencing_token: 1,
@@ -482,9 +517,9 @@ fn wire_envelope_errors_precede_missing_workspace_lookup() {
             .code(),
         ErrorCode::WorkspaceNotFound
     );
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     engine
-        .create_repository("repo", "P01", 1, "alice", &operation)
+        .create_repository("repo", "P01", 1, "alice", operation)
         .unwrap();
     request.operation_id = operation;
     assert_eq!(

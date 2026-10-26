@@ -9,7 +9,13 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     )
     .unwrap();
     let repo = engine
-        .create_repository("Workspace selections", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "Workspace selections",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -22,7 +28,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -198,7 +204,12 @@ fn empty_generations_still_validate_workspace_references_in_order() {
 fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories() {
     let (_temporary, mut engine, repo) = fixture();
     engine
-        .initialize_directory_scope(&repo.repository_id, "", "admin", &new_id("op"))
+        .initialize_directory_scope(
+            &repo.repository_id,
+            "",
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     engine
         .create_directory_branches(
@@ -206,20 +217,38 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
             "Folder",
             "draft",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
         .unwrap();
     let other = engine
-        .create_repository("Other", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "Other",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     engine
-        .create_directory_branches(&other.repository_id, "", "draft", "admin", &new_id("op"))
+        .create_directory_branches(
+            &other.repository_id,
+            "",
+            "draft",
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     engine
-        .select_directory_branches(&other.repository_id, "", "draft", "admin", &new_id("op"))
+        .select_directory_branches(
+            &other.repository_id,
+            "",
+            "draft",
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     engine
         .validate_workspace_file_selection(&workspace.workspace_id, "Folder/Child/file.txt")
@@ -231,7 +260,7 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
                 "Folder",
                 selection,
                 "admin",
-                &new_id("op"),
+                storage_contract::OperationId::generate(),
             )
             .unwrap();
     }
@@ -262,7 +291,7 @@ fn workspace_capture_matches_path_lookup_for_bootstrap_and_inherited_contexts() 
                     "Folder",
                     "draft",
                     "admin",
-                    &new_id("op"),
+                    storage_contract::OperationId::generate(),
                 )
                 .unwrap();
             engine
@@ -271,7 +300,7 @@ fn workspace_capture_matches_path_lookup_for_bootstrap_and_inherited_contexts() 
                     "Folder",
                     "draft",
                     "admin",
-                    &new_id("op"),
+                    storage_contract::OperationId::generate(),
                 )
                 .unwrap();
         }
@@ -337,7 +366,7 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
                     "Folder",
                     "draft",
                     "admin",
-                    &new_id("op"),
+                    storage_contract::OperationId::generate(),
                 )
                 .unwrap();
             engine
@@ -346,7 +375,7 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
                     "Folder",
                     "draft",
                     "admin",
-                    &new_id("op"),
+                    storage_contract::OperationId::generate(),
                 )
                 .unwrap();
         }
@@ -369,7 +398,7 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
             .plan_workspace_commit_inner(
                 CommitRequest {
                     workspace_id: workspace.workspace_id,
-                    operation_id: new_id("op"),
+                    operation_id: storage_contract::OperationId::generate(),
                     principal: "admin".into(),
                     expected_head: workspace.base_head.clone(),
                     fencing_token: workspace.fencing_token,

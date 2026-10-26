@@ -20,7 +20,13 @@ fn fixture() -> (tempfile::TempDir, Router, String, String, String) {
     config.max_workspaces = 1;
     let mut engine = Engine::initialize(&system, config).unwrap();
     let repository = engine
-        .create_repository("Optional identities", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "Optional identities",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let mut commits = Vec::new();
     for bytes in [b"old".as_slice(), b"new content".as_slice()] {
@@ -33,7 +39,7 @@ fn fixture() -> (tempfile::TempDir, Router, String, String, String) {
         let result = engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,

@@ -10,16 +10,7 @@ use data_serialization::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use storage_engine::{CommitRequest, Engine, FileLocation, NamespaceOperation};
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serialization(deny_unknown_fields)]
-pub struct CommitWorkspace {
-    pub workspace_id: String,
-    pub operation_id: String,
-    pub expected_head: String,
-    pub fencing_token: u64,
-    pub message: String,
-    pub request_digest: Option<String>,
-}
+use crate::CommitWorkspace;
 
 /// The frozen public envelope uses decimal strings deliberately: their exact
 /// spelling participates in the canonical request digest and binding checks.
@@ -82,7 +73,7 @@ pub struct MergeLink {
 pub struct NamespaceBatch {
     pub slot_id: String,
     pub request: storage_contract::DirectoryNamespaceBatch,
-    pub operation_id: String,
+    pub operation_id: storage_contract::OperationId,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -100,7 +91,7 @@ pub struct MergeFileBranches {
     pub surviving_branch_id: String,
     pub confirmed: bool,
     pub location: Option<FileLocation>,
-    pub operation_id: String,
+    pub operation_id: storage_contract::OperationId,
 }
 
 /// Wire commands accept only canonical decimal strings for generations.
@@ -174,7 +165,10 @@ impl<'a> Application<'a> {
                 target_copies: command.target_copies,
                 expected_generation: command.expected_generation,
                 principal: &self.identity.principal,
-                operation_id: &command.operation_id,
+                operation_id: command
+                    .operation_id
+                    .parse::<storage_contract::OperationId>()
+                    .map_err(|source| error(source.into()))?,
             })
             .map_err(error)
     }
@@ -192,7 +186,10 @@ impl<'a> Application<'a> {
                 primary_slot_id: &command.primary_slot_id,
                 expected_generation: command.expected_generation,
                 principal: &self.identity.principal,
-                operation_id: &command.operation_id,
+                operation_id: command
+                    .operation_id
+                    .parse::<storage_contract::OperationId>()
+                    .map_err(|source| error(source.into()))?,
             })
             .map_err(error)
     }
@@ -228,7 +225,10 @@ impl<'a> Application<'a> {
             .expect("invariant: internal JSON serialization succeeds");
         let request = self.commit_request(CommitWorkspace {
             workspace_id: command.workspace_id,
-            operation_id: command.operation_id,
+            operation_id: command
+                .operation_id
+                .parse::<storage_contract::OperationId>()
+                .map_err(|source| error(source.into()))?,
             expected_head: command.expected_head,
             fencing_token,
             message: command.message,
@@ -309,7 +309,10 @@ impl<'a> Application<'a> {
                 &command.source_commit_id,
                 &command.name,
                 &self.identity.principal,
-                &command.operation_id,
+                command
+                    .operation_id
+                    .parse::<storage_contract::OperationId>()
+                    .map_err(|source| error(source.into()))?,
             )
             .map_err(error)
     }
@@ -323,7 +326,10 @@ impl<'a> Application<'a> {
             .archive_branch(
                 &command.branch_id,
                 &self.identity.principal,
-                &command.operation_id,
+                command
+                    .operation_id
+                    .parse::<storage_contract::OperationId>()
+                    .map_err(|source| error(source.into()))?,
             )
             .map_err(error)
     }
@@ -332,6 +338,10 @@ impl<'a> Application<'a> {
         &mut self,
         command: MergeLink,
     ) -> Result<storage_contract::MergeLink, ApiError> {
+        let operation_id = command
+            .operation_id
+            .parse::<storage_contract::OperationId>()
+            .map_err(|source| error(source.into()))?;
         repo_for_history(self.engine, &command.history_tree_id)?;
         // A split can move both original endpoints after this operation was
         // published. Admit only its original owner/history to core replay;
@@ -340,7 +350,7 @@ impl<'a> Application<'a> {
             .engine
             .state()
             .operations
-            .get(&command.operation_id)
+            .get(&operation_id)
             .is_some_and(|operation| {
                 operation.kind == "merge-link.create"
                     && operation.history_tree_id.as_deref()
@@ -348,7 +358,7 @@ impl<'a> Application<'a> {
             })
             && self
                 .engine
-                .operation_owner(&command.operation_id)
+                .operation_owner(operation_id)
                 .map_err(crate::engine_backend::error)?
                 .as_deref()
                 == Some(self.identity.principal.as_str());
@@ -367,7 +377,7 @@ impl<'a> Application<'a> {
                 &command.target_branch_id,
                 &command.target_commit_id,
                 &self.identity.principal,
-                &command.operation_id,
+                operation_id,
             )
             .map_err(error)
     }
@@ -439,7 +449,7 @@ impl<'a> Application<'a> {
                 &repository_id,
                 &command.request,
                 &self.identity.principal,
-                &command.operation_id,
+                command.operation_id,
             )
             .map_err(error)
     }
@@ -480,7 +490,7 @@ impl<'a> Application<'a> {
                 surviving_branch_id: &command.surviving_branch_id,
                 location: command.location.as_ref(),
                 principal: &self.identity.principal,
-                operation_id: &command.operation_id,
+                operation_id: command.operation_id,
             })
             .map_err(error)
     }
@@ -511,7 +521,10 @@ impl<'a> Application<'a> {
             .commit_plan(
                 &command.plan_id,
                 &self.identity.principal,
-                &command.operation_id,
+                command
+                    .operation_id
+                    .parse::<storage_contract::OperationId>()
+                    .map_err(|source| error(source.into()))?,
             )
             .map_err(error)
     }

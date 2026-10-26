@@ -1,6 +1,6 @@
 use super::*;
 use crate::BackendAction;
-use storage_engine::{Config, new_id};
+use storage_engine::Config;
 
 #[test]
 fn scope_reads_dispatch_by_action_without_changing_state() {
@@ -12,10 +12,21 @@ fn scope_reads_dispatch_by_action_without_changing_state() {
     .unwrap();
     let identity = install_test_administrator(&mut engine, "owner");
     let repo = engine
-        .create_repository("Scopes", "P01", 1, "owner", &new_id("op"))
+        .create_repository(
+            "Scopes",
+            "P01",
+            1,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     engine
-        .initialize_directory_scope(&repo.repository_id, "", "owner", &new_id("op"))
+        .initialize_directory_scope(
+            &repo.repository_id,
+            "",
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let before = json_codec::to_value(engine.state()).unwrap();
     let backend = EngineBackend::new(engine);

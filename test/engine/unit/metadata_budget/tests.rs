@@ -8,7 +8,13 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     ]);
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
-        .create_repository("容量边界", "P01", 3, "alice", &new_id("op"))
+        .create_repository(
+            "容量边界",
+            "P01",
+            3,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     (temp, engine, repo)
 }
@@ -60,10 +66,9 @@ fn manifest_limit_rejects_before_any_new_payload_or_decision_and_keeps_published
         .head_commit_id = commit.commit_id.clone();
     next.commits.insert(commit.commit_id.clone(), commit);
     let mut result = next.operations.values().next().unwrap().clone();
-    result.operation_id = new_id("op");
+    result.operation_id = storage_contract::OperationId::generate();
     result.sequence = next_slot;
-    next.operations
-        .insert(result.operation_id.clone(), result.clone());
+    next.operations.insert(result.operation_id, result.clone());
     // Derive the exact successful boundary using the same serializer.
     let mut high = 1usize;
     while crate::history_package::store_history_manifests_bounded(&[], &next, high).is_err() {
@@ -100,7 +105,7 @@ fn manifest_limit_rejects_before_any_new_payload_or_decision_and_keeps_published
         assert!(!version_dir(disk, &repo.history_tree_id, &version.version_id).exists());
     }
     assert_eq!(
-        engine.operation(&result.operation_id).unwrap_err().code(),
+        engine.operation(result.operation_id).unwrap_err().code(),
         storage_contract::ErrorCode::OperationNotFound
     );
     assert_eq!(
@@ -127,7 +132,7 @@ fn actual_publication_and_local_proofs_fit_the_exact_preflight_boundary() {
     let result = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -204,7 +209,7 @@ fn save(engine: &mut Engine, branch: &str, bytes: &[u8]) -> String {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -223,7 +228,11 @@ fn metadata_only_package_and_purge_tombstone_combinations_are_preflighted() {
         .create_purge_plan(&repo.history_tree_id, vec![old.clone()], "alice")
         .unwrap();
     engine
-        .commit_plan(&plan.plan_id, "alice", &new_id("op"))
+        .commit_plan(
+            &plan.plan_id,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let disk = engine.members()[0].clone();
     let scanned = scan(&disk).unwrap();

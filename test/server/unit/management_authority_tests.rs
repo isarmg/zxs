@@ -33,7 +33,7 @@ impl Fixture {
             .persist_auth_state(
                 source_auth.snapshot().unwrap(),
                 "system_auth",
-                &storage_engine::new_id("op"),
+                storage_contract::OperationId::generate(),
             )
             .unwrap();
         drop(engine);

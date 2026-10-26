@@ -27,15 +27,21 @@ impl Fixture {
     }
 }
 fn repository(e: &mut Engine, copies: u32) -> Repository {
-    e.create_repository("项目", "P01", copies, "admin", &new_id("op"))
-        .unwrap()
+    e.create_repository(
+        "项目",
+        "P01",
+        copies,
+        "admin",
+        storage_contract::OperationId::generate(),
+    )
+    .unwrap()
 }
 fn save(e: &mut Engine, branch: &str, path: &str, bytes: &[u8]) -> OperationResult {
     let w = e.create_workspace(branch, "admin").unwrap();
     e.stage_bytes(&w.workspace_id, path, bytes).unwrap();
     e.commit_workspace(CommitRequest {
         workspace_id: w.workspace_id,
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: w.base_head,
         fencing_token: w.fencing_token,
@@ -78,7 +84,7 @@ fn normalized_directory_rename_and_file_branch_keep_parent_closure_after_restart
             &file.version_id,
             "Draft",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let branch_id = branch.branch_id.unwrap();
@@ -99,7 +105,7 @@ fn normalized_directory_rename_and_file_branch_keep_parent_closure_after_restart
             )
             .unwrap(),
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     drop(engine);
@@ -173,7 +179,7 @@ fn direct_namespace_cannot_write_an_inactive_directory_branch() {
             )
             .unwrap(),
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap_err();
     assert_eq!(error.code(), storage_contract::ErrorCode::BranchNotActive);
@@ -204,7 +210,7 @@ fn indexed_commit_comparison_preserves_normalized_identity_and_change_order() {
             )
             .unwrap(),
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     engine
@@ -217,7 +223,7 @@ fn indexed_commit_comparison_preserves_normalized_identity_and_change_order() {
             )
             .unwrap(),
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let right = save(&mut engine, &repo.main_branch_id, "added.txt", b"added")
@@ -266,7 +272,11 @@ fn modified_local_maintenance_plan_cannot_execute_a_different_preview_after_rest
     let before = engine.state().sequence;
     assert_eq!(
         engine
-            .commit_plan(&plan.plan_id, "admin", &new_id("op"))
+            .commit_plan(
+                &plan.plan_id,
+                "admin",
+                storage_contract::OperationId::generate()
+            )
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::PlanInvalid
@@ -314,7 +324,7 @@ fn file_container_rename_replays_only_after_decision_and_keeps_all_version_bytes
         assert_eq!(versions.len(), 2);
         assert!(versions[0].storage_name.starts_with("v000001_"));
         assert!(versions[1].storage_name.starts_with("v000002_"));
-        let operation = new_id("op");
+        let operation = storage_contract::OperationId::generate();
         engine.inject_fault_once(fault);
         assert_eq!(
             engine
@@ -327,7 +337,7 @@ fn file_container_rename_replays_only_after_decision_and_keeps_all_version_bytes
                     )
                     .unwrap(),
                     "admin",
-                    &operation
+                    operation
                 )
                 .unwrap_err()
                 .code(),
@@ -398,7 +408,7 @@ fn file_container_rename_replays_only_after_decision_and_keeps_all_version_bytes
                     )
                     .unwrap(),
                     "admin",
-                    &operation,
+                    operation,
                 )
                 .unwrap();
             assert_eq!(
@@ -439,9 +449,9 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
         .unwrap()
         .clone();
     let versions = engine.state().versions.len();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let branch = engine
-        .create_file_branch(&one.file_id, &one.version_id, "draft", "admin", &operation)
+        .create_file_branch(&one.file_id, &one.version_id, "draft", "admin", operation)
         .unwrap();
     let branch_id = branch.result["branch_id"].as_str().unwrap().to_string();
     assert_eq!(
@@ -452,7 +462,7 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
                 true,
                 engine.state().histories[&repo.history_tree_id].generation,
                 "admin",
-                &new_id("op")
+                storage_contract::OperationId::generate()
             )
             .unwrap_err()
             .code(),
@@ -521,7 +531,12 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
         "editing an unselected branch cannot change the visible file"
     );
     engine
-        .select_file_branch(&one.file_id, &branch_id, "admin", &new_id("op"))
+        .select_file_branch(
+            &one.file_id,
+            &branch_id,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     save(
         &mut engine,
@@ -558,7 +573,12 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
         .branch_id
         .clone();
     engine
-        .select_file_branch(&one.file_id, &main, "admin", &new_id("op"))
+        .select_file_branch(
+            &one.file_id,
+            &main,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     assert_eq!(
         bytes(
@@ -580,7 +600,7 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
                 &two.version_id,
                 "wrong file",
                 "admin",
-                &new_id("op")
+                storage_contract::OperationId::generate()
             )
             .unwrap_err()
             .code(),
@@ -588,7 +608,12 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
     );
     assert_eq!(
         engine
-            .select_file_branch(&one.file_id, &branch_id, "", &new_id("op"))
+            .select_file_branch(
+                &one.file_id,
+                &branch_id,
+                "",
+                storage_contract::OperationId::generate()
+            )
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::Unauthenticated
@@ -623,7 +648,7 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
             None,
             "file container note",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     engine
@@ -632,7 +657,7 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
             Some(&one.version_id),
             "original version note",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     engine
@@ -641,7 +666,13 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
     let target = Fixture::new();
     let mut recovered = target.initialize();
     recovered
-        .restore_history_package(&package, "P01", 3, "rescuer", &new_id("op"))
+        .restore_history_package(
+            &package,
+            "P01",
+            3,
+            "rescuer",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     assert_eq!(recovered.state().file_selections[&one.file_id], main);
     assert_eq!(
@@ -680,7 +711,7 @@ fn directory_writes_update_only_the_selected_file_branch() {
             &file.version_id,
             "experiment",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let branch = result.result["branch_id"].as_str().unwrap().to_string();
@@ -709,19 +740,24 @@ fn directory_writes_update_only_the_selected_file_branch() {
         Some("renamed.txt"),
     )
     .unwrap();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let result = engine
-        .file_namespace(&repo.repository_id, change.clone(), "admin", &operation)
+        .file_namespace(&repo.repository_id, change.clone(), "admin", operation)
         .unwrap();
     assert_eq!(
         engine
-            .file_namespace(&repo.repository_id, change, "admin", &operation)
+            .file_namespace(&repo.repository_id, change, "admin", operation)
             .unwrap()
             .operation_id,
         result.operation_id
     );
     engine
-        .select_file_branch(&file.file_id, &branch, "admin", &new_id("op"))
+        .select_file_branch(
+            &file.file_id,
+            &branch,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let visible = engine.list_tree(&repo.main_branch_id).unwrap();
     assert_eq!(visible[0].path, "renamed.txt");
@@ -766,9 +802,9 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
         .unwrap()
         .clone();
     let versions = engine.state().versions.len();
-    let operation = new_id("op");
+    let operation = storage_contract::OperationId::generate();
     let created = engine
-        .create_directory_branches(&repo.repository_id, "inside", "draft", "admin", &operation)
+        .create_directory_branches(&repo.repository_id, "inside", "draft", "admin", operation)
         .unwrap();
     assert_eq!(created.result["count"], "2");
     assert_eq!(created.result["copied_files"], "0");
@@ -778,7 +814,7 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
     let sequence = engine.state().sequence;
     assert_eq!(
         engine
-            .create_directory_branches(&repo.repository_id, "inside", "draft", "admin", &operation)
+            .create_directory_branches(&repo.repository_id, "inside", "draft", "admin", operation)
             .unwrap()
             .result,
         created.result
@@ -805,9 +841,9 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
             format!("draft {}", file.path).as_bytes(),
         );
     }
-    let selection = new_id("op");
+    let selection = storage_contract::OperationId::generate();
     let selected = engine
-        .select_directory_branches(&repo.repository_id, "inside", "draft", "admin", &selection)
+        .select_directory_branches(&repo.repository_id, "inside", "draft", "admin", selection)
         .unwrap();
     assert_eq!(selected.result["count"], "2");
     let tree = engine.list_tree(&repo.main_branch_id).unwrap();
@@ -836,14 +872,14 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
     let mut engine = Engine::open(&fixture.root).unwrap();
     assert_eq!(
         engine
-            .select_directory_branches(&repo.repository_id, "inside", "draft", "admin", &selection)
+            .select_directory_branches(&repo.repository_id, "inside", "draft", "admin", selection)
             .unwrap()
             .result,
         selected.result
     );
     assert_eq!(
         engine
-            .create_directory_branches(&repo.repository_id, "inside", "draft", "admin", &operation)
+            .create_directory_branches(&repo.repository_id, "inside", "draft", "admin", operation)
             .unwrap()
             .result,
         created.result
@@ -870,7 +906,13 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
     let files = engine.list_tree(&repo.main_branch_id).unwrap();
     let b = files.iter().find(|e| e.path == "folder/b.txt").unwrap();
     engine
-        .create_file_branch(&b.file_id, &b.version_id, "taken", "admin", &new_id("op"))
+        .create_file_branch(
+            &b.file_id,
+            &b.version_id,
+            "taken",
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     // File and directory branch names are separate namespaces. Registering
     // this composition reuses the already selected shared file branches.
@@ -880,7 +922,7 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
             "folder",
             "taken",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let before = canonical_json(engine.state()).unwrap();
@@ -891,7 +933,7 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
                 "folder",
                 "taken",
                 "admin",
-                &new_id("op")
+                storage_contract::OperationId::generate()
             )
             .unwrap_err()
             .code(),
@@ -908,7 +950,7 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
             "folder",
             "complete",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     save(
@@ -923,7 +965,7 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
             "folder",
             "complete",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     assert!(
@@ -941,7 +983,7 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
                 "folder",
                 "missing actor",
                 "",
-                &new_id("op")
+                storage_contract::OperationId::generate()
             )
             .unwrap_err()
             .code(),
@@ -961,7 +1003,7 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
             "folder",
             "unavailable",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     assert_eq!(placeholders.result["placeholder_files"], "0");
@@ -973,7 +1015,7 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
             "folder",
             "unavailable",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     assert!(
@@ -1054,7 +1096,7 @@ fn written_branch_survives_source_purge_and_merge_is_metadata_only() {
             first.commit_id.as_deref().unwrap(),
             "独立分支",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     assert_eq!(e.list_tree(&b.branch_id).unwrap()[0].version_id, old);
@@ -1071,7 +1113,7 @@ fn written_branch_survives_source_purge_and_merge_is_metadata_only() {
         &r.main_branch_id,
         &target,
         "admin",
-        &new_id("op"),
+        storage_contract::OperationId::generate(),
     )
     .unwrap();
     assert_eq!(e.state().versions.len(), count);
@@ -1082,8 +1124,12 @@ fn written_branch_survives_source_purge_and_merge_is_metadata_only() {
     let plan = e
         .create_purge_plan(&r.history_tree_id, vec![old.clone()], "admin")
         .unwrap();
-    e.commit_plan(&plan.plan_id, "admin", &new_id("op"))
-        .unwrap();
+    e.commit_plan(
+        &plan.plan_id,
+        "admin",
+        storage_contract::OperationId::generate(),
+    )
+    .unwrap();
     assert_eq!(
         e.open_content(&old).err().unwrap().code(),
         storage_contract::ErrorCode::ContentPurged
@@ -1117,7 +1163,7 @@ fn faults_replay_same_operation_and_never_publish_early() {
             .unwrap();
         let request = CommitRequest {
             workspace_id: w.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: w.base_head,
             fencing_token: w.fencing_token,
@@ -1132,12 +1178,12 @@ fn faults_replay_same_operation_and_never_publish_early() {
         );
         assert!(e.is_read_only());
         assert_eq!(
-            e.operation_owner(&request.operation_id).unwrap().as_deref(),
+            e.operation_owner(request.operation_id).unwrap().as_deref(),
             Some("admin")
         );
         drop(e);
         let mut e = Engine::open(&f.root).unwrap();
-        let result = e.operation(&request.operation_id).unwrap();
+        let result = e.operation(request.operation_id).unwrap();
         assert_eq!(
             result.commit_state,
             storage_contract::CommitState::Published,
@@ -1170,7 +1216,7 @@ fn disjoint_workspaces_rebase_but_same_file_is_owned() {
     for w in [a, b] {
         e.commit_workspace(CommitRequest {
             workspace_id: w.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: w.base_head,
             fencing_token: w.fencing_token,
@@ -1228,7 +1274,7 @@ fn workspace_actor_binding_and_idempotency_conflicts() {
     e.stage_bytes(&w.workspace_id, "a", b"private").unwrap();
     let request = CommitRequest {
         workspace_id: w.workspace_id.clone(),
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: w.base_head.clone(),
         fencing_token: w.fencing_token,
@@ -1275,18 +1321,18 @@ fn workspace_actor_binding_and_idempotency_conflicts() {
         workspace_before
     );
     e.commit_workspace(request).unwrap();
-    let op = new_id("op");
+    let op = storage_contract::OperationId::generate();
     let b = e
-        .create_repository("second", "P01", 1, "admin", &op)
+        .create_repository("second", "P01", 1, "admin", op)
         .unwrap();
     assert_eq!(
-        e.create_repository("second", "P01", 1, "admin", &op)
+        e.create_repository("second", "P01", 1, "admin", op)
             .unwrap()
             .repository_id,
         b.repository_id
     );
     assert_eq!(
-        e.create_repository("other", "P01", 1, "admin", &op)
+        e.create_repository("other", "P01", 1, "admin", op)
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::IdempotencyKeyReused
@@ -1318,7 +1364,11 @@ fn active_reads_protect_history_and_split_remaps_full_payloads() {
         )
         .unwrap();
     let result = e
-        .commit_plan(&plan.plan_id, "admin", &new_id("op"))
+        .commit_plan(
+            &plan.plan_id,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let new_history = result.history_tree_id.unwrap();
     assert_ne!(new_history, r.history_tree_id);
@@ -1360,7 +1410,7 @@ fn fixed_route_capacity_does_not_fallback_and_second_writer_is_rejected() {
     let err = e
         .commit_workspace(CommitRequest {
             workspace_id: w.workspace_id.clone(),
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: w.base_head,
             fencing_token: w.fencing_token,
@@ -1416,7 +1466,7 @@ fn published_success_survives_later_content_damage() {
     .unwrap();
     fs::remove_file(content).unwrap();
     let e = Engine::open(&f.root).unwrap();
-    let result = e.operation(&op.operation_id).unwrap();
+    let result = e.operation(op.operation_id).unwrap();
     assert_eq!(
         result.protection_at_publish,
         storage_contract::ProtectionAtPublish::TargetMet
@@ -1474,7 +1524,7 @@ fn explicit_upload_generations_and_sealed_wire_requests_are_stable() {
     body["request_digest"] = json!(commit_request_digest(&w.workspace_id, &body).unwrap());
     let request = CommitRequest {
         workspace_id: w.workspace_id.clone(),
-        operation_id: body["operation_id"].as_str().unwrap().into(),
+        operation_id: body["operation_id"].as_str().unwrap().parse().unwrap(),
         principal: "admin".into(),
         expected_head: w.base_head,
         fencing_token: w.fencing_token,
@@ -1522,7 +1572,7 @@ fn system_disk_restore_recovers_auth_and_unsubmitted_full_bytes() {
     e.persist_auth_state(
         json_codec::json!({"users":{"admin":{"password_hash":"test-hash-only"}}}),
         "admin",
-        &new_id("op"),
+        storage_contract::OperationId::generate(),
     )
     .unwrap();
     let w = e.create_workspace(&r.main_branch_id, "admin").unwrap();
@@ -1552,7 +1602,7 @@ fn system_disk_restore_recovers_auth_and_unsubmitted_full_bytes() {
     );
     e.commit_workspace(CommitRequest {
         workspace_id: w.workspace_id,
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: w.base_head,
         fencing_token: w.fencing_token,
@@ -1586,7 +1636,7 @@ fn mkdir_and_child_upload_publish_together_and_cancellation_never_undoes_executi
         .unwrap();
     e.commit_workspace(CommitRequest {
         workspace_id: w.workspace_id,
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: w.base_head,
         fencing_token: w.fencing_token,
@@ -1606,17 +1656,17 @@ fn mkdir_and_child_upload_publish_together_and_cancellation_never_undoes_executi
     let plan = e
         .create_purge_plan(&r.history_tree_id, vec![old.clone()], "admin")
         .unwrap();
-    let cancel = new_id("op");
-    let result = e.cancel_plan(&plan.plan_id, "admin", &cancel).unwrap();
+    let cancel = storage_contract::OperationId::generate();
+    let result = e.cancel_plan(&plan.plan_id, "admin", cancel).unwrap();
     assert_eq!(result.result["state"], "cancelled");
     assert_eq!(
-        e.cancel_plan(&plan.plan_id, "admin", &cancel)
+        e.cancel_plan(&plan.plan_id, "admin", cancel)
             .unwrap()
             .sequence,
         result.sequence
     );
     assert_eq!(
-        e.commit_plan(&plan.plan_id, "admin", &cancel)
+        e.commit_plan(&plan.plan_id, "admin", cancel)
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::IdempotencyKeyReused
@@ -1624,12 +1674,20 @@ fn mkdir_and_child_upload_publish_together_and_cancellation_never_undoes_executi
     let plan = e
         .create_purge_plan(&r.history_tree_id, vec![old], "admin")
         .unwrap();
-    e.commit_plan(&plan.plan_id, "admin", &new_id("op"))
-        .unwrap();
+    e.commit_plan(
+        &plan.plan_id,
+        "admin",
+        storage_contract::OperationId::generate(),
+    )
+    .unwrap();
     assert_eq!(
-        e.cancel_plan(&plan.plan_id, "admin", &new_id("op"))
-            .unwrap_err()
-            .code(),
+        e.cancel_plan(
+            &plan.plan_id,
+            "admin",
+            storage_contract::OperationId::generate()
+        )
+        .unwrap_err()
+        .code(),
         storage_contract::ErrorCode::PlanClosed
     );
 }
@@ -1704,7 +1762,7 @@ fn conditional_directory_policies_change_only_future_placements() {
         target_copies: 1,
         expected_generation: 0,
         principal: "admin",
-        operation_id: &new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
     })
     .unwrap();
     let rule = new_id("rule");
@@ -1715,7 +1773,7 @@ fn conditional_directory_policies_change_only_future_placements() {
         primary_slot_id: "P02",
         expected_generation: 0,
         principal: "admin",
-        operation_id: &new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
     })
     .unwrap();
     assert_eq!(
@@ -1726,14 +1784,20 @@ fn conditional_directory_policies_change_only_future_placements() {
             target_copies: 2,
             expected_generation: 0,
             principal: "admin",
-            operation_id: &new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
         })
         .unwrap_err()
         .code(),
         storage_contract::ErrorCode::GenerationMismatch
     );
     let other = e
-        .create_repository("other", "P01", 3, "admin", &new_id("op"))
+        .create_repository(
+            "other",
+            "P01",
+            3,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let before_rejected_updates = canonical_json(e.state()).unwrap();
     assert_eq!(
@@ -1744,7 +1808,7 @@ fn conditional_directory_policies_change_only_future_placements() {
             target_copies: 1,
             expected_generation: 0,
             principal: "",
-            operation_id: &new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
         })
         .unwrap_err()
         .code(),
@@ -1760,7 +1824,7 @@ fn conditional_directory_policies_change_only_future_placements() {
             target_copies: 1,
             expected_generation: 1,
             principal: "admin",
-            operation_id: &new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
         })
         .unwrap_err()
         .code(),
@@ -1774,7 +1838,7 @@ fn conditional_directory_policies_change_only_future_placements() {
             primary_slot_id: "P02",
             expected_generation: 1,
             principal: "admin",
-            operation_id: &new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
         })
         .unwrap_err()
         .code(),
@@ -1836,7 +1900,7 @@ fn overlapping_namespace_and_upload_never_reports_a_successful_disappearing_file
         let error = e
             .commit_workspace(CommitRequest {
                 workspace_id: w.workspace_id.clone(),
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "admin".into(),
                 expected_head: w.base_head,
                 fencing_token: w.fencing_token,
@@ -1860,7 +1924,12 @@ fn smb_binding_is_explicit_conditional_and_requires_clean_workspaces() {
     let r = repository(&mut e, 1);
     let root = e.state().branches[&r.main_branch_id].head_commit_id.clone();
     let branch = e
-        .create_branch(&root, "new-main", "admin", &new_id("op"))
+        .create_branch(
+            &root,
+            "new-main",
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let w = e.create_workspace(&r.main_branch_id, "admin").unwrap();
     assert_eq!(
@@ -1870,7 +1939,7 @@ fn smb_binding_is_explicit_conditional_and_requires_clean_workspaces() {
             true,
             1,
             "admin",
-            &new_id("op")
+            storage_contract::OperationId::generate()
         )
         .unwrap_err()
         .code(),
@@ -1883,7 +1952,7 @@ fn smb_binding_is_explicit_conditional_and_requires_clean_workspaces() {
         true,
         1,
         "admin",
-        &new_id("op"),
+        storage_contract::OperationId::generate(),
     )
     .unwrap();
     assert_eq!(
@@ -1897,7 +1966,7 @@ fn smb_binding_is_explicit_conditional_and_requires_clean_workspaces() {
             true,
             1,
             "admin",
-            &new_id("op")
+            storage_contract::OperationId::generate()
         )
         .unwrap_err()
         .code(),
@@ -1962,7 +2031,12 @@ fn merge_link_endpoints_must_belong_to_the_selected_distinct_branches() {
         .commit_id
         .unwrap();
     let branch = e
-        .create_branch(&first, "other", "admin", &new_id("op"))
+        .create_branch(
+            &first,
+            "other",
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let latest = save(&mut e, &repo.main_branch_id, "a", b"second")
         .commit_id
@@ -1974,7 +2048,7 @@ fn merge_link_endpoints_must_belong_to_the_selected_distinct_branches() {
             &repo.main_branch_id,
             &first,
             "admin",
-            &new_id("op")
+            storage_contract::OperationId::generate()
         )
         .unwrap_err()
         .code(),
@@ -1987,7 +2061,7 @@ fn merge_link_endpoints_must_belong_to_the_selected_distinct_branches() {
             &repo.main_branch_id,
             &branch.head_commit_id,
             "admin",
-            &new_id("op")
+            storage_contract::OperationId::generate()
         )
         .unwrap_err()
         .code(),
@@ -2000,21 +2074,25 @@ fn merge_link_endpoints_must_belong_to_the_selected_distinct_branches() {
             &repo.main_branch_id,
             &first,
             "admin",
-            &new_id("op")
+            storage_contract::OperationId::generate()
         )
         .unwrap_err()
         .code(),
         storage_contract::ErrorCode::MergeEndpointMismatch
     );
-    e.archive_branch(&branch.branch_id, "admin", &new_id("op"))
-        .unwrap();
+    e.archive_branch(
+        &branch.branch_id,
+        "admin",
+        storage_contract::OperationId::generate(),
+    )
+    .unwrap();
     e.add_merge_link(
         &branch.branch_id,
         &branch.head_commit_id,
         &repo.main_branch_id,
         &first,
         "admin",
-        &new_id("op"),
+        storage_contract::OperationId::generate(),
     )
     .unwrap();
     assert_eq!(
@@ -2039,10 +2117,15 @@ fn auth_sessions_do_not_stale_plans_and_offline_tombstones_are_proven() {
     e.persist_auth_state(
         json_codec::json!({"session_hashes":["not-raw-session-token"]}),
         "admin",
-        &new_id("op"),
+        storage_contract::OperationId::generate(),
     )
     .unwrap();
-    e.commit_plan(&p.plan_id, "admin", &new_id("op")).unwrap();
+    e.commit_plan(
+        &p.plan_id,
+        "admin",
+        storage_contract::OperationId::generate(),
+    )
+    .unwrap();
     let report = offline_check(&f.config.disks[0].root).unwrap();
     assert!(report.issues.is_empty(), "{:?}", report.issues);
     assert_eq!(report.tombstoned_versions, 1);
@@ -2068,7 +2151,7 @@ fn partial_publication_is_not_visible_with_two_members_and_receipt_tampering_is_
         e.stage_bytes(&w.workspace_id, "a", b"protected").unwrap();
         let request = CommitRequest {
             workspace_id: w.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: w.base_head.clone(),
             fencing_token: w.fencing_token,
@@ -2087,7 +2170,7 @@ fn partial_publication_is_not_visible_with_two_members_and_receipt_tampering_is_
         let e = Engine::open(&f.root).unwrap();
         assert!(e.is_read_only());
         assert_eq!(
-            e.operation(&request.operation_id).unwrap().commit_state,
+            e.operation(request.operation_id).unwrap().commit_state,
             if complete {
                 CommitState::Published
             } else {
@@ -2180,7 +2263,7 @@ fn pending_first_write_keeps_selected_ancestry_and_creates_a_real_empty_version(
             &source.version_id,
             "old source branch",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap()
         .branch_id
@@ -2191,7 +2274,12 @@ fn pending_first_write_keeps_selected_ancestry_and_creates_a_real_empty_version(
         Some(source.version_id.as_str())
     );
     engine
-        .select_file_branch(&source.file_id, &branch, "admin", &new_id("op"))
+        .select_file_branch(
+            &source.file_id,
+            &branch,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let placeholder = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
     assert_eq!(placeholder.version_id, source.version_id);
@@ -2233,7 +2321,7 @@ fn first_write_identical_to_source_is_not_an_unwritten_or_shared_version() {
                 &source.version_id,
                 "identical",
                 "admin",
-                &new_id("op"),
+                storage_contract::OperationId::generate(),
             )
             .unwrap()
             .branch_id
@@ -2270,7 +2358,7 @@ fn pending_range_write_edits_parent_before_publishing_its_own_complete_version()
             &source.version_id,
             "range",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap()
         .branch_id
@@ -2289,7 +2377,7 @@ fn pending_range_write_edits_parent_before_publishing_its_own_complete_version()
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -2323,7 +2411,7 @@ fn switching_pending_destinations_fences_old_directory_writes_with_same_source()
             &source.version_id,
             "first",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap()
         .branch_id
@@ -2334,13 +2422,18 @@ fn switching_pending_destinations_fences_old_directory_writes_with_same_source()
             &source.version_id,
             "second",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap()
         .branch_id
         .unwrap();
     engine
-        .select_file_branch(&source.file_id, &first, "admin", &new_id("op"))
+        .select_file_branch(
+            &source.file_id,
+            &first,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -2349,13 +2442,18 @@ fn switching_pending_destinations_fences_old_directory_writes_with_same_source()
         .stage_bytes(&workspace.workspace_id, "file.txt", b"belongs to first")
         .unwrap();
     engine
-        .select_file_branch(&source.file_id, &second, "admin", &new_id("op"))
+        .select_file_branch(
+            &source.file_id,
+            &second,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let before = engine.state().versions.len();
     let error = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id.clone(),
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -2437,7 +2535,7 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
             "folder",
             "draft",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     assert_eq!(created.result["copied_files"], "0");
@@ -2456,7 +2554,7 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
             "folder",
             "draft",
             "admin",
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     for entry in engine
@@ -2553,10 +2651,10 @@ fn workspace_commit_rejects_bytes_changed_after_upload_sealing() {
         fs::set_permissions(&staged.source_path, fs::Permissions::from_mode(0o600)).unwrap();
         fs::write(&staged.source_path, changed).unwrap();
         let sequence = engine.state().sequence;
-        let operation = new_id("op");
+        let operation = storage_contract::OperationId::generate();
         let request = CommitRequest {
             workspace_id: workspace.workspace_id.clone(),
-            operation_id: operation.clone(),
+            operation_id: operation,
             principal: "admin".into(),
             expected_head: workspace.base_head.clone(),
             fencing_token: workspace.fencing_token,
@@ -2641,7 +2739,7 @@ fn sealed_batch_checksum_failure_rolls_back_all_files_and_retries_after_restart(
     fs::write(&staged.source_path, b"corrupted").unwrap();
     let request = CommitRequest {
         workspace_id: workspace.workspace_id.clone(),
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: workspace.base_head,
         fencing_token: workspace.fencing_token,
@@ -2718,7 +2816,7 @@ fn accepted_batch_recovers_without_staged_sources_and_replays_exactly_once() {
         .unwrap();
     let request = CommitRequest {
         workspace_id: workspace.workspace_id.clone(),
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: workspace.base_head,
         fencing_token: workspace.fencing_token,
@@ -2739,7 +2837,7 @@ fn accepted_batch_recovers_without_staged_sources_and_replays_exactly_once() {
     drop(engine);
 
     let mut engine = Engine::open(&fixture.root).unwrap();
-    let result = engine.operation(&request.operation_id).unwrap();
+    let result = engine.operation(request.operation_id).unwrap();
     assert_eq!(
         result.commit_state,
         storage_contract::CommitState::Published
@@ -2788,7 +2886,7 @@ fn unchanged_save_recovery_persists_operation_without_creating_content_history()
             .unwrap();
         let request = CommitRequest {
             workspace_id: workspace.workspace_id.clone(),
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -2877,7 +2975,13 @@ fn content_read_plan_pins_before_io_and_authenticates_manifest_outside_engine() 
     // The plan owns its snapshot, so unrelated metadata work can run before any
     // disk verification; no borrow or Engine mutex is retained.
     engine
-        .create_repository("second", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "second",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let version = engine.state.versions[&version_id].clone();
     let placement = engine.state.placements[&version_id].clone();
@@ -2928,11 +3032,11 @@ fn shared_client_prepares_real_seal_without_losing_frozen_head() {
         let seal = engine
             .seal_workspace(&workspace.workspace_id, "admin")
             .unwrap();
-        let operation_id = new_id("op");
+        let operation_id = storage_contract::OperationId::generate();
         let body = storage_contract::client_protocol::prepare_commit(
             seal,
             &workspace.workspace_id,
-            &operation_id,
+            &operation_id.to_string(),
             "shared client",
             expected_override,
         )
@@ -3029,7 +3133,13 @@ fn upload_preparation_releases_engine_and_revalidates_workspace_without_lost_upd
     );
     // The copy plan is detached from Engine; unrelated writer work is allowed.
     engine
-        .create_repository("parallel", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "parallel",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let prepared = plan.execute().unwrap();
     let directory = engine.workspace_data_directory(&workspace).unwrap();
@@ -3223,7 +3333,7 @@ fn detached_commit_fixture(engine: &mut Engine, repo: &Repository) -> (Workspace
         .unwrap();
     let request = CommitRequest {
         workspace_id: workspace.workspace_id.clone(),
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: workspace.base_head.clone(),
         fencing_token: workspace.fencing_token,
@@ -3246,7 +3356,7 @@ fn detached_commit_retry_preserves_actor_binding_after_restart() {
         .unwrap();
     let request = CommitRequest {
         workspace_id: workspace.workspace_id,
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: workspace.base_head,
         fencing_token: workspace.fencing_token,
@@ -3363,7 +3473,13 @@ fn detached_workspace_commit_stale_base_is_definite_retryable_conflict() {
         .execute()
         .unwrap();
     let busy = engine
-        .create_repository("unrelated-writer", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "unrelated-writer",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap_err();
     assert_eq!(
         busy.code(),
@@ -3526,7 +3642,7 @@ fn detached_public_wire_commit_keeps_exact_digest_and_retry_binding() {
         .unwrap();
     let mut request = CommitRequest {
         workspace_id: workspace.workspace_id.clone(),
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: workspace.base_head.clone(),
         fencing_token: workspace.fencing_token,
@@ -3536,7 +3652,7 @@ fn detached_public_wire_commit_keeps_exact_digest_and_retry_binding() {
     let mut body = engine
         .seal_workspace(&workspace.workspace_id, "admin")
         .unwrap();
-    request.operation_id = body["operation_id"].as_str().unwrap().into();
+    request.operation_id = body["operation_id"].as_str().unwrap().parse().unwrap();
     request.message.clear();
     body["request_digest"] =
         json_codec::json!(commit_request_digest(&workspace.workspace_id, &body).unwrap());
@@ -3592,7 +3708,7 @@ fn detached_preparation_fences_physical_namespace_writes_but_not_reads() {
     let workspace_id = workspace.workspace_id.clone();
     let request = CommitRequest {
         workspace_id: workspace.workspace_id,
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: workspace.base_head,
         fencing_token: workspace.fencing_token,
@@ -3607,7 +3723,12 @@ fn detached_preparation_fences_physical_namespace_writes_but_not_reads() {
     )
     .unwrap();
     let error = engine
-        .file_namespace(&repo.repository_id, rename.clone(), "admin", &new_id("op"))
+        .file_namespace(
+            &repo.repository_id,
+            rename.clone(),
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap_err();
     assert_eq!(
         error.code(),
@@ -3629,7 +3750,12 @@ fn detached_preparation_fences_physical_namespace_writes_but_not_reads() {
     );
     drop(prepared);
     engine
-        .file_namespace(&repo.repository_id, rename, "admin", &new_id("op"))
+        .file_namespace(
+            &repo.repository_id,
+            rename,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     assert_eq!(bytes(&engine, &version), b"published");
     assert_eq!(
@@ -3667,11 +3793,11 @@ fn pending_operation_reads_exact_snapshot_replica_without_repair() {
     for kind in ["snapshot", "candidate", "state-page"] {
         let fixture = Fixture::new();
         let mut engine = fixture.initialize();
-        let operation = new_id("op");
+        let operation = storage_contract::OperationId::generate();
         engine.inject_fault_once("after_accept_1");
         assert!(
             engine
-                .create_repository("pending", "P01", 3, "admin", &operation)
+                .create_repository("pending", "P01", 3, "admin", operation)
                 .is_err()
         );
         let members = engine.members();
@@ -3700,18 +3826,18 @@ fn pending_operation_reads_exact_snapshot_replica_without_repair() {
         };
         let path = crate::journal::object_path(source, kind, &hash);
         fs::write(&path, b"broken").unwrap();
-        let result = engine.operation(&operation).unwrap();
+        let result = engine.operation(operation).unwrap();
         assert_eq!(result.commit_state, storage_contract::CommitState::InDoubt);
         assert_eq!(
-            engine.operation_owner(&operation).unwrap().as_deref(),
+            engine.operation_owner(operation).unwrap().as_deref(),
             Some("admin")
         );
         assert_eq!(fs::read(&path).unwrap(), b"broken");
         for disk in &members {
             fs::write(crate::journal::object_path(disk, kind, &hash), b"broken").unwrap();
         }
-        assert!(engine.operation(&operation).is_err());
-        assert!(engine.operation_owner(&operation).is_err());
+        assert!(engine.operation(operation).is_err());
+        assert!(engine.operation_owner(operation).is_err());
     }
 }
 #[test]
@@ -3771,11 +3897,11 @@ fn pending_operation_requires_a_trusted_decision_not_prepared_objects() {
     for fault in ["after_prepare_3", "after_accept_1"] {
         let fixture = Fixture::new();
         let mut engine = fixture.initialize();
-        let operation = new_id("op");
+        let operation = storage_contract::OperationId::generate();
         engine.inject_fault_once(fault);
         assert!(
             engine
-                .create_repository("pending", "P01", 3, "admin", &operation)
+                .create_repository("pending", "P01", 3, "admin", operation)
                 .is_err()
         );
         if fault == "after_accept_1" {
@@ -3793,10 +3919,10 @@ fn pending_operation_requires_a_trusted_decision_not_prepared_objects() {
             fs::write(disk.root.join("disk.json"), b"untrusted").unwrap();
         }
         assert_eq!(
-            engine.operation(&operation).unwrap_err().code(),
+            engine.operation(operation).unwrap_err().code(),
             storage_contract::ErrorCode::OperationNotFound
         );
-        assert_eq!(engine.operation_owner(&operation).unwrap(), None);
+        assert_eq!(engine.operation_owner(operation).unwrap(), None);
     }
 }
 
@@ -4008,7 +4134,13 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
     );
 
     let other = engine
-        .create_repository("Other", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "Other",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let foreign_head = engine.state.branches[&other.main_branch_id]
         .head_commit_id

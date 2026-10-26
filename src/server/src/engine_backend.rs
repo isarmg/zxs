@@ -74,7 +74,11 @@ impl EngineBackend {
             return Ok(());
         }
         engine
-            .persist_auth_state(snapshot, "system_auth", &storage_engine::new_id("op"))
+            .persist_auth_state(
+                snapshot,
+                "system_auth",
+                storage_contract::OperationId::generate(),
+            )
             .map_err(error)
     }
     pub(crate) fn read_only(&self) -> Result<bool, ApiError> {
@@ -95,7 +99,11 @@ impl EngineBackend {
                 return Ok(());
             }
             engine
-                .persist_auth_state(snapshot, "system_auth", &storage_engine::new_id("op"))
+                .persist_auth_state(
+                    snapshot,
+                    "system_auth",
+                    storage_contract::OperationId::generate(),
+                )
                 .map_err(error)
         }))?;
         Ok(auth)
@@ -124,7 +132,7 @@ fn install_test_administrator(engine: &mut Engine, username: &str) -> Identity {
         .persist_auth_state(
             auth.snapshot().unwrap(),
             "system_auth",
-            &storage_engine::new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     identity
@@ -240,7 +248,74 @@ fn finish_authorized_upload(
     sanitized(engine.finish_upload(prepared).map_err(error)?)
 }
 
+impl EngineBackend {
+    fn operation_admitted(
+        &self,
+        engine: std::sync::MutexGuard<'_, AdmissionEngine>,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        // Reject foreign owners before loading even the pending result
+        // pages. Unknown/pending operations never trigger payload I/O.
+        if let Some(owner) = engine
+            .operation_owner(operation_id)
+            .map_err(crate::engine_backend::error)?
+            && owner != identity.principal
+        {
+            return Err(ApiError::forbidden());
+        }
+        let record = engine.operation_record(operation_id).map_err(error)?;
+        operations::authorize_record(&engine, identity, &record)?;
+        let plan = engine.prepare_operation_health(record);
+        drop(engine);
+        #[cfg(test)]
+        if let Some(hook) = self.operation_health_hook.lock().unwrap().clone() {
+            hook();
+        }
+        let record = plan.check();
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        operations::authorize_record(&engine, &current, &record)?;
+        drop(engine);
+        Ok(record.into_result())
+    }
+}
+
 impl Backend for EngineBackend {
+    fn operation(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        let identity = &current;
+        self.operation_admitted(engine, identity, operation_id)
+    }
+
+    fn commit_workspace(
+        &self,
+        identity: &Identity,
+        command: crate::CommitWorkspace,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        let identity = &current;
+        let workspace_id = command.workspace_id.clone();
+        let plan = Application::new(&mut engine, identity).prepare_commit_workspace(command)?;
+        drop(engine);
+        #[cfg(test)]
+        if let Some(hook) = self.commit_preparation_hook.lock().unwrap().clone() {
+            hook();
+        }
+        let prepared = plan.execute().map_err(error)?;
+        let mut engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        let result = Application::new(&mut engine, &current)
+            .finish_workspace_commit(&workspace_id, prepared)?;
+        Ok(result)
+    }
+
     fn snapshot_at(
         &self,
         identity: &Identity,
@@ -851,40 +926,7 @@ impl Backend for EngineBackend {
                     .seal_workspace(&workspace_id, &principal)
                     .map_err(error)
             }
-            crate::BackendAction::CommitWorkspace
-            | crate::BackendAction::CommitWorkspaceInternal => {
-                if action == crate::BackendAction::CommitWorkspace {
-                    keys(
-                        &input,
-                        &[
-                            "workspace_id",
-                            "operation_id",
-                            "repository_id",
-                            "branch_id",
-                            "expected_head",
-                            "fencing_token",
-                            "message",
-                            "requested_protection",
-                            "file_placement",
-                            "expected_topology_generation",
-                            "sealed_manifest_hash",
-                            "request_digest",
-                        ],
-                    )?;
-                } else {
-                    keys(
-                        &input,
-                        &[
-                            "workspace_id",
-                            "operation_id",
-                            "expected_head",
-                            "fencing_token",
-                            "message",
-                            "request_digest",
-                        ],
-                    )?;
-                }
-                // Keep strict string presence checks at the canonical wire boundary.
+            crate::BackendAction::CommitWorkspace => {
                 for key in [
                     "workspace_id",
                     "operation_id",
@@ -894,33 +936,9 @@ impl Backend for EngineBackend {
                     field(&input, key)?;
                 }
                 let workspace_id = field(&input, "workspace_id")?.to_owned();
-                let plan = if action == crate::BackendAction::CommitWorkspace {
-                    let command =
-                        json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-                    Application::new(&mut engine, identity)
-                        .prepare_commit_workspace_public(command)?
-                } else {
-                    let command = application::CommitWorkspace {
-                        workspace_id: field(&input, "workspace_id")?.into(),
-                        operation_id: operation(&input)?.into(),
-                        expected_head: field(&input, "expected_head")?.into(),
-                        fencing_token: storage_contract::parse_u64_decimal(field(
-                            &input,
-                            "fencing_token",
-                        )?)
-                        .map_err(ApiError::invalid_source)?,
-                        message: input
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .into(),
-                        request_digest: input
-                            .get("request_digest")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
-                    };
-                    Application::new(&mut engine, identity).prepare_commit_workspace(command)?
-                };
+                let command = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+                let plan = Application::new(&mut engine, identity)
+                    .prepare_commit_workspace_public(command)?;
                 drop(engine);
                 #[cfg(test)]
                 if let Some(hook) = self.commit_preparation_hook.lock().unwrap().clone() {
@@ -1034,30 +1052,17 @@ impl Backend for EngineBackend {
                 }
             }
             crate::BackendAction::Operation => {
-                let operation_id = field(&input, "operation_id")?;
-                // Reject foreign owners before loading even the pending result
-                // pages. Unknown/pending operations never trigger payload I/O.
-                if let Some(owner) = engine
-                    .operation_owner(operation_id)
-                    .map_err(crate::engine_backend::error)?
-                    && owner != identity.principal
-                {
-                    return Err(ApiError::forbidden());
-                }
-                let record = engine.operation_record(operation_id).map_err(error)?;
-                operations::authorize_record(&engine, identity, &record)?;
-                let plan = engine.prepare_operation_health(record);
-                drop(engine);
-                #[cfg(test)]
-                if let Some(hook) = self.operation_health_hook.lock().unwrap().clone() {
-                    hook();
-                }
-                let record = plan.check();
-                let engine = self.engine.lock().expect("service state lock poisoned");
-                let current = current_protected_identity(&engine, identity)?;
-                operations::authorize_record(&engine, &current, &record)?;
-                drop(engine);
-                operation_wire(record.into_result())
+                let operation_id = field(&input, "operation_id")?.parse().map_err(
+                    |source: storage_contract::Error| {
+                        ApiError::new(
+                            ::http::StatusCode::NOT_FOUND,
+                            storage_contract::ErrorCode::OperationNotFound,
+                            "operation not found",
+                        )
+                        .with_source(source)
+                    },
+                )?;
+                operation_wire(self.operation_admitted(engine, identity, operation_id)?)
             }
             crate::BackendAction::PurgePlan => {
                 keys(&input, &["history_tree_id", "version_ids"])?;

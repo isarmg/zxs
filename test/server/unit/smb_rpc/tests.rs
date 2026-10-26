@@ -51,6 +51,29 @@ impl LostCommitReply {
     }
 }
 impl Backend for LostCommitReply {
+    fn operation(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.inner.operation(identity, operation_id)
+    }
+    fn commit_workspace(
+        &self,
+        identity: &Identity,
+        command: crate::CommitWorkspace,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let value = self.inner.commit_workspace(identity, command)?;
+        if self.fail.swap(false, Ordering::SeqCst) {
+            return Err(ApiError::new(
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
+                storage_contract::ErrorCode::InjectedFailure,
+                "injected after actual durable publication",
+            ));
+        }
+        Ok(value)
+    }
+
     fn snapshot_at(
         &self,
         identity: &crate::auth::Identity,
@@ -110,22 +133,19 @@ impl Backend for LostCommitReply {
                 &name_policy::PortablePath::parse("report.txt").unwrap(),
                 &crate::UploadSource::from_file(source.reopen().unwrap(), u64::MAX)?,
             )?;
-            self.inner.call(crate::BackendAction::CommitWorkspaceInternal, identity, json!({
-                "workspace_id":workspace.workspace_id,"operation_id":new_id("op"),
-                "expected_head":workspace.base_head,"fencing_token":workspace.fencing_token.to_string(),
-                "message":"concurrent update during SMB open"
-            }))?;
+            self.inner.commit_workspace(
+                identity,
+                crate::CommitWorkspace {
+                    workspace_id: workspace.workspace_id,
+                    operation_id: OperationId::generate(),
+                    expected_head: workspace.base_head,
+                    fencing_token: workspace.fencing_token,
+                    message: "concurrent update during SMB open".into(),
+                    request_digest: None,
+                },
+            )?;
         }
         let value = self.inner.call(action, identity, input)?;
-        if action == crate::BackendAction::CommitWorkspaceInternal
-            && self.fail.swap(false, Ordering::SeqCst)
-        {
-            return Err(ApiError::new(
-                ::http::StatusCode::SERVICE_UNAVAILABLE,
-                storage_contract::ErrorCode::InjectedFailure,
-                "injected after actual durable publication",
-            ));
-        }
         Ok(value)
     }
     fn upload(
@@ -169,7 +189,13 @@ fn fixture() -> (tempfile::TempDir, Arc<Shared>, Arc<LostCommitReply>, String) {
     ]);
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
-        .create_repository("资料", "P01", 3, "alice", &new_id("op"))
+        .create_repository(
+            "资料",
+            "P01",
+            3,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "alice")
@@ -180,7 +206,7 @@ fn fixture() -> (tempfile::TempDir, Arc<Shared>, Arc<LostCommitReply>, String) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -1158,7 +1184,19 @@ fn external_same_file_change_rejects_rebase_and_preserves_work_bytes() {
             &crate::UploadSource::from_file(File::open(&source).unwrap(), u64::MAX).unwrap(),
         )
         .unwrap();
-    backend.call(crate::BackendAction::CommitWorkspaceInternal,&one.identity,json!({"workspace_id":workspace.workspace_id,"operation_id":new_id("op"),"expected_head":workspace.base_head,"fencing_token":workspace.fencing_token.to_string(),"message":"external app"})).unwrap();
+    backend
+        .commit_workspace(
+            &one.identity,
+            crate::CommitWorkspace {
+                workspace_id: workspace.workspace_id,
+                operation_id: OperationId::generate(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: "external app".into(),
+                request_digest: None,
+            },
+        )
+        .unwrap();
     file.write_all_at(b"end", 0).unwrap();
     assert_eq!(
         one.dirty(opened.handle).unwrap_err().code,
@@ -1245,7 +1283,7 @@ async fn cancellation_closes_blocked_rpc_sessions_and_removes_its_socket() {
             )
             .unwrap();
             wire.send(
-                &Request::Hello {
+                &Request::<String>::Hello {
                     protocol: PROTOCOL.into(),
                     capabilities: REQUIRED_CAPABILITIES
                         .iter()
@@ -1690,7 +1728,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
             "report.txt".into(),
             Some("é.txt".into()),
             false,
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     let original = session.find("é.txt").unwrap().unwrap();
@@ -1757,7 +1795,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
                 "new-e\u{301}".into(),
                 None,
                 false,
-                &new_id("op")
+                storage_contract::OperationId::generate()
             )
             .is_err()
     );
@@ -1768,7 +1806,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
                 "é.txt".into(),
                 Some("new-e\u{301}.txt".into()),
                 false,
-                &new_id("op")
+                storage_contract::OperationId::generate()
             )
             .is_err()
     );
@@ -1782,7 +1820,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
             "e\u{301}.txt".into(),
             Some("Å.txt".into()),
             false,
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     session
@@ -1791,7 +1829,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
             "A\u{30a}.txt".into(),
             None,
             false,
-            &new_id("op"),
+            storage_contract::OperationId::generate(),
         )
         .unwrap();
     assert!(session.entries().unwrap().is_empty());

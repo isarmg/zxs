@@ -331,3 +331,26 @@ fn generic_encoding_keeps_original_serializer_call_count() {
     assert!(encode_hashed_object("Invalid", &Counted(&count)).is_err());
     assert_eq!(count.get(), 0);
 }
+
+#[test]
+fn typed_operation_id_preserves_request_envelope_digest() {
+    let raw = "op_0123456789abcdef0123456789abcdef";
+    let id: crate::OperationId = raw.parse().unwrap();
+    let legacy = json_codec::json!({"operation_id":raw,"message":"unchanged"});
+    let typed = json_codec::json!({"operation_id":id,"message":"unchanged"});
+    assert_eq!(
+        canonical_json(&typed).unwrap(),
+        canonical_json(&legacy).unwrap()
+    );
+    let digest = |body: &json_codec::Value| {
+        request_digest(
+            "POST",
+            "/api/workspaces/{workspace}/commit",
+            json_codec::json!({"workspace":"workspace"}),
+            json_codec::json!({}),
+            body,
+        )
+        .unwrap()
+    };
+    assert_eq!(digest(&typed), digest(&legacy));
+}

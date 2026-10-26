@@ -10,7 +10,13 @@ fn saved() -> (tempfile::TempDir, Engine, String, CommitRequest) {
     ]);
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repo = engine
-        .create_repository("files", "P01", 1, "admin", &new_id("op"))
+        .create_repository(
+            "files",
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -20,7 +26,7 @@ fn saved() -> (tempfile::TempDir, Engine, String, CommitRequest) {
         .unwrap();
     let request = CommitRequest {
         workspace_id: workspace.workspace_id,
-        operation_id: new_id("op"),
+        operation_id: storage_contract::OperationId::generate(),
         principal: "admin".into(),
         expected_head: workspace.base_head,
         fencing_token: workspace.fencing_token,
@@ -162,7 +168,7 @@ fn forged_saved_request_identity_cannot_close_unsubmitted_bytes() {
     // Copying a published digest does not turn another manifest into its input.
     request.request_digest = Some(
         engine
-            .operation(&request.operation_id)
+            .operation(request.operation_id)
             .unwrap()
             .request_digest,
     );
@@ -201,7 +207,7 @@ fn wire_commit_reconciles_after_publication_and_system_disk_loss() {
         );
         let request = CommitRequest {
             workspace_id: workspace.workspace_id.clone(),
-            operation_id: body["operation_id"].as_str().unwrap().into(),
+            operation_id: body["operation_id"].as_str().unwrap().parse().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -288,7 +294,7 @@ fn saved_wire() -> (tempfile::TempDir, Engine, CommitRequest, json_codec::Value)
     );
     let request = CommitRequest {
         workspace_id: workspace.workspace_id,
-        operation_id: body["operation_id"].as_str().unwrap().into(),
+        operation_id: body["operation_id"].as_str().unwrap().parse().unwrap(),
         principal: "admin".into(),
         expected_head: workspace.base_head,
         fencing_token: workspace.fencing_token,
@@ -346,10 +352,7 @@ fn wire_receipt_cannot_close_a_different_manifest_with_the_same_workspace_id() {
             "sealed"
         );
         assert_eq!(
-            engine
-                .operation(&request.operation_id)
-                .unwrap()
-                .commit_state,
+            engine.operation(request.operation_id).unwrap().commit_state,
             storage_contract::CommitState::Published
         );
     }
@@ -641,7 +644,13 @@ fn historical_workspace_mirror_recovery_uses_published_plan() {
         ]);
         let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
         let repo = engine
-            .create_repository("history", "P01", 1, "admin", &new_id("op"))
+            .create_repository(
+                "history",
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let head = engine.state().branches[&repo.main_branch_id]
             .head_commit_id
@@ -665,9 +674,9 @@ fn historical_workspace_mirror_recovery_uses_published_plan() {
                 "admin",
             )
             .unwrap();
-        let operation = new_id("op");
+        let operation = storage_contract::OperationId::generate();
         let receipt = engine
-            .commit_historical_save_plan(&plan.plan_id, "admin", &operation)
+            .commit_historical_save_plan(&plan.plan_id, "admin", operation)
             .unwrap();
         let paths = [
             engine
@@ -695,7 +704,7 @@ fn historical_workspace_mirror_recovery_uses_published_plan() {
         );
         assert_eq!(
             engine
-                .commit_historical_save_plan(&plan.plan_id, "admin", &operation)
+                .commit_historical_save_plan(&plan.plan_id, "admin", operation)
                 .unwrap(),
             receipt
         );
@@ -725,7 +734,7 @@ fn partial_workspace_completion_uses_original_published_file_contexts() {
             let before = engine.workspace(&workspace.workspace_id).unwrap();
             let request = CommitRequest {
                 workspace_id: workspace.workspace_id.clone(),
-                operation_id: new_id("op"),
+                operation_id: storage_contract::OperationId::generate(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -752,7 +761,7 @@ fn partial_workspace_completion_uses_original_published_file_contexts() {
                     &entry.version_id,
                     "later selection",
                     "admin",
-                    &new_id("op"),
+                    storage_contract::OperationId::generate(),
                 )
                 .unwrap();
             engine
@@ -760,7 +769,7 @@ fn partial_workspace_completion_uses_original_published_file_contexts() {
                     &entry.file_id,
                     alternative.result["branch_id"].as_str().unwrap(),
                     "admin",
-                    &new_id("op"),
+                    storage_contract::OperationId::generate(),
                 )
                 .unwrap();
             if forged {

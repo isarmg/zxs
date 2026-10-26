@@ -1,11 +1,11 @@
 use super::*;
 use crate::BackendAction;
-use storage_contract::{Config, Event, new_id};
+use storage_contract::{Config, Event};
 
 fn event(sequence: u64) -> Event {
     Event {
         sequence,
-        operation_id: format!("operation-{sequence}"),
+        operation_id: format!("op_{sequence:032x}").parse().unwrap(),
         kind: "test".into(),
         object_id: "object".into(),
     }
@@ -64,11 +64,23 @@ fn event_cursor_preserves_singleton_visibility_progress_and_recovery_order() {
     let (first, last) = {
         let mut engine = backend.engine.lock().unwrap();
         engine
-            .create_repository("First", "P01", 1, "owner", &new_id("op"))
+            .create_repository(
+                "First",
+                "P01",
+                1,
+                "owner",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         let first = engine.state().sequence;
         engine
-            .create_repository("Second", "P01", 1, "owner", &new_id("op"))
+            .create_repository(
+                "Second",
+                "P01",
+                1,
+                "owner",
+                storage_contract::OperationId::generate(),
+            )
             .unwrap();
         (first, engine.state().sequence)
     };

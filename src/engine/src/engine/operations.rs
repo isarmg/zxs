@@ -62,8 +62,8 @@ impl OperationReadPlan {
 }
 
 impl Engine {
-    pub fn operation_owner(&self, id: &str) -> Result<Option<String>> {
-        if let Some(owner) = self.state.operation_principals.get(id) {
+    pub fn operation_owner(&self, id: OperationId) -> Result<Option<String>> {
+        if let Some(owner) = self.state.operation_principals.get(&id) {
             return Ok(Some(owner.clone()));
         }
         let (members, snapshot, _) = match self.pending_operation_snapshot(id) {
@@ -78,10 +78,10 @@ impl Engine {
 
     /// Published records are metadata-only. An uncertain decision reads only
     /// the hash-bound owner/operation pages, not the candidate's entire State.
-    pub fn operation_record(&self, id: &str) -> Result<OperationRecord> {
-        if let Some(result) = self.state.operations.get(id) {
+    pub fn operation_record(&self, id: OperationId) -> Result<OperationRecord> {
+        if let Some(result) = self.state.operations.get(&id) {
             return Ok(OperationRecord {
-                owner: self.state.operation_principals.get(id).cloned(),
+                owner: self.state.operation_principals.get(&id).cloned(),
                 result: result.clone(),
             });
         }
@@ -152,7 +152,7 @@ impl Engine {
 
     /// Synchronous convenience for trusted local callers. Shared backends must
     /// capture and execute the read plan separately to release their mutex.
-    pub fn operation(&self, id: &str) -> Result<OperationResult> {
+    pub fn operation(&self, id: OperationId) -> Result<OperationResult> {
         Ok(self
             .prepare_operation_health(self.operation_record(id)?)
             .check()
@@ -165,7 +165,7 @@ impl Engine {
     /// never traverses version/commit/authentication pages or payload objects.
     fn pending_operation_snapshot(
         &self,
-        id: &str,
+        id: OperationId,
     ) -> Result<(Vec<DiskConfig>, Snapshot, Candidate)> {
         if !self.blocked {
             return Err(operation_not_found());
@@ -237,7 +237,7 @@ fn snapshot_entry<T: data_serialization::Serialize + data_serialization::de::Des
     members: &[DiskConfig],
     snapshot: &Snapshot,
     field: &str,
-    id: &str,
+    id: OperationId,
 ) -> Result<Option<T>> {
     if snapshot.scalars.contains_key(field) {
         return Err(Error::new(
@@ -253,7 +253,7 @@ fn snapshot_entry<T: data_serialization::Serialize + data_serialization::de::Des
     })?;
     let mut found = None;
     for hash in hashes {
-        let mut page: std::collections::BTreeMap<String, T> =
+        let mut page: std::collections::BTreeMap<OperationId, T> =
             verified_object(members, "state-page", hash)?;
         if page.len() > STATE_PAGE_ENTRIES {
             return Err(Error::new(
@@ -261,7 +261,7 @@ fn snapshot_entry<T: data_serialization::Serialize + data_serialization::de::Des
                 "operation snapshot page exceeds entry limit",
             ));
         }
-        if let Some(value) = page.remove(id)
+        if let Some(value) = page.remove(&id)
             && found.replace(value).is_some()
         {
             return Err(Error::new(

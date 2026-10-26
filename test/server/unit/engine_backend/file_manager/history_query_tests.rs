@@ -13,7 +13,7 @@ fn history_query_rejects_unknown_fields_without_changing_context_or_admission() 
     )
     .unwrap();
     let repo = engine
-        .create_disk_root("P01", "owner", &new_id("op"))
+        .create_disk_root("P01", "owner", storage_contract::OperationId::generate())
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "owner")
@@ -24,7 +24,7 @@ fn history_query_rejects_unknown_fields_without_changing_context_or_admission() 
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: new_id("op"),
+            operation_id: storage_contract::OperationId::generate(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
