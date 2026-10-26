@@ -80,3 +80,21 @@ fn symlinks_cannot_turn_an_external_path_into_optional_local_output() {
     std::os::unix::fs::symlink(&outside.0, f.0.join("test/evidence")).unwrap();
     assert!(resolve(&f.0, &f.0.join("README.md"), "test/evidence/missing.json").is_err());
 }
+
+#[test]
+fn missing_document_retains_io_error_source() {
+    let fixture = Fixture::new();
+    let error = resolve(&fixture.0, &fixture.0.join("README.md"), "missing.md")
+        .err()
+        .unwrap();
+    assert_eq!(
+        error
+            .source()
+            .unwrap()
+            .downcast_ref::<io::Error>()
+            .unwrap()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    assert!(error.to_string().contains("missing.md"));
+}

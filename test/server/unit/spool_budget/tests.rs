@@ -37,7 +37,7 @@ fn record(name: &str, principal: &str) -> UploadRecord {
         content_hash: Some("0".repeat(64)),
         persisted_bytes: 3,
         persisted_hash: blake3::hash(b"abc").to_hex().to_string(),
-        state: "complete".into(),
+        state: crate::uploads::UploadState::Complete,
         data_file: name.into(),
     }
 }
@@ -124,7 +124,7 @@ fn recovery_counts_retained_generations_failed_unknown_and_orphan_bytes_once() {
     retained(&budget, "alice", "new.data", 20, b"failure");
     let mut new = record("new.data", "alice");
     new.generation = 2;
-    new.state = "checksum_mismatch".into();
+    new.state = crate::uploads::UploadState::ChecksumMismatch;
     uploads::persist(root.path(), &new).unwrap();
     drop(budget);
     fs::write(root.path().join("unknown.data"), b"unknown").unwrap();
@@ -278,7 +278,7 @@ fn rejected_batch_headroom_preserves_actual_tail_and_verified_retry_accounting()
     let mut progress = record("batch.data", "alice");
     progress.logical_size = size;
     progress.content_hash = Some(blake3::hash(&complete).to_hex().to_string());
-    progress.state = "incomplete".into();
+    progress.state = crate::uploads::UploadState::Incomplete;
     uploads::persist(root.path(), &progress).unwrap();
     drop(budget);
 
@@ -321,7 +321,7 @@ fn rejected_batch_headroom_preserves_actual_tail_and_verified_retry_accounting()
     staged.sync().unwrap();
     progress.persisted_bytes = size;
     progress.persisted_hash = blake3::hash(&complete).to_hex().to_string();
-    uploads::persist_staged(root.path(), &progress, &staged).unwrap();
+    uploads::persist_staged(&progress, &staged).unwrap();
     drop(staged);
     assert_eq!(total(&budget), quota);
     assert_eq!(fs::read(root.path().join("batch.data")).unwrap(), complete);

@@ -88,7 +88,6 @@ pub(super) fn cleanup_writer(writer: &Writer) {
             tracing::warn!(error = ?error,path=%path.display(),"SMB staging cleanup failed");
         }
     }
-    writer.reservation.cleanup_record();
 }
 
 pub(super) fn finish_publication(
@@ -212,10 +211,12 @@ impl Session {
                 Ok(())
             })();
             if let Err(error) = validate {
-                let _ = self.call(
+                if let Err(abort_error) = self.call(
                     crate::BackendAction::AbortWorkspace,
                     json!({"workspace_id":workspace.workspace_id}),
-                );
+                ) {
+                    tracing::warn!(error = ?abort_error, "SMB preparation abort failed; workspace retained for recovery");
+                }
                 return Err(error);
             }
             Some(workspace)

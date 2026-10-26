@@ -38,37 +38,38 @@ fn next_enabled(options: &[SelectOption], current: Option<usize>, forward: bool)
         .find(|index| !options[*index].disabled)
 }
 
-fn position(trigger: web_sys::HtmlElement, panel: web_sys::HtmlElement) {
-    let Some(window) = web_sys::window() else {
-        return;
-    };
+fn position(
+    trigger: &web_sys::HtmlElement,
+    panel: &web_sys::HtmlElement,
+) -> Result<(), wasm_bindgen::JsValue> {
+    let window = web_sys::window()
+        .ok_or_else(|| wasm_bindgen::JsValue::from_str("Browser window is unavailable"))?;
     let bounds = trigger.get_bounding_client_rect();
     let width = window
-        .inner_width()
-        .ok()
-        .and_then(|v| v.as_f64())
-        .unwrap_or(320.0);
+        .inner_width()?
+        .as_f64()
+        .expect("invariant: innerWidth is a browser number");
     let height = window
-        .inner_height()
-        .ok()
-        .and_then(|v| v.as_f64())
-        .unwrap_or(640.0);
+        .inner_height()?
+        .as_f64()
+        .expect("invariant: innerHeight is a browser number");
     let panel_width = bounds.width().max(180.0).min((width - 16.0).max(0.0));
     let left = bounds.left().min(width - panel_width - 8.0).max(8.0);
     let below = height - bounds.bottom() - 12.0;
     let above = bounds.top() - 12.0;
     let style = panel.style();
-    let _ = style.set_property("width", &format!("{panel_width}px"));
-    let _ = style.set_property("left", &format!("{left}px"));
+    style.set_property("width", &format!("{panel_width}px"))?;
+    style.set_property("left", &format!("{left}px"))?;
     if below >= 180.0 || below >= above {
-        let _ = style.set_property("max-height", &format!("{}px", below.clamp(44.0, 320.0)));
-        let _ = style.set_property("top", &format!("{}px", bounds.bottom() + 4.0));
-        let _ = style.set_property("bottom", "auto");
+        style.set_property("max-height", &format!("{}px", below.clamp(44.0, 320.0)))?;
+        style.set_property("top", &format!("{}px", bounds.bottom() + 4.0))?;
+        style.set_property("bottom", "auto")?;
     } else {
-        let _ = style.set_property("max-height", &format!("{}px", above.clamp(44.0, 320.0)));
-        let _ = style.set_property("top", "auto");
-        let _ = style.set_property("bottom", &format!("{}px", height - bounds.top() + 4.0));
+        style.set_property("max-height", &format!("{}px", above.clamp(44.0, 320.0)))?;
+        style.set_property("top", "auto")?;
+        style.set_property("bottom", &format!("{}px", height - bounds.top() + 4.0))?;
     }
+    Ok(())
 }
 
 /// A labeled, controlled single choice. Empty values are ordinary valid options.
@@ -124,11 +125,17 @@ pub fn Select(
         };
         if open.get() && !disabled.get() {
             if let Some(trigger) = trigger.get() {
-                position(trigger.unchecked_into(), panel.clone().unchecked_into());
-                let _ = panel.show_popover();
+                let result = position(trigger.unchecked_ref(), panel.unchecked_ref())
+                    .and_then(|()| panel.show_popover());
+                if let Err(error) = result {
+                    web_sys::console::error_2(&"Could not open the selection menu".into(), &error);
+                    open.set(false);
+                }
             }
         } else {
-            let _ = panel.hide_popover();
+            if let Err(error) = panel.hide_popover() {
+                web_sys::console::warn_2(&"Could not close the selection menu".into(), &error);
+            }
         }
     });
     Effect::new(move |_| {
@@ -216,8 +223,10 @@ pub fn Select(
         on_cleanup(move || drop(listeners));
     }
     on_cleanup(move || {
-        if let Some(panel) = panel.get_untracked() {
-            let _ = panel.hide_popover();
+        if let Some(panel) = panel.get_untracked()
+            && let Err(error) = panel.hide_popover()
+        {
+            web_sys::console::warn_2(&"Could not close the selection menu".into(), &error);
         }
     });
     view! {

@@ -466,7 +466,10 @@ pub(crate) fn prepare_renamed_directories(
         .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
     {
         let mut path = dir.path.clone();
-        for change in changes.iter().filter(|change| change.kind == "rename") {
+        for change in changes
+            .iter()
+            .filter(|change| change.kind == NamespaceOperationKind::Rename)
+        {
             if let Some(destination) = &change.destination
                 && let Some(next) = renamed_path(&path, &change.path, destination)
             {
@@ -567,15 +570,15 @@ pub(crate) fn namespace_locations(
         let original_physical_path = physical_path.clone();
         for change in changes {
             let source = name_policy::path_key(&change.path);
-            if (change.kind == "delete" && moved.lookup_key == source)
-                || (change.kind == "delete_tree"
+            if (change.kind == NamespaceOperationKind::Delete && moved.lookup_key == source)
+                || (change.kind == NamespaceOperationKind::DeleteTree
                     && (moved.lookup_key == source
                         || namespace::is_descendant(&moved.lookup_key, &source)))
             {
                 deleted = true;
                 break;
             }
-            if change.kind != "rename" {
+            if change.kind != NamespaceOperationKind::Rename {
                 continue;
             }
             let Some(destination) = &change.destination else {
@@ -947,7 +950,7 @@ pub(crate) fn select_change(
         if !state
             .branches
             .get(branch)
-            .is_some_and(|b| b.file_id.as_deref() == Some(file) && b.state == "active")
+            .is_some_and(|b| b.file_id.as_deref() == Some(file) && b.state == BranchState::Active)
         {
             return Err(Error::new(
                 storage_contract::ErrorCode::FileBranchNotFound,

@@ -104,7 +104,7 @@ impl ValidationSnapshot {
                 result => return result,
             }
         }
-        Err(SnapshotError::SourceChanged)
+        unreachable!("invariant: validated attempts always return a capture result")
     }
 
     pub fn database_path(&self) -> &Path {
@@ -156,7 +156,7 @@ pub async fn open_validation_snapshot(
     let path = path.as_ref().to_path_buf();
     let snapshot = tokio::task::spawn_blocking(move || ValidationSnapshot::capture(path))
         .await
-        .map_err(|_| SnapshotError::CaptureTaskFailed)??;
+        .map_err(SnapshotError::CaptureTaskFailed)??;
     snapshot.into_pool().await
 }
 
@@ -169,7 +169,7 @@ pub async fn open_validation_snapshot_with_connection_limits(
     let path = path.as_ref().to_path_buf();
     let snapshot = tokio::task::spawn_blocking(move || ValidationSnapshot::capture(path))
         .await
-        .map_err(|_| SnapshotError::CaptureTaskFailed)??;
+        .map_err(SnapshotError::CaptureTaskFailed)??;
     snapshot.into_pool_with_connection_limits(limits).await
 }
 
@@ -328,7 +328,9 @@ fn capture_once(
     temporary_root: Option<&Path>,
 ) -> Result<ValidationSnapshot, SnapshotError> {
     check_deadline(deadline)?;
-    let parent_path = path.parent().ok_or(SnapshotError::UnsafeSource)?;
+    let parent_path = path
+        .parent()
+        .expect("invariant: validated absolute database path has a parent");
     let parent = OpenOptions::new()
         .read(true)
         .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::DIRECTORY).bits() as i32)
@@ -365,14 +367,14 @@ fn capture_once(
     let directory = Arc::new(match temporary_root {
         Some(root) => {
             let directory = crate::fs_safety::PrivateDirectory::open_existing(root)
-                .map_err(|_| SnapshotError::UnsafeSource)?;
+                .map_err(SnapshotError::Filesystem)?;
             directory
                 .verify_identity()
-                .map_err(|_| SnapshotError::UnsafeSource)?;
+                .map_err(SnapshotError::Filesystem)?;
             let temporary = builder.tempdir_in(root)?;
             directory
                 .verify_identity()
-                .map_err(|_| SnapshotError::UnsafeSource)?;
+                .map_err(SnapshotError::Filesystem)?;
             temporary
         }
         None => builder.tempdir()?,
@@ -424,7 +426,11 @@ fn capture_once(
         match fs::symlink_metadata(name) {
             Ok(_) if present => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound && !present => {}
-            _ => return Err(SnapshotError::SourceChanged),
+            Ok(_) => return Err(SnapshotError::SourceChanged),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(SnapshotError::SourceChanged);
+            }
+            Err(error) => return Err(error.into()),
         }
     }
     if let Some(shm) = shm {
@@ -527,9 +533,12 @@ pub enum SnapshotError {
     #[error("SQLite source has an active writer, checkpoint or recovery; retry later")]
     Busy,
     #[error("SQLite validation source does not support the required native lock: {0}")]
-    LockUnavailable(io::Error),
+    LockUnavailable(#[source] io::Error),
     #[error("SQLite validation capture task failed")]
-    CaptureTaskFailed,
+    #[cfg(feature = "sqlite-pool")]
+    CaptureTaskFailed(#[source] tokio::task::JoinError),
+    #[error("SQLite private snapshot directory failed")]
+    Filesystem(#[source] crate::fs_safety::Error),
     #[error("SQLite validation I/O failed: {0}")]
     Io(#[from] io::Error),
     #[error("SQLite private validation failed: {0}")]

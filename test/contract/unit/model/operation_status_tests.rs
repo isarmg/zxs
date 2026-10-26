@@ -65,3 +65,39 @@ fn operation_status_preserves_frozen_bytes_and_digest() {
         }
     }
 }
+
+#[test]
+fn current_health_preserves_all_persisted_spellings_and_rejects_unknown() {
+    use crate::CurrentHealth;
+    for health in [
+        CurrentHealth::Healthy,
+        CurrentHealth::Degraded,
+        CurrentHealth::Unavailable,
+        CurrentHealth::Unknown,
+        CurrentHealth::Recovering,
+    ] {
+        let encoded = format!("\"{}\"", health.as_str());
+        assert_eq!(json_codec::to_string(&health).unwrap(), encoded);
+        let object = format!("{{{}:null}}", encoded);
+        assert!(json_codec::from_str::<CurrentHealth>(&object).is_err());
+        assert_eq!(
+            json_codec::from_str::<CurrentHealth>(&encoded).unwrap(),
+            health
+        );
+    }
+    for invalid in ["\"healthy\"", "\"NEW_HEALTH\"", "null", "0", "true", "[]"] {
+        assert!(json_codec::from_str::<CurrentHealth>(invalid).is_err());
+    }
+}
+
+#[test]
+fn frozen_publication_states_reject_unit_object_aliases() {
+    for token in COMMIT_STATES {
+        let object = format!("{{\"{token}\":null}}");
+        assert!(json_codec::from_str::<CommitState>(&object).is_err());
+    }
+    for token in PROTECTION_STATES {
+        let object = format!("{{\"{token}\":null}}");
+        assert!(json_codec::from_str::<ProtectionAtPublish>(&object).is_err());
+    }
+}

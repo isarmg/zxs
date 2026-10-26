@@ -43,27 +43,37 @@ impl OperationReadPlan {
         let mut degraded = false;
         for (plan, target_copies) in &self.versions {
             match plan.health(*target_copies) {
-                "UNAVAILABLE" => self.unavailable = true,
-                "DEGRADED" => degraded = true,
-                _ => (),
+                storage_contract::CurrentHealth::Unavailable => self.unavailable = true,
+                storage_contract::CurrentHealth::Degraded => degraded = true,
+                storage_contract::CurrentHealth::Healthy => (),
+                storage_contract::CurrentHealth::Unknown
+                | storage_contract::CurrentHealth::Recovering => {
+                    unreachable!("invariant: a complete replica scan establishes current health")
+                }
             }
         }
         if self.unavailable {
-            self.record.result.current_health = "UNAVAILABLE".into();
+            self.record.result.current_health = storage_contract::CurrentHealth::Unavailable;
         } else if degraded {
-            self.record.result.current_health = "DEGRADED".into();
+            self.record.result.current_health = storage_contract::CurrentHealth::Degraded;
         }
         self.record
     }
 }
 
 impl Engine {
-    pub fn operation_owner(&self, id: &str) -> Option<String> {
+    pub fn operation_owner(&self, id: &str) -> Result<Option<String>> {
         if let Some(owner) = self.state.operation_principals.get(id) {
-            return Some(owner.clone());
+            return Ok(Some(owner.clone()));
         }
-        let (members, snapshot, _) = self.pending_operation_snapshot(id).ok()?;
-        snapshot_entry(&members, &snapshot, "operation_principals", id).ok()?
+        let (members, snapshot, _) = match self.pending_operation_snapshot(id) {
+            Ok(pending) => pending,
+            Err(error) if error.code() == storage_contract::ErrorCode::OperationNotFound => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        snapshot_entry(&members, &snapshot, "operation_principals", id)
     }
 
     /// Published records are metadata-only. An uncertain decision reads only
@@ -90,7 +100,7 @@ impl Engine {
         }
         result.commit_state = storage_contract::CommitState::InDoubt;
         result.protection_at_publish = storage_contract::ProtectionAtPublish::Unconfirmed;
-        result.current_health = "RECOVERING".into();
+        result.current_health = storage_contract::CurrentHealth::Recovering;
         Ok(OperationRecord { owner, result })
     }
 
@@ -161,40 +171,56 @@ impl Engine {
             return Err(operation_not_found());
         }
         let members = self.trusted_evidence_members();
+        let mut first_error = None;
         for disk in &members {
-            if let Ok(scan) = scan(disk) {
-                for (record, _) in scan.records.iter().rev().filter(|(record, _)| {
-                    matches!(
-                        record.record_type,
-                        RecordType::Accept | RecordType::Publication
-                    )
-                }) {
-                    if let Ok(candidate) =
-                        verified_object::<Candidate>(&members, "candidate", &record.candidate_hash)
-                        && candidate.operation_id == id
-                        && candidate.pool_id == self.config.pool_id
-                        && candidate.sequence == record.sequence
-                    {
-                        let snapshot: Snapshot =
-                            verified_object(&members, "snapshot", &candidate.snapshot_hash)?;
-                        if snapshot.sequence != candidate.sequence
-                            || snapshot
-                                .scalars
-                                .get("sequence")
-                                .and_then(json_codec::Value::as_str)
-                                != Some(candidate.sequence.to_string().as_str())
-                        {
-                            return Err(Error::new(
-                                storage_contract::ErrorCode::ObjectCorrupt,
-                                "snapshot sequence differs",
-                            ));
-                        }
-                        return Ok((members, snapshot, candidate));
-                    }
+            let scanned = match scan(disk) {
+                Ok(scanned) => scanned,
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                    continue;
                 }
+            };
+            for (record, _) in scanned.records.iter().rev().filter(|(record, _)| {
+                matches!(
+                    record.record_type,
+                    RecordType::Accept | RecordType::Publication
+                )
+            }) {
+                let candidate = match verified_object::<Candidate>(
+                    &members,
+                    "candidate",
+                    &record.candidate_hash,
+                ) {
+                    Ok(candidate) => candidate,
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                        continue;
+                    }
+                };
+                if candidate.operation_id != id
+                    || candidate.pool_id != self.config.pool_id
+                    || candidate.sequence != record.sequence
+                {
+                    continue;
+                }
+                let snapshot: Snapshot =
+                    verified_object(&members, "snapshot", &candidate.snapshot_hash)?;
+                if snapshot.sequence != candidate.sequence
+                    || snapshot
+                        .scalars
+                        .get("sequence")
+                        .and_then(json_codec::Value::as_str)
+                        != Some(candidate.sequence.to_string().as_str())
+                {
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::ObjectCorrupt,
+                        "snapshot sequence differs",
+                    ));
+                }
+                return Ok((members, snapshot, candidate));
             }
         }
-        Err(operation_not_found())
+        Err(first_error.unwrap_or_else(operation_not_found))
     }
 }
 

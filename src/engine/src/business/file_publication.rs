@@ -26,17 +26,14 @@ pub(crate) fn advance_branch_node(
         )
     })?;
     let version = super::file_nodes::node_version(state, file, node)?;
-    let body = state.versions[&version].clone();
-    let current = state
-        .commits
-        .get(&previous.head_commit_id)
-        .cloned()
-        .ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "file branch snapshot missing",
-            )
-        })?;
+    let body = &state.versions[&version];
+    let logical_size = body.logical_size;
+    let current = state.commits.get(&previous.head_commit_id).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "file branch snapshot missing",
+        )
+    })?;
     let mut entries = current.entries.clone();
     let mut found = false;
     for entry in entries
@@ -44,7 +41,7 @@ pub(crate) fn advance_branch_node(
         .filter(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file)
     {
         entry.version_id = version.clone();
-        entry.size = body.logical_size;
+        entry.size = logical_size;
         found = true;
     }
     if !found {
@@ -66,7 +63,7 @@ pub(crate) fn advance_branch_node(
             commit_id: id.clone(),
             history_tree_id: previous.history_tree_id,
             kind: "file_metadata".into(),
-            parent_commit_ids: vec![current.commit_id],
+            parent_commit_ids: vec![current.commit_id.clone()],
             tree_id: new_id("tree"),
             sequence: state.sequence,
             operation_id: operation.into(),
@@ -170,7 +167,6 @@ impl Publication<'_> {
             tree.inherited_files = branch.inherited_files.clone();
             tree.directory_refs = branch.directory_refs.clone();
         }
-        let original = tree.clone();
         let mut changed = false;
         for entry in tree
             .entries
@@ -225,16 +221,12 @@ impl Publication<'_> {
                     tree.inherited_files.remove(self.file);
                 }
             }
-            let previous = state
-                .commits
-                .get(&original.commit_id)
-                .cloned()
-                .ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::StateInvalid,
-                        "frozen directory commit missing",
-                    )
-                })?;
+            let previous = state.commits.get(&tree.commit_id).ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::StateInvalid,
+                    "frozen directory commit missing",
+                )
+            })?;
             let mut full = tree.entries.clone();
             let key = name_policy::path_key(&tree.path);
             full.extend(
@@ -270,9 +262,9 @@ impl Publication<'_> {
                 Commit {
                     namespace_deletions: None,
                     commit_id: id.clone(),
-                    history_tree_id: previous.history_tree_id,
+                    history_tree_id: previous.history_tree_id.clone(),
                     kind: "file_node_publication".into(),
-                    parent_commit_ids: vec![previous.commit_id],
+                    parent_commit_ids: vec![previous.commit_id.clone()],
                     tree_id: new_id("tree"),
                     sequence: state.sequence,
                     operation_id: self.operation.into(),
@@ -323,7 +315,8 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
         maximum,
     } = input;
     let version = super::file_nodes::node_version(state, file, target_node)?;
-    let body = state.versions[&version].clone();
+    let body = &state.versions[&version];
+    let logical_size = body.logical_size;
     let repo = state
         .repositories
         .values()
@@ -348,7 +341,7 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
         target_branch,
         target_node,
         version: &version,
-        size: body.logical_size,
+        size: logical_size,
         principal,
         operation,
         maximum,
@@ -411,16 +404,12 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
                 "repository main branch missing",
             )
         })?;
-    let previous = state
-        .commits
-        .get(&main.head_commit_id)
-        .cloned()
-        .ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "repository head missing",
-            )
-        })?;
+    let previous = state.commits.get(&main.head_commit_id).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "repository head missing",
+        )
+    })?;
     let mut entries = previous.entries.clone();
     let mut changed_paths = Vec::new();
     for entry in entries
@@ -441,7 +430,7 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
             matching_node.is_none(),
         )?;
         entry.version_id = version.clone();
-        entry.size = body.logical_size;
+        entry.size = logical_size;
         state.file_contexts.insert(
             directory::context_key(&repo.repository_id, &entry.path),
             context,
@@ -459,7 +448,7 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
                 commit_id: id.clone(),
                 history_tree_id: repo.history_tree_id.clone(),
                 kind: "file_node_publication".into(),
-                parent_commit_ids: vec![previous.commit_id],
+                parent_commit_ids: vec![previous.commit_id.clone()],
                 tree_id: new_id("tree"),
                 sequence: state.sequence,
                 operation_id: operation.into(),

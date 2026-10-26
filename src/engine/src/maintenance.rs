@@ -127,7 +127,7 @@ impl Engine {
             ));
         }
         if self.workspaces.values().any(|w| {
-            matches!(w.state.as_str(), "open" | "sealed")
+            matches!(w.state, WorkspaceState::Open | WorkspaceState::Sealed)
                 && self
                     .state
                     .branches
@@ -153,7 +153,7 @@ impl Engine {
             expected_sequence: self.state.business_generation,
             digest: object_hash("plan", &input)?,
             input,
-            state: "ready".into(),
+            state: PlanState::Ready,
         };
         // Plans are durable local preparations; business effects still require publication.
         write_json(
@@ -178,7 +178,7 @@ impl Engine {
         if let Some(op) = self.state.operations.get(operation) {
             if op.kind == "plan.cancel"
                 && op.result["plan_id"].as_str() == Some(id)
-                && self.operation_owner(operation).as_deref() == Some(principal)
+                && self.operation_owner(operation)?.as_deref() == Some(principal)
             {
                 return self.operation(operation);
             }
@@ -194,7 +194,7 @@ impl Engine {
                 "plan belongs to another principal",
             ));
         }
-        if plan.state != "ready" {
+        if plan.state != PlanState::Ready {
             return Err(Error::new(
                 storage_contract::ErrorCode::PlanClosed,
                 "only an unexecuted plan can be cancelled",
@@ -207,7 +207,7 @@ impl Engine {
             json!({"plan_id":id}),
             |_, state, _| {
                 let mut p = plan.clone();
-                p.state = "cancelled".into();
+                p.state = PlanState::Cancelled;
                 state.plans.insert(id.into(), p);
                 Ok(json!({"plan_id":id,"state":"cancelled"}))
             },
@@ -264,7 +264,7 @@ impl Engine {
                 op.kind.as_str(),
                 "content.purge" | "history.split" | "history.historical_save"
             ) && op.result["plan_id"].as_str() == Some(id)
-                && self.operation_owner(operation).as_deref() == Some(principal)
+                && self.operation_owner(operation)?.as_deref() == Some(principal)
             {
                 // The receipt proves publication, not completion of physical
                 // cleanup. Resume that idempotent phase after a failed attempt.
@@ -288,7 +288,7 @@ impl Engine {
                 "plan belongs to another principal",
             ));
         }
-        if plan.state != "ready" {
+        if plan.state != PlanState::Ready {
             return Err(Error::new(
                 storage_contract::ErrorCode::PlanClosed,
                 "plan is no longer ready",
@@ -335,7 +335,7 @@ impl Engine {
                                 .insert(version.clone(), ContentState::Purged);
                         }
                         let mut p = plan.clone();
-                        p.state = "committed".into();
+                        p.state = PlanState::Committed;
                         state.plans.insert(id.into(), p);
                         Ok(json!({"plan_id":id,"history_tree_id":history,"purged_versions":ids}))
                     },
@@ -385,7 +385,12 @@ impl Engine {
                     "version has an active read lease",
                 ));
             }
-            for b in self.state.branches.values().filter(|b| b.state == "active") {
+            for b in self
+                .state
+                .branches
+                .values()
+                .filter(|b| b.state == BranchState::Active)
+            {
                 if self
                     .state
                     .commits
@@ -414,7 +419,7 @@ impl Engine {
         for w in self
             .workspaces
             .values()
-            .filter(|w| matches!(w.state.as_str(), "open" | "sealed"))
+            .filter(|w| matches!(w.state, WorkspaceState::Open | WorkspaceState::Sealed))
         {
             if self
                 .state
@@ -493,12 +498,16 @@ impl Engine {
             if *state != ContentState::Purged && *state != ContentState::Migrated {
                 continue;
             }
-            let Some(v) = self.state.versions.get(id) else {
-                continue;
-            };
-            let Some(p) = self.state.placements.get(id) else {
-                continue;
-            };
+            let v = self
+                .state
+                .versions
+                .get(id)
+                .expect("invariant: every content state references an existing version");
+            let p = self
+                .state
+                .placements
+                .get(id)
+                .expect("invariant: every version has a placement");
             let mut inclusion = None;
             for hash in snapshot.pages.get("content_states").into_iter().flatten() {
                 let page: json_codec::Map<String, json_codec::Value> =
@@ -529,14 +538,15 @@ impl Engine {
                     continue;
                 }
                 let dir = version_dir(d, &v.history_tree_id, id);
-                if !dir.exists() {
+                if !dir.try_exists()? {
                     continue;
                 }
                 write_json(&dir.join("purged.json"), &tombstone, true)?;
                 let content = crate::container_storage::content_path(&dir, v)?;
-                if content.exists() {
-                    fs::remove_file(&content)?;
-                    sync_dir(content.parent().expect("content parent"))?;
+                match fs::remove_file(&content) {
+                    Ok(()) => sync_dir(content.parent().expect("content parent"))?,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                    Err(error) => return Err(error.into()),
                 }
             }
         }
@@ -557,36 +567,28 @@ impl Engine {
             |engine, state, pending| {
                 let original = state.histories.get(history).cloned()
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::HistoryNotFound, "source history missing"))?;
-                let original_repo = state.repositories.get(&original.repository_id).cloned()
-                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::RepositoryNotFound, "source repository missing"))?;
+                let original_repo = state.repositories.get(&original.repository_id)
+                    .expect("invariant: every history has a repository").clone();
                 let cut_commit = state.commits.get(cut)
                     .filter(|c| c.history_tree_id == history).cloned()
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::CommitNotFound, "cut commit missing"))?;
-                if cut_commit.commit_id != cut {
-                    return Err(Error::new(storage_contract::ErrorCode::StateInvalid, "split cut commit identity differs from its key"));
-                }
                 if original.root_commit_id == cut || cut_commit.parent_commit_ids.len() != 1 {
                     return Err(Error::new(storage_contract::ErrorCode::SplitRootForbidden, "split must preserve the original root and prefix"));
                 }
                 let prefix_head = cut_commit.parent_commit_ids[0].clone();
                 let prefix = state.commits.get(&prefix_head)
-                    .filter(|commit| commit.commit_id == prefix_head && commit.history_tree_id == history)
-                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "split prefix commit missing from source history"))?;
+                    .expect("invariant: admitted commit parents remain in their history");
                 let prefix_pending = prefix.pending_file_versions.clone();
                 let selected = crate::business::descendant_commits(
                     state.commits.values().filter(|commit| commit.history_tree_id == history), cut,
                 );
-                if selected.contains(&prefix_head) {
-                    return Err(Error::new(storage_contract::ErrorCode::StateInvalid, "split prefix is part of a cyclic selected history"));
-                }
-                if engine.workspaces.values().any(|w| matches!(w.state.as_str(), "open" | "sealed") && state.branches
+                if engine.workspaces.values().any(|w| matches!(w.state, WorkspaceState::Open | WorkspaceState::Sealed) && state.branches
                     .get(&w.branch_id).is_some_and(|b| b.history_tree_id == history)) {
                     return Err(Error::new(storage_contract::ErrorCode::WorkspaceBusy, "split input has an open workspace"));
                 }
                 let mut commits = selected.iter().map(|id| state.commits.get(id)
-                    .filter(|commit| commit.commit_id == *id && commit.history_tree_id == history).cloned()
-                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "split commit identity missing from source history")))
-                    .collect::<Result<Vec<_>>>()?;
+                    .expect("invariant: descendant traversal returns existing commits").clone())
+                    .collect::<Vec<_>>();
                 commits.sort_by_key(|c| c.sequence);
                 let selected_versions = commits.iter().flat_map(|c| &c.entries)
                     .filter(|e| e.kind == NamespaceEntryKind::File).map(|e| e.version_id.clone())
@@ -607,22 +609,12 @@ impl Engine {
                 let file_map = commits.iter().flat_map(|c| &c.entries).filter(|e| e.kind == NamespaceEntryKind::File)
                     .map(|e| e.file_id.clone()).collect::<BTreeSet<_>>().into_iter()
                     .map(|id| (id, new_id("file"))).collect::<BTreeMap<_,_>>();
-                let source_branches = state.branches.iter().filter(|(_, branch)| branch.history_tree_id == history)
-                    .map(|(id, branch)| {
-                        if id != &branch.branch_id {
-                            return Err(Error::new(storage_contract::ErrorCode::StateInvalid, "split source branch identity differs from its key"));
-                        }
-                        Ok(branch.clone())
-                    }).collect::<Result<Vec<_>>>()?;
+                let source_branches = state.branches.values().filter(|branch| branch.history_tree_id == history)
+                    .cloned().collect::<Vec<_>>();
                 let moved = source_branches.iter().filter(|b| selected.contains(&b.head_commit_id))
                     .map(|b| b.branch_id.clone()).collect::<BTreeSet<_>>();
-                let links = state.merge_links.iter().filter(|(_, link)| link.history_tree_id == history)
-                    .map(|(id, link)| {
-                        if id != &link.merge_link_id {
-                            return Err(Error::new(storage_contract::ErrorCode::StateInvalid, "split merge link identity differs from its key"));
-                        }
-                        Ok(link.clone())
-                    }).collect::<Result<Vec<_>>>()?;
+                let links = state.merge_links.values().filter(|link| link.history_tree_id == history)
+                    .cloned().collect::<Vec<_>>();
                 let mut branch_map = moved.iter().map(|id| (id.clone(), new_id("br")))
                     .collect::<BTreeMap<_,_>>();
                 // A link may name a branch whose current HEAD is outside the cut.
@@ -630,19 +622,6 @@ impl Engine {
                 for link in &links {
                     for (branch, commit) in [(&link.source_branch_id, &link.source_commit_id),
                         (&link.target_branch_id, &link.target_commit_id)] {
-                        // Even the endpoint left in the prefix becomes a local
-                        // audit boundary. Both references must remain valid;
-                        // legacy links need not match the branch's current HEAD.
-                        if !state.branches.get(branch).is_some_and(|b|
-                            b.branch_id == *branch && b.history_tree_id == history)
-                        {
-                            return Err(Error::new(storage_contract::ErrorCode::StateInvalid, "merge link branch missing from source history"));
-                        }
-                        if !state.commits.get(commit).is_some_and(|c|
-                            c.commit_id == *commit && c.history_tree_id == history)
-                        {
-                            return Err(Error::new(storage_contract::ErrorCode::StateInvalid, "merge link commit missing from source history"));
-                        }
                         if selected.contains(commit) {
                             branch_map.entry(branch.clone()).or_insert_with(|| new_id("br"));
                         }
@@ -652,15 +631,13 @@ impl Engine {
                 for c in &commits {
                     for entry in c.entries.iter().filter(|e| e.kind == NamespaceEntryKind::File) {
                         let old = state.versions.get(&entry.version_id)
-                            .filter(|version| version.version_id == entry.version_id
-                                && version.file_id == entry.file_id && version.history_tree_id == history)
-                            .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "split version identity differs from its entry"))?;
+                            .expect("invariant: every file entry references its admitted version");
                         if version_map.contains_key(&entry.version_id) { continue; }
                         let old = old.clone();
-                        let placement = state.placements.get(&entry.version_id).cloned()
-                            .ok_or_else(|| Error::new(storage_contract::ErrorCode::PlacementNotFound, "split placement missing"))?;
+                        let placement = state.placements.get(&entry.version_id)
+                            .expect("invariant: every version has a placement").clone();
                         let file_id = file_map.get(&old.file_id)
-                            .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "entry and version file identity differ"))?;
+                            .expect("invariant: file mappings cover the selected entries");
                         let new = if state.content_states.get(&old.version_id).is_some_and(|s| *s == ContentState::Purged) {
                             let mut new = old.clone();
                             new.version_id = new_id("ver");
@@ -732,11 +709,11 @@ impl Engine {
                         )?;
                         new.head_commit_id = commit_map[&branch.head_commit_id].clone();
                         let old = state.branches.get_mut(&branch.branch_id)
-                            .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "split source branch identity missing"))?;
+                            .expect("invariant: source branches remain until remapping completes");
                         old.pending_file_versions = prefix_pending.clone();
                         old.head_commit_id = prefix_head.clone();
                         if selected.contains(&old.fork_commit_id) { old.fork_commit_id = prefix_head.clone(); }
-                        old.state = "migrated".into();
+                        old.state = BranchState::Migrated;
                         old.generation = old.generation.checked_add(1)
                             .ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "branch generation exhausted"))?;
                     } else {
@@ -746,9 +723,9 @@ impl Engine {
                             } else if l.target_branch_id == branch.branch_id && selected.contains(&l.target_commit_id) {
                                 Some(&l.target_commit_id)
                             } else { None }
-                        }).ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "split branch endpoint missing"))?;
+                        }).expect("invariant: unmoved mapped branches came from selected merge endpoints");
                         new.head_commit_id = commit_map[endpoint].clone();
-                        new.state = "archived".into();
+                        new.state = BranchState::Archived;
                         // The audit endpoint keeps its own snapshot state,
                         // never the original branch's later reservation map.
                         new.pending_file_versions = state.commits[&new.head_commit_id]
@@ -767,7 +744,7 @@ impl Engine {
                 // active history's main. Prefer an existing active survivor.
                 let active = moved.iter().filter(|id| {
                     let branch = &state.branches[&branch_map[*id]];
-                    branch.state == "active" && branch.file_id.is_none()
+                    branch.state == BranchState::Active && branch.file_id.is_none()
                 }).cloned().collect::<BTreeSet<_>>();
                 let new_main = original.main_branch_id.as_ref().filter(|id| active.contains(*id))
                     .and_then(|id| branch_map.get(id)).cloned()
@@ -786,20 +763,20 @@ impl Engine {
                         state.branches.insert(id.clone(), Branch {
                             branch_id: id.clone(), history_tree_id: history_id.clone(), name,
                             head_commit_id: commit_map[cut].clone(), fork_commit_id: commit_map[cut].clone(),
-                            branch_kind: "full".into(), file_id: None, file_node_id:None, pending_file_versions, generation: 1, state: "active".into(),
+                            branch_kind: storage_contract::BranchKind::Full, file_id: None, file_node_id:None, pending_file_versions, generation: 1, state: BranchState::Active,
                         });
                         id
                     });
                 state.histories.insert(history_id.clone(), HistoryTree {
                     history_tree_id: history_id.clone(), repository_id: repository_id.clone(),
                     root_commit_id: commit_map[cut].clone(), main_branch_id: Some(new_main.clone()),
-                    generation: 1, state: "active".into(), provenance: Some(format!("{history}:{cut}")),
+                    generation: 1, state: HistoryState::Active, provenance: Some(format!("{history}:{cut}")),
                 });
                 let old = state.histories.get_mut(history).expect("source history");
                 old.generation = old.generation.checked_add(1)
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "history generation exhausted"))?;
                 let main_moved = old.main_branch_id.as_ref().is_some_and(|id| moved.contains(id));
-                if main_moved { old.main_branch_id = None; old.state = "archived".into(); }
+                if main_moved { old.main_branch_id = None; old.state = HistoryState::Archived; }
                 if main_moved {
                     let repository = state.repositories.get_mut(&original.repository_id).expect("source repository");
                     repository.smb_binding_generation = repository.smb_binding_generation.checked_add(1)
@@ -817,7 +794,6 @@ impl Engine {
                     new_repo.name = format!("拆分-{}", &new_id("repo")[5..13]);
                     if !state.repositories.values().any(|r| name_policy::lookup_key(&r.name) == name_policy::lookup_key(&new_repo.name)) { break; }
                 }
-                name_policy::validate_name(&new_repo.name)?;
                 state.repositories.insert(repository_id.clone(), new_repo);
                 let rules = state.placement_rules.values().filter(|p| p.repository_id == original.repository_id).cloned().collect::<Vec<_>>();
                 for mut rule in rules {
@@ -903,7 +879,7 @@ impl Engine {
                         state.content_states.insert(old_version.clone(), ContentState::Migrated);
                     }
                 }
-                let mut completed = plan.clone(); completed.state = "committed".into();
+                let mut completed = plan.clone(); completed.state = PlanState::Committed;
                 state.plans.insert(plan.plan_id.clone(), completed);
                 Ok(json!({"plan_id":plan.plan_id,"repository_id":repository_id,"history_tree_id":history_id,
                     "source_history_tree_id":history,"commit_id":commit_map[cut],"branch_id":new_main,

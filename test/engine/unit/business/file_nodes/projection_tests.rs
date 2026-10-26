@@ -30,7 +30,7 @@ fn metadata(state: &mut State, id: &str, parents: &[&str], tags: &[&str]) {
             version_id: "body".into(),
             parent_node_ids: parents.iter().map(|p| (*p).into()).collect(),
             branch_id: "branch".into(),
-            kind: "tags".into(),
+            kind: FileMetadataKind::Tags,
             tags: tags.iter().map(|t| (*t).into()).collect(),
             operation_id: "operation".into(),
             author: "author".into(),
@@ -261,8 +261,6 @@ fn batch_matches_public_single_node_results_including_partial_errors_and_scope()
         "cycle-a",
         "cycle-b",
         "dangling",
-        "missing-body",
-        "wrong-body",
         "foreign-node",
         "foreign-body",
         "other-history",
@@ -297,9 +295,12 @@ fn batch_matches_public_single_node_results_including_partial_errors_and_scope()
         assert_eq!(actual, expected, "{id}");
     }
     for id in ["missing-body", "wrong-body"] {
-        assert_eq!(
-            summaries[id].as_ref().unwrap_err().code(),
-            storage_contract::ErrorCode::StateInvalid
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                engine.file_node_version("file", id)
+            }))
+            .is_err(),
+            "{id} must expose invalid admitted state"
         );
     }
     for id in ["foreign-node", "foreign-body", "absent"] {

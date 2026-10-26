@@ -53,7 +53,7 @@ impl Engine {
                     let branch = state.branches.get(&input.branch_id)
                         .filter(|branch| branch.file_id.as_deref()==Some(file) && branch.history_tree_id==body.history_tree_id)
                         .ok_or_else(|| Error::new(storage_contract::ErrorCode::FileBranchNotFound,"merge branch does not belong to this file"))?;
-                    if branch.state != "active" || state.file_branch_aliases.contains_key(&input.branch_id) {
+                    if branch.state != BranchState::Active || state.file_branch_aliases.contains_key(&input.branch_id) {
                         return Err(Error::new(storage_contract::ErrorCode::FileBranchConflict,"merged branches cannot be merged or written again"));
                     }
                     let head = super::file_nodes::branch_head(state,&input.branch_id)?;
@@ -76,7 +76,7 @@ impl Engine {
                     state.file_metadata_nodes.insert(result.clone(), FileMetadataNode {
                         node_id:result.clone(),history_tree_id:body.history_tree_id.clone(),file_id:file.into(),
                         version_id:version.clone(),parent_node_ids:edges.clone(),branch_id:survivor.into(),
-                        kind:"merge".into(),tags:super::file_nodes::node_tags(state,chosen_node),
+                        kind:FileMetadataKind::Merge,tags:super::file_nodes::node_tags(state,chosen_node),
                         operation_id:operation.into(),author:principal.into(),sequence:state.sequence,created_at:now(),
                     });
                 }
@@ -92,7 +92,7 @@ impl Engine {
                 for branch in branches.iter().filter(|branch| branch.as_str()!=survivor) {
                     state.file_branch_aliases.insert(branch.clone(),survivor.into());
                     let branch = state.branches.get_mut(branch).expect("checked merge branch");
-                    branch.state="merged".into();
+                    branch.state=BranchState::Merged;
                     branch.generation = branch.generation.checked_add(1).ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "branch generation exhausted"))?;
                 }
                 // Historical aliases remain frozen, while their writable

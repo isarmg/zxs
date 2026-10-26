@@ -12,8 +12,15 @@ impl SnapshotReuse {
 }
 impl PreparedSnapshot {
     pub(crate) fn reuse_basis(&self) -> Option<SnapshotReuse> {
-        let root = self.objects.last()?;
-        if root.kind != "snapshot" || root.bytes.len() > MAX_REUSE_DESCRIPTOR_BYTES {
+        let root = self
+            .objects
+            .last()
+            .expect("invariant: prepared snapshot ends with its root");
+        assert_eq!(
+            root.kind, "snapshot",
+            "invariant: prepared snapshot ends with its root"
+        );
+        if root.bytes.len() > MAX_REUSE_DESCRIPTOR_BYTES {
             return None;
         }
         Some(SnapshotReuse {
@@ -37,28 +44,32 @@ impl PreparedSnapshot {
         mut visit: impl FnMut(&str, &[u8]) -> Result<()>,
     ) -> Result<()> {
         let Some(plan) = self.fields.get(field) else {
-            if self.descriptor.pages.contains_key(field) {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::StateInvalid,
-                    "snapshot field lacks an installation plan",
-                ));
-            }
+            assert!(
+                !self.descriptor.pages.contains_key(field),
+                "invariant: every snapshot field has an installation plan"
+            );
             return Ok(());
         };
-        let expected = self.descriptor.pages.get(field).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "snapshot field lacks its bound references",
-            )
-        })?;
+        let expected = self
+            .descriptor
+            .pages
+            .get(field)
+            .expect("invariant: every snapshot field plan has bound references");
         if let Some(range) = &plan.objects {
-            if range.len() != expected.len() {
-                return Err(invalid_reconstruction());
-            }
+            assert_eq!(
+                range.len(),
+                expected.len(),
+                "invariant: prepared page count matches its references"
+            );
             for (object, hash) in self.objects[range.clone()].iter().zip(expected) {
-                if object.kind != "state-page" || object.hash != *hash {
-                    return Err(invalid_reconstruction());
-                }
+                assert_eq!(
+                    object.kind, "state-page",
+                    "invariant: field objects are state pages"
+                );
+                assert_eq!(
+                    &object.hash, hash,
+                    "invariant: prepared page matches its reference"
+                );
                 visit(hash, &object.bytes)?;
             }
             return Ok(());
@@ -120,15 +131,18 @@ impl PreparedSnapshot {
         }
         // A root cannot become durable before every exact page has completed
         // its per-member file and directory barriers, including reused pages.
-        let root = self.objects.last().ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "snapshot root is absent",
-            )
-        })?;
-        if root.kind != "snapshot" || root.hash != self.hash {
-            return Err(invalid_reconstruction());
-        }
+        let root = self
+            .objects
+            .last()
+            .expect("invariant: prepared snapshot ends with its root");
+        assert_eq!(
+            root.kind, "snapshot",
+            "invariant: prepared snapshot ends with its root"
+        );
+        assert_eq!(
+            root.hash, self.hash,
+            "invariant: prepared snapshot root matches its hash"
+        );
         root.store(members)?;
         Ok(self.hash.clone())
     }

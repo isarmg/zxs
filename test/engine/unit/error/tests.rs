@@ -101,3 +101,21 @@ fn out_of_rfc3339_clock_range_preserves_format_cause() {
     assert_eq!(error.code(), ErrorCode::ContainerLayoutInvalid);
     assert!(error.source().unwrap().is::<date_time::error::Format>());
 }
+
+#[test]
+fn cleanup_failure_preserves_both_errors_and_original_status() {
+    let error = Error::Cleanup {
+        operation: Box::new(Error::from(std::io::Error::from_raw_os_error(28))),
+        cleanup: std::io::Error::from_raw_os_error(13),
+    }
+    .retryable();
+    assert_eq!(error.code(), ErrorCode::NoSpace);
+    assert!(error.is_retryable());
+    assert!(error.message().contains("cleanup failed"));
+    assert!(error.source().unwrap().to_string().starts_with("NO_SPACE:"));
+    let Error::Cleanup { operation, cleanup } = error else {
+        panic!("cleanup cause lost")
+    };
+    assert_eq!(operation.code(), ErrorCode::NoSpace);
+    assert_eq!(cleanup.raw_os_error(), Some(13));
+}

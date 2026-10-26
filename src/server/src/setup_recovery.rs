@@ -176,17 +176,18 @@ impl SetupRecovery {
             // Do not require unrelated members to be online to inspect or restore
             // selected survivors. Failure retains an unavailable descriptor; it
             // never grants permission to create a missing directory or mount.
-            let available = checked_directory(&path)
-                .and_then(|resolved| {
-                    directory_identity(&resolved).map(|identity| (resolved, identity))
-                })
-                .ok();
+            let available = checked_directory(&path).and_then(|resolved| {
+                directory_identity(&resolved).map(|identity| (resolved, identity))
+            });
             let resolved = match available {
-                Some((resolved, identity)) => {
+                Ok((resolved, identity)) => {
                     identities.insert(id.clone(), identity);
                     resolved
                 }
-                None => path,
+                Err(error) => {
+                    tracing::debug!(error = ?error, "local setup disk descriptor is unavailable");
+                    path
+                }
             };
             if !unique.insert(resolved.clone()) {
                 return Err(ApiError::invalid("duplicate disk directory"));
@@ -368,11 +369,18 @@ impl SetupRecovery {
         }
         let mut file = private_file(&self.management_root.join("bootstrap.key"), false)?;
         let metadata = file.metadata().map_err(ApiError::io)?;
-        let age = metadata
-            .modified()
-            .ok()
-            .and_then(|time| std::time::SystemTime::now().duration_since(time).ok());
-        if age.is_none_or(|age| age > std::time::Duration::from_secs(30 * 60)) {
+        let modified = metadata.modified().map_err(ApiError::io)?;
+        let age = std::time::SystemTime::now()
+            .duration_since(modified)
+            .map_err(|source| {
+                ApiError::new(
+                    ::http::StatusCode::UNAUTHORIZED,
+                    storage_contract::ErrorCode::BootstrapExpired,
+                    "local bootstrap authorization has expired",
+                )
+                .with_source(source)
+            })?;
+        if age > std::time::Duration::from_secs(30 * 60) {
             return Err(ApiError::new(
                 ::http::StatusCode::UNAUTHORIZED,
                 storage_contract::ErrorCode::BootstrapExpired,
@@ -787,11 +795,12 @@ impl SetupRecovery {
         let _lock = self.lock()?;
         self.verify_permit(permit)?;
         self.completion_proof()?;
-        let engine = Engine::open_for_recovery_with_workspace_limits(
+        let mut engine = Engine::open_for_recovery_with_workspace_limits(
             &self.data_root,
             self.retained_workspace_limits,
         )
         .map_err(engine_error)?;
+        crate::engine_backend::report_recovery_warnings(&mut engine);
         let pristine = storage_engine::State {
             topology_generation: 1,
             ..Default::default()
@@ -839,6 +848,7 @@ impl SetupRecovery {
             self.retained_workspace_limits,
         )
         .map_err(engine_error)?;
+        crate::engine_backend::report_recovery_warnings(&mut engine);
         #[cfg(test)]
         tests::after_recovery_open();
         // Opening/replaying storage can outlive the entrance session. Admit
@@ -866,6 +876,7 @@ impl SetupRecovery {
             self.retained_workspace_limits,
         )
         .map_err(engine_error)?;
+        crate::engine_backend::report_recovery_warnings(&mut engine);
         #[cfg(test)]
         tests::after_recovery_open();
         // Do not hold the authority lock across disk I/O. Once this fresh
@@ -956,12 +967,13 @@ impl SetupRecovery {
             ));
         }
         let disks = self.selected(&request.disk_ids)?;
-        let engine = Engine::restore_from_disks_with_workspace_limits(
+        let mut engine = Engine::restore_from_disks_with_workspace_limits(
             &self.data_root,
             &disks,
             self.retained_workspace_limits,
         )
         .map_err(engine_error)?;
+        crate::engine_backend::report_recovery_warnings(&mut engine);
         if engine.auth_state().is_none() {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::AuthRecoveryRequired,

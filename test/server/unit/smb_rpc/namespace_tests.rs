@@ -54,7 +54,7 @@ fn unlink_and_rmdir_preserve_targets_of_the_wrong_kind() {
     session
         .dispatch(Request::Namespace {
             operation_id: new_id("op"),
-            kind: "mkdir".into(),
+            kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
             path: "empty".into(),
             destination: None,
             replace: false,
@@ -62,16 +62,20 @@ fn unlink_and_rmdir_preserve_targets_of_the_wrong_kind() {
         .unwrap();
     for (kind, path, expected) in [
         (
-            "rmdir",
+            smb_protocol::protocol::NamespaceOperation::Rmdir,
             "report.txt",
             storage_contract::ErrorCode::NotDirectory,
         ),
-        ("unlink", "empty", storage_contract::ErrorCode::IsDirectory),
+        (
+            smb_protocol::protocol::NamespaceOperation::Unlink,
+            "empty",
+            storage_contract::ErrorCode::IsDirectory,
+        ),
     ] {
         let error = session
             .dispatch(Request::Namespace {
                 operation_id: new_id("op"),
-                kind: kind.into(),
+                kind,
                 path: path.into(),
                 destination: None,
                 replace: false,
@@ -165,7 +169,7 @@ fn namespace_submission_errors_retain_original_operation_without_abort() {
             &mut client,
             Request::Namespace {
                 operation_id: new_id("op"),
-                kind: "rename".into(),
+                kind: smb_protocol::protocol::NamespaceOperation::Rename,
                 path: "report.txt".into(),
                 destination: Some("renamed.txt".into()),
                 replace: false,
@@ -181,7 +185,7 @@ fn namespace_submission_errors_retain_original_operation_without_abort() {
         else {
             panic!("expected an error response");
         };
-        assert_eq!(code, "INJECTED_FAILURE");
+        assert_eq!(code, storage_contract::ErrorCode::InjectedFailure);
         assert!(
             !retryable,
             "namespace must not suggest replaying an unknown outcome"
@@ -260,7 +264,7 @@ fn uncertain_namespace_dispatch_never_aborts_its_workspace() {
         let error = session
             .dispatch(Request::Namespace {
                 operation_id: new_id("op"),
-                kind: "rename".into(),
+                kind: smb_protocol::protocol::NamespaceOperation::Rename,
                 path: "report.txt".into(),
                 destination: Some("renamed.txt".into()),
                 replace: false,
@@ -315,20 +319,17 @@ fn legacy_untyped_delete_cannot_remove_files_or_directories() {
             session
                 .dispatch(Request::Namespace {
                     operation_id: new_id("op"),
-                    kind: "mkdir".into(),
+                    kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
                     path: path.into(),
                     destination: None,
                     replace: false,
                 })
                 .unwrap();
         }
-        let result = session.dispatch(Request::Namespace {
-            operation_id: new_id("op"),
-            kind: "delete".into(),
-            path: path.into(),
-            destination: None,
-            replace: false,
-        });
+        let result = json_codec::from_value::<Request>(json!({
+            "op":"namespace", "operation_id":new_id("op"), "kind":"delete", "path":path,
+            "destination":null, "replace":false
+        }));
         assert!(
             session.find(path).unwrap().is_some(),
             "ambiguous legacy delete actually removed {path}: {result:?}"
@@ -342,14 +343,17 @@ fn typed_removal_succeeds_and_successful_namespace_records_are_cleaned() {
     let (_temp, shared, _backend, branch) = fixture();
     let mut session = session(shared, &branch);
     for (kind, path) in [
-        ("mkdir", "empty"),
-        ("rmdir", "empty"),
-        ("unlink", "report.txt"),
+        (smb_protocol::protocol::NamespaceOperation::Mkdir, "empty"),
+        (smb_protocol::protocol::NamespaceOperation::Rmdir, "empty"),
+        (
+            smb_protocol::protocol::NamespaceOperation::Unlink,
+            "report.txt",
+        ),
     ] {
         session
             .dispatch(Request::Namespace {
                 operation_id: new_id("op"),
-                kind: kind.into(),
+                kind,
                 path: path.into(),
                 destination: None,
                 replace: false,
@@ -383,17 +387,42 @@ fn malformed_namespace_requests_are_rejected_before_creating_workspaces() {
         )
         .unwrap();
     for (kind, path, destination, replace) in [
-        ("mkdir", "../bad", None, false),
-        ("mkdir", "valid", Some("other"), false),
-        ("rmdir", "valid", None, true),
-        ("rename", "report.txt", None, false),
-        ("rename", "report.txt", Some("../bad"), false),
+        (
+            smb_protocol::protocol::NamespaceOperation::Mkdir,
+            "../bad",
+            None,
+            false,
+        ),
+        (
+            smb_protocol::protocol::NamespaceOperation::Mkdir,
+            "valid",
+            Some("other"),
+            false,
+        ),
+        (
+            smb_protocol::protocol::NamespaceOperation::Rmdir,
+            "valid",
+            None,
+            true,
+        ),
+        (
+            smb_protocol::protocol::NamespaceOperation::Rename,
+            "report.txt",
+            None,
+            false,
+        ),
+        (
+            smb_protocol::protocol::NamespaceOperation::Rename,
+            "report.txt",
+            Some("../bad"),
+            false,
+        ),
     ] {
         assert!(
             session
                 .dispatch(Request::Namespace {
                     operation_id: new_id("op"),
-                    kind: kind.into(),
+                    kind,
                     path: path.into(),
                     destination: destination.map(str::to_owned),
                     replace,
@@ -548,7 +577,7 @@ fn preparation_and_record_sync_failures_keep_unresolved_recovery_evidence() {
             let error = session
                 .dispatch(Request::Namespace {
                     operation_id: operation_id.clone(),
-                    kind: "mkdir".into(),
+                    kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
                     path: "new".into(),
                     destination: None,
                     replace: false,
@@ -626,7 +655,7 @@ fn dropped_successful_rpc_frame_keeps_the_client_allocated_operation_queryable()
         .send(
             &Request::Namespace {
                 operation_id: operation_id.clone(),
-                kind: "rename".into(),
+                kind: smb_protocol::protocol::NamespaceOperation::Rename,
                 path: "report.txt".into(),
                 destination: Some("renamed.txt".into()),
                 replace: false,
@@ -657,7 +686,7 @@ fn namespace_identity_validation_and_replay_admission_precede_workspace_creation
     let mut session = session(shared.clone(), &branch);
     let request = |operation_id: String| Request::Namespace {
         operation_id,
-        kind: "mkdir".into(),
+        kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
         path: "new".into(),
         destination: None,
         replace: false,

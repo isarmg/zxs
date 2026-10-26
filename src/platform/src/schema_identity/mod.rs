@@ -219,7 +219,7 @@ pub struct SchemaObjectKey {
 /// different database adapters cannot silently produce different inputs.
 pub fn schema_fingerprint(rows: &[SchemaRow]) -> Result<String, Error> {
     let mut digest = Sha256::new();
-    let mut previous: Option<SchemaObjectKey> = None;
+    let mut previous: Option<&SchemaRow> = None;
 
     for row in rows {
         if row.name == "product_metadata" {
@@ -233,38 +233,34 @@ pub fn schema_fingerprint(rows: &[SchemaRow]) -> Result<String, Error> {
             });
         }
 
-        let key = row.key();
-        if let Some(previous_key) = previous.as_ref() {
-            match key.cmp(previous_key) {
+        let key = (&row.object_type, &row.name, &row.table_name);
+        if let Some(previous_row) = previous {
+            let previous_key = (
+                &previous_row.object_type,
+                &previous_row.name,
+                &previous_row.table_name,
+            );
+            match key.cmp(&previous_key) {
                 std::cmp::Ordering::Less => {
                     return Err(Error::SchemaRowsNotCanonical {
-                        previous: Box::new(previous_key.clone()),
-                        current: Box::new(key),
+                        previous: Box::new(previous_row.key()),
+                        current: Box::new(row.key()),
                     });
                 }
                 std::cmp::Ordering::Equal => {
-                    return Err(Error::DuplicateSchemaObject { key });
+                    return Err(Error::DuplicateSchemaObject { key: row.key() });
                 }
                 std::cmp::Ordering::Greater => {}
             }
         }
 
-        for (field, value) in [
-            ("type", row.object_type.as_str()),
-            ("name", row.name.as_str()),
-            ("tbl_name", row.table_name.as_str()),
-            ("sql", row.sql.as_str()),
-        ] {
+        for value in [&row.object_type, &row.name, &row.table_name, &row.sql] {
             let bytes = value.as_bytes();
-            let length = u64::try_from(bytes.len()).map_err(|_| Error::SchemaFieldTooLarge {
-                object: key.clone(),
-                field,
-                bytes: bytes.len(),
-            })?;
+            let length = bytes.len() as u64;
             digest.update(length.to_be_bytes());
             digest.update(bytes);
         }
-        previous = Some(key);
+        previous = Some(row);
     }
 
     Ok(lower_hex(&digest.finalize()))
@@ -395,12 +391,6 @@ pub enum Error {
     SchemaRowsNotCanonical {
         previous: Box<SchemaObjectKey>,
         current: Box<SchemaObjectKey>,
-    },
-    #[error("schema field {field} for {object:?} is too large ({bytes} bytes)")]
-    SchemaFieldTooLarge {
-        object: SchemaObjectKey,
-        field: &'static str,
-        bytes: usize,
     },
     #[error("product_metadata DDL does not match the five-column current contract")]
     ProductMetadataDdlMismatch,

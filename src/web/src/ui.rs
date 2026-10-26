@@ -152,6 +152,17 @@ pub(crate) fn fail(state: RwSignal<State>, error: api::Error) {
         s.errors.truncate(5);
     });
 }
+/// Entropy failure prevents admission and is reported once at the UI boundary.
+pub(crate) fn operation_id(state: RwSignal<State>) -> Option<String> {
+    match api::operation_id() {
+        Ok(id) => Some(id),
+        Err(error) => {
+            fail(state, error);
+            None
+        }
+    }
+}
+
 pub(crate) fn set_notice(state: RwSignal<State>, notice: String) {
     state.update(|s| s.notice = notice);
 }
@@ -231,7 +242,7 @@ pub(crate) fn navigate(state: RwSignal<State>, page: Page) {
         Page::Health => management::load(state),
         Page::Status => monitor::load(state),
         Page::History => history::load(state),
-        _ => {}
+        Page::Admin | Page::Details | Page::Account | Page::Files => {}
     }
 }
 fn workspace(state: RwSignal<State>) -> impl IntoView {

@@ -110,7 +110,9 @@ impl<DB: Database> PoolInner<DB> {
             let _permits = self.semaphore.acquire(permits_to_acquire).await;
 
             while let Some(idle) = self.idle_conns.pop() {
-                let _ = idle.live.raw.close().await;
+                if let Err(error) = idle.live.raw.close().await {
+                    tracing::warn!(%error, "error occurred while closing the pool connection");
+                }
             }
 
             self.num_idle.store(0, Ordering::Release);

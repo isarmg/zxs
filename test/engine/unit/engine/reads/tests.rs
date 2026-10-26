@@ -55,6 +55,24 @@ fn verified_replica_holds_checked_inode_and_rewinds_before_returning() {
         .read_to_end(&mut bytes)
         .unwrap();
     assert_eq!(bytes, b"original");
+    for disk in engine.members() {
+        fs::remove_file(disk.root.join("disk.json")).unwrap();
+    }
+    for error in [
+        engine.open_content(&version_id).err().unwrap(),
+        engine
+            .prepare_content(&version_id)
+            .unwrap()
+            .open()
+            .err()
+            .unwrap(),
+    ] {
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::ContentUnavailable
+        );
+        assert!(std::error::Error::source(&error).is_some());
+    }
 }
 
 #[test]
@@ -269,4 +287,26 @@ fn read_lease_drop_exposes_zero_registration() {
         .get_mut(&plan.0.lease.version)
         .unwrap() = 0;
     drop(plan);
+}
+
+#[test]
+#[should_panic(expected = "invariant: every placement references an existing version")]
+fn accounting_exposes_dangling_internal_placement() {
+    let (_temp, mut engine, workspace) = fixture();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: new_id("op"),
+            principal: "admin".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: String::new(),
+            request_digest: None,
+        })
+        .unwrap();
+    let id = engine.state.versions.keys().next().unwrap().clone();
+    std::sync::Arc::make_mut(&mut engine.state)
+        .versions
+        .remove(&id);
+    engine.used_bytes("P01");
 }

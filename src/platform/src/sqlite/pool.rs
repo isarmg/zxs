@@ -72,7 +72,7 @@ impl PoolOptions {
         if let Some(limits) = self.connection_limits {
             limits
                 .validate()
-                .map_err(|_| PoolOptionsError::InvalidConnectionLimits)?;
+                .map_err(PoolOptionsError::InvalidConnectionLimits)?;
         }
         Ok(())
     }
@@ -85,27 +85,13 @@ impl Default for PoolOptions {
 }
 
 /// Open an existing SQLite file. This operation never asks SQLite to create a
-/// missing file and reports an initially missing path as a typed error.
+/// missing file. Native open failures retain their SQLite source.
 pub async fn open_existing(
     database_path: impl AsRef<Path>,
     options: PoolOptions,
 ) -> Result<SqlitePool, Error> {
     options.validate()?;
     let database_path = database_path.as_ref();
-    match database_path.try_exists() {
-        Ok(true) => {}
-        Ok(false) => {
-            return Err(Error::DatabaseDoesNotExist {
-                path: database_path.to_path_buf(),
-            });
-        }
-        Err(source) => {
-            return Err(Error::InspectDatabase {
-                path: database_path.to_path_buf(),
-                source,
-            });
-        }
-    }
     connect(database_path, false, options).await
 }
 
@@ -227,7 +213,7 @@ pub async fn require_pool_current_schema(
     require_current_schema(&mut connection, expected).await
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Error)]
+#[derive(Debug, Error)]
 pub enum PoolOptionsError {
     #[error("max_connections must be greater than zero")]
     ZeroMaxConnections,
@@ -241,5 +227,5 @@ pub enum PoolOptionsError {
     #[error("acquire_timeout must be greater than zero")]
     ZeroAcquireTimeout,
     #[error("connection limits are outside the supported bounds")]
-    InvalidConnectionLimits,
+    InvalidConnectionLimits(#[source] ConnectionLimitError),
 }

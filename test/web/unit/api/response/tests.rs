@@ -78,3 +78,19 @@ fn empty_http_errors_keep_their_status() {
     assert_eq!(error.status, 404);
     assert_eq!(error.code, storage_contract::ErrorCode::HttpError);
 }
+
+#[test]
+fn protocol_decode_sources_survive_the_browser_adapter_and_cloning() {
+    use std::error::Error as _;
+    let failure = decode(200, b"{").unwrap_err();
+    let cloned = failure.clone();
+    let source = failure.source().expect("decode source");
+    assert!(
+        source.source().is_some(),
+        "the original JSON error remains chained"
+    );
+    assert!(std::sync::Arc::ptr_eq(
+        failure.source.as_ref().unwrap(),
+        cloned.source.as_ref().unwrap()
+    ));
+}

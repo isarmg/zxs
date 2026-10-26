@@ -108,24 +108,52 @@ pub enum Request {
     },
     Namespace {
         operation_id: String,
-        kind: String,
+        kind: NamespaceOperation,
         path: String,
         destination: Option<String>,
         replace: bool,
     },
 }
 
+/// Namespace operations admitted by the bridge protocol.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serialization(rename_all = "snake_case")]
+pub enum NamespaceOperation {
+    Mkdir,
+    Rename,
+    Unlink,
+    Rmdir,
+}
+
+impl<'de> Deserialize<'de> for NamespaceOperation {
+    fn deserialize<D: data_serialization::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "mkdir" => Ok(Self::Mkdir),
+            "rename" => Ok(Self::Rename),
+            "unlink" => Ok(Self::Unlink),
+            "rmdir" => Ok(Self::Rmdir),
+            _ => Err(data_serialization::de::Error::unknown_variant(
+                &value,
+                &["mkdir", "rename", "unlink", "rmdir"],
+            )),
+        }
+    }
+}
+
 /// Allocate the identity before any I/O so a lost reply remains queryable.
 /// This is a new operation, not an automatic retry of an unknown outcome.
 pub fn namespace_request(
-    kind: &str,
+    kind: NamespaceOperation,
     path: String,
     destination: Option<String>,
     replace: bool,
 ) -> Request {
     Request::Namespace {
         operation_id: storage_contract::new_id("op"),
-        kind: kind.into(),
+        kind,
         path,
         destination,
         replace,
@@ -140,9 +168,9 @@ pub fn remove_request(path: String, flags: i32) -> io::Result<Request> {
     }
     Ok(namespace_request(
         if flags & libc::AT_REMOVEDIR != 0 {
-            "rmdir"
+            NamespaceOperation::Rmdir
         } else {
-            "unlink"
+            NamespaceOperation::Unlink
         },
         path,
         None,
@@ -157,7 +185,7 @@ pub enum Response {
         result: Value,
     },
     Error {
-        code: String,
+        code: storage_contract::ErrorCode,
         message: String,
         retryable: bool,
         operation_id: Option<String>,
@@ -168,7 +196,7 @@ pub enum Response {
 #[serialization(deny_unknown_fields)]
 pub struct OpenResult {
     pub entry_id: String,
-    pub kind: String,
+    pub kind: storage_contract::NamespaceEntryKind,
     pub path: String,
     #[serialization(with = "storage_contract::u64_string")]
     pub handle: u64,
@@ -241,7 +269,7 @@ impl FrameStream {
                 "RPC frame size exceeded",
             ));
         }
-        let deadline = Instant::now() + self.1;
+        let deadline = self.deadline()?;
         let header = (payload.len() as u32).to_be_bytes();
         let mut vector = libc::iovec {
             iov_base: header.as_ptr().cast_mut().cast(),
@@ -368,7 +396,7 @@ impl FrameStream {
         mode: ReadMode,
     ) -> io::Result<(T, Option<OwnedFd>)> {
         let mut deadline = match mode {
-            ReadMode::Deadline => Some(Instant::now() + self.1),
+            ReadMode::Deadline => Some(self.deadline()?),
             ReadMode::EstablishedSession => None,
         };
         let mut header = [0u8; 4];
@@ -444,7 +472,9 @@ impl FrameStream {
                     "too many RPC descriptors",
                 ));
             }
-            deadline.get_or_insert_with(|| Instant::now() + self.1);
+            if deadline.is_none() {
+                deadline = Some(self.deadline()?);
+            }
             received += count as usize;
         }
         let length = u32::from_be_bytes(header) as usize;
@@ -494,6 +524,15 @@ impl FrameStream {
         }
         let value = storage_contract::decode_strict(&payload).map_err(io::Error::other)?;
         Ok((value, descriptor))
+    }
+
+    fn deadline(&self) -> io::Result<Instant> {
+        Instant::now().checked_add(self.1).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "RPC timeout exceeds the monotonic clock range",
+            )
+        })
     }
 
     fn set_remaining_timeout(&self, deadline: Option<Instant>) -> io::Result<()> {

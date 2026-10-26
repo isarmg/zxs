@@ -226,7 +226,8 @@ impl Connection for SqliteConnection {
         if let OptimizeOnClose::Enabled { analysis_limit } = self.optimize_on_close {
             let mut pragma_string = String::new();
             if let Some(limit) = analysis_limit {
-                write!(pragma_string, "PRAGMA analysis_limit = {limit}; ").ok();
+                write!(pragma_string, "PRAGMA analysis_limit = {limit}; ")
+                    .expect("invariant: writing to String cannot fail");
             }
             pragma_string.push_str("PRAGMA optimize;");
             self.execute(AssertSqlSafe(pragma_string)).await?;

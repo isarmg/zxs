@@ -328,14 +328,17 @@ impl<DB: Database> Floating<DB, Live<DB>> {
     }
 
     pub async fn close(self) {
-        // This isn't used anywhere that we care about the return value
-        let _ = self.inner.raw.close().await;
+        if let Err(error) = self.inner.raw.close().await {
+            tracing::warn!(%error, "error occurred while closing the pool connection");
+        }
 
         // `guard` is dropped as intended
     }
 
     pub async fn close_hard(self) {
-        let _ = self.inner.raw.close_hard().await;
+        if let Err(error) = self.inner.raw.close_hard().await {
+            tracing::warn!(%error, "error occurred while closing the pool connection");
+        }
     }
 
     pub fn detach(self) -> DB::Connection {
@@ -382,13 +385,15 @@ impl<DB: Database> Floating<DB, Idle<DB>> {
 
     pub async fn close(self) -> DecrementSizeGuard<DB> {
         if let Err(error) = self.inner.live.raw.close().await {
-            tracing::debug!(%error, "error occurred while closing the pool connection");
+            tracing::warn!(%error, "error occurred while closing the pool connection");
         }
         self.guard
     }
 
     pub async fn close_hard(self) -> DecrementSizeGuard<DB> {
-        let _ = self.inner.live.raw.close_hard().await;
+        if let Err(error) = self.inner.live.raw.close_hard().await {
+            tracing::warn!(%error, "error occurred while closing the pool connection");
+        }
 
         self.guard
     }

@@ -11,10 +11,11 @@
 //! Null checks defend optional arguments, not dangling pointers or a mismatched ABI.
 //! Workers receive owned descriptors/data, never these host pointers.
 #![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
+use data_serialization::Deserialize;
 use json_codec::Value;
 use smb_protocol::{
     client::{Client, error_errno},
-    protocol::{DirectoryPage, OpenResult, Request},
+    protocol::{DirectoryPage, NamespaceOperation, OpenResult, Request},
 };
 use std::{
     collections::BTreeMap,
@@ -82,10 +83,11 @@ fn errno(error: i32) {
     }
 }
 fn guarded(work: impl FnOnce() -> std::io::Result<i32>) -> i32 {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        work().inspect_err(|error| eprintln!("zxs SMB: {error}"))
+    })) {
         Ok(Ok(value)) => value,
         Ok(Err(error)) => {
-            eprintln!("zxs SMB: {error}");
             errno(error_errno(&error));
             -1
         }
@@ -157,17 +159,26 @@ unsafe extern "C" fn free_context(data: *mut *mut c_void) {
         // SAFETY: connect created this exact Context with Box::into_raw; free_context consumes it
         // once and clears the host slot.
         let context = unsafe { Box::from_raw(pointer.cast::<Context>()) };
-        for opened in context.files.values() {
-            // SAFETY: Each Open owns its descriptor, transferred by into_raw_fd on open; consuming
-            // Context closes each remaining descriptor once.
-            unsafe {
-                libc::close(opened.fd);
-            }
-        }
-        // SAFETY: The host data slot remains writable during its free callback; clearing it
-        // prevents a second Box reclamation.
+        // SAFETY: Clear the host slot before any diagnostic can panic; ownership is local now.
         unsafe {
             *data = std::ptr::null_mut();
+        }
+        let mut errors = Vec::new();
+        for opened in context.files.values() {
+            // SAFETY: Context owns each descriptor and this terminal callback closes it once.
+            if unsafe { libc::close(opened.fd) } < 0 {
+                errors.push(std::io::Error::last_os_error());
+            }
+        }
+        drop(context);
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for error in errors {
+                eprintln!("zxs SMB context descriptor close failed: {error}");
+            }
+        }))
+        .is_err()
+        {
+            errno(libc::EIO);
         }
     }
 }
@@ -296,10 +307,7 @@ unsafe extern "C" fn pread(
             if offset < 0 || count > isize::MAX as usize || (count > 0 && data.is_null()) {
                 return Err(bad());
             }
-            let _guard = opened
-                .io
-                .lock()
-                .map_err(|_| std::io::Error::from_raw_os_error(libc::EIO))?;
+            let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
             context.client.call(Request::AuthorizeRead {
                 handle: opened.info.handle,
             })?;
@@ -340,10 +348,7 @@ unsafe extern "C" fn pwrite(
             // event-loop thread and does not escape the callback.
             let context = unsafe { context(handle) }?;
             let opened = context.files.get(&(fsp as usize)).ok_or_else(bad)?;
-            let _guard = opened
-                .io
-                .lock()
-                .map_err(|_| std::io::Error::from_raw_os_error(libc::EIO))?;
+            let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
             write_data(
                 &context.client,
                 &opened.info,
@@ -354,12 +359,12 @@ unsafe extern "C" fn pwrite(
                 unsafe { input_bytes(data, count) }?,
                 offset,
             )
+            .inspect_err(|error| eprintln!("zxs SMB write: {error}"))
         },
     ));
     match result {
         Ok(Ok(result)) => result,
         Ok(Err(error)) => {
-            eprintln!("zxs SMB write: {error}");
             errno(error_errno(&error));
             -1
         }
@@ -378,7 +383,7 @@ fn write_data(
     offset: sdk::off_t,
 ) -> std::io::Result<isize> {
     let count = data.len();
-    if !writable || count > isize::MAX as usize {
+    if !writable {
         return Err(std::io::Error::from_raw_os_error(libc::EACCES));
     }
     let offset = if offset == -1 {
@@ -432,10 +437,7 @@ unsafe extern "C" fn truncate(
         if !opened.writable || length < 0 || length as u64 > opened.info.max_file_bytes {
             return Err(bad());
         }
-        let _guard = opened
-            .io
-            .lock()
-            .map_err(|_| std::io::Error::from_raw_os_error(libc::EIO))?;
+        let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
         context.client.call(Request::PrepareWrite {
             handle: opened.info.handle,
             end: length as u64,
@@ -474,7 +476,7 @@ unsafe extern "C" fn pread_send(
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(count)
-            .map_err(|_| std::io::Error::from_raw_os_error(libc::ENOMEM))?;
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::OutOfMemory, error))?;
         bytes.resize(count, 0);
         Ok((opened, bytes))
     })();
@@ -483,10 +485,7 @@ unsafe extern "C" fn pread_send(
     unsafe {
         asynchronous::send(mem_ctx, event, data, count, move || {
             let (opened, mut bytes) = prepared?;
-            let _guard = opened
-                .io
-                .lock()
-                .map_err(|_| std::io::Error::from_raw_os_error(libc::EIO))?;
+            let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
             opened.client.call(Request::AuthorizeRead {
                 handle: opened.info.handle,
             })?;
@@ -523,7 +522,7 @@ unsafe extern "C" fn pwrite_send(
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(count)
-            .map_err(|_| std::io::Error::from_raw_os_error(libc::ENOMEM))?;
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::OutOfMemory, error))?;
         // SAFETY: host input is readable for count bytes during this callback.
         bytes.extend_from_slice(unsafe { input_bytes(data, count) }?);
         Ok((opened, bytes))
@@ -533,10 +532,7 @@ unsafe extern "C" fn pwrite_send(
     unsafe {
         asynchronous::send(mem_ctx, event, std::ptr::null_mut(), 0, move || {
             let (opened, bytes) = prepared?;
-            let _guard = opened
-                .io
-                .lock()
-                .map_err(|_| std::io::Error::from_raw_os_error(libc::EIO))?;
+            let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
             write_data(
                 &opened.client,
                 &opened.info,
@@ -608,10 +604,7 @@ unsafe extern "C" fn fsync_send(
     unsafe {
         asynchronous::send(mem_ctx, event, std::ptr::null_mut(), 0, move || {
             let opened = prepared?;
-            let _guard = opened
-                .io
-                .lock()
-                .map_err(|_| std::io::Error::from_raw_os_error(libc::EIO))?;
+            let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
             opened.client.call(Request::Flush {
                 handle: opened.info.handle,
             })?;
@@ -631,7 +624,8 @@ unsafe extern "C" fn fsync_recv(
 /// # Safety
 /// A non-null stat points to live, aligned, exclusively writable SDK stat storage.
 unsafe fn fill_stat(node: &Value, stat: *mut sdk::SMB_STRUCT_STAT) -> std::io::Result<()> {
-    let kind = node.get("kind").and_then(Value::as_str).ok_or_else(bad)?;
+    let kind = NamespaceEntryKind::deserialize(node.get("kind").ok_or_else(bad)?)
+        .map_err(std::io::Error::other)?;
     let id = node
         .get("entry_id")
         .and_then(Value::as_str)
@@ -641,7 +635,7 @@ unsafe fn fill_stat(node: &Value, stat: *mut sdk::SMB_STRUCT_STAT) -> std::io::R
         .and_then(Value::as_str)
         .ok_or_else(bad)?
         .parse::<i64>()
-        .map_err(|_| bad())?;
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
     // SAFETY: The caller provides the same exclusive SDK output required by
     // fill_stat_fields, which rejects null before writing.
     unsafe { fill_stat_fields(kind, id, size, stat) }
@@ -650,7 +644,7 @@ unsafe fn fill_stat(node: &Value, stat: *mut sdk::SMB_STRUCT_STAT) -> std::io::R
 /// # Safety
 /// A non-null stat points to live, aligned, exclusively writable SDK stat storage.
 unsafe fn fill_stat_fields(
-    kind: &str,
+    kind: NamespaceEntryKind,
     id: &str,
     size: i64,
     stat: *mut sdk::SMB_STRUCT_STAT,
@@ -658,10 +652,9 @@ unsafe fn fill_stat_fields(
     if stat.is_null() || size < 0 {
         return Err(bad());
     }
-    let mode = if kind == "directory" {
-        libc::S_IFDIR | 0o700
-    } else {
-        libc::S_IFREG | 0o600
+    let mode = match kind {
+        NamespaceEntryKind::Directory => libc::S_IFDIR | 0o700,
+        NamespaceEntryKind::File => libc::S_IFREG | 0o600,
     };
     // SAFETY: The caller supplies exclusive writable SDK stat storage; null was rejected. Its POD
     // fields admit zero and are filled before return.
@@ -723,16 +716,17 @@ unsafe extern "C" fn fstat(
         if unsafe { libc::fstat(opened.fd, &mut metadata) } < 0 {
             return Err(std::io::Error::last_os_error());
         }
-        let size = if opened.info.kind == "directory" {
+        let size = if opened.info.kind == NamespaceEntryKind::Directory {
             0
         } else if opened.writable {
             metadata.st_size
         } else {
-            i64::try_from(opened.info.size).map_err(|_| bad())?
+            i64::try_from(opened.info.size)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?
         };
         // SAFETY: The host provides exclusive writable stat output for this callback, as required
         // by fill_stat_fields.
-        unsafe { fill_stat_fields(&opened.info.kind, &opened.info.entry_id, size, stat) }?;
+        unsafe { fill_stat_fields(opened.info.kind, &opened.info.entry_id, size, stat) }?;
         Ok(0)
     })
 }
@@ -801,7 +795,8 @@ unsafe extern "C" fn real_filename(
             .client
             .call(Request::Stat { path })?;
         let name = entry.get("name").and_then(Value::as_str).ok_or_else(bad)?;
-        let name = std::ffi::CString::new(name).map_err(|_| bad())?;
+        let name = std::ffi::CString::new(name)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
         // SAFETY: mem_ctx is a live host talloc context or null; name is a live CString copied by
         // talloc_strdup.
         let allocated = unsafe { sdk::talloc_strdup(mem_ctx.cast(), name.as_ptr()) };
@@ -843,7 +838,10 @@ unsafe extern "C" fn mkdirat(
         unsafe { context(handle) }?
             .client
             .call(smb_protocol::protocol::namespace_request(
-                "mkdir", path, None, false,
+                NamespaceOperation::Mkdir,
+                path,
+                None,
+                false,
             ))?;
         Ok(0)
     })
@@ -892,7 +890,7 @@ unsafe extern "C" fn renameat(
         unsafe { context(handle) }?
             .client
             .call(smb_protocol::protocol::namespace_request(
-                "rename",
+                NamespaceOperation::Rename,
                 path,
                 destination,
                 replace,
@@ -944,13 +942,10 @@ unsafe extern "C" fn fdopendir(
 }
 impl Directory {
     fn load_page(&mut self) -> std::io::Result<()> {
-        let (value, descriptor) = self.client.call(Request::ReadDirectory {
+        let (value, _) = self.client.call(Request::ReadDirectory {
             handle: self.handle,
             restart: self.restart,
         })?;
-        if descriptor.is_some() {
-            return Err(bad());
-        }
         let page: DirectoryPage = json_codec::from_value(value).map_err(std::io::Error::other)?;
         if page.more && page.entries.is_empty() {
             return Err(bad());
@@ -1057,7 +1052,12 @@ unsafe extern "C" fn closedir(
             &mut context.files,
             directory.owner,
             directory.handle,
-            |opened| (opened.info.handle, opened.info.kind == "directory"),
+            |opened| {
+                (
+                    opened.info.handle,
+                    opened.info.kind == NamespaceEntryKind::Directory,
+                )
+            },
         )?;
         finish_open(context, opened, authorized)
     })

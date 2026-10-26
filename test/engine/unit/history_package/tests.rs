@@ -110,7 +110,7 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
                 .file_namespace(
                     &repo.repository_id,
                     NamespaceOperation {
-                        kind: "mkdir".into(),
+                        kind: NamespaceOperationKind::Mkdir,
                         path: path.into(),
                         destination: None,
                     },
@@ -233,7 +233,7 @@ fn restore_backup_prefixes_preserve_evidenced_positions_and_reject_identity_coll
             .file_namespace(
                 &repo.repository_id,
                 NamespaceOperation {
-                    kind: "mkdir".into(),
+                    kind: NamespaceOperationKind::Mkdir,
                     path: "empty".into(),
                     destination: None,
                 },
@@ -599,7 +599,7 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: NamespaceOperationKind::Rename,
                 path: "folder".into(),
                 destination: Some("renamed".into()),
             },
@@ -883,7 +883,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
             .file_namespace(
                 &repo.repository_id,
                 NamespaceOperation {
-                    kind: "rename".into(),
+                    kind: NamespaceOperationKind::Rename,
                     path: source.into(),
                     destination: Some(destination.into()),
                 },
@@ -2408,7 +2408,7 @@ fn namespace_deletions_survive_export_restore_and_replay_without_operation_recor
         .namespace_operation(
             &workspace.workspace_id,
             NamespaceOperation {
-                kind: "delete_tree".into(),
+                kind: NamespaceOperationKind::DeleteTree,
                 path: "folder".into(),
                 destination: None,
             },
@@ -2487,7 +2487,7 @@ fn failed_workspace_namespace_sequence_does_not_publish_deletion_facts() {
             .namespace_operation(
                 &workspace.workspace_id,
                 NamespaceOperation {
-                    kind: "delete".into(),
+                    kind: NamespaceOperationKind::Delete,
                     path: path.into(),
                     destination: None,
                 },
@@ -2540,7 +2540,7 @@ fn net_zero_namespace_sequence_persists_deletion_once() {
             .namespace_operation(
                 &workspace.workspace_id,
                 NamespaceOperation {
-                    kind: kind.into(),
+                    kind: kind.parse().unwrap(),
                     path: "temporary".into(),
                     destination: None,
                 },
@@ -2717,4 +2717,171 @@ fn manifest_content_state_coverage_rejects_equal_length_wrong_version_keys() {
         manifest.validate().unwrap_err().code(),
         storage_contract::ErrorCode::HistoryPackageInvalid
     );
+}
+
+#[test]
+fn failed_export_cleans_staging_without_overwriting_the_destination() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = initialize(temp.path());
+    let repo = engine
+        .create_repository("export cleanup", "P01", 1, "alice", &new_id("op"))
+        .unwrap();
+    save(&mut engine, &repo.main_branch_id, b"body");
+    let destination = temp.path().join("existing-package");
+    std::fs::create_dir(&destination).unwrap();
+    std::fs::write(destination.join("keep"), b"existing").unwrap();
+    assert!(
+        engine
+            .export_history_package(&repo.history_tree_id, &destination)
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(destination.join("keep")).unwrap(),
+        b"existing"
+    );
+    assert!(!std::fs::read_dir(temp.path()).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".zxs-history-")
+    }));
+}
+
+#[test]
+fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let mut engine = initialize(&temp.path().join("source"));
+    let repo = engine
+        .create_repository("merge sources", "P01", 1, "alice", &new_id("op"))
+        .unwrap();
+    save(&mut engine, &repo.main_branch_id, b"original");
+    let entry = engine
+        .list_tree(&repo.main_branch_id)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
+        .unwrap();
+    let mut branches = Vec::new();
+    for name in ["left", "right"] {
+        let branch = engine
+            .create_file_branch(
+                &entry.file_id,
+                &entry.version_id,
+                name,
+                "alice",
+                &new_id("op"),
+            )
+            .unwrap()
+            .result["branch_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        save(&mut engine, &branch, name.as_bytes());
+        branches.push(branch);
+    }
+    let inputs = branches
+        .iter()
+        .map(|branch| FileMergeInput {
+            branch_id: branch.clone(),
+            expected_node_id: engine.file_branch_head(branch).unwrap(),
+        })
+        .collect::<Vec<_>>();
+    let operation = engine
+        .merge_file_branches(crate::FileBranchMergeRequest {
+            file_id: &entry.file_id,
+            inputs: &inputs,
+            chosen_node_id: &entry.version_id,
+            surviving_branch_id: &branches[0],
+            location: None,
+            principal: "alice",
+            operation_id: &new_id("op"),
+        })
+        .unwrap();
+    let first_merge = operation.result["merge_id"].as_str().unwrap().to_owned();
+    let package = temp.path().join("package");
+    engine
+        .export_history_package(&repo.history_tree_id, &package)
+        .unwrap();
+    let (mut baseline, proof, _) = load_package(&package).unwrap();
+    let first_node = baseline.file_branch_merges[&first_merge]
+        .result_node_id
+        .clone();
+    let second_node = new_id("fmeta");
+    let second_merge = new_id("fmerge");
+    let mut metadata = baseline.file_metadata_nodes[&first_node].clone();
+    metadata.node_id = second_node.clone();
+    baseline
+        .file_metadata_nodes
+        .insert(second_node.clone(), metadata);
+    let mut event = baseline.file_branch_merges[&first_merge].clone();
+    assert!(!event.reused_node);
+    event.merge_id = second_merge.clone();
+    event.result_node_id = second_node.clone();
+    baseline
+        .file_branch_merges
+        .insert(second_merge.clone(), event);
+    baseline.validate().unwrap();
+    rebind_test_package(
+        &package,
+        &temp.path().join("proof-valid"),
+        &baseline,
+        proof.clone(),
+        &engine.members(),
+    );
+    offline_check_history_package(&package).unwrap();
+
+    for corruption in [
+        "missing_chosen",
+        "chosen_cycle_omitted",
+        "chosen_cycle_linked",
+    ] {
+        let mut manifest = baseline.clone();
+        for (merge_id, result, chosen) in [
+            (&first_merge, &first_node, &second_node),
+            (&second_merge, &second_node, &first_node),
+        ] {
+            if corruption == "missing_chosen" && merge_id == &second_merge {
+                continue;
+            }
+            let event = manifest.file_branch_merges.get_mut(merge_id).unwrap();
+            event.parent_node_ids = event.input_node_ids.clone();
+            if corruption != "missing_chosen" {
+                event.chosen_node_id = chosen.clone();
+            }
+            if corruption == "chosen_cycle_linked" {
+                event.parent_node_ids.push(chosen.clone());
+            }
+            manifest
+                .file_metadata_nodes
+                .get_mut(result)
+                .unwrap()
+                .parent_node_ids = event.parent_node_ids.clone();
+        }
+        // Rebuild all object hashes and publication receipts, so graph admission,
+        // not an incidental checksum or proof mismatch, rejects the external data.
+        rebind_test_package(
+            &package,
+            &temp.path().join(format!("proof-{corruption}")),
+            &manifest,
+            proof.clone(),
+            &engine.members(),
+        );
+        let expected = if corruption == "chosen_cycle_linked" {
+            "file history contains a mixed content/path node cycle"
+        } else {
+            "file merge chosen source is absent from its ancestry"
+        };
+        let error = offline_check_history_package(&package).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::HistoryPackageInvalid);
+        assert_eq!(error.message(), expected);
+        let mut destination = initialize(&temp.path().join(format!("restore-{corruption}")));
+        let before = canonical_json(destination.state()).unwrap();
+        let error = destination
+            .restore_history_package(&package, "P01", 1, "alice", &new_id("op"))
+            .unwrap_err();
+        assert_eq!(error.message(), expected);
+        assert_eq!(canonical_json(destination.state()).unwrap(), before);
+    }
 }

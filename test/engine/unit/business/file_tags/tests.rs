@@ -111,7 +111,7 @@ fn labels_inherit_across_content_path_events_and_recovery_without_new_bodies() {
     e.file_namespace(
         &r.repository_id,
         NamespaceOperation {
-            kind: "rename".into(),
+            kind: NamespaceOperationKind::Rename,
             path: "folder/a.txt".into(),
             destination: Some("folder/b.txt".into()),
         },

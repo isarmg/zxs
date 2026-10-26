@@ -88,6 +88,7 @@ fn wrong_password_does_not_discard_pending_file_saves() {
             status: 403,
             retryable: false,
             request_id: Some("req_test".into()),
+            source: None,
         },
     );
     assert!(state.authenticated);
@@ -279,6 +280,7 @@ fn uncertain_password_change_blocks_resubmission_and_reload_without_discarding_w
                 message: "Outcome unknown".into(),
                 retryable: true,
                 request_id: Some("req_password".into()),
+                source: None,
             },
         );
         assert!(state.password_unknown());
@@ -358,6 +360,7 @@ fn exact_password_confirmation_and_unauthorized_logout_settle_the_session() {
                 status: 401,
                 retryable: false,
                 request_id: None,
+                source: None,
             }),
         );
         state.with_untracked(|s| {
@@ -380,6 +383,7 @@ fn known_password_rejection_allows_correction_but_never_erases_an_existing_fence
         message: "Incorrect password".into(),
         retryable: false,
         request_id: None,
+        source: None,
     };
     reject_password_change(&mut state, &error);
     assert!(!state.password_unknown());
@@ -452,6 +456,7 @@ fn expired_password_change_session_closes_business_admission_without_losing_reco
             message: "Session expired".into(),
             retryable: false,
             request_id: Some("req_expired_password".into()),
+            source: None,
         },
     );
     assert!(!state.authenticated);

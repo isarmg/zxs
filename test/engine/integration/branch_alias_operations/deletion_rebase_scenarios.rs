@@ -10,7 +10,7 @@ fn active_frozen_batch_deletion_records_live_rebased_path_exactly_once() {
         .file_namespace(
             &pool.repo.repository_id,
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: storage_contract::NamespaceOperationKind::Rename,
                 path: "STRASSE".into(),
                 destination: Some("renamed".into()),
             },

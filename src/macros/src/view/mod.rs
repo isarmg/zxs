@@ -383,7 +383,11 @@ fn inert_element_to_tokens(
                             }
                         }
                     }
-                    _ => {}
+                    Node::Comment(_)
+                    | Node::Doctype(_)
+                    | Node::Block(_)
+                    | Node::Fragment(_)
+                    | Node::Custom(_) => {}
                 }
             }
         }
@@ -490,7 +494,11 @@ fn inert_svg_element_to_tokens(
                             }
                         }
                     }
-                    _ => {}
+                    Node::Comment(_)
+                    | Node::Doctype(_)
+                    | Node::Block(_)
+                    | Node::Fragment(_)
+                    | Node::Custom(_) => {}
                 }
             }
         }
@@ -1028,7 +1036,9 @@ fn attribute_to_tokens(
             if name == "node_ref" {
                 let node_ref = match &node.key {
                     NodeName::Path(path) => path.path.get_ident(),
-                    _ => unreachable!(),
+                    NodeName::Punctuated(_) | NodeName::Block(_) => {
+                        unreachable!("plain attribute names are parsed as paths")
+                    }
                 };
                 let value = attribute_value(node, false);
                 quote! {
@@ -1043,31 +1053,41 @@ fn attribute_to_tokens(
             } else if let Some(name) = name.strip_prefix("class:") {
                 let class = match &node.key {
                     NodeName::Punctuated(parts) => &parts[0],
-                    _ => unreachable!(),
+                    NodeName::Path(_) | NodeName::Block(_) => {
+                        unreachable!("prefixed attribute names are punctuated")
+                    }
                 };
                 class_to_tokens(node, class.into_token_stream(), Some(name))?
             } else if name == "class" {
                 let class = match &node.key {
                     NodeName::Path(path) => path.path.get_ident(),
-                    _ => unreachable!(),
+                    NodeName::Punctuated(_) | NodeName::Block(_) => {
+                        unreachable!("plain attribute names are parsed as paths")
+                    }
                 };
                 class_to_tokens(node, class.into_token_stream(), None)?
             } else if let Some(name) = name.strip_prefix("style:") {
                 let style = match &node.key {
                     NodeName::Punctuated(parts) => &parts[0],
-                    _ => unreachable!(),
+                    NodeName::Path(_) | NodeName::Block(_) => {
+                        unreachable!("prefixed attribute names are punctuated")
+                    }
                 };
                 style_to_tokens(node, style.into_token_stream(), Some(name))
             } else if name == "style" {
                 let style = match &node.key {
                     NodeName::Path(path) => path.path.get_ident(),
-                    _ => unreachable!(),
+                    NodeName::Punctuated(_) | NodeName::Block(_) => {
+                        unreachable!("plain attribute names are parsed as paths")
+                    }
                 };
                 style_to_tokens(node, style.into_token_stream(), None)
             } else if let Some(name) = name.strip_prefix("prop:") {
                 let prop = match &node.key {
                     NodeName::Punctuated(parts) => &parts[0],
-                    _ => unreachable!(),
+                    NodeName::Path(_) | NodeName::Block(_) => {
+                        unreachable!("prefixed attribute names are punctuated")
+                    }
                 };
                 prop_to_tokens(node, prop.into_token_stream(), name)
             }
@@ -1265,30 +1285,18 @@ pub(crate) fn event_type_and_handler(
 ) -> rust_syntax::Result<(TokenStream, TokenStream, TokenStream)> {
     let handler = attribute_value(node, false);
 
-    let (event_type, is_custom, options) = parse_event_name(name)?;
+    let (event_type, is_custom, options) = parse_event_name(name);
 
-    let event_name_ident = match &node.key {
-        NodeName::Punctuated(parts) => {
-            if parts.len() >= 2 {
-                Some(&parts[1])
-            } else {
-                None
-            }
+    let parts = match &node.key {
+        NodeName::Punctuated(parts) => parts,
+        NodeName::Path(_) | NodeName::Block(_) => {
+            unreachable!("event attributes have a punctuated on:event name")
         }
-        _ => unreachable!(),
     };
-    let undelegated_ident = match &node.key {
-        NodeName::Punctuated(parts) => parts.iter().find(|part| part.to_string() == "undelegated"),
-        _ => unreachable!(),
-    };
-    let capture_ident = match &node.key {
-        NodeName::Punctuated(parts) => parts.iter().find(|part| part.to_string() == "capture"),
-        _ => unreachable!(),
-    };
-    let on = match &node.key {
-        NodeName::Punctuated(parts) => &parts[0],
-        _ => unreachable!(),
-    };
+    let event_name_ident = parts.iter().nth(1);
+    let undelegated_ident = parts.iter().find(|part| part.to_string() == "undelegated");
+    let capture_ident = parts.iter().find(|part| part.to_string() == "capture");
+    let on = &parts[0];
     let on = if options.targeted {
         Ident::new("on_target", on.span()).to_token_stream()
     } else {
@@ -1533,7 +1541,10 @@ fn parse_event(event_name: &str) -> (String, EventNameOptions) {
         captured: false,
     };
     let mut segments = event_name.split(':');
-    let mut name = segments.next().unwrap_or_default().to_owned();
+    let mut name = segments
+        .next()
+        .expect("invariant: split yields a first segment")
+        .to_owned();
     for segment in segments {
         match segment {
             "undelegated" => options.undelegated = true,
@@ -1730,9 +1741,7 @@ pub(crate) struct EventNameOptions {
     captured: bool,
 }
 
-pub(crate) fn parse_event_name(
-    name: &str,
-) -> rust_syntax::Result<(TokenStream, bool, EventNameOptions)> {
+pub(crate) fn parse_event_name(name: &str) -> (TokenStream, bool, EventNameOptions) {
     let (name, options) = parse_event(name);
 
     let (event_type, is_custom) = TYPED_EVENTS
@@ -1742,14 +1751,14 @@ pub(crate) fn parse_event_name(
 
     let event_type = event_type
         .parse::<TokenStream>()
-        .map_err(|_| rust_syntax::Error::new_spanned(event_type, "couldn't parse event name"))?;
+        .expect("invariant: built-in event names are Rust tokens");
 
     let event_type = if is_custom {
         quote! { Custom::new(#name) }
     } else {
         event_type
     };
-    Ok((event_type, is_custom, options))
+    (event_type, is_custom, options)
 }
 
 fn convert_to_snake_case(name: String) -> String {

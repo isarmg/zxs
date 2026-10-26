@@ -83,7 +83,7 @@ fn directory_rename_follows_normalized_ancestry_without_slicing_utf8_by_key_leng
         apply_namespace(
             &mut entries,
             &NamespaceOperation {
-                kind: "rename".into(),
+                kind: NamespaceOperationKind::Rename,
                 path: alias.into(),
                 destination: Some("Moved".into()),
             },
@@ -112,12 +112,12 @@ fn namespace_deletion_facts_follow_operations_not_identity_or_final_paths() {
         &base,
         &[
             NamespaceOperation {
-                kind: "delete".into(),
+                kind: NamespaceOperationKind::Delete,
                 path: "first.txt".into(),
                 destination: None,
             },
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: NamespaceOperationKind::Rename,
                 path: "second.txt".into(),
                 destination: Some("first.txt".into()),
             },
@@ -131,7 +131,7 @@ fn namespace_deletion_facts_follow_operations_not_identity_or_final_paths() {
     let deleted = apply_namespace(
         &mut entries,
         &NamespaceOperation {
-            kind: "rename".into(),
+            kind: NamespaceOperationKind::Rename,
             path: "first.txt".into(),
             destination: Some("FIRST.txt".into()),
         },
@@ -154,27 +154,27 @@ fn namespace_deletion_facts_preserve_repeated_intermediate_paths_and_tree_member
         &base,
         &[
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: NamespaceOperationKind::Rename,
                 path: "a".into(),
                 destination: Some("temporary".into()),
             },
             NamespaceOperation {
-                kind: "delete".into(),
+                kind: NamespaceOperationKind::Delete,
                 path: "temporary".into(),
                 destination: None,
             },
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: NamespaceOperationKind::Rename,
                 path: "b".into(),
                 destination: Some("temporary".into()),
             },
             NamespaceOperation {
-                kind: "delete".into(),
+                kind: NamespaceOperationKind::Delete,
                 path: "temporary".into(),
                 destination: None,
             },
             NamespaceOperation {
-                kind: "delete_tree".into(),
+                kind: NamespaceOperationKind::DeleteTree,
                 path: "tree".into(),
                 destination: None,
             },
@@ -203,7 +203,7 @@ fn rejected_namespace_delete_does_not_remove_entries_or_return_facts() {
             apply_namespace(
                 &mut entries,
                 &NamespaceOperation {
-                    kind: "delete".into(),
+                    kind: NamespaceOperationKind::Delete,
                     path: path.into(),
                     destination: None,
                 }
@@ -226,12 +226,12 @@ fn canonical_equivalent_namespace_sources_preserve_identity_and_strict_destinati
         let before = json_codec::to_value(&entries).unwrap();
         for operation in [
             NamespaceOperation {
-                kind: "mkdir".into(),
+                kind: NamespaceOperationKind::Mkdir,
                 path: query.into(),
                 destination: None,
             },
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: NamespaceOperationKind::Rename,
                 path: stored.into(),
                 destination: Some(query.into()),
             },
@@ -242,7 +242,7 @@ fn canonical_equivalent_namespace_sources_preserve_identity_and_strict_destinati
         apply_namespace(
             &mut entries,
             &NamespaceOperation {
-                kind: "rename".into(),
+                kind: NamespaceOperationKind::Rename,
                 path: query.into(),
                 destination: Some("renamed.txt".into()),
             },
@@ -256,7 +256,7 @@ fn canonical_equivalent_namespace_sources_preserve_identity_and_strict_destinati
         apply_namespace(
             &mut entries,
             &NamespaceOperation {
-                kind: "delete".into(),
+                kind: NamespaceOperationKind::Delete,
                 path: query.into(),
                 destination: None,
             },

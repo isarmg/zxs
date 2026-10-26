@@ -8,6 +8,29 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serialization(rename_all = "snake_case")]
+pub(crate) enum UploadState {
+    Incomplete,
+    ChecksumMismatch,
+    Complete,
+}
+impl<'de> Deserialize<'de> for UploadState {
+    fn deserialize<D: data_serialization::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "incomplete" => Ok(Self::Incomplete),
+            "checksum_mismatch" => Ok(Self::ChecksumMismatch),
+            "complete" => Ok(Self::Complete),
+            _ => Err(data_serialization::de::Error::custom(
+                "invalid upload state",
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct UploadRecord {
@@ -23,7 +46,7 @@ pub(crate) struct UploadRecord {
     #[serialization(with = "storage_contract::u64_string")]
     pub persisted_bytes: u64,
     pub persisted_hash: String,
-    pub state: String,
+    pub state: UploadState,
     pub data_file: String,
 }
 pub(crate) fn key(workspace: &str, item: &str) -> String {
@@ -155,25 +178,24 @@ impl StagedFile {
         self.reservation.block_admission();
     }
 }
-pub(crate) fn persist_staged(
-    root: &Path,
-    record: &UploadRecord,
-    staged: &StagedFile,
-) -> Result<(), ApiError> {
-    persist_staged_with_sync(root, record, staged, || {
-        staged.directory.sync().map_err(crate::upload_fs_error)
-    })
+pub(crate) fn persist_staged(record: &UploadRecord, staged: &StagedFile) -> Result<(), ApiError> {
+    persist_staged_with_sync(
+        record,
+        staged,
+        #[cfg(test)]
+        || staged.directory.sync().map_err(crate::upload_fs_error),
+    )
 }
+#[cfg(test)]
 fn sync_directory(root: &Path) -> Result<(), ApiError> {
     fs::File::open(root)
         .and_then(|file| file.sync_all())
         .map_err(ApiError::io)
 }
 fn persist_staged_with_sync(
-    _root: &Path,
     record: &UploadRecord,
     staged: &StagedFile,
-    sync: impl FnOnce() -> Result<(), ApiError>,
+    #[cfg(test)] sync: impl FnOnce() -> Result<(), ApiError>,
 ) -> Result<(), ApiError> {
     let result = (|| {
         staged
@@ -181,7 +203,15 @@ fn persist_staged_with_sync(
             .verify_identity()
             .map_err(crate::upload_fs_error)?;
         let name = format!("{}.json", key(&record.workspace_id, &record.item_id));
-        persist_held(&staged.directory, &name, record, || {}, sync)
+        persist_held(
+            &staged.directory,
+            &name,
+            record,
+            #[cfg(test)]
+            || {},
+            #[cfg(test)]
+            sync,
+        )
     })();
     if result.is_err() {
         // A failed cleanup or directory sync can leave extra/uncertain metadata.
@@ -198,8 +228,8 @@ pub(crate) fn persist(root: &Path, record: &UploadRecord) -> Result<(), ApiError
 fn persist_inner(
     root: &Path,
     record: &UploadRecord,
-    published: impl FnOnce(),
-    sync: impl FnOnce() -> Result<(), ApiError>,
+    #[cfg(test)] published: impl FnOnce(),
+    #[cfg(test)] sync: impl FnOnce() -> Result<(), ApiError>,
 ) -> Result<(), ApiError> {
     let name = format!("{}.json", key(&record.workspace_id, &record.item_id));
     persist_at(root, &name, record, published, sync)
@@ -208,19 +238,27 @@ fn persist_at(
     root: &Path,
     name: &str,
     record: &UploadRecord,
-    published: impl FnOnce(),
-    sync: impl FnOnce() -> Result<(), ApiError>,
+    #[cfg(test)] published: impl FnOnce(),
+    #[cfg(test)] sync: impl FnOnce() -> Result<(), ApiError>,
 ) -> Result<(), ApiError> {
     let directory = platform_io::fs_safety::PrivateDirectory::open_trusted(root)
         .map_err(crate::upload_fs_error)?;
-    persist_held(&directory, name, record, published, sync)
+    persist_held(
+        &directory,
+        name,
+        record,
+        #[cfg(test)]
+        published,
+        #[cfg(test)]
+        sync,
+    )
 }
 fn persist_held(
     directory: &platform_io::fs_safety::PrivateDirectory,
     name: &str,
     record: &UploadRecord,
-    published: impl FnOnce(),
-    sync: impl FnOnce() -> Result<(), ApiError>,
+    #[cfg(test)] published: impl FnOnce(),
+    #[cfg(test)] sync: impl FnOnce() -> Result<(), ApiError>,
 ) -> Result<(), ApiError> {
     use platform_io::fs_safety::{AtomicFile, RelativePath};
     let bytes =
@@ -234,12 +272,19 @@ fn persist_held(
         &bytes,
     )
     .map_err(crate::upload_fs_error)?;
-    published();
-    sync()
+    #[cfg(test)]
+    {
+        published();
+        sync()
+    }
+    #[cfg(not(test))]
+    {
+        directory.sync().map_err(crate::upload_fs_error)
+    }
 }
 
 pub(crate) fn status(record: &UploadRecord) -> json_codec::Value {
-    json_codec::json!({"workspace_id":record.workspace_id,"item_id":record.item_id,"upload_generation":record.generation.to_string(),"logical_size":record.logical_size.to_string(),"content_hash":record.content_hash,"state":if record.state=="complete"{"COMPLETE"}else{"RECEIVING"},"durable_ranges":if record.persisted_bytes>0{vec![json_codec::json!({"offset":"0","length":record.persisted_bytes.to_string(),"content_hash":record.persisted_hash})]}else{vec![]},"sealed_manifest_hash":null})
+    json_codec::json!({"workspace_id":record.workspace_id,"item_id":record.item_id,"upload_generation":record.generation.to_string(),"logical_size":record.logical_size.to_string(),"content_hash":record.content_hash,"state":if record.state==UploadState::Complete{"COMPLETE"}else{"RECEIVING"},"durable_ranges":if record.persisted_bytes>0{vec![json_codec::json!({"offset":"0","length":record.persisted_bytes.to_string(),"content_hash":record.persisted_hash})]}else{vec![]},"sealed_manifest_hash":null})
 }
 #[cfg(test)]
 pub(crate) struct RetainGenerationHook {
@@ -261,6 +306,7 @@ pub(crate) fn retain_generation(root: &Path, record: &UploadRecord) -> Result<()
         root,
         &name,
         record,
+        #[cfg(test)]
         || {
             #[cfg(test)]
             {
@@ -275,6 +321,7 @@ pub(crate) fn retain_generation(root: &Path, record: &UploadRecord) -> Result<()
                 }
             }
         },
+        #[cfg(test)]
         || sync_directory(root),
     )
 }
@@ -330,7 +377,8 @@ pub(crate) struct Claim {
 }
 impl Drop for Claim {
     fn drop(&mut self) {
-        if let Ok(mut claims) = self.claims.lock() {
+        {
+            let mut claims = self.claims.lock().expect("service state lock poisoned");
             claims.remove(&self.key);
         }
     }

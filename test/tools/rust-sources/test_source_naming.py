@@ -33,6 +33,9 @@ def inventory(path):
 
 class SourceNaming(unittest.TestCase):
     def setUp(self):
+        import proof_maintenance
+        maintenance = patch.object(proof_maintenance, 'RECEIPTS', ())
+        maintenance.start(); self.addCleanup(maintenance.stop)
         routing = patch.object(proof_routing, "RECEIPTS", ())
         routing.start()
         self.addCleanup(routing.stop)

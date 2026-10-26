@@ -35,71 +35,74 @@ struct Work {
 }
 
 fn pool() -> io::Result<&'static mpsc::SyncSender<Work>> {
-    static POOL: OnceLock<Option<mpsc::SyncSender<Work>>> = OnceLock::new();
+    static POOL: OnceLock<Result<mpsc::SyncSender<Work>, Arc<io::Error>>> = OnceLock::new();
     POOL.get_or_init(|| {
         let (sender, receiver) = mpsc::sync_channel::<Work>(8);
         let receiver = Arc::new(Mutex::new(receiver));
-        let mut started = 0;
         for index in 0..2 {
             let receiver = receiver.clone();
-            if std::thread::Builder::new()
+            let started = std::thread::Builder::new()
                 .name(format!("smb-protocol-io-{index}"))
-                .spawn(move || {
-                    loop {
-                        let work = match receiver.lock() {
-                            Ok(receiver) => match receiver.recv() {
-                                Ok(work) => work,
-                                Err(_) => return,
-                            },
-                            Err(_) => return,
-                        };
-                        let result =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(work.job))
-                                .unwrap_or_else(|_| Err(io::Error::from_raw_os_error(libc::EIO)));
-                        let outcome = match result {
-                            Ok(completion) => Outcome {
-                                error: 0,
-                                completion,
-                            },
-                            Err(error) => {
-                                eprintln!("zxs SMB async: {error}");
-                                Outcome {
-                                    error: error_errno(&error),
-                                    completion: Completion::done(-1),
-                                }
-                            }
-                        };
-                        if let Ok(mut slot) = work.shared.lock() {
-                            *slot = Some(outcome);
-                        }
-                        let signal = 1_u64;
-                        loop {
-                            // SAFETY: wake owns a live eventfd duplicate; signal is a live
-                            // initialized u64 and write reads exactly its eight bytes.
-                            let result = unsafe {
-                                libc::write(
-                                    work.wake.as_raw_fd(),
-                                    (&signal as *const u64).cast(),
-                                    8,
-                                )
-                            };
-                            if result >= 0
-                                || io::Error::last_os_error().raw_os_error() != Some(libc::EINTR)
-                            {
-                                break;
-                            }
-                        }
-                    }
-                })
-                .is_ok()
-            {
-                started += 1;
-            }
+                .spawn(move || worker_loop(receiver));
+            started.map_err(Arc::new)?;
         }
-        (started > 0).then_some(sender)
+        Ok(sender)
     })
     .as_ref()
-    .ok_or_else(|| io::Error::from_raw_os_error(libc::EAGAIN))
+    .map_err(cached_start_error)
+}
+
+fn cached_start_error(error: &Arc<io::Error>) -> io::Error {
+    match error.raw_os_error() {
+        Some(errno) => io::Error::from_raw_os_error(errno),
+        None => io::Error::new(error.kind(), error.clone()),
+    }
+}
+
+fn worker_loop(receiver: Arc<Mutex<mpsc::Receiver<Work>>>) {
+    loop {
+        let work = match receiver
+            .lock()
+            .expect("SMB worker queue lock poisoned")
+            .recv()
+        {
+            Ok(work) => work,
+            Err(_) => return,
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            (work.job)().inspect_err(|error| eprintln!("zxs SMB async: {error}"))
+        }))
+        .unwrap_or_else(|_| Err(io::Error::from_raw_os_error(libc::EIO)));
+        let outcome = match result {
+            Ok(completion) => Outcome {
+                error: 0,
+                completion,
+            },
+            Err(error) => Outcome {
+                error: error_errno(&error),
+                completion: Completion::done(-1),
+            },
+        };
+        *work.shared.lock().expect("SMB completion lock poisoned") = Some(outcome);
+        let signal = 1_u64;
+        loop {
+            // SAFETY: wake owns a live eventfd duplicate; signal is a live
+            // initialized u64 and write reads exactly its eight bytes.
+            let result =
+                unsafe { libc::write(work.wake.as_raw_fd(), (&signal as *const u64).cast(), 8) };
+            if result < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            // One writer owns this eventfd duplicate and writes one value to a zero counter.
+            assert_eq!(
+                result,
+                8,
+                "invariant: owned eventfd signal failed: {}",
+                io::Error::last_os_error()
+            );
+            break;
+        }
+    }
 }
 
 #[repr(C)]
@@ -140,21 +143,31 @@ unsafe extern "C" fn completed(
     // SAFETY: The watcher is a child of State and cannot survive request cancellation. send
     // installed the Extra box before registering this callback.
     let extra = unsafe { &*(*state).extra };
-    let mut signal = 0_u64;
-    // SAFETY: The live watcher owns read_fd; signal is writable u64 storage of eight bytes. A
-    // failed/nonblocking read cannot dereference host storage.
-    unsafe {
-        libc::read(extra.read_fd, (&mut signal as *mut u64).cast(), 8);
-    }
-    let outcome = extra
-        .shared
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take())
-        .unwrap_or(Outcome {
-            error: libc::EIO,
-            completion: Completion::done(-1),
-        });
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut signal = 0_u64;
+        loop {
+            // SAFETY: The live watcher owns read_fd; signal is writable eight-byte storage.
+            let read = unsafe { libc::read(extra.read_fd, (&mut signal as *mut u64).cast(), 8) };
+            if read < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            assert_eq!(
+                read, 8,
+                "invariant: readable eventfd has one complete signal"
+            );
+            break;
+        }
+        extra
+            .shared
+            .lock()
+            .expect("SMB completion lock poisoned")
+            .take()
+            .expect("invariant: worker publishes outcome before signaling")
+    }))
+    .unwrap_or_else(|_| Outcome {
+        error: libc::EIO,
+        completion: Completion::done(-1),
+    });
     let request = extra.request;
     let mut error = outcome.error;
     if !outcome.completion.bytes.is_empty() {
@@ -282,17 +295,25 @@ pub(super) unsafe fn send(
                 shared,
                 wake,
             })
-            .map_err(|_| io::Error::from_raw_os_error(libc::EAGAIN))?;
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(_) => io::Error::from_raw_os_error(libc::EAGAIN),
+                mpsc::TrySendError::Disconnected(_) => io::Error::from_raw_os_error(libc::EIO),
+            })?;
         Ok(())
     })();
     if let Err(error) = prepared {
+        let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            eprintln!("zxs SMB async request setup failed: {error}");
+            error_errno(&error)
+        }))
+        .unwrap_or(libc::EIO);
         // SAFETY: Only this event loop owns watcher/request. Free any registered watcher, set the
         // initialized state error, then post completion without further state access.
         unsafe {
             if !watcher.is_null() {
                 sdk::_talloc_free(watcher.cast(), c"zxs Rust VFS queue failure".as_ptr());
             }
-            (*state).error = error_errno(&error);
+            (*state).error = error;
             sdk::_tevent_req_done(request, c"zxs Rust VFS queue failure".as_ptr());
             return sdk::tevent_req_post(request, event);
         }

@@ -109,16 +109,21 @@ impl DraftTransaction {
 
     pub(crate) fn write_backup(&self, name: &OsStr, original: &[u8]) -> Result<()> {
         let replace = self.entry_exists(name)?;
-        write_atomic_at(
+        Ok(write_atomic_at(
             &self.target.directory,
             &EntryName::new(name)?,
             original,
             replace,
-        )
+        )?)
     }
 
     pub(crate) fn replace_private(&self, bytes: &[u8]) -> Result<()> {
-        write_atomic_at(&self.target.directory, &self.target.name, bytes, true)
+        Ok(write_atomic_at(
+            &self.target.directory,
+            &self.target.name,
+            bytes,
+            true,
+        )?)
     }
 }
 
@@ -127,10 +132,22 @@ struct StagingCleanup<'a> {
     name: String,
     armed: bool,
 }
+impl StagingCleanup<'_> {
+    fn cleanup(&mut self) -> std::io::Result<()> {
+        if !self.armed {
+            return Ok(());
+        }
+        self.armed = false;
+        match unlinkat(self.directory, self.name.as_str(), AtFlags::empty()) {
+            Ok(()) | Err(rustix::io::Errno::NOENT) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
 impl Drop for StagingCleanup<'_> {
     fn drop(&mut self) {
-        if self.armed {
-            let _ = unlinkat(self.directory, self.name.as_str(), AtFlags::empty());
+        if let Err(error) = self.cleanup() {
+            tracing::error!(%error, "rescue staging cleanup during unwind failed");
         }
     }
 }
@@ -139,7 +156,12 @@ impl Drop for StagingCleanup<'_> {
 /// A directory-sync failure after rename preserves PublishedDurabilityUnknown.
 pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let target = AnchoredPath::open(path)?;
-    write_atomic_at(&target.directory, &target.name, bytes, false)
+    Ok(write_atomic_at(
+        &target.directory,
+        &target.name,
+        bytes,
+        false,
+    )?)
 }
 
 fn write_atomic_at(
@@ -147,53 +169,74 @@ fn write_atomic_at(
     target: &EntryName,
     bytes: &[u8],
     replace: bool,
-) -> Result<()> {
+) -> std::result::Result<(), platform_io::fs_safety::Error> {
+    use platform_io::fs_safety::Error;
     let directory = root.directory();
     if replace {
         let existing = root.open_file(&target.as_relative(), false)?;
         if existing.metadata()?.uid() != rustix::process::geteuid().as_raw() {
-            return Err("configuration draft must belong to this user".into());
+            return Err(Error::UnsafePermissions(target.as_path().to_owned()));
         }
     }
-    let name = format!(".zxs-rescue-{}.tmp", authentication::random_token()?);
-    let mut file = File::from(openat(
-        directory,
-        name.as_str(),
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::from_raw_mode(0o600),
-    )?);
+    let name = format!(
+        ".zxs-rescue-{}.tmp",
+        authentication::random_token().map_err(std::io::Error::other)?
+    );
+    let mut file = File::from(
+        openat(
+            directory,
+            name.as_str(),
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o600),
+        )
+        .map_err(std::io::Error::from)?,
+    );
     // Arm cleanup only after the exclusive inode was created successfully.
     let mut cleanup = StagingCleanup {
         directory,
         name,
         armed: true,
     };
-    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    if replace {
-        renameat(
-            directory,
-            cleanup.name.as_str(),
-            directory,
-            target.as_os_str(),
-        )?;
-    } else {
-        renameat_with(
-            directory,
-            cleanup.name.as_str(),
-            directory,
-            target.as_os_str(),
-            RenameFlags::NOREPLACE,
-        )?;
+    let result = (|| {
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        if replace {
+            renameat(
+                directory,
+                cleanup.name.as_str(),
+                directory,
+                target.as_os_str(),
+            )
+            .map_err(std::io::Error::from)?;
+        } else {
+            renameat_with(
+                directory,
+                cleanup.name.as_str(),
+                directory,
+                target.as_os_str(),
+                RenameFlags::NOREPLACE,
+            )
+            .map_err(std::io::Error::from)?;
+        }
+        // The temporary name no longer belongs to us after publication. Disarm
+        // before syncing so a later user of that name cannot be removed by Drop.
+        cleanup.armed = false;
+        directory
+            .sync_all()
+            .map_err(platform_io::fs_safety::Error::PublishedDurabilityUnknown)?;
+        Ok(())
+    })();
+    match result {
+        Ok(value) => Ok(value),
+        Err(operation) => match cleanup.cleanup() {
+            Ok(()) => Err(operation),
+            Err(cleanup) => Err(Error::Cleanup {
+                operation: Box::new(operation),
+                cleanup,
+            }),
+        },
     }
-    // The temporary name no longer belongs to us after publication. Disarm
-    // before syncing so a later user of that name cannot be removed by Drop.
-    cleanup.armed = false;
-    directory
-        .sync_all()
-        .map_err(platform_io::fs_safety::Error::PublishedDurabilityUnknown)?;
-    Ok(())
 }
 
 #[cfg(test)]

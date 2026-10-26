@@ -137,7 +137,11 @@ fn unrelated_saved_request_cannot_close_an_unsubmitted_workspace() {
     drop(engine);
     let engine = Engine::open(&root).unwrap();
     assert_eq!(
-        engine.workspace(&pending.workspace_id).unwrap().state,
+        engine
+            .workspace(&pending.workspace_id)
+            .unwrap()
+            .state
+            .as_str(),
         "open"
     );
 }
@@ -169,7 +173,11 @@ fn forged_saved_request_identity_cannot_close_unsubmitted_bytes() {
     drop(engine);
     let engine = Engine::open(&root).unwrap();
     assert_eq!(
-        engine.workspace(&pending.workspace_id).unwrap().state,
+        engine
+            .workspace(&pending.workspace_id)
+            .unwrap()
+            .state
+            .as_str(),
         "open"
     );
 }
@@ -228,9 +236,9 @@ fn wire_commit_reconciles_after_publication_and_system_disk_loss() {
         assert_eq!(
             engine.workspace(&workspace.workspace_id).unwrap().state,
             if missing_legacy_body {
-                "sealed"
+                storage_contract::WorkspaceState::Sealed
             } else {
-                "committed"
+                storage_contract::WorkspaceState::Committed
             }
         );
         let sequence = engine.state().sequence;
@@ -303,14 +311,14 @@ fn wire_receipt_cannot_close_a_different_manifest_with_the_same_workspace_id() {
         // manifest must still reconcile normally using the saved request fence.
         let engine = Engine::open(&root).unwrap();
         let mut workspace = engine.workspace(&request.workspace_id).unwrap();
-        assert_eq!(workspace.state, "committed");
+        assert_eq!(workspace.state.as_str(), "committed");
         assert_eq!(workspace.fencing_token, request.fencing_token + 1);
-        workspace.state = "sealed".into();
+        workspace.state = storage_contract::WorkspaceState::Sealed;
         if namespace {
             workspace
                 .namespace_operations
                 .push(storage_engine::NamespaceOperation {
-                    kind: "mkdir".into(),
+                    kind: storage_contract::NamespaceOperationKind::Mkdir,
                     path: "not-published".into(),
                     destination: None,
                 });
@@ -329,7 +337,11 @@ fn wire_receipt_cannot_close_a_different_manifest_with_the_same_workspace_id() {
         drop(engine);
         let engine = Engine::open(&root).unwrap();
         assert_eq!(
-            engine.workspace(&request.workspace_id).unwrap().state,
+            engine
+                .workspace(&request.workspace_id)
+                .unwrap()
+                .state
+                .as_str(),
             "sealed"
         );
         assert_eq!(
@@ -406,7 +418,7 @@ fn workspace_mirrors_recover_single_corrupt_copy_without_rewriting_evidence() {
         let mut engine = Engine::open(&root).unwrap();
         assert_eq!(engine.commit_workspace(request.clone()).unwrap(), receipt);
         let retained = engine.workspace(&pending.workspace_id).unwrap();
-        assert_eq!(retained.state, "open");
+        assert_eq!(retained.state.as_str(), "open");
         assert_eq!(
             fs::read(&retained.files.values().next().unwrap().source_path).unwrap(),
             b"still pending"
@@ -457,7 +469,7 @@ fn workspace_mirrors_never_select_newest_or_first_conflicting_manifest() {
                     workspace.files.values_mut().next().unwrap().content_hash = "0".repeat(64)
                 }
                 "fence" => workspace.fencing_token += 50,
-                "state" => workspace.state = "aborted".into(),
+                "state" => workspace.state = storage_contract::WorkspaceState::Aborted,
                 "identity" => workspace.workspace_id = new_id("ws"),
                 _ => unreachable!(),
             }
@@ -482,7 +494,7 @@ fn workspace_mirrors_reconcile_only_published_state_and_fence_transition() {
         let receipt = engine.commit_workspace(request.clone()).unwrap();
         let paths = request_paths(&engine, &request).map(|p| p.with_file_name("workspace.json"));
         let mut workspace = engine.workspace(&request.workspace_id).unwrap();
-        workspace.state = "open".into();
+        workspace.state = storage_contract::WorkspaceState::Open;
         workspace.fencing_token = request.fencing_token;
         let root = engine.root().to_owned();
         drop(engine);
@@ -581,7 +593,7 @@ fn workspace_mirrors_do_not_resolve_unpublished_state_transition_by_fence() {
     request.workspace_id = workspace.workspace_id.clone();
     let paths = request_paths(&engine, &request).map(|p| p.with_file_name("workspace.json"));
     let mut changed = workspace;
-    changed.state = "aborted".into();
+    changed.state = storage_contract::WorkspaceState::Aborted;
     changed.fencing_token += 1;
     let root = engine.root().to_owned();
     drop(engine);
@@ -673,7 +685,11 @@ fn historical_workspace_mirror_recovery_uses_published_plan() {
         fs::write(&paths[damaged], b"{truncated").unwrap();
         let mut engine = Engine::open(&root).unwrap();
         assert_eq!(
-            engine.workspace(&workspace.workspace_id).unwrap().state,
+            engine
+                .workspace(&workspace.workspace_id)
+                .unwrap()
+                .state
+                .as_str(),
             "committed"
         );
         assert_eq!(
@@ -790,7 +806,7 @@ fn closing_a_published_workspace_does_not_reopen_its_old_fence_on_restart() {
     drop(engine);
     let engine = Engine::open(&root).unwrap();
     let recovered = engine.workspace(&request.workspace_id).unwrap();
-    assert_eq!(recovered.state, "aborted");
+    assert_eq!(recovered.state.as_str(), "aborted");
     assert_eq!(recovered.fencing_token, closed.fencing_token);
 }
 
@@ -814,11 +830,11 @@ fn absent_primary_preserves_read_only_workspace_receipt_recovery() {
         let mut engine = Engine::open(&root).unwrap();
         assert!(engine.is_read_only());
         let replayed = engine.commit_workspace(request).unwrap();
-        assert_eq!(replayed.current_health, "UNAVAILABLE");
+        assert_eq!(replayed.current_health.as_str(), "UNAVAILABLE");
         // Publication identity and protection-at-publish are immutable, while
         // current health must reflect the now-absent primary.
         let mut expected = receipt;
-        expected.current_health = "UNAVAILABLE".into();
+        expected.current_health = storage_contract::CurrentHealth::Unavailable;
         assert_eq!(replayed, expected);
         if empty_mountpoint {
             assert_eq!(fs::read_dir(primary).unwrap().count(), 0);

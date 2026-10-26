@@ -563,6 +563,20 @@ fn singleton_security_and_csrf_headers_fail_closed() {
         require_single_csrf_token(&[noncanonical_token.as_bytes()]),
         Err(Error::InvalidCsrfToken)
     ));
+    assert!(matches!(
+        require_csrf_token_matches_hash(
+            &[noncanonical_token.as_bytes()],
+            &token_hash(&noncanonical_token)
+        ),
+        Err(Error::InvalidCsrfToken)
+    ));
+    for invalid_length in [digest[..31].to_vec(), vec![0; TOKEN_HASH_BYTES + 1]] {
+        assert!(!token_matches_hash(&token, &invalid_length));
+        assert!(matches!(
+            require_csrf_token_matches_hash(&values, &invalid_length),
+            Err(Error::CsrfTokenMismatch)
+        ));
+    }
     let mut wrong_digest = digest;
     wrong_digest[0] ^= 1;
     assert!(matches!(
@@ -588,10 +602,10 @@ fn singleton_security_and_csrf_headers_fail_closed() {
 #[test]
 fn password_hash_propagates_entropy_failure_without_panicking() {
     let error = hash_password_with_entropy("correct horse battery staple", |_| {
-        Err(Error::Random("injected entropy failure".into()))
+        Err(Error::Random(system_entropy::Error::UNEXPECTED))
     })
     .unwrap_err();
-    assert_eq!(error, Error::Random("injected entropy failure".into()));
+    assert_eq!(error, Error::Random(system_entropy::Error::UNEXPECTED));
 }
 
 #[test]
@@ -620,4 +634,13 @@ fn password_hash_uses_the_supplied_full_length_salt() {
         encoded,
         vectors["password_hash"]["encoded"].as_str().unwrap()
     );
+}
+
+#[test]
+fn external_authentication_failures_retain_concrete_sources() {
+    use std::error::Error as _;
+    let error = require_current_password_hash("not-a-password-hash").unwrap_err();
+    assert!(error.source().unwrap().is::<argon2::password_hash::Error>());
+    let error = Error::Random(system_entropy::Error::UNEXPECTED);
+    assert!(error.source().unwrap().is::<system_entropy::Error>());
 }

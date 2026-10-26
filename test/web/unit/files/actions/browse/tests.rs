@@ -114,6 +114,7 @@ fn disk_read_error(status: u16) -> api::Error {
         message: "Delayed disk listing failure".into(),
         retryable: true,
         request_id: None,
+        source: None,
     }
 }
 

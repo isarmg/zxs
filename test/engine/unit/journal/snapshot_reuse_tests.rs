@@ -294,3 +294,22 @@ fn middle_or_last_missing_page_keeps_ordered_visitation_exactly_once() {
         );
     }
 }
+
+#[test]
+#[should_panic(expected = "invariant: prepared snapshot ends with its root")]
+fn missing_prepared_root_is_an_internal_bug() {
+    let mut prepared = prepare_snapshot(&State::default(), MAX_METADATA).unwrap();
+    prepared.objects.clear();
+    prepared.reuse_basis();
+}
+
+#[test]
+#[should_panic(expected = "invariant: every snapshot field has an installation plan")]
+fn missing_prepared_field_plan_is_an_internal_bug() {
+    let state = State::default();
+    let mut prepared = prepare_snapshot(&state, MAX_METADATA).unwrap();
+    prepared.fields.remove("versions");
+    prepared
+        .visit_field_pages("versions", &[], &state, |_, _| Ok(()))
+        .unwrap();
+}

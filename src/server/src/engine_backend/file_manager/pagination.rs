@@ -102,7 +102,10 @@ impl PageRequest {
             (None, None) => None,
             (Some(selected_path), Some(id)) if !id.is_empty() && id.len() <= 256 => {
                 name_policy::validate_lookup_name(
-                    selected_path.rsplit('/').next().unwrap_or_default(),
+                    selected_path
+                        .rsplit('/')
+                        .next()
+                        .expect("invariant: split has at least one element"),
                 )
                 .map_err(ApiError::invalid_source)?;
                 let parent = selected_path

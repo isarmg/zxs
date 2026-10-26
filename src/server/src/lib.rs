@@ -1180,11 +1180,15 @@ async fn capabilities(State(state): State<AppState>) -> Result<Json<Value>, ApiE
         json!({}),
     )
     .await?;
-    let core_limit = value
-        .get("max_upload_bytes")
-        .and_then(Value::as_str)
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(limit);
+    let core_limit = match value.get("max_upload_bytes") {
+        None => limit,
+        Some(Value::String(value)) => value.parse::<u64>().map_err(ApiError::invalid_source)?,
+        Some(_) => {
+            return Err(ApiError::invalid(
+                "backend upload capacity must be a decimal string",
+            ));
+        }
+    };
     value["max_upload_bytes"] = limit.min(core_limit).to_string().into();
     Ok(Json(value))
 }

@@ -79,6 +79,7 @@ fn failed_editor_requests_record_only_their_original_outcome() {
                     message: "request failed".into(),
                     retryable: false,
                     request_id: None,
+                    source: None,
                 },
             );
             state.with_untracked(|s| {
@@ -90,5 +91,18 @@ fn failed_editor_requests_record_only_their_original_outcome() {
                 assert_eq!(super::super::pending(s), expected == SaveStatus::Unknown);
             });
         }
+    });
+}
+
+#[test]
+fn blocked_actions_do_not_clone_unrelated_state_snapshots() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State::default());
+        crate::snapshot::CLONES.with(|count| count.set(0));
+        assert!(namespace(state, NamespaceAction::CreateDirectory, "new".into()).is_none());
+        crate::files::merge::start(state);
+        crate::files::tags::start(state);
+        crate::files::batch::start(state, crate::files::batch::Kind::Delete, None);
+        crate::snapshot::CLONES.with(|count| assert_eq!(count.get(), 0));
     });
 }

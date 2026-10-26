@@ -8,6 +8,7 @@ rust-version.workspace = true
 fault-injection = []
 
 [dependencies]
+tracing = { version = "0.1", default-features = false, features = ["std"], path = "../foundation/diagnostics/tracing" }
 error-definition.workspace = true
 storage-contract.workspace = true
 name-policy.workspace = true

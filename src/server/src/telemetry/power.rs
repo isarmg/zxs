@@ -6,16 +6,46 @@ use std::{
     time::Instant,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, data_serialization::Serialize)]
+#[serialization(rename_all = "snake_case")]
+pub(crate) enum PowerUnavailable {
+    SensorUnavailable,
+    SensorUnreadable,
+    Sampling,
+    CounterReset,
+    DiskOffline,
+    SimulatedDisk,
+    SensorAmbiguous,
+}
+impl<'de> data_serialization::Deserialize<'de> for PowerUnavailable {
+    fn deserialize<D: data_serialization::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Self, D::Error> {
+        let value = <String as data_serialization::Deserialize>::deserialize(deserializer)?;
+        match value.as_str() {
+            "sensor_unavailable" => Ok(Self::SensorUnavailable),
+            "sensor_unreadable" => Ok(Self::SensorUnreadable),
+            "sampling" => Ok(Self::Sampling),
+            "counter_reset" => Ok(Self::CounterReset),
+            "disk_offline" => Ok(Self::DiskOffline),
+            "simulated_disk" => Ok(Self::SimulatedDisk),
+            "sensor_ambiguous" => Ok(Self::SensorAmbiguous),
+            _ => Err(data_serialization::de::Error::custom(
+                "invalid power availability reason",
+            )),
+        }
+    }
+}
 #[derive(Clone, Debug, Default)]
 pub(super) struct PowerReading {
     pub watts: Option<f64>,
-    pub reason: Option<String>,
+    pub reason: Option<PowerUnavailable>,
 }
 impl PowerReading {
-    pub(super) fn unavailable(reason: &str) -> Self {
+    pub(super) fn unavailable(reason: PowerUnavailable) -> Self {
         Self {
             watts: None,
-            reason: Some(reason.into()),
+            reason: Some(reason),
         }
     }
     fn measured(watts: f64) -> Self {
@@ -53,35 +83,45 @@ impl CpuPowerSampler {
         discover_packages(&self.root, 0, &mut zones, &mut BTreeSet::new());
         if zones.is_empty() {
             self.previous = None;
-            return PowerReading::unavailable("sensor_unavailable");
+            return PowerReading::unavailable(PowerUnavailable::SensorUnavailable);
         }
         let mut current = BTreeMap::new();
         for zone in zones {
-            let Some(microjoules) = read_u64(&zone.join("energy_uj")) else {
-                self.previous = None;
-                return PowerReading::unavailable("sensor_unreadable");
+            let microjoules = match read_u64(&zone.join("energy_uj")) {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::debug!(error = ?error, "CPU energy sensor unreadable");
+                    self.previous = None;
+                    return PowerReading::unavailable(PowerUnavailable::SensorUnreadable);
+                }
             };
             current.insert(
                 zone.clone(),
                 Energy {
                     microjoules,
-                    range: read_u64(&zone.join("max_energy_range_uj")).filter(|v| *v > 0),
+                    range: match read_u64(&zone.join("max_energy_range_uj")) {
+                        Ok(value) => (value > 0).then_some(value),
+                        Err(error) => {
+                            tracing::debug!(error = ?error, "CPU energy counter wrap range unavailable");
+                            None
+                        }
+                    },
                 },
             );
         }
         let previous = self.previous.replace((now, current.clone()));
         let Some((then, previous)) = previous else {
-            return PowerReading::unavailable("sampling");
+            return PowerReading::unavailable(PowerUnavailable::Sampling);
         };
         let seconds = now.saturating_duration_since(then).as_secs_f64();
         if seconds <= 0.0 || previous.keys().ne(current.keys()) {
-            return PowerReading::unavailable("sampling");
+            return PowerReading::unavailable(PowerUnavailable::Sampling);
         }
         let mut energy = 0_u128;
         for (path, next) in &current {
             let old = &previous[path];
             let Some(delta) = energy_delta(old, next) else {
-                return PowerReading::unavailable("counter_reset");
+                return PowerReading::unavailable(PowerUnavailable::CounterReset);
             };
             energy += u128::from(delta);
         }
@@ -94,15 +134,24 @@ fn energy_delta(previous: &Energy, current: &Energy) -> Option<u64> {
         return None;
     }
     if current.microjoules >= previous.microjoules {
-        return current.microjoules.checked_sub(previous.microjoules);
+        return Some(current.microjoules - previous.microjoules);
     }
     let range = current.range?;
     if previous.microjoules > range || current.microjoules > range {
         return None;
     }
-    range
-        .checked_sub(previous.microjoules)?
-        .checked_add(current.microjoules)
+    (range - previous.microjoules).checked_add(current.microjoules)
+}
+
+// Optional sysfs probes may disappear between samples; keep the cause observable.
+fn sensor_value<T>(result: std::io::Result<T>) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::debug!(error = ?error, "optional power sensor unavailable");
+            None
+        }
+    }
 }
 
 fn discover_packages(
@@ -114,36 +163,39 @@ fn discover_packages(
     if depth > 4 || seen.len() >= 256 {
         return;
     }
-    let Ok(canonical) = root.canonicalize() else {
+    let Some(canonical) = sensor_value(root.canonicalize()) else {
         return;
     };
     if !seen.insert(canonical.clone()) {
         return;
     }
-    if fs::read_to_string(canonical.join("name"))
-        .ok()
-        .is_some_and(|name| {
-            name.trim().strip_prefix("package-").is_some_and(|suffix| {
-                !suffix.is_empty() && suffix.bytes().all(|c| c.is_ascii_digit())
-            })
-        })
-    {
+    if sensor_value(fs::read_to_string(canonical.join("name"))).is_some_and(|name| {
+        name.trim()
+            .strip_prefix("package-")
+            .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|c| c.is_ascii_digit()))
+    }) {
         result.insert(canonical);
         // A package already contains its core/uncore domains: do not add them twice.
         return;
     }
-    let Ok(entries) = fs::read_dir(root) else {
+    let Some(entries) = sensor_value(fs::read_dir(root)) else {
         return;
     };
-    for entry in entries.take(256).flatten() {
+    for entry in entries.take(256) {
+        let Some(entry) = sensor_value(entry) else {
+            continue;
+        };
         if entry.path().is_dir() {
             discover_packages(&entry.path(), depth + 1, result, seen);
         }
     }
 }
 
-fn read_u64(path: &Path) -> Option<u64> {
-    fs::read_to_string(path).ok()?.trim().parse().ok()
+fn read_u64(path: &Path) -> std::io::Result<u64> {
+    fs::read_to_string(path)?
+        .trim()
+        .parse()
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 /// The storage engine provides a previously verified physical sysfs identity.
@@ -155,11 +207,11 @@ pub(crate) fn disk_power(
     physical_device: &str,
     simulation: bool,
     online: bool,
-) -> (Option<f64>, Option<String>) {
+) -> (Option<f64>, Option<PowerUnavailable>) {
     let reading = if !online {
-        PowerReading::unavailable("disk_offline")
+        PowerReading::unavailable(PowerUnavailable::DiskOffline)
     } else if simulation {
-        PowerReading::unavailable("simulated_disk")
+        PowerReading::unavailable(PowerUnavailable::SimulatedDisk)
     } else {
         read_disk_power(
             Path::new(physical_device),
@@ -176,24 +228,27 @@ fn read_disk_power(
     hwmon_root: &Path,
     allowed_root: Option<&Path>,
 ) -> PowerReading {
-    let Ok(physical) = physical_device.canonicalize() else {
-        return PowerReading::unavailable("sensor_unavailable");
+    let Some(physical) = sensor_value(physical_device.canonicalize()) else {
+        return PowerReading::unavailable(PowerUnavailable::SensorUnavailable);
     };
     if allowed_root.is_some_and(|root| !physical.starts_with(root)) {
-        return PowerReading::unavailable("sensor_unavailable");
+        return PowerReading::unavailable(PowerUnavailable::SensorUnavailable);
     }
     let mut owners = vec![physical.clone()];
-    if let Ok(device) = physical.join("device").canonicalize() {
+    if let Some(device) = sensor_value(physical.join("device").canonicalize()) {
         owners.push(device);
     }
-    let Ok(entries) = fs::read_dir(hwmon_root) else {
-        return PowerReading::unavailable("sensor_unavailable");
+    let Some(entries) = sensor_value(fs::read_dir(hwmon_root)) else {
+        return PowerReading::unavailable(PowerUnavailable::SensorUnavailable);
     };
     let mut channels = BTreeMap::<(PathBuf, String), PathBuf>::new();
-    for entry in entries.take(256).flatten() {
+    for entry in entries.take(256) {
+        let Some(entry) = sensor_value(entry) else {
+            continue;
+        };
         let path = entry.path();
-        let owner = path.join("device").canonicalize().ok().or_else(|| {
-            let canonical = path.canonicalize().ok()?;
+        let owner = sensor_value(path.join("device").canonicalize()).or_else(|| {
+            let canonical = sensor_value(path.canonicalize())?;
             canonical.parent()?.parent().map(Path::to_path_buf)
         });
         let Some(owner) = owner else {
@@ -205,10 +260,13 @@ fn read_disk_power(
         {
             continue;
         }
-        let Ok(files) = fs::read_dir(&path) else {
+        let Some(files) = sensor_value(fs::read_dir(&path)) else {
             continue;
         };
-        for file in files.take(512).flatten() {
+        for file in files.take(512) {
+            let Some(file) = sensor_value(file) else {
+                continue;
+            };
             let name = file.file_name().to_string_lossy().into_owned();
             let Some((stem, kind)) = name.rsplit_once('_') else {
                 continue;
@@ -220,7 +278,7 @@ fn read_disk_power(
             {
                 continue;
             }
-            let Ok(sensor) = path.canonicalize() else {
+            let Some(sensor) = sensor_value(path.canonicalize()) else {
                 continue;
             };
             let key = (sensor, stem.to_string());
@@ -231,14 +289,17 @@ fn read_disk_power(
         }
     }
     if channels.len() > 1 {
-        return PowerReading::unavailable("sensor_ambiguous");
+        return PowerReading::unavailable(PowerUnavailable::SensorAmbiguous);
     }
     let Some(path) = channels.into_values().next() else {
-        return PowerReading::unavailable("sensor_unavailable");
+        return PowerReading::unavailable(PowerUnavailable::SensorUnavailable);
     };
     match read_u64(&path) {
-        Some(microwatts) => PowerReading::measured(microwatts as f64 / 1_000_000.0),
-        None => PowerReading::unavailable("sensor_unreadable"),
+        Ok(microwatts) => PowerReading::measured(microwatts as f64 / 1_000_000.0),
+        Err(error) => {
+            tracing::debug!(error = ?error, "disk power sensor unreadable");
+            PowerReading::unavailable(PowerUnavailable::SensorUnreadable)
+        }
     }
 }
 

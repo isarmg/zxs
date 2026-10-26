@@ -169,7 +169,7 @@ fn disk_root_uses_one_explicit_primary_on_short_and_complete_routes() {
             .file_namespace(
                 &repo.repository_id,
                 NamespaceOperation {
-                    kind: "mkdir".into(),
+                    kind: NamespaceOperationKind::Mkdir,
                     path: "Documents".into(),
                     destination: None,
                 },

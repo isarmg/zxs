@@ -63,3 +63,20 @@ fn session_response_is_exact_and_contains_no_roles() {
         assert!(Session::decode(invalid).is_err());
     }
 }
+
+#[test]
+fn malformed_external_values_retain_sources() {
+    use std::error::Error as _;
+    let error = match Client::connect("not a URL") {
+        Ok(_) => panic!("invalid URL accepted"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .is::<url_encoding::address::ParseError>()
+    );
+    let error = Session::decode(json!({"token": 1})).unwrap_err();
+    assert!(error.source().unwrap().is::<json_codec::Error>());
+}

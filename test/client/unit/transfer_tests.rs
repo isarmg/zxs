@@ -110,9 +110,7 @@ async fn checksum_failure_removes_temporary_data_without_publishing_a_destinatio
     let result = client
         .download_file("version_test", &directory.path().join("file.txt"))
         .await;
-    assert!(
-        matches!(result, Err(Error::Response(message)) if message.contains("CHECKSUM_MISMATCH"))
-    );
+    assert!(matches!(result, Err(Error::ChecksumMismatch)));
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     server.await.unwrap();
 }
@@ -195,7 +193,7 @@ async fn a_malformed_seal_response_is_an_error_instead_of_a_panic_or_cross_works
             client
                 .prepare_commit("workspace_test", "op_test", "save", None)
                 .await,
-            Err(Error::Response(_))
+            Err(Error::Contract(_))
         ));
         server.await.unwrap();
     }

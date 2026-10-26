@@ -66,7 +66,7 @@ pub(super) fn finish_open(
             context.client.call(request).map(|_| ())
         } else {
             // Detach releases the handle without publishing after revocation.
-            let _ = context.client.call(Request::Detach { handle: remote });
+            context.client.call(Request::Detach { handle: remote })?;
             Err(authentication::denied())
         }
     })

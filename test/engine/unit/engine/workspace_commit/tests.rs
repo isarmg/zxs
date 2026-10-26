@@ -86,7 +86,11 @@ fn detached_snapshot_keeps_only_target_and_preserves_live_retained_evidence() {
     assert_eq!(canonical_json(frozen_state.as_ref()).unwrap(), frozen_bytes);
     assert_eq!(result.operation_id, request.operation_id);
     assert_eq!(
-        engine.workspace(&target.workspace_id).unwrap().state,
+        engine
+            .workspace(&target.workspace_id)
+            .unwrap()
+            .state
+            .as_str(),
         "committed"
     );
     assert_eq!(engine.workspaces.len(), 4);
@@ -275,7 +279,7 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
         .unwrap();
     let frozen = Arc::clone(&engine.state);
     let before = canonical_json(frozen.as_ref()).unwrap();
-    let commit_id = frozen.commits.keys().next().unwrap().clone();
+    let commit_id = frozen.branches[&repo.main_branch_id].head_commit_id.clone();
     let tree_id = frozen.directory_trees.keys().next().unwrap().clone();
     let version_id = frozen.versions.keys().next().unwrap().clone();
     let mutate_records = |next: &mut State| {
@@ -305,9 +309,9 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
                 .insert(version.version_id.clone(), version)
                 .is_none()
         );
-        assert!(next.commits.remove_discard(&commit_id));
-        assert!(next.directory_trees.remove_discard(&tree_id));
-        assert!(next.versions.remove_discard(&version_id));
+        assert!(next.commits.remove_discard("candidate-only-commit"));
+        assert!(next.directory_trees.remove_discard("candidate-only-tree"));
+        assert!(next.versions.remove_discard("candidate-only-version"));
     };
     let failed_operation = new_id("op");
     let failed = engine.plan_mutation_digest(
@@ -349,21 +353,15 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
         panic!("fresh operation must produce an independent candidate");
     };
     assert!(prepared.is_empty());
+    assert_eq!(next.commits[&commit_id].message, "private candidate");
+    assert_eq!(next.directory_trees[&tree_id].path, "private/candidate");
+    assert!(!next.commits.contains_key("candidate-only-commit"));
+    assert!(!next.directory_trees.contains_key("candidate-only-tree"));
     assert_eq!(
-        next.commits["candidate-only-commit"].message,
+        next.versions[&version_id].creation_name,
         "private candidate"
     );
-    assert_eq!(
-        next.directory_trees["candidate-only-tree"].path,
-        "private/candidate"
-    );
-    assert!(!next.commits.contains_key(&commit_id));
-    assert!(!next.directory_trees.contains_key(&tree_id));
-    assert_eq!(
-        next.versions["candidate-only-version"].creation_name,
-        "private candidate"
-    );
-    assert!(!next.versions.contains_key(&version_id));
+    assert!(!next.versions.contains_key("candidate-only-version"));
     assert!(next.operations.contains_key(&operation));
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     drop(next); // A successful plan is not a publication; cancellation discards it.
@@ -372,4 +370,72 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
     assert!(Arc::ptr_eq(&frozen, &engine.state));
     assert!(!engine.state.operations.contains_key(&operation));
     assert!(!engine.is_read_only());
+}
+
+#[test]
+fn plan_failed_change_can_abandon_a_temporarily_missing_main_head() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &temp.path().join("state"),
+        Config::development([temp.path().join("primary")]),
+    )
+    .unwrap();
+    let repo = engine
+        .create_repository("abandoned head", "P01", 1, "admin", &new_id("op"))
+        .unwrap();
+    let frozen = Arc::clone(&engine.state);
+    let before = canonical_json(frozen.as_ref()).unwrap();
+    let head = frozen.branches[&repo.main_branch_id].head_commit_id.clone();
+    let operation = new_id("op");
+    let result = engine.plan_mutation_digest(
+        "test.abandon_head",
+        "admin",
+        &operation,
+        json_codec::json!({}),
+        None,
+        |_, next, _| {
+            assert!(next.commits.remove_discard(&head));
+            Err(Error::new(
+                storage_contract::ErrorCode::InjectedFailure,
+                "abandon temporary missing head",
+            ))
+        },
+    );
+    assert!(
+        matches!(result, Err(ref error) if error.code() == storage_contract::ErrorCode::InjectedFailure)
+    );
+    assert!(Arc::ptr_eq(&frozen, &engine.state));
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    assert!(!engine.state.operations.contains_key(&operation));
+    assert!(!engine.is_read_only());
+}
+
+#[test]
+#[should_panic(expected = "invariant: every branch has its head commit")]
+fn plan_successful_change_must_restore_main_head_before_returning() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &temp.path().join("state"),
+        Config::development([temp.path().join("primary")]),
+    )
+    .unwrap();
+    let repo = engine
+        .create_repository("broken successful head", "P01", 1, "admin", &new_id("op"))
+        .unwrap();
+    let head = engine.state.branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    engine
+        .plan_mutation_digest(
+            "test.broken_head",
+            "admin",
+            &new_id("op"),
+            json_codec::json!({}),
+            None,
+            |_, next, _| {
+                assert!(next.commits.remove_discard(&head));
+                Ok(json_codec::json!({}))
+            },
+        )
+        .unwrap_or_else(|error| panic!("unexpected planning error: {error}"));
 }

@@ -65,7 +65,7 @@
         },
         {
           "path": "test/interface/unit/i18n/tests.rs",
-          "sha256": "dd139d5630d38c89a43fcda6ae1e403995ec17c22dce826b772dd5c837ae21bb",
+          "sha256": "0faec26b52b900deb4a6fbd35b2b3a850ebe87790d6ffad105b62a3c0e35f629",
           "source": "src/interface/src/i18n.rs",
           "source_sha256_before": "743c8f64a2aa16f1bf1100a2df1ff530e84e48a7f7c86fba61dafebcc46b11f1"
         },
@@ -92,6 +92,13 @@
           "sha256": "260776ffeabc2d30aac649954c9188f0da9e27e3f3f7b8bfe8a20a6e0f4cefbc",
           "source": "src/interface/src/tasks.rs",
           "source_sha256_before": "48482d0c3c425e09e4175fd301f22fe89d12e1227ad5bdc83ecea9efbf3f2af8"
+        },
+        {
+          "path": "test/interface/unit/theme/tests.rs",
+          "sha256": "5af340773e6ecdff3771cabec15bc4070223a3bb4d2953ef0c6766b716ee0282",
+          "source": "test/interface/unit/theme/tests.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "5af340773e6ecdff3771cabec15bc4070223a3bb4d2953ef0c6766b716ee0282"
         }
       ],
       "roots": [
@@ -183,7 +190,7 @@
         },
         {
           "path": "test/macros/unit/view/event_modifier_tests.rs",
-          "sha256": "1a1e85ec9efdcf676844f9ef55f5d0026594816b82584edd201d422a5e0dff40",
+          "sha256": "7cba9070974fb6373b8c9b0a31fea329a14372572227225a5013ddcd90606b6c",
           "source": "src/macros/src/view/mod.rs",
           "source_sha256_before": "8089ceb3b8b1b78cc7872f987792e0bafea8b395364ee674beca880df955d7fd"
         },

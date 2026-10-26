@@ -317,9 +317,6 @@ where
 {
     match spawn_blocking(f).await {
         Ok(res) => res,
-        Err(_) => Err(io::Error::new(
-            io::ErrorKind::Other,
-            "background task failed",
-        )),
+        Err(error) => Err(io::Error::new(io::ErrorKind::Other, error)),
     }
 }

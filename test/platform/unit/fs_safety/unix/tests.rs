@@ -265,3 +265,22 @@ fn ancestor_owner_and_sticky_policy() {
     assert!(!trusted_ancestor(2000, 0o700, 0));
     assert!(!trusted_ancestor(2000, 0o1777, 1000));
 }
+
+#[test]
+fn staging_cleanup_reports_failure_and_disarms_before_drop() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = File::open(root.path()).unwrap();
+    std::fs::create_dir(root.path().join("staged")).unwrap();
+    let mut cleanup = StagingCleanup {
+        directory: &directory,
+        name: "staged",
+        armed: true,
+    };
+    assert_eq!(
+        cleanup.cleanup().unwrap_err().raw_os_error(),
+        Some(libc::EISDIR)
+    );
+    assert!(!cleanup.armed);
+    drop(cleanup);
+    assert!(root.path().join("staged").is_dir());
+}

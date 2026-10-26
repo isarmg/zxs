@@ -82,13 +82,13 @@ fn preparation_and_indeterminate_failure_never_advance_the_baseline() {
     ));
     assert!(base.matches(&engine, &config_hash(&engine)));
     engine.inject_fault_once("after_accept_1");
-    assert_eq!(
-        engine
-            .persist_auth_state(json!({"auth":"accepted"}), "alice", &new_id("op"))
-            .unwrap_err()
-            .code(),
-        storage_contract::ErrorCode::InDoubt
-    );
+    let error = engine
+        .persist_auth_state(json!({"auth":"accepted"}), "alice", &new_id("op"))
+        .unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::InDoubt);
+    assert!(error.is_retryable());
+    let source = std::error::Error::source(&error).expect("publication retains its cause");
+    assert!(source.to_string().contains("after_accept_1"));
     assert!(engine.blocked);
     assert!(Arc::ptr_eq(
         &base,

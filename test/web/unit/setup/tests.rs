@@ -61,7 +61,7 @@ fn completion_requires_authorized_proof_and_never_infers_account_reset() {
     let mut m = authorized();
     m.action = Action::Complete;
     m.empty = false;
-    m.status = "recovery_required".into();
+    m.status = Status::RecoveryRequired;
     m.unknown = true;
     assert!(!can_initialize(&m));
     accept_status(
@@ -210,6 +210,7 @@ fn failed_completion_preserves_the_original_unknown_reload_fence() {
             retryable: false,
             status: 400,
             request_id: None,
+            source: None,
         }),
     );
     assert!(!model.pending);
@@ -343,6 +344,7 @@ fn an_empty_key_cannot_accept_authorization_but_still_reports_input_errors() {
             retryable: false,
             status: 0,
             request_id: None,
+            source: None,
         }),
     );
     assert!(!model.pending);
@@ -372,4 +374,22 @@ fn form_cleanup_does_not_discard_initialization_outcome_recovery() {
         assert!(model.key.is_empty() && model.password.is_empty() && model.csrf.is_empty());
         assert!(!can_initialize(&model));
     }
+}
+
+#[test]
+fn setup_status_accepts_only_the_wire_vocabulary() {
+    assert!(matches!(Status::from_wire(Some("empty")), Status::Empty));
+    assert!(matches!(
+        Status::from_wire(Some("existing")),
+        Status::Existing
+    ));
+    assert!(matches!(
+        Status::from_wire(Some("recovery_required")),
+        Status::RecoveryRequired
+    ));
+    assert!(matches!(Status::from_wire(None), Status::Unavailable));
+    assert!(matches!(
+        Status::from_wire(Some("unknown")),
+        Status::Unknown
+    ));
 }

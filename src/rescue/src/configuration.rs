@@ -191,8 +191,10 @@ fn resolve_draft_disk_root(path: &Path) -> Result<std::path::PathBuf> {
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 // A dangling symlink is not a missing, safely creatable root.
-                if existing.symlink_metadata().is_ok() {
-                    return Err("disk root contains a dangling link".into());
+                match existing.symlink_metadata() {
+                    Ok(_) => return Err("disk root contains a dangling link".into()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
                 }
                 suffix.push(
                     existing

@@ -3,9 +3,27 @@ use data_serialization::{Deserialize, Serialize};
 
 macro_rules! error_codes {
     ($($variant:ident => $wire:literal),+ $(,)?) => {
-        #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+        #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
         #[serialization(rename_all = "SCREAMING_SNAKE_CASE")]
         pub enum ErrorCode { $($variant),+ }
+        impl<'de> Deserialize<'de> for ErrorCode {
+            fn deserialize<D: data_serialization::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+                struct CodeVisitor;
+                impl data_serialization::de::Visitor<'_> for CodeVisitor {
+                    type Value = ErrorCode;
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        formatter.write_str("a first-party error code string")
+                    }
+                    fn visit_str<E: data_serialization::de::Error>(self, token: &str) -> std::result::Result<Self::Value, E> {
+                        match token {
+                            $($wire => Ok(ErrorCode::$variant),)+
+                            _ => Err(E::unknown_variant(token, &[$($wire),+])),
+                        }
+                    }
+                }
+                deserializer.deserialize_str(CodeVisitor)
+            }
+        }
         impl ErrorCode {
             pub const ALL: &'static [Self] = &[$(Self::$variant),+];
             pub const fn as_str(self) -> &'static str {

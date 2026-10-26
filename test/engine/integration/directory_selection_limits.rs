@@ -32,12 +32,12 @@ impl Pool {
         }
     }
 
-    fn namespace(&mut self, kind: &str, path: &str) {
+    fn namespace(&mut self, kind: storage_contract::NamespaceOperationKind, path: &str) {
         self.engine
             .file_namespace(
                 &self.repo.repository_id,
                 NamespaceOperation {
-                    kind: kind.into(),
+                    kind,
                     path: path.into(),
                     destination: None,
                 },
@@ -109,8 +109,8 @@ impl Pool {
 
 fn sibling_compositions() -> (Pool, String, String) {
     let mut pool = Pool::new();
-    pool.namespace("mkdir", "left");
-    pool.namespace("mkdir", "right");
+    pool.namespace(storage_contract::NamespaceOperationKind::Mkdir, "left");
+    pool.namespace(storage_contract::NamespaceOperationKind::Mkdir, "right");
     pool.save("left/one.txt");
     pool.save("left/two.txt");
     assert_eq!(
@@ -119,8 +119,14 @@ fn sibling_compositions() -> (Pool, String, String) {
     );
     let left = pool.register("left", "full");
     let left_root = pool.register("", "left-full");
-    pool.namespace("delete", "left/one.txt");
-    pool.namespace("delete", "left/two.txt");
+    pool.namespace(
+        storage_contract::NamespaceOperationKind::Delete,
+        "left/one.txt",
+    );
+    pool.namespace(
+        storage_contract::NamespaceOperationKind::Delete,
+        "left/two.txt",
+    );
     pool.save("right/one.txt");
     pool.save("right/two.txt");
     assert_eq!(
@@ -170,13 +176,19 @@ fn oversized_sibling_selection_preserves_state_journals_and_operation_id() {
             pool.engine.operation(&operation).unwrap_err().code(),
             storage_contract::ErrorCode::OperationNotFound
         );
-        assert_eq!(pool.engine.operation_owner(&operation), None);
+        assert_eq!(pool.engine.operation_owner(&operation).unwrap(), None);
     }
 
     // The rejected operation did not reserve its key and can succeed once the
     // siblings leave enough room, without recreating its frozen composition.
-    pool.namespace("delete", "right/one.txt");
-    pool.namespace("delete", "right/two.txt");
+    pool.namespace(
+        storage_contract::NamespaceOperationKind::Delete,
+        "right/one.txt",
+    );
+    pool.namespace(
+        storage_contract::NamespaceOperationKind::Delete,
+        "right/two.txt",
+    );
     let result = pool
         .engine
         .select_directory_branches(

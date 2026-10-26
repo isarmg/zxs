@@ -4,7 +4,7 @@ use crate::validation::{
     compiler,
     keywords::pattern_properties::invalid_regex,
     node::SchemaNode,
-    regex::{analyze_pattern, contains_ecma_whitespace, LiteralMatchError, PatternOptimization},
+    regex::{analyze_pattern, contains_ecma_whitespace, PatternOptimization},
     validator::Validate as _,
     Json, JsonValueBackend, Object, ValidationContext,
 };
@@ -31,7 +31,7 @@ pub(crate) enum CompiledPattern<R> {
 impl<R: crate::validation::regex::RegexEngine> crate::validation::regex::RegexEngine
     for CompiledPattern<R>
 {
-    type Error = LiteralMatchError;
+    type Error = R::Error;
 
     #[inline]
     fn is_match(&self, text: &str) -> Result<bool, Self::Error> {
@@ -40,8 +40,7 @@ impl<R: crate::validation::regex::RegexEngine> crate::validation::regex::RegexEn
             CompiledPattern::Exact(exact) => Ok(text == exact.as_ref()),
             CompiledPattern::Alternation(alts) => Ok(alts.iter().any(|a| a.as_str() == text)),
             CompiledPattern::NoWhitespace => Ok(!contains_ecma_whitespace(text)),
-            // Treat regex errors as non-match for compatibility
-            CompiledPattern::Regex(re) => Ok(re.is_match(text).unwrap_or(false)),
+            CompiledPattern::Regex(re) => re.is_match(text),
         }
     }
 }

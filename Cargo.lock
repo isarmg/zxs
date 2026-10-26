@@ -874,12 +874,14 @@ dependencies = [
  "json-codec",
  "libc",
  "libsqlite3-sys",
+ "log",
  "rustix",
  "sha2",
  "sqlite-access",
  "system-entropy",
  "tempfile",
  "tokio",
+ "tracing",
  "zeroize",
 ]
 
@@ -1234,6 +1236,7 @@ version = "0.1.1"
 dependencies = [
  "bindgen",
  "blake3",
+ "data-serialization",
  "json-codec",
  "libc",
  "smb-protocol",
@@ -1289,6 +1292,7 @@ dependencies = [
  "data-serialization",
  "error-definition",
  "futures",
+ "http",
  "json-codec",
  "reqwest",
  "rustix",
@@ -1298,6 +1302,7 @@ dependencies = [
  "storage-contract",
  "tempfile",
  "tokio",
+ "tracing",
  "url-encoding",
  "webpki-roots",
 ]
@@ -1331,6 +1336,7 @@ dependencies = [
  "storage-contract",
  "storage-engine",
  "tempfile",
+ "tracing",
 ]
 
 [[package]]
@@ -1346,6 +1352,7 @@ dependencies = [
  "storage-engine",
  "storage-server",
  "tempfile",
+ "tracing",
 ]
 
 [[package]]
@@ -1809,6 +1816,7 @@ dependencies = [
 name = "web-app"
 version = "0.1.1"
 dependencies = [
+ "error-definition",
  "gloo-timers",
  "js-sys",
  "json-codec",

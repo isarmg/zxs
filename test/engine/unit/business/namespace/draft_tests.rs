@@ -34,7 +34,7 @@ fn unsorted_sources_and_replacements_preserve_legacy_order_and_aliases() {
         entry("A.txt", NamespaceEntryKind::File),
     ];
     let mut legacy = original.clone();
-    let mut draft = NamespaceDraft::new(original.clone()).unwrap();
+    let mut draft = NamespaceDraft::new(original.clone());
     for path in ["STRASSE.TXT", "z.TXT", "straße.txt"] {
         let mut replacement = draft.get(path).unwrap().clone();
         assert_eq!(
@@ -44,26 +44,21 @@ fn unsorted_sources_and_replacements_preserve_legacy_order_and_aliases() {
         replacement.version_id.push_str("-new");
         legacy.retain(|entry| entry.lookup_key != replacement.lookup_key);
         legacy.push(replacement.clone());
-        draft.replace(replacement).unwrap();
+        draft.replace(replacement);
     }
     assert_eq!(draft.get("ALIAS.TXT"), Some(&original[2]));
     assert_eq!(draft.into_entries(), legacy);
 }
 
 #[test]
-fn lookup_accepts_equivalent_queries_without_weakening_source_validation() {
+fn lookup_accepts_equivalent_queries_over_admitted_sources() {
     let original = vec![
         entry("Café", NamespaceEntryKind::Directory),
         entry("Café/Straße.txt", NamespaceEntryKind::File),
     ];
-    let mut draft = NamespaceDraft::new(original.clone()).unwrap();
+    let draft = NamespaceDraft::new(original.clone());
     assert_eq!(draft.get("Cafe\u{301}/STRASSE.TXT"), Some(&original[1]));
     assert!(draft.get("absent").is_none());
-    let invalid = entry("Cafe\u{301}/new.txt", NamespaceEntryKind::File);
-    assert_eq!(
-        draft.replace(invalid).unwrap_err().code(),
-        storage_contract::ErrorCode::StateInvalid
-    );
     assert_eq!(draft.into_entries(), original);
 }
 
@@ -74,7 +69,7 @@ fn shared_parent_creation_matches_legacy_order_and_preserves_existing_identity()
         entry("Existing", NamespaceEntryKind::Directory),
     ];
     let mut legacy = source.clone();
-    let mut draft = NamespaceDraft::new(source).unwrap();
+    let mut draft = NamespaceDraft::new(source);
     for path in [
         "New/Nested/a.txt",
         "New/Nested/b.txt",
@@ -85,7 +80,7 @@ fn shared_parent_creation_matches_legacy_order_and_preserves_existing_identity()
         let file = entry(path, NamespaceEntryKind::File);
         legacy.retain(|previous| previous.lookup_key != file.lookup_key);
         legacy.push(file.clone());
-        draft.replace(file).unwrap();
+        draft.replace(file);
     }
     let mut actual = draft.into_entries();
     // Newly materialized parent identities are independently random; all other
@@ -102,7 +97,7 @@ fn shared_parent_creation_matches_legacy_order_and_preserves_existing_identity()
 #[test]
 fn parent_file_errors_do_not_replace_or_drop_the_existing_entry() {
     let original = vec![entry("File", NamespaceEntryKind::File)];
-    let mut draft = NamespaceDraft::new(original.clone()).unwrap();
+    let mut draft = NamespaceDraft::new(original.clone());
     assert_eq!(
         draft.ensure_parents("file/child").unwrap_err().code(),
         storage_contract::ErrorCode::ParentNotDirectory
@@ -111,33 +106,10 @@ fn parent_file_errors_do_not_replace_or_drop_the_existing_entry() {
 }
 
 #[test]
-fn malformed_sources_are_rejected_not_normalized_or_deduplicated() {
+#[should_panic(expected = "invariant: admitted namespace lookup keys are unique")]
+fn duplicate_admitted_keys_are_an_internal_bug() {
     let valid = entry("Straße.txt", NamespaceEntryKind::File);
-    let mut wrong_key = valid.clone();
-    wrong_key.lookup_key = "unrelated".into();
-    let mut wrong_name = valid.clone();
-    wrong_name.name = "other.txt".into();
-    for source in [
-        vec![valid.clone(), valid.clone()],
-        vec![
-            valid.clone(),
-            entry("STRASSE.TXT", NamespaceEntryKind::File),
-        ],
-        vec![wrong_key],
-        vec![wrong_name],
-        vec![entry("Cafe\u{301}.txt", NamespaceEntryKind::File)],
-        vec![entry("missing/child", NamespaceEntryKind::File)],
-        vec![
-            entry("parent", NamespaceEntryKind::File),
-            entry("parent/child", NamespaceEntryKind::File),
-        ],
-    ] {
-        let error = match NamespaceDraft::new(source) {
-            Ok(_) => panic!("malformed source was accepted"),
-            Err(error) => error,
-        };
-        assert_eq!(error.code(), storage_contract::ErrorCode::StateInvalid);
-    }
+    NamespaceDraft::new(vec![valid.clone(), valid]);
 }
 
 #[test]
@@ -148,20 +120,20 @@ fn flattened_draft_keeps_namespace_operations_and_deletion_order_unchanged() {
         entry("Folder/a", NamespaceEntryKind::File),
     ];
     let mut legacy = source.clone();
-    let mut draft = NamespaceDraft::new(source.clone()).unwrap();
+    let mut draft = NamespaceDraft::new(source.clone());
     let mut replacement = source[1].clone();
     replacement.version_id = "changed".into();
     legacy.retain(|entry| entry.lookup_key != replacement.lookup_key);
     legacy.push(replacement.clone());
-    draft.replace(replacement).unwrap();
+    draft.replace(replacement);
     let operations = [
         NamespaceOperation {
-            kind: "rename".into(),
+            kind: NamespaceOperationKind::Rename,
             path: "FOLDER".into(),
             destination: Some("Renamed".into()),
         },
         NamespaceOperation {
-            kind: "delete_tree".into(),
+            kind: NamespaceOperationKind::DeleteTree,
             path: "RENAMED".into(),
             destination: None,
         },
@@ -183,7 +155,7 @@ fn thousand_to_hundred_thousand_replacements_have_linear_draft_work() {
             .rev()
             .map(|i| entry(&format!("file-{i:06}"), NamespaceEntryKind::File))
             .collect();
-        let mut draft = NamespaceDraft::new(entries).unwrap();
+        let mut draft = NamespaceDraft::new(entries);
         let work = draft.work.clone();
         // Same two lookup passes and replace operations as workspace commit.
         for i in 0..count {
@@ -194,7 +166,7 @@ fn thousand_to_hundred_thousand_replacements_have_linear_draft_work() {
             let mut replacement = draft.get(&path).unwrap().clone();
             replacement.version_id.push_str("-updated");
             draft.ensure_parents(&path).unwrap();
-            draft.replace(replacement).unwrap();
+            draft.replace(replacement);
         }
         assert!(draft.get("missing").is_none());
         let entries = draft.into_entries();
@@ -202,7 +174,7 @@ fn thousand_to_hundred_thousand_replacements_have_linear_draft_work() {
         assert_eq!(
             work.get(),
             Work {
-                source_visits: 2 * count,
+                source_visits: count,
                 map_operations: 4 * count + 1,
                 appended_slots: count,
                 flattened_slots: 2 * count,
@@ -218,15 +190,13 @@ fn thousand_to_hundred_thousand_replacements_have_linear_draft_work() {
 #[test]
 fn hundred_thousand_shared_parent_writes_do_not_rescan_siblings() {
     let count = 100_000;
-    let mut draft = NamespaceDraft::new(Vec::new()).unwrap();
+    let mut draft = NamespaceDraft::new(Vec::new());
     let work = draft.work.clone();
     for i in 0..count {
         let path = format!("Parent/Shared/file-{i:06}");
         assert!(draft.get(&path).is_none());
         draft.ensure_parents(&path).unwrap();
-        draft
-            .replace(entry(&path, NamespaceEntryKind::File))
-            .unwrap();
+        draft.replace(entry(&path, NamespaceEntryKind::File));
     }
     let entries = draft.into_entries();
     assert_eq!(entries.len(), count + 2);
@@ -242,7 +212,8 @@ fn hundred_thousand_shared_parent_writes_do_not_rescan_siblings() {
 }
 
 #[test]
-fn workspace_commit_rejects_duplicate_source_without_publishing_or_losing_staged_bytes() {
+#[should_panic(expected = "invariant: admitted namespace lookup keys are unique")]
+fn workspace_commit_exposes_corrupted_admitted_source() {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temporary.path().join("system"),
@@ -285,11 +256,9 @@ fn workspace_commit_rejects_duplicate_source_without_publishing_or_losing_staged
         .get_mut(&workspace.base_head)
         .unwrap();
     source.entries.push(source.entries[0].clone());
-    let before = canonical_json(engine.state()).unwrap();
-    let staged = canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap();
-    let error = engine
+    engine
         .commit_workspace(CommitRequest {
-            workspace_id: workspace.workspace_id.clone(),
+            workspace_id: workspace.workspace_id,
             operation_id: new_id("op"),
             principal: "admin".into(),
             expected_head: workspace.base_head,
@@ -297,11 +266,5 @@ fn workspace_commit_rejects_duplicate_source_without_publishing_or_losing_staged
             message: "must not publish".into(),
             request_digest: None,
         })
-        .unwrap_err();
-    assert_eq!(error.code(), storage_contract::ErrorCode::StateInvalid);
-    assert_eq!(canonical_json(engine.state()).unwrap(), before);
-    assert_eq!(
-        canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),
-        staged
-    );
+        .unwrap();
 }

@@ -25,7 +25,12 @@ impl std::ops::Deref for DispatchError {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        if let Ok(mut writers) = self.shared.file_writers.lock() {
+        {
+            let mut writers = self
+                .shared
+                .file_writers
+                .lock()
+                .expect("service state lock poisoned");
             for path in &self.writer_locks {
                 writers.remove(&(self.branch.clone(), path.clone()));
             }
@@ -102,7 +107,12 @@ impl Session {
         Ok(keys.into_iter().collect())
     }
     pub(super) fn release_paths(&mut self, paths: &[String]) {
-        if let Ok(mut writers) = self.shared.file_writers.lock() {
+        {
+            let mut writers = self
+                .shared
+                .file_writers
+                .lock()
+                .expect("service state lock poisoned");
             for path in paths {
                 writers.remove(&(self.branch.clone(), path.clone()));
                 self.writer_locks.remove(path);

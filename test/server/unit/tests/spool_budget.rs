@@ -152,7 +152,7 @@ async fn interrupted_and_checksum_failed_bytes_remain_charged_after_restart() {
     let record = uploads::load(&root.path().join("api-spool"), "ws", "item")
         .unwrap()
         .unwrap();
-    assert_eq!(record.state, "checksum_mismatch");
+    assert_eq!(record.state, crate::uploads::UploadState::ChecksumMismatch);
     drop(app);
     let app = restart(root.path(), limit);
     let response = app
@@ -373,7 +373,7 @@ fn upload_total_timeout_retains_unfinished_evidence_despite_progress() {
     let record = uploads::load(&root.path().join("api-spool"), "ws", "total")
         .unwrap()
         .unwrap();
-    assert_eq!(record.state, "incomplete");
+    assert_eq!(record.state, crate::uploads::UploadState::Incomplete);
     let bytes = std::fs::read(root.path().join("api-spool").join(record.data_file)).unwrap();
     assert!(!bytes.is_empty());
     assert!(bytes.len() < 100);

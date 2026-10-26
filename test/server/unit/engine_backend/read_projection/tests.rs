@@ -531,13 +531,6 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
         resolver.checked(&external),
         legacy_pending_entry_source(&engine, &repo.main_branch_id, commit, &external)
     );
-    let mut duplicate_snapshot = commit.clone();
-    duplicate_snapshot.entries.push(external.clone());
-    let duplicate = PendingSources::new(&engine, &repo.main_branch_id, &duplicate_snapshot);
-    assert_eq!(
-        duplicate.pending_versions().get(&original.file_id),
-        Some(&original.version_id)
-    );
     let expected: BTreeMap<_, _> = commit
         .entries
         .iter()

@@ -113,15 +113,21 @@ fn missing_directory_selection_references_return_errors_without_publication() {
             _ => unreachable!(),
         }
         let before = canonical_json(engine.state()).unwrap();
-        let error = engine
-            .select_directory_branches(
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.select_directory_branches(
                 &repo.repository_id,
                 "folder",
                 "draft",
                 "admin",
                 &new_id("op"),
             )
-            .unwrap_err();
+        }));
+        if matches!(corruption, "branch" | "commit") {
+            assert!(result.is_err(), "{corruption}: admitted root must exist");
+            assert_eq!(canonical_json(engine.state()).unwrap(), before);
+            continue;
+        }
+        let error = result.unwrap().unwrap_err();
         assert_eq!(
             error.code(),
             storage_contract::ErrorCode::StateInvalid,

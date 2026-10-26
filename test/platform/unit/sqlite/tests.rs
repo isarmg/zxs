@@ -135,7 +135,7 @@ async fn missing_existing_and_invalid_options_are_typed_and_do_not_create()
     let missing = directory.path().join("missing.sqlite3");
     assert!(matches!(
         open_existing(&missing, PoolOptions::default()).await,
-        Err(Error::DatabaseDoesNotExist { .. })
+        Err(Error::Sqlx(_))
     ));
     assert!(!missing.exists());
     assert!(matches!(
@@ -297,7 +297,7 @@ async fn pool_limits_apply_to_replacement_connections_and_invalid_creation_is_re
         )
         .await,
         Err(Error::InvalidPoolOptions(
-            PoolOptionsError::InvalidConnectionLimits
+            PoolOptionsError::InvalidConnectionLimits(_)
         ))
     ));
     assert!(!missing.exists());

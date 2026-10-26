@@ -91,9 +91,18 @@ pub(crate) fn repair_object_copies<T: data_serialization::Serialize>(
             match std::fs::symlink_metadata(&path) {
                 Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
                     // Never replace an unsafe entry, even if a healthy replica exists.
-                    open_regular(&path)?;
-                    let replace =
-                        read_bytes(&path, MAX_METADATA).ok().as_deref() != Some(bytes.as_slice());
+                    let replace = match open_optional_regular(&path)? {
+                        None => false,
+                        Some(file) => match read_file_bytes(file, MAX_METADATA) {
+                            Ok(existing) => existing != bytes,
+                            Err(error)
+                                if error.code() == storage_contract::ErrorCode::ResourceLimit =>
+                            {
+                                true
+                            }
+                            Err(error) => return Err(error),
+                        },
+                    };
                     // Matching bytes may be the visible result of a previous
                     // repair whose directory sync failed. Complete its barrier.
                     write_atomic(&path, &bytes, replace)?;

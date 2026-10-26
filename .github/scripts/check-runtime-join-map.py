@@ -18,6 +18,7 @@ def check(root):
     futures = json.dumps(str(root / "src/foundation/concurrency/futures"))
     adapters = json.dumps(str(root / "test/ci/fixtures/runtime-adapters.rs"))
     fixture = json.dumps(str(root / "test/ci/fixtures/runtime-join-map.rs"))
+    filesystem = json.dumps(str(root / "test/foundation/tokio/tests/fs_asyncify.rs"))
     manifest = f'''[package]
 name = "retained-runtime-join-map-consumer"
 version = "0.0.0"
@@ -37,6 +38,10 @@ path = {fixture}
 [[test]]
 name = "adapters"
 path = {adapters}
+
+[[test]]
+name = "fs_asyncify"
+path = {filesystem}
 
 [profile.dev]
 debug = 0

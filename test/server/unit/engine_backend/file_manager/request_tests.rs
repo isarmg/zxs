@@ -152,7 +152,7 @@ fn destructive_path_only_requests_never_mutate_or_create_a_disk_root() {
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation {
-                kind: "mkdir".into(),
+                kind: storage_contract::NamespaceOperationKind::Mkdir,
                 path: "folder".into(),
                 destination: None,
             },
@@ -444,7 +444,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                     .file_namespace(
                         &root.repository_id,
                         NamespaceOperation {
-                            kind: "mkdir".into(),
+                            kind: storage_contract::NamespaceOperationKind::Mkdir,
                             path,
                             destination: None,
                         },
@@ -458,7 +458,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                 .file_namespace(
                     &named.repository_id,
                     NamespaceOperation {
-                        kind: "mkdir".into(),
+                        kind: storage_contract::NamespaceOperationKind::Mkdir,
                         path: "named-only".into(),
                         destination: None,
                     },
@@ -545,7 +545,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                 .file_namespace(
                     &root.repository_id,
                     NamespaceOperation {
-                        kind: "rename".into(),
+                        kind: storage_contract::NamespaceOperationKind::Rename,
                         path: root_name.into(),
                         destination: Some(repaired.clone()),
                     },

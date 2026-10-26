@@ -23,7 +23,10 @@ fn cpu_uses_energy_differences_and_avoids_counting_subzones_twice() {
         previous: None,
     };
     let start = Instant::now();
-    assert_eq!(sampler.sample_at(start).reason.as_deref(), Some("sampling"));
+    assert_eq!(
+        sampler.sample_at(start).reason,
+        Some(crate::telemetry::power::PowerUnavailable::Sampling)
+    );
     write(&a.join("energy_uj"), "11000000");
     write(&b.join("energy_uj"), "21000000");
     assert_eq!(
@@ -32,11 +35,8 @@ fn cpu_uses_energy_differences_and_avoids_counting_subzones_twice() {
     );
     fs::remove_file(b.join("energy_uj")).unwrap();
     assert_eq!(
-        sampler
-            .sample_at(start + Duration::from_secs(10))
-            .reason
-            .as_deref(),
-        Some("sensor_unreadable")
+        sampler.sample_at(start + Duration::from_secs(10)).reason,
+        Some(crate::telemetry::power::PowerUnavailable::SensorUnreadable)
     );
 }
 
@@ -64,8 +64,8 @@ fn disk_sensor_requires_drive_ownership_and_does_not_sum_unknown_rails() {
     write(&hwmon.join("hwmon0/power1_input"), "999000000");
     symlink(&unrelated, hwmon.join("hwmon0/device")).unwrap();
     assert_eq!(
-        read_disk_power(&drive, &hwmon, None).reason.as_deref(),
-        Some("sensor_unavailable")
+        read_disk_power(&drive, &hwmon, None).reason,
+        Some(crate::telemetry::power::PowerUnavailable::SensorUnavailable)
     );
     write(&hwmon.join("hwmon1/power1_input"), "4200000");
     write(&hwmon.join("hwmon1/power1_average"), "4100000");
@@ -73,11 +73,11 @@ fn disk_sensor_requires_drive_ownership_and_does_not_sum_unknown_rails() {
     assert_eq!(read_disk_power(&drive, &hwmon, None).watts, Some(4.2));
     write(&hwmon.join("hwmon1/power2_input"), "1500000");
     assert_eq!(
-        read_disk_power(&drive, &hwmon, None).reason.as_deref(),
-        Some("sensor_ambiguous")
+        read_disk_power(&drive, &hwmon, None).reason,
+        Some(crate::telemetry::power::PowerUnavailable::SensorAmbiguous)
     );
     assert_eq!(
-        disk_power("ignored", true, true).1.as_deref(),
-        Some("simulated_disk")
+        disk_power("ignored", true, true).1,
+        Some(crate::telemetry::power::PowerUnavailable::SimulatedDisk)
     );
 }

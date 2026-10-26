@@ -59,7 +59,7 @@ fn namespace_growth_is_charged_and_rejection_preserves_durable_evidence() {
             match e.namespace_operation(
                 &w.workspace_id,
                 NamespaceOperation {
-                    kind: "mkdir".into(),
+                    kind: storage_contract::NamespaceOperationKind::Mkdir,
                     path: format!("directory-{accepted:04}"),
                     destination: None,
                 },
@@ -85,7 +85,7 @@ fn namespace_growth_is_charged_and_rejection_preserves_durable_evidence() {
         drop(e);
         let mut e = Engine::open(&f.root).unwrap();
         let saved = e.workspace(&w.workspace_id).unwrap();
-        assert_eq!(saved.state, "aborted");
+        assert_eq!(saved.state.as_str(), "aborted");
         assert_eq!(saved.namespace_operations.len(), accepted);
         assert_eq!(
             e.create_workspace(&repo.main_branch_id, "admin")
@@ -114,7 +114,7 @@ fn uncertain_manifest_write_blocks_further_admission_until_restart() {
         e.namespace_operation(
             &w.workspace_id,
             NamespaceOperation {
-                kind: "mkdir".into(),
+                kind: storage_contract::NamespaceOperationKind::Mkdir,
                 path: "unacknowledged".into(),
                 destination: None,
             }
@@ -205,7 +205,7 @@ fn committed_file_context_receipt_fits_exact_reserved_metadata_budget() {
     e.namespace_operation(
         &w.workspace_id,
         NamespaceOperation {
-            kind: "mkdir".into(),
+            kind: storage_contract::NamespaceOperationKind::Mkdir,
             path: "extra-directory".into(),
             destination: None,
         },
@@ -227,7 +227,10 @@ fn committed_file_context_receipt_fits_exact_reserved_metadata_budget() {
         request_digest: None,
     })
     .unwrap();
-    assert_eq!(e.workspace(&w.workspace_id).unwrap().state, "committed");
+    assert_eq!(
+        e.workspace(&w.workspace_id).unwrap().state.as_str(),
+        "committed"
+    );
     assert_eq!(e.retained_workspace_metadata_bytes(), charge);
     let completed = e.workspace(&w.workspace_id).unwrap();
     for (key, context) in &old_contexts {
@@ -237,7 +240,10 @@ fn committed_file_context_receipt_fits_exact_reserved_metadata_budget() {
     e.assert_workspace_budget_consistent();
     drop(e);
     let e = Engine::open(&f.root).unwrap();
-    assert_eq!(e.workspace(&w.workspace_id).unwrap().state, "committed");
+    assert_eq!(
+        e.workspace(&w.workspace_id).unwrap().state.as_str(),
+        "committed"
+    );
     assert_eq!(e.retained_workspace_metadata_bytes(), charge);
     e.assert_workspace_budget_consistent();
 }

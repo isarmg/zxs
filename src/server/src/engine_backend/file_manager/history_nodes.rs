@@ -51,9 +51,10 @@ impl NodePaths<'_> {
             if let Some(path) = self.cache.get(&current) {
                 break path.clone();
             }
-            if !seen.insert(current.clone()) {
-                break String::new();
-            }
+            assert!(
+                seen.insert(current.clone()),
+                "invariant: admitted file history source chains are acyclic"
+            );
             trail.push(current.clone());
             if let Some(path) = state.file_path_nodes.get(&current) {
                 break path.path.clone();
@@ -71,7 +72,7 @@ impl NodePaths<'_> {
                     .unwrap_or_else(|| version.creation_name.clone());
             }
             if let Some(metadata) = state.file_metadata_nodes.get(&current) {
-                let source = if metadata.kind == "merge" {
+                let source = if metadata.kind == storage_contract::FileMetadataKind::Merge {
                     self.chosen.get(current.as_str()).copied()
                 } else {
                     metadata.parent_node_ids.first().map(String::as_str)
@@ -83,10 +84,11 @@ impl NodePaths<'_> {
                 break state
                     .versions
                     .get(&metadata.version_id)
-                    .map(|body| body.creation_name.clone())
-                    .unwrap_or_default();
+                    .expect("invariant: metadata node body version exists")
+                    .creation_name
+                    .clone();
             }
-            break String::new();
+            unreachable!("invariant: admitted file history references an existing node");
         };
         for id in trail {
             self.cache.insert(id, path.clone());

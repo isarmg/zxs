@@ -72,7 +72,9 @@ fn plot(
             flush(&mut segment, &mut paths, &mut dots);
         }
         let x = left + ((*timestamp - from) / (to - from).max(1.)).clamp(0., 1.) * (right - left);
-        let y = bottom - value.unwrap_or_default() / maximum * (bottom - top);
+        let y = bottom
+            - value.expect("invariant: plotted sample passed value validation") / maximum
+                * (bottom - top);
         segment.push((x, y));
         previous_time = Some(*timestamp);
     }
@@ -159,15 +161,20 @@ pub(super) fn view(state: RwSignal<State>, metric: Metric) -> impl IntoView {
             move |_: js_sys::Array, _: web_sys::ResizeObserver| update(),
         )
             as Box<dyn FnMut(js_sys::Array, web_sys::ResizeObserver)>);
-        if let Ok(observer) = web_sys::ResizeObserver::new(callback.as_ref().unchecked_ref()) {
-            if let Some(element) = root.get_untracked() {
-                observer.observe(&element);
+        match web_sys::ResizeObserver::new(callback.as_ref().unchecked_ref()) {
+            Ok(observer) => {
+                if let Some(element) = root.get_untracked() {
+                    observer.observe(&element);
+                }
+                let cleanup = send_wrapper::SendWrapper::new((observer, callback));
+                on_cleanup(move || {
+                    cleanup.0.disconnect();
+                    drop(cleanup);
+                });
             }
-            let cleanup = send_wrapper::SendWrapper::new((observer, callback));
-            on_cleanup(move || {
-                cleanup.0.disconnect();
-                drop(cleanup);
-            });
+            Err(error) => {
+                web_sys::console::warn_2(&"Could not observe chart resizing".into(), &error)
+            }
         }
     });
     let label = metric.label();

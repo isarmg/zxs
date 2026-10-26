@@ -50,7 +50,7 @@ impl Fixture {
         self.engine.file_namespace(
             &self.repo.repository_id,
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: storage_contract::NamespaceOperationKind::Rename,
                 path: path.into(),
                 destination: Some(destination.into()),
             },

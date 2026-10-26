@@ -115,7 +115,9 @@ pub(crate) fn component_to_tokens(
                 let ident = ident.strip_prefix("let:")?;
                 let span = match &attr.key {
                     NodeName::Punctuated(path) => path[1].span(),
-                    _ => unreachable!(),
+                    NodeName::Path(_) | NodeName::Block(_) => {
+                        unreachable!("let bindings have punctuated names")
+                    }
                 };
                 let ident1 = format_ident!("{ident}", span = span);
                 return Some(quote_spanned! { span => #ident1 });

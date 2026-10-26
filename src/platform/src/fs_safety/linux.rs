@@ -2,7 +2,7 @@
 use crate::fs_safety::{Error, RelativePath};
 use rustix::{
     fd::AsFd,
-    fs::{FileType, Mode, OFlags, ResolveFlags, fstat, openat2},
+    fs::{FileType, Mode, OFlags, ResolveFlags, fstat, openat, openat2},
 };
 use std::{fs::File, io, os::unix::fs::MetadataExt, path::Path};
 
@@ -122,24 +122,39 @@ impl SingleLinkRequirement {
     }
 }
 
-/// Holds a duplicate of an already-anchored directory, never a separate lock pathname.
+/// Owns an independent open-file description of the already-anchored directory.
 #[derive(Debug)]
 pub struct AdvisoryLock {
-    _directory: File,
+    directory: File,
 }
 impl AdvisoryLock {
     pub fn directory(directory: &File) -> Result<Self, Error> {
         if !directory.metadata()?.is_dir() {
             return Err(Error::UnsafeFileType("lock anchor".into()));
         }
-        let directory = directory.try_clone()?;
+        let directory = File::from(
+            openat(
+                directory,
+                ".",
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(io::Error::from)?,
+        );
         directory.try_lock().map_err(|error| match error {
             std::fs::TryLockError::WouldBlock => Error::AlreadyLocked("directory".into()),
             std::fs::TryLockError::Error(error) => Error::Io(error),
         })?;
-        Ok(Self {
-            _directory: directory,
-        })
+        Ok(Self { directory })
+    }
+}
+
+impl Drop for AdvisoryLock {
+    fn drop(&mut self) {
+        // A forked child can retain the open-file description until exec, after our FD closes.
+        if let Err(error) = self.directory.unlock() {
+            tracing::error!(%error, "directory advisory lock release failed");
+        }
     }
 }
 

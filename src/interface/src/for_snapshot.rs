@@ -81,7 +81,7 @@ impl<K: Clone + Eq + Hash, T: PartialEq + Send + Sync + 'static> SnapshotRows<K,
             items.iter().all(|(key, _)| seen.insert(key.clone())),
             "ForSnapshot requires unique row keys"
         );
-        let mut rows = self.rows.lock().unwrap();
+        let mut rows = self.rows.lock().expect("snapshot rows lock poisoned");
         let mut previous = std::mem::take(&mut *rows);
         let mut retained = Vec::with_capacity(items.len());
         let mut updates = Vec::new();

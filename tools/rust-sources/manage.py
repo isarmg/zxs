@@ -17,6 +17,7 @@ import external_tests
 import source_naming
 import source_moves
 import proof_routing
+import proof_maintenance
 import source_consolidation
 import external_transfers
 import source_relocation
@@ -870,6 +871,8 @@ def _refresh(root, retire_plan=None, upgrade_plan_data=None, rename_plan_data=No
                    upstream_identities=[record["upstream"] for record in records.values()], merges=merges,
                    retired=retired, retired_records_sha256=origin_hashes(retired),
                    superseded=superseded, superseded_records_sha256=origin_hashes(superseded))
+    if proof_maintenance.RECEIPTS:
+        catalog[proof_maintenance.KEY] = list(proof_maintenance.RECEIPTS)
     if source_layout.KEY in previous:
         catalog[source_layout.KEY] = previous[source_layout.KEY]
     if source_layout_corrections.KEY in previous:

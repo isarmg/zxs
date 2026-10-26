@@ -160,12 +160,21 @@ fn owner_instance(view: &Window, value: &JsValue, name: &str) -> bool {
             &constructor,
             js_sys::Symbol::has_instance().as_ref(),
         )?)?;
-        Ok(has_instance
+        has_instance
             .call1(&constructor, value)?
             .as_bool()
-            .unwrap_or(false))
+            .ok_or_else(|| JsValue::from_str("Browser instanceof result is not boolean"))
     };
-    check().unwrap_or(false)
+    match check() {
+        Ok(matches) => matches,
+        Err(error) => {
+            web_sys::console::warn_2(
+                &"Could not inspect the event's browser realm".into(),
+                &error,
+            );
+            false
+        }
+    }
 }
 
 struct Inner {
@@ -202,11 +211,13 @@ struct Listener {
 }
 impl Listener {
     fn detach(&self) {
-        let _ = self.target.remove_event_listener_with_callback_and_bool(
+        if let Err(error) = self.target.remove_event_listener_with_callback_and_bool(
             self.name,
             self.callback.as_ref().unchecked_ref(),
             self.capture,
-        );
+        ) {
+            web_sys::console::warn_2(&"Could not detach a contour listener".into(), &error);
+        }
     }
 }
 impl Drop for Listener {
@@ -300,16 +311,19 @@ impl Inner {
             EventKind::Schedule,
         )?);
         listeners.push(self.listen(self.view.as_ref(), "pagehide", false, EventKind::PageHide)?);
-        self.setup
-            .set(Setup {
-                observer,
-                resize,
-                _mutation: mutation,
-                _resize: resize_callback,
-                animation_frame,
-                listeners,
-            })
-            .map_err(|_| JsValue::from_str("Contour decoration is already installed"))?;
+        assert!(
+            self.setup
+                .set(Setup {
+                    observer,
+                    resize,
+                    _mutation: mutation,
+                    _resize: resize_callback,
+                    animation_frame,
+                    listeners,
+                })
+                .is_ok(),
+            "invariant: contour setup is installed once"
+        );
         Ok(())
     }
     fn listen(
@@ -366,7 +380,12 @@ impl Inner {
                 EventKind::Interaction => {
                     if event.type_() == "scroll" {
                         for record in &state.records {
-                            let _ = position_foreground(record);
+                            if let Err(error) = position_foreground(record) {
+                                web_sys::console::warn_2(
+                                    &"Could not reposition contour foreground".into(),
+                                    &error,
+                                );
+                            }
                         }
                     }
                     let mut element = target;
@@ -407,7 +426,7 @@ impl Inner {
                         }
                     }
                 }
-                _ => {}
+                EventKind::Schedule | EventKind::PageHide => {}
             }
         }
         self.schedule();
@@ -416,12 +435,16 @@ impl Inner {
         if self.stopped.get() || self.frame.get().is_some() {
             return;
         }
-        if let Some(setup) = self.setup.get()
-            && let Ok(frame) = self
+        if let Some(setup) = self.setup.get() {
+            match self
                 .view
                 .request_animation_frame(setup.animation_frame.as_ref().unchecked_ref())
-        {
-            self.frame.set(Some(frame));
+            {
+                Ok(frame) => self.frame.set(Some(frame)),
+                Err(error) => {
+                    web_sys::console::warn_2(&"Could not schedule contour refresh".into(), &error)
+                }
+            }
         }
     }
     fn refresh_now(&self) -> Result<(), JsValue> {
@@ -489,8 +512,10 @@ impl Inner {
         self.stopped.set(true);
         self.deferred_dirty.set(false);
         self.deferred_refresh.set(false);
-        if let Some(frame) = self.frame.take() {
-            let _ = self.view.cancel_animation_frame(frame);
+        if let Some(frame) = self.frame.take()
+            && let Err(error) = self.view.cancel_animation_frame(frame)
+        {
+            web_sys::console::warn_2(&"Could not cancel contour refresh".into(), &error);
         }
         if let Some(setup) = self.setup.get() {
             setup.observer.disconnect();
@@ -502,12 +527,16 @@ impl Inner {
         let mut state = self.state.borrow_mut();
         state.active.clear();
         for record in &mut state.records {
-            let _ = restore(record, &self.draft, true);
+            if let Err(error) = restore(record, &self.draft, true) {
+                web_sys::console::warn_2(&"Could not restore contour-owned styles".into(), &error);
+            }
         }
         state.records.clear();
         state.indices.clear();
         for (_, url) in state.images.drain(..) {
-            let _ = web_sys::Url::revoke_object_url(&url);
+            if let Err(error) = web_sys::Url::revoke_object_url(&url) {
+                web_sys::console::warn_2(&"Could not release a contour image URL".into(), &error);
+            }
         }
         state.used_images.clear();
     }
@@ -920,7 +949,7 @@ impl State {
             if self.index(&node).is_none() {
                 self.prepare_transitions(inner, &node, Some(&live))?;
             }
-            let css = paint::snapshot(&live);
+            let css = paint::snapshot(&live)?;
             let width = measured_dimension(&node, &css, "width");
             let height = measured_dimension(&node, &css, "height");
             let fragments = node.get_client_rects().length();
@@ -963,7 +992,12 @@ impl State {
         self.images.retain(|(source, url)| {
             if remove > 0 && !self.used_images.contains(source) {
                 remove -= 1;
-                let _ = web_sys::Url::revoke_object_url(url);
+                if let Err(error) = web_sys::Url::revoke_object_url(url) {
+                    web_sys::console::warn_2(
+                        &"Could not release a cached contour image URL".into(),
+                        &error,
+                    );
+                }
                 false
             } else {
                 true
@@ -1065,7 +1099,11 @@ impl State {
         let foreground_path = if foreground {
             match geometry::offset_path(&geometry, -border_width) {
                 Ok(path) => Some(geometry.path.clone() + &path),
-                Err(_) => {
+                Err(error) => {
+                    web_sys::console::warn_2(
+                        &"Contour foreground geometry is unsupported".into(),
+                        &error.into(),
+                    );
                     fallback!("invalid-foreground-inset");
                 }
             }
@@ -1083,7 +1121,11 @@ impl State {
             Ok(None) => {
                 fallback!("unsupported-border-or-shadow-inset");
             }
-            Err(_) => {
+            Err(error) => {
+                web_sys::console::warn_2(
+                    &"Contour paint geometry is unsupported".into(),
+                    &error.into(),
+                );
                 fallback!("invalid-paint-geometry");
             }
         };

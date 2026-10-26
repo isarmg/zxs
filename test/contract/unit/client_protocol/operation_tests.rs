@@ -227,3 +227,16 @@ fn frozen_copy_evidence_cannot_contradict_the_publication_label() {
     }
     assert_eq!(operation_status(&degraded), None);
 }
+
+#[test]
+fn receipt_publication_states_reject_object_aliases() {
+    for (value, _) in receipts() {
+        for field in ["commit_state", "protection_at_publish"] {
+            if let Some(token) = value.get(field).and_then(Value::as_str) {
+                let mut invalid = value.clone();
+                invalid[field] = json!({token:null});
+                assert_eq!(operation_status(&invalid), None, "object alias for {field}");
+            }
+        }
+    }
+}

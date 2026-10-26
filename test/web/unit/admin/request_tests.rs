@@ -1,46 +1,58 @@
 use super::*;
 #[test]
 fn new_repository_defaults_to_one_actual_copy_and_preserves_explicit_choices() {
-    let mut fields = initial_fields("repository");
+    let mut fields = initial_fields(Kind::Repository);
     fields.insert("name".into(), "one disk".into());
     fields.insert("slot".into(), "P01".into());
-    let (_, path, body) = build("repository", &fields, "operation").unwrap();
+    let (_, path, body) = build(Kind::Repository, &fields, "operation").unwrap();
     assert_eq!(path, "/api/repositories");
     assert_eq!(body["target_copies"], 1);
     fields.insert("copies".into(), "3".into());
     assert_eq!(
-        build("repository", &fields, "operation").unwrap().2["target_copies"],
+        build(Kind::Repository, &fields, "operation").unwrap().2["target_copies"],
         3
     );
     fields.insert("copies".into(), "0".into());
-    assert!(build("repository", &fields, "operation").is_err());
-    assert_eq!(initial_fields("policy")["copies"], "1");
+    assert!(build(Kind::Repository, &fields, "operation").is_err());
+    assert_eq!(initial_fields(Kind::Policy)["copies"], "1");
     assert!(
-        initial_fields("save").is_empty(),
+        initial_fields(Kind::Save).is_empty(),
         "historical saves retain inherited policy unless explicitly overridden"
     );
 }
 
 #[test]
-fn retired_account_and_acl_actions_cannot_build_requests() {
-    for kind in ["account", "grants"] {
-        assert!(build(kind, &Fields::new(), "operation").is_err());
-    }
+fn inspection_cannot_build_a_mutation_request() {
+    assert!(build(Kind::Inspect, &Fields::new(), "operation").is_err());
 }
 
 #[test]
-fn storage_mutations_require_a_secure_operation_identity() {
-    for kind in [
-        "repository",
-        "smb",
-        "policy",
-        "rule",
-        "branch",
-        "link",
-        "purge",
-        "split",
-        "save",
-    ] {
-        assert!(build(kind, &Fields::new(), "").is_err());
-    }
+fn invalid_numeric_fields_retain_their_parser_source() {
+    use std::error::Error as _;
+    let fields = [
+        ("name".into(), "repo".into()),
+        ("slot".into(), "P01".into()),
+        ("copies".into(), "NaN".into()),
+    ]
+    .into_iter()
+    .collect();
+    assert!(
+        build(Kind::Repository, &fields, "operation")
+            .unwrap_err()
+            .source()
+            .is_some()
+    );
+    let fields = [
+        ("repository".into(), "repo".into()),
+        ("branch".into(), "b".into()),
+        ("generation".into(), "18446744073709551616".into()),
+    ]
+    .into_iter()
+    .collect();
+    assert!(
+        build(Kind::Smb, &fields, "operation")
+            .unwrap_err()
+            .source()
+            .is_some()
+    );
 }

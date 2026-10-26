@@ -433,34 +433,47 @@ impl Lease {
         }
         Ok(())
     }
-    fn evidence_absent(&self) -> bool {
-        [
+    fn evidence_absent(&self) -> io::Result<bool> {
+        for path in [
             self.source.clone(),
             self.source.with_extension("work.json"),
             self.source.with_extension("namespace.json"),
-        ]
-        .iter()
-        .all(|path| absent(path))
-    }
-    pub(super) fn cleanup_record(&self) {
-        // Keep ownership metadata if cleanup of any data/recovery file failed.
-        if self.evidence_absent() {
-            let _ = fs::remove_file(record_path(&self.source));
+        ] {
+            match fs::symlink_metadata(path) {
+                Ok(_) => return Ok(false),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
         }
+        Ok(true)
     }
-}
-fn absent(path: &Path) -> bool {
-    matches!(fs::symlink_metadata(path), Err(error) if error.kind() == io::ErrorKind::NotFound)
 }
 impl Drop for Lease {
     fn drop(&mut self) {
-        self.cleanup_record();
-        if self.evidence_absent()
-            && absent(&record_path(&self.source))
-            && let Ok(mut ledger) = self.budget.ledger.lock()
-            && ledger.replace(self.source.clone(), None).is_err()
-        {
+        match self.evidence_absent() {
+            Ok(false) => return,
+            Err(error) => {
+                tracing::warn!(error = ?error, "SMB ownership retained because recovery evidence cannot be inventoried");
+                return;
+            }
+            Ok(true) => {}
+        }
+        match fs::remove_file(record_path(&self.source)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::warn!(error = ?error, "SMB ownership record retained after cleanup failure");
+                return;
+            }
+        }
+        let mut ledger = self
+            .budget
+            .ledger
+            .lock()
+            .expect("service state lock poisoned");
+        if let Err(error) = ledger.replace(self.source.clone(), None) {
             ledger.uncertain = true;
+            tracing::warn!(error = ?error, "SMB spool accounting could not settle; admission blocked");
         }
     }
 }

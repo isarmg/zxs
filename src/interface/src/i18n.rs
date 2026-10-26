@@ -1,9 +1,24 @@
 use std::cell::RefCell;
+use wasm_bindgen::JsValue;
 use web_sys::Url;
 
-thread_local! { static LOCALE: RefCell<Option<String>> = const { RefCell::new(None) }; }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Locale {
+    Chinese,
+    English,
+}
+impl Locale {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Chinese => "zh-CN",
+            Self::English => "en",
+        }
+    }
+}
 
-fn supported(value: &str) -> Option<&'static str> {
+thread_local! { static LOCALE: RefCell<Option<Locale>> = const { RefCell::new(None) }; }
+
+fn supported(value: &str) -> Option<Locale> {
     let mut parts = value.split('-');
     let first = parts.next()?.to_ascii_lowercase();
     if parts.any(|part| {
@@ -12,8 +27,8 @@ fn supported(value: &str) -> Option<&'static str> {
         return None;
     }
     match first.as_str() {
-        "zh" => Some("zh-CN"),
-        "en" => Some("en"),
+        "zh" => Some(Locale::Chinese),
+        "en" => Some(Locale::English),
         _ => None,
     }
 }
@@ -23,41 +38,61 @@ pub fn valid_locale(value: &str) -> bool {
     supported(value).is_some()
 }
 
-pub fn locale() -> String {
+fn current() -> Locale {
     LOCALE.with(|saved| {
         if let Some(value) = saved.borrow().as_ref() {
-            return value.clone();
+            return *value;
         }
         let value = resolve();
-        *saved.borrow_mut() = Some(value.clone());
+        *saved.borrow_mut() = Some(value);
         value
     })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn resolve() -> String {
-    "en".into()
+fn resolve() -> Locale {
+    Locale::English
+}
+
+pub fn locale() -> String {
+    current().as_str().into()
+}
+
+fn location_url(window: &web_sys::Window) -> Result<Url, JsValue> {
+    Url::new(&window.location().href()?)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn resolve() -> String {
+fn resolve() -> Locale {
     let Some(window) = web_sys::window() else {
-        return "en".into();
+        return Locale::English;
     };
-    if let Ok(url) = Url::new(&window.location().href().unwrap_or_default())
-        && let Some(value) = url
-            .search_params()
-            .get("lang")
-            .as_deref()
-            .and_then(supported)
-    {
-        return value.into();
+    match location_url(&window) {
+        Ok(url) => {
+            if let Some(value) = url
+                .search_params()
+                .get("lang")
+                .as_deref()
+                .and_then(supported)
+            {
+                return value;
+            }
+        }
+        Err(error) => web_sys::console::warn_2(&"Could not read the language URL".into(), &error),
     }
-    if let Ok(Some(storage)) = window.local_storage()
-        && let Ok(Some(value)) = storage.get_item("zxs-language")
-        && let Some(value) = supported(&value)
-    {
-        return value.into();
+    let saved = window.local_storage().and_then(|storage| match storage {
+        Some(storage) => storage.get_item("zxs-language"),
+        None => Ok(None),
+    });
+    match saved {
+        Ok(value) => {
+            if let Some(locale) = value.as_deref().and_then(supported) {
+                return locale;
+            }
+        }
+        Err(error) => {
+            web_sys::console::warn_2(&"Could not read the language preference".into(), &error)
+        }
     }
     for value in window
         .navigator()
@@ -66,14 +101,18 @@ fn resolve() -> String {
         .filter_map(|v| v.as_string())
     {
         if let Some(value) = supported(&value) {
-            return value.into();
+            return value;
         }
     }
-    "en".into()
+    Locale::English
 }
 
 pub fn t(zh: &str, en: &str) -> String {
-    if locale() == "zh-CN" { zh } else { en }.to_owned()
+    match current() {
+        Locale::Chinese => zh,
+        Locale::English => en,
+    }
+    .to_owned()
 }
 
 pub fn tf(zh: &str, en: &str, values: &[&str]) -> String {
@@ -107,31 +146,46 @@ pub fn initialize() {
     let Some(window) = web_sys::window() else {
         return;
     };
-    if let Some(document) = window.document()
-        && let Some(root) = document.document_element()
+    if let Some(root) = window
+        .document()
+        .and_then(|document| document.document_element())
+        && let Err(error) = root.set_attribute("lang", current().as_str())
     {
-        let _ = root.set_attribute("lang", &locale());
+        web_sys::console::warn_2(&"Could not set the document language".into(), &error);
     }
-    if let Ok(url) = Url::new(&window.location().href().unwrap_or_default())
-        && url
+    let save = || -> Result<(), JsValue> {
+        let url = location_url(&window)?;
+        if url
             .search_params()
             .get("lang")
             .as_deref()
             .and_then(supported)
             .is_some()
-        && let Ok(Some(storage)) = window.local_storage()
-    {
-        let _ = storage.set_item("zxs-language", &locale());
+            && let Some(storage) = window.local_storage()?
+        {
+            storage.set_item("zxs-language", current().as_str())?;
+        }
+        Ok(())
+    };
+    if let Err(error) = save() {
+        web_sys::console::warn_2(&"Could not save the language preference".into(), &error);
     }
 }
 
 pub fn switch_language() {
-    if let Some(window) = web_sys::window()
-        && let Ok(url) = Url::new(&window.location().href().unwrap_or_default())
-    {
-        url.search_params()
-            .set("lang", if locale() == "zh-CN" { "en" } else { "zh-CN" });
-        let _ = window.location().assign(&url.href());
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let result = location_url(&window).and_then(|url| {
+        let next = match current() {
+            Locale::Chinese => Locale::English,
+            Locale::English => Locale::Chinese,
+        };
+        url.search_params().set("lang", next.as_str());
+        window.location().assign(&url.href())
+    });
+    if let Err(error) = result {
+        web_sys::console::error_2(&"Could not switch the language".into(), &error);
     }
 }
 

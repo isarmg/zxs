@@ -22,6 +22,10 @@ pub struct SqliteError {
 }
 
 impl SqliteError {
+    pub(crate) fn same_diagnostic(&self, other: &Self) -> bool {
+        self.code == other.code && self.message == other.message
+    }
+
     pub(crate) unsafe fn new(handle: *mut sqlite3) -> Self {
         Self::try_new(handle).expect("There should be an error")
     }

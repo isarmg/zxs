@@ -107,7 +107,7 @@ fn selecting_old_directory_restores_names_membership_and_hierarchy() {
     e.file_namespace(
         &r.repository_id,
         NamespaceOperation {
-            kind: "rename".into(),
+            kind: NamespaceOperationKind::Rename,
             path: "folder/old.txt".into(),
             destination: Some("folder/new.txt".into()),
         },
@@ -391,7 +391,7 @@ fn a_directory_created_after_workspace_open_still_fences_new_file_staging() {
     e.file_namespace(
         &r.repository_id,
         NamespaceOperation {
-            kind: "mkdir".into(),
+            kind: NamespaceOperationKind::Mkdir,
             path: "new".into(),
             destination: None,
         },
@@ -446,7 +446,7 @@ fn content_save_with_equivalent_spelling_preserves_the_existing_display_path() {
         e.file_namespace(
             &r.repository_id,
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: NamespaceOperationKind::Rename,
                 path: original_path.into(),
                 destination: Some(lookup_path.into()),
             },
@@ -509,7 +509,7 @@ fn namespace_bookkeeping_uses_paths_and_keeps_the_first_match_in_unsorted_entrie
         &before,
         &after,
         &[NamespaceOperation {
-            kind: "delete".into(),
+            kind: NamespaceOperationKind::Delete,
             path: "Gone.txt".into(),
             destination: None,
         }],

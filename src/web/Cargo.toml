@@ -8,6 +8,7 @@ license = "Apache-2.0"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+error-definition.workspace = true
 web-interface = { path = "../interface" }
 storage-contract = { path = "../contract" }
 name-policy = { path = "../naming" }

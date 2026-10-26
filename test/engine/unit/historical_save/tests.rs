@@ -284,7 +284,7 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
         .namespace_operation(
             &workspace.workspace_id,
             NamespaceOperation {
-                kind: "delete".into(),
+                kind: storage_contract::NamespaceOperationKind::Delete,
                 path: "file.txt".into(),
                 destination: None,
             },

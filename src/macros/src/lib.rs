@@ -394,11 +394,12 @@ pub fn include_view(tokens: TokenStream) -> TokenStream {
 }
 
 fn include_view_impl(tokens: TokenStream) -> rust_syntax::Result<proc_macro2::TokenStream> {
-    let file_name = rust_syntax::parse::<rust_syntax::LitStr>(tokens).map_err(|_| {
-        rust_syntax::Error::new(
+    let file_name = rust_syntax::parse::<rust_syntax::LitStr>(tokens).map_err(|mut error| {
+        error.combine(rust_syntax::Error::new(
             Span::call_site(),
             "the only supported argument is a string literal",
-        )
+        ));
+        error
     })?;
     let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR").ok_or_else(|| {
         rust_syntax::Error::new(

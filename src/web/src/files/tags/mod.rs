@@ -74,69 +74,64 @@ pub(crate) fn edit_node(state: RwSignal<State>, id: String) {
     start(state);
 }
 pub(crate) fn start(state: RwSignal<State>) {
-    let snapshot = state.get_untracked();
-    if !actions::write_allowed(&snapshot)
-        || super::model::selected_entry_read_only(&snapshot.files)
-        || snapshot.files.history_loading
-        || snapshot.files.checked_nodes.is_empty()
-    {
-        return;
-    }
-    let Some(entry) = snapshot.files.selected.as_ref() else {
-        return;
-    };
-    let Some((repository, path)) = super::model::file_context(&snapshot.files, entry) else {
-        return;
-    };
-    let file = text(entry, &["file_id"]);
-    let nodes = history_nodes(&snapshot.files.file_history)
-        .into_iter()
-        .filter(|node| {
-            snapshot
-                .files
-                .checked_nodes
-                .contains(&history_node_id(node))
-        })
-        .collect::<Vec<_>>();
-    // A refresh may remove a previously checked node. Never silently turn a
-    // user's batch into a partial edit.
-    if nodes.len() != snapshot.files.checked_nodes.len() {
-        state.update(|s| {
-            s.notice = t(
+    let draft = state.with_untracked(|snapshot| {
+        if !actions::write_allowed(snapshot)
+            || super::model::selected_entry_read_only(&snapshot.files)
+            || snapshot.files.history_loading
+            || snapshot.files.checked_nodes.is_empty()
+        {
+            return Ok(None);
+        }
+        let Some(entry) = snapshot.files.selected.as_ref() else {
+            return Ok(None);
+        };
+        let Some((repository, path)) = super::model::file_context(&snapshot.files, entry) else {
+            return Ok(None);
+        };
+        let file = text(entry, &["file_id"]);
+        let nodes = history_nodes(&snapshot.files.file_history)
+            .into_iter()
+            .filter(|node| {
+                snapshot
+                    .files
+                    .checked_nodes
+                    .contains(&history_node_id(node))
+            })
+            .collect::<Vec<_>>();
+        // A refresh may remove a previously checked node. Never silently turn a
+        // user's batch into a partial edit.
+        if nodes.len() != snapshot.files.checked_nodes.len() {
+            return Err(t(
                 "所选节点已变化，请重新选择后编辑标签。",
                 "The selected nodes have changed. Select them again before editing tags.",
-            );
-        });
-        return;
-    }
-    let branches = snapshot.files.file_history["branches"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(merge::branch_writable)
-        .collect::<Vec<_>>();
-    let selected = selected_branch(&snapshot.files);
-    let branch = branches
-        .iter()
-        .find(|branch| text(branch, &["branch_id"]) == selected);
-    let expected = branch.map(super::merge::branch_head).unwrap_or_default();
-    let selected = if branch.is_some() {
-        selected
-    } else {
-        String::new()
-    };
-    let targets = nodes
-        .iter()
-        .map(|node| Target {
-            source: history_node_id(node),
-            branch: selected.clone(),
-            expected: expected.clone(),
-        })
-        .collect();
-    review::reset(state, review::Kind::Tags);
-    state.update(|s| {
-        s.files.tag_edit = Some(Draft {
+            ));
+        }
+        let branches = snapshot.files.file_history["branches"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|branch| merge::branch_writable(branch))
+            .cloned()
+            .collect::<Vec<_>>();
+        let selected = selected_branch(&snapshot.files);
+        let branch = branches
+            .iter()
+            .find(|branch| text(branch, &["branch_id"]) == selected);
+        let expected = branch.map(super::merge::branch_head).unwrap_or_default();
+        let selected = if branch.is_some() {
+            selected
+        } else {
+            String::new()
+        };
+        let targets = nodes
+            .iter()
+            .map(|node| Target {
+                source: history_node_id(node),
+                branch: selected.clone(),
+                expected: expected.clone(),
+            })
+            .collect();
+        Ok(Some(Draft {
             file,
             repository,
             path,
@@ -146,9 +141,18 @@ pub(crate) fn start(state: RwSignal<State>) {
             add: BTreeSet::new(),
             remove: BTreeSet::new(),
             input: String::new(),
-        })
+        }))
     });
+    match draft {
+        Ok(Some(draft)) => {
+            review::reset(state, review::Kind::Tags);
+            state.update(|s| s.files.tag_edit = Some(draft));
+        }
+        Ok(None) => {}
+        Err(message) => state.update(|s| s.notice = message),
+    }
 }
+
 fn update(state: RwSignal<State>, f: impl FnOnce(&mut Draft)) {
     state.update(|s| {
         if let Some(draft) = s.files.tag_edit.as_mut() {

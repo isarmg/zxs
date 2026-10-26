@@ -48,16 +48,14 @@ pub(crate) fn node_version(state: &State, file: &str, node: &str) -> Result<Stri
                 "node does not belong to this file",
             )
         })?;
-    if !state
+    let body = state
         .versions
         .get(&version)
-        .is_some_and(|v| v.file_id == file)
-    {
-        return Err(Error::new(
-            storage_contract::ErrorCode::StateInvalid,
-            "file node body is missing",
-        ));
-    }
+        .expect("invariant: admitted file nodes reference an existing body");
+    debug_assert_eq!(
+        body.file_id, file,
+        "invariant: admitted node body belongs to its file"
+    );
     Ok(version)
 }
 

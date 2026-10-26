@@ -44,7 +44,7 @@ fn renamed_targets(pool: &mut Pool) -> (String, String) {
         .file_namespace(
             &pool.repo.repository_id,
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: storage_contract::NamespaceOperationKind::Rename,
                 path: "folder".into(),
                 destination: Some("renamed".into()),
             },

@@ -105,6 +105,7 @@ fn main() -> std::process::ExitCode {
             tracing::collector::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
         )
         .with_writer(std::io::stderr)
+        .log_internal_errors(false)
         .init();
     let result = run_with_runtime(args);
     // This point is after Tokio has joined its blocking pool, not merely after

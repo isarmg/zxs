@@ -27,6 +27,13 @@ pub use workspace_limits::RetainedWorkspaceLimits;
 mod workspace_storage;
 use config::{acquire_locks, validate_config};
 
+/// Nonfatal checkpoint failures from the latest recovery invocation.
+#[derive(Debug, Default)]
+pub struct RecoveryWarnings {
+    pub checkpoint_load: Option<Error>,
+    pub checkpoint_save: Option<Error>,
+}
+
 pub struct Engine {
     pub(crate) root: PathBuf,
     pub(crate) config: Config,
@@ -42,6 +49,7 @@ pub struct Engine {
     pub(crate) upload_preparations: Arc<Mutex<BTreeSet<String>>>,
     commit_preparation: Arc<std::sync::atomic::AtomicBool>,
     history_query_proof: Mutex<index::QueryProof>,
+    recovery_warnings: RecoveryWarnings,
     _locks: Vec<File>,
     #[cfg(feature = "fault-injection")]
     pub(crate) fault: Option<String>,
@@ -138,7 +146,7 @@ impl Engine {
         mut config: Config,
         workspace_limits: Option<RetainedWorkspaceLimits>,
     ) -> Result<Self> {
-        if root.join("config.json").exists() {
+        if root.join("config.json").try_exists()? {
             return Err(Error::new(
                 storage_contract::ErrorCode::AlreadyInitialized,
                 "configuration already exists; use open/recovery",
@@ -153,7 +161,7 @@ impl Engine {
         for d in &mut config.disks {
             private_dir(&d.root)?;
             d.root = d.root.canonicalize()?;
-            if d.root.join("disk.json").exists() {
+            if d.root.join("disk.json").try_exists()? {
                 return Err(Error::new(
                     storage_contract::ErrorCode::DiskAlreadyEnrolled,
                     "disk already contains a managed identity",
@@ -216,6 +224,7 @@ impl Engine {
             upload_preparations: Arc::new(Mutex::new(BTreeSet::new())),
             commit_preparation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             history_query_proof: Mutex::new(index::QueryProof::default()),
+            recovery_warnings: RecoveryWarnings::default(),
             _locks: locks,
             #[cfg(feature = "fault-injection")]
             fault: None,
@@ -290,6 +299,7 @@ impl Engine {
             upload_preparations: Arc::new(Mutex::new(BTreeSet::new())),
             commit_preparation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             history_query_proof: Mutex::new(index::QueryProof::default()),
+            recovery_warnings: RecoveryWarnings::default(),
             _locks: locks,
             #[cfg(feature = "fault-injection")]
             fault: None,
@@ -307,7 +317,7 @@ impl Engine {
         disks: &[PathBuf],
         workspace_limits: Option<RetainedWorkspaceLimits>,
     ) -> Result<Self> {
-        if root.join("config.json").exists() {
+        if root.join("config.json").try_exists()? {
             return Err(Error::new(
                 storage_contract::ErrorCode::AlreadyInitialized,
                 "restore requires a new system state directory",
@@ -420,6 +430,10 @@ impl Engine {
     }
     pub fn root(&self) -> &Path {
         &self.root
+    }
+    /// Drain nonfatal startup diagnostics for reporting once at the application boundary.
+    pub fn take_recovery_warnings(&mut self) -> RecoveryWarnings {
+        std::mem::take(&mut self.recovery_warnings)
     }
     pub fn is_read_only(&self) -> bool {
         self.blocked
@@ -681,7 +695,7 @@ impl Engine {
         })?;
         if let Some(result) = self.state.operations.get(operation_id) {
             if result.request_digest == digest
-                && self.operation_owner(operation_id).as_deref() == Some(principal)
+                && self.operation_owner(operation_id)?.as_deref() == Some(principal)
             {
                 return self.operation(operation_id).map(MutationPlan::Existing);
             }
@@ -751,7 +765,7 @@ impl Engine {
                 .map(str::to_string),
             commit_state: storage_contract::CommitState::Published,
             protection_at_publish: protection,
-            current_health: "HEALTHY".into(),
+            current_health: storage_contract::CurrentHealth::Healthy,
             request_digest: digest.clone(),
             sequence: next.sequence,
             result,

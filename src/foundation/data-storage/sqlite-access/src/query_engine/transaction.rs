@@ -106,19 +106,15 @@ where
         conn: impl Into<TransactionConnection<'c, DB>>,
         statement: Option<SqlStr>,
     ) -> BoxFuture<'c, Result<Self, Error>> {
-        let conn = conn.into();
+        let mut conn = conn.into();
 
         Box::pin(async move {
-            let mut tx = Self {
+            DB::TransactionManager::begin(&mut conn, statement).await?;
+
+            Ok(Self {
                 connection: conn,
-
-                // If the call to `begin` fails or doesn't complete we want to attempt a rollback in case the transaction was started.
                 open: true,
-            };
-
-            DB::TransactionManager::begin(&mut tx.connection, statement).await?;
-
-            Ok(tx)
+            })
         })
     }
 

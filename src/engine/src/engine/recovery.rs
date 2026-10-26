@@ -71,6 +71,7 @@ impl Engine {
     }
 
     pub(super) fn recover_mode(&mut self, complete_unpublished: bool) -> Result<()> {
+        self.recovery_warnings = super::RecoveryWarnings::default();
         let members = self.members();
         let mut online = Vec::new();
         let mut prefixes = BTreeMap::<String, BTreeSet<String>>::new();
@@ -135,11 +136,17 @@ impl Engine {
             .collect();
         self.reject_unjournaled_publications(&online, &journaled)?;
         let checkpoint = if online.len() == members.len() && !torn_tail {
-            super::recovery_checkpoint::load(self, &prefixes, &records).filter(|c| {
-                records
-                    .get(&c.sequence)
-                    .is_some_and(|candidates| candidates.contains_key(&c.candidate_hash))
-            })
+            match super::recovery_checkpoint::load(self, &prefixes, &records) {
+                Ok(checkpoint) => checkpoint.filter(|c| {
+                    records
+                        .get(&c.sequence)
+                        .is_some_and(|candidates| candidates.contains_key(&c.candidate_hash))
+                }),
+                Err(error) => {
+                    self.recovery_warnings.checkpoint_load = Some(error);
+                    None
+                }
+            }
         } else {
             None
         };
@@ -352,8 +359,9 @@ impl Engine {
         if checkpoint
             .as_ref()
             .is_none_or(|c| c.sequence < self.state.sequence)
+            && let Err(error) = super::recovery_checkpoint::save(self)
         {
-            let _ = super::recovery_checkpoint::save(self);
+            self.recovery_warnings.checkpoint_save = Some(error);
         }
         Ok(())
     }

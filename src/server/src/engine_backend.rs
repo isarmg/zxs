@@ -20,6 +20,16 @@ use wire::{
     operation_wire, pending_entry_source, sanitized,
 };
 
+pub(crate) fn report_recovery_warnings(engine: &mut Engine) {
+    let warnings = engine.take_recovery_warnings();
+    if let Some(error) = warnings.checkpoint_load {
+        tracing::warn!(error = ?error, "recovery checkpoint unavailable; authoritative journal replay completed");
+    }
+    if let Some(error) = warnings.checkpoint_save {
+        tracing::warn!(error = ?error, "recovery completed without refreshing its optional checkpoint");
+    }
+}
+
 pub struct EngineBackend {
     engine: Mutex<AdmissionEngine>,
     #[cfg(test)]
@@ -28,7 +38,8 @@ pub struct EngineBackend {
     operation_health_hook: Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>>,
 }
 impl EngineBackend {
-    pub fn new(engine: Engine) -> Self {
+    pub fn new(mut engine: Engine) -> Self {
+        report_recovery_warnings(&mut engine);
         Self {
             engine: Mutex::new(AdmissionEngine::new(engine)),
             #[cfg(test)]
@@ -166,7 +177,7 @@ fn repo_for_branch_in_state<'a>(
             "branch not found",
         )
     })?;
-    if branch.state == "migrated" {
+    if branch.state == storage_contract::BranchState::Migrated {
         return Err(ApiError::new(
             ::http::StatusCode::CONFLICT,
             storage_contract::ErrorCode::TreeMoved,
@@ -580,8 +591,8 @@ impl Backend for EngineBackend {
                 let replicas = input
                     .get("target_copies")
                     .and_then(Value::as_u64)
-                    .and_then(|v| u32::try_from(v).ok())
                     .ok_or_else(|| ApiError::invalid("target_copies must be a positive integer"))?;
+                let replicas = u32::try_from(replicas).map_err(ApiError::invalid_source)?;
                 encode(
                     engine
                         .create_repository(
@@ -711,7 +722,7 @@ impl Backend for EngineBackend {
                     workspace_authorize(&engine, identity, field(&input, "workspace_id")?)?;
                 storage_contract::validate_id(field(&input, "item_id")?, "entry")
                     .map_err(ApiError::invalid_source)?;
-                if workspace.state != "open" {
+                if workspace.state != storage_contract::WorkspaceState::Open {
                     return Err(ApiError::conflict(
                         storage_contract::ErrorCode::WorkspaceClosed,
                         "workspace is no longer open for upload",
@@ -754,7 +765,11 @@ impl Backend for EngineBackend {
                         "upload item not found",
                     )
                 })?;
-                let sealed = matches!(workspace.state.as_str(), "sealed" | "committed");
+                let sealed = matches!(
+                    workspace.state,
+                    storage_contract::WorkspaceState::Sealed
+                        | storage_contract::WorkspaceState::Committed
+                );
                 let manifest = if sealed {
                     Some(storage_engine::workspace_manifest_hash(workspace).map_err(error)?)
                 } else {
@@ -768,7 +783,9 @@ impl Backend for EngineBackend {
                 keys(&input, &["workspace_id", "kind", "path", "destination"])?;
                 let workspace = field(&input, "workspace_id")?;
                 let change = NamespaceOperation {
-                    kind: field(&input, "kind")?.into(),
+                    kind: field(&input, "kind")?
+                        .parse()
+                        .map_err(ApiError::invalid_source)?,
                     path: field(&input, "path")?.into(),
                     destination: input
                         .get("destination")
@@ -978,7 +995,9 @@ impl Backend for EngineBackend {
                 let operation_id = field(&input, "operation_id")?;
                 // Reject foreign owners before loading even the pending result
                 // pages. Unknown/pending operations never trigger payload I/O.
-                if let Some(owner) = engine.operation_owner(operation_id)
+                if let Some(owner) = engine
+                    .operation_owner(operation_id)
+                    .map_err(crate::engine_backend::error)?
                     && owner != identity.principal
                 {
                     return Err(ApiError::forbidden());

@@ -81,7 +81,14 @@ fn build_sdk() {
             build.join(library).display()
         );
     }
-    if let Ok(extra) = env::var("ZXS_SMB_SDK_CLANG_ARGS_JSON") {
+    let extra = match env::var("ZXS_SMB_SDK_CLANG_ARGS_JSON") {
+        Ok(extra) => Some(extra),
+        Err(env::VarError::NotPresent) => None,
+        Err(env::VarError::NotUnicode(_)) => {
+            panic!("ZXS_SMB_SDK_CLANG_ARGS_JSON must be valid UTF-8")
+        }
+    };
+    if let Some(extra) = extra {
         let arguments: Vec<String> = json_codec::from_str(&extra)
             .expect("ZXS_SMB_SDK_CLANG_ARGS_JSON must be a JSON array of clang arguments");
         generator = generator.clang_args(arguments);

@@ -89,6 +89,7 @@ impl Target {
                 .expect("tempfile supplies an entry name")
                 .to_owned(),
             payload: None,
+            cleanup_pending: true,
         };
         let file = File::from(openat(
             &stage.directory,
@@ -113,10 +114,11 @@ pub(super) struct Stage {
     directory: File,
     name: OsString,
     payload: Option<File>,
+    cleanup_pending: bool,
 }
 
 impl Stage {
-    pub(super) fn publish(self) -> io::Result<()> {
+    pub(super) fn publish(mut self) -> io::Result<()> {
         // AT_EMPTY_PATH requires capabilities for ordinary files. The
         // procfs descriptor alias provides the same inode-bound link for
         // unprivileged callers. Do not fall back to a mutable source name.
@@ -128,9 +130,9 @@ impl Stage {
             &self.target.name,
             AtFlags::SYMLINK_FOLLOW,
         )?;
-        self.remove_payload()?;
-        self.directory.sync_all()?;
-        self.target.directory.sync_all()
+        self.target.directory.sync_all()?;
+        self.cleanup();
+        Ok(())
     }
 
     fn remove_payload(&self) -> io::Result<()> {
@@ -150,23 +152,44 @@ impl Stage {
     }
 }
 
-impl Drop for Stage {
-    fn drop(&mut self) {
-        let _ = self.remove_payload();
-        // A foreign parent owner may rename our private directory. Never
-        // remove a replacement entry, even when cleaning up a cancelled task.
-        if let (Ok(held), Ok(named)) = (
-            fstat(&self.directory),
-            statat(
+impl Stage {
+    fn cleanup(&mut self) {
+        if !self.cleanup_pending {
+            return;
+        }
+        self.cleanup_pending = false;
+        // Only remove the directory if its name still refers to our held inode.
+        let cleanup = (|| -> io::Result<()> {
+            self.remove_payload()?;
+            let held = fstat(&self.directory)?;
+            let named = match statat(
                 &self.target.directory,
                 &self.name,
                 AtFlags::SYMLINK_NOFOLLOW,
-            ),
-        ) && FileType::from_raw_mode(named.st_mode) == FileType::Directory
-            && (held.st_dev, held.st_ino) == (named.st_dev, named.st_ino)
-        {
-            let _ = unlinkat(&self.target.directory, &self.name, AtFlags::REMOVEDIR);
+            ) {
+                Ok(named) => named,
+                Err(rustix::io::Errno::NOENT) => return Ok(()),
+                Err(error) => return Err(error.into()),
+            };
+            if FileType::from_raw_mode(named.st_mode) == FileType::Directory
+                && (held.st_dev, held.st_ino) == (named.st_dev, named.st_ino)
+            {
+                match unlinkat(&self.target.directory, &self.name, AtFlags::REMOVEDIR) {
+                    Ok(()) | Err(rustix::io::Errno::NOENT) => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = cleanup {
+            tracing::warn!(error = ?error, "download staging directory retained after cleanup failure");
         }
+    }
+}
+
+impl Drop for Stage {
+    fn drop(&mut self) {
+        self.cleanup();
     }
 }
 

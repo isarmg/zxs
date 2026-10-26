@@ -21,29 +21,44 @@ import manage
 import source_layout
 
 
+def current_fixture_bytes(root, layout, receipt):
+    """Keep ordinary implementation live; authenticate retained proof inputs."""
+    result = {}
+    for item in receipt['packages']:
+        directory = item['directory']
+        physical = source_layout.physical(root, directory)
+        for path in physical.rglob('*'):
+            if path.is_file():
+                relative = path.relative_to(root).as_posix()
+                logical = layout.historical_path(relative) if layout else relative
+                result[logical] = (source_layout.read(root, logical) if path.name == 'Cargo.toml'
+                                   else source_layout.safe(root, relative).read_bytes())
+        external = 'test/foundation/' + directory.rsplit('/', 1)[1]
+        for logical in source_layout.inventory(root, external):
+            result[logical] = source_layout.read(root, logical)
+    frozen = {relocation.PATH: relocation.RECEIPT, **receipt['frozen_evidence']}
+    frozen.update((row['destination'], row['sha256'])
+                  for item in receipt['packages'] for row in item['routes'])
+    for logical, expected in frozen.items():
+        data = source_layout.read(root, logical)
+        if relocation.digest(data) != expected:
+            raise ValueError('changed current benchmark fixture evidence: ' + logical)
+        result[logical] = data
+    return result
+
+
 class BenchmarkRelocation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.receipt = relocation.read(ROOT)
         current = json.loads((ROOT / 'compliance/rust-sources.json').read_text())
-        # These tests isolate the earlier benchmark transaction. Reconstruct its
-        # logical source view only from authenticated CURRENT grouped bytes.
-        # No historical archive substitutes for a missing current source file.
-        layout = source_layout.load(ROOT)
-        with source_layout.activate(layout):
+        # Ordinary production evolves; only retained benchmarks/evidence need
+        # the strict logical-byte projection of authenticated CURRENT files.
+        cls.layout = source_layout.load(ROOT)
+        with source_layout.activate(cls.layout):
             cls.catalog = source_layout.project_catalog(ROOT, current)
             cls.catalog.pop(source_layout.KEY, None)
-            paths = [relocation.PATH, *cls.receipt['frozen_evidence']]
-            for item in cls.receipt['packages']:
-                paths.extend([item['directory'], 'test/foundation/' + item['directory'].rsplit('/', 1)[1]])
-            cls.fixture_bytes = {}
-            for relative in paths:
-                physical = source_layout.physical(ROOT, relative)
-                if physical.is_dir():
-                    for logical in source_layout.inventory(ROOT, relative):
-                        cls.fixture_bytes[logical] = source_layout.read(ROOT, logical)
-                else:
-                    cls.fixture_bytes[relative] = source_layout.read(ROOT, relative)
+            cls.fixture_bytes = current_fixture_bytes(ROOT, cls.layout, cls.receipt)
         # Construct the exact supported after view even during a pre-refresh run.
         cls.catalog[relocation.KEY] = relocation.RECEIPT
         for item in cls.receipt['packages']:
@@ -193,6 +208,38 @@ class BenchmarkRelocation(unittest.TestCase):
         (self.root / self.item['directory'] / 'src/lib.rs').write_bytes(b'legitimate later edit')
         self.check()
 
+    def test_current_layout_edited_source_remains_refreshable(self):
+        logical = 'src/foundation/schema-validation/src/validation/error.rs'
+        physical = ROOT / self.layout.current_path(logical)
+        changed = physical.read_bytes() + b'\npub const LATER_MAINTENANCE: bool = true;\n'
+        read_bytes = Path.read_bytes
+        def read(path):
+            return changed if path == physical else read_bytes(path)
+        with patch.object(Path, 'read_bytes', read), source_layout.activate(self.layout):
+            with self.assertRaises(ValueError):
+                source_layout.read(ROOT, logical)
+            current = current_fixture_bytes(ROOT, self.layout, self.receipt)
+        self.assertEqual(current[logical], changed)
+        (self.root / logical).write_bytes(current[logical])
+        self.check()
+
+    def test_current_benchmarks_cannot_use_historical_fallback(self):
+        read_bytes = Path.read_bytes
+        for item in self.receipt['packages']:
+            for route in item['routes']:
+                physical = ROOT / self.layout.current_path(route['destination'])
+                for missing in (True, False):
+                    def read(path):
+                        if path == physical:
+                            if missing:
+                                raise FileNotFoundError(path)
+                            return b'tampered current benchmark'
+                        return read_bytes(path)
+                    with self.subTest(path=route['destination'], missing=missing):
+                        with patch.object(Path, 'read_bytes', read), source_layout.activate(self.layout):
+                            with self.assertRaises((ValueError, OSError)):
+                                current_fixture_bytes(ROOT, self.layout, self.receipt)
+
     def historical_install_view(self, fixture=None):
         # Only this install scenario needs the exact prior snapshot. Ordinary
         # verification above deliberately keeps current source and manifest edits.
@@ -208,8 +255,13 @@ class BenchmarkRelocation(unittest.TestCase):
                     if current.get(relative) == sha:
                         continue
                     name = directory + '/' + relative
-                    self.assertLessEqual(archive.getinfo(name).file_size, 100_000)
-                    data = archive.read(name)
+                    edit = self.layout.edits.get(name) if self.layout else None
+                    if (edit and current.get(relative) == edit['after_sha256']
+                            and edit['before_sha256'] == sha):
+                        data = self.layout.project_bytes(name, (self.root / name).read_bytes())
+                    else:
+                        self.assertLessEqual(archive.getinfo(name).file_size, 100_000)
+                        data = archive.read(name)
                     self.assertEqual(hashlib.sha256(data).hexdigest(), sha)
                     path = self.root / name
                     path.parent.mkdir(parents=True, exist_ok=True)

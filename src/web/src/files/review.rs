@@ -68,7 +68,7 @@ pub(crate) fn settle(model: &mut Model, id: &str, status: SaveStatus) {
                     publication.error = publication_notice(status);
                 }
             }
-            _ => {}
+            SaveStatus::Unknown => {}
         }
     }
 }
@@ -89,10 +89,9 @@ pub(crate) fn submit(
     }) {
         return;
     }
-    let id = api::operation_id();
-    if id.is_empty() {
+    let Some(id) = crate::ui::operation_id(state) else {
         return;
-    }
+    };
     body["operation_id"] = id.clone().into();
     let epoch = state.with_untracked(|s| s.session_epoch);
     state.update(|s| {

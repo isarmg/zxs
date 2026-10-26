@@ -296,6 +296,42 @@ origin、逐文件转移证明。此绑定本身不授权已升级输入、旧�
 补丁限制，最后进行根/整合事务。最终整合使用紧邻前阶段的精确快照，而不是未
 分阶段时的最初清单；其外置转移还须遵守独立限制及逐 origin 的精确归属。
 
-固定来源整合链有意设为终结：后续编辑、重命名、退役或其他生命周期变更须有新
-认证适配器。无关普通 owner 保持原有审查刷新行为。此路由机制不重写或跳过
-任何历史收据、证明摘要、原始 origin/许可材料或验证步骤。
+固定来源整合路由仍为终结：普通 `edit` 不能跟在 `consolidation` 后面。
+同根维护使用独立 `proof-maintenance` 认证适配器；重命名、退役、生产文件增删
+及其他生命周期变更仍拒绝。无关普通 owner 保持原有审查刷新行为。
+
+### 整合后的同根维护
+
+`tools/rust-sources/proof_maintenance.py` 的 `RECEIPTS` 是仅追加的审核固定列表，
+对应 `compliance/proof-maintenance/<sha256>.json.gz`，来源清单同步登记
+`proof_maintenance_receipts`。每张 schema 1 收据包含 `reason`、终结路由摘要
+`terminal`、前张维护摘要 `parent`（首张为 null）、精确 `layout` 标识、完整
+物理 `before` / `after` owner 快照（`package`、`merges`、`external`）和
+`files`。`files` 只列全部发生内容变化的既有文件，每项使用原路由格式的
+before/after 路径、摘要及 base64 `old` / `new` 唯一可逆替换；不能用整文件
+归档替代补丁。至少一项既有文件改变，仍遵守 512 处替换、2 MiB 补丁及
+64 MiB 活动材料上限。
+
+生产清单、owner 身份、所有 merged origin 和测试 roots 不变。现有外测保留
+原 `source`、`source_sha256_before` 与 origin；新增文件只能是既有测试根下
+明确登记的 `project-authored` 测试，其初始 source/path 和摘要相同。第二次
+维护可以继续修改源码或这些测试，但不能重置首次归属。新增测试仍须登记
+外测映射并加入真实测试门禁，不能仅靠维护收据证明测试已经执行。
+
+审核新收据时，从旧清单复制精确物理 owner 快照，并记录当前物理 after 快照；
+将 JSON 按键排序、UTF-8 编码，gzip 使用 `mtime=0`，以压缩字节 SHA-256 命名，
+追加固定摘要后执行 `python3 tools/rust-sources/manage.py refresh` 和
+`python3 tools/rust-sources/manage.py verify --metadata`。
+每次 refresh 每个 owner 只接受一张新维护收据，before 必须等于旧清单中的
+对应完整 owner；不能跳过中间步骤。其它 owner 的后续正常维护不冻结在这张
+收据上。禁止修改旧收据、原始 origins 或 layout/corrections 历史来配合新代码。
+
+验证严格按实际变换的逆序进行：一次有界读取物理当前文件并核验完整 after
+清单，逆维护补丁恢复 before 字节，再执行旧 layout 的精确逆变换，最后验证
+原 consolidation 的完整 owner equality 及固定主来源旧路由。外测 bytes 也
+必须逐阶段准确。新测试只属于当前 owner，不混入旧历史文件双射。漏文件、
+额外文件、额外换行、错序、歧义补丁、来源漂移或缺失登记都会失败；未登记的
+语义编辑仍不能穿过旧 layout 或终结证明。历史收据和所有原校验均保持原样。
+
+本轮 Tokio 收据认证 `fs::asyncify` 保留 `JoinError` 的源码改动、Cargo 测试
+目标及 `fs_asyncify` 取消回归。其证明是字节与归属关系，不替代运行时测试。

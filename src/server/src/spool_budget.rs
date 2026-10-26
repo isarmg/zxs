@@ -170,12 +170,23 @@ pub(crate) struct SpoolBudget {
 fn valid_name(name: &str) -> bool {
     !name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\\'])
 }
-fn metadata<T: data_serialization::de::DeserializeOwned>(path: &Path) -> Option<T> {
-    let directory = PrivateDirectory::open_trusted(path.parent()?).ok()?;
-    let name = EntryName::new(path.file_name()?).ok()?;
-    let bytes = directory.read_bounded(&name, MAX_METADATA as usize).ok()?;
-    storage_contract::decode_strict(&bytes).ok()
+fn metadata<T: data_serialization::de::DeserializeOwned>(path: &Path) -> Result<T, ApiError> {
+    let directory = PrivateDirectory::open_trusted(
+        path.parent()
+            .expect("invariant: spool entries have a parent"),
+    )
+    .map_err(crate::upload_fs_error)?;
+    let name = EntryName::new(
+        path.file_name()
+            .expect("invariant: spool entries have a filename"),
+    )
+    .map_err(crate::upload_fs_error)?;
+    let bytes = directory
+        .read_bounded(&name, MAX_METADATA as usize)
+        .map_err(crate::upload_fs_error)?;
+    storage_contract::decode_strict(&bytes).map_err(ApiError::invalid_source)
 }
+
 fn charge_bytes(bytes: u64) -> Result<u64, ApiError> {
     bytes.checked_add(METADATA_ALLOWANCE).ok_or_else(|| {
         ApiError::new(
@@ -248,18 +259,28 @@ impl SpoolBudget {
             }
             files.insert(name.clone(), info.len());
             if name.ends_with(".owner.json") {
-                if let Some(owner) = metadata::<Owner>(&entry.path()) {
-                    if name != format!("{}.owner.json", owner.data_file) {
-                        return Err(invalid_state("spool ownership filename mismatch"));
+                match metadata::<Owner>(&entry.path()) {
+                    Ok(owner) => {
+                        if name != format!("{}.owner.json", owner.data_file) {
+                            return Err(invalid_state("spool ownership filename mismatch"));
+                        }
+                        covered_metadata.insert(name, owner.data_file.clone());
+                        set_owner(&mut owners, owner.data_file, owner.principal)?;
                     }
-                    covered_metadata.insert(name, owner.data_file.clone());
-                    set_owner(&mut owners, owner.data_file, owner.principal)?;
+                    Err(error) => {
+                        tracing::warn!(error = ?error, "unreadable spool ownership remains charged as unknown")
+                    }
                 }
-            } else if name.contains(".json")
-                && let Some(record) = metadata::<UploadRecord>(&entry.path())
-            {
-                covered_metadata.insert(name, record.data_file.clone());
-                set_owner(&mut owners, record.data_file, record.principal)?;
+            } else if name.contains(".json") {
+                match metadata::<UploadRecord>(&entry.path()) {
+                    Ok(record) => {
+                        covered_metadata.insert(name, record.data_file.clone());
+                        set_owner(&mut owners, record.data_file, record.principal)?;
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = ?error, "unreadable spool metadata remains charged as unknown")
+                    }
+                }
             }
         }
         let mut ledger = Ledger::default();
@@ -425,7 +446,12 @@ pub(crate) struct Reservation {
 }
 impl Reservation {
     pub(crate) fn block_admission(&self) {
-        if let Ok(mut ledger) = self.budget.ledger.lock() {
+        {
+            let mut ledger = self
+                .budget
+                .ledger
+                .lock()
+                .expect("service state lock poisoned");
             ledger.uncertain = true;
         }
     }
@@ -460,14 +486,6 @@ impl Reservation {
     /// uncertain outcome both files are retained; recovery inventories them.
     pub(crate) fn persist_owner(&self) -> Result<(), ApiError> {
         let path = self.budget.root.join(format!("{}.owner.json", self.name));
-        if path.exists() {
-            let owner = metadata::<Owner>(&path)
-                .ok_or_else(|| invalid_state("invalid spool owner record"))?;
-            if owner.data_file != self.name || owner.principal != self.principal {
-                return Err(invalid_state("spool owner record mismatch"));
-            }
-            return Ok(());
-        }
         let mut options = OpenOptions::new();
         options.create_new(true).write(true);
         #[cfg(unix)]
@@ -475,7 +493,17 @@ impl Reservation {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let mut file = options.open(path).map_err(ApiError::io)?;
+        let mut file = match options.open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let owner = metadata::<Owner>(&path)?;
+                if owner.data_file != self.name || owner.principal != self.principal {
+                    return Err(invalid_state("spool owner record mismatch"));
+                }
+                return Ok(());
+            }
+            Err(error) => return Err(ApiError::io(error)),
+        };
         let bytes = json_codec::to_vec(&Owner {
             data_file: self.name.clone(),
             principal: self.principal.clone(),
@@ -490,13 +518,15 @@ impl Reservation {
 }
 impl Drop for Reservation {
     fn drop(&mut self) {
-        let Ok(mut ledger) = self.budget.ledger.lock() else {
-            return;
-        };
-        let Some(previous) = ledger.files.get(&self.name) else {
-            ledger.uncertain = true;
-            return;
-        };
+        let mut ledger = self
+            .budget
+            .ledger
+            .lock()
+            .expect("service state lock poisoned");
+        let previous = ledger
+            .files
+            .get(&self.name)
+            .expect("invariant: a reservation owns its ledger entry");
         let overhead = previous.overhead;
         let maximum = previous.bytes;
         // Last writer/metadata task has finished. Unknown durability and upload
@@ -509,10 +539,17 @@ impl Drop for Reservation {
                 ) {
                     Ok(_) => Some(overhead),
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(0),
-                    Err(_) => None,
+                    Err(error) => {
+                        tracing::warn!(error = ?error, "spool ownership cannot be inventoried; admission blocked");
+                        None
+                    }
                 }
             }
-            _ => None,
+            Ok(_) => None,
+            Err(error) => {
+                tracing::warn!(error = ?error, "spool payload cannot be inventoried; admission blocked");
+                None
+            }
         };
         let Some(bytes) = retained.filter(|bytes| *bytes <= maximum) else {
             ledger.uncertain = true;
@@ -524,8 +561,9 @@ impl Drop for Reservation {
             overhead,
             reserved: 0,
         });
-        if ledger.replace(&self.name, next).is_err() {
+        if let Err(error) = ledger.replace(&self.name, next) {
             ledger.uncertain = true;
+            tracing::warn!(error = ?error, "spool accounting could not settle; admission blocked");
         }
     }
 }

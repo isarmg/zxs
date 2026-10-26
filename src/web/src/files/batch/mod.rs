@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     api,
-    ui::{State, accept_read_response, current_session, fail, list, set_notice, text},
+    ui::{State, accept_read_response, current_session, fail, list, text},
 };
 use json_codec::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -126,12 +126,9 @@ pub(crate) fn settle_operation(
     status: super::model::SaveStatus,
 ) -> bool {
     if let Some(draft) = model.batch.as_mut()
-        && draft
-            .registration
-            .as_ref()
-            .is_some_and(|registration| registration.operation_id == id)
+        && let Some(registration) = draft.registration.as_mut()
+        && registration.operation_id == id
     {
-        let registration = draft.registration.as_mut().unwrap();
         // Publication is terminal. Older receipts cannot revoke its association
         // or release the follow-on read (including a failed read awaiting retry).
         if registration.published {
@@ -169,7 +166,7 @@ pub(crate) fn settle_operation(
                 draft.submitted_operation = None;
             }
         }
-        _ => {}
+        super::model::SaveStatus::Unknown => {}
     }
     false
 }

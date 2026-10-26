@@ -215,11 +215,11 @@ pub fn AccountPage(
                                         let confirm = confirmation.get_untracked().unwrap();
                                         if secret.value().is_empty() || password.value().is_empty() {
                                             failure.set(Some(t("请输入当前密码和新密码。", "Enter your current and new password.")));
-                                            let _ = secret.focus(); return;
+                                            if let Err(error) = secret.focus() { web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error); } return;
                                         }
                                         if password.value() != confirm.value() {
                                             failure.set(Some(t("两次输入的新密码不一致。", "The new passwords do not match.")));
-                                            let _ = confirm.focus(); return;
+                                            if let Err(error) = confirm.focus() { web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error); } return;
                                         }
                                         let change = super::PasswordChange { current_password: secret.value(), new_password: password.value() };
                                         failure.set(None);

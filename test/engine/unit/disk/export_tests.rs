@@ -311,6 +311,11 @@ fn offline_tombstones_bind_retained_version_metadata_and_directory() {
             assert_corrupt("invalid tombstone disposition");
             assert_eq!(fs::read(&tombstone_path).unwrap(), bytes);
         }
+        fs::write(&tombstone_path, &tombstone_bytes).unwrap();
+        fs::remove_file(&tombstone_path).unwrap();
+        std::os::unix::fs::symlink("purged.json", &tombstone_path).unwrap();
+        assert_corrupt("unreadable tombstone");
+        fs::remove_file(&tombstone_path).unwrap();
         fs::write(&tombstone_path, tombstone_bytes).unwrap();
 
         let moved = directory.with_file_name(new_id("ver"));
@@ -360,4 +365,14 @@ fn restored_tombstones_need_no_source_payload_proofs() {
             assert!(offline_check(&disk.root).unwrap().issues.is_empty());
         }
     }
+}
+
+#[test]
+fn offline_check_does_not_treat_unreadable_histories_as_empty() {
+    let (temp, directory, _version) = published_body();
+    let root = directory.ancestors().nth(4).unwrap();
+    let histories = root.join("histories");
+    std::fs::rename(&histories, temp.path().join("retained-histories")).unwrap();
+    std::os::unix::fs::symlink("histories", &histories).unwrap();
+    assert!(offline_check(root).is_err());
 }

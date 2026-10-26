@@ -32,6 +32,9 @@ class ProjectionFixture(unittest.TestCase):
         return path
 
     def setUp(self):
+        import proof_maintenance
+        maintenance = patch.object(proof_maintenance, 'RECEIPTS', ())
+        maintenance.start(); self.addCleanup(maintenance.stop)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)

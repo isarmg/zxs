@@ -28,6 +28,12 @@ pub enum Error {
     IntegerRange(#[from] std::num::TryFromIntError),
     #[error("directory name is not UTF-8: {0:?}")]
     PathEncoding(std::ffi::OsString),
+    #[error("{operation}; cleanup failed: {cleanup}")]
+    Cleanup {
+        #[source]
+        operation: Box<Error>,
+        cleanup: std::io::Error,
+    },
     #[error("{code}: {message}")]
     Context {
         code: ErrorCode,
@@ -53,6 +59,10 @@ impl Error {
     pub fn retryable(self) -> Self {
         match self {
             Self::Contract(source) => Self::Contract(source.retryable()),
+            Self::Cleanup { operation, cleanup } => Self::Cleanup {
+                operation: Box::new(operation.retryable()),
+                cleanup,
+            },
             Self::Context {
                 code,
                 message,
@@ -85,6 +95,7 @@ impl Error {
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Contract(source) => source.is_retryable(),
+            Self::Cleanup { operation, .. } => operation.is_retryable(),
             Self::Context { retryable, .. } => *retryable,
             Self::Filesystem(_)
             | Self::Sqlite(_)
@@ -102,31 +113,9 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Contract(source) => source.code(),
+            Self::Cleanup { operation, .. } => operation.code(),
             Self::Context { code, .. } => *code,
-            Self::Filesystem(source) => match source {
-                platform_io::fs_safety::Error::Io(source)
-                    if matches!(source.raw_os_error(), Some(20 | 40)) =>
-                {
-                    ErrorCode::UnsafePath
-                }
-                platform_io::fs_safety::Error::Io(source) if source.raw_os_error() == Some(28) => {
-                    ErrorCode::NoSpace
-                }
-                platform_io::fs_safety::Error::Io(_) => ErrorCode::IoError,
-                platform_io::fs_safety::Error::PublishedDurabilityUnknown(_) => {
-                    ErrorCode::DurabilityUnknown
-                }
-                platform_io::fs_safety::Error::DestinationExists(_) => ErrorCode::DestinationExists,
-                platform_io::fs_safety::Error::Randomness
-                | platform_io::fs_safety::Error::AbsolutePathRequired(_)
-                | platform_io::fs_safety::Error::UnsafeRelativePath(_)
-                | platform_io::fs_safety::Error::UnsafeFileType(_)
-                | platform_io::fs_safety::Error::MultipleLinks(_)
-                | platform_io::fs_safety::Error::UnsafePermissions(_)
-                | platform_io::fs_safety::Error::IdentityChanged(_)
-                | platform_io::fs_safety::Error::AlreadyLocked(_)
-                | platform_io::fs_safety::Error::BudgetExceeded => ErrorCode::UnsafePath,
-            },
+            Self::Filesystem(source) => filesystem_code(source),
             Self::Sqlite(_) | Self::Database(_) => ErrorCode::IndexRebuildFailed,
             Self::Payload(_) | Self::Digest(_) => ErrorCode::ChecksumMismatch,
             Self::Timestamp(_) | Self::DateFormat(_) | Self::Integer(_) => {
@@ -140,6 +129,9 @@ impl Error {
     pub fn message(&self) -> Cow<'_, str> {
         match self {
             Self::Contract(source) => source.message(),
+            Self::Cleanup { operation, cleanup } => {
+                format!("{}; cleanup failed: {cleanup}", operation.message()).into()
+            }
             Self::Context { message, .. } => message.as_str().into(),
             Self::Filesystem(source) => match source {
                 platform_io::fs_safety::Error::Io(source)
@@ -149,7 +141,8 @@ impl Error {
                 platform_io::fs_safety::Error::DestinationExists(path) => {
                     path.display().to_string().into()
                 }
-                source @ (platform_io::fs_safety::Error::Randomness
+                source @ (platform_io::fs_safety::Error::Cleanup { .. }
+                | platform_io::fs_safety::Error::Randomness(_)
                 | platform_io::fs_safety::Error::AbsolutePathRequired(_)
                 | platform_io::fs_safety::Error::UnsafeRelativePath(_)
                 | platform_io::fs_safety::Error::UnsafeFileType(_)
@@ -186,3 +179,32 @@ impl From<json_codec::Error> for Error {
 #[cfg(test)]
 #[path = "../../../test/engine/unit/error/tests.rs"]
 mod tests;
+
+fn filesystem_code(source: &platform_io::fs_safety::Error) -> ErrorCode {
+    match source {
+        platform_io::fs_safety::Error::Cleanup { operation, .. } => filesystem_code(operation),
+
+        platform_io::fs_safety::Error::Io(source)
+            if matches!(source.raw_os_error(), Some(20 | 40)) =>
+        {
+            ErrorCode::UnsafePath
+        }
+        platform_io::fs_safety::Error::Io(source) if source.raw_os_error() == Some(28) => {
+            ErrorCode::NoSpace
+        }
+        platform_io::fs_safety::Error::Io(_) => ErrorCode::IoError,
+        platform_io::fs_safety::Error::PublishedDurabilityUnknown(_) => {
+            ErrorCode::DurabilityUnknown
+        }
+        platform_io::fs_safety::Error::DestinationExists(_) => ErrorCode::DestinationExists,
+        platform_io::fs_safety::Error::Randomness(_)
+        | platform_io::fs_safety::Error::AbsolutePathRequired(_)
+        | platform_io::fs_safety::Error::UnsafeRelativePath(_)
+        | platform_io::fs_safety::Error::UnsafeFileType(_)
+        | platform_io::fs_safety::Error::MultipleLinks(_)
+        | platform_io::fs_safety::Error::UnsafePermissions(_)
+        | platform_io::fs_safety::Error::IdentityChanged(_)
+        | platform_io::fs_safety::Error::AlreadyLocked(_)
+        | platform_io::fs_safety::Error::BudgetExceeded => ErrorCode::UnsafePath,
+    }
+}

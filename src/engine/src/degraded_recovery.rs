@@ -134,10 +134,9 @@ pub(crate) fn discover_publication(
                     )
                 })?;
             if publication.candidate_hash == hash {
-                if found.as_ref().is_some_and(|old| {
-                    object_hash("publication", old).ok()
-                        != object_hash("publication", &publication).ok()
-                }) {
+                if let Some(old) = &found
+                    && object_hash("publication", old)? != object_hash("publication", &publication)?
+                {
                     return Err(required("conflicting publication results exist"));
                 }
                 found = Some(publication);
@@ -152,20 +151,29 @@ pub(crate) fn discover_publication(
                 &evidence.version.version_id,
             );
             let path = local_proof_directory(&directory, hash)?.join("publication-proof.json");
-            if path.exists() {
-                let local: LocalPublication = read_json(&path).map_err(|source| {
-                    source.context(
-                        ErrorCode::RecoveryRequired,
-                        "unreadable local publication evidence",
-                    )
-                })?;
+            {
+                let local: LocalPublication = match read_json(&path) {
+                    Ok(local) => local,
+                    Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+                    | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+                        if error.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        continue;
+                    }
+                    Err(source) => {
+                        return Err(source.context(
+                            ErrorCode::RecoveryRequired,
+                            "unreadable local publication evidence",
+                        ));
+                    }
+                };
                 if object_hash("candidate", &local.candidate)? != hash {
                     return Err(required("conflicting local publication evidence"));
                 }
-                if found.as_ref().is_some_and(|old| {
-                    object_hash("publication", old).ok()
-                        != object_hash("publication", &local.publication).ok()
-                }) {
+                if let Some(old) = &found
+                    && object_hash("publication", old)?
+                        != object_hash("publication", &local.publication)?
+                {
                     return Err(required("local and metadata publication results conflict"));
                 }
                 found = Some(local.publication);
@@ -393,9 +401,9 @@ impl Engine {
             })?;
             self.verify_candidate_membership(&c)?;
             let hash = object_hash("candidate", &c)?;
-            if candidate.as_ref().is_some_and(|existing: &Candidate| {
-                object_hash("candidate", existing).ok().as_deref() != Some(hash.as_str())
-            }) {
+            if let Some(existing) = &candidate
+                && object_hash("candidate", existing)? != hash
+            {
                 return Err(required("original members disagree about the candidate"));
             }
             if c.previous_snapshot != self.snapshot || c.pool_id != self.config.pool_id {
@@ -523,8 +531,17 @@ impl Engine {
             self.pending_recovery_candidate(operation, None)?;
         let hash = object_hash("candidate", &candidate)?;
         let old = member_plan_path(&self.members()[0], &hash);
-        if old.exists() {
-            let plan: RecoveryPlan = read_json(&old)?;
+        let existing = match read_json::<RecoveryPlan>(&old) {
+            Ok(plan) => Some(plan),
+            Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+            | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+                if error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                None
+            }
+            Err(error) => return Err(error),
+        };
+        if let Some(plan) = existing {
             if plan.principal != principal || plan.digest != plan_digest(&plan)? {
                 return Err(required(
                     "a unique recovery plan already exists for this candidate",
@@ -574,39 +591,46 @@ impl Engine {
     pub fn recovery_plan(&self, id: &str) -> Result<RecoveryPlan> {
         validate_id(id, "recovery")?;
         let local = plan_path(&self.root, id);
-        let plan: RecoveryPlan = if local.exists() {
-            read_json(&local)?
-        } else {
-            let mut found: Option<RecoveryPlan> = None;
-            for disk in self.members() {
-                let directory = disk.root.join("metadata/recovery-plans");
-                if !directory.exists() {
-                    continue;
-                }
-                for entry in fs::read_dir(directory)? {
-                    let candidate: RecoveryPlan = read_json(&entry?.path())?;
-                    if candidate.recovery_id == id {
-                        if found
-                            .as_ref()
-                            .is_some_and(|old| old.digest != candidate.digest)
-                        {
-                            return Err(required("member recovery plans conflict"));
+        let plan: RecoveryPlan = match read_json(&local) {
+            Ok(plan) => plan,
+            Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+            | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+                if error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                let mut found: Option<RecoveryPlan> = None;
+                for disk in self.members() {
+                    let directory = disk.root.join("metadata/recovery-plans");
+                    let entries = match fs::read_dir(&directory) {
+                        Ok(entries) => entries,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) => return Err(error.into()),
+                    };
+                    for entry in entries {
+                        let candidate: RecoveryPlan = read_json(&entry?.path())?;
+                        if candidate.recovery_id == id {
+                            if found
+                                .as_ref()
+                                .is_some_and(|old| old.digest != candidate.digest)
+                            {
+                                return Err(required("member recovery plans conflict"));
+                            }
+                            found = Some(candidate);
                         }
-                        found = Some(candidate);
                     }
                 }
+                let recovered = found.ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::RecoveryPlanNotFound,
+                        "no member holds this recovery plan",
+                    )
+                })?;
+                if recovered.digest != plan_digest(&recovered)? {
+                    return Err(required("member recovery plan digest differs"));
+                }
+                write_json(&local, &recovered, false)?;
+                recovered
             }
-            let recovered = found.ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::RecoveryPlanNotFound,
-                    "no member holds this recovery plan",
-                )
-            })?;
-            if recovered.digest != plan_digest(&recovered)? {
-                return Err(required("member recovery plan digest differs"));
-            }
-            write_json(&local, &recovered, false)?;
-            recovered
+            Err(error) => return Err(error),
         };
         if plan.recovery_id != id || plan.digest != plan_digest(&plan)? {
             return Err(required("recovery plan digest differs"));
@@ -673,11 +697,10 @@ impl Engine {
                 .iter()
                 .any(|s| s["state"] == "COMPLETE_VERIFIED")
         }) {
-            "UNAVAILABLE"
+            storage_contract::CurrentHealth::Unavailable
         } else {
-            "DEGRADED"
-        }
-        .into();
+            storage_contract::CurrentHealth::Degraded
+        };
         result.result["recovery_id"] = json!(id);
         result.result["recovery_plan_digest"] = json!(plan.digest);
         result.result["isolation_generation"] = json!(plan.isolation_generation);

@@ -10,6 +10,7 @@ use storage_contract::{
     MergeLink, Placement, PlacementRule, ProtectionPolicy, Repository,
     SUPPORTED_CHECKSUM_CHUNK_BYTES, SharedRecords, State, canonical_json, validate_id,
 };
+use storage_contract::{BranchKind, BranchState, FileMetadataKind};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -425,7 +426,7 @@ impl HistoryManifest {
                     || version.file_id != entry.file_id
                     || version.logical_size != entry.size
                     || shared.history_tree_id != *history
-                    || shared.branch_kind != "file"
+                    || shared.branch_kind != BranchKind::File
                     || shared.file_id.as_deref() != Some(entry.file_id.as_str())
                 {
                     return Err(invalid(
@@ -526,7 +527,7 @@ impl HistoryManifest {
             .branches
             .get(&context.branch_id)
             .ok_or_else(|| invalid("file path context branch is missing"))?;
-        if branch.branch_kind != "file"
+        if branch.branch_kind != BranchKind::File
             || branch.file_id.as_deref() != Some(file_id)
             || branch.history_tree_id != self.history.history_tree_id
         {
@@ -602,7 +603,7 @@ impl HistoryManifest {
                 || body.file_id != node.file_id
                 || body.history_tree_id != node.history_tree_id
                 || branch.file_id.as_deref() != Some(node.file_id.as_str())
-                || branch.branch_kind != "file"
+                || branch.branch_kind != BranchKind::File
                 || branch.history_tree_id != node.history_tree_id
                 || node.author.is_empty()
                 || node.path == node.previous_path
@@ -636,11 +637,10 @@ impl HistoryManifest {
                 || body.file_id != node.file_id
                 || body.history_tree_id != node.history_tree_id
                 || branch.file_id.as_deref() != Some(node.file_id.as_str())
-                || branch.branch_kind != "file"
+                || branch.branch_kind != BranchKind::File
                 || branch.history_tree_id != node.history_tree_id
                 || node.author.is_empty()
                 || node.parent_node_ids.is_empty()
-                || !["tags", "merge"].contains(&node.kind.as_str())
                 || node.tags.len() > storage_contract::MAX_FILE_TAGS
                 || node
                     .tags
@@ -649,7 +649,7 @@ impl HistoryManifest {
             {
                 return Err(invalid("file metadata identity, scope or labels differ"));
             }
-            if node.kind == "tags"
+            if node.kind == FileMetadataKind::Tags
                 && (node.parent_node_ids.len() != 1
                     || self.file_node_version(&node.parent_node_ids[0])?.version_id
                         != node.version_id)
@@ -678,13 +678,18 @@ impl HistoryManifest {
             {
                 return Err(invalid("file merge provenance identity or result differs"));
             }
+            if !event.reused_node && !event.parent_node_ids.contains(&event.chosen_node_id) {
+                return Err(invalid(
+                    "file merge chosen source is absent from its ancestry",
+                ));
+            }
             for (branch, node) in event.input_branch_ids.iter().zip(&event.input_node_ids) {
                 let branch = self
                     .branches
                     .get(branch)
                     .ok_or_else(|| invalid("file merge input branch is missing"))?;
                 let node = self.file_node_version(node)?;
-                if branch.branch_kind != "file"
+                if branch.branch_kind != BranchKind::File
                     || branch.file_id.as_deref() != Some(event.file_id.as_str())
                     || branch.history_tree_id != event.history_tree_id
                     || node.file_id != event.file_id
@@ -698,7 +703,7 @@ impl HistoryManifest {
                     .file_metadata_nodes
                     .get(&event.result_node_id)
                     .is_some_and(|node| {
-                        node.kind == "merge"
+                        node.kind == FileMetadataKind::Merge
                             && node.parent_node_ids == event.parent_node_ids
                             && node.branch_id == event.surviving_branch_id
                     })
@@ -731,7 +736,10 @@ impl HistoryManifest {
                 .branches
                 .get(source)
                 .ok_or_else(|| invalid("merged file alias source is missing"))?;
-            if original.branch_kind != "file" || original.state != "merged" || source == target {
+            if original.branch_kind != BranchKind::File
+                || original.state != BranchState::Merged
+                || source == target
+            {
                 return Err(invalid("merged file alias source is invalid"));
             }
             let mut cursor = target;
@@ -744,7 +752,7 @@ impl HistoryManifest {
                     .branches
                     .get(cursor)
                     .ok_or_else(|| invalid("merged file alias target is missing"))?;
-                if branch.branch_kind != "file"
+                if branch.branch_kind != BranchKind::File
                     || branch.file_id != original.file_id
                     || branch.history_tree_id != original.history_tree_id
                 {
@@ -753,7 +761,7 @@ impl HistoryManifest {
                 match self.file_branch_aliases.get(cursor) {
                     Some(next) => cursor = next,
                     None => {
-                        if branch.state != "active" {
+                        if branch.state != BranchState::Active {
                             return Err(invalid("merged file alias final target is not active"));
                         }
                         break;
@@ -955,7 +963,7 @@ impl HistoryManifest {
             }
             if let Some(file) = branch.file_id.as_deref() {
                 let head = &self.commits[&branch.head_commit_id];
-                if branch.branch_kind != "file"
+                if branch.branch_kind != BranchKind::File
                     || head
                         .entries
                         .iter()
@@ -1010,11 +1018,9 @@ impl HistoryManifest {
             }
         }
         for (file, branch) in &self.file_selections {
-            if !self
-                .branches
-                .get(branch)
-                .is_some_and(|b| b.file_id.as_deref() == Some(file.as_str()) && b.state == "active")
-            {
+            if !self.branches.get(branch).is_some_and(|b| {
+                b.file_id.as_deref() == Some(file.as_str()) && b.state == BranchState::Active
+            }) {
                 return Err(invalid(
                     "selected file branch is missing, inactive or belongs to another file",
                 ));

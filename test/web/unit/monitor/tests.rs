@@ -25,6 +25,7 @@ fn superseded_history_read_revokes_authentication_without_settling_the_new_read(
                 status: 401,
                 retryable: false,
                 request_id: Some("expired-history".into()),
+                source: None,
             }),
         );
         state.with_untracked(|s| {
@@ -64,6 +65,7 @@ fn superseded_history_data_and_prior_session_errors_leave_current_state_unchange
                     status,
                     retryable: false,
                     request_id: None,
+                    source: None,
                 }),
             );
         }

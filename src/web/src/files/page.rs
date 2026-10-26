@@ -36,6 +36,7 @@ pub(super) fn selected(
             message: "The selected entry did not match the requested identity.".into(),
             retryable: false,
             request_id: None,
+            source: None,
         }),
     }
 }
@@ -48,6 +49,7 @@ impl Page {
             message: "The directory page did not match the server contract.".into(),
             retryable: false,
             request_id: None,
+            source: None,
         };
         let cursor = |field: &str| -> Option<Option<String>> {
             match value.get(field)? {

@@ -43,10 +43,9 @@ fn start(state: RwSignal<State>, repository: String, path: String) {
     if state.with_untracked(|s| !s.session_active() || actions::pending(s)) {
         return;
     }
-    let id = api::operation_id();
-    if id.is_empty() {
+    let Some(id) = crate::ui::operation_id(state) else {
         return;
-    }
+    };
     let epoch = state.with_untracked(|s| s.session_epoch);
     review::reset(state, review::Kind::Backup);
     state.update(|s| {

@@ -19,17 +19,16 @@ impl EngineBackend {
                 "version not found",
             )
         })?;
-        repo_for_history(&engine, &record.history_tree_id)?;
-        let plan = engine.prepare_content(version).map_err(error)?;
         let repo = repo_for_history(&engine, &record.history_tree_id)?;
-        let tree = engine.namespace_tree(&repo.main_branch_id).ok();
-        let entries = tree.map(|tree| tree.entries()).unwrap_or_default();
+        let plan = engine.prepare_content(version).map_err(error)?;
+        let tree = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
+        let entries = tree.entries();
         let preferred = engine
             .state()
             .file_locations
             .get(&record.file_id)
             .and_then(|path| {
-                tree?.get(path).filter(|entry| {
+                tree.get(path).filter(|entry| {
                     entry.kind == storage_contract::NamespaceEntryKind::File
                         && entry.file_id == record.file_id
                 })

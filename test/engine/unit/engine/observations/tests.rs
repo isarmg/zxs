@@ -124,3 +124,43 @@ fn accounting_snapshot_preserves_purge_and_duplicate_route_semantics() {
             .any(|disk| disk.used_bytes > 0)
     );
 }
+
+#[test]
+#[should_panic(expected = "invariant: every placement references an existing version")]
+fn observation_exposes_dangling_internal_placement() {
+    let root = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([
+            root.path().join("d1"),
+            root.path().join("d2"),
+            root.path().join("d3"),
+        ]),
+    )
+    .unwrap();
+    let repo = engine
+        .create_repository("Accounting", "P01", 3, "owner", &new_id("op"))
+        .unwrap();
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "owner")
+        .unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "body", b"bytes")
+        .unwrap();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: new_id("op"),
+            principal: "owner".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: String::new(),
+            request_digest: None,
+        })
+        .unwrap();
+    let id = engine.state.versions.keys().next().unwrap().clone();
+    std::sync::Arc::make_mut(&mut engine.state)
+        .versions
+        .remove(&id);
+    engine.prepare_disk_observation();
+}

@@ -157,7 +157,7 @@ fn temporary_appends_and_renames_stay_unordered_until_validation() {
     apply_namespace(
         &mut entries,
         &NamespaceOperation {
-            kind: "mkdir".into(),
+            kind: NamespaceOperationKind::Mkdir,
             path: "a/B/C".into(),
             destination: None,
         },
@@ -166,7 +166,7 @@ fn temporary_appends_and_renames_stay_unordered_until_validation() {
     apply_namespace(
         &mut entries,
         &NamespaceOperation {
-            kind: "rename".into(),
+            kind: NamespaceOperationKind::Rename,
             path: "A".into(),
             destination: Some("0".into()),
         },
@@ -177,7 +177,7 @@ fn temporary_appends_and_renames_stay_unordered_until_validation() {
         apply_namespace(
             &mut entries,
             &NamespaceOperation {
-                kind: "mkdir".into(),
+                kind: NamespaceOperationKind::Mkdir,
                 path: "0/b".into(),
                 destination: None,
             }
@@ -191,7 +191,7 @@ fn temporary_appends_and_renames_stay_unordered_until_validation() {
         .map(|entry| entry.path.clone())
         .collect::<Vec<_>>();
     assert_eq!(mutation_order, ["Z", "0", "0/B", "0/B/C"]);
-    let draft = NamespaceDraft::new(entries).unwrap();
+    let draft = NamespaceDraft::new(entries);
     assert_eq!(draft.get("0/b").unwrap().entry_id, parent_id);
     let mut entries = draft.into_entries();
     assert_eq!(
@@ -284,7 +284,7 @@ fn published_and_reopened_trees_preserve_unicode_identity_and_historical_lookup(
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: NamespaceOperationKind::Rename,
                 path: "STRASSE".into(),
                 destination: Some("Moved".into()),
             },
@@ -311,7 +311,7 @@ fn published_and_reopened_trees_preserve_unicode_identity_and_historical_lookup(
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation {
-                kind: "mkdir".into(),
+                kind: NamespaceOperationKind::Mkdir,
                 path: "MOVED".into(),
                 destination: None,
             },
@@ -443,7 +443,7 @@ fn query_views_keep_missing_foreign_and_migrated_branch_errors() {
         .branches
         .get_mut(&repo.main_branch_id)
         .unwrap()
-        .state = "migrated".into();
+        .state = BranchState::Migrated;
     let old = engine.list_tree_ref(&repo.main_branch_id).err().unwrap();
     let new = engine.namespace_tree(&repo.main_branch_id).err().unwrap();
     assert_eq!(new.code(), storage_contract::ErrorCode::TreeMoved);

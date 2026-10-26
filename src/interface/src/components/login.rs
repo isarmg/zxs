@@ -15,7 +15,9 @@ pub fn LoginPage(
             failure.set(Some((error.message, error.request_id)));
             if let Some(secret) = password.get_untracked() {
                 secret.set_value("");
-                let _ = secret.focus();
+                if let Err(error) = secret.focus() {
+                    web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error);
+                }
             }
         }
     });
@@ -153,12 +155,16 @@ pub fn LoginPage(
                 let secret = password.get_untracked().unwrap();
                 if name.value().is_empty() {
                     failure.set(Some((t("请输入用户名。", "Enter your username."), None)));
-                    let _ = name.focus();
+                    if let Err(error) = name.focus() {
+                        web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error);
+                    }
                     return;
                 }
                 if secret.value().is_empty() {
                     failure.set(Some((t("请输入密码。", "Enter your password."), None)));
-                    let _ = secret.focus();
+                    if let Err(error) = secret.focus() {
+                        web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error);
+                    }
                     return;
                 }
                 failure.set(None);

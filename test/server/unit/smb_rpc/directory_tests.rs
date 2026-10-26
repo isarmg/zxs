@@ -41,7 +41,7 @@ fn directory_cursor_freezes_its_commit_and_restart_captures_a_new_snapshot() {
     let mut writer = session(shared.clone(), &branch);
     writer
         .namespace(
-            "mkdir".into(),
+            smb_protocol::protocol::NamespaceOperation::Mkdir,
             "new-directory".into(),
             None,
             false,
@@ -96,10 +96,10 @@ fn directory_pages_recheck_current_binding_and_handle_ownership() {
         .to_owned();
     binding_tests::rebind(&shared, &branch, false);
     assert!(
-        matches!(exchange(&mut client,Request::ReadDirectory {handle,restart:false}).0,Response::Error {code,..} if code=="SMB_REBIND_REQUIRED")
+        matches!(exchange(&mut client,Request::ReadDirectory {handle,restart:false}).0,Response::Error {code,..} if code == storage_contract::ErrorCode::SmbRebindRequired)
     );
     assert!(
-        matches!(exchange(&mut client,Request::ReadDirectory {handle:handle+100,restart:false}).0,Response::Error {code,..} if code=="NOT_FOUND")
+        matches!(exchange(&mut client,Request::ReadDirectory {handle:handle+100,restart:false}).0,Response::Error {code,..} if code == storage_contract::ErrorCode::NotFound)
     );
     assert!(matches!(
         exchange(&mut client, Request::Close { handle }).0,
@@ -114,7 +114,7 @@ fn renamed_and_replaced_directory_does_not_retarget_the_open_handle() {
     let mut session = session(shared, &branch);
     session
         .namespace(
-            "mkdir".into(),
+            smb_protocol::protocol::NamespaceOperation::Mkdir,
             "original".into(),
             None,
             false,
@@ -127,7 +127,7 @@ fn renamed_and_replaced_directory_does_not_retarget_the_open_handle() {
     let opened: OpenResult = json_codec::from_value(opened).unwrap();
     session
         .namespace(
-            "rename".into(),
+            smb_protocol::protocol::NamespaceOperation::Rename,
             "original".into(),
             Some("moved".into()),
             false,
@@ -136,7 +136,7 @@ fn renamed_and_replaced_directory_does_not_retarget_the_open_handle() {
         .unwrap();
     session
         .namespace(
-            "mkdir".into(),
+            smb_protocol::protocol::NamespaceOperation::Mkdir,
             "original".into(),
             None,
             false,

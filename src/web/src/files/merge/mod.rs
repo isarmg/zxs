@@ -52,42 +52,42 @@ pub(crate) fn available(model: &Model) -> bool {
             })
 }
 pub(crate) fn start(state: RwSignal<State>) {
-    let snapshot = state.get_untracked();
-    if !actions::write_allowed(&snapshot)
-        || super::model::selected_entry_read_only(&snapshot.files)
-        || !available(&snapshot.files)
-    {
+    let Some(draft) = state.with_untracked(|snapshot| {
+        if !actions::write_allowed(snapshot)
+            || super::model::selected_entry_read_only(&snapshot.files)
+            || !available(&snapshot.files)
+        {
+            return None;
+        }
+        let entry = snapshot.files.selected.as_ref()?;
+        let file = text(entry, &["file_id"]);
+        let (repository, path) = super::model::file_context(&snapshot.files, entry)?;
+        let branches = snapshot.files.file_history["branches"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|branch| branch_writable(branch))
+            .cloned()
+            .collect::<Vec<_>>();
+        let current = selected_branch(&snapshot.files);
+        let selected = branches
+            .iter()
+            .filter(|branch| branch_id(branch) == current)
+            .map(branch_id)
+            .collect();
+        let draft = Draft {
+            file,
+            repository,
+            path,
+            branches,
+            nodes: history_nodes(&snapshot.files.file_history),
+            selected,
+            chosen: String::new(),
+            survivor: String::new(),
+        };
+        Some(draft)
+    }) else {
         return;
-    }
-    let Some(entry) = snapshot.files.selected.as_ref() else {
-        return;
-    };
-    let file = text(entry, &["file_id"]);
-    let Some((repository, path)) = super::model::file_context(&snapshot.files, entry) else {
-        return;
-    };
-    let branches = snapshot.files.file_history["branches"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(branch_writable)
-        .collect::<Vec<_>>();
-    let current = selected_branch(&snapshot.files);
-    let selected = branches
-        .iter()
-        .filter(|branch| branch_id(branch) == current)
-        .map(branch_id)
-        .collect();
-    let draft = Draft {
-        file,
-        repository,
-        path,
-        branches,
-        nodes: history_nodes(&snapshot.files.file_history),
-        selected,
-        chosen: String::new(),
-        survivor: String::new(),
     };
     review::reset(state, review::Kind::Merge);
     state.update(|s| s.files.merge = Some(draft));

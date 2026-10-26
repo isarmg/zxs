@@ -49,7 +49,9 @@ pub(super) fn rebind(shared: &Shared, branch: &str, enabled: bool) {
 fn refused(wire: &mut FrameStream, request: Request) {
     let (response, fd) = exchange(wire, request);
     assert!(fd.is_none());
-    assert!(matches!(response, Response::Error { code, .. } if code == "SMB_REBIND_REQUIRED"));
+    assert!(
+        matches!(response, Response::Error { code, .. } if code == storage_contract::ErrorCode::SmbRebindRequired)
+    );
 }
 fn create(path: &str) -> Request {
     Request::Open {
@@ -112,7 +114,7 @@ fn check_read_authorization(
         assert!(descriptor.is_none());
         match (reply, error) {
             (Response::Ok { result }, None) => assert_eq!(result, json!({"authorized":true})),
-            (Response::Error { code, .. }, Some(expected)) => assert_eq!(code, expected),
+            (Response::Error { code, .. }, Some(expected)) => assert_eq!(code.as_str(), expected),
             (reply, expected) => {
                 panic!("unexpected authorization reply: {reply:?}, error={expected:?}")
             }
@@ -132,7 +134,7 @@ fn missing_read_handle(wire: &mut FrameStream, backend: &LostCommitReply, handle
     assert!(matches!(
         reply,
         Response::Error { code, message, retryable: false, operation_id: None }
-            if code == "NOT_FOUND" && message == "SMB handle missing"
+            if code == storage_contract::ErrorCode::NotFound && message == "SMB handle missing"
     ));
     assert!(backend.take_calls().is_empty());
 }
@@ -245,7 +247,7 @@ fn authorize_read_keeps_read_semantics_after_normal_writes_and_default_selection
         exchange(&mut client, Request::PrepareWrite {
             handle: writer.handle, end: 3, bytes: 3,
         }).0,
-        Response::Error { code, .. } if code == "DIRECTORY_BRANCH_CONFLICT"
+        Response::Error { code, .. } if code == storage_contract::ErrorCode::DirectoryBranchConflict
     ));
     close_authorization_handles(&mut client, &handles);
     drop(client);
@@ -309,14 +311,16 @@ fn disabled_and_reenabled_binding_cannot_revive_an_idle_authenticated_connection
         &mut old,
         Request::Namespace {
             operation_id: new_id("op"),
-            kind: "mkdir".into(),
+            kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
             path: "disabled".into(),
             destination: None,
             replace: false,
         },
     );
     let (new, rejected, hello) = wire(shared.clone());
-    assert!(matches!(hello, Response::Error { code, .. } if code == "SMB_REBIND_REQUIRED"));
+    assert!(
+        matches!(hello, Response::Error { code, .. } if code == storage_contract::ErrorCode::SmbRebindRequired)
+    );
     drop(new);
     rejected.join().unwrap().unwrap();
     rebind(&shared, &branch, true);
@@ -515,13 +519,13 @@ fn live_writer_cannot_prepare_or_publish_after_disable_and_failed_close_retains_
         let (reply, fd) = exchange(&mut wire, request);
         assert!(fd.is_none());
         assert!(
-            matches!(reply, Response::Error { code, .. } if code == "WORKSPACE_REBASE_REQUIRED")
+            matches!(reply, Response::Error { code, .. } if code == storage_contract::ErrorCode::WorkspaceRebaseRequired)
         );
     }
     assert_eq!(backend.uploads.load(Ordering::SeqCst), 1);
     assert!(shared.file_writers.lock().unwrap().is_empty());
     assert!(
-        matches!(exchange(&mut wire, Request::AuthorizeRead { handle: opened.handle }).0, Response::Error { code, .. } if code == "NOT_FOUND")
+        matches!(exchange(&mut wire, Request::AuthorizeRead { handle: opened.handle }).0, Response::Error { code, .. } if code == storage_contract::ErrorCode::NotFound)
     );
     let records: Vec<_> = fs::read_dir(&shared.spool)
         .unwrap()

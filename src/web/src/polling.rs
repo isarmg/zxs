@@ -120,10 +120,15 @@ mod browser {
     }
     impl Drop for Listener {
         fn drop(&mut self) {
-            let _ = self.target.remove_event_listener_with_callback(
+            if let Err(error) = self.target.remove_event_listener_with_callback(
                 self.name,
                 self.callback.as_ref().unchecked_ref(),
-            );
+            ) {
+                web_sys::console::warn_2(
+                    &"Could not remove the background-read listener".into(),
+                    &error,
+                );
+            }
         }
     }
 

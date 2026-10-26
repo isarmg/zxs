@@ -23,7 +23,7 @@ fn domain(value: &Value) -> OperationResult {
             if content { result } else { value }["protection_at_publish"].clone(),
         )
         .unwrap(),
-        current_health: value["current_health"]["state"].as_str().unwrap().into(),
+        current_health: json_codec::from_value(value["current_health"]["state"].clone()).unwrap(),
         request_digest: value["request_digest"].as_str().unwrap().into(),
         sequence: storage_contract::parse_u64_decimal(
             if content { result } else { value }["publication_sequence"]

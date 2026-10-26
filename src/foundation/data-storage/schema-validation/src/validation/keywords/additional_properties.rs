@@ -7,6 +7,7 @@
 //!
 //! Each valid combination of these keywords has a validator here.
 use crate::reference::{Uri, Vocabulary};
+use crate::validation::regex::property_match_error;
 use crate::validation::{
     compiler,
     error::ValidationError,
@@ -778,7 +779,10 @@ impl<F: Json, R: RegexEngine> Validate<F> for AdditionalPropertiesWithPatternsVa
             for (property, value) in object.members() {
                 let mut has_match = false;
                 for (re, node) in &self.patterns {
-                    if re.is_match(property.as_ref()).unwrap_or(false) {
+                    if match re.is_match(property.as_ref()) {
+                        Ok(matched) => matched,
+                        Err(_) => return false,
+                    } {
                         has_match = true;
                         if !node.is_valid(&value, ctx) {
                             return false;
@@ -805,7 +809,15 @@ impl<F: Json, R: RegexEngine> Validate<F> for AdditionalPropertiesWithPatternsVa
                 let property_location = location.push(property.as_ref());
                 let mut has_match = false;
                 for (re, node) in &self.patterns {
-                    if re.is_match(property.as_ref()).unwrap_or(false) {
+                    if re.is_match(property.as_ref()).map_err(|error| {
+                        property_match_error(
+                            error,
+                            node.location(),
+                            &location.push(property.as_ref()),
+                            tracker,
+                            property.as_ref(),
+                        )
+                    })? {
                         has_match = true;
                         node.validate(&value, &property_location, tracker, ctx)?;
                     }
@@ -833,7 +845,20 @@ impl<F: Json, R: RegexEngine> Validate<F> for AdditionalPropertiesWithPatternsVa
         for (property, value) in object.members() {
             let mut has_match = false;
             for (re, node) in &self.patterns {
-                if re.is_match(property.as_ref()).unwrap_or(false) {
+                if match re.is_match(property.as_ref()) {
+                    Ok(matched) => matched,
+                    Err(error) => {
+                        has_match = true;
+                        errors.push(property_match_error(
+                            error,
+                            node.location(),
+                            &location.push(property.as_ref()),
+                            tracker,
+                            property.as_ref(),
+                        ));
+                        continue;
+                    }
+                } {
                     has_match = true;
                     node.collect_errors(
                         &value,
@@ -871,7 +896,20 @@ impl<F: Json, R: RegexEngine> Validate<F> for AdditionalPropertiesWithPatternsVa
                 let path = location.push(property.as_ref());
                 let mut has_match = false;
                 for (pattern, node) in &self.patterns {
-                    if pattern.is_match(property.as_ref()).unwrap_or(false) {
+                    if match pattern.is_match(property.as_ref()) {
+                        Ok(matched) => matched,
+                        Err(error) => {
+                            return EvaluationResult::invalid_empty(vec![
+                                ErrorDescription::from_validation_error(&property_match_error(
+                                    error,
+                                    node.location(),
+                                    &location.push(property.as_ref()),
+                                    tracker,
+                                    property.as_ref(),
+                                )),
+                            ])
+                        }
+                    } {
                         has_match = true;
                         pattern_matched_propnames.push(property.as_ref().to_owned());
                         let child = node.evaluate_instance_below(&value, &path, tracker, ctx);
@@ -947,7 +985,10 @@ impl<F: Json, R: RegexEngine> Validate<F> for AdditionalPropertiesWithPatternsFa
             for (property, value) in object.members() {
                 let mut has_match = false;
                 for (re, node) in &self.patterns {
-                    if re.is_match(property.as_ref()).unwrap_or(false) {
+                    if match re.is_match(property.as_ref()) {
+                        Ok(matched) => matched,
+                        Err(_) => return false,
+                    } {
                         has_match = true;
                         if !node.is_valid(&value, ctx) {
                             return false;
@@ -974,7 +1015,15 @@ impl<F: Json, R: RegexEngine> Validate<F> for AdditionalPropertiesWithPatternsFa
                 let property_location = location.push(property.as_ref());
                 let mut has_match = false;
                 for (re, node) in &self.patterns {
-                    if re.is_match(property.as_ref()).unwrap_or(false) {
+                    if re.is_match(property.as_ref()).map_err(|error| {
+                        property_match_error(
+                            error,
+                            node.location(),
+                            &location.push(property.as_ref()),
+                            tracker,
+                            property.as_ref(),
+                        )
+                    })? {
                         has_match = true;
                         node.validate(&value, &property_location, tracker, ctx)?;
                     }
@@ -1008,7 +1057,20 @@ impl<F: Json, R: RegexEngine> Validate<F> for AdditionalPropertiesWithPatternsFa
         for (property, value) in object.members() {
             let mut has_match = false;
             for (re, node) in &self.patterns {
-                if re.is_match(property.as_ref()).unwrap_or(false) {
+                if match re.is_match(property.as_ref()) {
+                    Ok(matched) => matched,
+                    Err(error) => {
+                        has_match = true;
+                        errors.push(property_match_error(
+                            error,
+                            node.location(),
+                            &location.push(property.as_ref()),
+                            tracker,
+                            property.as_ref(),
+                        ));
+                        continue;
+                    }
+                } {
                     has_match = true;
                     node.collect_errors(
                         &value,
@@ -1049,7 +1111,20 @@ impl<F: Json, R: RegexEngine> Validate<F> for AdditionalPropertiesWithPatternsFa
                 let path = location.push(property.as_ref());
                 let mut has_match = false;
                 for (pattern, node) in &self.patterns {
-                    if pattern.is_match(property.as_ref()).unwrap_or(false) {
+                    if match pattern.is_match(property.as_ref()) {
+                        Ok(matched) => matched,
+                        Err(error) => {
+                            return EvaluationResult::invalid_empty(vec![
+                                ErrorDescription::from_validation_error(&property_match_error(
+                                    error,
+                                    node.location(),
+                                    &location.push(property.as_ref()),
+                                    tracker,
+                                    property.as_ref(),
+                                )),
+                            ])
+                        }
+                    } {
                         has_match = true;
                         pattern_matched_props.push(property.as_ref().to_owned());
                         let child = node.evaluate_instance_below(&value, &path, tracker, ctx);
@@ -1161,7 +1236,10 @@ impl<F: Json, M: PropertiesValidatorsMap<F>, R: RegexEngine> Validate<F>
                     // Unknown property - need runtime regex matching
                     let mut has_match = false;
                     for (re, node) in &self.patterns {
-                        if re.is_match(property.as_ref()).unwrap_or(false) {
+                        if match re.is_match(property.as_ref()) {
+                            Ok(matched) => matched,
+                            Err(_) => return false,
+                        } {
                             has_match = true;
                             if !node.is_valid(&value, ctx) {
                                 return false;
@@ -1206,7 +1284,15 @@ impl<F: Json, M: PropertiesValidatorsMap<F>, R: RegexEngine> Validate<F>
                     let property_location = location.push(property.as_ref());
                     let mut has_match = false;
                     for (re, node) in &self.patterns {
-                        if re.is_match(property.as_ref()).unwrap_or(false) {
+                        if re.is_match(property.as_ref()).map_err(|error| {
+                            property_match_error(
+                                error,
+                                node.location(),
+                                &location.push(property.as_ref()),
+                                tracker,
+                                property.as_ref(),
+                            )
+                        })? {
                             has_match = true;
                             node.validate(&value, &property_location, tracker, ctx)?;
                         }
@@ -1253,7 +1339,20 @@ impl<F: Json, M: PropertiesValidatorsMap<F>, R: RegexEngine> Validate<F>
                 // Unknown property - need runtime regex matching
                 let mut has_match = false;
                 for (re, node) in &self.patterns {
-                    if re.is_match(property.as_ref()).unwrap_or(false) {
+                    if match re.is_match(property.as_ref()) {
+                        Ok(matched) => matched,
+                        Err(error) => {
+                            has_match = true;
+                            errors.push(property_match_error(
+                                error,
+                                node.location(),
+                                &location.push(property.as_ref()),
+                                tracker,
+                                property.as_ref(),
+                            ));
+                            continue;
+                        }
+                    } {
                         has_match = true;
                         node.collect_errors(
                             &value,
@@ -1307,7 +1406,20 @@ impl<F: Json, M: PropertiesValidatorsMap<F>, R: RegexEngine> Validate<F>
                     // Unknown property - need runtime regex matching
                     let mut has_match = false;
                     for (pattern, node) in &self.patterns {
-                        if pattern.is_match(property.as_ref()).unwrap_or(false) {
+                        if match pattern.is_match(property.as_ref()) {
+                            Ok(matched) => matched,
+                            Err(error) => {
+                                return EvaluationResult::invalid_empty(vec![
+                                    ErrorDescription::from_validation_error(&property_match_error(
+                                        error,
+                                        node.location(),
+                                        &location.push(property.as_ref()),
+                                        tracker,
+                                        property.as_ref(),
+                                    )),
+                                ])
+                            }
+                        } {
                             has_match = true;
                             let child = node.evaluate_instance_below(&value, &path, tracker, ctx);
                             children.push(&mut ctx.arena, child);
@@ -1394,7 +1506,10 @@ impl<F: Json, M: PropertiesValidatorsMap<F>, R: RegexEngine> Validate<F>
                     // Unknown property - need runtime regex matching
                     let mut has_match = false;
                     for (re, node) in &self.patterns {
-                        if re.is_match(property.as_ref()).unwrap_or(false) {
+                        if match re.is_match(property.as_ref()) {
+                            Ok(matched) => matched,
+                            Err(_) => return false,
+                        } {
                             has_match = true;
                             if !node.is_valid(&value, ctx) {
                                 return false;
@@ -1437,7 +1552,15 @@ impl<F: Json, M: PropertiesValidatorsMap<F>, R: RegexEngine> Validate<F>
                     let property_location = location.push(property.as_ref());
                     let mut has_match = false;
                     for (re, node) in &self.patterns {
-                        if re.is_match(property.as_ref()).unwrap_or(false) {
+                        if re.is_match(property.as_ref()).map_err(|error| {
+                            property_match_error(
+                                error,
+                                node.location(),
+                                &location.push(property.as_ref()),
+                                tracker,
+                                property.as_ref(),
+                            )
+                        })? {
                             has_match = true;
                             node.validate(&value, &property_location, tracker, ctx)?;
                         }
@@ -1493,7 +1616,20 @@ impl<F: Json, M: PropertiesValidatorsMap<F>, R: RegexEngine> Validate<F>
                 // Unknown property - need runtime regex matching
                 let mut has_match = false;
                 for (re, node) in &self.patterns {
-                    if re.is_match(property.as_ref()).unwrap_or(false) {
+                    if match re.is_match(property.as_ref()) {
+                        Ok(matched) => matched,
+                        Err(error) => {
+                            has_match = true;
+                            errors.push(property_match_error(
+                                error,
+                                node.location(),
+                                &location.push(property.as_ref()),
+                                tracker,
+                                property.as_ref(),
+                            ));
+                            continue;
+                        }
+                    } {
                         has_match = true;
                         node.collect_errors(
                             &value,
@@ -1550,7 +1686,20 @@ impl<F: Json, M: PropertiesValidatorsMap<F>, R: RegexEngine> Validate<F>
                     // Unknown property - need runtime regex matching
                     let mut has_match = false;
                     for (pattern, node) in &self.patterns {
-                        if pattern.is_match(property.as_ref()).unwrap_or(false) {
+                        if match pattern.is_match(property.as_ref()) {
+                            Ok(matched) => matched,
+                            Err(error) => {
+                                return EvaluationResult::invalid_empty(vec![
+                                    ErrorDescription::from_validation_error(&property_match_error(
+                                        error,
+                                        node.location(),
+                                        &location.push(property.as_ref()),
+                                        tracker,
+                                        property.as_ref(),
+                                    )),
+                                ])
+                            }
+                        } {
                             has_match = true;
                             let child = node.evaluate_instance_below(&value, &path, tracker, ctx);
                             children.push(&mut ctx.arena, child);
@@ -1594,22 +1743,30 @@ macro_rules! try_compile {
 /// Pre-compute which `patternProperties` patterns match each property name from `properties`.
 /// This eliminates regex matching at validation time for known properties.
 fn precompute_property_pattern_indices<R: RegexEngine, F: Json>(
-    property_names: impl Iterator<Item = impl AsRef<str> + Clone + Into<String>>,
+    property_names: impl Iterator<Item = impl AsRef<str> + Into<String>>,
     patterns: &[(R, SchemaNode<F>)],
-) -> AHashMap<String, Box<[usize]>> {
+) -> Result<AHashMap<String, Box<[usize]>>, ValidationError<'static>> {
     let mut result = AHashMap::new();
     for prop_name in property_names {
-        let matching_indices: Vec<usize> = patterns
-            .iter()
-            .enumerate()
-            .filter(|(_, (re, _))| re.is_match(prop_name.as_ref()).unwrap_or(false))
-            .map(|(i, _)| i)
-            .collect();
+        let mut matching_indices = Vec::new();
+        for (index, (pattern, node)) in patterns.iter().enumerate() {
+            if pattern.is_match(prop_name.as_ref()).map_err(|error| {
+                property_match_error(
+                    error,
+                    node.location(),
+                    &LazyLocation::new().push(prop_name.as_ref()),
+                    None,
+                    prop_name.as_ref(),
+                )
+            })? {
+                matching_indices.push(index);
+            }
+        }
         if !matching_indices.is_empty() {
             result.insert(prop_name.into(), matching_indices.into_boxed_slice());
         }
     }
-    result
+    Ok(result)
 }
 
 fn compile_pattern_non_empty<'a, R, F: Json>(
@@ -1622,7 +1779,8 @@ where
     R: RegexEngine + 'static,
 {
     let kctx = ctx.new_at_location("additionalProperties");
-    let property_pattern_indices = precompute_property_pattern_indices(map.keys(), &patterns);
+    let property_pattern_indices =
+        try_compile!(precompute_property_pattern_indices(map.keys(), &patterns));
 
     if map.len() < HASHMAP_THRESHOLD {
         Some(Ok(Box::new(
@@ -1654,7 +1812,8 @@ where
     R: RegexEngine + 'static,
 {
     let kctx = ctx.new_at_location("additionalProperties");
-    let property_pattern_indices = precompute_property_pattern_indices(map.keys(), &patterns);
+    let property_pattern_indices =
+        try_compile!(precompute_property_pattern_indices(map.keys(), &patterns));
 
     if map.len() < HASHMAP_THRESHOLD {
         Some(Ok(Box::new(

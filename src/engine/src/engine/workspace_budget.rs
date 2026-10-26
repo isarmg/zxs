@@ -120,7 +120,7 @@ impl Engine {
     /// existing values defensively rather than undercharging recovered records.
     fn workspace_metadata_charge(&self, workspace: &Workspace) -> Result<u64> {
         let mut reserved = workspace.clone();
-        reserved.state = "committed".into();
+        reserved.state = WorkspaceState::Committed;
         reserved.fencing_token = u64::MAX;
         let context_keys: BTreeMap<_, _> = reserved
             .selected_file_contexts

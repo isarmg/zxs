@@ -46,7 +46,7 @@ fn published_new_file_context_fences_same_version_branch_switch() {
             )
             .is_none()
         );
-        assert_eq!(workspace.state, "committed");
+        assert_eq!(workspace.state, WorkspaceState::Committed);
         assert_eq!(
             workspace.selected_file_contexts.get(&key),
             engine
@@ -263,7 +263,7 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
         let published_context = engine
             .file_context(&repo.repository_id, "fresh.txt")
             .unwrap();
-        assert_eq!(completed.state, "committed");
+        assert_eq!(completed.state, WorkspaceState::Committed);
         assert_eq!(completed.fencing_token, before.fencing_token + 1);
         assert_eq!(
             completed.selected_file_contexts.get(&key),

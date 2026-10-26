@@ -43,7 +43,7 @@ impl Engine {
                 "workspace belongs to another principal",
             ));
         }
-        if !["open", "sealed"].contains(&w.state.as_str()) {
+        if !matches!(w.state, WorkspaceState::Open | WorkspaceState::Sealed) {
             return Err(Error::new(
                 storage_contract::ErrorCode::WorkspaceClosed,
                 "workspace cannot be sealed",
@@ -52,7 +52,7 @@ impl Engine {
         self.repository_for_branch(&w.branch_id)?;
         let repository = self.repository_for_branch(&w.branch_id)?.clone();
         // Once sealed, no uploader or namespace request can mutate this generation.
-        w.state = "sealed".into();
+        w.state = WorkspaceState::Sealed;
         self.persist_workspace(&w)?;
         self.workspaces.insert(id.into(), w.clone());
         let mut placement = json_codec::Map::new();
@@ -122,7 +122,7 @@ impl Engine {
         if let Some(existing) = self.state.operations.get(&request.operation_id)
             && (existing.request_digest != wire_digest
                 || text(&body, "request_digest")? != wire_digest
-                || self.operation_owner(&request.operation_id).as_deref()
+                || self.operation_owner(&request.operation_id)?.as_deref()
                     != Some(&request.principal))
         {
             return Err(Error::new(
@@ -233,7 +233,9 @@ impl Engine {
             self.route(primary, copies)?;
             placements.insert(item.clone(), (primary.into(), copies));
         }
-        if w.state != "sealed" && !self.state.operations.contains_key(&request.operation_id) {
+        if w.state != WorkspaceState::Sealed
+            && !self.state.operations.contains_key(&request.operation_id)
+        {
             return Err(Error::new(
                 storage_contract::ErrorCode::WorkspaceNotSealed,
                 "seal the immutable upload manifest before commit",

@@ -36,22 +36,22 @@ fn language_reload_preserves_admin_operation_fences() {
     model.busy = true;
     assert!(model.reload_blocked());
     model.busy = false;
-    model.uncertain_operation = "original".into();
+    model.uncertain_operation = Some(UncertainOperation::Known("original".into()));
     assert!(model.reload_blocked());
-    model.uncertain_operation = "unknown".into();
+    model.uncertain_operation = Some(UncertainOperation::MissingId);
     assert!(model.reload_blocked());
 }
 
 #[test]
 fn edited_plan_inputs_require_a_new_preview_before_commit_or_cancel() {
     for (kind, key, original, changed) in [
-        ("inspect", "id", "plan-a", "plan-b"),
-        ("purge", "versions", "version-a", "version-b"),
-        ("split", "commit", "commit-a", "commit-b"),
-        ("save", "name", "saved-a", "saved-b"),
+        (Kind::Inspect, "id", "plan-a", "plan-b"),
+        (Kind::Purge, "versions", "version-a", "version-b"),
+        (Kind::Split, "commit", "commit-a", "commit-b"),
+        (Kind::Save, "name", "saved-a", "saved-b"),
     ] {
         let mut model = Model {
-            kind: kind.into(),
+            kind,
             fields: [(key.into(), original.into())].into_iter().collect(),
             plan: json_codec::json!({"plan_id":"plan-a", "digest":"reviewed", "state":"ready"}),
             result: "previous plan preview".into(),
@@ -60,7 +60,7 @@ fn edited_plan_inputs_require_a_new_preview_before_commit_or_cancel() {
         };
         model.edit_field(key, changed.into());
         assert_eq!(model.fields[key], changed);
-        assert!(model.plan.is_null(), "{kind} retained its previous plan");
+        assert!(model.plan.is_null(), "{kind:?} retained its previous plan");
         assert!(!model.acknowledged);
         assert!(model.result.is_empty());
         // Even a queued acknowledgment cannot make the previous target usable.
@@ -74,7 +74,11 @@ fn edited_plan_inputs_require_a_new_preview_before_commit_or_cancel() {
 #[test]
 fn field_events_cannot_change_pending_or_unconfirmed_admin_intent() {
     let plan = json_codec::json!({"plan_id":"plan-a", "digest":"reviewed", "state":"ready"});
-    for (busy, uncertain) in [(true, ""), (false, "original"), (false, "unknown")] {
+    for (busy, uncertain) in [
+        (true, None),
+        (false, Some(UncertainOperation::Known("original".into()))),
+        (false, Some(UncertainOperation::MissingId)),
+    ] {
         let mut model = Model {
             fields: [
                 ("id".into(), "plan-a".into()),
@@ -86,7 +90,7 @@ fn field_events_cannot_change_pending_or_unconfirmed_admin_intent() {
             acknowledged: true,
             result: "original operation receipt".into(),
             busy,
-            uncertain_operation: uncertain.into(),
+            uncertain_operation: uncertain.clone(),
             ..Default::default()
         };
         model.edit_field("id", "plan-b".into());
@@ -127,7 +131,7 @@ fn invalid_success_and_early_not_found_preserve_review_and_uncertainty() {
         let mut model = Model {
             plan: reviewed.clone(),
             acknowledged: true,
-            uncertain_operation: "original".into(),
+            uncertain_operation: Some(UncertainOperation::Known("original".into())),
             ..Default::default()
         };
         let contract =
@@ -138,7 +142,10 @@ fn invalid_success_and_early_not_found_preserve_review_and_uncertainty() {
         }
         assert_eq!(model.plan, reviewed);
         assert!(model.acknowledged);
-        assert_eq!(model.uncertain_operation, "original");
+        assert_eq!(
+            model.uncertain_operation,
+            Some(UncertainOperation::Known("original".into()))
+        );
     }
     // The operation may not be indexed yet. A lookup error is not evidence of
     // rejection and never enters the success reducer.
@@ -148,10 +155,11 @@ fn invalid_success_and_early_not_found_preserve_review_and_uncertainty() {
         status: 404,
         retryable: false,
         request_id: None,
+        source: None,
     };
     let mut model = Model {
         plan: reviewed.clone(),
-        uncertain_operation: "original".into(),
+        uncertain_operation: Some(UncertainOperation::Known("original".into())),
         ..Default::default()
     };
     reject(&mut model, "GET", false, "", &error);
@@ -162,7 +170,7 @@ fn invalid_success_and_early_not_found_preserve_review_and_uncertainty() {
 #[test]
 fn inspection_snapshots_never_settle_an_interrupted_storage_mutation() {
     let mut model = Model {
-        uncertain_operation: "original".into(),
+        uncertain_operation: Some(UncertainOperation::Known("original".into())),
         ..Default::default()
     };
     for value in [
@@ -170,7 +178,10 @@ fn inspection_snapshots_never_settle_an_interrupted_storage_mutation() {
         json_codec::json!([{"repository_id":"repo"}]),
     ] {
         accept(&mut model, "GET", "/api/repositories", false, value);
-        assert_eq!(model.uncertain_operation, "original");
+        assert_eq!(
+            model.uncertain_operation,
+            Some(UncertainOperation::Known("original".into()))
+        );
         assert!(model.reload_blocked());
     }
 }
@@ -194,9 +205,9 @@ fn management_selection_does_not_bypass_session_busy_or_uncertainty_guards() {
                 s.authenticated = guard != "anonymous";
                 s.admin_console.busy = guard == "busy";
                 s.admin_console.uncertain_operation = if guard == "unknown" {
-                    "original".into()
+                    Some(UncertainOperation::Known("original".into()))
                 } else {
-                    String::new()
+                    None
                 };
                 s.session_transition = match guard {
                     "restoring" => crate::ui::SessionTransition::Restoring,
@@ -205,10 +216,10 @@ fn management_selection_does_not_bypass_session_busy_or_uncertainty_guards() {
                     _ => crate::ui::SessionTransition::Idle,
                 };
             });
-            select(state, "repository");
+            select(state, Kind::Repository);
             assert_eq!(
-                state.with_untracked(|s| s.admin_console.kind.clone()),
-                "inspect"
+                state.with_untracked(|s| s.admin_console.kind),
+                Kind::Inspect
             );
         }
         state.update(|s| {
@@ -217,10 +228,10 @@ fn management_selection_does_not_bypass_session_busy_or_uncertainty_guards() {
                 ..Default::default()
             };
         });
-        select(state, "repository");
+        select(state, Kind::Repository);
         assert_eq!(
-            state.with_untracked(|s| s.admin_console.kind.clone()),
-            "repository"
+            state.with_untracked(|s| s.admin_console.kind),
+            Kind::Repository
         );
     });
 }
@@ -238,22 +249,33 @@ fn storage_action_controls_reenable_after_busy_request_completes() {
         });
         // Save/Create preview and Cancel share this disabled binding.
         let write = Memo::new(move |_| {
-            state.with(|s| !permitted(s, true) || !s.admin_console.uncertain_operation.is_empty())
+            state.with(|s| !permitted(s, true) || s.admin_console.uncertain_operation.is_some())
         });
         let commit = Memo::new(move |_| {
             state.with(|s| {
                 !permitted(s, true)
                     || !s.admin_console.acknowledged
-                    || !s.admin_console.uncertain_operation.is_empty()
+                    || s.admin_console.uncertain_operation.is_some()
             })
         });
         let poll = Memo::new(move |_| {
-            state.with(|s| !permitted(s, false) || s.admin_console.uncertain_operation == "unknown")
+            state.with(|s| {
+                !permitted(s, false)
+                    || s.admin_console
+                        .uncertain_operation
+                        .as_ref()
+                        .and_then(UncertainOperation::id)
+                        .is_none()
+            })
         });
-        let controls = [write, commit, poll];
+        let controls = [write, commit];
         for busy in [false, true, false, true, false] {
             state.update(|s| s.admin_console.busy = busy);
             assert_eq!(allowed(state, true), !busy);
+            assert!(
+                poll.get_untracked(),
+                "there is no original operation to query"
+            );
             for disabled in controls {
                 assert_eq!(
                     disabled.get_untracked(),
@@ -262,19 +284,21 @@ fn storage_action_controls_reenable_after_busy_request_completes() {
                 );
             }
         }
-        state.update(|s| s.admin_console.uncertain_operation = "original".into());
+        state.update(|s| {
+            s.admin_console.uncertain_operation = Some(UncertainOperation::Known("original".into()))
+        });
         assert!(write.get_untracked());
         assert!(commit.get_untracked());
         assert!(!poll.get_untracked());
-        state.update(|s| s.admin_console.uncertain_operation = "unknown".into());
+        state.update(|s| s.admin_console.uncertain_operation = Some(UncertainOperation::MissingId));
         assert!(poll.get_untracked());
         state.update(|s| {
-            s.admin_console.uncertain_operation.clear();
+            s.admin_console.uncertain_operation = None;
             s.admin_console.acknowledged = false;
         });
         assert!(!write.get_untracked());
         assert!(commit.get_untracked());
-        assert!(!poll.get_untracked());
+        assert!(poll.get_untracked());
     });
 }
 
@@ -286,7 +310,7 @@ fn storage_action_controls_observe_initial_readiness_changes() {
             ..Default::default()
         });
         let disabled = Memo::new(move |_| {
-            state.with(|s| !permitted(s, true) || !s.admin_console.uncertain_operation.is_empty())
+            state.with(|s| !permitted(s, true) || s.admin_console.uncertain_operation.is_some())
         });
         assert!(disabled.get_untracked());
         state.update(|s| s.management.storage = Storage::Ready);
@@ -296,4 +320,24 @@ fn storage_action_controls_observe_initial_readiness_changes() {
             "the control must observe storage becoming writable"
         );
     });
+}
+
+#[test]
+fn missing_operation_identity_cannot_match_a_receipt_named_unknown() {
+    let mut model = Model {
+        uncertain_operation: Some(UncertainOperation::MissingId),
+        ..Default::default()
+    };
+    let mut receipt: Value = json_codec::from_str(include_str!(
+        "../files/fixtures/namespace-batch-operation.json"
+    ))
+    .unwrap();
+    receipt["operation_id"] = "unknown".into();
+    assert!(response::terminal(&receipt, "unknown"));
+    accept(&mut model, "GET", "/api/operations/unknown", false, receipt);
+    assert_eq!(
+        model.uncertain_operation,
+        Some(UncertainOperation::MissingId)
+    );
+    assert!(model.reload_blocked());
 }

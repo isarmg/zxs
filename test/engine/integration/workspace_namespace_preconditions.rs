@@ -16,7 +16,7 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
             .create_repository("Namespace preconditions", "P01", 3, "admin", &new_id("op"))
             .unwrap();
         let change = |kind: &str| NamespaceOperation {
-            kind: kind.into(),
+            kind: kind.parse().unwrap(),
             path: "Documents".into(),
             destination: (kind == "rename").then(|| "Moved".into()),
         };
@@ -67,7 +67,11 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
         assert_eq!(current[0].entry_id, replacement.entry_id);
         assert_eq!(current[0].path, "Documents");
         assert_eq!(
-            engine.workspace(&workspace.workspace_id).unwrap().state,
+            engine
+                .workspace(&workspace.workspace_id)
+                .unwrap()
+                .state
+                .as_str(),
             "open"
         );
     }
@@ -89,7 +93,7 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
         .create_repository("Canonical queries", "P01", 1, "admin", &new_id("op"))
         .unwrap();
     let change = |kind: &str, path: &str, destination: Option<&str>| NamespaceOperation {
-        kind: kind.into(),
+        kind: kind.parse().unwrap(),
         path: path.into(),
         destination: destination.map(str::to_owned),
     };
@@ -194,7 +198,7 @@ fn canonical_equivalent_workspace_source_survives_reopen_before_commit() {
         .namespace_operation(
             &workspace.workspace_id,
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: storage_contract::NamespaceOperationKind::Rename,
                 path: "Cafe\u{301}/A\u{30a}.txt".into(),
                 destination: Some("Café/가.txt".into()),
             },

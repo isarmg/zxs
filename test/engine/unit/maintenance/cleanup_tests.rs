@@ -99,7 +99,10 @@ fn published_maintenance_retry_finishes_cleanup_without_republishing() {
             receipt.commit_state,
             storage_contract::CommitState::Published
         );
-        assert_eq!(engine.plan(&plan.plan_id).unwrap().state, "committed");
+        assert_eq!(
+            engine.plan(&plan.plan_id).unwrap().state.as_str(),
+            "committed"
+        );
         assert!(payloads.iter().all(|path| path.exists()));
         let published = canonical_json(engine.state()).unwrap();
 

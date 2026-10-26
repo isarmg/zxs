@@ -25,7 +25,7 @@ pub(super) struct CpuStatus {
     usage_percent: Option<f32>,
     logical_count: usize,
     power_watts: Option<f64>,
-    power_unavailable_reason: Option<String>,
+    power_unavailable_reason: Option<power::PowerUnavailable>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -50,7 +50,7 @@ pub(super) struct DiskStatus {
     #[serialization(default)]
     power_watts: Option<f64>,
     #[serialization(default)]
-    power_unavailable_reason: Option<String>,
+    power_unavailable_reason: Option<power::PowerUnavailable>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -105,7 +105,7 @@ impl SystemSampler {
                 usage_percent: self.cpu_usage,
                 logical_count: self.system.cpus().len(),
                 power_watts: self.cpu_power.watts,
-                power_unavailable_reason: self.cpu_power.reason.clone(),
+                power_unavailable_reason: self.cpu_power.reason,
             },
             memory_status(total, available),
         )
@@ -288,27 +288,53 @@ pub(crate) async fn status(
     .await
 }
 
+#[derive(Clone, Copy, Debug, Default, data_serialization::Serialize)]
+pub(crate) enum HistoryRange {
+    #[default]
+    #[serialization(rename = "1min")]
+    Minute,
+    #[serialization(rename = "30min")]
+    HalfHour,
+    #[serialization(rename = "1h")]
+    Hour,
+    #[serialization(rename = "24h")]
+    Day,
+    #[serialization(rename = "1month")]
+    Month,
+}
+impl<'de> Deserialize<'de> for HistoryRange {
+    fn deserialize<D: data_serialization::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "1min" => Ok(Self::Minute),
+            "30min" => Ok(Self::HalfHour),
+            "1h" => Ok(Self::Hour),
+            "24h" => Ok(Self::Day),
+            "1month" => Ok(Self::Month),
+            _ => Err(data_serialization::de::Error::custom(
+                "history range must be 1min, 30min, 1h, 24h or 1month",
+            )),
+        }
+    }
+}
+impl HistoryRange {
+    fn parameters(self) -> (i64, i64) {
+        match self {
+            Self::Minute => (60, 5),
+            Self::HalfHour => (30 * 60, 5),
+            Self::Hour => (60 * 60, 10),
+            Self::Day => (24 * 60 * 60, 4 * 60),
+            Self::Month => (30 * 24 * 60 * 60, 2 * 60 * 60),
+        }
+    }
+}
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct HistoryQuery {
-    #[serialization(default = "default_range")]
-    range: String,
-}
-fn default_range() -> String {
-    "1min".into()
-}
-
-fn range_parameters(range: &str) -> Result<(i64, i64), ApiError> {
-    match range {
-        "1min" => Ok((60, 5)),
-        "30min" => Ok((30 * 60, 5)),
-        "1h" => Ok((60 * 60, 10)),
-        "24h" => Ok((24 * 60 * 60, 4 * 60)),
-        "1month" => Ok((30 * 24 * 60 * 60, 2 * 60 * 60)),
-        _ => Err(ApiError::invalid(
-            "history range must be 1min, 30min, 1h, 24h or 1month",
-        )),
-    }
+    #[serialization(default)]
+    range: HistoryRange,
 }
 
 pub(crate) async fn history(
@@ -318,7 +344,7 @@ pub(crate) async fn history(
 ) -> Result<Json<Value>, ApiError> {
     telemetry_job(state.telemetry.request_slots.clone(), move || {
         require_current_session(&state.auth, &identity)?;
-        let (seconds, interval) = range_parameters(&query.range)?;
+        let (seconds, interval) = query.range.parameters();
         let to = date_time::OffsetDateTime::now_utc().unix_timestamp();
         let from = to - seconds;
         let samples = state.telemetry.history.lock().expect("service state lock poisoned").samples(from, to, interval);

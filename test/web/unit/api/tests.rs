@@ -260,3 +260,14 @@ fn validated_session_restoration_requires_the_original_credential_generation() {
     });
     clear_session();
 }
+
+#[test]
+fn invalid_api_path_preserves_the_contract_error_source() {
+    use std::error::Error as _;
+    let failure = validate_path("https://outside.example/api/a").unwrap_err();
+    assert!(failure.source().unwrap().source().is_some());
+    assert!(matches!(
+        failure.source.as_deref(),
+        Some(ErrorSource::Path(_))
+    ));
+}

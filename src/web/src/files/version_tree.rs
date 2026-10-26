@@ -569,7 +569,10 @@ fn measure(root: &web_sys::Element, layout: &Layout) -> Geometry {
         .flat_map(|(depth, ids)| ids.iter().map(move |id| (id.as_str(), depth)))
         .collect::<BTreeMap<_, _>>();
     let mut boxes = BTreeMap::new();
-    if let Ok(nodes) = root.query_selector_all(".zxs-version-node[data-version-id]") {
+    {
+        let nodes = root
+            .query_selector_all(".zxs-version-node[data-version-id]")
+            .expect("invariant: version-node selector is valid");
         for index in 0..nodes.length() {
             if let Some(element) = nodes
                 .item(index)
@@ -603,20 +606,21 @@ fn observe(root: NodeRef<html::Div>, layout: Memo<Layout>, geometry: RwSignal<Ge
         let element: web_sys::Element = element.unchecked_into();
         let update_root = element.clone();
         let initially_centered = std::rc::Rc::new(std::cell::Cell::new(false));
-        let update = move || {
-            let next = measure(&update_root, &layout.get_untracked());
-            if geometry.with_untracked(|old| old != &next) {
-                geometry.set(next);
-            }
-            // A wide tree initially reveals its newest tip rather than an empty
-            // left corner. This belongs to this mounted tree only: refreshes, note
-            // edits and later resizes never take the user's scroll position.
-            if !initially_centered.get()
-                && let (Some(scroll), Ok(Some(first_tip))) = (
+        let update =
+            move || {
+                let next = measure(&update_root, &layout.get_untracked());
+                if geometry.with_untracked(|old| old != &next) {
+                    geometry.set(next);
+                }
+                // A wide tree initially reveals its newest tip rather than an empty
+                // left corner. This belongs to this mounted tree only: refreshes, note
+                // edits and later resizes never take the user's scroll position.
+                if !initially_centered.get()
+                && let (Some(scroll), Some(first_tip)) = (
                     update_root.parent_element(),
                     update_root.query_selector(
                         ".zxs-version-tree-level[data-version-depth=\"0\"] .zxs-version-node",
-                    ),
+                    ).expect("invariant: first-tip selector is valid"),
                 )
             {
                 let rect = first_tip.get_bounding_client_rect();
@@ -635,29 +639,34 @@ fn observe(root: NodeRef<html::Div>, layout: Memo<Layout>, geometry: RwSignal<Ge
                     initially_centered.set(true);
                 }
             }
-        };
+            };
         update();
         let resize_update = update.clone();
         let callback = Closure::wrap(Box::new(
             move |_: js_sys::Array, _: web_sys::ResizeObserver| resize_update(),
         )
             as Box<dyn FnMut(js_sys::Array, web_sys::ResizeObserver)>);
-        let Ok(resize) = web_sys::ResizeObserver::new(callback.as_ref().unchecked_ref()) else {
-            return;
+        let resize = match web_sys::ResizeObserver::new(callback.as_ref().unchecked_ref()) {
+            Ok(resize) => resize,
+            Err(error) => {
+                web_sys::console::warn_2(&"Could not observe version-tree resizing".into(), &error);
+                return;
+            }
         };
         resize.observe(&element);
         let observe_nodes = {
             let resize = resize.clone();
             let element = element.clone();
             move || {
-                if let Ok(nodes) = element.query_selector_all(".zxs-version-node") {
-                    for index in 0..nodes.length() {
-                        if let Some(node) = nodes
-                            .item(index)
-                            .and_then(|node| node.dyn_into::<web_sys::Element>().ok())
-                        {
-                            resize.observe(&node);
-                        }
+                let nodes = element
+                    .query_selector_all(".zxs-version-node")
+                    .expect("invariant: version-node selector is valid");
+                for index in 0..nodes.length() {
+                    if let Some(node) = nodes
+                        .item(index)
+                        .and_then(|node| node.dyn_into::<web_sys::Element>().ok())
+                    {
+                        resize.observe(&node);
                     }
                 }
             }
@@ -671,12 +680,26 @@ fn observe(root: NodeRef<html::Div>, layout: Memo<Layout>, geometry: RwSignal<Ge
         )
             as Box<dyn FnMut(js_sys::Array, web_sys::MutationObserver)>);
         let mutation =
-            web_sys::MutationObserver::new(mutation_callback.as_ref().unchecked_ref()).ok();
+            match web_sys::MutationObserver::new(mutation_callback.as_ref().unchecked_ref()) {
+                Ok(observer) => Some(observer),
+                Err(error) => {
+                    web_sys::console::warn_2(
+                        &"Could not observe version-tree updates".into(),
+                        &error,
+                    );
+                    None
+                }
+            };
         if let Some(observer) = &mutation {
             let options = web_sys::MutationObserverInit::new();
             options.set_child_list(true);
             options.set_subtree(true);
-            let _ = observer.observe_with_options(&element, &options);
+            if let Err(error) = observer.observe_with_options(&element, &options) {
+                web_sys::console::warn_2(
+                    &"Could not start version-tree observation".into(),
+                    &error,
+                );
+            }
         }
         let cleanup =
             send_wrapper::SendWrapper::new((resize, callback, mutation, mutation_callback));

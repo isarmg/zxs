@@ -1,10 +1,10 @@
 use crate::protocol::{
     FrameStream, OpenResult, PROTOCOL, REQUIRED_CAPABILITIES, Request, Response,
 };
+use data_serialization::Deserialize;
 use json_codec::Value;
 use std::{
     io,
-    net::Shutdown,
     os::{
         fd::{IntoRawFd, OwnedFd},
         unix::net::UnixStream,
@@ -12,17 +12,33 @@ use std::{
     path::Path,
     sync::{Arc, Mutex},
 };
+use storage_contract::ErrorCode;
 
 #[derive(Clone)]
 pub struct Client(Arc<Mutex<Option<FrameStream>>>);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RemoteErrorCode {
+    Server(ErrorCode),
+    RpcOutcomeUnknown,
+}
+impl std::fmt::Display for RemoteErrorCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Server(code) => code.as_str(),
+            Self::RpcOutcomeUnknown => "RPC_OUTCOME_UNKNOWN",
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct RemoteError {
-    pub code: String,
+    pub code: RemoteErrorCode,
     pub message: String,
     pub operation_id: Option<String>,
     pub retryable: bool,
     errno: i32,
+    source: Option<io::Error>,
 }
 impl std::fmt::Display for RemoteError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -33,57 +49,258 @@ impl std::fmt::Display for RemoteError {
         Ok(())
     }
 }
-impl std::error::Error for RemoteError {}
-fn remote_errno(code: &str) -> i32 {
-    match code {
-        "NOT_FOUND"
-        | "ENTRY_NOT_FOUND"
-        | "VERSION_NOT_FOUND"
-        | "BRANCH_NOT_FOUND"
-        | "REPOSITORY_NOT_FOUND" => libc::ENOENT,
-        "UNAUTHENTICATED" | "UNAUTHORIZED" | "PERMISSION_DENIED" | "FORBIDDEN" => libc::EACCES,
-        "BRANCH_NOT_ACTIVE" | "FILE_BRANCH_READ_ONLY" => libc::EROFS,
-        "FILE_WRITE_BUSY"
-        | "BRANCH_WRITE_BUSY"
-        | "WORKSPACE_BUSY"
-        | "CONTENT_PINNED"
-        | "COMMIT_PREPARATION_BUSY" => libc::EBUSY,
-        "NAME_CONFLICT" | "NAME_COLLISION" | "OBJECT_COLLISION" => libc::EEXIST,
-        "NO_SPACE" | "QUOTA_EXCEEDED" => libc::ENOSPC,
-        "FILE_TOO_LARGE" => libc::EFBIG,
-        "RESOURCE_LIMIT_EXCEEDED" | "RESOURCE_LIMIT" => libc::EAGAIN,
-        "NAME_TOO_LONG" | "PATH_TOO_DEEP" => libc::ENAMETOOLONG,
-        "DIRECTORY_NOT_EMPTY" => libc::ENOTEMPTY,
-        "IS_DIRECTORY" => libc::EISDIR,
-        "PARENT_NOT_DIRECTORY" | "NOT_DIRECTORY" => libc::ENOTDIR,
-        "UNSUPPORTED"
-        | "OPERATION_UNSUPPORTED"
-        | "UNSUPPORTED_OPERATION"
-        | "FORMAT_UNSUPPORTED" => libc::ENOTSUP,
-        "INVALID_REQUEST"
-        | "INVALID_NAME"
-        | "INVALID_PATH"
-        | "INVALID_MOVE"
-        | "NAME_INVALID"
-        | "NAME_INVALID_CHARACTER"
-        | "NAME_RESERVED"
-        | "NAME_NOT_NORMALIZED"
-        | "PATH_INVALID" => libc::EINVAL,
-        "SMB_REBIND_REQUIRED" | "TREE_MOVED" | "BRANCH_ARCHIVED" => libc::ESTALE,
-        "FILE_VERSION_CONFLICT"
-        | "FILE_CONFLICT"
-        | "FILE_BRANCH_CONFLICT"
-        | "DIRECTORY_BRANCH_CONFLICT"
-        | "DIRECTORY_ALIAS_CONFLICT"
-        | "BATCH_MAPPING_CONFLICT"
-        | "BATCH_SCOPE_CONFLICT"
-        | "NAMESPACE_CONFLICT"
-        | "HEAD_CONFLICT"
-        | "COMMIT_PREPARATION_STALE"
-        | "WORKSPACE_REBASE_REQUIRED" => libc::EAGAIN,
-        _ => libc::EIO,
+impl std::error::Error for RemoteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_ref().map(|source| source as _)
     }
 }
+fn remote_errno(code: ErrorCode) -> i32 {
+    match code {
+        ErrorCode::NotFound
+        | ErrorCode::EntryNotFound
+        | ErrorCode::VersionNotFound
+        | ErrorCode::BranchNotFound
+        | ErrorCode::RepositoryNotFound => libc::ENOENT,
+        ErrorCode::Unauthenticated
+        | ErrorCode::Unauthorized
+        | ErrorCode::PermissionDenied
+        | ErrorCode::Forbidden => libc::EACCES,
+        ErrorCode::BranchNotActive => libc::EROFS,
+        ErrorCode::FileWriteBusy
+        | ErrorCode::BranchWriteBusy
+        | ErrorCode::WorkspaceBusy
+        | ErrorCode::ContentPinned
+        | ErrorCode::CommitPreparationBusy => libc::EBUSY,
+        ErrorCode::NameConflict | ErrorCode::NameCollision | ErrorCode::ObjectCollision => {
+            libc::EEXIST
+        }
+        ErrorCode::NoSpace | ErrorCode::QuotaExceeded => libc::ENOSPC,
+        ErrorCode::FileTooLarge => libc::EFBIG,
+        ErrorCode::ResourceLimitExceeded | ErrorCode::ResourceLimit => libc::EAGAIN,
+        ErrorCode::NameTooLong | ErrorCode::PathTooDeep => libc::ENAMETOOLONG,
+        ErrorCode::DirectoryNotEmpty => libc::ENOTEMPTY,
+        ErrorCode::IsDirectory => libc::EISDIR,
+        ErrorCode::ParentNotDirectory | ErrorCode::NotDirectory => libc::ENOTDIR,
+        ErrorCode::OperationUnsupported
+        | ErrorCode::UnsupportedOperation
+        | ErrorCode::FormatUnsupported => libc::ENOTSUP,
+        ErrorCode::InvalidRequest
+        | ErrorCode::InvalidMove
+        | ErrorCode::NameInvalidCharacter
+        | ErrorCode::NameReserved
+        | ErrorCode::NameNotNormalized
+        | ErrorCode::PathInvalid => libc::EINVAL,
+        ErrorCode::SmbRebindRequired | ErrorCode::TreeMoved | ErrorCode::BranchArchived => {
+            libc::ESTALE
+        }
+        ErrorCode::FileVersionConflict
+        | ErrorCode::FileConflict
+        | ErrorCode::FileBranchConflict
+        | ErrorCode::DirectoryBranchConflict
+        | ErrorCode::DirectoryAliasConflict
+        | ErrorCode::BatchMappingConflict
+        | ErrorCode::BatchScopeConflict
+        | ErrorCode::NamespaceConflict
+        | ErrorCode::HeadConflict
+        | ErrorCode::CommitPreparationStale
+        | ErrorCode::WorkspaceRebaseRequired => libc::EAGAIN,
+        ErrorCode::AlreadyInitialized
+        | ErrorCode::AuthorityRecoveryRequired
+        | ErrorCode::AuthAlreadyInitialized
+        | ErrorCode::AuthRecoveryRequired
+        | ErrorCode::AuthStateInvalid
+        | ErrorCode::AuthStoreBusy
+        | ErrorCode::BackupConfigurationRequired
+        | ErrorCode::BackupPathConflict
+        | ErrorCode::BackupPrefixRequired
+        | ErrorCode::BackupRouteIncomplete
+        | ErrorCode::BaseHeadMismatch
+        | ErrorCode::BootstrapExpired
+        | ErrorCode::CheckpointInvalid
+        | ErrorCode::ChecksumFormatInvalid
+        | ErrorCode::ChecksumMismatch
+        | ErrorCode::CommitInDoubt
+        | ErrorCode::CommitNotFound
+        | ErrorCode::ConfigConflict
+        | ErrorCode::ConfigInvalid
+        | ErrorCode::ContainerAmbiguous
+        | ErrorCode::ContainerLayoutInvalid
+        | ErrorCode::ContentCorrupt
+        | ErrorCode::ContentMissing
+        | ErrorCode::ContentPurged
+        | ErrorCode::ContentUnavailable
+        | ErrorCode::CurrentPasswordInvalid
+        | ErrorCode::DestinationExists
+        | ErrorCode::DirectoryBranchIncomplete
+        | ErrorCode::DirectoryBranchNotFound
+        | ErrorCode::DirectoryBranchScope
+        | ErrorCode::DirectoryHistorySplitUnsupported
+        | ErrorCode::DirectoryNotFound
+        | ErrorCode::DirectoryScopeRequired
+        | ErrorCode::DiskAlreadyEnrolled
+        | ErrorCode::DiskChanged
+        | ErrorCode::DiskIdentityMismatch
+        | ErrorCode::DiskNotFound
+        | ErrorCode::DiskNotIndependent
+        | ErrorCode::DiskNotMounted
+        | ErrorCode::DiskReadOnly
+        | ErrorCode::DiskSampleUnavailable
+        | ErrorCode::DiskUnavailable
+        | ErrorCode::DurabilityUnknown
+        | ErrorCode::Fenced
+        | ErrorCode::FencingTokenExpired
+        | ErrorCode::FencingTokenInvalid
+        | ErrorCode::FilesystemRequired
+        | ErrorCode::FileBranchNotFound
+        | ErrorCode::FileBranchRequired
+        | ErrorCode::FileBranchScope
+        | ErrorCode::FileBranchSelected
+        | ErrorCode::FileBusy
+        | ErrorCode::FileHistorySplitUnsupported
+        | ErrorCode::FileNodeHistorySplitUnsupported
+        | ErrorCode::FileNodeNotFound
+        | ErrorCode::FileNotFound
+        | ErrorCode::GenerationMismatch
+        | ErrorCode::HistoricalSaveRequiresBranch
+        | ErrorCode::HistoryMismatch
+        | ErrorCode::HistoryNodeNotFound
+        | ErrorCode::HistoryNotFound
+        | ErrorCode::HistoryPackageInvalid
+        | ErrorCode::HttpError
+        | ErrorCode::HttpUploadsPending
+        | ErrorCode::HttpUploadsUnavailable
+        | ErrorCode::IdempotencyKeyReused
+        | ErrorCode::IndexRebuildFailed
+        | ErrorCode::InjectedFailure
+        | ErrorCode::InternalError
+        | ErrorCode::InvalidAdminResponse
+        | ErrorCode::InvalidApiPath
+        | ErrorCode::InvalidBackupPrefix
+        | ErrorCode::InvalidCursor
+        | ErrorCode::InvalidDirectoryPage
+        | ErrorCode::InvalidDiskList
+        | ErrorCode::InvalidId
+        | ErrorCode::InvalidInteger
+        | ErrorCode::InvalidJson
+        | ErrorCode::InvalidObjectType
+        | ErrorCode::InvalidResponse
+        | ErrorCode::InvalidSession
+        | ErrorCode::InvalidSetupRequest
+        | ErrorCode::InvalidSlotId
+        | ErrorCode::InvalidTag
+        | ErrorCode::InDoubt
+        | ErrorCode::IoError
+        | ErrorCode::ItemNotFound
+        | ErrorCode::ItemPathMismatch
+        | ErrorCode::LeaseExpired
+        | ErrorCode::ListingChanged
+        | ErrorCode::LogCorrupt
+        | ErrorCode::LogFork
+        | ErrorCode::LogFormatUnsupported
+        | ErrorCode::MainBranchRequired
+        | ErrorCode::MergeEndpointMismatch
+        | ErrorCode::MetadataQuorumUnavailable
+        | ErrorCode::MetadataTooLong
+        | ErrorCode::MetadataUnavailable
+        | ErrorCode::MethodNotAllowed
+        | ErrorCode::MonitorUnavailable
+        | ErrorCode::MultiDeviceFilesystem
+        | ErrorCode::NoWindow
+        | ErrorCode::ObjectCorrupt
+        | ErrorCode::OfflineConfigurationRequired
+        | ErrorCode::OperationAborted
+        | ErrorCode::OperationIdConflict
+        | ErrorCode::OperationNotFound
+        | ErrorCode::PayloadTooLarge
+        | ErrorCode::PermanentLossNotAcknowledged
+        | ErrorCode::PlacementInvalid
+        | ErrorCode::PlacementNotFound
+        | ErrorCode::PlanClosed
+        | ErrorCode::PlanInvalid
+        | ErrorCode::PlanNotFound
+        | ErrorCode::PlanStale
+        | ErrorCode::PlanUnsupported
+        | ErrorCode::PreparationStale
+        | ErrorCode::PublicationInvalid
+        | ErrorCode::PurgeBlockedByReference
+        | ErrorCode::RangeNotSatisfiable
+        | ErrorCode::RecoveryPlanNotFound
+        | ErrorCode::RecoveryRequired
+        | ErrorCode::RecoveryWorkerFailed
+        | ErrorCode::ReplicaTargetUnavailable
+        | ErrorCode::RequestBindingMismatch
+        | ErrorCode::RequestDigestMismatch
+        | ErrorCode::RequestTimeout
+        | ErrorCode::ResponseTooLarge
+        | ErrorCode::RestoreBackupConflict
+        | ErrorCode::RouteIncomplete
+        | ErrorCode::RouteTargetUnavailable
+        | ErrorCode::SaveModeUnsupported
+        | ErrorCode::ScopeChanged
+        | ErrorCode::SealedManifestMismatch
+        | ErrorCode::ServiceStopping
+        | ErrorCode::SessionChanged
+        | ErrorCode::SetupBusy
+        | ErrorCode::SetupContentChanged
+        | ErrorCode::SetupPresetChanged
+        | ErrorCode::SetupProofInvalid
+        | ErrorCode::SlotNotFound
+        | ErrorCode::SmbSpoolUnavailable
+        | ErrorCode::SmbUnavailable
+        | ErrorCode::SourceChanged
+        | ErrorCode::SplitInvalid
+        | ErrorCode::SplitPlanStale
+        | ErrorCode::SplitRootForbidden
+        | ErrorCode::StaleUploadGeneration
+        | ErrorCode::StateInvalid
+        | ErrorCode::StorageActive
+        | ErrorCode::StorageDraining
+        | ErrorCode::StorageRetryRunning
+        | ErrorCode::StorageUnavailable
+        | ErrorCode::SystemAuthRequired
+        | ErrorCode::SystemRootChanged
+        | ErrorCode::TagLimitExceeded
+        | ErrorCode::TombstoneInvalid
+        | ErrorCode::TopologyGenerationMismatch
+        | ErrorCode::TopologyInvalid
+        | ErrorCode::TransferTimeout
+        | ErrorCode::TransportError
+        | ErrorCode::UnsafePath
+        | ErrorCode::UnsupportedDeviceTopology
+        | ErrorCode::UnsupportedMediaType
+        | ErrorCode::UploadGenerationConflict
+        | ErrorCode::UploadIncomplete
+        | ErrorCode::UploadRangeConflict
+        | ErrorCode::UploadStateInvalid
+        | ErrorCode::WebAssetsUnavailable
+        | ErrorCode::WorkspaceChanged
+        | ErrorCode::WorkspaceClosed
+        | ErrorCode::WorkspaceDependencyBusy
+        | ErrorCode::WorkspaceNotFound
+        | ErrorCode::WorkspaceNotSealed
+        | ErrorCode::WriterAlreadyActive => libc::EIO,
+    }
+}
+#[derive(Debug)]
+struct CloseFailure {
+    operation: io::Error,
+    close: io::Error,
+}
+impl std::fmt::Display for CloseFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}; descriptor close also failed: {}",
+            self.operation, self.close
+        )
+    }
+}
+impl std::error::Error for CloseFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.operation)
+    }
+}
+
 /// Preserve remote diagnostics while presenting the corresponding filesystem errno.
 pub fn error_errno(error: &io::Error) -> i32 {
     error
@@ -93,8 +310,19 @@ pub fn error_errno(error: &io::Error) -> i32 {
                 .get_ref()
                 .and_then(|inner| inner.downcast_ref::<RemoteError>())
                 .map(|remote| remote.errno)
+                .or_else(|| {
+                    error
+                        .get_ref()
+                        .and_then(|inner| inner.downcast_ref::<CloseFailure>())
+                        .map(|failure| error_errno(&failure.operation))
+                })
         })
-        .unwrap_or(libc::EIO)
+        .unwrap_or_else(|| match error.kind() {
+            io::ErrorKind::InvalidInput => libc::EINVAL,
+            io::ErrorKind::PermissionDenied => libc::EACCES,
+            io::ErrorKind::OutOfMemory => libc::ENOMEM,
+            _ => libc::EIO,
+        })
 }
 
 /// Finish an already-removed VFS handle and always release its local descriptor.
@@ -123,12 +351,15 @@ pub fn close_descriptor(
     let closed = unsafe { libc::close(descriptor.into_raw_fd()) };
     let close_error = (closed < 0).then(io::Error::last_os_error);
     drop(guard);
-    saved?;
-    if poisoned {
-        return Err(io::Error::from_raw_os_error(libc::EIO));
+    if let Err(operation) = saved {
+        return Err(match close_error {
+            Some(close) => io::Error::new(operation.kind(), CloseFailure { operation, close }),
+            None => operation,
+        });
     }
     match close_error {
         Some(error) => Err(error),
+        None if poisoned => Err(io::Error::from_raw_os_error(libc::EIO)),
         None => Ok(()),
     }
 }
@@ -169,10 +400,7 @@ impl Client {
         Ok(client)
     }
     pub fn call(&self, request: Request) -> io::Result<(Value, Option<OwnedFd>)> {
-        let mut connection = self
-            .0
-            .lock()
-            .map_err(|_| io::Error::other("RPC connection poisoned"))?;
+        let mut connection = self.0.lock().expect("RPC connection lock poisoned");
         let stream = connection.as_mut().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotConnected, "RPC connection is closed")
         })?;
@@ -194,13 +422,15 @@ impl Client {
                 }
                 if expects_fd {
                     let Response::Ok { result } = &response else {
-                        unreachable!();
+                        unreachable!(
+                            "invariant: descriptor expectation requires a successful open response"
+                        );
                     };
                     // The remote handle already exists. If its metadata cannot
                     // be decoded, no caller can close it by identity. Terminate
                     // the session while holding the shared lock so the server
                     // releases it and no clone continues a partially adopted open.
-                    json_codec::from_value::<OpenResult>(result.clone())
+                    OpenResult::deserialize(result)
                         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
                 }
                 Ok((response, fd))
@@ -211,20 +441,19 @@ impl Client {
                 // A partial request/response or invalid frame loses message
                 // alignment. Close the shared connection before unlocking so
                 // every clone fails instead of consuming a stale response.
-                if let Some(stream) = connection.take() {
-                    let _ = stream.0.shutdown(Shutdown::Both);
-                }
+                *connection = None;
                 return Err(match request {
                     Request::Namespace { operation_id, .. } => io::Error::new(
                         error.kind(),
                         RemoteError {
-                            code: "RPC_OUTCOME_UNKNOWN".into(),
+                            code: RemoteErrorCode::RpcOutcomeUnknown,
                             message: format!(
                                 "{error}; query the original operation before retrying"
                             ),
                             operation_id: Some(operation_id),
                             retryable: false,
                             errno: error.raw_os_error().unwrap_or(libc::EIO),
+                            source: Some(error),
                         },
                     ),
                     _ => error,
@@ -239,15 +468,16 @@ impl Client {
                 operation_id,
                 retryable,
             } => {
-                let errno = remote_errno(&code);
+                let errno = remote_errno(code);
                 Err(io::Error::new(
                     io::Error::from_raw_os_error(errno).kind(),
                     RemoteError {
-                        code,
+                        code: RemoteErrorCode::Server(code),
                         message,
                         operation_id,
                         retryable,
                         errno,
+                        source: None,
                     },
                 ))
             }
@@ -261,12 +491,11 @@ impl Client {
             ));
         }
         let (result, fd) = self.call(request)?;
-        let result = json_codec::from_value(result).map_err(io::Error::other)?;
+        let result = json_codec::from_value(result)
+            .expect("invariant: Client::call already validated the open result");
         Ok((
             result,
-            fd.ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "open returned no descriptor")
-            })?,
+            fd.expect("invariant: successful open response has a descriptor"),
         ))
     }
 }

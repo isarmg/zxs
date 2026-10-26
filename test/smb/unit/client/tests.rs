@@ -1,4 +1,5 @@
 use super::*;
+use storage_contract::ErrorCode;
 
 #[test]
 fn module_client_requires_authenticated_account_and_durable_reservations() {
@@ -57,7 +58,12 @@ fn module_client_requires_authenticated_account_and_durable_reservations() {
 #[test]
 fn namespace_transport_failure_retains_identity_and_disconnects_every_clone() {
     for send_failure in [false, true] {
-        let request = crate::protocol::namespace_request("mkdir", "new".into(), None, false);
+        let request = crate::protocol::namespace_request(
+            crate::protocol::NamespaceOperation::Mkdir,
+            "new".into(),
+            None,
+            false,
+        );
         let Request::Namespace { operation_id, .. } = &request else {
             unreachable!()
         };
@@ -98,7 +104,7 @@ fn namespace_transport_failure_retains_identity_and_disconnects_every_clone() {
             .and_then(|error| error.downcast_ref::<RemoteError>())
             .expect("transport failure lost the caller's operation identity");
         assert_eq!(remote.operation_id.as_deref(), Some(expected.as_str()));
-        assert_eq!(remote.code, "RPC_OUTCOME_UNKNOWN");
+        assert_eq!(remote.code, RemoteErrorCode::RpcOutcomeUnknown);
         assert!(!remote.retryable);
         assert_eq!(
             clone
@@ -155,56 +161,56 @@ fn terminal_close_releases_descriptor_on_business_error_poison_or_unwind() {
 fn remote_error_retains_operation_and_filesystem_errno() {
     for (code, message, errno, retryable, operation) in [
         (
-            "BRANCH_NOT_ACTIVE",
+            ErrorCode::BranchNotActive,
             "merged file branch is read-only",
             libc::EROFS,
             false,
             None,
         ),
         (
-            "FILE_WRITE_BUSY",
+            ErrorCode::FileWriteBusy,
             "another writer owns this file",
             libc::EBUSY,
             true,
             Some("op_pending"),
         ),
         (
-            "FILE_BRANCH_CONFLICT",
+            ErrorCode::FileBranchConflict,
             "file branch changed after the workspace began",
             libc::EAGAIN,
             false,
             None,
         ),
         (
-            "DIRECTORY_BRANCH_CONFLICT",
+            ErrorCode::DirectoryBranchConflict,
             "directory branch changed after the workspace began",
             libc::EAGAIN,
             false,
             None,
         ),
         (
-            "COMMIT_PREPARATION_BUSY",
+            ErrorCode::CommitPreparationBusy,
             "another workspace commit is being prepared",
             libc::EBUSY,
             true,
             Some("op_preparing"),
         ),
         (
-            "COMMIT_PREPARATION_STALE",
+            ErrorCode::CommitPreparationStale,
             "workspace or publication base changed during preparation",
             libc::EAGAIN,
             true,
             Some("op_stale"),
         ),
         (
-            "COMMIT_IN_DOUBT",
+            ErrorCode::CommitInDoubt,
             "query the original operation before retrying",
             libc::EIO,
             true,
             Some("op_uncertain"),
         ),
         (
-            "DURABILITY_UNKNOWN",
+            ErrorCode::DurabilityUnknown,
             "publication durability is unknown",
             libc::EIO,
             true,
@@ -219,7 +225,7 @@ fn remote_error_retains_operation_and_filesystem_errno() {
             stream
                 .send(
                     &Response::Error {
-                        code: code.into(),
+                        code,
                         message: message.into(),
                         retryable,
                         operation_id: operation.map(str::to_owned),
@@ -240,11 +246,11 @@ fn remote_error_retains_operation_and_filesystem_errno() {
             .unwrap()
             .downcast_ref::<RemoteError>()
             .unwrap();
-        assert_eq!(remote.code, code);
+        assert_eq!(remote.code, RemoteErrorCode::Server(code));
         assert_eq!(remote.message, message);
         assert_eq!(remote.operation_id.as_deref(), operation);
         assert_eq!(remote.retryable, retryable);
-        assert!(error.to_string().contains(code));
+        assert!(error.to_string().contains(code.as_str()));
         assert!(error.to_string().contains(message));
         server.join().unwrap();
     }
@@ -252,19 +258,20 @@ fn remote_error_retains_operation_and_filesystem_errno() {
 
 #[test]
 fn preparation_conflicts_do_not_reclassify_uncertain_or_integrity_failures() {
-    assert_eq!(remote_errno("COMMIT_PREPARATION_BUSY"), libc::EBUSY);
-    assert_eq!(remote_errno("COMMIT_PREPARATION_STALE"), libc::EAGAIN);
+    assert_eq!(remote_errno(ErrorCode::CommitPreparationBusy), libc::EBUSY);
+    assert_eq!(
+        remote_errno(ErrorCode::CommitPreparationStale),
+        libc::EAGAIN
+    );
     // Only the two explicit workspace preparation conflicts are reclassified.
     // Generic preparation failures and unknown outcomes remain I/O failures,
     // even when their remote diagnostics separately permit a later retry.
     for code in [
-        "COMMIT_IN_DOUBT",
-        "DURABILITY_UNKNOWN",
-        "PREPARATION_STALE",
-        "CHECKSUM_MISMATCH",
-        "UNRECOGNIZED_ERROR",
+        ErrorCode::CommitInDoubt,
+        ErrorCode::DurabilityUnknown,
+        ErrorCode::ChecksumMismatch,
     ] {
-        assert_eq!(remote_errno(code), libc::EIO, "{code}");
+        assert_eq!(remote_errno(code), libc::EIO, "{code:?}");
     }
 }
 
@@ -316,7 +323,7 @@ fn remote_business_error_preserves_the_stream_for_the_next_call() {
         stream
             .send(
                 &Response::Error {
-                    code: "ENTRY_NOT_FOUND".into(),
+                    code: ErrorCode::EntryNotFound,
                     message: "missing".into(),
                     operation_id: None,
                     retryable: false,
@@ -394,7 +401,7 @@ fn response_descriptor_contract_failure_disconnects_every_clone() {
             let file = std::fs::File::open("/etc/hostname").unwrap();
             let response = if mode == "error_fd" {
                 Response::Error {
-                    code: "NOT_FOUND".into(),
+                    code: ErrorCode::NotFound,
                     message: "missing".into(),
                     retryable: false,
                     operation_id: None,
@@ -519,7 +526,7 @@ fn rejected_response_descriptors_are_closed_before_returning() {
             stream.receive::<Request>().unwrap();
             let response = if error_response {
                 Response::Error {
-                    code: "NOT_FOUND".into(),
+                    code: ErrorCode::NotFound,
                     message: "missing".into(),
                     retryable: false,
                     operation_id: None,
@@ -619,14 +626,60 @@ fn portable_name_and_path_rejections_are_invalid_input_not_io_failures() {
     // These are the concrete codes emitted by name-policy and forwarded by
     // the server. Keep malformed SMB names distinguishable from disk errors.
     for code in [
-        "NAME_INVALID_CHARACTER",
-        "NAME_RESERVED",
-        "NAME_NOT_NORMALIZED",
-        "PATH_INVALID",
+        ErrorCode::NameInvalidCharacter,
+        ErrorCode::NameReserved,
+        ErrorCode::NameNotNormalized,
+        ErrorCode::PathInvalid,
     ] {
-        assert_eq!(remote_errno(code), libc::EINVAL, "{code}");
+        assert_eq!(remote_errno(code), libc::EINVAL, "{code:?}");
     }
-    assert_eq!(remote_errno("NAME_TOO_LONG"), libc::ENAMETOOLONG);
-    assert_eq!(remote_errno("PATH_TOO_DEEP"), libc::ENAMETOOLONG);
-    assert_eq!(remote_errno("CHECKSUM_MISMATCH"), libc::EIO);
+    assert_eq!(remote_errno(ErrorCode::NameTooLong), libc::ENAMETOOLONG);
+    assert_eq!(remote_errno(ErrorCode::PathTooDeep), libc::ENAMETOOLONG);
+    assert_eq!(remote_errno(ErrorCode::ChecksumMismatch), libc::EIO);
+}
+
+#[test]
+fn close_failure_retains_both_errors_and_primary_errno() {
+    let failure = CloseFailure {
+        operation: io::Error::from_raw_os_error(libc::ENOSPC),
+        close: io::Error::from_raw_os_error(libc::EIO),
+    };
+    let error = io::Error::new(io::ErrorKind::StorageFull, failure);
+    assert_eq!(error_errno(&error), libc::ENOSPC);
+    let failure = error
+        .get_ref()
+        .unwrap()
+        .downcast_ref::<CloseFailure>()
+        .unwrap();
+    assert_eq!(failure.close.raw_os_error(), Some(libc::EIO));
+    assert_eq!(
+        std::error::Error::source(failure)
+            .unwrap()
+            .downcast_ref::<io::Error>()
+            .unwrap()
+            .raw_os_error(),
+        Some(libc::ENOSPC)
+    );
+}
+
+#[test]
+fn ffi_errno_translation_keeps_typed_validation_sources() {
+    let source = "invalid".parse::<u64>().unwrap_err();
+    let error = io::Error::new(io::ErrorKind::InvalidInput, source);
+    assert_eq!(error_errno(&error), libc::EINVAL);
+    assert!(
+        error
+            .get_ref()
+            .unwrap()
+            .downcast_ref::<std::num::ParseIntError>()
+            .is_some()
+    );
+    assert_eq!(
+        error_errno(&io::Error::new(io::ErrorKind::PermissionDenied, "revoked")),
+        libc::EACCES
+    );
+    assert_eq!(
+        error_errno(&io::Error::new(io::ErrorKind::OutOfMemory, "allocation")),
+        libc::ENOMEM
+    );
 }

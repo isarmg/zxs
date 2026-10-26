@@ -30,12 +30,18 @@ pub struct Receipt {
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("{operation}; staging cleanup also failed: {cleanup}")]
+    Cleanup {
+        #[source]
+        operation: Box<Error>,
+        cleanup: io::Error,
+    },
     #[error("payload length does not match sealed length {expected}: observed {actual}")]
     Length { expected: u64, actual: u64 },
     #[error("payload BLAKE3 does not match sealed digest")]
     Digest,
     #[error("secure random staging name could not be generated")]
-    Randomness,
+    Randomness(#[source] system_entropy::Error),
     #[error(transparent)]
     Filesystem(#[from] crate::fs_safety::Error),
     #[error(transparent)]
@@ -45,13 +51,26 @@ pub enum Error {
 struct StagingCleanup {
     directory: File,
     name: String,
+    armed: bool,
 }
 
+impl StagingCleanup {
+    fn cleanup(&mut self) -> io::Result<()> {
+        if !self.armed {
+            return Ok(());
+        }
+        self.armed = false;
+        match unlinkat(&self.directory, self.name.as_str(), AtFlags::empty()) {
+            Ok(()) | Err(rustix::io::Errno::NOENT) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
 impl Drop for StagingCleanup {
     fn drop(&mut self) {
-        // The random name belongs to our exclusively created file. Successful
-        // publication has already removed it. Cleanup never touches destination.
-        let _ = unlinkat(&self.directory, self.name.as_str(), AtFlags::empty());
+        if let Err(error) = self.cleanup() {
+            tracing::error!(%error, "payload staging cleanup during unwind failed");
+        }
     }
 }
 
@@ -69,7 +88,7 @@ pub fn write_full(
     expectation: Expectation,
 ) -> Result<Receipt, Error> {
     let mut nonce = [0u8; 16];
-    system_entropy::fill(&mut nonce).map_err(|_| Error::Randomness)?;
+    system_entropy::fill(&mut nonce).map_err(Error::Randomness)?;
     let mut name = String::from(".zxs-payload-");
     use std::fmt::Write as _;
     for byte in nonce {
@@ -88,60 +107,82 @@ pub fn write_full(
         )
         .map_err(io::Error::from)?,
     );
-    let cleanup = StagingCleanup {
+    let mut cleanup = StagingCleanup {
         directory: cleanup_directory,
         name,
+        armed: true,
     };
     let mut staging = staging;
-    let identity = crate::fs_safety::linux::SingleLinkRequirement::check(&staging)?;
-    let mut hasher = blake3::Hasher::new();
-    let mut bytes = 0u64;
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let read = match reader.read(&mut buffer) {
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            result => result?,
-        };
-        if read == 0 {
-            break;
+    let result = (|| {
+        let identity = crate::fs_safety::linux::SingleLinkRequirement::check(&staging)?;
+        let mut hasher = blake3::Hasher::new();
+        let mut bytes = 0u64;
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let read = match reader.read(&mut buffer) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                result => result?,
+            };
+            if read == 0 {
+                break;
+            }
+            bytes = bytes.checked_add(read as u64).ok_or(Error::Length {
+                expected: expectation.bytes,
+                actual: u64::MAX,
+            })?;
+            if bytes > expectation.bytes {
+                return Err(Error::Length {
+                    expected: expectation.bytes,
+                    actual: bytes,
+                });
+            }
+            staging.write_all(&buffer[..read])?;
+            hasher.update(&buffer[..read]);
         }
-        bytes = bytes.checked_add(read as u64).ok_or(Error::Length {
-            expected: expectation.bytes,
-            actual: u64::MAX,
-        })?;
-        if bytes > expectation.bytes {
+        if bytes != expectation.bytes {
             return Err(Error::Length {
                 expected: expectation.bytes,
                 actual: bytes,
             });
         }
-        staging.write_all(&buffer[..read])?;
-        hasher.update(&buffer[..read]);
+        let digest = hasher.finalize();
+        if expectation
+            .blake3
+            .is_some_and(|expected| expected != digest)
+        {
+            return Err(Error::Digest);
+        }
+        staging.sync_all()?;
+        let published = NoClobberPublish::publish(
+            directory,
+            &RelativePath::new(&cleanup.name)?,
+            &destination.as_relative(),
+        );
+        if matches!(
+            &published,
+            Ok(())
+                | Err(crate::fs_safety::Error::PublishedDurabilityUnknown(_)
+                    | crate::fs_safety::Error::IdentityChanged(_))
+        ) {
+            cleanup.armed = false;
+        }
+        published?;
+        Ok(Receipt {
+            bytes,
+            blake3: digest,
+            identity,
+        })
+    })();
+    match result {
+        Ok(value) => Ok(value),
+        Err(operation) => match cleanup.cleanup() {
+            Ok(()) => Err(operation),
+            Err(cleanup) => Err(Error::Cleanup {
+                operation: Box::new(operation),
+                cleanup,
+            }),
+        },
     }
-    if bytes != expectation.bytes {
-        return Err(Error::Length {
-            expected: expectation.bytes,
-            actual: bytes,
-        });
-    }
-    let digest = hasher.finalize();
-    if expectation
-        .blake3
-        .is_some_and(|expected| expected != digest)
-    {
-        return Err(Error::Digest);
-    }
-    staging.sync_all()?;
-    NoClobberPublish::publish(
-        directory,
-        &RelativePath::new(&cleanup.name)?,
-        &destination.as_relative(),
-    )?;
-    Ok(Receipt {
-        bytes,
-        blake3: digest,
-        identity,
-    })
 }
 
 /// Verify the current single-linked file content with bounded memory.

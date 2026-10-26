@@ -43,3 +43,22 @@ fn readiness_uses_fixed_membership_and_reports_single_disk_no_metadata_redundanc
         );
     }
 }
+
+#[test]
+fn backend_reports_and_consumes_nonfatal_recovery_checkpoint_warnings() {
+    let temp = tempfile::tempdir().unwrap();
+    let disk = temp.path().join("disk");
+    let root = temp.path().join("system");
+    drop(Engine::initialize(&root, Config::development([disk.clone()])).unwrap());
+    drop(Engine::open(&root).unwrap());
+    std::fs::write(
+        disk.join("metadata/replay-checkpoint.json"),
+        b"broken checkpoint",
+    )
+    .unwrap();
+    let engine = Engine::open(&root).unwrap();
+    let backend = EngineBackend::new(engine);
+    let warnings = backend.engine.lock().unwrap().take_recovery_warnings();
+    assert!(warnings.checkpoint_load.is_none());
+    assert!(warnings.checkpoint_save.is_none());
+}

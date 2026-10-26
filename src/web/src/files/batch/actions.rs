@@ -1,82 +1,89 @@
 //! Captured scope reads and publication with session/generation fences.
 use super::*;
 pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Value>) {
-    let snapshot = state.get_untracked();
-    if !file_actions::write_allowed(&snapshot) {
-        return;
-    }
-    let entries = if let Some(entry) = entry {
-        vec![entry]
-    } else {
-        let checked = snapshot
-            .files
-            .entries
-            .iter()
-            .filter(|entry| snapshot.files.checked_entries.contains(&entry_key(entry)))
-            .cloned()
-            .collect::<Vec<_>>();
-        if checked.is_empty() {
-            snapshot.files.selected.iter().cloned().collect()
-        } else {
-            checked
+    let draft = state.with_untracked(|snapshot| {
+        if !file_actions::write_allowed(snapshot) {
+            return Ok(None);
         }
-    };
-    if entries.is_empty() || snapshot.files.repository_id.is_empty() {
-        return;
-    }
-    let sources = source_branches(&snapshot.files);
-    let selected_sources = sources
-        .iter()
-        .filter(|branch| branch["current"] == true)
-        .map(branch_id)
-        .collect::<BTreeSet<_>>();
-    let id = api::operation_id();
-    if id.is_empty() {
-        return;
-    }
-    let repository = snapshot.files.repository_id.clone();
-    let repository_path = snapshot.files.repository_path.clone();
-    let disk_prefix = if repository_path.is_empty() {
-        snapshot.files.directory.clone()
-    } else {
-        snapshot
-            .files
-            .directory
-            .strip_suffix(&repository_path)
-            .unwrap_or_default()
-            .trim_end_matches('/')
-            .to_owned()
-    };
-    let draft = Draft {
-        id,
-        kind,
-        repository,
-        repository_path,
-        disk_prefix,
-        names: entries
+        let entries = if let Some(entry) = entry {
+            vec![entry]
+        } else {
+            let checked = snapshot
+                .files
+                .entries
+                .iter()
+                .filter(|entry| snapshot.files.checked_entries.contains(&entry_key(entry)))
+                .cloned()
+                .collect::<Vec<_>>();
+            if checked.is_empty() {
+                snapshot.files.selected.iter().cloned().collect()
+            } else {
+                checked
+            }
+        };
+        if entries.is_empty() || snapshot.files.repository_id.is_empty() {
+            return Ok(None);
+        }
+        let sources = source_branches(&snapshot.files);
+        let selected_sources = sources
             .iter()
-            .map(|entry| (entry_key(entry), text(entry, &["name"])))
-            .collect(),
-        entries,
-        mappings: selected_sources
-            .iter()
-            .map(|source| Mapping {
-                source: source.clone(),
-                target: String::new(),
-            })
-            .collect(),
-        source_resolved: sources.is_empty(),
-        scope_read: None,
-        sources,
-        selected_sources,
-        target_path: String::new(),
-        targets: vec![],
-        target_resolved: false,
-        loading: false,
-        submitted_operation: None,
-        registration: None,
-        generation: 0,
-        error: String::new(),
+            .filter(|branch| branch["current"] == true)
+            .map(branch_id)
+            .collect::<BTreeSet<_>>();
+        let id = api::operation_id()?;
+        let repository = snapshot.files.repository_id.clone();
+        let repository_path = snapshot.files.repository_path.clone();
+        let disk_prefix = if repository_path.is_empty() {
+            snapshot.files.directory.clone()
+        } else {
+            snapshot
+                .files
+                .directory
+                .strip_suffix(&repository_path)
+                .unwrap_or_default()
+                .trim_end_matches('/')
+                .to_owned()
+        };
+        let draft = Draft {
+            id,
+            kind,
+            repository,
+            repository_path,
+            disk_prefix,
+            names: entries
+                .iter()
+                .map(|entry| (entry_key(entry), text(entry, &["name"])))
+                .collect(),
+            entries,
+            mappings: selected_sources
+                .iter()
+                .map(|source| Mapping {
+                    source: source.clone(),
+                    target: String::new(),
+                })
+                .collect(),
+            source_resolved: sources.is_empty(),
+            scope_read: None,
+            sources,
+            selected_sources,
+            target_path: String::new(),
+            targets: vec![],
+            target_resolved: false,
+            loading: false,
+            submitted_operation: None,
+            registration: None,
+            generation: 0,
+            error: String::new(),
+        };
+        Ok(Some(draft))
+    });
+    let draft = match draft {
+        Ok(Some(draft)) => draft,
+        Ok(None) => return,
+        Err(error) => {
+            fail(state, error);
+            return;
+        }
     };
     open_draft(state, draft);
 }
@@ -308,14 +315,25 @@ pub(super) fn load_target(state: RwSignal<State>) {
     if !state.with_untracked(State::session_active) {
         return;
     }
-    let snapshot = state.get_untracked();
-    let Some(draft) = snapshot.files.batch else {
+    let Some((target, generation, repository, disk_prefix, id, slot, epoch)) = state
+        .with_untracked(|s| {
+            let draft = s.files.batch.as_ref()?;
+            if draft.registration.is_some() || draft.loading || !draft.source_resolved {
+                return None;
+            }
+            Some((
+                draft.target_path.trim_matches('/').to_owned(),
+                draft.generation + 1,
+                draft.repository.clone(),
+                draft.disk_prefix.clone(),
+                draft.id.clone(),
+                s.files.slot.clone(),
+                s.session_epoch,
+            ))
+        })
+    else {
         return;
     };
-    if draft.registration.is_some() || draft.loading || !draft.source_resolved {
-        return;
-    }
-    let target = draft.target_path.trim_matches('/').to_owned();
     if !valid_path(&target) {
         update(state, |draft| {
             draft.error = t("目录路径无效。", "Invalid directory path.")
@@ -333,15 +351,12 @@ pub(super) fn load_target(state: RwSignal<State>) {
             mapping.target.clear();
         }
     });
-    let generation = draft.generation + 1;
-    let scoped_endpoint = scope_endpoint(&draft.repository, &target);
+    let scoped_endpoint = scope_endpoint(&repository, &target);
     let entries_endpoint = format!(
         "/api/file-manager/disks/{}/entries?path={}&limit=1",
-        api::segment(&snapshot.files.slot),
-        api::segment(&join_path(&draft.disk_prefix, &target))
+        api::segment(&slot),
+        api::segment(&join_path(&disk_prefix, &target))
     );
-    let epoch = snapshot.session_epoch;
-    let id = draft.id;
     spawn_local(async move {
         let cancellation = match start_scope_read(state, epoch, &id, generation) {
             Ok(Some(value)) => value,
@@ -434,20 +449,21 @@ pub(super) fn begin_scope_registration(
 }
 
 pub(super) fn initialize_scope(state: RwSignal<State>, destination: bool) {
-    let snapshot = state.get_untracked();
-    if !file_actions::write_allowed(&snapshot) {
-        return;
-    }
-    let Some(draft) = snapshot.files.batch else {
+    let Some((repository, id, epoch)) = state.with_untracked(|s| {
+        if !file_actions::write_allowed(s) {
+            return None;
+        }
+        let draft = s.files.batch.as_ref()?;
+        if draft.registration.is_some() || draft.loading {
+            return None;
+        }
+        Some((draft.repository.clone(), draft.id.clone(), s.session_epoch))
+    }) else {
         return;
     };
-    if draft.registration.is_some() || draft.loading {
+    let Some(operation_id) = crate::ui::operation_id(state) else {
         return;
-    }
-    let operation_id = api::operation_id();
-    if operation_id.is_empty() {
-        return;
-    }
+    };
     let Some(registration) = state
         .try_update(|s| {
             let registration = begin_scope_registration(
@@ -464,10 +480,8 @@ pub(super) fn initialize_scope(state: RwSignal<State>, destination: bool) {
     };
     let endpoint = format!(
         "/api/repositories/{}/directory-scopes",
-        api::segment(&draft.repository)
+        api::segment(&repository)
     );
-    let epoch = snapshot.session_epoch;
-    let id = draft.id;
     spawn_local(async move {
         let result = api::request(
             "POST",
@@ -609,7 +623,12 @@ pub(super) fn complete_registered_scope(
                 );
                 return;
             }
-            if draft.registration.as_ref().unwrap().destination {
+            if draft
+                .registration
+                .as_ref()
+                .expect("invariant: matching published registration was checked")
+                .destination
+            {
                 draft.targets = branches;
                 draft.target_resolved = true;
             } else {
@@ -644,41 +663,38 @@ pub(super) fn complete_registered_scope(
     }
 }
 pub(super) fn submit(state: RwSignal<State>) {
-    let snapshot = state.get_untracked();
-    if !file_actions::write_allowed(&snapshot) {
-        return;
-    }
-    let Some(draft) = snapshot.files.batch else {
+    let Some((request, slot, epoch, draft_id)) = state.with_untracked(|s| {
+        if !file_actions::write_allowed(s) {
+            return None;
+        }
+        let draft = s.files.batch.as_ref()?;
+        if draft.loading || draft.submitted_operation.is_some() || draft.registration.is_some() {
+            return None;
+        }
+        Some((
+            request(draft),
+            s.files.slot.clone(),
+            s.session_epoch,
+            draft.id.clone(),
+        ))
+    }) else {
         return;
     };
-    if draft.loading || draft.submitted_operation.is_some() || draft.registration.is_some() {
-        return;
-    }
-    let mut body = match request(&draft) {
+    let mut body = match request {
         Ok(body) => body,
         Err(error) => {
             update(state, |draft| draft.error = error);
             return;
         }
     };
-    let id = api::operation_id();
-    if id.is_empty() {
-        set_notice(
-            state,
-            t(
-                "浏览器无法生成安全操作编号。",
-                "The browser could not generate a secure operation ID.",
-            ),
-        );
+    let Some(id) = crate::ui::operation_id(state) else {
         return;
-    }
+    };
     body["operation_id"] = id.clone().into();
     let endpoint = format!(
         "/api/file-manager/disks/{}/namespace-batch",
-        api::segment(&snapshot.files.slot)
+        api::segment(&slot)
     );
-    let epoch = snapshot.session_epoch;
-    let draft_id = draft.id;
     state.update(|s| {
         s.files.mutation_pending = true;
         if let Some(draft) = s.files.batch.as_mut() {

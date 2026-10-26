@@ -9,10 +9,10 @@ use libsqlite3_sys::{
     sqlite3, sqlite3_prepare_v3, sqlite3_stmt, SQLITE_OK, SQLITE_PREPARE_PERSISTENT,
 };
 
-use bytes::{Buf, Bytes};
 use crate::error::Error;
 use crate::ext::ustr::UStr;
 use crate::{HashMap, SmallVec};
+use bytes::{Buf, Bytes};
 
 use crate::sqlite::connection::ConnectionHandle;
 use crate::sqlite::statement::StatementHandle;
@@ -136,15 +136,28 @@ impl VirtualStatement {
             })
     }
 
-    pub fn reset(&mut self) -> Result<(), Error> {
+    pub fn reset(&mut self) -> Result<(), SqliteError> {
         self.index = None;
+        let mut first_error: Option<SqliteError> = None;
 
         for handle in self.handles.iter_mut() {
-            handle.reset()?;
+            let result = handle.reset();
             handle.clear_bindings();
+            if let Err(error) = result {
+                if let Some(first) = &first_error {
+                    if !first.same_diagnostic(&error) {
+                        tracing::warn!(%error, "error occurred while resetting the SQLite statement");
+                    }
+                } else {
+                    first_error = Some(error);
+                }
+            }
         }
 
-        Ok(())
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 }
 

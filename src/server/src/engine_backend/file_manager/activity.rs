@@ -12,16 +12,16 @@ const HISTORY_LIMIT: usize = 200;
 
 fn utc_event_timestamp(event: &mut Value) -> Result<(), ApiError> {
     if !event["timestamp"].is_null() {
-        let seconds = event["timestamp"]
-            .as_str()
-            .and_then(|value| storage_contract::parse_u64_decimal(value).ok())
-            .ok_or_else(|| {
-                ApiError::new(
-                    ::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    storage_contract::ErrorCode::StateInvalid,
-                    "history timestamp is invalid",
-                )
-            })?;
+        let invalid = || {
+            ApiError::new(
+                ::http::StatusCode::INTERNAL_SERVER_ERROR,
+                storage_contract::ErrorCode::StateInvalid,
+                "history timestamp is invalid",
+            )
+        };
+        let timestamp = event["timestamp"].as_str().ok_or_else(invalid)?;
+        let seconds = storage_contract::parse_u64_decimal(timestamp)
+            .map_err(|source| invalid().with_source(source))?;
         event["timestamp"] = utc_timestamp(seconds)?.into();
     }
     Ok(())
@@ -61,9 +61,7 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
         if !history_sequence_may_fit(&events, commit.sequence) {
             continue;
         }
-        let Ok(repo) = repo_for_history(engine, &commit.history_tree_id) else {
-            continue;
-        };
+        let repo = repo_for_history(engine, &commit.history_tree_id)?;
         // Deletions are committed namespace facts, independent of content
         // identity and of whether another alias still names the same file.
         // The ordinal preserves repeated removal of one path in a transaction.
@@ -205,8 +203,10 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
         let Some(file) = operation.result.get("file_id").and_then(Value::as_str) else {
             continue;
         };
-        let Ok(repo) = file_repo(engine, file) else {
-            continue;
+        let repo = match file_repo(engine, file) {
+            Ok(repo) => repo,
+            Err(error) if error.code == storage_contract::ErrorCode::FileNotFound => continue,
+            Err(error) => return Err(error),
         };
         let path_node = operation
             .result
@@ -220,8 +220,9 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
             .and_then(|id| engine.state().file_metadata_nodes.get(id));
         let current = engine
             .list_tree(&repo.main_branch_id)
-            .ok()
-            .and_then(|entries| entries.into_iter().find(|entry| entry.file_id == file));
+            .map_err(crate::engine_backend::error)?
+            .into_iter()
+            .find(|entry| entry.file_id == file);
         let relative = path_node
             .map(|node| node.path.clone())
             .or_else(|| current.map(|entry| entry.path))
@@ -243,7 +244,7 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
             &mut events,
             operation.sequence,
             operation.operation_id.clone(),
-            json!({"timestamp":operation.result.get("timestamp"),"slot_id":repo.primary_slot_id,"path":display,"action":operation.kind,"principal":engine.operation_owner(&operation.operation_id),"file_id":file,"version_id":path_node.map(|node|json!(node.version_id)).or_else(||metadata_node.map(|node|json!(node.version_id))).or_else(||operation.result.get("version_id").cloned()),"node_id":operation.result.get("node_id"),"branch_id":operation.result.get("branch_id"),"message":operation.result.get("name").and_then(Value::as_str).unwrap_or("")}),
+            json!({"timestamp":operation.result.get("timestamp"),"slot_id":repo.primary_slot_id,"path":display,"action":operation.kind,"principal":engine.operation_owner(&operation.operation_id).map_err(crate::engine_backend::error)?,"file_id":file,"version_id":path_node.map(|node|json!(node.version_id)).or_else(||metadata_node.map(|node|json!(node.version_id))).or_else(||operation.result.get("version_id").cloned()),"node_id":operation.result.get("node_id"),"branch_id":operation.result.get("branch_id"),"message":operation.result.get("name").and_then(Value::as_str).unwrap_or("")}),
         );
     }
     for operation in engine.state().operations.values().filter(|op| {
@@ -290,7 +291,7 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
             operation.operation_id.clone(),
             json!({"timestamp":operation.result.get("timestamp"),
                 "slot_id":repo.primary_slot_id,"path":display,
-                "action":operation.kind,"principal":engine.operation_owner(&operation.operation_id),
+                "action":operation.kind,"principal":engine.operation_owner(&operation.operation_id).map_err(crate::engine_backend::error)?,
                 "file_id":"","version_id":null,"directory_branch_id":id,
                 "head_tree_id":operation.result.get("head_tree_id"),
                 "message":operation.result.get("name").and_then(Value::as_str).unwrap_or("")
@@ -306,13 +307,15 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
         if !history_sequence_may_fit(&events, operation.sequence) {
             continue;
         }
-        let Some(repo) = operation
+        let history = operation
             .result
             .get("history_tree_id")
             .and_then(Value::as_str)
-            .and_then(|history| repo_for_history(engine, history).ok())
-        else {
-            continue;
+            .expect("invariant: backup configuration records their history identity");
+        let repo = match repo_for_history(engine, history) {
+            Ok(repo) => repo,
+            Err(error) if error.status == ::http::StatusCode::NOT_FOUND => continue,
+            Err(error) => return Err(error),
         };
         let path = operation.result["scope"]["path"].as_str().unwrap_or("");
         let display = if repo.file_manager_root {
@@ -328,7 +331,7 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
             operation.operation_id.clone(),
             json!({"timestamp":operation.result.get("timestamp"),
             "slot_id":repo.primary_slot_id,"path":display,"action":"backup.configure",
-            "principal":engine.operation_owner(&operation.operation_id),"file_id":operation.result["policy"]["scope_file_id"].as_str().unwrap_or(""),"version_id":null,
+            "principal":engine.operation_owner(&operation.operation_id).map_err(crate::engine_backend::error)?,"file_id":operation.result["policy"]["scope_file_id"].as_str().unwrap_or(""),"version_id":null,
             "target_copies":operation.result.get("target_copies"),"message":""}),
         );
     }
@@ -336,9 +339,7 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
         if !history_sequence_may_fit(&events, node.sequence) {
             continue;
         }
-        let Ok(repo) = repo_for_history(engine, &node.history_tree_id) else {
-            continue;
-        };
+        let repo = repo_for_history(engine, &node.history_tree_id)?;
         let display = if repo.file_manager_root {
             node.path.clone()
         } else {
@@ -412,7 +413,7 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
             tree.tree_id.clone(),
             json!({"timestamp":operation.result.get("timestamp"),
                 "slot_id":repo.primary_slot_id,"path":display,
-                "action":action,"principal":engine.operation_owner(&operation.operation_id),
+                "action":action,"principal":engine.operation_owner(&operation.operation_id).map_err(crate::engine_backend::error)?,
                 "file_id":"","version_id":null,"directory_branch_id":tree.directory_branch_id,
                 "head_tree_id":tree.tree_id,"parent_tree_id":tree.parent_tree_id,"message":""
             }),

@@ -54,7 +54,10 @@ where
 
             let render_root = container.clone();
 
-            let _ = mount.append_child(&container);
+            if let Err(error) = mount.append_child(&container) {
+                web_sys::console::error_2(&"Could not attach the portal".into(), &error);
+                return;
+            }
             let handle = SendWrapper::new((
                 mount::mount_to(render_root.unchecked_into(), {
                     let children = Arc::clone(&children);
@@ -68,7 +71,9 @@ where
                 move || {
                     let (handle, mount, container) = handle.take();
                     drop(handle);
-                    let _ = mount.remove_child(&container);
+                    if let Err(error) = mount.remove_child(&container) {
+                        web_sys::console::warn_2(&"Could not detach the portal".into(), &error);
+                    }
                 }
             })
         });

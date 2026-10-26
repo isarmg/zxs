@@ -399,8 +399,15 @@ fn malformed_or_partially_replicated_checkpoint_falls_back() {
     let (_temp, root, config) = setup();
     drop(reopen(&root).0);
     std::fs::write(path(&config.disks[0]), b"not a checkpoint").unwrap();
-    let (engine, count) = reopen(&root);
+    let (mut engine, count) = reopen(&root);
     assert!(count >= 6);
+    let warnings = engine.take_recovery_warnings();
+    let error = warnings
+        .checkpoint_load
+        .expect("malformed cache is reported once");
+    assert!(std::error::Error::source(&error).is_some());
+    assert!(warnings.checkpoint_save.is_none());
+    assert!(engine.take_recovery_warnings().checkpoint_load.is_none());
     drop(engine);
     assert_eq!(reopen(&root).1, 1);
 }
@@ -480,4 +487,18 @@ fn torn_journal_tail_disables_checkpoint_replay_skip() {
     file.write_all(b"ZXSLO").unwrap();
     let (_, count) = reopen(&root);
     assert!(count >= 6);
+}
+
+#[test]
+fn checkpoint_save_failure_is_nonfatal_and_reported_once() {
+    let (_temp, root, config) = setup();
+    let checkpoint = path(&config.disks[0]);
+    std::fs::create_dir(&checkpoint).unwrap();
+    let (mut engine, count) = reopen(&root);
+    assert!(count >= 6);
+    let warnings = engine.take_recovery_warnings();
+    assert!(warnings.checkpoint_save.is_some());
+    let consumed = engine.take_recovery_warnings();
+    assert!(consumed.checkpoint_load.is_none());
+    assert!(consumed.checkpoint_save.is_none());
 }

@@ -13,7 +13,7 @@ fn old_tree_admission(state: &State, input: &Value) -> Result<(), ApiError> {
             "branch not found",
         )
     })?;
-    if branch_info.state == "migrated" {
+    if branch_info.state == storage_contract::BranchState::Migrated {
         return Err(ApiError::new(
             ::http::StatusCode::CONFLICT,
             storage_contract::ErrorCode::TreeMoved,
@@ -93,12 +93,16 @@ fn narrow_authorization_matches_old_tree_metadata_decisions_and_error_precedence
         let mut state = base.clone();
         match case {
             "valid" => {}
-            "archived" => state.branches.get_mut(branch).unwrap().state = "archived".into(),
+            "archived" => {
+                state.branches.get_mut(branch).unwrap().state =
+                    storage_contract::BranchState::Archived
+            }
             "missing branch" => {
                 state.branches.remove(branch);
             }
             "migrated" | "migrated and missing history" => {
-                state.branches.get_mut(branch).unwrap().state = "migrated".into();
+                state.branches.get_mut(branch).unwrap().state =
+                    storage_contract::BranchState::Migrated;
                 if case.ends_with("history") {
                     state.histories.clear();
                 }

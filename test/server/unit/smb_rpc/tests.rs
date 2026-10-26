@@ -433,7 +433,7 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
     client
         .dispatch(Request::Namespace {
             operation_id: new_id("op"),
-            kind: "rename".into(),
+            kind: smb_protocol::protocol::NamespaceOperation::Rename,
             path: "a/report.txt".into(),
             destination: Some("b/report.txt".into()),
             replace: false,
@@ -947,7 +947,7 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
     let before = one.find("report.txt").unwrap().unwrap();
     two.dispatch(Request::Namespace {
         operation_id: new_id("op"),
-        kind: "rename".into(),
+        kind: smb_protocol::protocol::NamespaceOperation::Rename,
         path: "report.txt".into(),
         destination: Some("REPORT.txt".into()),
         replace: true,
@@ -965,7 +965,7 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
     assert_eq!(
         two.dispatch(Request::Namespace {
             operation_id: new_id("op"),
-            kind: "rename".into(),
+            kind: smb_protocol::protocol::NamespaceOperation::Rename,
             path: "dir".into(),
             destination: Some("moved".into()),
             replace: false
@@ -976,7 +976,7 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
     );
     two.dispatch(Request::Namespace {
         operation_id: new_id("op"),
-        kind: "mkdir".into(),
+        kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
         path: "unrelated".into(),
         destination: None,
         replace: false,
@@ -990,7 +990,7 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
     assert_eq!(
         two.dispatch(Request::Namespace {
             operation_id: new_id("op"),
-            kind: "rename".into(),
+            kind: smb_protocol::protocol::NamespaceOperation::Rename,
             path: "REPORT.txt".into(),
             destination: Some("unrelated".into()),
             replace: true
@@ -1001,7 +1001,7 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
     );
     two.dispatch(Request::Namespace {
         operation_id: new_id("op"),
-        kind: "mkdir".into(),
+        kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
         path: "after-failure".into(),
         destination: None,
         replace: false,
@@ -1017,7 +1017,7 @@ fn listing_uses_portable_lookup_keys_and_rejects_files_or_missing_directories() 
         session
             .dispatch(Request::Namespace {
                 operation_id: new_id("op"),
-                kind: "mkdir".into(),
+                kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
                 path: path.into(),
                 destination: None,
                 replace: false,
@@ -1323,7 +1323,7 @@ fn writable_open_rejects_entry_changed_before_workspace_snapshot() {
             client
                 .dispatch(Request::Namespace {
                     operation_id: new_id("op"),
-                    kind: "unlink".into(),
+                    kind: smb_protocol::protocol::NamespaceOperation::Unlink,
                     path: "report.txt".into(),
                     destination: None,
                     replace: false,
@@ -1600,7 +1600,9 @@ fn hello_rejects_missing_write_reservations_before_admitting_a_session() {
         } else {
             let (response, descriptor) = wire.receive::<Response>().unwrap();
             assert!(descriptor.is_none());
-            assert!(matches!(response, Response::Error { code, .. } if code == "INVALID_REQUEST"));
+            assert!(
+                matches!(response, Response::Error { code, .. } if code == storage_contract::ErrorCode::InvalidRequest)
+            );
             assert_eq!(
                 wire.receive::<Response>().unwrap_err().kind(),
                 io::ErrorKind::UnexpectedEof
@@ -1661,7 +1663,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
     let mut session = session(shared, &branch);
     session
         .namespace(
-            "rename".into(),
+            smb_protocol::protocol::NamespaceOperation::Rename,
             "report.txt".into(),
             Some("é.txt".into()),
             false,
@@ -1723,7 +1725,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
     assert!(
         session
             .namespace(
-                "mkdir".into(),
+                smb_protocol::protocol::NamespaceOperation::Mkdir,
                 "new-e\u{301}".into(),
                 None,
                 false,
@@ -1734,7 +1736,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
     assert!(
         session
             .namespace(
-                "rename".into(),
+                smb_protocol::protocol::NamespaceOperation::Rename,
                 "é.txt".into(),
                 Some("new-e\u{301}.txt".into()),
                 false,
@@ -1748,7 +1750,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
     );
     session
         .namespace(
-            "rename".into(),
+            smb_protocol::protocol::NamespaceOperation::Rename,
             "e\u{301}.txt".into(),
             Some("Å.txt".into()),
             false,
@@ -1757,7 +1759,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
         .unwrap();
     session
         .namespace(
-            "unlink".into(),
+            smb_protocol::protocol::NamespaceOperation::Unlink,
             "A\u{30a}.txt".into(),
             None,
             false,

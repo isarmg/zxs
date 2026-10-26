@@ -1347,7 +1347,14 @@ impl<'a> ValidationError<'a> {
     }
 }
 
-impl error::Error for ValidationError<'_> {}
+impl error::Error for ValidationError<'_> {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self.kind() {
+            ValidationErrorKind::BacktrackLimitExceeded { error } => Some(error),
+            _ => None,
+        }
+    }
+}
 impl From<crate::reference::Error> for ValidationError<'_> {
     #[inline]
     fn from(err: crate::reference::Error) -> Self {

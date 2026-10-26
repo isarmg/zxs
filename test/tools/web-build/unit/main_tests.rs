@@ -269,3 +269,65 @@ fn inventory_rejects_lossy_and_alternate_path_spellings() {
         );
     }
 }
+
+fn test_lock(fixture: &Fixture) -> BuildLock {
+    let path = fixture.0.join(".web-build-lock");
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .unwrap();
+    BuildLock {
+        path: Some(path),
+        _file: file,
+    }
+}
+
+#[test]
+fn build_lock_finish_releases_on_success_and_build_error() {
+    let fixture = Fixture::new();
+    test_lock(&fixture).finish(Ok(())).unwrap();
+    assert!(!fixture.0.join(".web-build-lock").exists());
+    let error = test_lock(&fixture)
+        .finish(Err(
+            std::io::Error::from(std::io::ErrorKind::Interrupted).into()
+        ))
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::Interrupted
+    );
+    assert!(!fixture.0.join(".web-build-lock").exists());
+}
+
+#[test]
+fn build_lock_finish_preserves_cleanup_and_primary_errors() {
+    let fixture = Fixture::new();
+    let lock = test_lock(&fixture);
+    fs::remove_file(fixture.0.join(".web-build-lock")).unwrap();
+    let error = lock.finish(Ok(())).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    let lock = test_lock(&fixture);
+    fs::remove_file(fixture.0.join(".web-build-lock")).unwrap();
+    let error = lock
+        .finish(Err(
+            std::io::Error::from(std::io::ErrorKind::Interrupted).into()
+        ))
+        .unwrap_err();
+    let both = error.downcast_ref::<BuildAndCleanupError>().unwrap();
+    assert_eq!(both.cleanup.kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(
+        both.build.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::Interrupted
+    );
+}
+
+#[test]
+fn build_lock_unwind_fallback_releases_lock() {
+    let fixture = Fixture::new();
+    drop(test_lock(&fixture));
+    assert!(!fixture.0.join(".web-build-lock").exists());
+}

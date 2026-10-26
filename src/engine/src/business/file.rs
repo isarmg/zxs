@@ -88,7 +88,8 @@ pub(crate) fn synchronize_directory_edits(
         if branch.history_tree_id != current.history_tree_id {
             continue;
         }
-        if branch.state != "active" || state.file_branch_aliases.contains_key(&branch_id) {
+        if branch.state != BranchState::Active || state.file_branch_aliases.contains_key(&branch_id)
+        {
             return Err(Error::new(
                 storage_contract::ErrorCode::BranchNotActive,
                 "selected file branch is not writable",
@@ -201,7 +202,7 @@ pub(crate) fn publish_selected_file_at(
                 "directory branch missing",
             )
         })?;
-    if main.state != "active" {
+    if main.state != BranchState::Active {
         return Err(Error::new(
             storage_contract::ErrorCode::BranchNotActive,
             "directory is not writable",
@@ -418,7 +419,7 @@ pub(crate) fn ensure_shared_file_branch(
                 name: "main".into(),
                 head_commit_id: commit_id,
                 fork_commit_id: current.commit_id.clone(),
-                branch_kind: "file".into(),
+                branch_kind: BranchKind::File,
                 file_id: Some(file_id.into()),
                 pending_file_versions: current
                     .pending_file_versions
@@ -426,7 +427,7 @@ pub(crate) fn ensure_shared_file_branch(
                     .map(|version| [(file_id.into(), version.clone())].into())
                     .unwrap_or_default(),
                 generation: 1,
-                state: "active".into(),
+                state: BranchState::Active,
             },
         );
         state.file_selections.insert(file_id.into(), id);
@@ -471,7 +472,7 @@ pub(crate) fn create_file_branch_change(
                 "directory branch missing",
             )
         })?;
-    if main.state != "active" {
+    if main.state != BranchState::Active {
         return Err(Error::new(
             storage_contract::ErrorCode::BranchNotActive,
             "directory is not writable",
@@ -552,11 +553,11 @@ pub(crate) fn create_file_branch_change(
             name: name.into(),
             head_commit_id: commit_id.clone(),
             fork_commit_id: current.commit_id,
-            branch_kind: "file".into(),
+            branch_kind: BranchKind::File,
             file_id: Some(file_id.into()),
             pending_file_versions: [(file_id.into(), source_version.into())].into(),
             generation: 1,
-            state: "active".into(),
+            state: BranchState::Active,
         },
     );
     Ok(
@@ -619,7 +620,7 @@ impl Engine {
         principal: &str,
         operation: &str,
     ) -> Result<OperationResult> {
-        if change.kind == "mkdir" {
+        if change.kind == NamespaceOperationKind::Mkdir {
             name_policy::validate_path(&change.path)?;
         } else {
             name_policy::validate_lookup_path(&change.path)?;
@@ -631,7 +632,7 @@ impl Engine {
             let repo=engine.state.repositories.get(repository).ok_or_else(||Error::new(storage_contract::ErrorCode::RepositoryNotFound,"directory namespace missing"))?;
 
             let branch=state.branches.get(&repo.main_branch_id).cloned().ok_or_else(||Error::new(storage_contract::ErrorCode::BranchNotFound,"directory branch missing"))?;
-            if branch.state!="active"{return Err(Error::new(storage_contract::ErrorCode::BranchNotActive,"directory is not writable"));}
+            if branch.state!=BranchState::Active{return Err(Error::new(storage_contract::ErrorCode::BranchNotActive,"directory is not writable"));}
             let previous=state.commits.get(&branch.head_commit_id).cloned().ok_or_else(||Error::new(storage_contract::ErrorCode::StateInvalid,"directory head missing"))?;
             let mut entries=previous.entries.clone();let deleted=super::apply_namespace(&mut entries,&change)?;
             validate_entries(&mut entries,engine.config.max_entries)?;
@@ -639,7 +640,7 @@ impl Engine {
             super::directory::namespace_locations(state,repository,&previous.entries,&entries,std::slice::from_ref(&change),principal,operation)?;
             let pending_file_versions=previous.pending_file_versions.iter().filter(|(file,_)|entries.iter().any(|entry|entry.kind == NamespaceEntryKind::File&&entry.file_id==file.as_str())).map(|(file,source)|(file.clone(),source.clone())).collect();
             let id=new_id("commit");
-            state.commits.insert(id.clone(),Commit{ namespace_deletions: namespace::deletion_record(deleted, now()),commit_id:id.clone(),history_tree_id:branch.history_tree_id.clone(),kind:"namespace".into(),parent_commit_ids:vec![previous.commit_id],tree_id:new_id("tree"),sequence:state.sequence,operation_id:operation.into(),author:principal.into(),message:format!("{} {}",change.kind,change.path),entries,pending_file_versions,provenance:None});
+            state.commits.insert(id.clone(),Commit{ namespace_deletions: namespace::deletion_record(deleted, now()),commit_id:id.clone(),history_tree_id:branch.history_tree_id.clone(),kind:"namespace".into(),parent_commit_ids:vec![previous.commit_id],tree_id:new_id("tree"),sequence:state.sequence,operation_id:operation.into(),author:principal.into(),message:format!("{} {}",change.kind.as_str(),change.path),entries,pending_file_versions,provenance:None});
             let live_files=state.commits[&id].entries.iter().filter(|entry|entry.kind == NamespaceEntryKind::File).map(|entry|entry.file_id.clone()).collect::<std::collections::BTreeSet<_>>();
             let branch=state.branches.get_mut(&repo.main_branch_id).expect("checked");branch.head_commit_id=id.clone();branch.generation = branch.generation.checked_add(1).ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "branch generation exhausted"))?;
             branch.pending_file_versions.retain(|file,_|live_files.contains(file));
@@ -707,7 +708,7 @@ impl Engine {
                     .filter(|b| b.file_id.as_deref() == Some(file_id)
                         && b.history_tree_id == repo.history_tree_id)
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::FileBranchNotFound, "file branch missing"))?;
-                if branch.state != "active" {
+                if branch.state != BranchState::Active {
                     return Err(Error::new(storage_contract::ErrorCode::BranchNotActive, "merged file aliases are read-only; select an active branch"));
                 }
                 let selected = state.commits.get(&branch.head_commit_id)
@@ -738,7 +739,7 @@ impl Engine {
                 let branch = state.branches.get(branch_id).cloned()
                     .filter(|b| b.file_id.as_deref() == Some(file_id))
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::FileBranchNotFound, "select an active branch of this file"))?;
-                if branch.state != "active" {
+                if branch.state != BranchState::Active {
                     return Err(Error::new(storage_contract::ErrorCode::BranchNotActive, "merged file aliases are read-only; select an active branch"));
                 }
                 engine.repository_for_history(&branch.history_tree_id)?;

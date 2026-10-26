@@ -63,23 +63,18 @@ pub(crate) struct DiskSeal {
 }
 pub(crate) fn private_dir(path: &Path) -> Result<()> {
     let path = absolute_path(path)?;
-    match fs::symlink_metadata(&path) {
-        Ok(_) => {
-            PrivateDirectory::open_existing(&path).map_err(fs_error)?;
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let parent = path.parent().ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::UnsafePath,
-                    "missing directory parent",
-                )
-            })?;
-            if !parent.exists() {
-                private_dir(parent)?;
-            }
+    match PrivateDirectory::create(&path) {
+        Ok(_) => (),
+        Err(platform_io::fs_safety::Error::Io(error))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            let parent = path
+                .parent()
+                .expect("invariant: missing child has a parent");
+            private_dir(parent)?;
             PrivateDirectory::create(&path).map_err(fs_error)?;
         }
-        Err(e) => return Err(e.into()),
+        Err(error) => return Err(fs_error(error)),
     }
     Ok(())
 }
@@ -284,10 +279,16 @@ fn full_copy_to_path(
             "missing destination parent",
         )
     })?;
-    if !parent.exists() {
-        private_dir(parent)?;
-    }
-    let directory = OpenAt2Root::open(parent, MountPolicy::SameMount).map_err(fs_error)?;
+    let directory = match OpenAt2Root::open(parent, MountPolicy::SameMount) {
+        Ok(directory) => directory,
+        Err(platform_io::fs_safety::Error::Io(error))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            private_dir(parent)?;
+            OpenAt2Root::open(parent, MountPolicy::SameMount).map_err(fs_error)?
+        }
+        Err(error) => return Err(fs_error(error)),
+    };
     let destination_name = EntryName::new(destination.file_name().ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::UnsafePath,
@@ -416,14 +417,20 @@ fn full_copy_checked(
         directory.directory().sync_all()?;
         Ok((size, hash, checksums))
     })();
-    if result.is_err() {
-        let _ = rustix::fs::unlinkat(
+    match result {
+        Ok((size, hash, checksums)) => Ok((size, hash, checksums, target)),
+        Err(operation) => match rustix::fs::unlinkat(
             directory.directory(),
             temporary.as_str(),
             rustix::fs::AtFlags::empty(),
-        );
+        ) {
+            Ok(()) | Err(rustix::io::Errno::NOENT) => Err(operation),
+            Err(cleanup) => Err(Error::Cleanup {
+                operation: Box::new(operation),
+                cleanup: cleanup.into(),
+            }),
+        },
     }
-    result.map(|(size, hash, checksums)| (size, hash, checksums, target))
 }
 pub(crate) fn verify_payload(directory: &Path, version: &FileVersion) -> Result<()> {
     verify_payload_held(directory, version).map(|_| ())
@@ -538,7 +545,7 @@ fn production_device(root: &Path) -> Result<(String, String)> {
     })?;
     let class = Path::new("/sys/class/block").join(name);
     let hardware = class.canonicalize()?;
-    let mut physical = if class.join("partition").exists() {
+    let mut physical = if class.join("partition").try_exists()? {
         hardware
             .parent()
             .ok_or_else(|| {
@@ -555,7 +562,10 @@ fn production_device(root: &Path) -> Result<(String, String)> {
     // independent physical media from this kernel view. Refuse them instead of
     // counting two mappings of one drive as independent replicas.
     if physical.starts_with("/sys/devices/virtual")
-        || fs::read_dir(class.join("slaves"))?.next().is_some()
+        || fs::read_dir(class.join("slaves"))?
+            .next()
+            .transpose()?
+            .is_some()
     {
         return Err(Error::new(
             storage_contract::ErrorCode::UnsupportedDeviceTopology,
@@ -596,9 +606,13 @@ fn production_device(root: &Path) -> Result<(String, String)> {
             continue;
         }
         let entries = fs::read_dir(&devices)?.collect::<std::io::Result<Vec<_>>>()?;
-        let belongs = entries
-            .iter()
-            .any(|e| e.path().canonicalize().ok().as_ref() == Some(&hardware));
+        let mut belongs = false;
+        for device in &entries {
+            if device.path().canonicalize()? == hardware {
+                belongs = true;
+                break;
+            }
+        }
         if belongs {
             if entries.len() != 1 {
                 return Err(Error::new(
@@ -669,44 +683,45 @@ pub fn offline_check(root: &Path) -> Result<CheckReport> {
         issues: Vec::new(),
     };
     let histories = root.join("histories");
-    if !histories.exists() {
-        return Ok(report);
-    }
-    for h in fs::read_dir(histories)? {
+    let histories = match fs::read_dir(&histories) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(report),
+        Err(error) => return Err(error.into()),
+    };
+    for h in histories {
         let h = h?;
         if !h.file_type()?.is_dir() {
             continue;
         }
         let versions = h.path().join("versions");
-        if !versions.exists() {
-            continue;
-        }
-        for v in fs::read_dir(versions)? {
+        let versions = match fs::read_dir(&versions) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        for v in versions {
             let v = v?;
             if !v.file_type()?.is_dir() {
                 continue;
             }
             report.checked_versions += 1;
-            if v.path().join("purged.json").exists() {
-                let result = read_json::<FileVersion>(&v.path().join("version.json"))
-                    .and_then(|version| crate::journal::verify_tombstone(&v.path(), &version));
-                match result {
-                    Ok(()) => report.tombstoned_versions += 1,
-                    Err(e) => report
-                        .issues
-                        .push(format!("{}: {e}", v.file_name().to_string_lossy())),
+            let check: Result<bool> = (|| {
+                let directory = v.path();
+                let version: FileVersion = read_json(&directory.join("version.json"))?;
+                if let Some(file) = open_optional_regular(&directory.join("purged.json"))? {
+                    let tombstone = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
+                    crate::journal::verify_tombstone_content(&directory, &version, &tombstone)?;
+                    return Ok(true);
                 }
-                continue;
-            }
-            let check = (|| {
-                let version: FileVersion = read_json(&v.path().join("version.json"))?;
                 validate_id(&version.version_id, "ver")?;
                 name_policy::validate_name(&version.creation_name)?;
-                crate::journal::verify_local_publication(&v.path(), &version)?;
-                verify_payload(&v.path(), &version)
+                crate::journal::verify_local_publication(&directory, &version)?;
+                verify_payload(&directory, &version)?;
+                Ok(false)
             })();
             match check {
-                Ok(()) => report.healthy_replicas += 1,
+                Ok(true) => report.tombstoned_versions += 1,
+                Ok(false) => report.healthy_replicas += 1,
                 Err(e) => report
                     .issues
                     .push(format!("{}: {}", v.file_name().to_string_lossy(), e)),
@@ -724,21 +739,30 @@ pub fn offline_export(root: &Path, version_id: &str, destination: &Path) -> Resu
             continue;
         }
         let directory = h.path().join("versions").join(version_id);
-        if !directory.exists() {
-            continue;
+        match OpenAt2Root::open(&directory, MountPolicy::SameMount) {
+            Ok(_) => (),
+            Err(platform_io::fs_safety::Error::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                continue;
+            }
+            Err(error) => return Err(fs_error(error)),
         }
         let version: FileVersion = read_json(&directory.join("version.json"))?;
         name_policy::validate_name(&version.creation_name)?;
         crate::journal::verify_local_publication(&directory, &version)?;
         let source = verify_payload_held(&directory, &version)?;
-        if destination.exists() {
-            return Err(Error::new(
-                storage_contract::ErrorCode::DestinationExists,
-                "export does not overwrite existing files",
-            ));
-        }
-        verified_full_copy(source, destination, &version)?;
-        return Ok(());
+        return verified_full_copy(source, destination, &version).map_err(|error| match error {
+            Error::Contract(storage_contract::Error::Io { ref source, .. })
+                if source.kind() == std::io::ErrorKind::AlreadyExists =>
+            {
+                error.context(
+                    storage_contract::ErrorCode::DestinationExists,
+                    "export does not overwrite existing files",
+                )
+            }
+            error => error,
+        });
     }
     Err(Error::new(
         storage_contract::ErrorCode::VersionNotFound,

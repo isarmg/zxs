@@ -210,7 +210,7 @@ fn failed_vfs_close_detaches_only_its_writer_and_keeps_both_sessions_usable() {
             Failure::PendingOperation | Failure::UnknownOperation => "RECOVERY_REQUIRED",
             Failure::Abort => "WORKSPACE_BUSY",
         };
-        assert_eq!(remote(&error).code, expected_code);
+        assert_eq!(remote(&error).code.to_string(), expected_code);
         assert_eq!(
             remote(&error).operation_id.as_deref(),
             Some(operation.as_str())
@@ -250,7 +250,10 @@ fn failed_vfs_close_detaches_only_its_writer_and_keeps_both_sessions_usable() {
                 handle: opened.handle,
             })
             .unwrap_err();
-        assert_eq!(remote(&repeated).code, "NOT_FOUND");
+        assert_eq!(
+            remote(&repeated).code,
+            smb_protocol::client::RemoteErrorCode::Server(storage_contract::ErrorCode::NotFound)
+        );
         assert_eq!(injected.commits.load(Ordering::SeqCst), before.1);
         injected.enabled.store(false, Ordering::SeqCst);
         assert!(
@@ -319,7 +322,10 @@ fn lost_close_reply_retains_original_published_operation_without_resubmitting() 
         .to_owned();
     backend.fail.store(true, Ordering::SeqCst);
     let error = close_vfs(&client, &opened, fd).unwrap_err();
-    assert_eq!(remote(&error).code, "INJECTED_FAILURE");
+    assert_eq!(
+        remote(&error).code,
+        smb_protocol::client::RemoteErrorCode::Server(storage_contract::ErrorCode::InjectedFailure)
+    );
     assert_eq!(
         remote(&error).operation_id.as_deref(),
         Some(operation.as_str())

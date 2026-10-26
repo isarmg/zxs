@@ -428,7 +428,10 @@ class Layout:
         target = safe(self.root, self.current_path(path))
         if not target.is_file() or target.stat().st_size > MAX_FILE_BYTES:
             raise ValueError('missing or oversized live layout file: ' + path)
-        data = target.read_bytes()
+        return self.project_bytes(path, target.read_bytes())
+
+    def project_bytes(self, path, data):
+        """Apply the original exact layout inverse to supplied physical bytes."""
         if self.corrections is not None:
             data = self.corrections.read(path, data)
         if path in self.descendant_files and digest(data) != self.descendant_files[path]:

@@ -14,6 +14,10 @@ const DEADLINE: Duration = Duration::from_secs(3);
 pub enum DdlFingerprintError {
     #[error("trusted DDL input exceeds the supported bounds")]
     InputLimit,
+    #[error("trusted DDL native connection limits failed")]
+    ConnectionLimits(#[source] crate::sqlite::ConnectionLimitError),
+    #[error("trusted DDL schema read failed")]
+    SchemaRead(#[source] crate::sqlite::Error),
     #[error("trusted DDL schema result exceeds the supported bounds")]
     ResultLimit,
     #[error("trusted DDL evaluation exceeded its deadline")]
@@ -24,6 +28,12 @@ pub enum DdlFingerprintError {
     Schema(#[source] crate::schema_identity::Error),
     #[error("trusted DDL SQLite connection could not be closed")]
     Close(#[source] sqlite_access::Error),
+    #[error("{operation}; SQLite connection close also failed: {close}")]
+    EvaluationAndClose {
+        operation: Box<DdlFingerprintError>,
+        #[source]
+        close: sqlite_access::Error,
+    },
 }
 
 /// Compute a schema fingerprint from owned, trusted product DDL synchronously.
@@ -58,7 +68,11 @@ pub fn fingerprint_trusted_ddl(ddl: &[&str]) -> Result<String, DdlFingerprintErr
         let result = evaluate(&mut connection, ddl, deadline).await;
         let close = connection.close().await;
         match (result, close) {
-            (Err(error), _) => Err(error),
+            (Err(operation), Err(close)) => Err(DdlFingerprintError::EvaluationAndClose {
+                operation: Box::new(operation),
+                close,
+            }),
+            (Err(error), Ok(())) => Err(error),
             (Ok(_), Err(error)) => Err(DdlFingerprintError::Close(error)),
             (Ok(fingerprint), Ok(())) => Ok(fingerprint),
         }
@@ -75,7 +89,7 @@ async fn evaluate(
         crate::sqlite::ConnectionLimits::new(MAX_SCHEMA_BYTES as u32),
     )
     .await
-    .map_err(|_| DdlFingerprintError::InputLimit)?;
+    .map_err(DdlFingerprintError::ConnectionLimits)?;
     {
         let mut handle = connection
             .lock_handle()
@@ -109,8 +123,7 @@ async fn evaluate(
             match error {
                 crate::sqlite::Error::SchemaBudgetExceeded => DdlFingerprintError::ResultLimit,
                 crate::sqlite::Error::Sqlx(error) => DdlFingerprintError::Sqlite(error),
-                // schema_rows has no metadata or file-system operation.
-                _ => DdlFingerprintError::ResultLimit,
+                error => DdlFingerprintError::SchemaRead(error),
             }
         })?;
     let fingerprint = schema_fingerprint(&rows).map_err(DdlFingerprintError::Schema)?;

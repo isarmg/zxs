@@ -22,9 +22,8 @@ struct Work {
 }
 
 impl NamespaceDraft {
-    /// Admit even an unsorted source, but never resolve corrupt duplicates by
-    /// silently choosing a first or last entry. No source entry is normalized.
-    pub(crate) fn new(entries: Vec<Entry>) -> Result<Self> {
+    /// Start from admitted commit entries; no path normalization or admission work.
+    pub(crate) fn new(entries: Vec<Entry>) -> Self {
         let mut draft = Self {
             slots: Vec::with_capacity(entries.len()),
             by_path: BTreeMap::new(),
@@ -34,46 +33,15 @@ impl NamespaceDraft {
         for entry in entries {
             #[cfg(test)]
             draft.record(|work| work.source_visits += 1);
-            Self::validate_entry(&entry)?;
-            if draft
-                .index_insert(entry.lookup_key.clone(), draft.slots.len())
-                .is_some()
-            {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::StateInvalid,
-                    "namespace source has duplicate lookup keys",
-                ));
-            }
+            assert!(
+                draft
+                    .index_insert(entry.lookup_key.clone(), draft.slots.len())
+                    .is_none(),
+                "invariant: admitted namespace lookup keys are unique"
+            );
             draft.slots.push(Some(entry));
         }
-        for entry in draft.slots.iter().flatten() {
-            #[cfg(test)]
-            draft.record(|work| work.source_visits += 1);
-            if let Some((parent, _)) = entry.lookup_key.rsplit_once('/')
-                && draft
-                    .get_key(parent)
-                    .is_none_or(|entry| entry.kind != NamespaceEntryKind::Directory)
-            {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::StateInvalid,
-                    "namespace source parent is missing or is not a directory",
-                ));
-            }
-        }
-        Ok(draft)
-    }
-
-    fn validate_entry(entry: &Entry) -> Result<()> {
-        if name_policy::validate_path(&entry.path).is_err()
-            || entry.lookup_key != name_policy::path_key(&entry.path)
-            || entry.name != entry.path.rsplit('/').next().unwrap_or("")
-        {
-            return Err(Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "namespace entry path, key or name is invalid",
-            ));
-        }
-        Ok(())
+        draft
     }
 
     /// Lookup is intentionally not create-path validation: folded and NFD
@@ -96,15 +64,13 @@ impl NamespaceDraft {
         self.by_path.insert(key, slot)
     }
 
-    pub(crate) fn replace(&mut self, entry: Entry) -> Result<()> {
-        Self::validate_entry(&entry)?;
+    pub(crate) fn replace(&mut self, entry: Entry) {
         if let Some(previous) = self.index_insert(entry.lookup_key.clone(), self.slots.len()) {
             self.slots[previous] = None;
         }
         self.slots.push(Some(entry));
         #[cfg(test)]
         self.record(|work| work.appended_slots += 1);
-        Ok(())
     }
 
     pub(crate) fn ensure_parents(&mut self, path: &str) -> Result<()> {
@@ -132,7 +98,7 @@ impl NamespaceDraft {
                     file_id: String::new(),
                     version_id: String::new(),
                     size: 0,
-                })?;
+                });
             }
         }
         Ok(())

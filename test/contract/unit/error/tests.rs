@@ -48,3 +48,17 @@ fn concrete_sources_survive_contract_conversion_and_retry_policy() {
     assert!(error.source().is_none());
     assert!(!error.is_retryable());
 }
+
+#[test]
+fn error_codes_accept_only_their_wire_strings() {
+    for code in ErrorCode::ALL {
+        let encoded = format!("\"{}\"", code.as_str());
+        assert_eq!(json_codec::to_string(code).unwrap(), encoded);
+        assert_eq!(json_codec::from_str::<ErrorCode>(&encoded).unwrap(), *code);
+        let object = format!("{{{}:null}}", encoded);
+        assert!(json_codec::from_str::<ErrorCode>(&object).is_err());
+    }
+    for invalid in ["\"UNRECOGNIZED_ERROR\"", "null", "0", "true", "[]"] {
+        assert!(json_codec::from_str::<ErrorCode>(invalid).is_err());
+    }
+}

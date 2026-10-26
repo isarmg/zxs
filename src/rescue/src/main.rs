@@ -93,7 +93,10 @@ enum PackageCommand {
     },
 }
 fn print(value: impl data_serialization::Serialize) -> Result<()> {
-    println!("{}", json_codec::to_string_pretty(&value)?);
+    use std::io::Write;
+    let mut output = std::io::stdout().lock();
+    writeln!(&mut output, "{}", json_codec::to_string_pretty(&value)?)?;
+    output.flush()?;
     Ok(())
 }
 impl Args {
@@ -120,11 +123,41 @@ impl Args {
 
 fn main() {
     let args = Args::parse();
+    tracing::collector::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .with_ansi(false)
+        .with_writer(std::io::stderr)
+        // Stderr is the final diagnostic sink; do not recursively report its write failures.
+        .log_internal_errors(false)
+        .init();
     if let Err(error) = run(args) {
         eprintln!("zxs-rescue: {error}");
         std::process::exit(1);
     }
 }
+fn report_recovery_warnings(engine: &mut Engine) {
+    let warnings = engine.take_recovery_warnings();
+    for (action, warning) in [
+        (
+            "checkpoint load failed; used full replay",
+            warnings.checkpoint_load,
+        ),
+        ("checkpoint save skipped", warnings.checkpoint_save),
+    ] {
+        if let Some(error) = warning {
+            let mut message = error.to_string();
+            let mut source = std::error::Error::source(&error);
+            while let Some(cause) = source {
+                use std::fmt::Write;
+                write!(&mut message, "; caused by: {cause}")
+                    .expect("String formatting is infallible");
+                source = cause.source();
+            }
+            eprintln!("zxs-rescue: {action}: {message}");
+        }
+    }
+}
+
 fn run(args: Args) -> Result<()> {
     let retained_workspace_limits = args.workspace_limits()?;
     let root = args.root;
@@ -138,7 +171,9 @@ fn run(args: Args) -> Result<()> {
                 history,
                 destination,
             } => {
-                let engine = Engine::open_with_workspace_limits(&root, retained_workspace_limits)?;
+                let mut engine =
+                    Engine::open_with_workspace_limits(&root, retained_workspace_limits)?;
+                report_recovery_warnings(&mut engine);
                 print(engine.export_history_package(&history, &destination)?)
             }
             PackageCommand::Restore {
@@ -149,23 +184,27 @@ fn run(args: Args) -> Result<()> {
             } => {
                 let mut engine =
                     Engine::open_with_workspace_limits(&root, retained_workspace_limits)?;
+                report_recovery_warnings(&mut engine);
                 let operation = operation_id.unwrap_or_else(|| storage_engine::new_id("op"));
-                print(engine.restore_history_package(
+                let restored = engine.restore_history_package(
                     &package,
                     &primary_slot,
                     copies,
                     &args.principal,
                     &operation,
-                )?)
+                );
+                report_recovery_warnings(&mut engine);
+                print(restored?)
             }
         },
         Command::RestoreSystem { disks } => {
-            let engine = Engine::restore_from_disks_with_workspace_limits(
+            let mut engine = Engine::restore_from_disks_with_workspace_limits(
                 &root,
                 &disks,
                 retained_workspace_limits,
             )?;
-            let pool = engine.config().pool_id.clone();
+            report_recovery_warnings(&mut engine);
+            let pool = &engine.config().pool_id;
             let repositories = engine.state().repositories.len();
             let credentials_available = engine.auth_state().is_some();
             print(
@@ -175,7 +214,10 @@ fn run(args: Args) -> Result<()> {
         Command::RecoveryPreview { operation, reason } => {
             let mut engine =
                 Engine::open_for_recovery_with_workspace_limits(&root, retained_workspace_limits)?;
-            print(engine.prepare_degraded_recovery(&operation, &args.principal, &reason)?)
+            report_recovery_warnings(&mut engine);
+            let result = engine.prepare_degraded_recovery(&operation, &args.principal, &reason);
+            report_recovery_warnings(&mut engine);
+            print(result?)
         }
         Command::RecoveryCommit {
             recovery,
@@ -190,7 +232,10 @@ fn run(args: Args) -> Result<()> {
             }
             let mut engine =
                 Engine::open_for_recovery_with_workspace_limits(&root, retained_workspace_limits)?;
-            print(engine.commit_degraded_recovery(&recovery, &digest, &args.principal, true)?)
+            report_recovery_warnings(&mut engine);
+            let result = engine.commit_degraded_recovery(&recovery, &digest, &args.principal, true);
+            report_recovery_warnings(&mut engine);
+            print(result?)
         }
         Command::OfflineCheck { disk } => {
             let report = storage_engine::offline_check(&disk)?;

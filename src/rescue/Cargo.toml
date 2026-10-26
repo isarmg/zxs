@@ -10,6 +10,7 @@ name = "zxs-rescue"
 path = "src/main.rs"
 
 [dependencies]
+tracing = { version = "0.1", default-features = false, features = ["fmt"], path = "../foundation/diagnostics/tracing" }
 authentication.workspace = true
 platform-io.workspace = true
 rustix.workspace = true

@@ -13,7 +13,7 @@ use sqlite_access::{
     Connection, Executor, Row, Sqlite, SqliteConnection,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
 };
-use std::{io, path::Path, path::PathBuf, time::Duration};
+use std::{io, path::Path, time::Duration};
 
 mod blocking;
 pub use blocking::block_on_sqlite_connection;
@@ -116,9 +116,10 @@ pub async fn open_index_connection(
         if let Err(close_error) = connection.close().await {
             // A caller must not interpret the original corruption code as
             // permission to move files while native closure remains uncertain.
-            return Err(connect_error(sqlite_access::Error::Io(io::Error::other(
-                close_error,
-            ))));
+            return Err(Error::InitializationAndClose {
+                operation: error,
+                close: close_error,
+            });
         }
         return Err(connect_error(error));
     }
@@ -156,9 +157,10 @@ pub async fn open_index_read_connection(database_path: &Path) -> Result<SqliteCo
     .await;
     if let Err(error) = initialized {
         if let Err(close_error) = connection.close().await {
-            return Err(connect_error(sqlite_access::Error::Io(io::Error::other(
-                close_error,
-            ))));
+            return Err(Error::InitializationAndClose {
+                operation: error,
+                close: close_error,
+            });
         }
         return Err(connect_error(error));
     }
@@ -348,13 +350,15 @@ async fn read_metadata_rows(
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("SQLite initialization failed: {operation}; connection close also failed: {close}")]
+    InitializationAndClose {
+        operation: sqlite_access::Error,
+        #[source]
+        close: sqlite_access::Error,
+    },
     #[cfg(feature = "sqlite-pool")]
     #[error(transparent)]
     InvalidPoolOptions(#[from] PoolOptionsError),
-    #[error("SQLite database does not exist: {path}", path = .path.display())]
-    DatabaseDoesNotExist { path: PathBuf },
-    #[error("cannot inspect SQLite database {path}: {source}", path = .path.display())]
-    InspectDatabase { path: PathBuf, source: io::Error },
     #[error("SQLite operation failed: {0}")]
     Sqlx(#[from] sqlite_access::Error),
     #[error(transparent)]

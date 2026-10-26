@@ -85,7 +85,7 @@ fn generate(root: &Path) -> Result<String> {
         let fields = line
             .split('#')
             .next()
-            .unwrap_or("")
+            .expect("invariant: split yields at least one segment")
             .split(';')
             .map(str::trim)
             .collect::<Vec<_>>();
@@ -100,7 +100,7 @@ fn generate(root: &Path) -> Result<String> {
         let fields = line
             .split('#')
             .next()
-            .unwrap_or("")
+            .expect("invariant: split yields at least one segment")
             .split(';')
             .map(str::trim)
             .collect::<Vec<_>>();

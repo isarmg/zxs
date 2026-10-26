@@ -75,7 +75,7 @@ fn adopting_an_arbitrary_third_node_creates_one_metadata_node_and_only_participa
     assert!(node.starts_with("fmeta_"));
     assert_eq!(p.engine.state().versions.len(), versions);
     let metadata = &p.engine.state().file_metadata_nodes[&node];
-    assert_eq!(metadata.kind, "merge");
+    assert_eq!(metadata.kind, storage_contract::FileMetadataKind::Merge);
     assert_eq!(metadata.version_id, chosen);
     assert_eq!(
         metadata
@@ -87,7 +87,10 @@ fn adopting_an_arbitrary_third_node_creates_one_metadata_node_and_only_participa
     assert_ne!(p.branch(&involved).head_tree_id, old_involved);
     assert_eq!(p.entry(&involved, "docs/report.txt").version_id, chosen);
     assert_eq!(p.branch(&frozen).head_tree_id, frozen_tree);
-    assert_eq!(p.engine.state().branches[&right].state, "merged");
+    assert_eq!(
+        p.engine.state().branches[&right].state,
+        storage_contract::BranchState::Merged
+    );
     assert_eq!(p.engine.state().file_branch_aliases[&right], left);
     assert_eq!(p.engine.file_branch_head(&right).unwrap(), right_node);
     assert_eq!(p.bytes(&chosen), b"chosen third body");

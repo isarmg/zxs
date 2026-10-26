@@ -256,3 +256,37 @@ fn unsafe_missing_oversized_and_invalid_sources_fail_without_source_changes() {
     ));
     assert_eq!(fs::read(source).unwrap(), b"not a sqlite database");
 }
+
+#[test]
+fn snapshot_errors_preserve_io_and_capture_task_sources() {
+    let error = SnapshotError::LockUnavailable(io::Error::from_raw_os_error(libc::ENOSYS));
+    let source = std::error::Error::source(&error).unwrap();
+    assert_eq!(
+        source.downcast_ref::<io::Error>().unwrap().raw_os_error(),
+        Some(libc::ENOSYS)
+    );
+    let error = SnapshotError::Filesystem(crate::fs_safety::Error::Io(
+        io::Error::from_raw_os_error(libc::EACCES),
+    ));
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<crate::fs_safety::Error>()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn capture_task_failure_preserves_join_error() {
+    let source = tokio::task::spawn_blocking(|| panic!("capture task failure"))
+        .await
+        .unwrap_err();
+    let error = SnapshotError::CaptureTaskFailed(source);
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<tokio::task::JoinError>()
+            .unwrap()
+            .is_panic()
+    );
+}

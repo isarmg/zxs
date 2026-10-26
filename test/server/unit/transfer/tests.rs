@@ -513,7 +513,7 @@ fn cancelled_generation_retention_keeps_item_claim_and_upload_slot_until_worker_
     });
     let current = uploads::load(&spool, "ws", "item").unwrap().unwrap();
     assert_eq!(current.generation, 2);
-    assert_eq!(current.state, "complete");
+    assert_eq!(current.state, crate::uploads::UploadState::Complete);
     assert_eq!(fs::read(spool.join(&current.data_file)).unwrap(), b"new");
     assert_eq!(fs::read(spool.join(&previous.data_file)).unwrap(), b"old");
     let retained = fs::read_dir(&spool)

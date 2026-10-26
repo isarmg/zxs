@@ -183,7 +183,7 @@ pub struct AuthStore {
 /// Immutable password challenge. Expensive verification needs no store lock;
 /// successful proofs remain bound to the exact administrator generation and hash.
 pub(crate) struct LoginChallenge {
-    username: String,
+    username: Option<String>,
     password_hash: String,
     generation: Option<u64>,
 }
@@ -200,7 +200,9 @@ impl LoginChallenge {
             .filter(|_| valid)
             .ok_or_else(ApiError::unauthorized)?;
         Ok(VerifiedLogin {
-            username: self.username,
+            username: self
+                .username
+                .expect("invariant: a verified account has a canonical username"),
             password_hash: self.password_hash,
             generation,
         })
@@ -273,19 +275,27 @@ fn refresh_identity(
         return Err(ApiError::unauthorized());
     }
     if let Some(key) = &caller.admission_session {
+        let current_time = now()?;
         sessions
             .get(key)
-            .filter(|session| session.expires_at > now() && session.generation == generation)
+            .filter(|session| session.expires_at > current_time && session.generation == generation)
             .ok_or_else(ApiError::unauthorized)?;
     }
     Ok(caller.clone())
 }
 
-fn now() -> u64 {
+fn now() -> Result<u64, ApiError> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+        .map(|duration| duration.as_secs())
+        .map_err(|source| {
+            ApiError::new(
+                ::http::StatusCode::INTERNAL_SERVER_ERROR,
+                storage_contract::ErrorCode::InternalError,
+                "system clock precedes the Unix epoch",
+            )
+            .with_source(source)
+        })
 }
 
 // Relative deployment paths remain supported, but resolving them never follows
@@ -552,7 +562,6 @@ impl AuthStore {
         // or publishing its protected backup. This is deterministic admission,
         // not an uncertain I/O outcome that should block existing credentials.
         let database = self.db.as_ref().ok_or_else(Self::missing_authority)?;
-        database.validate()?;
         let bytes =
             json_codec::to_vec(database).expect("invariant: internal JSON serialization succeeds");
         if bytes.len() > MAX_STORE_BYTES {
@@ -585,14 +594,18 @@ impl AuthStore {
                 }
                 return Err(error);
             }
-            if initial && self.path.symlink_metadata().is_ok() {
-                return Err(ApiError::conflict(
-                    storage_contract::ErrorCode::AuthAlreadyInitialized,
-                    "credentials already exist",
-                ));
-            }
             if initial {
-                fs::hard_link(&temporary, &self.path).map_err(ApiError::io)?;
+                fs::hard_link(&temporary, &self.path).map_err(|source| {
+                    if source.kind() == std::io::ErrorKind::AlreadyExists {
+                        ApiError::conflict(
+                            storage_contract::ErrorCode::AuthAlreadyInitialized,
+                            "credentials already exist",
+                        )
+                        .with_source(source)
+                    } else {
+                        ApiError::io(source)
+                    }
+                })?;
                 fs::remove_file(&temporary).map_err(ApiError::io)?;
             } else {
                 fs::rename(&temporary, &self.path).map_err(ApiError::io)?;
@@ -611,13 +624,19 @@ impl AuthStore {
             {
                 self.blocked.store(true, Ordering::SeqCst);
             }
-            let _ = fs::remove_file(temporary);
+            match fs::remove_file(temporary) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => tracing::warn!(error = ?error, "credential staging cleanup failed"),
+            }
         }
         if result.is_ok() && self.local_authority {
             // The durable system store is primary. Replica failure must never
             // roll back a password change or resurrect revoked sessions.
-            if let Some(backup) = &self.backup {
-                let _ = backup(self.snapshot()?);
+            if let Some(backup) = &self.backup
+                && let Err(error) = backup(self.snapshot()?)
+            {
+                tracing::warn!(error = ?error, "credentials committed; disaster-recovery replica unavailable");
             }
         }
         result
@@ -652,11 +671,16 @@ impl AuthStore {
 
     pub(crate) fn login_challenge(&self, username: &str) -> Result<LoginChallenge, ApiError> {
         let administrator = &self.database()?.administrator;
-        let username = primitives::normalize_administrator_username(username).unwrap_or_default();
+        let username = match primitives::normalize_administrator_username(username) {
+            Ok(username) => Some(username),
+            Err(primitives::Error::InvalidAdministratorUsername) => None,
+            Err(error) => return Err(ApiError::invalid_source(error)),
+        };
         Ok(LoginChallenge {
             // Unknown names perform exactly the same password verification,
             // but cannot receive a proof even if the supplied password matches.
-            generation: (username == administrator.username).then_some(administrator.generation),
+            generation: (username.as_deref() == Some(administrator.username.as_str()))
+                .then_some(administrator.generation),
             username,
             password_hash: administrator.password_hash.clone(),
         })
@@ -677,7 +701,7 @@ impl AuthStore {
         }
         let token = primitives::random_token().map_err(ApiError::invalid_source)?;
         let csrf_token = primitives::derive_csrf_token(&token).map_err(ApiError::invalid_source)?;
-        let expires_at = now() + SESSION_TTL_SECONDS;
+        let expires_at = now()? + SESSION_TTL_SECONDS;
         let result = LoginResult {
             token: token.clone(),
             csrf_token,
@@ -708,7 +732,7 @@ impl AuthStore {
 
     /// Return removed records so a failed publication can restore exact state.
     fn prune_invalid_sessions(&mut self) -> Result<BTreeMap<String, Session>, ApiError> {
-        let current_time = now();
+        let current_time = now()?;
         let database = self.database_mut()?;
         let generation = database.administrator.generation;
         let mut removed = BTreeMap::new();
@@ -728,11 +752,12 @@ impl AuthStore {
             return Err(ApiError::unauthorized());
         }
         let key = primitives::token_hash_hex(token);
+        let current_time = now()?;
         database
             .sessions
             .get(&key)
             .filter(|session| {
-                session.expires_at > now()
+                session.expires_at > current_time
                     && session.generation == database.administrator.generation
             })
             .ok_or_else(ApiError::unauthorized)?;

@@ -140,7 +140,11 @@ pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError>
             value["note"] = engine
                 .state()
                 .file_notes
-                .get(value["file_id"].as_str().unwrap_or_default())
+                .get(
+                    value["file_id"]
+                        .as_str()
+                        .expect("invariant: listed entries have a file identity"),
+                )
                 .cloned()
                 .unwrap_or_default()
                 .into();

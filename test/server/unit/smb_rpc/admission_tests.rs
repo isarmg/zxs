@@ -75,11 +75,15 @@ fn session_cap_is_shared_across_repositories_and_rejects_other_samba_names() {
         idle.push(connection);
     }
     let (rejected, response) = connect(shared.clone(), "alice", &repository);
-    assert!(matches!(response, Response::Error { code, .. } if code == "RESOURCE_LIMIT_EXCEEDED"));
+    assert!(
+        matches!(response, Response::Error { code, .. } if code == storage_contract::ErrorCode::ResourceLimitExceeded)
+    );
     disconnect(rejected, false);
     for username in ["alias-alice", "bob", "", "anonymous", "guest"] {
         let (rejected, response) = connect(shared.clone(), username, &repository);
-        assert!(matches!(response, Response::Error { code, .. } if code == "FORBIDDEN"));
+        assert!(
+            matches!(response, Response::Error { code, .. } if code == storage_contract::ErrorCode::Forbidden)
+        );
         disconnect(rejected, false);
     }
     assert_eq!(
@@ -102,7 +106,7 @@ fn failed_repository_admission_does_not_leak_session_slots() {
     for _ in 0..=MAX_AUTHENTICATED_SESSIONS {
         let (rejected, response) = connect(shared.clone(), "alice", &new_id("repo"));
         assert!(
-            matches!(response, Response::Error { code, .. } if code != "RESOURCE_LIMIT_EXCEEDED")
+            matches!(response, Response::Error { code, .. } if code != storage_contract::ErrorCode::ResourceLimitExceeded)
         );
         disconnect(rejected, false);
         assert_eq!(*shared.authenticated_sessions.lock().unwrap(), 0);
@@ -115,7 +119,9 @@ fn configured_samba_account_binds_the_current_single_authority_and_fails_closed_
     let repository = repository(&shared);
     Arc::get_mut(&mut shared).unwrap().username = "samba-owner".into();
     let (wrong, response) = connect(shared.clone(), "alice", &repository);
-    assert!(matches!(response, Response::Error { code, .. } if code == "FORBIDDEN"));
+    assert!(
+        matches!(response, Response::Error { code, .. } if code == storage_contract::ErrorCode::Forbidden)
+    );
     disconnect(wrong, false);
     let (mut live, response) = connect(shared.clone(), "samba-owner", &repository);
     assert!(matches!(response, Response::Ok { result } if result["principal"] == "alice"));
@@ -130,10 +136,12 @@ fn configured_samba_account_binds_the_current_single_authority_and_fails_closed_
         )
         .unwrap();
     assert!(
-        matches!(live.wire.receive::<Response>().unwrap().0, Response::Error { code, .. } if code == "RECOVERY_REQUIRED")
+        matches!(live.wire.receive::<Response>().unwrap().0, Response::Error { code, .. } if code == storage_contract::ErrorCode::RecoveryRequired)
     );
     let (rejected, response) = connect(shared.clone(), "samba-owner", &repository);
-    assert!(matches!(response, Response::Error { code, .. } if code == "RECOVERY_REQUIRED"));
+    assert!(
+        matches!(response, Response::Error { code, .. } if code == storage_contract::ErrorCode::RecoveryRequired)
+    );
     disconnect(rejected, false);
     disconnect(live, false);
     assert_eq!(*shared.authenticated_sessions.lock().unwrap(), 0);

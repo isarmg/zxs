@@ -168,20 +168,23 @@ fn assert_failure_stops_new_groups_and_joins_claimed_groups(panics: bool) {
         let waiting_for_claimed =
             matches!(observed_finish.try_recv(), Err(mpsc::TryRecvError::Empty));
         finish.release();
-        let error = scheduler.join().unwrap().unwrap_err();
+        let outcome = scheduler.join();
         failure_observed.unwrap();
         assert!(
             waiting_for_claimed,
             "returned before claimed files finished"
         );
-        assert_eq!(
-            error.code(),
-            if panics {
-                storage_contract::ErrorCode::InternalError
-            } else {
+        if panics {
+            assert!(
+                outcome.is_err(),
+                "internal worker panic must reach its caller"
+            );
+        } else {
+            assert_eq!(
+                outcome.unwrap().unwrap_err().code(),
                 storage_contract::ErrorCode::SourceChanged
-            }
-        );
+            );
+        }
     });
     assert_eq!(visits[1].load(Ordering::SeqCst), 1);
     for file in [0, 2, 3] {
@@ -205,7 +208,7 @@ fn panic_closes_claims_before_join_and_finishes_already_claimed_file_versions() 
 }
 
 #[test]
-fn lower_group_error_wins_over_already_observed_higher_error_or_panic() {
+fn lower_group_error_wins_over_higher_error_but_never_hides_a_panic() {
     for higher_panics in [false, true] {
         let jobs: Vec<_> = (0..8).collect();
         let groups: Vec<_> = jobs.iter().map(|job| vec![job]).collect();
@@ -243,11 +246,19 @@ fn lower_group_error_wins_over_already_observed_higher_error_or_panic() {
             });
             let higher_finished = observed_exit.recv_timeout(WATCHDOG);
             finish.release();
-            let error = scheduler.join().unwrap().unwrap_err();
+            let outcome = scheduler.join();
             higher_finished.unwrap();
-            assert_eq!(error.code(), storage_contract::ErrorCode::SourceChanged);
-            assert_eq!(error.message(), "lower-index failure");
-            assert!(error.is_retryable());
+            if higher_panics {
+                assert!(
+                    outcome.is_err(),
+                    "ordinary errors must not hide worker panics"
+                );
+            } else {
+                let error = outcome.unwrap().unwrap_err();
+                assert_eq!(error.code(), storage_contract::ErrorCode::SourceChanged);
+                assert_eq!(error.message(), "lower-index failure");
+                assert!(error.is_retryable());
+            }
         });
     }
 }

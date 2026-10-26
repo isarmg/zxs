@@ -35,7 +35,7 @@ fn rename(e: &mut Engine, r: &Repository, from: &str, to: &str) -> OperationResu
     e.file_namespace(
         &r.repository_id,
         NamespaceOperation {
-            kind: "rename".into(),
+            kind: NamespaceOperationKind::Rename,
             path: from.into(),
             destination: Some(to.into()),
         },
@@ -52,7 +52,7 @@ fn folder_and_file_rename_append_path_nodes_reusing_bodies_then_write_follows_th
     e.file_namespace(
         &r.repository_id,
         NamespaceOperation {
-            kind: "mkdir".into(),
+            kind: NamespaceOperationKind::Mkdir,
             path: "folder/empty".into(),
             destination: None,
         },

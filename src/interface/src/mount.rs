@@ -23,7 +23,9 @@ where
     F: FnOnce() -> N + 'static,
     N: IntoView,
 {
-    let _ = Executor::init_wasm_bindgen();
+    match Executor::init_wasm_bindgen() {
+        Ok(()) | Err(task_dispatch::ExecutorError::AlreadySet) => {}
+    }
     let owner = Owner::new();
     let mountable = owner.with(move || {
         let mut view = app().into_view().build();
@@ -42,7 +44,9 @@ where
     F: FnOnce() -> N + 'static,
     N: Render,
 {
-    let _ = Executor::init_wasm_bindgen();
+    match Executor::init_wasm_bindgen() {
+        Ok(()) | Err(task_dispatch::ExecutorError::AlreadySet) => {}
+    }
     let owner = Owner::new();
     let mountable = owner.with(move || {
         let mut view = app().build();

@@ -5,7 +5,7 @@ fn mkdir(engine: &mut Engine, repo: &Repository, path: &str) {
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation {
-                kind: "mkdir".into(),
+                kind: storage_contract::NamespaceOperationKind::Mkdir,
                 path: path.into(),
                 destination: None,
             },

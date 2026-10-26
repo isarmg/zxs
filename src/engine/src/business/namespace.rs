@@ -109,7 +109,7 @@ pub(crate) fn apply_workspace_namespace(
         // Uploaded children may have materialized their missing parents. An
         // explicit mkdir for that new parent belongs to the same workspace.
         let key = name_policy::path_key(&op.path);
-        if op.kind == "mkdir"
+        if op.kind == NamespaceOperationKind::Mkdir
             && find_unordered(base, &op.path).is_none()
             && find_unordered(entries, &op.path)
                 .is_some_and(|e| e.kind == NamespaceEntryKind::Directory)
@@ -118,7 +118,7 @@ pub(crate) fn apply_workspace_namespace(
             continue;
         }
         deleted.extend(apply_namespace(entries, op)?);
-        if op.kind == "mkdir" {
+        if op.kind == NamespaceOperationKind::Mkdir {
             explicit_directories.insert(name_policy::path_key(&op.path));
         }
     }
@@ -131,7 +131,7 @@ pub(crate) fn validate_workspace_dependencies(workspace: &Workspace) -> Result<(
         left == right || is_descendant(&left, &right) || is_descendant(&right, &left)
     };
     for operation in &workspace.namespace_operations {
-        if operation.kind == "mkdir" {
+        if operation.kind == NamespaceOperationKind::Mkdir {
             continue;
         }
         if workspace.files.values().any(|file| {
@@ -176,8 +176,8 @@ pub(crate) fn apply_namespace(
 ) -> Result<Vec<DeletedPath>> {
     let key = name_policy::path_key(&op.path);
     let mut deleted = Vec::new();
-    match op.kind.as_str() {
-        "mkdir" => {
+    match op.kind {
+        NamespaceOperationKind::Mkdir => {
             if find_unordered(entries, &op.path).is_some() {
                 return Err(Error::new(
                     storage_contract::ErrorCode::NameCollision,
@@ -196,14 +196,16 @@ pub(crate) fn apply_namespace(
                 size: 0,
             });
         }
-        "delete" | "delete_tree" => {
+        NamespaceOperationKind::Delete | NamespaceOperationKind::DeleteTree => {
             if find_unordered(entries, &op.path).is_none() {
                 return Err(Error::new(
                     storage_contract::ErrorCode::EntryNotFound,
                     "delete target missing",
                 ));
             }
-            if op.kind == "delete" && entries.iter().any(|e| is_descendant(&e.lookup_key, &key)) {
+            if op.kind == NamespaceOperationKind::Delete
+                && entries.iter().any(|e| is_descendant(&e.lookup_key, &key))
+            {
                 return Err(Error::new(
                     storage_contract::ErrorCode::DirectoryNotEmpty,
                     "directory contains children",
@@ -213,16 +215,18 @@ pub(crate) fn apply_namespace(
                 .iter()
                 .filter(|e| {
                     e.lookup_key == key
-                        || (op.kind == "delete_tree" && is_descendant(&e.lookup_key, &key))
+                        || (op.kind == NamespaceOperationKind::DeleteTree
+                            && is_descendant(&e.lookup_key, &key))
                 })
                 .map(deleted_path)
                 .collect();
             entries.retain(|e| {
                 e.lookup_key != key
-                    && !(op.kind == "delete_tree" && is_descendant(&e.lookup_key, &key))
+                    && !(op.kind == NamespaceOperationKind::DeleteTree
+                        && is_descendant(&e.lookup_key, &key))
             });
         }
-        "rename" => {
+        NamespaceOperationKind::Rename => {
             let target = op.destination.as_ref().ok_or_else(|| {
                 Error::new(
                     storage_contract::ErrorCode::InvalidRequest,
@@ -273,12 +277,6 @@ pub(crate) fn apply_namespace(
                 };
                 relocate_entry(entry, path)?;
             }
-        }
-        _ => {
-            return Err(Error::new(
-                storage_contract::ErrorCode::OperationUnsupported,
-                "namespace operation not supported",
-            ));
         }
     }
     Ok(deleted)

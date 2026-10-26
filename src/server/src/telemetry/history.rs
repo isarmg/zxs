@@ -119,8 +119,12 @@ impl HistoryStore {
             {
                 continue;
             }
-            let Ok(bytes) = read_bounded_file(&entry.path()) else {
-                continue;
+            let bytes = match read_bounded_file(&entry.path()) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    tracing::warn!(error = ?error, "unreadable monitoring cache skipped");
+                    continue;
+                }
             };
             for line in bytes.split(|byte| *byte == b'\n') {
                 if line.is_empty()
@@ -129,8 +133,12 @@ impl HistoryStore {
                 {
                     continue;
                 }
-                let Ok(sample) = json_codec::from_slice::<Sample>(line) else {
-                    continue;
+                let sample = match json_codec::from_slice::<Sample>(line) {
+                    Ok(sample) => sample,
+                    Err(error) => {
+                        tracing::debug!(error = ?error, "invalid monitoring cache sample skipped");
+                        continue;
+                    }
                 };
                 if !sample.valid_at(now) {
                     continue;

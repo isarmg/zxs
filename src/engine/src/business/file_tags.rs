@@ -88,7 +88,7 @@ impl Engine {
                         .filter(|b| b.file_id.as_deref() == Some(file))
                         .ok_or_else(|| Error::new(storage_contract::ErrorCode::FileBranchNotFound, "tag target branch missing"))?;
                     engine.repository_for_history(&branch.history_tree_id)?;
-                    if branch.state != "active" || state.file_branch_aliases.contains_key(&target.branch_id) {
+                    if branch.state != BranchState::Active || state.file_branch_aliases.contains_key(&target.branch_id) {
                         return Err(Error::new(storage_contract::ErrorCode::BranchNotActive, "merged aliases are read-only"));
                     }
                     let head = file_nodes::branch_head(state,&target.branch_id)?;
@@ -123,7 +123,7 @@ impl Engine {
                     state.file_metadata_nodes.insert(node.clone(),FileMetadataNode {
                         node_id:node.clone(),history_tree_id:history,file_id:file.into(),version_id:version,
                         parent_node_ids:vec![target.source_node_id.clone()],branch_id:target.branch_id.clone(),
-                        kind:"tags".into(),tags:tags.clone(),operation_id:operation.into(),author:principal.into(),sequence:state.sequence,created_at:now(),
+                        kind:FileMetadataKind::Tags,tags:tags.clone(),operation_id:operation.into(),author:principal.into(),sequence:state.sequence,created_at:now(),
                     });
                     if advance {
                         file_publication::advance_branch_node(state,&target.branch_id,&node,false,principal,operation)?;

@@ -143,7 +143,7 @@ impl ConnectionWorker {
                 // would rollback an already completed transaction.
                 let mut ignore_next_start_rollback = false;
 
-                for (cmd, span) in command_rx {
+                for (cmd, span) in &command_rx {
                     let _guard = span.enter();
                     match cmd {
                         Command::Prepare { query, tx } => {
@@ -194,8 +194,9 @@ impl ConnectionWorker {
                                             if ok.is_right() {
                                                 rows_returned += 1;
                                                 if rows_returned >= limit {
-                                                    drop(iter);
-                                                    let _ = tx.send(res);
+                                                    // RETURNING may fail to commit only when reset.
+                                                    let result = iter.finish().and(res);
+                                                    let _ = tx.send(result);
                                                     break;
                                                 }
                                             }
@@ -310,6 +311,9 @@ impl ConnectionWorker {
                                     // rollback.
                                     ignore_next_start_rollback = true;
                                 }
+                            } else if let Err(error) = res {
+                                tracing::error!(%error, "failed to rollback dropped transaction");
+                                break;
                             }
                         }
                         #[cfg(feature = "sqlite-deserialize")]
@@ -340,6 +344,16 @@ impl ConnectionWorker {
                             let _ = tx.send(());
                             return;
                         }
+                    }
+                }
+
+                // A disconnected flume receiver retains queued reply senders. Reject
+                // pending commands until the connection owner releases its sender.
+                drop(conn);
+                for (command, _) in command_rx {
+                    if let Command::Execute { tx, .. } = command {
+                        // An empty row stream means success, unlike a cancelled oneshot.
+                        let _ = tx.send(Err(Error::WorkerCrashed));
                     }
                 }
             })?;
@@ -471,6 +485,8 @@ impl ConnectionWorker {
     }
 
     pub(crate) async fn unlock_db(&mut self) -> Result<MutexGuard<'_, ConnectionState>, Error> {
+        // FIFO acknowledgement rejects retired workers before exposing their raw handle.
+        self.ping().await?;
         let (guard, res) = futures::future::join(
             // we need to join the wait queue for the lock before we send the message
             self.shared.conn.lock(),

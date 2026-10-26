@@ -1,6 +1,34 @@
 use gloo_events::EventListener;
 use std::cell::{Cell, RefCell};
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{JsCast, JsValue};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Theme {
+    Light,
+    Dark,
+}
+impl Theme {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "light" => Some(Self::Light),
+            "dark" => Some(Self::Dark),
+            _ => None,
+        }
+    }
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+    fn system(query: Option<&web_sys::MediaQueryList>) -> Self {
+        if query.is_some_and(|query| query.matches()) {
+            Self::Dark
+        } else {
+            Self::Light
+        }
+    }
+}
 
 thread_local! {
     static INITIALIZED: Cell<bool> = const { Cell::new(false) };
@@ -8,42 +36,70 @@ thread_local! {
     static SYSTEM_LISTENER: RefCell<Option<EventListener>> = const { RefCell::new(None) };
 }
 
-pub fn current() -> String {
-    let Some(window) = web_sys::window() else {
-        return "light".into();
-    };
-    if let Some(document) = window.document()
-        && let Some(root) = document.document_element()
-        && let Some(value) = root.get_attribute("data-zxs-theme")
-        && (value == "light" || value == "dark")
-    {
-        return value;
+fn storage(window: &web_sys::Window) -> Option<web_sys::Storage> {
+    match window.local_storage() {
+        Ok(storage) => storage,
+        Err(error) => {
+            web_sys::console::warn_2(&"Theme preference storage is unavailable".into(), &error);
+            None
+        }
     }
-    if let Ok(Some(storage)) = window.local_storage()
-        && let Ok(Some(value)) = storage.get_item("zxs-theme")
-        && (value == "light" || value == "dark")
-    {
-        return value;
-    }
-    if window
-        .match_media("(prefers-color-scheme: dark)")
-        .ok()
-        .flatten()
-        .is_some_and(|query| query.matches())
-    {
-        "dark"
-    } else {
-        "light"
-    }
-    .into()
 }
-
-fn apply(value: &str) {
+fn saved(window: &web_sys::Window) -> Option<Theme> {
+    let storage = storage(window)?;
+    match storage.get_item("zxs-theme") {
+        Ok(value) => value.as_deref().and_then(Theme::parse),
+        Err(error) => {
+            web_sys::console::warn_2(&"Could not read the theme preference".into(), &error);
+            None
+        }
+    }
+}
+fn query(window: &web_sys::Window) -> Option<web_sys::MediaQueryList> {
+    match window.match_media("(prefers-color-scheme: dark)") {
+        Ok(query) => query,
+        Err(error) => {
+            web_sys::console::warn_2(&"System theme preference is unavailable".into(), &error);
+            None
+        }
+    }
+}
+fn current_theme() -> Theme {
+    let Some(window) = web_sys::window() else {
+        return Theme::Light;
+    };
+    if let Some(theme) = window
+        .document()
+        .and_then(|document| document.document_element())
+        .and_then(|root| root.get_attribute("data-zxs-theme"))
+        .as_deref()
+        .and_then(Theme::parse)
+    {
+        return theme;
+    }
+    saved(&window).unwrap_or_else(|| Theme::system(query(&window).as_ref()))
+}
+pub fn current() -> String {
+    current_theme().as_str().into()
+}
+fn apply(theme: Theme) -> Result<(), JsValue> {
     if let Some(root) = web_sys::window()
         .and_then(|w| w.document())
         .and_then(|d| d.document_element())
     {
-        let _ = root.set_attribute("data-zxs-theme", value);
+        root.set_attribute("data-zxs-theme", theme.as_str())?;
+    }
+    Ok(())
+}
+fn change(theme: Theme) {
+    let result = apply(theme).and_then(|()| {
+        if let Some(window) = web_sys::window() {
+            window.dispatch_event(&web_sys::Event::new("zxs-theme-change")?)?;
+        }
+        Ok(())
+    });
+    if let Err(error) = result {
+        web_sys::console::error_2(&"Could not change the theme".into(), &error);
     }
 }
 
@@ -54,34 +110,23 @@ pub fn initialize() {
     let Some(window) = web_sys::window() else {
         return;
     };
-    let saved = window
-        .local_storage()
-        .ok()
-        .flatten()
-        .and_then(|storage| storage.get_item("zxs-theme").ok().flatten())
-        .filter(|value| value == "light" || value == "dark");
+    let saved = saved(&window);
     MANUAL.with(|manual| manual.set(saved.is_some()));
-    let query = window
-        .match_media("(prefers-color-scheme: dark)")
-        .ok()
-        .flatten();
-    apply(
-        saved
-            .as_deref()
-            .unwrap_or(if query.as_ref().is_some_and(|query| query.matches()) {
-                "dark"
-            } else {
-                "light"
-            }),
-    );
+    let query = query(&window);
+    if let Err(error) = apply(saved.unwrap_or_else(|| Theme::system(query.as_ref()))) {
+        web_sys::console::error_2(&"Could not initialize the theme".into(), &error);
+    }
     if let Some(query) = query {
         let listener = EventListener::new(&query, "change", |event| {
             if MANUAL.with(Cell::get) {
                 return;
             }
             if let Some(event) = event.dyn_ref::<web_sys::MediaQueryListEvent>() {
-                apply(if event.matches() { "dark" } else { "light" });
-                changed();
+                change(if event.matches() {
+                    Theme::Dark
+                } else {
+                    Theme::Light
+                });
             }
         });
         SYSTEM_LISTENER.with(|listener_slot| *listener_slot.borrow_mut() = Some(listener));
@@ -89,23 +134,19 @@ pub fn initialize() {
 }
 
 pub fn toggle() {
-    let next = if current() == "dark" { "light" } else { "dark" };
-    // Keep an explicit preference for this document even when storage is denied.
+    let next = match current_theme() {
+        Theme::Dark => Theme::Light,
+        Theme::Light => Theme::Dark,
+    };
+    // Storage denial must not discard the user's document-local preference.
     MANUAL.with(|manual| manual.set(true));
     if let Some(window) = web_sys::window() {
-        if let Ok(Some(storage)) = window.local_storage() {
-            let _ = storage.set_item("zxs-theme", next);
+        if let Some(storage) = storage(&window)
+            && let Err(error) = storage.set_item("zxs-theme", next.as_str())
+        {
+            web_sys::console::warn_2(&"Could not save the theme preference".into(), &error);
         }
-        apply(next);
-        changed();
-    }
-}
-
-fn changed() {
-    if let Some(window) = web_sys::window()
-        && let Ok(event) = web_sys::Event::new("zxs-theme-change")
-    {
-        let _ = window.dispatch_event(&event);
+        change(next);
     }
 }
 
@@ -115,3 +156,7 @@ pub(crate) fn cleanup() {
     SYSTEM_LISTENER.with(|listener| listener.borrow_mut().take());
     INITIALIZED.with(|initialized| initialized.set(false));
 }
+
+#[cfg(test)]
+#[path = "../../../test/interface/unit/theme/tests.rs"]
+mod tests;

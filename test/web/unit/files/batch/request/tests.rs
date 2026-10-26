@@ -652,6 +652,7 @@ fn scope_read_error(status: u16) -> api::Error {
         message: "Scope read failed".into(),
         retryable: true,
         request_id: None,
+        source: None,
     }
 }
 

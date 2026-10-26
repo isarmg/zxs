@@ -36,7 +36,7 @@ fn save(engine: &mut Engine, branch: &str, bytes: &[u8]) -> OperationResult {
 
 fn assert_frozen(observed: &OperationResult, published: &OperationResult) {
     let mut normalized = observed.clone();
-    normalized.current_health = published.current_health.clone();
+    normalized.current_health = published.current_health;
     assert_eq!(&normalized, published);
 }
 
@@ -62,14 +62,14 @@ fn operation_read_plan_blocks_purge_until_observation_finishes() {
         storage_contract::ErrorCode::ContentPinned
     );
     let observed = plan.check().into_result();
-    assert_eq!(observed.current_health, "HEALTHY");
+    assert_eq!(observed.current_health.as_str(), "HEALTHY");
     assert_frozen(&observed, &original);
     assert!(!engine.reads.lock().unwrap().contains_key(&version));
     engine
         .commit_plan(&purge.plan_id, "owner", &new_id("op"))
         .unwrap();
     let observed = engine.operation(&original.operation_id).unwrap();
-    assert_eq!(observed.current_health, "UNAVAILABLE");
+    assert_eq!(observed.current_health.as_str(), "UNAVAILABLE");
     assert_frozen(&observed, &original);
 }
 
@@ -100,7 +100,7 @@ fn operation_capture_is_metadata_only_deduplicated_and_cancel_safe() {
     drop(plan);
     assert!(engine.reads.lock().unwrap().is_empty());
     let observed = engine.operation(&operation.operation_id).unwrap();
-    assert_eq!(observed.current_health, "UNAVAILABLE");
+    assert_eq!(observed.current_health.as_str(), "UNAVAILABLE");
     assert_frozen(&observed, &operation);
 }
 
@@ -126,14 +126,14 @@ fn health_reverifies_each_replica_and_never_rewrites_publication_facts() {
     fs::remove_file(&path).unwrap();
     fs::write(&path, b"changed").unwrap();
     let observed = plan.check().into_result();
-    assert_eq!(observed.current_health, "DEGRADED");
+    assert_eq!(observed.current_health.as_str(), "DEGRADED");
     assert_frozen(&observed, &operation);
     // A checksum header without its bound hash and an unrelated publication
     // proof are not sufficient health evidence, even if a body is present.
     fs::write(directories[1].join("checksums.bin"), b"untrusted").unwrap();
     fs::write(directories[2].join("publication-proof.json"), b"{}").unwrap();
     let observed = engine.operation(&operation.operation_id).unwrap();
-    assert_eq!(observed.current_health, "UNAVAILABLE");
+    assert_eq!(observed.current_health.as_str(), "UNAVAILABLE");
     assert_frozen(&observed, &operation);
     assert_eq!(engine.state.operations[&operation.operation_id], operation);
     assert!(engine.reads.lock().unwrap().is_empty());
@@ -172,7 +172,7 @@ fn pending_receipt_reads_only_exact_operation_pages_and_owner_first() {
         record.result().protection_at_publish,
         storage_contract::ProtectionAtPublish::Unconfirmed
     );
-    assert_eq!(record.result().current_health, "RECOVERING");
+    assert_eq!(record.result().current_health.as_str(), "RECOVERING");
     let plan = engine.prepare_operation_health(record);
     assert!(plan.versions.is_empty());
     assert!(engine.reads.lock().unwrap().is_empty());
@@ -183,6 +183,28 @@ fn pending_receipt_reads_only_exact_operation_pages_and_owner_first() {
             fs::write(object_path(disk, "state-page", hash), b"broken results").unwrap();
         }
     }
-    assert_eq!(engine.operation_owner(&operation).as_deref(), Some("owner"));
+    assert_eq!(
+        engine.operation_owner(&operation).unwrap().as_deref(),
+        Some("owner")
+    );
     assert!(engine.operation_record(&operation).is_err());
+}
+
+#[test]
+fn pending_receipt_does_not_turn_corrupt_journals_into_not_found() {
+    let (_root, mut engine, _repo) = fixture();
+    let operation = new_id("op");
+    engine.inject_fault_once("after_accept_1");
+    assert!(
+        engine
+            .create_repository("pending", "P01", 3, "owner", &operation)
+            .is_err()
+    );
+    for disk in engine.members() {
+        fs::write(log_path(&disk), b"invalid journal frame").unwrap();
+    }
+    let error = engine.operation_record(&operation).err().unwrap();
+    assert_eq!(error.code(), storage_contract::ErrorCode::LogCorrupt);
+    let owner_error = engine.operation_owner(&operation).unwrap_err();
+    assert_eq!(owner_error.code(), storage_contract::ErrorCode::LogCorrupt);
 }

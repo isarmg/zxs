@@ -203,7 +203,7 @@ fn oversized_success_is_a_business_error_and_the_connection_remains_usable() {
         let (response, fd) = stream.receive::<Response>().unwrap();
         assert!(fd.is_none());
         assert!(
-            matches!(response, Response::Error { code, operation_id:Some(id), retryable:false, .. } if code == "RESPONSE_TOO_LARGE" && id == expected_operation)
+            matches!(response, Response::Error { code, operation_id:Some(id), retryable:false, .. } if code == storage_contract::ErrorCode::ResponseTooLarge && id == expected_operation)
         );
     }
     assert!(

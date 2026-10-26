@@ -1080,11 +1080,20 @@ fn verify_local_membership(root: &Path, candidate: &Candidate, seal: &DiskSeal) 
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn verify_tombstone(directory: &Path, version: &FileVersion) -> Result<()> {
+    let tombstone: ContentTombstone = read_json(&directory.join("purged.json"))?;
+    verify_tombstone_content(directory, version, &tombstone)
+}
+
+pub(crate) fn verify_tombstone_content(
+    directory: &Path,
+    version: &FileVersion,
+    t: &ContentTombstone,
+) -> Result<()> {
     // Intentional removal proves the content state, not the retained descriptor.
     // Its immutable identity and location must still bind to the local publication.
     verify_local_version_publication(directory, version)?;
-    let t: ContentTombstone = read_json(&directory.join("purged.json"))?;
     verify_publication_seal(&t.candidate, &t.publication, &t.publication_seal)?;
     let root = directory.ancestors().nth(4).ok_or_else(|| {
         Error::new(
@@ -1120,18 +1129,23 @@ pub(crate) fn verify_tombstone(directory: &Path, version: &FileVersion) -> Resul
 /// the first locally published proof and retain each later receipt by candidate.
 pub(crate) fn local_proof_directory(directory: &Path, candidate: &str) -> Result<PathBuf> {
     let original = directory.join("commit-proof.json");
-    if original.try_exists()? {
-        let proof: CommitProof = read_json(&original)?;
-        if proof.candidate_hash != candidate {
-            return Ok(directory.join("protection-proofs").join(candidate));
+    match read_json::<CommitProof>(&original) {
+        Ok(proof) => {
+            if proof.candidate_hash != candidate {
+                return Ok(directory.join("protection-proofs").join(candidate));
+            }
         }
+        Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+        | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+            if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
     }
     Ok(directory.to_owned())
 }
 
 pub(crate) fn verify_local_publication(directory: &Path, version: &FileVersion) -> Result<()> {
     verify_local_version_publication(directory, version)?;
-    if directory.join("purged.json").exists() {
+    if open_optional_regular(&directory.join("purged.json"))?.is_some() {
         return Err(Error::new(
             storage_contract::ErrorCode::ContentPurged,
             "this version has a local content tombstone",

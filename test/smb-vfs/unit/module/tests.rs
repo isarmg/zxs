@@ -4,10 +4,10 @@ use super::*;
 #[test]
 fn typed_handle_stat_matches_path_stat_without_json_reencoding() {
     for (kind, size) in [
-        ("file", 0),
-        ("file", 513),
-        ("file", i64::MAX),
-        ("directory", 0),
+        (NamespaceEntryKind::File, 0),
+        (NamespaceEntryKind::File, 513),
+        (NamespaceEntryKind::File, i64::MAX),
+        (NamespaceEntryKind::Directory, 0),
     ] {
         let mut direct = sdk::SMB_STRUCT_STAT::default();
         let mut decoded = sdk::SMB_STRUCT_STAT::default();
@@ -23,7 +23,7 @@ fn typed_handle_stat_matches_path_stat_without_json_reencoding() {
         assert_eq!(direct.st_ex_mode, decoded.st_ex_mode);
         assert_eq!(
             direct.st_ex_mode & libc::S_IFMT,
-            if kind == "directory" {
+            if kind == NamespaceEntryKind::Directory {
                 libc::S_IFDIR
             } else {
                 libc::S_IFREG
@@ -41,11 +41,15 @@ fn typed_handle_stat_matches_path_stat_without_json_reencoding() {
     let mut output = sdk::SMB_STRUCT_STAT::default();
     // SAFETY: The local output is writable; null is rejected before dereference.
     unsafe {
-        assert!(fill_stat_fields("file", "entry", -1, &mut output).is_err());
-        assert!(fill_stat_fields("file", "entry", 0, std::ptr::null_mut()).is_err());
+        assert!(fill_stat_fields(NamespaceEntryKind::File, "entry", -1, &mut output).is_err());
+        assert!(
+            fill_stat_fields(NamespaceEntryKind::File, "entry", 0, std::ptr::null_mut()).is_err()
+        );
         let too_large =
             json_codec::json!({"kind": "file", "entry_id": "entry", "size": u64::MAX.to_string()});
         assert!(fill_stat(&too_large, &mut output).is_err());
+        let unknown = json_codec::json!({"kind":"future_kind", "entry_id":"entry", "size":"0"});
+        assert!(fill_stat(&unknown, &mut output).is_err());
     }
 }
 
@@ -82,7 +86,7 @@ fn removed_open_descriptor_is_closed_on_poisoned_lock_and_remote_save_failure() 
         let opened = Open {
             info: Arc::new(OpenResult {
                 entry_id: "entry".into(),
-                kind: "file".into(),
+                kind: storage_contract::NamespaceEntryKind::File,
                 path: "file.txt".into(),
                 handle: 7,
                 size: 0,
@@ -237,7 +241,7 @@ fn readdir_keeps_one_page_and_rewind_requests_a_fresh_snapshot() {
     let opened = Open {
         info: Arc::new(OpenResult {
             entry_id: "directory".into(),
-            kind: "directory".into(),
+            kind: storage_contract::NamespaceEntryKind::Directory,
             path: "".into(),
             handle: 7,
             size: 0,
@@ -342,7 +346,7 @@ fn directory_cleanup_preserves_admission_failure_and_is_terminal_after_errors() 
                 }
             ));
             let error = || Response::Error {
-                code: "INTERNAL_ERROR".into(),
+                code: storage_contract::ErrorCode::InternalError,
                 message: "injected directory failure".into(),
                 retryable: false,
                 operation_id: None,
@@ -401,7 +405,7 @@ fn directory_cleanup_preserves_admission_failure_and_is_terminal_after_errors() 
         let opened = Open {
             info: Arc::new(OpenResult {
                 entry_id: "directory".into(),
-                kind: "directory".into(),
+                kind: storage_contract::NamespaceEntryKind::Directory,
                 path: "".into(),
                 handle: 7,
                 size: 0,
@@ -516,7 +520,7 @@ fn revoked_close_detaches_without_publishing_and_releases_descriptor() {
     let opened = Open {
         info: Arc::new(OpenResult {
             entry_id: "entry".into(),
-            kind: "file".into(),
+            kind: storage_contract::NamespaceEntryKind::File,
             path: "file".into(),
             handle: 7,
             size: 0,

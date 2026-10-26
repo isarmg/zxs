@@ -478,8 +478,16 @@ pub(crate) fn capture_names(state: &mut State) {
     } = state;
     let entries = repositories
         .values()
-        .filter_map(|repository| branches.get(&repository.main_branch_id))
-        .filter_map(|branch| commits.get(&branch.head_commit_id))
+        .map(|repository| {
+            branches
+                .get(&repository.main_branch_id)
+                .expect("invariant: every repository has its main branch")
+        })
+        .map(|branch| {
+            commits
+                .get(&branch.head_commit_id)
+                .expect("invariant: every branch has its head commit")
+        })
         .flat_map(|commit| &commit.entries)
         .filter(|entry| entry.kind == NamespaceEntryKind::File);
     for entry in entries {
@@ -940,11 +948,12 @@ fn projection_locations(
         .chain(next.versions.values().map(|version| (next, version)))
         .filter(|(_, version)| version.file_id == file)
     {
-        validate_version(version)?;
-        if let Some(placement) = state.placements.get(&version.version_id) {
-            for slot in &placement.route_slot_ids {
-                locations.insert((slot.clone(), version.history_tree_id.clone()));
-            }
+        let placement = state
+            .placements
+            .get(&version.version_id)
+            .expect("invariant: every admitted version has a placement");
+        for slot in &placement.route_slot_ids {
+            locations.insert((slot.clone(), version.history_tree_id.clone()));
         }
     }
     Ok(locations)

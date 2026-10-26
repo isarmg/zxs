@@ -67,3 +67,26 @@ fn root_identity_and_exclusive_lock_survive_directory_rebinding() {
     drop(root);
     AdvisoryLock::directory(second.directory()).unwrap();
 }
+
+#[test]
+fn directory_lock_ownership_is_independent_of_anchor_handles() {
+    let root = tempfile::tempdir().unwrap();
+    let anchor = std::fs::File::open(root.path()).unwrap();
+    let retained_anchor = anchor.try_clone().unwrap();
+    let lock = AdvisoryLock::directory(&anchor).unwrap();
+    assert!(matches!(
+        AdvisoryLock::directory(&anchor),
+        Err(Error::AlreadyLocked(_))
+    ));
+    drop(lock);
+    let next = AdvisoryLock::directory(&anchor).unwrap();
+    drop(anchor);
+    drop(retained_anchor);
+    let contender = std::fs::File::open(root.path()).unwrap();
+    assert!(matches!(
+        AdvisoryLock::directory(&contender),
+        Err(Error::AlreadyLocked(_))
+    ));
+    drop(next);
+    AdvisoryLock::directory(&contender).unwrap();
+}

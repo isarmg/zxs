@@ -16,6 +16,27 @@ use web_interface::{
     tasks::spawn_local,
 };
 
+#[derive(Clone, Copy, Default)]
+enum Status {
+    #[default]
+    Unknown,
+    Empty,
+    Existing,
+    RecoveryRequired,
+    Unavailable,
+}
+impl Status {
+    fn from_wire(value: Option<&str>) -> Self {
+        match value {
+            Some("empty") => Self::Empty,
+            Some("existing") => Self::Existing,
+            Some("recovery_required") => Self::RecoveryRequired,
+            Some("unavailable") | None => Self::Unavailable,
+            Some(_) => Self::Unknown,
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct Model {
     key: String,
@@ -40,7 +61,7 @@ pub(crate) struct Model {
     restart_required: bool,
     generation: u64,
     failure: Option<String>,
-    status: String,
+    status: Status,
 }
 fn valid_selection(model: &Model) -> bool {
     !model.selected.is_empty()
@@ -103,11 +124,11 @@ fn finish_check(s: &mut Model, generation: u64, key: &str, result: Result<Value,
     }
 }
 fn accept_status(s: &mut Model, value: &Value) {
-    s.status = value["state"].as_str().unwrap_or("unavailable").into();
+    s.status = Status::from_wire(value["state"].as_str());
     s.allow_development = value["allow_development"] == true;
     s.development = false;
     s.csrf = value["csrf_token"].as_str().unwrap_or_default().into();
-    s.empty = s.status == "empty" && !s.csrf.is_empty();
+    s.empty = matches!(s.status, Status::Empty) && !s.csrf.is_empty();
     s.completion_available = value["completion_available"] == true && !s.csrf.is_empty();
     s.presets = value["config_presets"]
         .as_array()
@@ -287,7 +308,10 @@ fn finish_preset_preview(
                     .is_some_and(|digest| !digest.is_empty()) =>
         {
             s.preset_preview = value["configuration"].clone();
-            s.preset_digest = value["config_digest"].as_str().unwrap_or_default().into();
+            s.preset_digest = value["config_digest"]
+                .as_str()
+                .expect("invariant: preset digest was validated")
+                .into();
         }
         Ok(_) => {
             s.failure = Some(t(
@@ -314,7 +338,7 @@ fn preset_view(state: RwSignal<Model>) -> impl IntoView {
             <button type="button" class="zxs-button" disabled=move ||state.with(|s|s.pending||!s.presets.contains(&s.preset_id)) on:click=move |_|preview_preset(state)>{t("查看预置方案摘要","Review preset summary")}</button>
             <Show when=move ||state.with(preset_reviewed)>
                 <p>{t("以下是服务器本地方案的只读摘要，磁盘以允许的候选 ID 表示；不提交文件路径或任意配置。初始化绑定此摘要，方案改变后必须重新检查。","This is a read-only preview of the local preset, with disks represented by allowed candidate IDs. No file paths or arbitrary configuration are submitted. Initialization is bound to this preview; changed presets require a new review.")}</p>
-                <pre data-setup-preset-summary="">{move ||state.with(|s|json_codec::to_string_pretty(&s.preset_preview).unwrap_or_default())}</pre>
+                <pre data-setup-preset-summary="">{move ||state.with(|s|json_codec::to_string_pretty(&s.preset_preview).expect("invariant: JSON values serialize"))}</pre>
             </Show>
         </div>
     }
@@ -344,7 +368,7 @@ pub(crate) fn view(state: RwSignal<Model>) -> impl IntoView {
         <form class="zxs-stack" on:submit=move |event|{event.prevent_default();initialize(state);}>
             <label>{t("本地授权密钥","Local authorization key")}<input class="zxs-input" data-setup-key="" type="password" autocomplete="off" prop:value=move ||state.with(|s|s.key.clone()) disabled=move ||state.with(|s|s.pending||s.complete) on:input=move |event|state.update(|s|{s.key=event_target_value(&event);s.empty=false;s.completion_available=false;s.confirmed=false;})/></label>
             <button type="button" class="zxs-button" disabled=move ||state.with(|s|s.pending||s.complete) on:click=move |_|check(state)>{t("验证授权并检查磁盘","Authorize and check disks")}</button>
-            <p role="status">{move ||state.with(|s|match s.status.as_str(){"empty"=>t("已确认空白安装。至少选择一个存储盘；备份盘可选，也可选择已允许的本地预置方案。","Empty installation confirmed. Select at least one storage disk; backup disks are optional. You may also choose an allowed local preset."),"existing"=>t("已存在安装；禁止初始化。","An installation already exists; initialization is blocked."),"recovery_required"=>t("需要本地恢复；禁止初始化。","Local recovery is required; initialization is blocked."),"unavailable"=>t("磁盘不可用；禁止初始化。","Disks are unavailable; initialization is blocked."),_=>String::new()})}</p>
+            <p role="status">{move ||state.with(|s|match s.status{Status::Empty=>t("已确认空白安装。至少选择一个存储盘；备份盘可选，也可选择已允许的本地预置方案。","Empty installation confirmed. Select at least one storage disk; backup disks are optional. You may also choose an allowed local preset."),Status::Existing=>t("已存在安装；禁止初始化。","An installation already exists; initialization is blocked."),Status::RecoveryRequired=>t("需要本地恢复；禁止初始化。","Local recovery is required; initialization is blocked."),Status::Unavailable=>t("磁盘不可用；禁止初始化。","Disks are unavailable; initialization is blocked."),Status::Unknown=>String::new()})}</p>
             <Show when=move ||state.with(|s|s.completion_available&&!s.complete)><p role="status">{t("已验证的中断初始化可以受保护补全，请明确选择下方操作。","Verified interrupted initialization can be completed with local authorization. Explicitly select the completion action below.")}</p></Show>
             <Show when=move ||state.with(|s|!s.complete&&((s.empty&&!s.unknown)||s.completion_available))>
                 <div class="zxs-flow">

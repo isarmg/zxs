@@ -53,10 +53,12 @@ pub(super) fn branch_wire(
     branch: &storage_contract::Branch,
 ) -> Result<Value, ApiError> {
     let mut result = encode(branch)?;
-    let snapshot = engine.state().commits.get(&branch.head_commit_id);
-    let mut pending = snapshot
-        .map(|commit| commit.pending_file_versions.clone())
-        .unwrap_or_default();
+    let snapshot = engine
+        .state()
+        .commits
+        .get(&branch.head_commit_id)
+        .expect("invariant: admitted branch head references an existing commit");
+    let mut pending = snapshot.pending_file_versions.clone();
     pending.extend(branch.pending_file_versions.clone());
     result["pending_file_versions"] = encode(&pending)?;
     result["materialized"] = pending.is_empty().into();
@@ -68,7 +70,7 @@ pub(super) fn branch_wire(
     }
     .into();
     if let Some(file) = branch.file_id.as_deref() {
-        result["read_only"] = (branch.state != "active"
+        result["read_only"] = (branch.state != storage_contract::BranchState::Active
             || engine
                 .state()
                 .file_branch_aliases
@@ -81,7 +83,9 @@ pub(super) fn branch_wire(
             .cloned()
             .into();
         let visible = snapshot
-            .and_then(|commit| commit.entries.iter().find(|entry| entry.file_id == file))
+            .entries
+            .iter()
+            .find(|entry| entry.file_id == file)
             .map(|entry| entry.version_id.as_str());
         result["node_id"] = branch
             .file_node_id
@@ -160,18 +164,6 @@ impl<'a> PendingSources<'a> {
     }
 
     pub(super) fn pending_versions(&self) -> std::collections::BTreeMap<String, String> {
-        // Published trees are sorted with unique normalized keys. If a caller
-        // supplies a noncanonical snapshot, preserve the old first-match rule.
-        let canonical = self
-            .commit
-            .entries
-            .windows(2)
-            .all(|pair| pair[0].lookup_key < pair[1].lookup_key)
-            && self
-                .commit
-                .entries
-                .iter()
-                .all(|entry| entry.lookup_key == name_policy::path_key(&entry.path));
         let historical = self
             .current
             .filter(|current| current.head_commit_id != self.commit.commit_id)
@@ -196,20 +188,10 @@ impl<'a> PendingSources<'a> {
             .iter()
             .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
             .filter_map(|entry| {
-                let visible = if canonical {
-                    entry
-                } else {
-                    self.visible(entry)?
-                };
+                let visible = entry;
                 let context = self.main_repository.and_then(|repository| {
-                    if canonical {
-                        self.engine
-                            .file_context_for_current_entry(repository, entry)
-                    } else {
-                        self.engine
-                            .file_context(repository, &entry.path)
-                            .map(std::borrow::Cow::Owned)
-                    }
+                    self.engine
+                        .file_context_for_current_entry(repository, entry)
                 });
                 self.resolve(
                     entry,
@@ -385,13 +367,16 @@ fn redact(value: &mut Value) {
                 redact(value);
             }
         }
-        _ => {}
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
 }
 pub(super) fn operation_wire(op: storage_engine::OperationResult) -> Result<Value, ApiError> {
-    let health = match op.current_health.as_str() {
-        "HEALTHY" | "DEGRADED" | "UNAVAILABLE" | "UNKNOWN" => op.current_health.as_str(),
-        _ => "UNKNOWN",
+    let health = match op.current_health {
+        storage_contract::CurrentHealth::Recovering => storage_contract::CurrentHealth::Unknown,
+        health @ (storage_contract::CurrentHealth::Healthy
+        | storage_contract::CurrentHealth::Degraded
+        | storage_contract::CurrentHealth::Unavailable
+        | storage_contract::CurrentHealth::Unknown) => health,
     };
     let current_health = json!({"state":health,"checked_at":date_time::OffsetDateTime::now_utc().format(&date_time::format_description::well_known::Rfc3339).map_err(ApiError::invalid_source)?});
     let content_save = op.kind == "workspace.commit"

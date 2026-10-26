@@ -666,3 +666,21 @@ fn password_change_request_cannot_create_rename_disable_or_scope_an_account() {
         );
     }
 }
+
+#[test]
+fn forwarded_address_parse_failure_preserves_source() {
+    use std::error::Error as _;
+    let error = client_ip(
+        &request_from("127.0.0.1:1234", Some("not-an-ip")),
+        &proxy_config(),
+    )
+    .unwrap_err();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        if cause.is::<std::net::AddrParseError>() {
+            return;
+        }
+        source = cause.source();
+    }
+    panic!("missing address parse source");
+}

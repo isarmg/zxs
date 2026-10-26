@@ -15,7 +15,7 @@ pub(super) fn acquire_locks(
             }
             validate_seal(config, d)?;
             paths.push(d.root.join(".writer.lock"));
-        } else if d.root.exists() {
+        } else if d.root.try_exists()? {
             paths.push(d.root.join(".writer.lock"));
         }
     }

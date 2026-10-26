@@ -45,7 +45,10 @@ pub fn resolve(root: &Path, document: &Path, relative: &str) -> Result<Target> {
     let path = normalize(&raw)?;
     let relative = path
         .strip_prefix(root)
-        .map_err(|_| format!("link outside repository: {}", path.display()))?;
+        .map_err(|source| super::ContextError {
+            context: format!("link outside repository: {}", path.display()),
+            source: source.into(),
+        })?;
     let generated = generated(relative);
     match path.canonicalize() {
         Ok(canonical) => {
@@ -77,11 +80,14 @@ pub fn resolve(root: &Path, document: &Path, relative: &str) -> Result<Target> {
                 generated: true,
             })
         }
-        Err(error) => Err(format!(
-            "missing local link {} in {}: {error}",
-            path.display(),
-            document.display()
-        )
+        Err(source) => Err(super::ContextError {
+            context: format!(
+                "missing local link {} in {}",
+                path.display(),
+                document.display()
+            ),
+            source: source.into(),
+        }
         .into()),
     }
 }

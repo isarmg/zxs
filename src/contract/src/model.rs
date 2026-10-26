@@ -5,12 +5,36 @@ use std::{
     path::PathBuf,
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+macro_rules! strict_string_deserialize {
+    ($name:ident { $($variant:ident => $wire:literal),+ $(,)? }) => {
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: data_serialization::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                struct StringVisitor;
+                impl data_serialization::de::Visitor<'_> for StringVisitor {
+                    type Value = $name;
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        formatter.write_str(concat!(stringify!($name), " string"))
+                    }
+                    fn visit_str<E: data_serialization::de::Error>(self, token: &str) -> Result<Self::Value, E> {
+                        match token {
+                            $($wire => Ok($name::$variant),)+
+                            _ => Err(E::unknown_variant(token, &[$($wire),+])),
+                        }
+                    }
+                }
+                deserializer.deserialize_str(StringVisitor)
+            }
+        }
+    };
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serialization(rename_all = "snake_case")]
 pub enum Mode {
     Production,
     Development,
 }
+strict_string_deserialize!(Mode { Production => "production", Development => "development" });
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -131,6 +155,70 @@ impl Config {
     }
 }
 
+macro_rules! string_state {
+    ($name:ident { $($variant:ident => $wire:literal),+ $(,)? }) => {
+        #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+        #[serialization(rename_all = "snake_case")]
+        pub enum $name { $($variant),+ }
+        impl $name {
+            pub const fn as_str(self) -> &'static str {
+                match self { $(Self::$variant => $wire),+ }
+            }
+        }
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: data_serialization::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                struct StateVisitor;
+                impl data_serialization::de::Visitor<'_> for StateVisitor {
+                    type Value = $name;
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        formatter.write_str(concat!(stringify!($name), " string"))
+                    }
+                    fn visit_str<E: data_serialization::de::Error>(self, token: &str) -> Result<Self::Value, E> {
+                        match token {
+                            $($wire => Ok($name::$variant),)+
+                            _ => Err(E::unknown_variant(token, &[$($wire),+])),
+                        }
+                    }
+                }
+                deserializer.deserialize_str(StateVisitor)
+            }
+        }
+    };
+}
+
+string_state!(BranchKind { File => "file", Full => "full" });
+string_state!(FileMetadataKind { Tags => "tags", Merge => "merge" });
+string_state!(HistoryState { Active => "active", Archived => "archived" });
+string_state!(BranchState {
+    Active => "active", Archived => "archived", Migrated => "migrated", Merged => "merged"
+});
+string_state!(WorkspaceState {
+    Open => "open", Sealed => "sealed", Committed => "committed", Aborted => "aborted"
+});
+string_state!(WorkspacePurpose { Normal => "normal", HistoricalBranch => "historical_branch" });
+string_state!(PlanState {
+    Ready => "ready", Cancelled => "cancelled", Committed => "committed", Completed => "completed"
+});
+string_state!(NamespaceOperationKind {
+    Mkdir => "mkdir", Rename => "rename", Delete => "delete", DeleteTree => "delete_tree"
+});
+
+impl std::str::FromStr for NamespaceOperationKind {
+    type Err = crate::Error;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "mkdir" => Ok(Self::Mkdir),
+            "rename" => Ok(Self::Rename),
+            "delete" => Ok(Self::Delete),
+            "delete_tree" => Ok(Self::DeleteTree),
+            _ => Err(crate::Error::new(
+                crate::ErrorCode::OperationUnsupported,
+                "namespace operation is not supported",
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub struct Repository {
@@ -166,7 +254,7 @@ pub struct HistoryTree {
     pub main_branch_id: Option<String>,
     #[serialization(with = "crate::u64_string")]
     pub generation: u64,
-    pub state: String,
+    pub state: HistoryState,
     pub provenance: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -177,7 +265,7 @@ pub struct Branch {
     pub name: String,
     pub head_commit_id: String,
     pub fork_commit_id: String,
-    pub branch_kind: String,
+    pub branch_kind: BranchKind,
     /// File branches contain only this stable file identity and its parents.
     #[serialization(default, skip_serializing_if = "Option::is_none")]
     pub file_id: Option<String>,
@@ -189,7 +277,7 @@ pub struct Branch {
     pub pending_file_versions: BTreeMap<String, String>,
     #[serialization(with = "crate::u64_string")]
     pub generation: u64,
-    pub state: String,
+    pub state: BranchState,
 }
 /// A directory view composes shared file branches at frozen content versions.
 /// It owns neither private file branches nor payloads. Edits advance its
@@ -272,7 +360,7 @@ pub struct FileMetadataNode {
     pub version_id: String,
     pub parent_node_ids: Vec<String>,
     pub branch_id: String,
-    pub kind: String,
+    pub kind: FileMetadataKind,
     pub tags: BTreeSet<String>,
     pub operation_id: String,
     pub author: String,
@@ -522,7 +610,7 @@ pub struct StagedFile {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct NamespaceOperation {
-    pub kind: String,
+    pub kind: NamespaceOperationKind,
     pub path: String,
     pub destination: Option<String>,
 }
@@ -530,7 +618,7 @@ pub struct NamespaceOperation {
 #[serialization(deny_unknown_fields)]
 pub struct Workspace {
     pub workspace_id: String,
-    pub purpose: String,
+    pub purpose: WorkspacePurpose,
     pub branch_id: String,
     /// Immutable operation actor, bound to staged data and replay, not an ACL.
     pub principal: String,
@@ -564,7 +652,7 @@ pub struct Workspace {
     pub namespace_operations: Vec<NamespaceOperation>,
     #[serialization(with = "crate::u64_string")]
     pub created_at: u64,
-    pub state: String,
+    pub state: WorkspaceState,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -635,7 +723,7 @@ impl ContentState {
 
 /// Closed publication lifecycle vocabulary shared by persisted and wire results.
 /// Serde names are part of the hashed on-disk contract.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serialization(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CommitState {
     Staging,
@@ -653,14 +741,85 @@ pub enum CommitState {
     Aborted,
 }
 
+strict_string_deserialize!(CommitState {
+    Staging => "STAGING", Sealed => "SEALED", Prepared => "PREPARED", Deciding => "DECIDING",
+    Decided => "DECIDED", Protected => "PROTECTED", Published => "PUBLISHED", Acked => "ACKED",
+    Recovering => "RECOVERING", RecoveryRequired => "RECOVERY_REQUIRED", InDoubt => "IN_DOUBT",
+    PublishedDegraded => "PUBLISHED_DEGRADED", Aborted => "ABORTED"
+});
+
 /// Frozen evidence at publication, not a live assessment of copy health.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serialization(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ProtectionAtPublish {
     NotApplicable,
     TargetMet,
     BelowTarget,
     Unconfirmed,
+}
+
+strict_string_deserialize!(ProtectionAtPublish {
+    NotApplicable => "NOT_APPLICABLE", TargetMet => "TARGET_MET", BelowTarget => "BELOW_TARGET", Unconfirmed => "UNCONFIRMED"
+});
+
+/// Current content observation, separate from frozen publication evidence.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serialization(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CurrentHealth {
+    Healthy,
+    Degraded,
+    Unavailable,
+    Unknown,
+    Recovering,
+}
+
+impl<'de> Deserialize<'de> for CurrentHealth {
+    fn deserialize<D: data_serialization::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Self, D::Error> {
+        struct HealthVisitor;
+        impl data_serialization::de::Visitor<'_> for HealthVisitor {
+            type Value = CurrentHealth;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a current health string")
+            }
+            fn visit_str<E: data_serialization::de::Error>(
+                self,
+                token: &str,
+            ) -> Result<Self::Value, E> {
+                match token {
+                    "HEALTHY" => Ok(CurrentHealth::Healthy),
+                    "DEGRADED" => Ok(CurrentHealth::Degraded),
+                    "UNAVAILABLE" => Ok(CurrentHealth::Unavailable),
+                    "UNKNOWN" => Ok(CurrentHealth::Unknown),
+                    "RECOVERING" => Ok(CurrentHealth::Recovering),
+                    _ => Err(E::unknown_variant(
+                        token,
+                        &[
+                            "HEALTHY",
+                            "DEGRADED",
+                            "UNAVAILABLE",
+                            "UNKNOWN",
+                            "RECOVERING",
+                        ],
+                    )),
+                }
+            }
+        }
+        deserializer.deserialize_str(HealthVisitor)
+    }
+}
+
+impl CurrentHealth {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Healthy => "HEALTHY",
+            Self::Degraded => "DEGRADED",
+            Self::Unavailable => "UNAVAILABLE",
+            Self::Unknown => "UNKNOWN",
+            Self::Recovering => "RECOVERING",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -673,7 +832,7 @@ pub struct OperationResult {
     pub branch_id: Option<String>,
     pub commit_state: CommitState,
     pub protection_at_publish: ProtectionAtPublish,
-    pub current_health: String,
+    pub current_health: CurrentHealth,
     pub request_digest: String,
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
@@ -689,7 +848,7 @@ pub struct Plan {
     pub expected_sequence: u64,
     pub digest: String,
     pub input: json_codec::Value,
-    pub state: String,
+    pub state: PlanState,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
@@ -941,3 +1100,7 @@ mod operation_status_tests;
 #[cfg(test)]
 #[path = "../../../test/contract/unit/model/config_tests.rs"]
 mod config_tests;
+
+#[cfg(test)]
+#[path = "../../../test/contract/unit/model/domain_state_tests.rs"]
+mod domain_state_tests;

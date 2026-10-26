@@ -310,7 +310,10 @@ fn quarantine_corrupt_index(root: &Path) -> Result<()> {
 
 impl Engine {
     pub(crate) fn rebuild_index(&self) -> Result<()> {
-        let mut proof = self.history_query_proof.lock().unwrap();
+        let mut proof = self
+            .history_query_proof
+            .lock()
+            .expect("invariant: history query proof lock poisoned");
         proof.healthy = false;
         let delta = HistoryDelta::between(None, &self.state.versions);
         checked_index_files(&self.root)?;
@@ -333,7 +336,10 @@ impl Engine {
     }
     pub(crate) fn update_index(&self, previous: &State) -> Result<()> {
         let delta = HistoryDelta::between(Some(&previous.versions), &self.state.versions);
-        let mut proof = self.history_query_proof.lock().unwrap();
+        let mut proof = self
+            .history_query_proof
+            .lock()
+            .expect("invariant: history query proof lock poisoned");
         if let Err(error) = checked_index_files(&self.root) {
             proof.healthy = false;
             return Err(error);
@@ -374,12 +380,14 @@ impl Engine {
     pub(crate) fn history_index_is_selective(&self, file_id: &str) -> bool {
         // Connection/validation costs dominate small maps and large result sets.
         // Conservative measured threshold; this is not an API response limit.
-        self.state.versions.len() >= HISTORY_INDEX_MIN_VERSIONS
-            && self.history_query_proof.lock().is_ok_and(|proof| {
-                proof.healthy
-                    && proof.counts.get(file_id).copied().unwrap_or(0)
-                        <= HISTORY_INDEX_MAX_CANDIDATES
-            })
+        self.state.versions.len() >= HISTORY_INDEX_MIN_VERSIONS && {
+            let proof = self
+                .history_query_proof
+                .lock()
+                .expect("invariant: history query proof lock poisoned");
+            proof.healthy
+                && proof.counts.get(file_id).copied().unwrap_or(0) <= HISTORY_INDEX_MAX_CANDIDATES
+        }
     }
 
     /// Candidate selection only. Every field comes from State, never SQLite JSON.
@@ -396,7 +404,7 @@ impl Engine {
             return None;
         }
         let expected = proof.counts.get(file_id).copied().unwrap_or(0);
-        let limit = i64::try_from(expected).ok()?.checked_add(1)?;
+        let limit = expected as i64 + 1;
         let result = platform_io::sqlite::block_on_sqlite_connection(async {
             let mut c =
                 platform_io::sqlite::open_index_read_connection(&self.root.join("index.sqlite"))

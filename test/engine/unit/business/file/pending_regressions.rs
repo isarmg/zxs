@@ -48,7 +48,7 @@ fn file(engine: &Engine, branch: &str) -> Entry {
 
 #[test]
 fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
-    for state in ["archived", "merged"] {
+    for state in [BranchState::Archived, BranchState::Merged] {
         let (_root, mut engine, repo) = fixture();
         save(&mut engine, &repo.main_branch_id, b"original");
         let original = file(&engine, &repo.main_branch_id);
@@ -73,7 +73,7 @@ fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
             .branches
             .get_mut(&branch)
             .unwrap()
-            .state = state.into();
+            .state = state;
         let before = engine.state.branches[&branch].head_commit_id.clone();
         assert_eq!(
             engine

@@ -93,7 +93,7 @@ fn normalized_directory_rename_and_file_branch_keep_parent_closure_after_restart
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: storage_contract::NamespaceOperationKind::Rename,
                 path: "strasse".into(),
                 destination: Some("Moved".into()),
             },
@@ -160,13 +160,13 @@ fn direct_namespace_cannot_write_an_inactive_directory_branch() {
         .branches
         .get_mut(&repo.main_branch_id)
         .unwrap()
-        .state = "archived".into();
+        .state = storage_contract::BranchState::Archived;
     let before = canonical_json(engine.state()).unwrap();
     let error = engine
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation {
-                kind: "mkdir".into(),
+                kind: storage_contract::NamespaceOperationKind::Mkdir,
                 path: "unpublished".into(),
                 destination: None,
             },
@@ -196,7 +196,7 @@ fn indexed_commit_comparison_preserves_normalized_identity_and_change_order() {
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation {
-                kind: "delete".into(),
+                kind: storage_contract::NamespaceOperationKind::Delete,
                 path: "remove.txt".into(),
                 destination: None,
             },
@@ -208,7 +208,7 @@ fn indexed_commit_comparison_preserves_normalized_identity_and_change_order() {
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: storage_contract::NamespaceOperationKind::Rename,
                 path: "keep.txt".into(),
                 destination: Some("KEEP.txt".into()),
             },
@@ -317,7 +317,7 @@ fn file_container_rename_replays_only_after_decision_and_keeps_all_version_bytes
                 .file_namespace(
                     &repo.repository_id,
                     NamespaceOperation {
-                        kind: "rename".into(),
+                        kind: storage_contract::NamespaceOperationKind::Rename,
                         path: "report.txt".into(),
                         destination: Some("renamed.txt".into()),
                     },
@@ -387,7 +387,7 @@ fn file_container_rename_replays_only_after_decision_and_keeps_all_version_bytes
                 .file_namespace(
                     &repo.repository_id,
                     NamespaceOperation {
-                        kind: "rename".into(),
+                        kind: storage_contract::NamespaceOperationKind::Rename,
                         path: "report.txt".into(),
                         destination: Some("renamed.txt".into()),
                     },
@@ -486,7 +486,7 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
             .namespace_operation(
                 &scope.workspace_id,
                 NamespaceOperation {
-                    kind: "mkdir".into(),
+                    kind: storage_contract::NamespaceOperationKind::Mkdir,
                     path: "other".into(),
                     destination: None
                 }
@@ -697,7 +697,7 @@ fn directory_writes_update_only_the_selected_file_branch() {
         b"current main"
     );
     let change = NamespaceOperation {
-        kind: "rename".into(),
+        kind: storage_contract::NamespaceOperationKind::Rename,
         path: "file.txt".into(),
         destination: Some("renamed.txt".into()),
     };
@@ -1124,7 +1124,7 @@ fn faults_replay_same_operation_and_never_publish_early() {
         );
         assert!(e.is_read_only());
         assert_eq!(
-            e.operation_owner(&request.operation_id).as_deref(),
+            e.operation_owner(&request.operation_id).unwrap().as_deref(),
             Some("admin")
         );
         drop(e);
@@ -1417,7 +1417,7 @@ fn published_success_survives_later_content_damage() {
         result.commit_state,
         storage_contract::CommitState::Published
     );
-    assert_eq!(result.current_health, "UNAVAILABLE");
+    assert_eq!(result.current_health.as_str(), "UNAVAILABLE");
 }
 
 #[test]
@@ -1499,7 +1499,10 @@ fn explicit_upload_generations_and_sealed_wire_requests_are_stable() {
     );
     drop(e);
     let mut e = Engine::open(&f.root).unwrap();
-    assert_eq!(e.workspace(&w.workspace_id).unwrap().state, "committed");
+    assert_eq!(
+        e.workspace(&w.workspace_id).unwrap().state.as_str(),
+        "committed"
+    );
     assert!(e.create_workspace(&r.main_branch_id, "admin").is_ok());
 }
 
@@ -1534,7 +1537,7 @@ fn system_disk_restore_recovers_auth_and_unsubmitted_full_bytes() {
         "test-hash-only"
     );
     let pending = e.workspace(&w.workspace_id).unwrap();
-    assert_eq!(pending.state, "open");
+    assert_eq!(pending.state.as_str(), "open");
     assert_eq!(
         fs::read(&pending.files.values().next().unwrap().source_path).unwrap(),
         b"not yet published"
@@ -1564,7 +1567,7 @@ fn mkdir_and_child_upload_publish_together_and_cancellation_never_undoes_executi
     e.namespace_operation(
         &w.workspace_id,
         NamespaceOperation {
-            kind: "mkdir".into(),
+            kind: storage_contract::NamespaceOperationKind::Mkdir,
             path: "文档".into(),
             destination: None,
         },
@@ -1806,7 +1809,7 @@ fn overlapping_namespace_and_upload_never_reports_a_successful_disappearing_file
         let head = e.state().branches[&r.main_branch_id].head_commit_id.clone();
         let w = e.create_workspace(&r.main_branch_id, "admin").unwrap();
         let delete = NamespaceOperation {
-            kind: "delete_tree".into(),
+            kind: storage_contract::NamespaceOperationKind::DeleteTree,
             path: "docs".into(),
             destination: None,
         };
@@ -2556,7 +2559,11 @@ fn workspace_commit_rejects_bytes_changed_after_upload_sealing() {
         assert!(!engine.state().operations.contains_key(&operation));
         assert!(engine.list_tree(&repo.main_branch_id).unwrap().is_empty());
         assert_eq!(
-            engine.workspace(&workspace.workspace_id).unwrap().state,
+            engine
+                .workspace(&workspace.workspace_id)
+                .unwrap()
+                .state
+                .as_str(),
             "open"
         );
 
@@ -2643,7 +2650,11 @@ fn sealed_batch_checksum_failure_rolls_back_all_files_and_retries_after_restart(
     let mut engine = Engine::open(&fixture.root).unwrap();
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     assert_eq!(
-        engine.workspace(&workspace.workspace_id).unwrap().state,
+        engine
+            .workspace(&workspace.workspace_id)
+            .unwrap()
+            .state
+            .as_str(),
         "sealed"
     );
     assert_eq!(
@@ -2672,7 +2683,11 @@ fn sealed_batch_checksum_failure_rolls_back_all_files_and_retries_after_restart(
     }
     assert_eq!(engine.state().versions.len(), 2);
     assert_eq!(
-        engine.workspace(&workspace.workspace_id).unwrap().state,
+        engine
+            .workspace(&workspace.workspace_id)
+            .unwrap()
+            .state
+            .as_str(),
         "committed"
     );
 }
@@ -2720,7 +2735,11 @@ fn accepted_batch_recovers_without_staged_sources_and_replays_exactly_once() {
         storage_contract::CommitState::Published
     );
     assert_eq!(
-        engine.workspace(&workspace.workspace_id).unwrap().state,
+        engine
+            .workspace(&workspace.workspace_id)
+            .unwrap()
+            .state
+            .as_str(),
         "committed"
     );
     let sequence = engine.state().sequence;
@@ -2817,7 +2836,11 @@ fn unchanged_save_recovery_persists_operation_without_creating_content_history()
         assert_eq!(engine.state().commits.len(), commits);
         assert_eq!(engine.state().versions.len(), versions);
         assert_eq!(
-            engine.workspace(&workspace.workspace_id).unwrap().state,
+            engine
+                .workspace(&workspace.workspace_id)
+                .unwrap()
+                .state
+                .as_str(),
             "committed"
         );
     }
@@ -3289,7 +3312,11 @@ fn detached_workspace_preparation_writes_no_decision_and_replays_original_operat
     );
     assert!(!engine.state.operations.contains_key(&request.operation_id));
     assert_eq!(
-        engine.workspace(&workspace.workspace_id).unwrap().state,
+        engine
+            .workspace(&workspace.workspace_id)
+            .unwrap()
+            .state
+            .as_str(),
         "open"
     );
     assert!(
@@ -3342,7 +3369,11 @@ fn detached_workspace_commit_stale_base_is_definite_retryable_conflict() {
     );
     assert!(!engine.state.operations.contains_key(&request.operation_id));
     assert_eq!(
-        engine.workspace(&workspace.workspace_id).unwrap().state,
+        engine
+            .workspace(&workspace.workspace_id)
+            .unwrap()
+            .state
+            .as_str(),
         "open"
     );
     for staged in engine
@@ -3560,7 +3591,7 @@ fn detached_preparation_fences_physical_namespace_writes_but_not_reads() {
     };
     let plan = engine.prepare_workspace_commit(request, None).unwrap();
     let rename = NamespaceOperation {
-        kind: "rename".into(),
+        kind: storage_contract::NamespaceOperationKind::Rename,
         path: "original.txt".into(),
         destination: Some("renamed.txt".into()),
     };
@@ -3660,13 +3691,16 @@ fn pending_operation_reads_exact_snapshot_replica_without_repair() {
         fs::write(&path, b"broken").unwrap();
         let result = engine.operation(&operation).unwrap();
         assert_eq!(result.commit_state, storage_contract::CommitState::InDoubt);
-        assert_eq!(engine.operation_owner(&operation).as_deref(), Some("admin"));
+        assert_eq!(
+            engine.operation_owner(&operation).unwrap().as_deref(),
+            Some("admin")
+        );
         assert_eq!(fs::read(&path).unwrap(), b"broken");
         for disk in &members {
             fs::write(crate::journal::object_path(disk, kind, &hash), b"broken").unwrap();
         }
         assert!(engine.operation(&operation).is_err());
-        assert_eq!(engine.operation_owner(&operation), None);
+        assert!(engine.operation_owner(&operation).is_err());
     }
 }
 #[test]
@@ -3751,7 +3785,7 @@ fn pending_operation_requires_a_trusted_decision_not_prepared_objects() {
             engine.operation(&operation).unwrap_err().code(),
             storage_contract::ErrorCode::OperationNotFound
         );
-        assert_eq!(engine.operation_owner(&operation), None);
+        assert_eq!(engine.operation_owner(&operation).unwrap(), None);
     }
 }
 
@@ -4026,7 +4060,7 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
         .get_mut(&repo.main_branch_id)
         .unwrap();
     branch.head_commit_id = head.clone();
-    branch.state = "migrated".into();
+    branch.state = storage_contract::BranchState::Migrated;
     assert_eq!(
         engine
             .list_tree_ref(&repo.main_branch_id)

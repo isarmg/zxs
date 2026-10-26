@@ -171,6 +171,7 @@ impl Engine {
             // The frozen view may plan writes; only the live Engine is fenced.
             commit_preparation: Arc::new(AtomicBool::new(false)),
             history_query_proof: std::sync::Mutex::new(super::index::QueryProof::default()),
+            recovery_warnings: super::RecoveryWarnings::default(),
             _locks: locks,
             #[cfg(feature = "fault-injection")]
             fault: None,
@@ -228,8 +229,10 @@ impl Engine {
         {
             return Err(Error::new(storage_contract::ErrorCode::CommitPreparationStale, "workspace or publication base changed during preparation; retry the same operation").retryable());
         }
-        if !matches!(workspace.state.as_str(), "open" | "sealed")
-            || workspace.fencing_token != prepared.request.fencing_token
+        if !matches!(
+            workspace.state,
+            WorkspaceState::Open | WorkspaceState::Sealed
+        ) || workspace.fencing_token != prepared.request.fencing_token
         {
             return Err(Error::new(
                 storage_contract::ErrorCode::FencingTokenInvalid,
@@ -275,7 +278,10 @@ impl WorkspaceCommitPreparation {
             engine.plan_workspace_commit_inner(self.request, None)?
         };
         let (publication, existing, expected_digest) = match plan.mutation {
-            MutationPlan::Existing(result) => (None, Some(result.clone()), result.request_digest),
+            MutationPlan::Existing(result) => {
+                let digest = result.request_digest.clone();
+                (None, Some(result), digest)
+            }
             MutationPlan::Prepared {
                 next,
                 prepared,

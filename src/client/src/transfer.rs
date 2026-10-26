@@ -208,17 +208,13 @@ impl Client {
             file.write_all(&chunk).await?;
         }
         if length != expected_length || hash.finalize().to_hex().as_str() != expected {
-            return Err(Error::Response(
-                "CHECKSUM_MISMATCH: download did not match the immutable version hash".into(),
-            ));
+            return Err(Error::ChecksumMismatch);
         }
         file.sync_all().await?;
         drop(file);
         // No empty reservation file is exposed. Publication is an indivisible
         // no-replace operation, so a concurrent creator always keeps its file.
-        tokio::task::spawn_blocking(move || cleanup.publish())
-            .await
-            .map_err(|error| Error::Response(error.to_string()))??;
+        tokio::task::spawn_blocking(move || cleanup.publish()).await??;
         Ok(())
     }
     /// Verified publication has no weaker pathname-based compatibility mode.

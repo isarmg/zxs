@@ -38,6 +38,7 @@ pub(crate) fn parse_disks(value: &Value) -> Result<Vec<Disk>, crate::api::Error>
         message: "The disk listing did not match the server contract.".into(),
         retryable: false,
         request_id: None,
+        source: None,
     })
 }
 
@@ -133,7 +134,6 @@ impl Model {
                 .iter()
                 .any(|key| selected[*key] != entry[*key]);
             let changed = content_changed || selected["path"] != entry["path"];
-            let entry = entry.clone();
             if changed {
                 // A refreshed branch or renamed logical path invalidates both
                 // visible metadata and in-flight reads of the previous context.
@@ -179,7 +179,7 @@ pub(crate) fn publication_notice(status: SaveStatus) -> String {
             "保存未完成，服务端暂存内容已保留。",
             "The save did not complete. Staged content was retained on the server.",
         ),
-        _ => t(
+        SaveStatus::Unknown => t(
             "保存结果尚未确认，正在查询原操作。请勿重复提交。",
             "The save is not yet confirmed. The original operation is being checked; do not submit it again.",
         ),

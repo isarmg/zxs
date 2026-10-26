@@ -299,3 +299,15 @@ fn restore_accepts_one_agreed_pool_and_rejects_foreign_extra_input() {
     );
     drop(foreign_temp);
 }
+
+#[test]
+fn repair_rejects_unsafe_unreadable_entry_instead_of_replacing_it() {
+    let (_temp, engine, repo) = fixture();
+    let members = engine.members();
+    let hash = object_hash("repository", &repo).unwrap();
+    let path = object_path(&members[0], "repository", &hash);
+    crate::disk::private_dir(path.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&path, &path).unwrap();
+    assert!(repair_object_copies(&members, "repository", &hash, &repo).is_err());
+    assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
+}

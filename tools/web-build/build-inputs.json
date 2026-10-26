@@ -45,6 +45,7 @@
     "tools/rust-sources/external_transfers.py",
     "tools/rust-sources/source_history_chain.py",
     "tools/rust-sources/proof_routing.py",
-    "tools/rust-sources/proof_consolidation.py"
+    "tools/rust-sources/proof_consolidation.py",
+    "tools/rust-sources/proof_maintenance.py"
   ]
 }

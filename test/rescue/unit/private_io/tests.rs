@@ -204,3 +204,91 @@ fn draft_transaction_keeps_markers_backups_and_writes_on_the_held_parent() {
     assert!(!parent.join("draft.json.before-registration").exists());
     assert!(DraftTransaction::open(&moved.join("draft.json")).is_err());
 }
+
+#[test]
+fn failed_explicit_staging_cleanup_preserves_error_and_never_retries_on_drop() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = File::open(root.path()).unwrap();
+    fs::create_dir(root.path().join("staged")).unwrap();
+    let mut cleanup = StagingCleanup {
+        directory: &directory,
+        name: "staged".into(),
+        armed: true,
+    };
+    assert_eq!(
+        cleanup.cleanup().unwrap_err().kind(),
+        std::io::ErrorKind::IsADirectory
+    );
+    assert!(!cleanup.armed);
+    drop(cleanup);
+    assert!(root.path().join("staged").is_dir());
+}
+
+#[test]
+fn dropping_draft_transaction_releases_lock_before_an_unrelated_child_execs() {
+    use std::os::unix::{net::UnixStream, process::CommandExt};
+    use std::time::Duration;
+
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("draft.json");
+    write_new(&path, b"draft").unwrap();
+    let transaction = DraftTransaction::open(&path).unwrap();
+    let (mut parent, child) = UnixStream::pair().unwrap();
+    parent
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    child
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let spawned = std::thread::spawn(move || {
+        let mut command = std::process::Command::new("/bin/true");
+        // SAFETY: The child only uses async-signal-safe read/write on an already-owned socket;
+        // the inherited draft descriptors deliberately remain open until the parent releases it.
+        unsafe {
+            command.pre_exec(move || {
+                rustix::io::write(&child, b"r")?;
+                let mut release = [0_u8; 1];
+                if rustix::io::read(&child, &mut release)? != 1 {
+                    return Err(std::io::ErrorKind::UnexpectedEof.into());
+                }
+                Ok(())
+            });
+        }
+        command.spawn().unwrap().wait().unwrap()
+    });
+    let mut ready = [0_u8; 1];
+    parent.read_exact(&mut ready).unwrap();
+    drop(transaction);
+    let next = DraftTransaction::open(&path);
+    // Release and reap the child even when the regression assertion below fails.
+    parent.write_all(b"x").unwrap();
+    assert!(spawned.join().unwrap().success());
+    assert!(
+        next.is_ok(),
+        "completed transaction left its lock in the child: {:#?}",
+        next.err()
+    );
+}
+
+#[test]
+fn failed_drop_cleanup_does_not_panic_when_the_diagnostic_sink_is_full() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = File::open(root.path()).unwrap();
+    fs::create_dir(root.path().join("staged")).unwrap();
+    let full = fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let subscriber = tracing::collector::fmt()
+        .with_writer(full)
+        .log_internal_errors(false)
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        drop(StagingCleanup {
+            directory: &directory,
+            name: "staged".into(),
+            armed: true,
+        });
+    });
+    assert!(root.path().join("staged").is_dir());
+}

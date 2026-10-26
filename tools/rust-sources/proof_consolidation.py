@@ -59,7 +59,7 @@ def _reject_pinned_secondary(root, inputs, primary):
                 raise ValueError('pinned secondary origin needs its own proof projection adapter')
 
 
-def projection(root, record):
+def projection(root, record, historical_bytes=None):
     """Return exactly package/external/inventory/roots/foreign.
 
 package and external are only the primary origin's after snapshots. inventory
@@ -120,7 +120,8 @@ full content and live-inventory equality remain the proof loader's obligation.
                 path = source_consolidation._safe(root, row['path'])
                 if not path.is_file():
                     raise ValueError('missing active primary external projection file')
-                size += source_layout.logical_size(root, row['path'])
+                size += (len(historical_bytes[row['path']]) if historical_bytes is not None
+                         else source_layout.logical_size(root, row['path']))
                 if size > MAX_LIVE_BYTES:
                     raise ValueError('primary external projection byte bound exceeded')
                 primary_paths.add(row['path'])
@@ -142,7 +143,8 @@ def validate_binding(root, row, catalog=None, prospective=False):
 
 Prospective mode accepts no registration as authorization: the caller must match
 before against the previous catalog and bind the exact pending reviewed plan.
-This function never calls proof_routing.load or validates a following chain step.
+Maintenance may supply an authenticated terminal snapshot; ordinary routing
+successors remain forbidden. This function never calls proof_routing.load.
 """
     return validate_bindings(root, (row,), catalog, prospective)[0]
 
@@ -150,16 +152,29 @@ This function never calls proof_routing.load or validates a following chain step
 @source_layout.operation
 def validate_bindings(root, rows, catalog=None, prospective=False):
     """Check every binding and authenticate shared history once for this call."""
-    catalog = source_layout.project_catalog(root, catalog) if catalog is not None else None
     rows = tuple(rows)
+    import proof_maintenance
+    restored = {}
+    if catalog is not None:
+        catalog, restored, _ = proof_maintenance.restore(root, catalog, prospective)
+        catalog = source_layout.project_catalog(root, catalog)
     if rows and not prospective:
         if not isinstance(catalog, dict):
             raise ValueError('consolidation proof requires registered current catalog')
         source_consolidation.validate_history(Path(root), catalog, validate_external=external_transfers.validate)
-    return [_validate_binding(root, row, catalog, prospective) for row in rows]
+    results = []
+    for row in rows:
+        binding = row.get('binding') if isinstance(row, dict) else None
+        record = binding.get('record') if isinstance(binding, dict) else None
+        maintenance = restored.get(record.get('destination_directory')) if isinstance(record, dict) else None
+        result = _validate_binding(root, row, catalog, prospective, maintenance)
+        if maintenance is not None:
+            result['maintenance'] = maintenance
+        results.append(result)
+    return results
 
 
-def _validate_binding(root, row, catalog, prospective):
+def _validate_binding(root, row, catalog, prospective, maintenance=None):
     if not isinstance(row, dict):
         raise ValueError('invalid consolidation proof binding row')
     binding = row.get('binding')
@@ -167,7 +182,7 @@ def _validate_binding(root, row, catalog, prospective):
             or binding['kind'] != 'consolidation'):
         raise ValueError('invalid consolidation proof binding')
     record = binding['record']
-    result = projection(root, record)
+    result = projection(root, record, maintenance['bytes'] if maintenance is not None else None)
     primary = next(item for item in record['inputs']
                    if item['package']['directory'] == record['primary_directory'])
     if (row.get('before') != primary['package'] or row.get('external_before') != primary['external_tests']

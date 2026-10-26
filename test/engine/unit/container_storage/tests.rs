@@ -43,7 +43,7 @@ fn reserve(state: &mut State, version: &FileVersion) -> String {
             name: "draft".into(),
             head_commit_id: new_id("commit"),
             fork_commit_id: new_id("commit"),
-            branch_kind: "file".into(),
+            branch_kind: storage_contract::BranchKind::File,
             file_id: Some(version.file_id.clone()),
             file_node_id: None,
             pending_file_versions: BTreeMap::from([(
@@ -51,7 +51,7 @@ fn reserve(state: &mut State, version: &FileVersion) -> String {
                 version.version_id.clone(),
             )]),
             generation: 1,
-            state: "active".into(),
+            state: storage_contract::BranchState::Active,
         },
     );
     id
@@ -886,4 +886,19 @@ fn identity_preserves_generated_storage_name_limit() {
     )
     .unwrap_err();
     assert_eq!(error.code(), storage_contract::ErrorCode::NameTooLong);
+}
+
+#[test]
+#[should_panic(expected = "invariant: every repository has its main branch")]
+fn name_capture_exposes_missing_internal_main_branch() {
+    let (mut state, _, _) = capture_fixture();
+    let branch = state
+        .repositories
+        .values()
+        .next()
+        .unwrap()
+        .main_branch_id
+        .clone();
+    state.branches.remove(&branch);
+    capture_names(&mut state);
 }

@@ -371,7 +371,9 @@ impl Editor {
 fn editor_input(editor: Editor) -> impl IntoView {
     let input = NodeRef::<html::Input>::new();
     input.on_load(|input| {
-        let _ = input.focus();
+        if let Err(error) = input.focus() {
+            web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error);
+        }
         input.select();
     });
     view! {

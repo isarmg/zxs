@@ -67,3 +67,29 @@ fn sqlite_metrics_count_only_typed_history_rows_and_reset() {
         json!({"inserts":1,"updates":0,"deletes":0})
     );
 }
+
+#[test]
+fn sqlite_open_failure_retains_platform_error_type() {
+    let temp = tempfile::tempdir().unwrap();
+    let error = sql(&temp.path().join("absent.sqlite"), false).unwrap_err();
+    assert!(error.downcast_ref::<platform_io::sqlite::Error>().is_some());
+    assert!(error.source().is_some());
+}
+
+#[test]
+fn sqlite_pragma_formatting_preserves_connect_and_optimize_close() {
+    use sqlite_access::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
+    platform_io::sqlite::block_on_sqlite_connection(async {
+        let options = SqliteConnectOptions::new()
+            .in_memory(true)
+            .pragma("cache_size", "1234")
+            .optimize_on_close(true, Some(23));
+        let mut connection = SqliteConnection::connect_with(&options).await.unwrap();
+        let row = sqlite_access::query("PRAGMA cache_size")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<i64, _>(0), 1234);
+        connection.close().await.unwrap();
+    });
+}

@@ -20868,6 +20868,13 @@
           "sha256": "cd15d5fc5716580839e2770efbfc821d2499b12cc73a3cd848ed0d20444b1f8c",
           "source": "src/foundation/tokio-util/src/util/memchr.rs",
           "source_sha256_before": "c9d7b9f5b9d03845b46ce13cad1f7e8986fa719d1cbd0caaf9935b2c0b2dfec7"
+        },
+        {
+          "path": "test/foundation/tokio/tests/fs_asyncify.rs",
+          "sha256": "f67ae96c5dcb9d45f1259d6ecd1a57a990082af4b46c653bed61c20ce8d37a77",
+          "source": "test/foundation/tokio/tests/fs_asyncify.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "f67ae96c5dcb9d45f1259d6ecd1a57a990082af4b46c653bed61c20ce8d37a77"
         }
       ],
       "roots": [

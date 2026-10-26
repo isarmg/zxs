@@ -32,6 +32,8 @@ pub(crate) enum ApiErrorSource {
     #[error("{0}")]
     Integer(#[from] std::num::ParseIntError),
     #[error("{0}")]
+    IpAddress(#[from] std::net::AddrParseError),
+    #[error("{0}")]
     IntegerRange(#[from] std::num::TryFromIntError),
     #[error("{0}")]
     FileLock(#[from] std::fs::TryLockError),
@@ -49,6 +51,8 @@ pub(crate) enum ApiErrorSource {
     Path(#[from] http_routing::extract::rejection::PathRejection),
     #[error("{0}")]
     Body(#[from] http_routing::extract::rejection::BytesRejection),
+    #[error("{0}")]
+    BodyStream(#[from] http_routing::Error),
     #[error("{0}")]
     Timeout(#[from] tokio::time::error::Elapsed),
     #[error("{0}")]

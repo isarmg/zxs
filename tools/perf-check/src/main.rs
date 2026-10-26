@@ -36,15 +36,19 @@ fn version(engine: &Engine, branch: &str) -> String {
 }
 fn sql(path: &Path, install: bool) -> Result<Value> {
     platform_io::sqlite::block_on_sqlite_connection(async {
-        let mut conn = platform_io::sqlite::open_index_connection(path, false, None).await.map_err(|e| e.to_string())?;
+        let mut conn = platform_io::sqlite::open_index_connection(path, false, None).await?;
         if install {
             // Count only typed history rows, not generic mirrors, the fixed
             // current_state marker, or these instrumentation updates.
-            conn.execute("CREATE TABLE IF NOT EXISTS perf_history_writes(inserts INTEGER,updates INTEGER,deletes INTEGER);DELETE FROM perf_history_writes;INSERT INTO perf_history_writes VALUES(0,0,0);CREATE TRIGGER IF NOT EXISTS perf_history_insert AFTER INSERT ON file_history_versions BEGIN UPDATE perf_history_writes SET inserts=inserts+1;END;CREATE TRIGGER IF NOT EXISTS perf_history_update AFTER UPDATE ON file_history_versions BEGIN UPDATE perf_history_writes SET updates=updates+1;END;CREATE TRIGGER IF NOT EXISTS perf_history_delete AFTER DELETE ON file_history_versions BEGIN UPDATE perf_history_writes SET deletes=deletes+1;END;").await.map_err(|e|e.to_string())?;
+            conn.execute("CREATE TABLE IF NOT EXISTS perf_history_writes(inserts INTEGER,updates INTEGER,deletes INTEGER);DELETE FROM perf_history_writes;INSERT INTO perf_history_writes VALUES(0,0,0);CREATE TRIGGER IF NOT EXISTS perf_history_insert AFTER INSERT ON file_history_versions BEGIN UPDATE perf_history_writes SET inserts=inserts+1;END;CREATE TRIGGER IF NOT EXISTS perf_history_update AFTER UPDATE ON file_history_versions BEGIN UPDATE perf_history_writes SET updates=updates+1;END;CREATE TRIGGER IF NOT EXISTS perf_history_delete AFTER DELETE ON file_history_versions BEGIN UPDATE perf_history_writes SET deletes=deletes+1;END;").await?;
         }
-        let r = sqlite_access::query("SELECT inserts,updates,deletes FROM perf_history_writes").fetch_one(&mut conn).await.map_err(|e|e.to_string())?;
-        Ok::<Value,String>(json!({"inserts":r.get::<i64,_>(0),"updates":r.get::<i64,_>(1),"deletes":r.get::<i64,_>(2)}))
-    }).map_err(Into::into)
+        let r = sqlite_access::query("SELECT inserts,updates,deletes FROM perf_history_writes")
+            .fetch_one(&mut conn)
+            .await?;
+        Ok::<Value, Box<dyn std::error::Error>>(
+            json!({"inserts":r.get::<i64,_>(0),"updates":r.get::<i64,_>(1),"deletes":r.get::<i64,_>(2)}),
+        )
+    })
 }
 // Accept only the two persisted object layouts, never report a shard prefix
 // as an object kind or count malformed evidence as a successful benchmark.

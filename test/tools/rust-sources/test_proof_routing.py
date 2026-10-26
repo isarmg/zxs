@@ -19,6 +19,9 @@ def enc(data): return base64.b64encode(data).decode()
 
 class ActiveProofRouting(unittest.TestCase):
     def setUp(self):
+        import proof_maintenance
+        maintenance = patch.object(proof_maintenance, 'RECEIPTS', ())
+        maintenance.start(); self.addCleanup(maintenance.stop)
         temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup); self.root = Path(temp.name)
         self.old = 'src/foundation/entropy-1'; self.new = 'src/foundation/entropy'
         self.old_test = 'test/foundation/entropy-1'; self.new_test = 'test/foundation/entropy'

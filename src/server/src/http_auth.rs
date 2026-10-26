@@ -47,7 +47,8 @@ impl PendingLogin {
 
 impl Drop for PendingLogin {
     fn drop(&mut self) {
-        if let Ok(mut active) = self.pending.lock() {
+        {
+            let mut active = self.pending.lock().expect("service state lock poisoned");
             active.remove(&self.account);
         }
     }
@@ -180,10 +181,11 @@ fn client_ip(request: &Request, config: &ServerConfig) -> Result<IpAddr, ApiErro
     }
     let ip = value
         .to_str()
-        .ok()
-        .and_then(|value| value.parse::<IpAddr>().ok())
-        .ok_or_else(|| {
+        .map_err(ApiError::invalid_source)?
+        .parse::<IpAddr>()
+        .map_err(|source| {
             ApiError::invalid("trusted proxy must overwrite X-Forwarded-For with one IP")
+                .with_source(source)
         })?;
     // Unify IPv4 and IPv4-mapped IPv6 spellings so they cannot multiply a budget.
     Ok(match ip {

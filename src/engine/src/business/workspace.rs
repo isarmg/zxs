@@ -162,11 +162,14 @@ impl Drop for PreparedUpload {
         if let Some(path) = &self.scratch
             && let Some(name) = path.file_name()
         {
-            let _ = rustix::fs::unlinkat(
+            match rustix::fs::unlinkat(
                 self.plan.directory_handle.directory(),
                 name,
                 rustix::fs::AtFlags::empty(),
-            );
+            ) {
+                Ok(()) | Err(rustix::io::Errno::NOENT) => (),
+                Err(error) => tracing::error!(%error, "upload scratch cleanup failed"),
+            }
         }
     }
 }
@@ -404,7 +407,7 @@ fn validate_file_context(
             || state
                 .branches
                 .get(&selected.branch_id)
-                .is_none_or(|branch| branch.state != "active"))
+                .is_none_or(|branch| branch.state != BranchState::Active))
     {
         return Err(Error::new(
             storage_contract::ErrorCode::BranchNotActive,
@@ -494,7 +497,7 @@ impl Engine {
         if self
             .workspaces
             .values()
-            .filter(|w| matches!(w.state.as_str(), "open" | "sealed"))
+            .filter(|w| matches!(w.state, WorkspaceState::Open | WorkspaceState::Sealed))
             .count()
             >= self.config.max_workspaces
         {
@@ -509,7 +512,7 @@ impl Engine {
                 "branch missing",
             )
         })?;
-        if branch.state != "active" {
+        if branch.state != BranchState::Active {
             return Err(Error::new(
                 storage_contract::ErrorCode::BranchArchived,
                 "branch is not writable",
@@ -527,7 +530,7 @@ impl Engine {
             })?;
         let w = Workspace {
             workspace_id: new_id("ws"),
-            purpose: "normal".into(),
+            purpose: WorkspacePurpose::Normal,
             branch_id: branch_id.into(),
             principal: principal.into(),
             base_head: branch.head_commit_id.clone(),
@@ -568,7 +571,7 @@ impl Engine {
                 .collect(),
             namespace_operations: Vec::new(),
             created_at: now(),
-            state: "open".into(),
+            state: WorkspaceState::Open,
         };
         self.persist_workspace(&w)?;
         self.workspaces.insert(w.workspace_id.clone(), w.clone());
@@ -577,7 +580,7 @@ impl Engine {
     fn writable_workspace(&self, id: &str) -> Result<Workspace> {
         self.require_write()?;
         let w = self.workspace(id)?;
-        if w.state != "open" {
+        if w.state != WorkspaceState::Open {
             return Err(Error::new(
                 storage_contract::ErrorCode::WorkspaceClosed,
                 "workspace is not open",
@@ -642,7 +645,7 @@ impl Engine {
         validate_id(item, "entry")?;
         name_policy::validate_path(path)?;
         let w = self.writable_workspace(workspace)?;
-        if w.purpose == "normal" {
+        if w.purpose == WorkspacePurpose::Normal {
             validate_directory_selection(&self.state, &w, path)?;
         }
         let key = name_policy::path_key(path);
@@ -656,7 +659,7 @@ impl Engine {
             )
         })?;
         let base_entry = base.get(path).cloned();
-        if w.purpose == "normal"
+        if w.purpose == WorkspacePurpose::Normal
             && let Some(entry) = base_entry
                 .as_ref()
                 .filter(|e| e.kind == NamespaceEntryKind::File)
@@ -693,7 +696,7 @@ impl Engine {
         if self.workspaces.values().any(|other| {
             other.workspace_id != workspace
                 && other.branch_id == w.branch_id
-                && matches!(other.state.as_str(), "open" | "sealed")
+                && matches!(other.state, WorkspaceState::Open | WorkspaceState::Sealed)
                 && other
                     .files
                     .values()
@@ -969,7 +972,7 @@ impl Engine {
         let w = self.writable_workspace(workspace)?;
         validate_id(item, "entry")?;
         name_policy::validate_path(path)?;
-        if w.purpose == "normal" {
+        if w.purpose == WorkspacePurpose::Normal {
             validate_directory_selection(&self.state, &w, path)?;
         }
         let end = offset.checked_add(bytes.len() as u64).ok_or_else(|| {
@@ -989,7 +992,7 @@ impl Engine {
                 "workspace base missing",
             )
         })?;
-        if w.purpose == "normal"
+        if w.purpose == WorkspacePurpose::Normal
             && let Some(entry) = base.get(path)
         {
             validate_file_context(&self.state, &w, &entry.file_id, path)?;
@@ -1060,19 +1063,13 @@ impl Engine {
         workspace: &str,
         operation: NamespaceOperation,
     ) -> Result<Workspace> {
-        if operation.kind == "mkdir" {
+        if operation.kind == NamespaceOperationKind::Mkdir {
             name_policy::validate_path(&operation.path)?;
         } else {
             name_policy::validate_lookup_path(&operation.path)?;
         }
         if let Some(to) = &operation.destination {
             name_policy::validate_path(to)?;
-        }
-        if !["mkdir", "rename", "delete", "delete_tree"].contains(&operation.kind.as_str()) {
-            return Err(Error::new(
-                storage_contract::ErrorCode::OperationUnsupported,
-                "namespace operation is not supported",
-            ));
         }
         let mut w = self.writable_workspace(workspace)?;
         if self
@@ -1105,7 +1102,7 @@ impl Engine {
                 "cannot abort while a decision is unresolved",
             ));
         }
-        w.state = "aborted".into();
+        w.state = WorkspaceState::Aborted;
         w.fencing_token = w.fencing_token.saturating_add(1);
         self.persist_workspace(&w)?;
         self.workspaces.insert(id.into(), w);
@@ -1152,7 +1149,7 @@ impl Engine {
             });
         }
         let w = self.workspace(&request.workspace_id)?;
-        if w.purpose == "historical_branch" {
+        if w.purpose == WorkspacePurpose::HistoricalBranch {
             return Err(Error::new(
                 storage_contract::ErrorCode::HistoricalSaveRequiresBranch,
                 "commit a historical-save plan to create a full branch",
@@ -1160,7 +1157,7 @@ impl Engine {
         }
         validate_workspace_dependencies(&w)?;
         self.require_write()?;
-        if !["open", "sealed"].contains(&w.state.as_str()) {
+        if !matches!(w.state, WorkspaceState::Open | WorkspaceState::Sealed) {
             return Err(Error::new(
                 storage_contract::ErrorCode::WorkspaceClosed,
                 "workspace is not writable",
@@ -1219,7 +1216,7 @@ impl Engine {
             |engine, state, pending| {
                 let branch = state.branches.get(&w.branch_id).cloned()
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::BranchNotFound, "branch disappeared"))?;
-                if branch.state != "active" {
+                if branch.state != BranchState::Active {
                     return Err(Error::new(storage_contract::ErrorCode::BranchArchived, "branch is not writable"));
                 }
                 // Freeze the source records without copying the current Commit.
@@ -1233,9 +1230,8 @@ impl Engine {
                 let repo = engine.repository_for_branch(&w.branch_id)?;
 
                 // One explicit mutation-local index serves both conflict checks
-                // and staged replacements. It accepts unsorted input but rejects
-                // malformed source keys instead of silently dropping aliases.
-                let mut draft = namespace::NamespaceDraft::new(current.entries.clone())?;
+                // and staged replacements, reusing admitted source keys.
+                let mut draft = namespace::NamespaceDraft::new(current.entries.clone());
                 for file in w.files.values() {
                     validate_directory_selection(state, &w, &file.path)?;
                     let existing = draft.get(&file.path);
@@ -1311,7 +1307,7 @@ impl Engine {
                         lookup_key: name_policy::path_key(path), kind: NamespaceEntryKind::File,
                         file_id: file_id.clone(), version_id: version.version_id, size: version.logical_size,
                     };
-                    draft.replace(entry)?;
+                    draft.replace(entry);
                     state.file_locations.entry(file_id.clone()).or_insert_with(||path.to_owned());
                     state.file_names.entry(file_id.clone()).or_insert_with(||path.rsplit('/').next().unwrap_or("").into());
                     written_files.push(file_id);
@@ -1429,7 +1425,7 @@ impl Engine {
         // handle subsequently continues its own published destination; later
         // external selections are still fenced against this post-save receipt.
         Self::refresh_workspace_contexts(&self.state, &mut completed);
-        completed.state = "committed".into();
+        completed.state = WorkspaceState::Committed;
         completed.fencing_token += 1;
         self.persist_workspace(&completed)?;
         self.workspaces

@@ -1,5 +1,6 @@
 //! Namespace type checks, workspace staging and recoverable commit submission.
 use super::*;
+use smb_protocol::protocol::NamespaceOperation;
 
 // Only namespace admission uses this registry. It spans the operation lookup,
 // record lifetime and workspace submission without holding a mutex across I/O.
@@ -27,7 +28,12 @@ impl OperationReservation {
 }
 impl Drop for OperationReservation {
     fn drop(&mut self) {
-        if let Ok(mut operations) = self.shared.namespace_operations.lock() {
+        {
+            let mut operations = self
+                .shared
+                .namespace_operations
+                .lock()
+                .expect("service state lock poisoned");
             operations.remove(&self.operation_id);
         }
     }
@@ -36,7 +42,7 @@ impl Drop for OperationReservation {
 impl Session {
     pub(super) fn namespace(
         &mut self,
-        kind: String,
+        kind: NamespaceOperation,
         path: String,
         destination: Option<String>,
         replace: bool,
@@ -44,15 +50,12 @@ impl Session {
     ) -> Result<Value, ApiError> {
         // Validate before this client-provided identifier can reach a path.
         storage_contract::validate_id(operation_id, "op").map_err(contract)?;
-        if !["mkdir", "rename", "unlink", "rmdir"].contains(&kind.as_str()) {
-            return Err(ApiError::unsupported());
-        }
-        if kind == "mkdir" {
+        if kind == NamespaceOperation::Mkdir {
             name_policy::validate_path(&path).map_err(contract)?;
         } else {
             name_policy::validate_lookup_path(&path).map_err(contract)?;
         }
-        if kind == "rename" {
+        if kind == NamespaceOperation::Rename {
             let target = destination
                 .as_deref()
                 .ok_or_else(|| ApiError::invalid("rename needs a destination"))?;
@@ -148,7 +151,7 @@ impl Session {
                         .iter()
                         .any(|child| child.lookup_key.starts_with(&prefix))
             };
-            if kind == "unlink" || kind == "rmdir" {
+            if kind == NamespaceOperation::Unlink || kind == NamespaceOperation::Rmdir {
                 let entry = find(&path).ok_or_else(|| {
                     ApiError::new(
                         ::http::StatusCode::NOT_FOUND,
@@ -156,7 +159,8 @@ impl Session {
                         "remove target missing",
                     )
                 })?;
-                if kind == "unlink" && entry.kind == storage_contract::NamespaceEntryKind::Directory
+                if kind == NamespaceOperation::Unlink
+                    && entry.kind == storage_contract::NamespaceEntryKind::Directory
                 {
                     return Err(ApiError::new(
                         ::http::StatusCode::CONFLICT,
@@ -164,7 +168,8 @@ impl Session {
                         "unlink cannot remove a directory",
                     ));
                 }
-                if kind == "rmdir" && entry.kind != storage_contract::NamespaceEntryKind::Directory
+                if kind == NamespaceOperation::Rmdir
+                    && entry.kind != storage_contract::NamespaceEntryKind::Directory
                 {
                     return Err(ApiError::new(
                         ::http::StatusCode::CONFLICT,
@@ -180,7 +185,7 @@ impl Session {
                     ));
                 }
             }
-            if kind == "rename"
+            if kind == NamespaceOperation::Rename
                 && replace
                 && let Some(target) = destination.as_deref()
                 && let Some(target_entry) = find(target)
@@ -211,10 +216,10 @@ impl Session {
                     }))?;
                 }
             }
-            let core_kind = if kind == "unlink" || kind == "rmdir" {
-                "delete"
-            } else {
-                &kind
+            let core_kind = match kind {
+                NamespaceOperation::Unlink | NamespaceOperation::Rmdir => "delete",
+                NamespaceOperation::Mkdir => "mkdir",
+                NamespaceOperation::Rename => "rename",
             };
             self.call(crate::BackendAction::Namespace, json!({
                 "workspace_id":workspace.workspace_id,"kind":core_kind,"path":path,"destination":destination

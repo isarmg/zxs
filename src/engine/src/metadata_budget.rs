@@ -225,12 +225,7 @@ fn preflight_inner(
             )?
         } else {
             planned
-                .ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::StateInvalid,
-                        "normal publication lacks a prepared snapshot",
-                    )
-                })?
+                .expect("invariant: normal publication prepares a snapshot")
                 .descriptor
                 .clone()
         };
@@ -288,12 +283,7 @@ fn preflight_inner(
             // tombstone-bearing field is decoded, one page at a time; there is
             // no second whole-map Value or independently chosen partition.
             planned
-                .ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::StateInvalid,
-                        "normal publication lacks a prepared snapshot",
-                    )
-                })?
+                .expect("invariant: normal publication prepares a snapshot")
                 .visit_field_pages("content_states", &members, state, |_, bytes| {
                     check_page(decode_strict(bytes)?)
                 })?;

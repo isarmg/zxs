@@ -22,7 +22,6 @@ use http_routing::{
 use json_codec::{Value, json};
 use std::{
     io::{Read, Seek, SeekFrom},
-    path::Path,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -103,19 +102,17 @@ struct UploadDeadline {
 }
 
 async fn persist_upload(
-    root: &Path,
     record: &uploads::UploadRecord,
     admission: &Arc<UploadAdmission>,
     staged: &Arc<uploads::StagedFile>,
 ) -> Result<(), ApiError> {
-    let root = root.to_owned();
     let record = record.clone();
     let admission = admission.clone();
     let staged = staged.clone();
     tokio::task::spawn_blocking(move || {
         let _admission = admission;
         staged.sync()?;
-        uploads::persist_staged(&root, &record, &staged)
+        uploads::persist_staged(&record, &staged)
     })
     .await
     .map_err(ApiError::join)?
@@ -375,7 +372,7 @@ async fn upload_inner(
         content_hash: expected_hash.clone(),
         persisted_bytes: 0,
         persisted_hash: blake3::hash(b"").to_hex().to_string(),
-        state: "incomplete".into(),
+        state: crate::uploads::UploadState::Incomplete,
         data_file,
     };
     if let Some(previous) = previous
@@ -402,7 +399,7 @@ async fn upload_inner(
         .as_ref()
         .is_none_or(|previous| generation > previous.generation)
     {
-        persist_upload(&spool, &record, &admission, &staged_file).await?;
+        persist_upload(&record, &admission, &staged_file).await?;
     }
     let mut stream = request.into_body().into_data_stream().peekable();
     let mut length = 0u64;
@@ -413,22 +410,26 @@ async fn upload_inner(
     loop {
         // Ready empty frames must not starve the timer or extend idle time.
         let next = if tokio::time::Instant::now() >= idle_deadline {
-            None
+            Err(None)
         } else {
             tokio::time::timeout_at(idle_deadline, stream.next())
                 .await
-                .ok()
+                .map_err(Some)
         };
         let chunk = match next {
-            Some(Some(chunk)) => chunk,
-            Some(None) => break,
-            None => {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(source) => {
                 if prefix.as_ref().is_none_or(|prefix| prefix.complete()) {
                     record.persisted_bytes = length;
                     record.persisted_hash = hash.clone().finalize().to_hex().to_string();
-                    persist_upload(&spool, &record, &admission, &staged_file).await?;
+                    persist_upload(&record, &admission, &staged_file).await?;
                 }
-                return Err(timeout_error());
+                let error = timeout_error();
+                return Err(match source {
+                    Some(source) => error.with_source(source),
+                    None => error,
+                });
             }
         };
         let chunk = match chunk {
@@ -437,11 +438,12 @@ async fn upload_inner(
                 if prefix.as_ref().is_none_or(|prefix| prefix.complete()) {
                     record.persisted_bytes = length;
                     record.persisted_hash = hash.clone().finalize().to_hex().to_string();
-                    persist_upload(&spool, &record, &admission, &staged_file).await?;
+                    persist_upload(&record, &admission, &staged_file).await?;
                 }
                 return Err(ApiError::invalid(format!(
                     "upload interrupted; durable work data is retained: {error}"
-                )));
+                ))
+                .with_source(error));
             }
         };
         if chunk.is_empty() {
@@ -501,7 +503,7 @@ async fn upload_inner(
         {
             record.persisted_bytes = length;
             record.persisted_hash = hash.clone().finalize().to_hex().to_string();
-            persist_upload(&spool, &record, &admission, &staged_file).await?;
+            persist_upload(&record, &admission, &staged_file).await?;
             last_persisted = length;
         }
     }
@@ -514,7 +516,7 @@ async fn upload_inner(
     }
     record.persisted_bytes = length;
     record.persisted_hash = hash.clone().finalize().to_hex().to_string();
-    persist_upload(&spool, &record, &admission, &staged_file).await?;
+    persist_upload(&record, &admission, &staged_file).await?;
     if length != expected_length {
         return Err(ApiError::new(
             ::http::StatusCode::BAD_REQUEST,
@@ -524,8 +526,8 @@ async fn upload_inner(
     }
     let actual_hash = hash.finalize().to_hex().to_string();
     if expected_hash.is_some_and(|expected| expected != actual_hash) {
-        record.state = "checksum_mismatch".into();
-        persist_upload(&spool, &record, &admission, &staged_file).await?;
+        record.state = crate::uploads::UploadState::ChecksumMismatch;
+        persist_upload(&record, &admission, &staged_file).await?;
         return Err(ApiError::new(
             ::http::StatusCode::BAD_REQUEST,
             storage_contract::ErrorCode::ChecksumMismatch,
@@ -549,8 +551,8 @@ async fn upload_inner(
         let source = staged_file.source(expected_length, actual_hash)?;
         let staged =
             backend.upload_generation(&owner, &ws, &item_id, &logical_path, &source, generation)?;
-        record.state = "complete".into();
-        uploads::persist_staged(&spool, &record, &staged_file)?;
+        record.state = crate::uploads::UploadState::Complete;
+        uploads::persist_staged(&record, &staged_file)?;
         Ok::<_, ApiError>(staged)
     })
     .await

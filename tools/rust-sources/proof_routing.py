@@ -106,6 +106,11 @@ def _read(root, sha):
 def _inverse(data, row):
     if digest(data) != row['after_sha256']:
         raise ValueError('proof routing current content drift')
+    return inverse_replacements(data, row)
+
+
+def inverse_replacements(data, row):
+    """Restore the before image from already authenticated after bytes."""
     if not data and row['before_sha256'] != digest(b''):
         raise ValueError('empty proof routing replacement is not a routing edit')
     replacements = row['replacements']
@@ -139,6 +144,7 @@ class View:
         self.roots = set()
         self.packages = {}
         self.records = []
+        self.maintenance_records = []
 
     def _touched(self, path):
         return any(path == r or path.startswith(r + '/') for r in self.roots)
@@ -191,7 +197,7 @@ class View:
         return dict(directory=source_layout.current_path(self.root, directory), name=manifest['name'], version=manifest['version'])
 
 
-@source_layout.historical_catalog
+@source_layout.operation
 def load(root, catalog=None, prospective=False):
     """Return authenticated baseline live bytes; prospective is only for refresh authorization."""
     root = Path(root); view = View(root)
@@ -286,6 +292,9 @@ def load(root, catalog=None, prospective=False):
     bound = [(sha, row) for sha, row in view.records if row['binding']['kind'] == 'consolidation']
     projections = dict(zip((sha for sha, _ in bound),
                            validate_bindings(root, (row for _, row in bound), catalog, prospective)))
+    catalog = source_layout.project_catalog(root, catalog)
+    view.maintenance_records = [item for result in projections.values()
+                                for item in result.get('maintenance', {}).get('records', [])]
     all_current = set()
     live_bytes = 0
     for origin, chain in chains.items():
@@ -301,21 +310,30 @@ def load(root, catalog=None, prospective=False):
             raise ValueError('active proof routing cannot substitute for retired archive')
         physical_expected = projection['inventory'] if projection else expected
         live_roots = projection['roots'] if projection else live_roots
-        paths = set()
-        current = {}
-        for base in live_roots:
-            logical = source_layout.inventory(root, base)
-            for p in logical:
-                if p in paths or p in all_current:
-                    raise ValueError('overlapping active proof owners')
-                data = source_layout.read(root, p)
-                paths.add(p); live_bytes += len(data)
-                if len(paths) > MAX_FILES or live_bytes > MAX_LIVE_BYTES:
-                    raise ValueError('active proof live material bound exceeded')
-                current[p] = data
-        if paths != set(physical_expected) or any(digest(data) != physical_expected[p] for p, data in current.items()):
-            raise ValueError('active proof current inventory/content drift')
-        all_current.update(current)
+        maintenance = projection.get('maintenance') if projection else None
+        if maintenance is not None:
+            # The maintenance boundary already authenticated the entire live union.
+            paths = set(maintenance['inventory'])
+            current = maintenance['bytes']
+            live_bytes += maintenance['live_bytes']
+            if paths & all_current or live_bytes > MAX_LIVE_BYTES:
+                raise ValueError('overlapping/bounded active proof owners')
+        else:
+            paths = set()
+            current = {}
+            for base in live_roots:
+                logical = source_layout.inventory(root, base)
+                for p in logical:
+                    if p in paths or p in all_current:
+                        raise ValueError('overlapping active proof owners')
+                    data = source_layout.read(root, p)
+                    paths.add(p); live_bytes += len(data)
+                    if len(paths) > MAX_FILES or live_bytes > MAX_LIVE_BYTES:
+                        raise ValueError('active proof live material bound exceeded')
+                    current[p] = data
+            if paths != set(physical_expected) or any(digest(data) != physical_expected[p] for p, data in current.items()):
+                raise ValueError('active proof current inventory/content drift')
+        all_current.update(paths)
         # Foreign-origin imports remain authenticated physical material, never
         # members of the pinned primary's historical inverse bijection.
         current = {p: current[p] for p in expected}
@@ -378,6 +396,8 @@ def authorize_consolidation(root, previous, record):
 def validate_refresh(root, previous, current):
     # No newly pinned receipt may quietly authorize a different prior state.
     view = load(root, current)
+    import proof_maintenance
+    proof_maintenance.validate_refresh(root, previous, current, view.maintenance_records)
     registered = previous.get('proof_routing_receipts', [])
     if list(RECEIPTS[:len(registered)]) != registered:
         raise ValueError('immutable proof routing history drift')

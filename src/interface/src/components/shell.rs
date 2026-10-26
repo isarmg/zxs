@@ -101,8 +101,9 @@ pub fn AppShell(
                             .unwrap()
                             .get_element_by_id("zxs-main-content")
                             .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+                            && let Err(error) = main.focus()
                         {
-                            let _ = main.focus();
+                            web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error);
                         }
                     },
                 ),

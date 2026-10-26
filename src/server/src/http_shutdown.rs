@@ -31,7 +31,11 @@ impl Connections {
     fn close(&mut self) {
         self.closed = true;
         for socket in self.sockets.values() {
-            let _ = socket.shutdown(Shutdown::Both);
+            if let Err(error) = socket.shutdown(Shutdown::Both)
+                && error.kind() != io::ErrorKind::NotConnected
+            {
+                tracing::warn!(error = ?error, "HTTP socket shutdown failed");
+            }
         }
         self.sockets.clear();
     }
@@ -41,7 +45,7 @@ impl Connections {
 struct NetworkGuard(Arc<Mutex<Connections>>);
 impl Drop for NetworkGuard {
     fn drop(&mut self) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).close();
+        self.0.lock().expect("service state lock poisoned").close();
     }
 }
 
@@ -63,9 +67,16 @@ impl DrainStream {
         let Some(socket) = self.cancel.take() else {
             return;
         };
-        let mut connections = self.connections.lock().unwrap_or_else(|e| e.into_inner());
+        let mut connections = self
+            .connections
+            .lock()
+            .expect("service state lock poisoned");
         if connections.closed {
-            let _ = socket.shutdown(Shutdown::Both);
+            if let Err(error) = socket.shutdown(Shutdown::Both)
+                && error.kind() != io::ErrorKind::NotConnected
+            {
+                tracing::warn!(error = ?error, "HTTP socket shutdown failed");
+            }
         } else {
             connections.sockets.insert(self.key, socket);
         }
@@ -75,7 +86,7 @@ impl Drop for DrainStream {
     fn drop(&mut self) {
         self.connections
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .expect("service state lock poisoned")
             .sockets
             .remove(&self.key);
     }
@@ -175,15 +186,26 @@ async fn serve_with_grace(
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
         .with_graceful_shutdown(async move {
-            let _ = stopped.await;
-            let _ = draining.send(());
+            match stopped.await {
+                Ok(()) | Err(_) => {} // Sender cancellation also requests shutdown.
+            }
+            // A cancelled drain timer needs no notification.
+            match draining.send(()) {
+                Ok(()) | Err(()) => {}
+            }
         })
         .await
     };
     let cutoff = async {
-        let _ = drain_started.await;
+        if drain_started.await.is_err() {
+            return pending::<io::Result<()>>().await;
+        }
         tokio::time::sleep(grace).await;
-        sockets.0.lock().unwrap_or_else(|e| e.into_inner()).close();
+        sockets
+            .0
+            .lock()
+            .expect("service state lock poisoned")
+            .close();
         tracing::info!("HTTP network grace ended; awaiting admitted storage work");
         // Never replace the HTTP drain or durability joins with a timeout.
         pending::<io::Result<()>>().await

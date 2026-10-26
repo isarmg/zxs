@@ -70,17 +70,48 @@ mod browser {
         Ok(())
     }
     pub fn failed(document: &Document, error: &JsValue) {
-        let Ok(root) = root(document) else { return };
-        let Ok(current) = phase(&root) else { return };
+        let root = match root(document) {
+            Ok(root) => root,
+            Err(reporting_error) => {
+                web_sys::console::error_3(
+                    &"Application startup failed without a document root".into(),
+                    error,
+                    &reporting_error,
+                );
+                return;
+            }
+        };
+        let current = match phase(&root) {
+            Ok(current) => current,
+            Err(reporting_error) => {
+                web_sys::console::error_3(
+                    &"Application startup state is invalid".into(),
+                    error,
+                    &reporting_error,
+                );
+                return;
+            }
+        };
         if current.settle(Phase::Failed).is_none() {
             return;
         }
-        let _ = root.set_attribute("data-zxs-startup", "failed");
-        let _ = root.remove_attribute("data-zxs-runtime");
-        let _ = root.remove_attribute("data-zxs-ready");
+        for result in [
+            root.set_attribute("data-zxs-startup", "failed"),
+            root.remove_attribute("data-zxs-runtime"),
+            root.remove_attribute("data-zxs-ready"),
+        ] {
+            if let Err(error) = result {
+                web_sys::console::warn_2(
+                    &"Could not update failed startup attributes".into(),
+                    &error,
+                );
+            }
+        }
         web_sys::console::error_2(&JsValue::from_str("Application startup failed"), error);
-        if let Ok(event) = Event::new(FAILED_EVENT) {
-            let _ = document.dispatch_event(&event);
+        if let Err(error) =
+            Event::new(FAILED_EVENT).and_then(|event| document.dispatch_event(&event))
+        {
+            web_sys::console::warn_2(&"Could not announce startup failure".into(), &error);
         }
     }
 }

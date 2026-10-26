@@ -48,10 +48,7 @@ impl TaskScope {
                 return None;
             }
             let id = inner.next;
-            inner.next = inner
-                .next
-                .checked_add(1)
-                .expect("UI task counter exhausted");
+            inner.next += 1;
             inner.pending.insert(id, handle);
             id
         };
@@ -61,7 +58,9 @@ impl TaskScope {
         };
         Some(async move {
             let _guard = guard;
-            let _ = Abortable::new(future, registration).await;
+            match Abortable::new(future, registration).await {
+                Ok(()) | Err(futures::future::Aborted) => {}
+            }
         })
     }
 }

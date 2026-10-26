@@ -53,8 +53,20 @@ fn main() -> Result<()> {
         verify_rust_sources(&root)?;
     }
     let lock_path = build.join(".web-build-lock");
-    let _lock = BuildLock { path:lock_path.clone(), _file:fs::OpenOptions::new().write(true).create_new(true).open(&lock_path).context("another Web build is running (remove a stale build/.web-build-lock only after confirming its process exited)")? };
-    let inputs_before = source_inventory(&root)?;
+    let lock = BuildLock { path:Some(lock_path.clone()), _file:fs::OpenOptions::new().write(true).create_new(true).open(&lock_path).context("another Web build is running (remove a stale build/.web-build-lock only after confirming its process exited)")? };
+    let result = build_locked(&root, &web, &build, &command);
+    lock.finish(result)?;
+    if command == "build" {
+        println!(
+            "{}",
+            json_codec::json!({"event":"built","dist":build.join("web"),"runtime":"web-interface"})
+        );
+    }
+    Ok(())
+}
+
+fn build_locked(root: &Path, web: &Path, build: &Path, command: &str) -> Result<()> {
+    let inputs_before = source_inventory(root)?;
     let target = std::env::var_os("ZXS_WEB_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/web"));
@@ -62,7 +74,7 @@ fn main() -> Result<()> {
     // though Cargo itself must run at the inventoried product root.
     let target = std::path::absolute(target)?;
     let mut cargo = Command::new("cargo");
-    cargo.arg(match command.as_str() {
+    cargo.arg(match command {
         "build" => "build",
         "check" => "check",
         "test" => "test",
@@ -71,7 +83,7 @@ fn main() -> Result<()> {
     cargo
         // Cargo discovers repository configuration and toolchains from its cwd,
         // not from --manifest-path. Use the same root that we inventory.
-        .current_dir(&root)
+        .current_dir(root)
         .args(["--locked", "--offline", "--package", "web-app"])
         .arg("--target-dir")
         .arg(&target);
@@ -121,7 +133,7 @@ fn main() -> Result<()> {
     }
     fs::copy(web.join("styles.css"), staging.join("zxs.css"))?;
     copy_tree(&web.join("public"), &staging)?;
-    copy_distribution_material(&root, &staging)?;
+    copy_distribution_material(root, &staging)?;
     fs::write(staging.join("boot.js"), bootstrap::loader())?;
     fs::write(staging.join("index.html"), bootstrap::index())?;
     let wasm = staging.join("pkg/zxs_bg.wasm");
@@ -129,8 +141,8 @@ fn main() -> Result<()> {
         wasm.with_extension("wasm.gz"),
         gzip_asset(&fs::read(&wasm)?)?,
     )?;
-    verify_rust_sources(&root)?;
-    let inputs_after = source_inventory(&root)?;
+    verify_rust_sources(root)?;
+    let inputs_after = source_inventory(root)?;
     if inputs_before != inputs_after {
         bail!("Web sources changed during compilation; retry with a stable source tree");
     }
@@ -162,12 +174,9 @@ fn main() -> Result<()> {
     if had_previous {
         fs::remove_dir_all(&backup)?;
     }
-    println!(
-        "{}",
-        json_codec::json!({"event":"built","dist":dist,"runtime":"web-interface"})
-    );
     Ok(())
 }
+
 fn verify_rust_sources(root: &Path) -> Result<()> {
     if !Command::new("python3")
         .current_dir(root)
@@ -209,12 +218,53 @@ fn build_manifest(
 }
 
 struct BuildLock {
-    path: PathBuf,
+    path: Option<PathBuf>,
     _file: fs::File,
+}
+#[derive(Debug)]
+struct BuildAndCleanupError {
+    build: anyhow::Error,
+    cleanup: std::io::Error,
+}
+impl std::fmt::Display for BuildAndCleanupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}; additionally failed to release Web build lock: {}",
+            self.build, self.cleanup
+        )
+    }
+}
+impl std::error::Error for BuildAndCleanupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.build.as_ref())
+    }
+}
+impl BuildLock {
+    fn finish(mut self, result: Result<()>) -> Result<()> {
+        let path = self
+            .path
+            .take()
+            .expect("invariant: build lock is released once");
+        match (result, fs::remove_file(path)) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(()), Err(error)) => Err(error).context("failed to release Web build lock"),
+            (Err(build), Err(cleanup)) => Err(BuildAndCleanupError { build, cleanup }.into()),
+        }
+    }
 }
 impl Drop for BuildLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        // Unwinding cannot return cleanup failures to main.
+        if let Some(path) = self.path.take()
+            && let Err(error) = fs::remove_file(&path)
+        {
+            eprintln!(
+                "failed to release Web build lock {} during unwinding: {error}",
+                path.display()
+            );
+        }
     }
 }
 const INPUT_SPEC_PATH: &str = "tools/web-build/build-inputs.json";

@@ -83,10 +83,15 @@ pub fn AnimatedShow(
         } else {
             cls.set(hide_class);
 
-            let h =
-                dom_helpers::helpers::set_timeout_with_handle(move || show.set(false), hide_delay)
-                    .expect("set timeout in AnimatedShow");
-            handle.set_value(Some(h));
+            match dom_helpers::helpers::set_timeout_with_handle(move || show.set(false), hide_delay)
+            {
+                Ok(h) => handle.set_value(Some(h)),
+                Err(error) => {
+                    web_sys::console::warn_2(&"Could not schedule delayed hiding".into(), &error);
+                    handle.set_value(None);
+                    show.set(false);
+                }
+            }
         }
     });
 

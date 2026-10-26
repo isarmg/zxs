@@ -285,3 +285,35 @@ fn operation_observation_preserves_publication_wire_facts() {
     );
     assert_eq!(backend.engine.lock().unwrap().state().sequence, sequence);
 }
+
+#[test]
+fn pending_owner_discovery_failure_is_not_a_missing_operation_response() {
+    use std::error::Error as _;
+    let (_root, backend, _auth, _token, identity, _published) = fixture();
+    let operation = new_id("op");
+    {
+        let mut engine = backend.engine.lock().unwrap();
+        engine.inject_fault_once("after_accept_1");
+        assert!(
+            engine
+                .create_repository("pending-owner", "P01", 3, &identity.principal, &operation)
+                .is_err()
+        );
+        for disk in &engine.config().disks {
+            std::fs::write(
+                disk.root.join("metadata/application-log/journal.bin"),
+                b"invalid journal frame",
+            )
+            .unwrap();
+        }
+    }
+    let error = backend
+        .call(
+            BackendAction::Operation,
+            &identity,
+            json!({"operation_id": operation}),
+        )
+        .unwrap_err();
+    assert_ne!(error.code, storage_contract::ErrorCode::NotFound);
+    assert!(error.source().is_some());
+}

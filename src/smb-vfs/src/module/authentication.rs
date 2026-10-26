@@ -51,8 +51,10 @@ pub(super) unsafe fn account_name(handle: *mut sdk::vfs_handle_struct) -> std::i
     }
     // SAFETY: Samba supplies the session's NUL-terminated authenticated account
     // name. text rejects null and non-UTF-8; no request-supplied name is used.
-    let name = unsafe { text((*info).account_name) }.map_err(|_| denied())?;
-    smb_protocol::protocol::validate_username(name).map_err(|_| denied())?;
+    let name = unsafe { text((*info).account_name) }
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, error))?;
+    smb_protocol::protocol::validate_username(name)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, error))?;
     Ok(name.to_owned())
 }
 

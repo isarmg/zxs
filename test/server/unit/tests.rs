@@ -761,7 +761,7 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             .unwrap()
             .unwrap()
             .state,
-        "complete"
+        crate::uploads::UploadState::Complete
     );
 }
 

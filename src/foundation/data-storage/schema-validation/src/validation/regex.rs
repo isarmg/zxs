@@ -179,6 +179,38 @@ pub(crate) fn analyze_pattern(pattern: &str) -> Option<PatternOptimization> {
     })
 }
 
+/// Preserve a property-name match failure at its pattern and instance locations.
+pub(crate) fn property_match_error<'i>(
+    error: impl RegexError,
+    schema_location: &crate::validation::paths::Location,
+    location: &crate::validation::paths::LazyLocation,
+    tracker: Option<&crate::validation::paths::RefTracker>,
+    key: &str,
+) -> crate::validation::ValidationError<'i> {
+    use crate::validation::{LazyInstance, ValidationError};
+    let instance = LazyInstance::Ready(std::borrow::Cow::Owned(json_codec::Value::String(
+        key.into(),
+    )));
+    let evaluation_path =
+        crate::validation::paths::capture_evaluation_path(tracker, schema_location);
+    match error.into_failure_reason() {
+        RegexFailureReason::FancyRegex(error) => ValidationError::backtrack_limit(
+            schema_location.clone(),
+            evaluation_path,
+            location.into(),
+            instance,
+            error,
+        ),
+        RegexFailureReason::Panicked => ValidationError::regex_engine_failure(
+            schema_location.clone(),
+            evaluation_path,
+            location.into(),
+            instance,
+            "Regex engine failed to evaluate property pattern".into(),
+        ),
+    }
+}
+
 #[cfg(test)]
 include!(concat!(
     env!("CARGO_MANIFEST_DIR"),

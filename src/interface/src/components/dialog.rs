@@ -12,11 +12,18 @@ pub fn Dialog(title: String, close: Callback<()>, children: ChildrenFn) -> impl 
     );
     Effect::new(move |_| {
         if let Some(dialog) = dialog.get() {
-            let _ = dialog.show_modal();
-            if let Ok(Some(element)) = dialog.query_selector("[data-zxs-initial-focus]")
+            if let Err(error) = dialog.show_modal() {
+                web_sys::console::error_2(&"Could not open the dialog".into(), &error);
+                close.run(());
+                return;
+            }
+            if let Some(element) = dialog
+                .query_selector("[data-zxs-initial-focus]")
+                .expect("invariant: initial-focus selector is valid")
                 && let Ok(element) = element.dyn_into::<web_sys::HtmlElement>()
+                && let Err(error) = element.focus()
             {
-                let _ = element.focus();
+                web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error);
             }
         }
     });
@@ -26,8 +33,9 @@ pub fn Dialog(title: String, close: Callback<()>, children: ChildrenFn) -> impl 
         }
         if let Some(previous) = previous.as_ref()
             && previous.is_connected()
+            && let Err(error) = previous.focus()
         {
-            let _ = previous.focus();
+            web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error);
         }
     });
     View::new(
@@ -82,23 +90,22 @@ pub fn Dialog(title: String, close: Callback<()>, children: ChildrenFn) -> impl 
                 };
                 if dialog
                     .query_selector("video[controls],audio[controls]")
-                    .ok()
-                    .flatten()
+                    .expect("invariant: media selector is valid")
                     .is_some()
                 {
                     return;
                 }
-                let Ok(nodes) =
-                    dialog.query_selector_all("button,input,select,textarea,a[href],[tabindex]")
-                else {
-                    return;
-                };
+                let nodes = dialog
+                    .query_selector_all("button,input,select,textarea,a[href],[tabindex]")
+                    .expect("invariant: focusable selector is valid");
                 let focusable: Vec<_> = (0..nodes.length())
                     .filter_map(|i| nodes.item(i))
                     .filter_map(|n| n.dyn_into::<web_sys::HtmlElement>().ok())
                     .filter(|e| {
                         e.tab_index() >= 0
-                            && !e.matches(":disabled,[hidden]").unwrap_or(true)
+                            && !e
+                                .matches(":disabled,[hidden]")
+                                .expect("invariant: disabled selector is valid")
                             && e.get_client_rects().length() > 0
                     })
                     .collect();
@@ -111,14 +118,26 @@ pub fn Dialog(title: String, close: Callback<()>, children: ChildrenFn) -> impl 
                             || active.as_ref() == Some(dialog.as_ref()))
                     {
                         event.prevent_default();
-                        let _ = last.focus();
+                        if let Err(error) = last.focus() {
+                            web_sys::console::warn_2(
+                                &"Could not move keyboard focus".into(),
+                                &error,
+                            );
+                        }
                     } else if !event.shift_key() && active.as_ref() == Some(last.as_ref()) {
                         event.prevent_default();
-                        let _ = first.focus();
+                        if let Err(error) = first.focus() {
+                            web_sys::console::warn_2(
+                                &"Could not move keyboard focus".into(),
+                                &error,
+                            );
+                        }
                     }
                 } else {
                     event.prevent_default();
-                    let _ = dialog.focus();
+                    if let Err(error) = dialog.focus() {
+                        web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error);
+                    }
                 }
             }),
     )

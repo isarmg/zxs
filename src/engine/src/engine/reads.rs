@@ -16,7 +16,12 @@ impl Engine {
                     .get(&p.version_id)
                     .is_none_or(|s| *s != ContentState::Purged && *s != ContentState::Migrated)
             })
-            .filter_map(|p| self.state.versions.get(&p.version_id))
+            .map(|p| {
+                self.state
+                    .versions
+                    .get(&p.version_id)
+                    .expect("invariant: every placement references an existing version")
+            })
             .fold(0u64, |sum, v| sum.saturating_add(v.logical_size))
     }
     pub(crate) fn valid_replica(&self, version_id: &str) -> Result<(PathBuf, FileVersion)> {
@@ -48,27 +53,38 @@ impl Engine {
                 "version placement missing",
             )
         })?;
+        let mut first_error: Option<Error> = None;
         for slot in &placement.route_slot_ids {
             let d = self.disk(slot)?;
-            if validate_seal(&self.config, d).is_err() {
-                continue;
-            }
-            let dir = version_dir(d, &version.history_tree_id, version_id);
-            if verify_local_publication(&dir, version).is_ok()
-                && let Ok(mut file) = verify_payload_held(&dir, version)
-            {
-                // Keep the exact inode that passed complete verification. A
-                // second path open could select replacement, unverified bytes.
+            let candidate = (|| {
+                validate_seal(&self.config, d)?;
+                let dir = version_dir(d, &version.history_tree_id, version_id);
+                verify_local_publication(&dir, version)?;
+                let mut file = verify_payload_held(&dir, version)?;
+                // Retain the exact verified inode rather than reopening a pathname.
                 use std::io::{Seek, SeekFrom};
                 file.seek(SeekFrom::Start(0))?;
-                return Ok((file, version.clone(), dir));
+                Ok((file, version.clone(), dir))
+            })();
+            match candidate {
+                Ok(replica) => return Ok(replica),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
             }
         }
-        Err(Error::new(
-            storage_contract::ErrorCode::ContentUnavailable,
-            "no verified complete replica is available",
-        ))
+        Err(match first_error {
+            Some(error) => error.context(
+                storage_contract::ErrorCode::ContentUnavailable,
+                "no verified complete replica is available",
+            ),
+            None => Error::new(
+                storage_contract::ErrorCode::ContentUnavailable,
+                "version placement has no replica routes",
+            ),
+        })
     }
+
     pub fn open_content(&self, version_id: &str) -> Result<OpenedContent> {
         let (file, version, _) = self.verified_replica(version_id)?;
         let mut reads = self
@@ -261,7 +277,7 @@ impl Engine {
 impl ContentReadPlan {
     /// A fresh, complete verification, never a cached protection assertion.
     /// Keep the plan (and therefore its read lease) alive for the entire scan.
-    pub(super) fn health(&self, target_copies: u32) -> &'static str {
+    pub(super) fn health(&self, target_copies: u32) -> storage_contract::CurrentHealth {
         let healthy = self
             .disks
             .iter()
@@ -277,16 +293,17 @@ impl ContentReadPlan {
             })
             .count();
         if healthy == 0 {
-            "UNAVAILABLE"
+            storage_contract::CurrentHealth::Unavailable
         } else if healthy < target_copies as usize {
-            "DEGRADED"
+            storage_contract::CurrentHealth::Degraded
         } else {
-            "HEALTHY"
+            storage_contract::CurrentHealth::Healthy
         }
     }
 
     fn authenticated_replicas(&self) -> Result<Vec<(std::fs::File, Vec<u8>, ChecksumManifest)>> {
         let mut replicas = Vec::new();
+        let mut first_error: Option<Error> = None;
         for disk in &self.disks {
             let candidate = (|| {
                 validate_seal(&self.config, disk)?;
@@ -324,15 +341,24 @@ impl ContentReadPlan {
                 }
                 Ok((file, checks, manifest))
             })();
-            if let Ok(candidate) = candidate {
-                replicas.push(candidate);
+            match candidate {
+                Ok(candidate) => replicas.push(candidate),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
             }
         }
         if replicas.is_empty() {
-            Err(Error::new(
-                storage_contract::ErrorCode::ContentUnavailable,
-                "no authenticated replica is available",
-            ))
+            Err(match first_error {
+                Some(error) => error.context(
+                    storage_contract::ErrorCode::ContentUnavailable,
+                    "no authenticated replica is available",
+                ),
+                None => Error::new(
+                    storage_contract::ErrorCode::ContentUnavailable,
+                    "version placement has no replica routes",
+                ),
+            })
         } else {
             Ok(replicas)
         }

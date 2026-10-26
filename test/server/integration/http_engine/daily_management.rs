@@ -2,13 +2,14 @@
 use super::*;
 #[path = "../../../../src/web/src/admin/request.rs"]
 mod request;
+use request::{InputError, Kind};
 fn fields(pairs: &[(&str, &str)]) -> request::Fields {
     pairs
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect()
 }
-async fn apply(app: &Router, token: &str, kind: &str, fields: &request::Fields) -> Value {
+async fn apply(app: &Router, token: &str, kind: Kind, fields: &request::Fields) -> Value {
     let (method, path, body) = request::build(kind, fields, &new_id("op")).unwrap();
     success(app, token, method, &path, Some(body)).await
 }
@@ -20,40 +21,18 @@ async fn web_daily_forms_execute_real_management_operations() {
     let repo = apply(
         &app,
         &admin,
-        "repository",
+        Kind::Repository,
         &fields(&[("name", "Web managed"), ("slot", "P01"), ("copies", "1")]),
     )
     .await;
     let id = repo["repository_id"].as_str().unwrap();
     let branch = repo["main_branch_id"].as_str().unwrap();
     let history = repo["history_tree_id"].as_str().unwrap();
-    // Removed multi-account forms must fail at request construction rather
-    // than retaining an account-management or repository-grant compatibility path.
-    for (kind, values) in [
-        (
-            "account",
-            fields(&[
-                ("username", "second-account"),
-                ("password", "second-account-password"),
-                ("repositories", id),
-                ("admin", "true"),
-            ]),
-        ),
-        (
-            "grants",
-            fields(&[
-                ("repository", id),
-                ("read", "second-account"),
-                ("write", "second-account"),
-                ("manage", "second-account"),
-            ]),
-        ),
-    ] {
-        assert_eq!(
-            request::build(kind, &values, &new_id("op")).unwrap_err(),
-            "Unknown management action"
-        );
-    }
+    // Retired account/grant actions are not representable by the production Kind.
+    assert!(matches!(
+        request::build(Kind::Inspect, &fields(&[]), &new_id("op")),
+        Err(InputError::Inspect)
+    ));
     let session = login(&app, "admin", "integration-test-password").await;
     let repository_path = format!("/api/repositories/{id}");
     assert_eq!(
@@ -71,8 +50,8 @@ async fn web_daily_forms_execute_real_management_operations() {
         success(&app, &admin, "GET", &repository_path, None).await["repository_id"],
         id
     );
-    for kind in ["policy", "rule"] {
-        let rule = new_id(kind);
+    for (kind, prefix) in [(Kind::Policy, "policy"), (Kind::Rule, "rule")] {
+        let rule = new_id(prefix);
         let f = fields(&[
             ("id", &rule),
             ("repository", id),
@@ -98,7 +77,7 @@ async fn web_daily_forms_execute_real_management_operations() {
     apply(
         &app,
         &admin,
-        "smb",
+        Kind::Smb,
         &fields(&[
             ("repository", id),
             ("branch", branch),
@@ -133,7 +112,7 @@ async fn web_daily_forms_execute_real_management_operations() {
     let created = apply(
         &app,
         &admin,
-        "branch",
+        Kind::Branch,
         &fields(&[
             ("repository", id),
             ("commit", commit),
@@ -144,7 +123,7 @@ async fn web_daily_forms_execute_real_management_operations() {
     apply(
         &app,
         &admin,
-        "link",
+        Kind::Link,
         &fields(&[
             ("history", history),
             ("source_branch", branch),
@@ -158,7 +137,7 @@ async fn web_daily_forms_execute_real_management_operations() {
         let plan = apply(
             &app,
             &admin,
-            "save",
+            Kind::Save,
             &fields(&[
                 ("history", history),
                 ("commit", commit),
@@ -185,27 +164,28 @@ async fn web_daily_forms_execute_real_management_operations() {
 }
 #[test]
 fn web_daily_contracts_reject_invalid_input_and_bind_exact_review_digest() {
-    assert!(
+    assert!(matches!(
         request::build(
-            "repository",
+            Kind::Repository,
             &fields(&[("name", "test"), ("slot", "P01"), ("copies", "0")]),
             "op_test"
-        )
-        .is_err()
-    );
-    assert!(
-        request::build(
-            "policy",
-            &fields(&[
-                ("id", "p"),
-                ("repository", "r"),
-                ("copies", "1"),
-                ("generation", "-1")
-            ]),
-            "op_test"
-        )
-        .is_err()
-    );
+        ),
+        Err(InputError::ZeroCopies)
+    ));
+    let error = request::build(
+        Kind::Policy,
+        &fields(&[
+            ("id", "p"),
+            ("repository", "r"),
+            ("copies", "1"),
+            ("generation", "-1"),
+        ]),
+        "op_test",
+    )
+    .unwrap_err();
+    assert!(matches!(error, InputError::Generation(_)));
+    assert!(std::error::Error::source(&error).is_some());
+
     let plan = json!({"plan_id":"plan/x","digest":"reviewed-digest","state":"ready"});
     let (_, path, body) = request::plan_action(&plan, true, true, "op_test").unwrap();
     assert_eq!(path, "/api/plans/plan%2Fx/commit");
@@ -219,7 +199,10 @@ fn web_daily_contracts_reject_invalid_input_and_bind_exact_review_digest() {
         )
         .is_err()
     );
-    for (kind, key, value) in [("purge", "versions", "v1,v2"), ("split", "commit", "c1")] {
+    for (kind, key, value) in [
+        (Kind::Purge, "versions", "v1,v2"),
+        (Kind::Split, "commit", "c1"),
+    ] {
         let (_, path, body) =
             request::build(kind, &fields(&[("history", "h"), (key, value)]), "op_test").unwrap();
         assert!(path.ends_with("-plans"));
@@ -230,7 +213,7 @@ fn web_daily_contracts_reject_invalid_input_and_bind_exact_review_digest() {
 
 #[tokio::test]
 async fn web_purge_and_split_preview_digest_cancel_and_commit_use_real_engine() {
-    for kind in ["purge", "split"] {
+    for kind in [Kind::Purge, Kind::Split] {
         let root = tempfile::tempdir().unwrap();
         let system = root.path().join("system");
         let mut engine = Engine::initialize(

@@ -96,11 +96,7 @@ pub(crate) fn poll(state: RwSignal<State>) {
                 Ok(value) => {
                     record_receipt(state, &id, value);
                 }
-                Err(error) => {
-                    if error.status == 401 {
-                        fail(state, error)
-                    }
-                }
+                Err(error) => fail(state, error),
             }
             state.update(|s| s.files.polling_operations.retain(|item| item != &id));
         });

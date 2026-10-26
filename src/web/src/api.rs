@@ -45,13 +45,27 @@ impl Credentials {
 }
 thread_local! { static CREDENTIALS: RefCell<Credentials> = RefCell::new(Credentials::default()); }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, error_definition::Error)]
+pub enum ErrorSource {
+    #[error("invalid service API path: {0}")]
+    Path(#[source] storage_contract::Error),
+    #[error("invalid API response: {0}")]
+    Decode(#[source] storage_contract::client_protocol::ResponseDecodeError),
+    #[error("invalid Content-Length: {0}")]
+    ContentLength(#[source] std::num::ParseIntError),
+    #[error("browser operation failed: {0:?}")]
+    Browser(JsValue),
+}
+
+#[derive(Clone, Debug, error_definition::Error)]
 pub struct Error {
     pub code: storage_contract::ErrorCode,
     pub message: String,
     pub retryable: bool,
     pub status: u16,
     pub request_id: Option<String>,
+    #[source]
+    pub source: Option<std::sync::Arc<ErrorSource>>,
 }
 
 impl Error {
@@ -103,6 +117,7 @@ fn error(code: storage_contract::ErrorCode, message: impl Into<String>) -> Error
         retryable: false,
         status: 0,
         request_id: None,
+        source: None,
     }
 }
 
@@ -126,22 +141,22 @@ pub(crate) fn invalidate_session_work() {
     CREDENTIALS.with(|saved| saved.borrow_mut().generation += 1);
 }
 
-pub fn operation_id() -> String {
-    fresh_id("op")
-}
-
-fn fresh_id(prefix: &str) -> String {
+pub fn operation_id() -> Result<String, Error> {
+    let window = web_sys::window().ok_or_else(|| {
+        error(
+            storage_contract::ErrorCode::NoWindow,
+            "Browser window is unavailable",
+        )
+    })?;
+    let crypto = window.crypto().map_err(js_error)?;
     let mut bytes = [0u8; 16];
-    if let Some(crypto) = web_sys::window().and_then(|w| w.crypto().ok())
-        && crypto.get_random_values_with_u8_array(&mut bytes).is_ok()
-    {
-        return format!(
-            "{prefix}_{}",
-            bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
-        );
-    }
-    // The server rejects empty operation IDs. Do not silently substitute weak IDs.
-    String::new()
+    crypto
+        .get_random_values_with_u8_array(&mut bytes)
+        .map_err(js_error)?;
+    Ok(format!(
+        "op_{}",
+        bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    ))
 }
 
 pub fn segment(value: &str) -> String {
@@ -162,14 +177,16 @@ pub fn segment(value: &str) -> String {
 }
 
 fn validate_path(path: &str) -> Result<(), Error> {
-    storage_contract::validate_api_path(path).map_err(|_| {
-        error(
+    storage_contract::validate_api_path(path).map_err(|source| {
+        let mut error = error(
             storage_contract::ErrorCode::InvalidApiPath,
             t(
                 "仅允许本服务的 /api/ 业务接口",
                 "Only this service’s /api/ API is allowed",
             ),
-        )
+        );
+        error.source = Some(std::sync::Arc::new(ErrorSource::Path(source)));
+        error
     })
 }
 
@@ -180,7 +197,9 @@ fn js_error(value: JsValue) -> Error {
             "The connection was interrupted. Check whether the save completed.",
         )
     });
-    error(storage_contract::ErrorCode::TransportError, message)
+    let mut error = error(storage_contract::ErrorCode::TransportError, message);
+    error.source = Some(std::sync::Arc::new(ErrorSource::Browser(value)));
+    error
 }
 
 /// Cancellation is shared by the listing owner and the in-flight GET only.
@@ -262,24 +281,27 @@ async fn fetch_authorized(
                 .map_err(js_error)?;
         }
     }
-    let credentials = CREDENTIALS.with(|saved| saved.borrow().clone());
-    if bootstrap.is_none()
-        && let Some(token) = credentials.token.as_ref()
-    {
-        request
-            .headers()
-            .set("Authorization", &format!("Bearer {token}"))
-            .map_err(js_error)?;
-    }
-    if bootstrap.is_none()
-        && !matches!(method, "GET" | "HEAD")
-        && let Some(token) = credentials.csrf.as_ref()
-    {
-        request
-            .headers()
-            .set("X-CSRF-Token", token)
-            .map_err(js_error)?;
-    }
+    let credential_generation = CREDENTIALS.with(|saved| {
+        let credentials = saved.borrow();
+        if bootstrap.is_none()
+            && let Some(token) = credentials.token.as_ref()
+        {
+            request
+                .headers()
+                .set("Authorization", &format!("Bearer {token}"))
+                .map_err(js_error)?;
+        }
+        if bootstrap.is_none()
+            && !matches!(method, "GET" | "HEAD")
+            && let Some(token) = credentials.csrf.as_ref()
+        {
+            request
+                .headers()
+                .set("X-CSRF-Token", token)
+                .map_err(js_error)?;
+        }
+        Ok::<_, Error>(credentials.generation)
+    })?;
     let timer = gloo_timers::callback::Timeout::new(120_000, move || cancellation.abort());
     let window = web_sys::window().ok_or_else(|| {
         error(
@@ -292,7 +314,7 @@ async fn fetch_authorized(
         .map_err(js_error);
     Ok(Fetched {
         response: result?.dyn_into().map_err(js_error)?,
-        credential_generation: credentials.generation,
+        credential_generation,
         revoke_on_unauthorized: bootstrap.is_none(),
         _timeout: timer,
         _abort: abort,
@@ -319,20 +341,23 @@ async fn read_body_inner(response: &Response, limit: usize) -> Result<Vec<u8>, E
         if Reflect::get(&part, &"done".into())
             .map_err(js_error)?
             .as_bool()
-            .unwrap_or(false)
+            .expect("invariant: stream read result has a boolean done field")
         {
             break;
         }
         let chunk = Uint8Array::new(&Reflect::get(&part, &"value".into()).map_err(js_error)?);
         if bytes.len().saturating_add(chunk.length() as usize) > limit {
-            let _ = JsFuture::from(reader.cancel()).await;
-            return Err(error(
+            let mut oversized = error(
                 storage_contract::ErrorCode::ResponseTooLarge,
                 t(
                     "响应超过界面安全上限，请缩小查询范围",
                     "The response is too large. Narrow the query.",
                 ),
-            ));
+            );
+            if let Err(source) = JsFuture::from(reader.cancel()).await {
+                oversized.source = Some(std::sync::Arc::new(ErrorSource::Browser(source)));
+            }
+            return Err(oversized);
         }
         bytes.extend_from_slice(&chunk.to_vec());
     }
@@ -345,18 +370,26 @@ async fn decode(fetched: Fetched) -> Result<Value, Error> {
     if status == 401 && fetched.revoke_on_unauthorized {
         CREDENTIALS.with(|saved| saved.borrow_mut().revoke(fetched.credential_generation));
     }
-    if fetched
+    if let Some(length) = fetched
         .response
         .headers()
         .get("Content-Length")
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<u64>().ok())
-        .is_some_and(|v| v > storage_contract::client_protocol::MAX_RESPONSE_BYTES as u64)
+        .map_err(|source| js_error(source).with_status(status))?
     {
-        return Err(response::from_protocol(
-            storage_contract::client_protocol::response_too_large(status),
-        ));
+        let length = length.parse::<u64>().map_err(|source| {
+            let mut failure = error(
+                storage_contract::ErrorCode::InvalidResponse,
+                "Invalid response Content-Length",
+            )
+            .with_status(status);
+            failure.source = Some(std::sync::Arc::new(ErrorSource::ContentLength(source)));
+            failure
+        })?;
+        if length > storage_contract::client_protocol::MAX_RESPONSE_BYTES as u64 {
+            return Err(response::from_protocol(
+                storage_contract::client_protocol::response_too_large(status),
+            ));
+        }
     }
     let bytes = read_body(
         &fetched.response,
@@ -365,9 +398,11 @@ async fn decode(fetched: Fetched) -> Result<Value, Error> {
     .await
     .map_err(|error| {
         if error.code == storage_contract::ErrorCode::ResponseTooLarge {
-            response::from_protocol(storage_contract::client_protocol::response_too_large(
-                status,
-            ))
+            let mut oversized = response::from_protocol(
+                storage_contract::client_protocol::response_too_large(status),
+            );
+            oversized.source = error.source;
+            oversized
         } else {
             error.with_status(status)
         }
@@ -376,7 +411,6 @@ async fn decode(fetched: Fetched) -> Result<Value, Error> {
 }
 
 pub async fn request(method: &str, path: &str, body: Option<Value>) -> Result<Value, Error> {
-    validate_path(path)?;
     decode(fetch(method, path, body).await?).await
 }
 
@@ -442,7 +476,13 @@ pub(crate) async fn login(username: &str, password: &str) -> Result<Authenticate
     accept_login(generation, result)
 }
 
-fn validate_session(value: &Value, login: bool) -> Result<Authenticated, Error> {
+struct ValidatedSession {
+    authenticated: Authenticated,
+    csrf: String,
+    token: Option<String>,
+}
+
+fn validate_session(value: &Value, login: bool) -> Result<ValidatedSession, Error> {
     let fields: &[&str] = if login {
         &["principal", "csrf_token", "token", "expires_at"]
     } else {
@@ -462,11 +502,18 @@ fn validate_session(value: &Value, login: bool) -> Result<Authenticated, Error> 
     {
         return Err(invalid_session());
     }
-    Ok(Authenticated {
-        principal: value["principal"]
+    let field = |name: &str| {
+        value[name]
             .as_str()
-            .ok_or_else(invalid_session)?
-            .to_owned(),
+            .expect("invariant: session fields were validated")
+            .to_owned()
+    };
+    Ok(ValidatedSession {
+        authenticated: Authenticated {
+            principal: field("principal"),
+        },
+        csrf: field("csrf_token"),
+        token: login.then(|| field("token")),
     })
 }
 
@@ -482,23 +529,16 @@ fn invalid_session() -> Error {
 }
 
 fn accept_login(generation: u64, result: Value) -> Result<Authenticated, Error> {
-    let authenticated = validate_session(&result, true)?;
-    let token = result["token"]
-        .as_str()
-        .filter(|token| !token.is_empty())
-        .ok_or_else(invalid_session)?
-        .to_owned();
+    let session = validate_session(&result, true)?;
     let accepted = CREDENTIALS.with(|saved| {
-        saved.borrow_mut().replace_if_current(
-            generation,
-            Some(token),
-            result["csrf_token"].as_str().map(str::to_owned),
-        )
+        saved
+            .borrow_mut()
+            .replace_if_current(generation, session.token, Some(session.csrf))
     });
     if !accepted {
         return Err(session_changed());
     }
-    Ok(authenticated)
+    Ok(session.authenticated)
 }
 
 pub(crate) async fn restore() -> Result<Authenticated, Error> {
@@ -508,17 +548,17 @@ pub(crate) async fn restore() -> Result<Authenticated, Error> {
 }
 
 fn accept_restore(generation: u64, value: Value) -> Result<Authenticated, Error> {
-    let authenticated = validate_session(&value, false)?;
+    let session = validate_session(&value, false)?;
     let accepted = CREDENTIALS.with(|saved| {
         let mut saved = saved.borrow_mut();
         if saved.generation != generation {
             return false;
         }
-        saved.csrf = value["csrf_token"].as_str().map(str::to_owned);
+        saved.csrf = Some(session.csrf);
         true
     });
     if accepted {
-        Ok(authenticated)
+        Ok(session.authenticated)
     } else {
         Err(session_changed())
     }

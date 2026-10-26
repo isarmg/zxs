@@ -123,8 +123,8 @@ pub(super) fn call(
             let copies = input
                 .get("target_copies")
                 .and_then(Value::as_u64)
-                .and_then(|value| u32::try_from(value).ok())
                 .ok_or_else(|| ApiError::invalid("target_copies must be a positive integer"))?;
+            let copies = u32::try_from(copies).map_err(ApiError::invalid_source)?;
             let prefixes: BTreeMap<String, String> = json_codec::from_value(
                 input
                     .get("backup_prefixes")

@@ -1153,3 +1153,41 @@ fn single_administrator_capacity_always_includes_global_and_principal_budgets() 
         assert!(!schema.is_valid(&null), "null {field}");
     }
 }
+
+#[test]
+fn schema_errors_remain_owned_typed_errors() {
+    let error = validator(&json!({"type": 7})).err().unwrap();
+    assert!(
+        error
+            .downcast_ref::<schema_validation::ValidationError<'static>>()
+            .is_some()
+    );
+    let error = schema_valid(&json!({"type": "integer"}), &json!("text")).unwrap_err();
+    assert!(
+        error
+            .downcast_ref::<schema_validation::ValidationError<'static>>()
+            .is_some()
+    );
+}
+
+#[test]
+fn malformed_ref_is_rejected_before_bundling() {
+    assert!(schema_validation::meta::validate(&json!({"$ref": 7})).is_err());
+    assert_eq!(
+        bundle(&json!({"$ref": "#/$defs/Item"})),
+        json!({"$ref": "#/components/schemas/Item"})
+    );
+}
+
+#[test]
+fn configuration_context_preserves_schema_error_source() {
+    let error =
+        validate_configuration_projection(&json!({"type": "integer"}), &json!("text")).unwrap_err();
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .downcast_ref::<schema_validation::ValidationError<'static>>()
+            .is_some()
+    );
+}

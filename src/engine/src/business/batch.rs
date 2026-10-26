@@ -531,7 +531,7 @@ fn apply(
                 return None;
             }
             Some(NamespaceOperation {
-                kind: "rename".into(),
+                kind: NamespaceOperationKind::Rename,
                 path: item.source.path.clone(),
                 destination: Some(target.path.clone()),
             })

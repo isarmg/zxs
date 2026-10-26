@@ -235,7 +235,7 @@ fn protection_policy_role_is_required_and_empty_current_rules_survive_pruning() 
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation {
-                kind: "mkdir".into(),
+                kind: storage_contract::NamespaceOperationKind::Mkdir,
                 path: "empty".into(),
                 destination: None,
             },

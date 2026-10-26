@@ -148,7 +148,18 @@ impl<const COMPONENT: bool> PropOptions<COMPONENT> {
                     (Attrs, Value::Flag(value)) => options.attrs = value,
                     (Name, Value::Name(value)) => options.name = Some(value),
                     (Marker, Value::Flag(value)) => options.marker = value,
-                    _ => unreachable!("field values are checked while parsing"),
+                    (DefaultValue | Name, Value::Flag(_))
+                    | (
+                        Optional | OptionalNoStrip | StripOption | Into | Attrs | Marker | Name,
+                        Value::Default(_),
+                    )
+                    | (
+                        Optional | OptionalNoStrip | StripOption | Into | Attrs | Marker
+                        | DefaultValue,
+                        Value::Name(_),
+                    ) => {
+                        unreachable!("field values are checked while parsing")
+                    }
                 }
             }
         }

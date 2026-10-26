@@ -68,12 +68,14 @@ impl Engine {
         }
         for workspace in self.workspaces.values() {
             let directory = self.workspace_data_directory(workspace)?;
-            if !directory.exists() {
-                continue;
-            }
+            let entries = match fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
             // Older generations remain valid recovery candidates even after
             // the current workspace manifest points at newer dirty bytes.
-            for entry in fs::read_dir(&directory)? {
+            for entry in entries {
                 let entry = entry?;
                 if entry
                     .path()
@@ -105,10 +107,12 @@ impl Engine {
         for disk in &self.config.disks {
             validate_seal(&self.config, disk)?;
             let quarantine = disk.root.join("quarantine");
-            if !quarantine.exists() {
-                continue;
-            }
-            for entry in fs::read_dir(&quarantine)? {
+            let entries = match fs::read_dir(&quarantine) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            for entry in entries {
                 let entry = entry?;
                 if !entry.file_type()?.is_dir()
                     || !entry
@@ -137,10 +141,9 @@ impl Engine {
                 let disk = self.disk(slot)?;
                 validate_seal(&self.config, disk)?;
                 let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
-                let intact =
-                    read_json::<FileVersion>(&directory.join("version.json")).is_ok_and(|stored| {
-                        object_hash("version", &stored).ok() == object_hash("version", version).ok()
-                    }) && verify_payload(&directory, version).is_ok();
+                let intact = read_json::<FileVersion>(&directory.join("version.json"))
+                    .is_ok_and(|stored| stored == *version)
+                    && verify_payload(&directory, version).is_ok();
                 if !intact {
                     damaged.push((disk.clone(), directory));
                 }

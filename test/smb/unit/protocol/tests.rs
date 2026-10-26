@@ -24,7 +24,12 @@ fn hello_requires_an_explicit_capability_list() {
 
 #[test]
 fn namespace_requests_require_a_preallocated_identity_on_the_wire() {
-    for kind in ["mkdir", "rename", "unlink", "rmdir"] {
+    for kind in [
+        NamespaceOperation::Mkdir,
+        NamespaceOperation::Rename,
+        NamespaceOperation::Unlink,
+        NamespaceOperation::Rmdir,
+    ] {
         let request = namespace_request(kind, "entry".into(), None, false);
         let value = json_codec::to_value(&request).unwrap();
         storage_contract::validate_id(value["operation_id"].as_str().unwrap(), "op").unwrap();
@@ -36,7 +41,10 @@ fn namespace_requests_require_a_preallocated_identity_on_the_wire() {
 
 #[test]
 fn unlinkat_flags_preserve_target_kind_and_reject_unknown_flags() {
-    for (flags, expected) in [(0, "unlink"), (libc::AT_REMOVEDIR, "rmdir")] {
+    for (flags, expected) in [
+        (0, NamespaceOperation::Unlink),
+        (libc::AT_REMOVEDIR, NamespaceOperation::Rmdir),
+    ] {
         let request = remove_request("entry".into(), flags).unwrap();
         let Request::Namespace {
             operation_id,
@@ -375,7 +383,7 @@ fn immutable_reads_hide_appended_bytes_while_workspace_reads_follow_live_length(
     file.write_all_at(b"good", 0).unwrap();
     let info = OpenResult {
         entry_id: "entry".into(),
-        kind: "file".into(),
+        kind: storage_contract::NamespaceEntryKind::File,
         path: "file".into(),
         handle: 1,
         size: 4,
@@ -420,4 +428,51 @@ fn samba_username_is_one_exact_name_not_a_mapping() {
         assert!(validate_username(name).is_err());
     }
     assert!(validate_username(&"a".repeat(257)).is_err());
+}
+
+#[test]
+fn namespace_and_open_kind_reject_unknown_wire_states() {
+    let request = namespace_request(NamespaceOperation::Mkdir, "entry".into(), None, false);
+    let mut value = json_codec::to_value(request).unwrap();
+    value["kind"] = "future_operation".into();
+    assert!(json_codec::from_value::<Request>(value).is_err());
+    let opened = json_codec::json!({
+        "entry_id":"entry", "kind":"future_kind", "path":"entry", "handle":"1",
+        "size":"0", "max_file_bytes":"1024", "version_id":null, "workspace_id":null
+    });
+    assert!(json_codec::from_value::<OpenResult>(opened).is_err());
+}
+
+#[test]
+fn protocol_error_codes_require_known_string_identities() {
+    for code in [
+        json_codec::json!("FUTURE_CODE"),
+        json_codec::json!({"NOT_FOUND":null}),
+    ] {
+        let value = json_codec::json!({"status":"error", "code":code, "message":"failure", "retryable":false, "operation_id":null});
+        assert!(json_codec::from_value::<Response>(value).is_err());
+    }
+    let mut request = json_codec::to_value(namespace_request(
+        NamespaceOperation::Mkdir,
+        "entry".into(),
+        None,
+        false,
+    ))
+    .unwrap();
+    request["kind"] = json_codec::json!({"mkdir":null});
+    assert!(json_codec::from_value::<Request>(request).is_err());
+}
+
+#[test]
+fn unrepresentable_external_timeout_is_an_error_not_a_panic() {
+    let (one, _peer) = UnixStream::pair().unwrap();
+    let mut stream = FrameStream(one, Duration::MAX);
+    assert_eq!(
+        stream.send_serialized(b"{}", None).unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
+    assert_eq!(
+        stream.receive::<Response>().unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
 }

@@ -34,9 +34,11 @@ impl Engine {
             {
                 continue;
             }
-            let Some(version) = self.state.versions.get(&placement.version_id) else {
-                continue;
-            };
+            let version = self
+                .state
+                .versions
+                .get(&placement.version_id)
+                .expect("invariant: every placement references an existing version");
             for (index, slot) in placement.route_slot_ids.iter().enumerate() {
                 // Match used_bytes' membership semantics even for duplicate slots.
                 if placement.route_slot_ids[..index].contains(slot) {

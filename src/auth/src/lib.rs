@@ -72,10 +72,10 @@ pub fn credential_policy() -> json_codec::Value {
 pub fn credential_validation_vectors() -> Result<json_codec::Value, Error> {
     let password = "contract-fixture-password";
     let salt = SaltString::from_b64("AAECAwQFBgcICQoLDA0ODw")
-        .map_err(|error| Error::PasswordHash(error.to_string()))?;
+        .expect("invariant: credential fixture salt is valid base64");
     let encoded = current_argon2()
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|error| Error::PasswordHash(error.to_string()))?
+        .map_err(Error::PasswordHash)?
         .to_string();
     require_current_password_hash(&encoded)?;
     Ok(json_codec::json!({
@@ -112,11 +112,11 @@ pub enum Error {
     )]
     InvalidPassword,
     #[error("failed to encode the current Argon2id password hash: {0}")]
-    PasswordHash(String),
+    PasswordHash(#[source] argon2::password_hash::Error),
     #[error("encoded password hash does not use the exact current Argon2id policy")]
     InvalidPasswordHash,
     #[error("the operating system random source failed: {0}")]
-    Random(String),
+    Random(#[source] system_entropy::Error),
     #[error("required security header {name} is missing")]
     MissingSecurityHeader { name: &'static str },
     #[error("security header {name} must occur exactly once, found {actual}")]
@@ -131,6 +131,8 @@ pub enum Error {
     DevelopmentHostIsNotLoopback,
     #[error("the CSRF header is not one canonical current authentication token")]
     InvalidCsrfToken,
+    #[error("authentication token has invalid base64 encoding: {0}")]
+    TokenEncoding(#[source] base64::DecodeError),
     #[error("the CSRF header does not match the current session")]
     CsrfTokenMismatch,
 }
@@ -236,11 +238,13 @@ pub fn validate_password(password: &str) -> Result<(), Error> {
 /// Hash a password with the exact current Argon2id policy and a fresh 16-byte
 /// salt. There is no verifier fallback for hashes using another policy.
 pub fn hash_password(password: &str) -> Result<String, Error> {
-    hash_password_with_entropy(password, |bytes| {
-        system_entropy::fill(bytes).map_err(|error| Error::Random(error.to_string()))
-    })
+    validate_password(password)?;
+    let mut bytes = [0_u8; ARGON2_SALT_BYTES];
+    system_entropy::fill(&mut bytes).map_err(Error::Random)?;
+    hash_password_with_salt(password, &bytes)
 }
 
+#[cfg(test)]
 fn hash_password_with_entropy(
     password: &str,
     fill: impl FnOnce(&mut [u8]) -> Result<(), Error>,
@@ -248,12 +252,19 @@ fn hash_password_with_entropy(
     validate_password(password)?;
     let mut bytes = [0_u8; ARGON2_SALT_BYTES];
     fill(&mut bytes)?;
+    hash_password_with_salt(password, &bytes)
+}
+
+fn hash_password_with_salt(
+    password: &str,
+    bytes: &[u8; ARGON2_SALT_BYTES],
+) -> Result<String, Error> {
     let salt =
-        SaltString::encode_b64(&bytes).map_err(|error| Error::PasswordHash(error.to_string()))?;
+        SaltString::encode_b64(bytes).expect("invariant: fixed-size random salt fits PHC encoding");
     current_argon2()
         .hash_password(password.as_bytes(), &salt)
         .map(|hash| hash.to_string())
-        .map_err(|error| Error::PasswordHash(error.to_string()))
+        .map_err(Error::PasswordHash)
 }
 
 pub fn verify_password(password: &str, encoded: &str) -> bool {
@@ -278,7 +289,7 @@ pub fn verify_password(password: &str, encoded: &str) -> bool {
 /// even when the plaintext password is unavailable. This function accepts
 /// exactly one policy.
 pub fn require_current_password_hash(encoded: &str) -> Result<(), Error> {
-    let hash = PasswordHash::new(encoded).map_err(|_| Error::InvalidPasswordHash)?;
+    let hash = PasswordHash::new(encoded).map_err(Error::PasswordHash)?;
     if hash.to_string() != encoded || !password_hash_uses_current_policy(&hash) {
         return Err(Error::InvalidPasswordHash);
     }
@@ -288,31 +299,28 @@ pub fn require_current_password_hash(encoded: &str) -> Result<(), Error> {
 /// Generate a 256-bit URL-safe token without padding.
 pub fn random_token() -> Result<String, Error> {
     let mut bytes = [0_u8; SESSION_TOKEN_BYTES];
-    system_entropy::fill(&mut bytes).map_err(|error| Error::Random(error.to_string()))?;
+    system_entropy::fill(&mut bytes).map_err(Error::Random)?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
-pub fn is_token_shape(value: &str) -> bool {
+fn decode_session_token(value: &str) -> Result<Vec<u8>, Error> {
     if value.len() != SESSION_TOKEN_ENCODED_BYTES {
-        return false;
+        return Err(Error::InvalidCsrfToken);
     }
-    let Ok(decoded) = URL_SAFE_NO_PAD.decode(value) else {
-        return false;
-    };
-    decoded.len() == SESSION_TOKEN_BYTES && URL_SAFE_NO_PAD.encode(decoded) == value
+    URL_SAFE_NO_PAD.decode(value).map_err(Error::TokenEncoding)
+}
+
+pub fn is_token_shape(value: &str) -> bool {
+    decode_session_token(value).is_ok()
 }
 
 /// Derive the stable CSRF token for one canonical session secret. The fixed
 /// purpose separates CSRF from every other use of the session key.
 pub fn derive_csrf_token(session_token: &str) -> Result<String, Error> {
     use hmac::{Hmac, KeyInit, Mac};
-    if !is_token_shape(session_token) {
-        return Err(Error::InvalidCsrfToken);
-    }
-    let key = URL_SAFE_NO_PAD
-        .decode(session_token)
-        .map_err(|_| Error::InvalidCsrfToken)?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(&key).map_err(|_| Error::InvalidCsrfToken)?;
+    let key = decode_session_token(session_token)?;
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(&key).expect("invariant: HMAC accepts every key length");
     mac.update(b"zxs/admin-csrf");
     Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
 }
@@ -334,7 +342,14 @@ pub fn token_hash_hex(value: &str) -> String {
 pub fn token_matches_hash(value: &str, expected: &[u8]) -> bool {
     // A digest from an arbitrary noncanonical token must never become a
     // valid current session merely because the bytes happen to match.
-    if !is_token_shape(value) || expected.len() != TOKEN_HASH_BYTES {
+    if !is_token_shape(value) {
+        return false;
+    }
+    canonical_token_matches_hash(value, expected)
+}
+
+fn canonical_token_matches_hash(value: &str, expected: &[u8]) -> bool {
+    if expected.len() != TOKEN_HASH_BYTES {
         return false;
     }
     let actual = token_hash(value);
@@ -371,7 +386,7 @@ where
     {
         return Err(Error::InvalidSecurityHeaderValue { name });
     }
-    str::from_utf8(bytes).map_err(|_| Error::InvalidSecurityHeaderValue { name })
+    Ok(str::from_utf8(bytes).expect("invariant: validated security header is ASCII"))
 }
 
 /// Require one canonical 256-bit CSRF token from `X-CSRF-Token`.
@@ -396,7 +411,7 @@ where
     Value: AsRef<[u8]>,
 {
     let value = require_single_csrf_token(values)?;
-    if !token_matches_hash(value, expected_hash) {
+    if !canonical_token_matches_hash(value, expected_hash) {
         return Err(Error::CsrfTokenMismatch);
     }
     Ok(())

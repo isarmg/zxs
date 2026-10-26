@@ -47,11 +47,11 @@ fn uncertain_directory_sync_retains_bytes_and_blocks_fresh_admission_until_inven
         content_hash: Some(blake3::hash(b"new bytes").to_hex().to_string()),
         persisted_bytes: 9,
         persisted_hash: blake3::hash(b"new bytes").to_hex().to_string(),
-        state: "incomplete".into(),
+        state: crate::uploads::UploadState::Incomplete,
         data_file: "new.data".into(),
     };
     assert!(
-        persist_staged_with_sync(root.path(), &record, &guard, || {
+        persist_staged_with_sync(&record, &guard, || {
             Err(ApiError::io(std::io::Error::other(
                 "injected directory sync failure",
             )))
@@ -89,7 +89,7 @@ fn interrupted_upload_retains_and_checks_its_persisted_prefix() {
         content_hash: Some("0".repeat(64)),
         persisted_bytes: 16,
         persisted_hash: blake3::hash(b"original partial").to_hex().to_string(),
-        state: "incomplete".into(),
+        state: crate::uploads::UploadState::Incomplete,
         data_file: "data".into(),
     };
     persist(dir.path(), &record).unwrap();
@@ -132,7 +132,7 @@ fn failed_atomic_progress_publication_cleans_up_its_temporary_file() {
         content_hash: Some(blake3::hash(b"").to_hex().to_string()),
         persisted_bytes: 0,
         persisted_hash: blake3::hash(b"").to_hex().to_string(),
-        state: "incomplete".into(),
+        state: crate::uploads::UploadState::Incomplete,
         data_file: "data".into(),
     };
     // A directory at the destination makes rename fail deterministically,
@@ -188,7 +188,7 @@ fn upload_progress_and_retry_prefix_reject_links_without_reading_targets() {
         content_hash: Some(blake3::hash(b"original").to_hex().to_string()),
         persisted_bytes: 8,
         persisted_hash: blake3::hash(b"original").to_hex().to_string(),
-        state: "incomplete".into(),
+        state: crate::uploads::UploadState::Incomplete,
         data_file: "data".into(),
     };
     persist(outside.path(), &record).unwrap();
@@ -230,4 +230,19 @@ fn private_tempdir() -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
     directory
+}
+
+#[test]
+fn upload_state_accepts_only_known_string_states() {
+    for state in ["incomplete", "checksum_mismatch", "complete"] {
+        let decoded: UploadState = json_codec::from_value(json_codec::json!(state)).unwrap();
+        assert_eq!(json_codec::to_value(decoded).unwrap(), state);
+    }
+    for invalid in [
+        json_codec::json!("unknown"),
+        json_codec::json!({"complete": null}),
+        json_codec::json!(null),
+    ] {
+        assert!(json_codec::from_value::<UploadState>(invalid).is_err());
+    }
 }

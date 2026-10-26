@@ -63,7 +63,7 @@ pub(crate) fn load_disks(state: RwSignal<State>) {
         match state.try_update(|s| complete_disk_load(s, epoch, generation, result)) {
             Some(Ok(true)) => load_disks(state),
             Some(Err(error)) => fail(state, error),
-            _ => {}
+            Some(Ok(false)) | None => {}
         }
     });
 }
@@ -426,13 +426,11 @@ pub(crate) fn load_file_history(state: RwSignal<State>) {
         }
         match result {
             Ok(value) => state.update(|s| {
-                s.files.file_history = s
-                    .files
-                    .selected
-                    .as_ref()
-                    .map(|entry| crate::files::model::history_for_entry(value.clone(), entry))
-                    .unwrap_or(value)
-                    .into();
+                s.files.file_history = match s.files.selected.as_ref() {
+                    Some(entry) => crate::files::model::history_for_entry(value, entry),
+                    None => value,
+                }
+                .into();
             }),
             Err(error) => {
                 // A failed refresh must not re-enable controls for stale heads.

@@ -459,10 +459,17 @@ impl Engine {
             sync_dir(parent)?;
             Ok(report)
         })();
-        if result.is_err() && staging.exists() {
-            let _ = fs::remove_dir_all(staging);
+        match result {
+            Ok(report) => Ok(report),
+            Err(operation) => match fs::remove_dir_all(&staging) {
+                Ok(()) => Err(operation),
+                Err(cleanup) if cleanup.kind() == std::io::ErrorKind::NotFound => Err(operation),
+                Err(cleanup) => Err(Error::Cleanup {
+                    operation: Box::new(operation),
+                    cleanup,
+                }),
+            },
         }
-        result
     }
     /// Restore immutable logical identities into a new pool. Routes are explicitly
     /// rebound, every available file is fully copied, and the result is republished.

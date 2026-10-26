@@ -142,9 +142,10 @@ fn entry_name(path: &RelativePath) -> Result<&OsStr, Error> {
     if path.as_path().components().count() != 1 {
         return Err(Error::UnsafeRelativePath(path.as_path().to_path_buf()));
     }
-    path.as_path()
+    Ok(path
+        .as_path()
         .file_name()
-        .ok_or_else(|| Error::UnsafeRelativePath(path.as_path().to_path_buf()))
+        .expect("invariant: one normal path component has a file name"))
 }
 
 pub(super) fn sync_file_and_parent(path: &Path) -> Result<(), Error> {
@@ -295,6 +296,31 @@ pub(super) fn atomic_create(
     atomic_write(directory, &destination.as_relative(), bytes, true)
 }
 
+struct StagingCleanup<'a> {
+    directory: &'a File,
+    name: &'a str,
+    armed: bool,
+}
+impl StagingCleanup<'_> {
+    fn cleanup(&mut self) -> io::Result<()> {
+        if !self.armed {
+            return Ok(());
+        }
+        self.armed = false;
+        match unlinkat(self.directory, self.name, AtFlags::empty()) {
+            Ok(()) | Err(rustix::io::Errno::NOENT) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+impl Drop for StagingCleanup<'_> {
+    fn drop(&mut self) {
+        if let Err(error) = self.cleanup() {
+            tracing::error!(%error, "atomic staging cleanup during unwind failed");
+        }
+    }
+}
+
 fn atomic_write(
     directory: &PrivateDirectory,
     destination: &RelativePath,
@@ -312,6 +338,11 @@ fn atomic_write(
     )
     .map_err(io::Error::from)?;
     let mut file = File::from(fd);
+    let mut cleanup = StagingCleanup {
+        directory: &directory.directory,
+        name: &temporary,
+        armed: true,
+    };
     let result = (|| {
         if let Some((uid, gid)) = directory.administration_owner {
             // Only the exclusive new temporary descriptor is re-owned. The
@@ -328,7 +359,15 @@ fn atomic_write(
         file.sync_all()?;
         validate_destination(directory, name)?;
         if create_only {
-            no_clobber_publish(directory, &RelativePath::new(&temporary)?, destination)?;
+            let published =
+                no_clobber_publish(directory, &RelativePath::new(&temporary)?, destination);
+            if matches!(
+                &published,
+                Ok(()) | Err(Error::PublishedDurabilityUnknown(_) | Error::IdentityChanged(_))
+            ) {
+                cleanup.armed = false;
+            }
+            published?;
         } else {
             renameat(
                 &directory.directory,
@@ -338,8 +377,9 @@ fn atomic_write(
             )
             .map_err(io::Error::from)?;
         }
+        cleanup.armed = false;
         let published = statat(&directory.directory, name, AtFlags::SYMLINK_NOFOLLOW)
-            .map_err(io::Error::from)?;
+            .map_err(|error| Error::PublishedDurabilityUnknown(error.into()))?;
         if (identity.st_dev, identity.st_ino) != (published.st_dev, published.st_ino) {
             return Err(Error::IdentityChanged(destination.as_path().to_path_buf()));
         }
@@ -348,11 +388,16 @@ fn atomic_write(
             .sync_all()
             .map_err(Error::PublishedDurabilityUnknown)
     })();
-    if result.is_err() {
-        // Our exclusive temporary lives under the held private directory handle.
-        let _ = unlinkat(&directory.directory, temporary.as_str(), AtFlags::empty());
+    match result {
+        Ok(value) => Ok(value),
+        Err(operation) => match cleanup.cleanup() {
+            Ok(()) => Err(operation),
+            Err(cleanup) => Err(Error::Cleanup {
+                operation: Box::new(operation),
+                cleanup,
+            }),
+        },
     }
-    result
 }
 
 pub(super) fn advisory_lock(
@@ -459,7 +504,6 @@ pub(super) fn no_clobber_publish(
     );
     let identity = regular_single_link(&file, Path::new(source))?;
     file.sync_all()?;
-    #[cfg(target_os = "linux")]
     rustix::fs::renameat_with(
         &directory.directory,
         source,
@@ -474,23 +518,6 @@ pub(super) fn no_clobber_publish(
             io::Error::from(error).into()
         }
     })?;
-    #[cfg(not(target_os = "linux"))]
-    {
-        rustix::fs::linkat(
-            &directory.directory,
-            source,
-            &directory.directory,
-            destination,
-            AtFlags::empty(),
-        )
-        .map_err(io::Error::from)?;
-        directory
-            .directory
-            .sync_all()
-            .map_err(Error::PublishedDurabilityUnknown)?;
-        unlinkat(&directory.directory, source, AtFlags::empty())
-            .map_err(|error| Error::PublishedDurabilityUnknown(error.into()))?;
-    }
     let current = statat(&directory.directory, destination, AtFlags::SYMLINK_NOFOLLOW)
         .map_err(|error| Error::PublishedDurabilityUnknown(error.into()))?;
     if (identity.st_dev, identity.st_ino) != (current.st_dev, current.st_ino) {

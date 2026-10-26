@@ -99,7 +99,7 @@ fn split_closes_source_policy_scopes_without_dropping_valid_empty_rules() {
             .file_namespace(
                 &repo.repository_id,
                 NamespaceOperation {
-                    kind: "mkdir".into(),
+                    kind: storage_contract::NamespaceOperationKind::Mkdir,
                     path: path.into(),
                     destination: None,
                 },
@@ -183,7 +183,7 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
                 .file_namespace(
                     &repo.repository_id,
                     NamespaceOperation {
-                        kind: "mkdir".into(),
+                        kind: storage_contract::NamespaceOperationKind::Mkdir,
                         path: path.into(),
                         destination: None,
                     },
@@ -212,7 +212,7 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
                 .file_namespace(
                     &repo.repository_id,
                     NamespaceOperation {
-                        kind: "delete".into(),
+                        kind: storage_contract::NamespaceOperationKind::Delete,
                         path: path.into(),
                         destination: None,
                     },
@@ -997,7 +997,7 @@ fn split_preserves_identity_per_file_and_requires_explicit_rebinding() {
         repo.history_tree_id
     );
     assert_eq!(
-        engine.state.branches[&repo.main_branch_id].state,
+        engine.state.branches[&repo.main_branch_id].state.as_str(),
         "migrated"
     );
     let graph = engine.graph(history).unwrap();
@@ -1081,7 +1081,12 @@ fn split_merge_links_have_local_branch_stubs_and_explicit_crossing_boundaries() 
     assert_graph_closed(&engine, &history);
     let graph = engine.graph(&history).unwrap();
     assert_eq!(graph.merge_links.len(), 1);
-    assert!(graph.branches.iter().any(|b| b.state == "archived"));
+    assert!(
+        graph
+            .branches
+            .iter()
+            .any(|b| b.state == storage_contract::BranchState::Archived)
+    );
     assert!(
         graph
             .boundary_marks
@@ -1141,8 +1146,15 @@ fn split_preserves_archived_branches_and_selects_an_active_main() {
         let history = result.history_tree_id.as_ref().unwrap();
         let main = result.branch_id.as_ref().unwrap();
         let mapped_archived = result.result["branch_mapping"][&archived].as_str().unwrap();
-        assert_eq!(engine.state.branches[mapped_archived].state, "archived");
-        assert_eq!(engine.state.branches[main].state, "active", "{scenario}");
+        assert_eq!(
+            engine.state.branches[mapped_archived].state.as_str(),
+            "archived"
+        );
+        assert_eq!(
+            engine.state.branches[main].state.as_str(),
+            "active",
+            "{scenario}"
+        );
         assert!(engine.state.branches[main].file_id.is_none());
         if scenario == "archived_main" {
             assert_eq!(engine.state.branches[main].name, "main-2");
@@ -1185,7 +1197,10 @@ fn split_preserves_archived_branches_and_selects_an_active_main() {
         let mapped_archived = mapped_archived.to_owned();
         drop(engine);
         let mut engine = Engine::open(&temp.path().join("state")).unwrap();
-        assert_eq!(engine.state.branches[&mapped_archived].state, "archived");
+        assert_eq!(
+            engine.state.branches[&mapped_archived].state.as_str(),
+            "archived"
+        );
         engine
             .set_smb_binding(&new_repo, &main, true, 1, "alice", &new_id("op"))
             .unwrap();
@@ -1252,7 +1267,7 @@ fn split_at_deletion_preserves_facts_without_copying_deleted_content() {
         .namespace_operation(
             &workspace.workspace_id,
             NamespaceOperation {
-                kind: "delete_tree".into(),
+                kind: storage_contract::NamespaceOperationKind::DeleteTree,
                 path: "资料".into(),
                 destination: None,
             },

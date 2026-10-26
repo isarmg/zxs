@@ -37,22 +37,22 @@ impl HttpSpool {
     }
 
     pub(crate) fn status(&self) -> &'static str {
-        match self.state.lock().as_deref() {
-            Ok(State::Pending) => "pending",
-            Ok(State::Ready(_)) => "ready",
-            Ok(State::Unavailable) | Err(_) => "unavailable",
+        match *self.state.lock().expect("service state lock poisoned") {
+            State::Pending => "pending",
+            State::Ready(_) => "ready",
+            State::Unavailable => "unavailable",
         }
     }
 
     pub(crate) fn budget(&self) -> Result<Arc<SpoolBudget>, ApiError> {
-        match self.state.lock().as_deref() {
-            Ok(State::Ready(budget)) => Ok(budget.clone()),
-            Ok(State::Pending) => Err(ApiError::new(
+        match *self.state.lock().expect("service state lock poisoned") {
+            State::Ready(ref budget) => Ok(budget.clone()),
+            State::Pending => Err(ApiError::new(
                 ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::HttpUploadsPending,
                 "HTTP upload staging inventory is still running; retry after it completes",
             )),
-            Ok(State::Unavailable) | Err(_) => Err(ApiError::new(
+            State::Unavailable => Err(ApiError::new(
                 ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::HttpUploadsUnavailable,
                 "HTTP upload staging is unavailable; repair the local spool and restart",
@@ -79,7 +79,12 @@ impl Startup {
                 State::Unavailable
             }
         };
-        if let Ok(mut state) = self.spool.state.lock() {
+        {
+            let mut state = self
+                .spool
+                .state
+                .lock()
+                .expect("service state lock poisoned");
             debug_assert!(matches!(*state, State::Pending));
             *state = next;
         }

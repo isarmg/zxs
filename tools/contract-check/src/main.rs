@@ -10,6 +10,21 @@ use std::{
 };
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+#[derive(Debug)]
+struct ContextError {
+    context: String,
+    source: Box<dyn std::error::Error>,
+}
+impl std::fmt::Display for ContextError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.context, self.source)
+    }
+}
+impl std::error::Error for ContextError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
 fn require(condition: bool, message: impl Into<String>) -> Result {
     if condition {
         Ok(())
@@ -349,7 +364,7 @@ fn bundle(value: &Value) -> Value {
                             Value::String(
                                 value
                                     .as_str()
-                                    .unwrap_or("")
+                                    .expect("invariant: validated $ref is a string")
                                     .replace("#/$defs/", "#/components/schemas/"),
                             )
                         } else {
@@ -368,12 +383,12 @@ fn validator(schema: &Value) -> Result<schema_validation::Validator> {
         .with_draft(schema_validation::Draft::Draft202012)
         .should_validate_formats(true)
         .build(schema)
-        .map_err(|error| error.to_string().into())
+        .map_err(|error| error.to_owned().into())
 }
 fn schema_valid(schema: &Value, value: &Value) -> Result {
     validator(schema)?
         .validate(value)
-        .map_err(|error| error.to_string().into())
+        .map_err(|error| error.to_owned().into())
 }
 
 fn openapi(api: &Value) -> Result {
@@ -397,7 +412,7 @@ fn openapi(api: &Value) -> Result {
                 for (key, child) in map {
                     if key == "schema" {
                         schema_validation::meta::validate(child)
-                            .map_err(|error| error.to_string())?;
+                            .map_err(|error| error.to_owned())?;
                     }
                     references(root, child)?;
                 }
@@ -528,13 +543,16 @@ fn configuration_projection(schema: &Value, configuration: &Value) -> Result<Val
 }
 
 fn validate_configuration_projection(schema: &Value, projection: &Value) -> Result {
-    schema_valid(schema, projection).map_err(|error| {
-        format!(
-            "docs/21-configuration.md TOML projection against docs/contracts/config-constraints.schema.json: {error}"
-        )
+    schema_valid(schema, projection).map_err(|source| ContextError {
+        context: "docs/21-configuration.md TOML projection against docs/contracts/config-constraints.schema.json".into(),
+        source,
     })?;
-    semantics("config", projection).map_err(|error| {
-        format!("docs/21-configuration.md TOML projection semantics: {error}").into()
+    semantics("config", projection).map_err(|source| {
+        ContextError {
+            context: "docs/21-configuration.md TOML projection semantics".into(),
+            source,
+        }
+        .into()
     })
 }
 fn run(root: &Path) -> Result<Report> {
@@ -545,7 +563,7 @@ fn run(root: &Path) -> Result<Report> {
     let api = read(&directory.join("openapi.json"))?;
     let vectors = read(&directory.join("vectors.json"))?;
     for schema in [&core, &config] {
-        schema_validation::meta::validate(schema).map_err(|error| error.to_string())?;
+        schema_validation::meta::validate(schema).map_err(|error| error.to_owned())?;
     }
     openapi(&api)?;
     require(

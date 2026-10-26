@@ -14,6 +14,16 @@ pub use transfer::PreparedUpload;
 pub enum Error {
     #[error("invalid server address: {0}")]
     Address(String),
+    #[error("invalid server address: {0}")]
+    Url(#[from] url_encoding::address::ParseError),
+    #[error("invalid API request: {0}")]
+    Contract(#[from] storage_contract::Error),
+    #[error("invalid JSON: {0}")]
+    Json(#[from] json_codec::Error),
+    #[error("request task failed: {0}")]
+    Join(#[from] tokio::task::JoinError),
+    #[error("invalid HTTP method: {0}")]
+    Method(#[from] http::method::InvalidMethod),
     #[error("{code}: {message}")]
     Api {
         status: u16,
@@ -29,6 +39,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("invalid response: {0}")]
     Response(String),
+    #[error("CHECKSUM_MISMATCH: download did not match the immutable version hash")]
+    ChecksumMismatch,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -41,8 +53,7 @@ pub struct Session {
 }
 impl Session {
     fn decode(value: Value) -> Result<Self, Error> {
-        let session: Self =
-            json_codec::from_value(value).map_err(|error| Error::Response(error.to_string()))?;
+        let session: Self = json_codec::from_value(value)?;
         if session.token.is_empty()
             || session.csrf_token.is_empty()
             || session.principal.is_empty()
@@ -83,8 +94,7 @@ pub struct Client {
 }
 impl Client {
     pub fn connect(address: &str) -> Result<Self, Error> {
-        let base = url_encoding::address::Url::parse(address)
-            .map_err(|error| Error::Address(error.to_string()))?;
+        let base = url_encoding::address::Url::parse(address)?;
         let loopback = base.host_str().is_some_and(|host| {
             host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "::1"
         });
@@ -117,12 +127,8 @@ impl Client {
         self.base.as_str()
     }
     fn url(&self, path: &str) -> Result<url_encoding::address::Url, Error> {
-        storage_contract::validate_api_path(path)
-            .map_err(|error| Error::Address(error.message().into_owned()))?;
-        let url = self
-            .base
-            .join(path)
-            .map_err(|error| Error::Address(error.to_string()))?;
+        storage_contract::validate_api_path(path)?;
+        let url = self.base.join(path)?;
         if url.origin() != self.base.origin() || !url.path().starts_with("/api/") {
             return Err(Error::Address("API route changed origin".into()));
         }
@@ -197,7 +203,7 @@ impl Client {
             message,
             expected_head,
         )
-        .map_err(|error| Error::Response(error.to_string()))
+        .map_err(Error::from)
     }
 
     pub async fn commit_prepared(&self, body: &Value) -> Result<Value, Error> {
@@ -236,8 +242,7 @@ impl Client {
         request: &storage_contract::DirectoryNamespaceBatch,
         operation_id: &str,
     ) -> Result<Value, Error> {
-        let mut body =
-            json_codec::to_value(request).map_err(|error| Error::Response(error.to_string()))?;
+        let mut body = json_codec::to_value(request)?;
         body["operation_id"] = operation_id.into();
         self.request(
             "POST",
@@ -355,8 +360,7 @@ impl Client {
         path: &str,
         body: Option<&Value>,
     ) -> Result<Value, Error> {
-        let method = reqwest::Method::from_bytes(method.as_bytes())
-            .map_err(|error| Error::Address(error.to_string()))?;
+        let method = reqwest::Method::from_bytes(method.as_bytes())?;
         let mut request = self.builder(method, path)?;
         if let Some(body) = body {
             request = request.json(body);

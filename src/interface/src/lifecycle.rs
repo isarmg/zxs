@@ -47,7 +47,7 @@ impl<T> Lifecycle<T> {
     pub(crate) fn close(&mut self) -> Option<T> {
         match std::mem::replace(&mut self.0, State::Closed) {
             State::Mounted(value) => Some(value),
-            _ => None,
+            State::Idle | State::Starting | State::Closed => None,
         }
     }
 }

@@ -349,6 +349,7 @@ impl<'a> Application<'a> {
             && self
                 .engine
                 .operation_owner(&command.operation_id)
+                .map_err(crate::engine_backend::error)?
                 .as_deref()
                 == Some(self.identity.principal.as_str());
         if !replay {

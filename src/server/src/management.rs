@@ -242,7 +242,8 @@ impl Drop for RecoveryPermit<'_> {
 }
 impl Inner {
     fn set(&self, backend: Option<Arc<EngineBackend>>, status: StorageState) {
-        if let Ok(mut state) = self.state.lock() {
+        {
+            let mut state = self.state.lock().expect("service state lock poisoned");
             state.backend = backend;
             state.status = if self.stopping.load(Ordering::SeqCst) {
                 StorageState::Unavailable
@@ -297,7 +298,9 @@ impl Inner {
         // A previous worker has relinquished recovering under the same mutex.
         // Join outside all locks, even if it is still unwinding its epilogue.
         if let Some(previous) = previous {
-            let _ = previous.join();
+            previous
+                .join()
+                .expect("invariant: storage recovery worker does not panic");
         }
         if reopen {
             let mut state = crate::lock(&self.state);
@@ -351,14 +354,14 @@ impl Inner {
         }
     }
     fn stop(&self) {
-        // Recover poison during shutdown: a panic must not detach a writer.
+        // Serialize the shutdown fence with recovery enqueue.
         let worker = self
             .recovery_worker
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .expect("service state lock poisoned");
         self.stopping.store(true, Ordering::SeqCst);
         drop(worker);
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().expect("service state lock poisoned");
         state.admitted = false;
         state.status = StorageState::Unavailable;
     }
@@ -367,7 +370,7 @@ impl Inner {
         let worker = self
             .recovery_worker
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .expect("service state lock poisoned")
             .take();
         if let Some(worker) = worker {
             worker
@@ -381,7 +384,8 @@ impl Inner {
             let generation = self.generation.load(Ordering::SeqCst);
             if let Err(error) = recover(&self) {
                 tracing::warn!(error = ?error,"storage unavailable; management remains online");
-                if let Ok(mut state) = self.state.lock() {
+                {
+                    let mut state = self.state.lock().expect("service state lock poisoned");
                     state.admitted = false;
                     state.status = StorageState::RecoveryRequired;
                 }
@@ -391,7 +395,7 @@ impl Inner {
             let _worker = self
                 .recovery_worker
                 .lock()
-                .unwrap_or_else(|error| error.into_inner());
+                .expect("service state lock poisoned");
             if !self.stopping.load(Ordering::SeqCst)
                 && self.generation.load(Ordering::SeqCst) != generation
             {
@@ -413,16 +417,25 @@ impl Inner {
                 Ok(engine) => engine,
                 Err(error) => {
                     tracing::warn!(error = ?error,"storage recovery failed");
-                    let status =
-                        if self.data_root.join("config.json").try_exists().ok() == Some(false) {
-                            if self.data_root.join("management-authority.json").exists() {
-                                StorageState::RecoveryRequired
-                            } else {
-                                StorageState::Unconfigured
-                            }
+                    let status = if !self
+                        .data_root
+                        .join("config.json")
+                        .try_exists()
+                        .map_err(ApiError::io)?
+                    {
+                        if self
+                            .data_root
+                            .join("management-authority.json")
+                            .try_exists()
+                            .map_err(ApiError::io)?
+                        {
+                            StorageState::RecoveryRequired
                         } else {
-                            StorageState::Unavailable
-                        };
+                            StorageState::Unconfigured
+                        }
+                    } else {
+                        StorageState::Unavailable
+                    };
                     self.set(None, status);
                     return Ok(());
                 }
@@ -470,7 +483,16 @@ impl Inner {
                         state.status = StorageState::RecoveryRequired;
                     }
                     inner.generation.fetch_add(1, Ordering::SeqCst);
-                    let _ = inner.recover();
+                    match inner.recover() {
+                        Ok(()) => {}
+                        Err(error)
+                            if matches!(
+                                error.code,
+                                storage_contract::ErrorCode::StorageRetryRunning
+                                    | storage_contract::ErrorCode::ServiceStopping
+                            ) => {}
+                        Err(error) => return Err(error),
+                    }
                 }
                 Ok(())
             }));
@@ -514,58 +536,67 @@ impl Inner {
     /// Keep the engine lease inside one sample. The observer's idle interval
     /// must not look like an in-flight storage operation to recovery admission.
     fn observe_storage_once(&self) {
-        let backend = self
-            .state
-            .lock()
-            .ok()
-            .and_then(|state| state.backend.as_ref().filter(|_| state.admitted).cloned());
-        let observation = backend
-            .as_ref()
-            .ok_or_else(|| {
-                ApiError::new(
-                    ::http::StatusCode::SERVICE_UNAVAILABLE,
-                    storage_contract::ErrorCode::StorageUnavailable,
-                    "storage unavailable",
-                )
-            })
-            .and_then(|backend| {
-                let health = backend.call(
-                    BackendAction::Ready,
-                    &Identity {
-                        admission_session: None,
-                        smb_binding: None,
-                        principal: "monitor".into(),
-                    },
-                    json!({}),
-                );
-                if let Ok(mut state) = self.state.lock()
-                    && state.admitted
-                    && state
-                        .backend
-                        .as_ref()
-                        .is_some_and(|current| Arc::ptr_eq(current, backend))
+        let backend = {
+            let state = crate::lock(&self.state);
+            state.backend.as_ref().filter(|_| state.admitted).cloned()
+        };
+        let Some(backend) = backend.as_ref() else {
+            *crate::lock(&self.disk_observation) = None;
+            return;
+        };
+        let observation = {
+            let health = backend.call(
+                BackendAction::Ready,
+                &Identity {
+                    admission_session: None,
+                    smb_binding: None,
+                    principal: "monitor".into(),
+                },
+                json!({}),
+            );
+            let mut state = crate::lock(&self.state);
+            if state.admitted
+                && state
+                    .backend
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, backend))
+            {
+                state.observed_at = std::time::Instant::now();
+                let previous = state.status;
+                state.status = match &health {
+                    Ok(_) => StorageState::Ready,
+                    Err(error)
+                        if matches!(
+                            error.code,
+                            storage_contract::ErrorCode::RecoveryRequired
+                                | storage_contract::ErrorCode::MetadataUnavailable
+                        ) =>
+                    {
+                        StorageState::ReadOnly
+                    }
+                    Err(_) => StorageState::Unavailable,
+                };
+                if state.status != previous
+                    && let Err(error) = &health
                 {
-                    state.observed_at = std::time::Instant::now();
-                    state.status = match &health {
-                        Ok(_) => StorageState::Ready,
-                        Err(error)
-                            if matches!(
-                                error.code,
-                                storage_contract::ErrorCode::RecoveryRequired
-                                    | storage_contract::ErrorCode::MetadataUnavailable
-                            ) =>
-                        {
-                            StorageState::ReadOnly
-                        }
-                        Err(_) => StorageState::Unavailable,
-                    };
+                    tracing::warn!(error = ?error, "storage readiness changed after failed health observation");
                 }
-                backend.observe_disks(&InternalDiskObservation(()))
-            });
-        if let Ok(mut cache) = self.disk_observation.lock() {
-            *cache = observation
-                .ok()
-                .map(|value| (std::time::Instant::now(), value));
+            }
+            drop(state);
+            backend.observe_disks(&InternalDiskObservation(()))
+        };
+        {
+            let mut cache = self
+                .disk_observation
+                .lock()
+                .expect("service state lock poisoned");
+            *cache = match observation {
+                Ok(value) => Some((std::time::Instant::now(), value)),
+                Err(error) => {
+                    tracing::warn!(error = ?error, "disk observation unavailable; cached observation cleared");
+                    None
+                }
+            };
         }
     }
 }
@@ -838,15 +869,18 @@ impl Backend for ManagementBackend {
         if self.inner.ensure_running().is_err() {
             return;
         }
-        if let Ok(mut current) = self.inner.auth.lock() {
+        {
+            let mut current = self.inner.auth.lock().expect("service state lock poisoned");
             if current.is_some() {
                 return;
             }
             *current = Some(auth);
         }
-        let _ = self.inner.recover();
+        if let Err(error) = self.inner.recover() {
+            tracing::warn!(error = ?error, "initial storage recovery could not start");
+        }
         let weak = Arc::downgrade(&self.inner);
-        let _ = std::thread::Builder::new()
+        if let Err(error) = std::thread::Builder::new()
             .name("zxs-disk-observation".into())
             .spawn(move || {
                 loop {
@@ -860,7 +894,10 @@ impl Backend for ManagementBackend {
                     drop(inner);
                     std::thread::sleep(std::time::Duration::from_secs(5));
                 }
-            });
+            })
+        {
+            tracing::warn!(error = ?error, "disk observation worker could not start");
+        }
     }
     fn stop_management(&self) {
         self.inner.stop();
@@ -873,8 +910,8 @@ impl Backend for ManagementBackend {
             .inner
             .state
             .lock()
-            .map(|s| s.effective_status())
-            .unwrap_or(StorageState::RecoveryRequired);
+            .expect("service state lock poisoned")
+            .effective_status();
         json!({"state":state.as_str(),"retryable":state!=StorageState::Ready,"recovering":self.inner.recovering.load(Ordering::SeqCst)})
     }
     fn retry_storage(&self, identity: &Identity) -> Result<Value, ApiError> {

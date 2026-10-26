@@ -1,4 +1,4 @@
-//! Split validation must reject broken inputs without publishing a partial migration.
+//! Disk admission rejects malformed histories before split can use internal invariants.
 use super::*;
 
 fn fixture() -> (tempfile::TempDir, Engine, Repository, String, String) {
@@ -49,7 +49,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String, String) {
 }
 
 #[test]
-fn split_rejects_broken_persisted_identities_without_partial_migration() {
+fn snapshot_admission_rejects_broken_split_identities() {
     for corruption in [
         "missing_prefix",
         "foreign_prefix",
@@ -147,9 +147,8 @@ fn split_rejects_broken_persisted_identities_without_partial_migration() {
             _ => unreachable!(),
         }
         let before = canonical_json(engine.state()).unwrap();
-        let error = engine
-            .commit_plan(&plan.plan_id, "admin", &new_id("op"))
-            .unwrap_err();
+        let raw: crate::history_package::RawState = decode_strict(&before).unwrap();
+        let error = State::try_from(raw).unwrap_err();
         assert_eq!(
             error.code(),
             storage_contract::ErrorCode::StateInvalid,
@@ -160,12 +159,12 @@ fn split_rejects_broken_persisted_identities_without_partial_migration() {
             before,
             "{corruption}"
         );
-        assert_eq!(engine.plan(&plan.plan_id).unwrap().state, "ready");
+        assert_eq!(engine.plan(&plan.plan_id).unwrap().state.as_str(), "ready");
     }
 }
 
 #[test]
-fn split_rejects_broken_crossing_merge_endpoints_without_publication() {
+fn snapshot_admission_rejects_broken_crossing_merge_endpoints() {
     for corruption in [
         "prefix_branch",
         "prefix_commit",
@@ -179,7 +178,7 @@ fn split_rejects_broken_crossing_merge_endpoints_without_publication() {
         let outside = engine
             .create_branch(&prefix, "prefix", "admin", &new_id("op"))
             .unwrap();
-        let plan = engine
+        let _plan = engine
             .create_split_plan(&repo.history_tree_id, &cut, "admin")
             .unwrap();
         let mut link = MergeLink {
@@ -224,9 +223,8 @@ fn split_rejects_broken_crossing_merge_endpoints_without_publication() {
             .merge_links
             .insert(key, link);
         let before = canonical_json(engine.state()).unwrap();
-        let error = engine
-            .commit_plan(&plan.plan_id, "admin", &new_id("op"))
-            .unwrap_err();
+        let raw: crate::history_package::RawState = decode_strict(&before).unwrap();
+        let error = State::try_from(raw).unwrap_err();
         assert_eq!(
             error.code(),
             storage_contract::ErrorCode::StateInvalid,
@@ -270,7 +268,7 @@ fn split_generation_overflow_does_not_wrap_or_publish_migration() {
             "{counter}"
         );
         assert_eq!(canonical_json(engine.state()).unwrap(), before, "{counter}");
-        assert_eq!(engine.plan(&plan.plan_id).unwrap().state, "ready");
+        assert_eq!(engine.plan(&plan.plan_id).unwrap().state.as_str(), "ready");
     }
 }
 

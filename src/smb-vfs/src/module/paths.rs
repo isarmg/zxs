@@ -12,7 +12,7 @@ pub(super) unsafe fn text<'a>(pointer: *const libc::c_char) -> std::io::Result<&
     // rejected above.
     unsafe { CStr::from_ptr(pointer) }
         .to_str()
-        .map_err(|_| bad())
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))
 }
 /// # Safety
 /// Non-null arguments and nested strings obey the host boundary contract.
@@ -49,7 +49,7 @@ pub(super) unsafe fn name(
         let root = unsafe { text((*(*handle).conn).connectpath) }?;
         Path::new(name)
             .strip_prefix(root)
-            .map_err(|_| bad())?
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?
             .to_str()
             .ok_or_else(bad)?
     } else {

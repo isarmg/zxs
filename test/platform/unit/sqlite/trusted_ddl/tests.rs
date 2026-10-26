@@ -64,3 +64,28 @@ fn native_progress_interrupts_unbounded_trusted_evaluation() {
     ));
     assert!(start.elapsed() < Duration::from_secs(10));
 }
+
+#[test]
+fn evaluation_and_close_failure_retains_both_sources() {
+    let error = DdlFingerprintError::EvaluationAndClose {
+        operation: Box::new(DdlFingerprintError::Sqlite(sqlite_access::Error::Io(
+            std::io::Error::from_raw_os_error(libc::ENOSPC),
+        ))),
+        close: sqlite_access::Error::Io(std::io::Error::from_raw_os_error(libc::EIO)),
+    };
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<sqlite_access::Error>()
+            .is_some()
+    );
+    let DdlFingerprintError::EvaluationAndClose { operation, close } = error else {
+        panic!("expected retained evaluation and close failures")
+    };
+    assert!(
+        matches!(*operation, DdlFingerprintError::Sqlite(sqlite_access::Error::Io(ref source)) if source.raw_os_error() == Some(libc::ENOSPC))
+    );
+    assert!(
+        matches!(close, sqlite_access::Error::Io(ref source) if source.raw_os_error() == Some(libc::EIO))
+    );
+}

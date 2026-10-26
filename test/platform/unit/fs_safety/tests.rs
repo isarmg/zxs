@@ -156,3 +156,10 @@ fn trusted_spool_payloads_remain_anchored_and_replacements_are_rejected() {
     assert!(root.path().join("moved/anchored").exists());
     assert!(!path.join("anchored").exists());
 }
+
+#[test]
+fn randomness_failure_preserves_its_entropy_source() {
+    let error = Error::Randomness(system_entropy::Error::UNSUPPORTED);
+    let source = std::error::Error::source(&error).expect("entropy source must survive");
+    assert!(source.downcast_ref::<system_entropy::Error>().is_some());
+}

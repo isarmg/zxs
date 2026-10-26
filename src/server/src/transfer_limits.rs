@@ -66,7 +66,12 @@ impl Admission {
 }
 impl Drop for Permit {
     fn drop(&mut self) {
-        if let Ok(mut active) = self.admission.active.lock() {
+        {
+            let mut active = self
+                .admission
+                .active
+                .lock()
+                .expect("service state lock poisoned");
             *active -= 1;
         }
     }
@@ -112,7 +117,7 @@ where
                 tokio::select! {
                     biased;
                     _ = tokio::time::sleep_until(next) => {
-                        let mut state = shared.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut state = shared.lock().expect("service state lock poisoned");
                         // A chunk may have reset idle while this timer became ready.
                         if Instant::now() < (*updates.borrow()).min(deadline) { continue; }
                         if state.stream.is_none() { return; }
@@ -137,7 +142,7 @@ where
 impl<S: Stream<Item = Result<bytes::Bytes, std::io::Error>>> Stream for BoundedStream<S> {
     type Item = Result<bytes::Bytes, std::io::Error>;
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().expect("service state lock poisoned");
         if state.stream.is_some() && Instant::now() >= (*self.progress.borrow()).min(self.deadline)
         {
             state.stream = None;
@@ -170,7 +175,7 @@ impl<S: Stream<Item = Result<bytes::Bytes, std::io::Error>>> Stream for BoundedS
                 state.stream = None;
                 self.timer.abort();
             }
-            _ => {}
+            Poll::Pending | Poll::Ready(Some(Ok(_))) => {}
         }
         state.waker = Some(cx.waker().clone());
         result
@@ -179,7 +184,10 @@ impl<S: Stream<Item = Result<bytes::Bytes, std::io::Error>>> Stream for BoundedS
 impl<S> Drop for BoundedStream<S> {
     fn drop(&mut self) {
         self.timer.abort();
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).stream = None;
+        self.state
+            .lock()
+            .expect("service state lock poisoned")
+            .stream = None;
     }
 }
 

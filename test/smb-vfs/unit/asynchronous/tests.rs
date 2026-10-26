@@ -191,7 +191,7 @@ fn sync_and_async_reads_bound_immutable_extents_but_allow_workspace_growth() {
     let opened = vfs::Open {
         info: Arc::new(OpenResult {
             entry_id: "entry".into(),
-            kind: "file".into(),
+            kind: storage_contract::NamespaceEntryKind::File,
             path: "file".into(),
             handle: 7,
             size: 4,
@@ -295,4 +295,115 @@ fn sync_and_async_reads_bound_immutable_extents_but_allow_workspace_growth() {
     }
     worker.join().unwrap();
     std::fs::remove_file(socket).unwrap();
+}
+
+#[test]
+fn worker_panic_completes_as_io_error_without_unwinding_through_host() {
+    // SAFETY: Real SDK objects remain on this owning thread until received/freed.
+    unsafe {
+        let event = event_context();
+        let request = send(std::ptr::null_mut(), event, std::ptr::null_mut(), 0, || {
+            panic!("worker request panic")
+        });
+        assert!(!request.is_null());
+        while sdk::tevent_req_is_in_progress(request) {
+            assert_eq!(
+                sdk::_tevent_loop_once(event, c"panic boundary test".as_ptr()),
+                0
+            );
+        }
+        let mut aio: sdk::vfs_aio_state = Default::default();
+        assert_eq!(recv(request, &mut aio), -1);
+        assert_eq!(aio.error, libc::EIO);
+        sdk::_talloc_free(request.cast(), c"panic boundary test".as_ptr());
+        sdk::_talloc_free(event.cast(), c"panic boundary test".as_ptr());
+    }
+}
+
+#[test]
+fn second_worker_start_failure_releases_the_first_worker() {
+    fn start_with(
+        spawn: &mut impl FnMut(usize, Arc<Mutex<mpsc::Receiver<Work>>>) -> io::Result<()>,
+    ) -> io::Result<mpsc::SyncSender<Work>> {
+        let (sender, receiver) = mpsc::sync_channel(8);
+        let receiver = Arc::new(Mutex::new(receiver));
+        for index in 0..2 {
+            spawn(index, receiver.clone())?;
+        }
+        Ok(sender)
+    }
+    let mut first = None;
+    let error = start_with(&mut |index, receiver| {
+        if index == 1 {
+            return Err(io::Error::from_raw_os_error(libc::EAGAIN));
+        }
+        first = Some(std::thread::spawn(move || worker_loop(receiver)));
+        Ok(())
+    })
+    .unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(libc::EAGAIN));
+    first.unwrap().join().unwrap();
+}
+
+#[test]
+fn worker_reporting_failure_still_completes() {
+    const CHILD: &str = "ZXS_TEST_SMB_STDERR_FULL";
+    if std::env::var_os(CHILD).is_none() {
+        let full = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/full")
+            .unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "module::asynchronous::tests::worker_reporting_failure_still_completes",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .stderr(full)
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success());
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("stderr failure left the host request pending");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    // SAFETY: The child owns the real SDK event/request until completion and frees each once.
+    unsafe {
+        let event = event_context();
+        let request = send(std::ptr::null_mut(), event, std::ptr::null_mut(), 0, || {
+            Err(io::Error::from_raw_os_error(libc::ENOSPC))
+        });
+        assert!(!request.is_null());
+        while sdk::tevent_req_is_in_progress(request) {
+            assert_eq!(
+                sdk::_tevent_loop_once(event, c"stderr failure test".as_ptr()),
+                0
+            );
+        }
+        let mut aio: sdk::vfs_aio_state = Default::default();
+        assert_eq!(recv(request, &mut aio), -1);
+        assert_eq!(aio.error, libc::EIO);
+        sdk::_talloc_free(request.cast(), c"stderr failure test".as_ptr());
+        sdk::_talloc_free(event.cast(), c"stderr failure test".as_ptr());
+    }
+}
+
+#[test]
+fn cached_worker_start_failure_keeps_native_errno() {
+    for errno in [libc::EAGAIN, libc::ENOMEM] {
+        let source = Arc::new(io::Error::from_raw_os_error(errno));
+        let reported = cached_start_error(&source);
+        assert_eq!(reported.raw_os_error(), Some(errno));
+        assert_eq!(error_errno(&reported), errno);
+    }
 }

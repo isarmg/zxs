@@ -265,11 +265,19 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
         Engine::restore_from_disks_with_workspace_limits(&restored, &disks, Some(raised)).unwrap();
     assert_eq!(engine.workspace_capacity("admin"), report);
     assert_eq!(
-        engine.workspace(&aborted.workspace_id).unwrap().state,
+        engine
+            .workspace(&aborted.workspace_id)
+            .unwrap()
+            .state
+            .as_str(),
         "aborted"
     );
     assert_eq!(
-        engine.workspace(&third.workspace_id).unwrap().state,
+        engine
+            .workspace(&third.workspace_id)
+            .unwrap()
+            .state
+            .as_str(),
         "committed"
     );
     assert_eq!(engine.operation(&first.operation_id).unwrap(), first);
@@ -314,7 +322,7 @@ fn raised_runtime_metadata_limits_still_enforce_each_finite_dimension() {
             let result = engine.namespace_operation(
                 &workspace.workspace_id,
                 NamespaceOperation {
-                    kind: "mkdir".into(),
+                    kind: storage_contract::NamespaceOperationKind::Mkdir,
                     path: format!("directory-{accepted:04}"),
                     destination: None,
                 },
@@ -352,7 +360,11 @@ fn raised_runtime_metadata_limits_still_enforce_each_finite_dimension() {
         let engine = Engine::open_with_workspace_limits(&f.root, Some(raised)).unwrap();
         assert_eq!(engine.workspace_capacity("admin"), report);
         assert_eq!(
-            engine.workspace(&workspace.workspace_id).unwrap().state,
+            engine
+                .workspace(&workspace.workspace_id)
+                .unwrap()
+                .state
+                .as_str(),
             "aborted"
         );
         drop(engine);

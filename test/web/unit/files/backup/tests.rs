@@ -7,6 +7,7 @@ fn unauthorized() -> api::Error {
         status: 401,
         retryable: false,
         request_id: Some("expired-backup".into()),
+        source: None,
     }
 }
 

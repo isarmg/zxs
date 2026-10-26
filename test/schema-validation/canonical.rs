@@ -3,10 +3,10 @@
 use data_serialization::Deserialize;
 use json_codec::Value;
 use schema_validation::{
-    Draft, Validator,
     canonical::{
         self, CanonicalSchema, CanonicalizationError, CanonicalizeOptions, Satisfiability,
     },
+    Draft, Validator,
 };
 
 fn run_case(case: CanonicalCase) {
@@ -339,4 +339,143 @@ fn canonical_fixture_suite() {
         }
     }
     assert_eq!(count, 1509);
+}
+
+#[test]
+fn pattern_property_runtime_errors_fail_closed() {
+    use json_codec::json;
+    use schema_validation::{error::ValidationErrorKind, PatternOptions};
+    use std::error::Error as _;
+    for patterns in [
+        json!({"(?<=ab)c": false}),
+        json!({"(?<=ab)c": false, "^z": true}),
+    ] {
+        for extra in [None, Some(json!(false)), Some(json!({"type":"integer"}))] {
+            let large_properties: json_codec::Map<String, Value> = ('d'..='s')
+                .map(|name| (name.to_string(), json!(true)))
+                .collect();
+            for properties in [
+                None,
+                Some(json!({"x":true})),
+                Some(Value::Object(large_properties)),
+            ] {
+                let mut schema = json!({"patternProperties":patterns});
+                if let Some(extra) = &extra {
+                    schema["additionalProperties"] = extra.clone();
+                }
+                if let Some(properties) = &properties {
+                    schema["properties"] = properties.clone();
+                }
+                let validator =
+                    schema_validation::options()
+                        .with_pattern_options(
+                            PatternOptions::fancy_regex()
+                                .backtrack_limit(if properties.is_some() { 2 } else { 1 }),
+                        )
+                        .build(&schema)
+                        .unwrap();
+                let key = if properties.is_some() { "zzabc" } else { "abc" };
+                let instance = json!({key:1});
+                let error = validator
+                    .validate(&instance)
+                    .expect_err("regex execution must not become a non-match");
+                assert!(
+                    matches!(
+                        error.kind(),
+                        ValidationErrorKind::BacktrackLimitExceeded { .. }
+                    ),
+                    "{schema}: {error}"
+                );
+                assert!(error.source().unwrap().is::<fancy_regex::Error>());
+                assert_eq!(error.instance_path().as_str(), format!("/{key}"));
+                assert!(!validator.is_valid(&instance), "{schema}");
+                assert!(
+                    validator.iter_errors(&instance).any(|error| matches!(
+                        error.kind(),
+                        ValidationErrorKind::BacktrackLimitExceeded { .. }
+                    )),
+                    "{schema}"
+                );
+                let evaluation = validator.evaluate(&instance);
+                assert!(!evaluation.is_valid(), "{schema}");
+                assert!(
+                    json_codec::to_string(&evaluation.list())
+                        .unwrap()
+                        .contains("backtracking"),
+                    "{schema}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn known_property_pattern_precomputation_retains_runtime_failure() {
+    use json_codec::json;
+    use schema_validation::{error::ValidationErrorKind, PatternOptions};
+    use std::error::Error as _;
+    for additional in [json!(false), json!({"type":"integer"})] {
+        let schema = json!({"properties":{"abc":true}, "patternProperties":{"(?<=ab)c":false}, "additionalProperties":additional});
+        let error = schema_validation::options()
+            .with_pattern_options(PatternOptions::fancy_regex().backtrack_limit(1))
+            .build(&schema)
+            .expect_err("failed precomputation cannot become a cached non-match");
+        assert!(matches!(
+            error.kind(),
+            ValidationErrorKind::BacktrackLimitExceeded { .. }
+        ));
+        assert!(error.source().unwrap().is::<fancy_regex::Error>());
+    }
+}
+
+#[test]
+fn property_patterns_keep_normal_match_and_non_match_semantics() {
+    use json_codec::json;
+    for pattern in ["^x", "^x[0-9]+$"] {
+        for additional in [json!(true), json!(false), json!({"type":"integer"})] {
+            for count in [0, 1, 16] {
+                let properties: json_codec::Map<String, Value> = (0..count)
+                    .map(|index| (format!("safe{index}"), json!(true)))
+                    .collect();
+                let schema = json!({"patternProperties":{pattern:{"type":"integer"}},
+                    "properties":properties, "additionalProperties":additional});
+                let validator = schema_validation::validator_for(&schema).unwrap();
+                for (instance, expected) in [
+                    (json!({"x1":7}), true),
+                    (json!({"x1":"wrong"}), false),
+                    (json!({"other":7}), additional != json!(false)),
+                ] {
+                    assert_eq!(
+                        validator.is_valid(&instance),
+                        expected,
+                        "{schema}: {instance}"
+                    );
+                    assert_eq!(validator.validate(&instance).is_ok(), expected);
+                    assert_eq!(validator.iter_errors(&instance).next().is_none(), expected);
+                    assert_eq!(validator.evaluate(&instance).is_valid(), expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn unevaluated_properties_does_not_hide_pattern_execution_failure() {
+    use json_codec::json;
+    use schema_validation::{error::ValidationErrorKind, PatternOptions};
+    for unevaluated in [json!(true), json!(false)] {
+        let schema =
+            json!({"patternProperties":{"(?<=ab)c":true}, "unevaluatedProperties":unevaluated});
+        let validator = schema_validation::options()
+            .with_pattern_options(PatternOptions::fancy_regex().backtrack_limit(1))
+            .build(&schema)
+            .unwrap();
+        let instance = json!({"abc":1});
+        assert!(!validator.is_valid(&instance));
+        assert!(!validator.evaluate(&instance).is_valid());
+        assert!(matches!(
+            validator.validate(&instance).unwrap_err().kind(),
+            ValidationErrorKind::BacktrackLimitExceeded { .. }
+        ));
+    }
 }

@@ -9,7 +9,7 @@ fn exact_modifiers_work_in_any_order() {
         let (name, options) = parse_event(event);
         assert_eq!(name, "click");
         assert!(options.targeted && options.captured && options.undelegated);
-        assert!(!parse_event_name(event).unwrap().1);
+        assert!(!parse_event_name(event).1);
     }
 }
 
@@ -23,7 +23,7 @@ fn custom_event_segments_are_not_partial_modifiers() {
         let (name, options) = parse_event(event);
         assert_eq!(name, event);
         assert!(!options.targeted && !options.captured && !options.undelegated);
-        let (tokens, custom, _) = parse_event_name(event).unwrap();
+        let (tokens, custom, _) = parse_event_name(event);
         assert!(custom);
         assert_eq!(
             tokens.to_string(),
@@ -45,4 +45,13 @@ fn bare_custom_event_named_like_modifier_is_preserved() {
     let (name, options) = parse_event("capture");
     assert_eq!(name, "capture");
     assert!(!options.captured);
+}
+
+#[test]
+fn every_builtin_event_has_valid_rust_tokens() {
+    for name in TYPED_EVENTS {
+        let (tokens, custom, _) = parse_event_name(name);
+        assert!(!custom, "{name}");
+        assert_eq!(tokens.to_string(), name);
+    }
 }

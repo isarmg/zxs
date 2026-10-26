@@ -9,6 +9,7 @@ use std::sync::{
 
 struct WriterProbe {
     stopped: AtomicBool,
+    failure: Option<&'static str>,
     entered: Mutex<Option<oneshot::Sender<()>>>,
     release: Mutex<mpsc::Receiver<()>>,
     done: Mutex<Option<oneshot::Sender<()>>>,
@@ -28,7 +29,10 @@ impl Backend for WriterProbe {
             .unwrap();
         self.release.lock().unwrap().recv_timeout(DEADLINE).unwrap();
         self.done.lock().unwrap().take().unwrap().send(()).unwrap();
-        Ok(())
+        match self.failure {
+            Some(message) => Err(ApiError::io(io::Error::other(message))),
+            None => Ok(()),
+        }
     }
     fn call(&self, _: BackendAction, _: &Identity, _: Value) -> Result<Value, ApiError> {
         Err(ApiError::unsupported())
@@ -59,6 +63,7 @@ fn writer() -> (
     (
         Arc::new(WriterProbe {
             stopped: AtomicBool::new(false),
+            failure: None,
             entered: Mutex::new(Some(entered)),
             release: Mutex::new(released),
             done: Mutex::new(Some(done)),
@@ -171,4 +176,116 @@ fn closed_runtime_rejecting_blocking_enqueue_still_drains_native_writer() {
     assert!(backend.stopped.load(Ordering::SeqCst));
     assert!(started.try_recv().is_ok());
     assert!(finished.try_recv().is_ok());
+}
+
+#[test]
+fn failed_drain_is_returned_or_reported_once_after_cancellation() {
+    use std::io::{Read, Seek};
+    let mut capture = tempfile::tempfile().unwrap();
+    let subscriber = tracing::collector::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(Arc::new(capture.try_clone().unwrap()))
+        .finish();
+    // Detached blocking outputs may be dropped on any runtime worker.
+    tracing::subscriber::set_global_default(subscriber).unwrap();
+
+    for (cancel, marker) in [
+        (false, "lifecycle-returned-drain-failure"),
+        (true, "lifecycle-detached-drain-failure"),
+    ] {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (mut backend, started, release, finished) = writer();
+        Arc::get_mut(&mut backend).unwrap().failure = Some(marker);
+        runtime.block_on(async {
+            let mut management = ManagementShutdown::new(backend);
+            let task = tokio::spawn(async move { management.finish().await });
+            notice(started).await;
+            if cancel {
+                task.abort();
+                assert!(task.await.unwrap_err().is_cancelled());
+                release.send(()).unwrap();
+            } else {
+                release.send(()).unwrap();
+                let error = task.await.unwrap().unwrap_err();
+                let source = error.get_ref().unwrap().downcast_ref::<ApiError>().unwrap();
+                assert!(format!("{source:?}").contains(marker));
+            }
+            notice(finished).await;
+        });
+        // Runtime teardown waits for the detached native drain and its output.
+        drop(runtime);
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    let (occupied, occupied_rx) = mpsc::channel();
+    let (unblock, unblock_rx) = mpsc::channel();
+    let blocker = runtime.spawn_blocking(move || {
+        occupied.send(()).unwrap();
+        unblock_rx.recv_timeout(DEADLINE).unwrap();
+    });
+    occupied_rx.recv_timeout(DEADLINE).unwrap();
+    let (mut backend, mut started, release, mut finished) = writer();
+    Arc::get_mut(&mut backend).unwrap().failure = Some("lifecycle-queued-drain-failure");
+    release.send(()).unwrap();
+    {
+        let _entered = runtime.enter();
+        let mut management = ManagementShutdown::new(backend);
+        management.begin();
+        management.drain.as_ref().unwrap().abort();
+        drop(management);
+    }
+    unblock.send(()).unwrap();
+    runtime.block_on(blocker).unwrap();
+    drop(runtime);
+    assert!(started.try_recv().is_ok());
+    assert!(finished.try_recv().is_ok());
+
+    capture.rewind().unwrap();
+    let mut logged = String::new();
+    capture.read_to_string(&mut logged).unwrap();
+    assert_eq!(
+        logged.matches("lifecycle-returned-drain-failure").count(),
+        0,
+        "{logged}"
+    );
+    assert_eq!(
+        logged.matches("lifecycle-detached-drain-failure").count(),
+        1,
+        "{logged}"
+    );
+    assert_eq!(
+        logged.matches("lifecycle-queued-drain-failure").count(),
+        1,
+        "{logged}"
+    );
+}
+
+#[test]
+fn simultaneous_http_and_management_failures_keep_both_concrete_causes() {
+    let error = combine_shutdown_results(
+        Err(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "HTTP failure",
+        )),
+        Err(io::Error::other(ApiError::io(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "management failure",
+        )))),
+    )
+    .unwrap_err();
+    let combined = error
+        .get_ref()
+        .unwrap()
+        .downcast_ref::<HttpAndManagementError>()
+        .unwrap();
+    assert_eq!(combined.http.kind(), io::ErrorKind::ConnectionReset);
+    assert!(combined.management.get_ref().unwrap().is::<ApiError>());
+    assert!(format!("{combined:?}").contains("management failure"));
 }

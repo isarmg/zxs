@@ -76,7 +76,7 @@ fn rename(engine: &mut Engine, repo: &Repository, path: &str, destination: &str)
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: storage_contract::NamespaceOperationKind::Rename,
                 path: path.into(),
                 destination: Some(destination.into()),
             },
@@ -228,7 +228,7 @@ fn parent_configuration_keeps_explicit_children_and_empty_directories_inherit() 
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation {
-                kind: "mkdir".into(),
+                kind: storage_contract::NamespaceOperationKind::Mkdir,
                 path: "empty".into(),
                 destination: None,
             },
@@ -561,7 +561,7 @@ fn top_level_backup_policy_overrides_root_regardless_of_policy_id_order() {
             .file_namespace(
                 &repo.repository_id,
                 NamespaceOperation {
-                    kind: "mkdir".into(),
+                    kind: storage_contract::NamespaceOperationKind::Mkdir,
                     path: "docs".into(),
                     destination: None,
                 },
@@ -657,7 +657,7 @@ fn one_copy_scoped_policy_binds_new_files_and_survives_moves_and_reopen() {
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation {
-                kind: "mkdir".into(),
+                kind: storage_contract::NamespaceOperationKind::Mkdir,
                 path: "destination".into(),
                 destination: None,
             },

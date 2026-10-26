@@ -205,7 +205,7 @@ fn public_commit_roundtrip_preserves_canonical_envelope_and_executes() {
         .stage_namespace(StageNamespace {
             workspace_id: workspace.workspace_id.clone(),
             change: NamespaceOperation {
-                kind: "mkdir".into(),
+                kind: storage_contract::NamespaceOperationKind::Mkdir,
                 path: "Folder".into(),
                 destination: None,
             },
@@ -249,7 +249,7 @@ fn workspace_ownership_and_session_admission_apply_to_typed_and_wire_paths() {
     let result = Application::new(&mut engine, &intruder).stage_namespace(StageNamespace {
         workspace_id: workspace.workspace_id.clone(),
         change: NamespaceOperation {
-            kind: "mkdir".into(),
+            kind: storage_contract::NamespaceOperationKind::Mkdir,
             path: "TypedDenied".into(),
             destination: None,
         },

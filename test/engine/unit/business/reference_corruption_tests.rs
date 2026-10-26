@@ -55,7 +55,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry, String) {
 }
 
 #[test]
-fn file_selection_rejects_missing_heads_without_publication() {
+fn file_selection_exposes_broken_admitted_heads_without_publication() {
     for missing in ["main_branch", "main_head", "file_head", "history"] {
         for scoped in [false, true] {
             let (_temporary, mut engine, repo, entry, branch) = fixture();
@@ -88,19 +88,29 @@ fn file_selection_rejects_missing_heads_without_publication() {
                 _ => unreachable!(),
             }
             let before = canonical_json(engine.state()).unwrap();
-            let result = if scoped {
-                engine.select_file_branch_at(
-                    &repo.repository_id,
-                    &entry.path,
-                    &entry.file_id,
-                    &branch,
-                    "admin",
-                    &new_id("op"),
-                )
-            } else {
-                engine.select_file_branch(&entry.file_id, &branch, "admin", &new_id("op"))
-            };
-            let error = result.unwrap_err();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if scoped {
+                    engine.select_file_branch_at(
+                        &repo.repository_id,
+                        &entry.path,
+                        &entry.file_id,
+                        &branch,
+                        "admin",
+                        &new_id("op"),
+                    )
+                } else {
+                    engine.select_file_branch(&entry.file_id, &branch, "admin", &new_id("op"))
+                }
+            }));
+            if matches!(missing, "main_branch" | "main_head") {
+                assert!(
+                    result.is_err(),
+                    "{missing}/{scoped}: admitted root must exist"
+                );
+                assert_eq!(canonical_json(engine.state()).unwrap(), before);
+                continue;
+            }
+            let error = result.unwrap().unwrap_err();
             assert!(
                 matches!(
                     error.code(),
@@ -225,9 +235,15 @@ fn batch_rejects_missing_references_without_publication() {
             _ => unreachable!(),
         }
         let before = canonical_json(engine.state()).unwrap();
-        let error = engine
-            .directory_namespace_batch(&repo.repository_id, &request, "admin", &new_id("op"))
-            .unwrap_err();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.directory_namespace_batch(&repo.repository_id, &request, "admin", &new_id("op"))
+        }));
+        if matches!(missing, "main_branch" | "main_head") {
+            assert!(result.is_err(), "{missing}: admitted root must exist");
+            assert_eq!(canonical_json(engine.state()).unwrap(), before);
+            continue;
+        }
+        let error = result.unwrap().unwrap_err();
         assert_eq!(
             error.code(),
             storage_contract::ErrorCode::StateInvalid,
@@ -238,7 +254,7 @@ fn batch_rejects_missing_references_without_publication() {
 }
 
 #[test]
-fn file_node_publication_rejects_missing_main_without_leaking_new_nodes() {
+fn file_node_publication_exposes_missing_admitted_main_without_leaking_new_nodes() {
     for missing in ["main_branch", "main_head"] {
         let (_temporary, mut engine, repo, entry, branch) = fixture();
         match missing {
@@ -258,8 +274,8 @@ fn file_node_publication_rejects_missing_main_without_leaking_new_nodes() {
             _ => unreachable!(),
         }
         let before = canonical_json(engine.state()).unwrap();
-        let error = engine
-            .update_file_node_tags(crate::FileNodeTagsUpdateRequest {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.update_file_node_tags(crate::FileNodeTagsUpdateRequest {
                 file_id: &entry.file_id,
                 targets: &[FileTagTarget {
                     branch_id: branch,
@@ -272,12 +288,8 @@ fn file_node_publication_rejects_missing_main_without_leaking_new_nodes() {
                 principal: "admin",
                 operation_id: &new_id("op"),
             })
-            .unwrap_err();
-        assert_eq!(
-            error.code(),
-            storage_contract::ErrorCode::StateInvalid,
-            "{missing}"
-        );
+        }));
+        assert!(result.is_err(), "{missing}: admitted root must exist");
         assert_eq!(canonical_json(engine.state()).unwrap(), before, "{missing}");
     }
 }
@@ -397,6 +409,15 @@ fn missing_file_nodes_and_bodies_return_errors_without_publication() {
                 .file_node_id = Some(node.clone());
             node
         };
+        if missing == "body" {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    engine.file_node_version(&entry.file_id, &head)
+                }))
+                .is_err()
+            );
+            continue;
+        }
         let before = canonical_json(engine.state()).unwrap();
         let error = engine
             .update_file_node_tags(crate::FileNodeTagsUpdateRequest {
@@ -487,7 +508,7 @@ fn exhausted_branch_generations_reject_metadata_mutations_atomically() {
             "namespace" => engine.file_namespace(
                 &repo.repository_id,
                 NamespaceOperation {
-                    kind: "rename".into(),
+                    kind: NamespaceOperationKind::Rename,
                     path: entry.path.clone(),
                     destination: Some("folder/renamed.txt".into()),
                 },

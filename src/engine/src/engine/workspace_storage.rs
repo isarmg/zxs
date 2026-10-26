@@ -245,7 +245,7 @@ impl Engine {
             if authoritative {
                 for workspace in &mut healthy {
                     let published = self.reconcile_workspace_receipt(workspace)?;
-                    if damaged && workspace.state == "committed" && !published {
+                    if damaged && workspace.state == WorkspaceState::Committed && !published {
                         return Err(recovery_required(
                             "surviving committed manifest lacks a bound receipt",
                         ));
@@ -276,8 +276,8 @@ impl Engine {
                         left.selected_file_contexts.clear();
                         right.selected_file_contexts.clear();
                     }
-                    left.state.clear();
-                    right.state.clear();
+                    left.state = WorkspaceState::Open;
+                    right.state = WorkspaceState::Open;
                     left.fencing_token = 0;
                     right.fencing_token = 0;
                 }
@@ -329,12 +329,7 @@ impl Engine {
                 "workspace manifest identity differs from directory",
             ));
         }
-        if !matches!(
-            workspace.state.as_str(),
-            "open" | "sealed" | "committed" | "aborted"
-        ) || !matches!(workspace.purpose.as_str(), "normal" | "historical_branch")
-            || workspace.fencing_token == 0
-        {
+        if workspace.fencing_token == 0 {
             return Err(recovery_required(
                 "invalid workspace state or fencing token",
             ));
@@ -354,7 +349,10 @@ impl Engine {
                         "workspace base belongs to another history",
                     ));
                 }
-            } else if matches!(workspace.state.as_str(), "open" | "sealed") {
+            } else if matches!(
+                workspace.state,
+                WorkspaceState::Open | WorkspaceState::Sealed
+            ) {
                 return Err(recovery_required(
                     "active workspace base is absent from verified history",
                 ));
@@ -416,14 +414,14 @@ impl Engine {
         };
         let mut expected = mirrors[before].clone();
         // Historical-save completion does not update selection contexts.
-        if expected.purpose != "normal" {
+        if expected.purpose != WorkspacePurpose::Normal {
             return Err(recovery_required(
                 "historical workspace context mirrors conflict",
             ));
         }
         let published = self.workspace_publication_snapshot(&expected)?;
         Self::refresh_workspace_contexts(&published, &mut expected);
-        expected.state = "committed".into();
+        expected.state = WorkspaceState::Committed;
         expected.fencing_token = expected
             .fencing_token
             .checked_add(1)
@@ -528,16 +526,18 @@ impl Engine {
             {
                 // Closing an already published workspace is permitted. A later
                 // abort is terminal, not a request to resurrect the old fence.
-                if workspace.state == "aborted" {
+                if workspace.state == WorkspaceState::Aborted {
                     continue;
                 }
                 let next = request
                     .fencing_token
                     .checked_add(1)
                     .ok_or_else(|| recovery_required("workspace fencing generation exhausted"))?;
-                if !matches!(workspace.state.as_str(), "open" | "sealed" | "committed")
-                    || !(workspace.fencing_token == request.fencing_token
-                        || workspace.fencing_token == next)
+                if !matches!(
+                    workspace.state,
+                    WorkspaceState::Open | WorkspaceState::Sealed | WorkspaceState::Committed
+                ) || !(workspace.fencing_token == request.fencing_token
+                    || workspace.fencing_token == next)
                     || completion.is_some_and(|fence| fence != next)
                 {
                     return Err(recovery_required(
@@ -547,10 +547,12 @@ impl Engine {
                 completion = Some(next);
             }
         }
-        if workspace.purpose == "historical_branch" && workspace.state != "aborted" {
+        if workspace.purpose == WorkspacePurpose::HistoricalBranch
+            && workspace.state != WorkspaceState::Aborted
+        {
             for plan in self.state.plans.values().filter(|plan| {
                 plan.kind == "historical_save"
-                    && plan.state == "completed"
+                    && plan.state == PlanState::Completed
                     && plan.principal == workspace.principal
                     && plan.input["workspace_id"].as_str() == Some(workspace.workspace_id.as_str())
                     && plan.input["source_commit_id"].as_str() == Some(workspace.base_head.as_str())
@@ -571,8 +573,10 @@ impl Engine {
                 {
                     continue;
                 }
-                if !matches!(workspace.state.as_str(), "sealed" | "committed")
-                    || !(workspace.fencing_token == fence || workspace.fencing_token == next)
+                if !matches!(
+                    workspace.state,
+                    WorkspaceState::Sealed | WorkspaceState::Committed
+                ) || !(workspace.fencing_token == fence || workspace.fencing_token == next)
                     || completion.is_some_and(|other| other != next)
                 {
                     return Err(recovery_required(
@@ -583,15 +587,18 @@ impl Engine {
             }
         }
         if let Some(fence) = completion {
-            if workspace.purpose == "normal"
-                && matches!(workspace.state.as_str(), "open" | "sealed")
+            if workspace.purpose == WorkspacePurpose::Normal
+                && matches!(
+                    workspace.state,
+                    WorkspaceState::Open | WorkspaceState::Sealed
+                )
             {
                 // Both mirrors may predate completion. Later selections cannot
                 // replace the destination bound by this workspace's publication.
                 let published = self.workspace_publication_snapshot(workspace)?;
                 Self::refresh_workspace_contexts(&published, workspace);
             }
-            workspace.state = "committed".into();
+            workspace.state = WorkspaceState::Committed;
             workspace.fencing_token = fence;
         }
         Ok(completion.is_some())
@@ -603,7 +610,7 @@ fn recovery_required(message: &str) -> Error {
 }
 
 fn possible_commit_transition(before: &Workspace, after: &Workspace) -> bool {
-    matches!(before.state.as_str(), "open" | "sealed")
-        && after.state == "committed"
+    matches!(before.state, WorkspaceState::Open | WorkspaceState::Sealed)
+        && after.state == WorkspaceState::Committed
         && before.fencing_token.checked_add(1) == Some(after.fencing_token)
 }

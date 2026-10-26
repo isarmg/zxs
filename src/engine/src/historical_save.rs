@@ -42,13 +42,16 @@ fn historical_workspace(
             "historical workspace belongs to another principal",
         ));
     }
-    if workspace.purpose != "historical_branch" || workspace.base_head != source {
+    if workspace.purpose != WorkspacePurpose::HistoricalBranch || workspace.base_head != source {
         return Err(Error::new(
             storage_contract::ErrorCode::SaveModeUnsupported,
             "historical save requires a workspace explicitly bound to the selected historical commit",
         ));
     }
-    if !["open", "sealed"].contains(&workspace.state.as_str()) {
+    if !matches!(
+        workspace.state,
+        WorkspaceState::Open | WorkspaceState::Sealed
+    ) {
         return Err(Error::new(
             storage_contract::ErrorCode::WorkspaceClosed,
             "historical workspace is no longer available",
@@ -90,7 +93,12 @@ fn final_entries(
             let entry = Entry {
                 entry_id: staged.item_id.clone(),
                 path: staged.path.clone(),
-                name: staged.path.rsplit('/').next().unwrap_or("").into(),
+                name: staged
+                    .path
+                    .rsplit('/')
+                    .next()
+                    .expect("invariant: split yields a final component")
+                    .into(),
                 lookup_key: key.clone(),
                 kind: NamespaceEntryKind::File,
                 file_id: previous
@@ -147,7 +155,7 @@ impl Engine {
                 "source branch is missing",
             )
         })?;
-        if branch_record.state == "migrated" {
+        if branch_record.state == BranchState::Migrated {
             return Err(Error::new(
                 storage_contract::ErrorCode::TreeMoved,
                 "source branch has moved to an independent history domain",
@@ -162,7 +170,12 @@ impl Engine {
         if self
             .workspaces
             .values()
-            .filter(|workspace| ["open", "sealed"].contains(&workspace.state.as_str()))
+            .filter(|workspace| {
+                matches!(
+                    workspace.state,
+                    WorkspaceState::Open | WorkspaceState::Sealed
+                )
+            })
             .count()
             >= self.config.max_workspaces
         {
@@ -173,7 +186,7 @@ impl Engine {
         }
         let workspace = Workspace {
             workspace_id: new_id("ws"),
-            purpose: "historical_branch".into(),
+            purpose: WorkspacePurpose::HistoricalBranch,
             branch_id: branch.into(),
             principal: principal.into(),
             base_head: source_commit.into(),
@@ -186,7 +199,7 @@ impl Engine {
             file_selection_generations: BTreeMap::new(),
             namespace_operations: Vec::new(),
             created_at: now(),
-            state: "open".into(),
+            state: WorkspaceState::Open,
         };
         self.persist_workspace(&workspace)?;
         self.workspaces
@@ -272,27 +285,15 @@ impl Engine {
             .filter(|entry| entry.kind == NamespaceEntryKind::File)
         {
             if let Some(item) = entry.version_id.strip_prefix("staged:") {
-                let staged = workspace
-                    .as_ref()
-                    .and_then(|workspace| workspace.files.get(item))
-                    .ok_or_else(|| {
-                        Error::new(
-                            storage_contract::ErrorCode::StateInvalid,
-                            "historical staged item is missing",
-                        )
-                    })?;
                 let opened = self.open_workspace_content(
-                    &workspace.as_ref().unwrap().workspace_id,
+                    &workspace
+                        .as_ref()
+                        .expect("invariant: staged entries require a workspace")
+                        .workspace_id,
                     item,
                     principal,
                 )?;
                 drop(opened);
-                if staged.size != entry.size {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::SourceChanged,
-                        "historical staged file changed after preparation",
-                    ));
-                }
             } else {
                 // Unwritten files become placeholders, with no source-byte IO.
                 continue;
@@ -342,7 +343,7 @@ impl Engine {
             expected_sequence: self.state.business_generation,
             digest: object_hash("plan", &input)?,
             input,
-            state: "ready".into(),
+            state: PlanState::Ready,
         };
         write_json(
             &self
@@ -367,7 +368,7 @@ impl Engine {
         if let Some(previous) = self.state.operations.get(operation) {
             if previous.kind == "history.historical_save"
                 && previous.result["plan_id"].as_str() == Some(id)
-                && self.operation_owner(operation).as_deref() == Some(principal)
+                && self.operation_owner(operation)?.as_deref() == Some(principal)
             {
                 return self.operation(operation);
             }
@@ -383,7 +384,7 @@ impl Engine {
                 "historical plan belongs to another operation or principal",
             ));
         }
-        if plan.state != "ready" {
+        if plan.state != PlanState::Ready {
             return Err(Error::new(
                 storage_contract::ErrorCode::PlanClosed,
                 "historical plan is no longer ready",
@@ -393,12 +394,6 @@ impl Engine {
             return Err(Error::new(
                 storage_contract::ErrorCode::PlanStale,
                 "business state changed; preview historical save again",
-            ));
-        }
-        if object_hash("plan", &plan.input)? != plan.digest {
-            return Err(Error::new(
-                storage_contract::ErrorCode::PlanInvalid,
-                "historical plan input digest does not match",
             ));
         }
         if plan.input["branch_creation"].as_str() != Some("placeholder-until-write") {
@@ -420,7 +415,7 @@ impl Engine {
         }
         let workspace = if let Some(id) = plan.input["workspace_id"].as_str() {
             let workspace = historical_workspace(self, id, &source_id, principal)?;
-            if workspace.state != "sealed"
+            if workspace.state != WorkspaceState::Sealed
                 || workspace_manifest_hash(&workspace)?
                     != text(&plan.input, "sealed_manifest_hash")?
                 || workspace.fencing_token.to_string()
@@ -480,7 +475,7 @@ impl Engine {
                         if let Some(item) = entry.version_id.strip_prefix("staged:") {
                             let staged = workspace.as_ref()
                                 .and_then(|workspace| workspace.files.get(item))
-                                .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "historical staged item missing"))?;
+                                .expect("invariant: staged entries were composed from this workspace");
                             (staged.source_path.clone(), staged.base_version_id.clone().into_iter().collect::<Vec<_>>(), staged.content_hash.clone(), staged.size)
                         } else {
                             pending_file_versions.insert(entry.file_id.clone(), entry.version_id.clone());
@@ -515,16 +510,16 @@ impl Engine {
                 state.branches.insert(branch_id.clone(), Branch {file_node_id:None,
                     branch_id: branch_id.clone(), history_tree_id: history.clone(), name: name.clone(),
                     head_commit_id: commit_id.clone(), fork_commit_id: source_id.clone(),
-                    branch_kind: "full".into(), file_id: None, pending_file_versions: pending_file_versions.clone(), generation: 1, state: "active".into(),
+                    branch_kind: storage_contract::BranchKind::Full, file_id: None, pending_file_versions: pending_file_versions.clone(), generation: 1, state: BranchState::Active,
                 });
                 let mut complete = plan.clone();
-                complete.state = "completed".into();
+                complete.state = PlanState::Completed;
                 state.plans.insert(id.into(), complete);
                 Ok(json!({"plan_id":id,"history_tree_id":history,"branch_id":branch_id,"commit_id":commit_id,"source_commit_id":source_id,"full_copy_files":copied,"written_files":copied,"placeholder_files":pending_file_versions.len(),"workspace_id":workspace.as_ref().map(|workspace|workspace.workspace_id.clone())}))
             },
         )?;
         if let Some(mut workspace) = workspace {
-            workspace.state = "committed".into();
+            workspace.state = WorkspaceState::Committed;
             workspace.fencing_token = workspace.fencing_token.checked_add(1).ok_or_else(|| {
                 Error::new(
                     storage_contract::ErrorCode::ResourceLimit,

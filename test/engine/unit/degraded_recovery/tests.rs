@@ -145,7 +145,7 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
         result.protection_at_publish,
         storage_contract::ProtectionAtPublish::BelowTarget
     );
-    assert_eq!(result.current_health, "UNAVAILABLE");
+    assert_eq!(result.current_health.as_str(), "UNAVAILABLE");
     let disk = engine.members()[0].clone();
     let scanned = scan(&disk).unwrap();
     assert_eq!(
@@ -489,7 +489,7 @@ fn original_normal_publication_is_preserved_when_content_was_lost_later() {
         result.protection_at_publish,
         storage_contract::ProtectionAtPublish::TargetMet
     );
-    assert_eq!(result.current_health, "UNAVAILABLE");
+    assert_eq!(result.current_health.as_str(), "UNAVAILABLE");
     assert_eq!(
         engine
             .prepare_degraded_recovery(&operation, "alice", "later loss")
@@ -610,7 +610,7 @@ fn prepare_only_failure_reserves_its_slot_and_is_not_an_indeterminate_operation(
         engine.operation(&operation).unwrap_err().code(),
         storage_contract::ErrorCode::OperationNotFound
     );
-    assert!(engine.operation_owner(&operation).is_none());
+    assert!(engine.operation_owner(&operation).unwrap().is_none());
     let branch = engine
         .state
         .repositories
@@ -637,4 +637,20 @@ fn prepare_only_failure_reserves_its_slot_and_is_not_an_indeterminate_operation(
     assert_eq!(result.sequence, 3);
     drop(engine);
     assert!(Engine::open(&temp.path().join("state")).is_ok());
+}
+
+#[test]
+fn unreadable_local_publication_is_not_absent_evidence() {
+    let (_temp, engine, _operation, candidate) = fixture("after_accept_2");
+    let evidence = &candidate.versions[0];
+    let directory = version_dir(
+        engine.disk(&evidence.placement.route_slot_ids[0]).unwrap(),
+        &evidence.version.history_tree_id,
+        &evidence.version.version_id,
+    );
+    let path = directory.join("publication-proof.json");
+    std::os::unix::fs::symlink("publication-proof.json", &path).unwrap();
+    let hash = object_hash("candidate", &candidate).unwrap();
+    let error = discover_publication(&engine, &candidate, &hash).unwrap_err();
+    assert!(std::error::Error::source(&error).is_some());
 }

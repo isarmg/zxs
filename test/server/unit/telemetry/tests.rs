@@ -90,11 +90,13 @@ fn read_only_sysfs_cache_falls_back_to_live_memory_monitoring() {
 #[test]
 fn supported_ranges_bound_chart_points_and_reject_other_strings() {
     for range in ["1min", "30min", "1h", "24h", "1month"] {
-        let (seconds, interval) = range_parameters(range).unwrap();
+        let (seconds, interval) = json_codec::from_value::<HistoryRange>(json!(range))
+            .unwrap()
+            .parameters();
         assert!(seconds / interval <= 360);
     }
-    assert!(range_parameters("1year").is_err());
-    assert!(range_parameters("../1h").is_err());
+    assert!(json_codec::from_value::<HistoryRange>(json!("1year")).is_err());
+    assert!(json_codec::from_value::<HistoryRange>(json!("../1h")).is_err());
 }
 
 #[test]
@@ -308,4 +310,9 @@ async fn rejected_symlink_cache_preserves_target_and_management_across_restarts(
         );
         assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
     }
+}
+
+#[test]
+fn history_range_rejects_enum_objects() {
+    assert!(json_codec::from_value::<HistoryRange>(json!({"1min": null})).is_err());
 }

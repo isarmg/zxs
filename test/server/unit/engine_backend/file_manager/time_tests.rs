@@ -50,7 +50,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: storage_contract::NamespaceOperationKind::Rename,
                 path: "before.txt".into(),
                 destination: Some("after.txt".into()),
             },

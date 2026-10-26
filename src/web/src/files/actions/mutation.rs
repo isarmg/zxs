@@ -18,28 +18,22 @@ pub(crate) fn namespace(
     action: NamespaceAction,
     name: String,
 ) -> Option<String> {
-    let snapshot = state.get_untracked();
-    if !write_allowed(&snapshot) {
-        return None;
-    }
-    let mut body = match action {
-        NamespaceAction::CreateDirectory => {
-            json!({"kind":"mkdir","path":join_path(&snapshot.files.directory,&name)})
+    let (mut body, endpoint) = state.with_untracked(|snapshot| {
+        if !write_allowed(snapshot) {
+            return None;
         }
-    };
-    let id = api::operation_id();
-    if id.is_empty() {
-        set_notice(
-            state,
-            t(
-                "浏览器无法生成安全操作编号。",
-                "The browser could not generate a secure operation ID.",
-            ),
-        );
-        return None;
-    }
+        let body = match action {
+            NamespaceAction::CreateDirectory => {
+                json!({"kind":"mkdir","path":join_path(&snapshot.files.directory,&name)})
+            }
+        };
+        Some((
+            body,
+            format!("{}/namespace", disk_path(&snapshot.files.slot)),
+        ))
+    })?;
+    let id = crate::ui::operation_id(state)?;
     body["operation_id"] = id.clone().into();
-    let endpoint = format!("{}/namespace", disk_path(&snapshot.files.slot));
     state.update(|s| {
         s.files.mutation_pending = true;
     });
@@ -71,10 +65,7 @@ pub(crate) fn directory_branch(
     if !state.with_untracked(write_allowed) {
         return None;
     }
-    let operation_id = api::operation_id();
-    if operation_id.is_empty() {
-        return None;
-    }
+    let operation_id = crate::ui::operation_id(state)?;
     let slot = state.with_untracked(|s| s.files.slot.clone());
     let action = if select {
         "directory-select"
@@ -196,10 +187,7 @@ fn record_mutation(
     if !state.with_untracked(write_allowed) {
         return None;
     }
-    let operation_id = api::operation_id();
-    if operation_id.is_empty() {
-        return None;
-    }
+    let operation_id = crate::ui::operation_id(state)?;
     body["operation_id"] = operation_id.clone().into();
     let epoch = state.with_untracked(|s| s.session_epoch);
     state.update(|s| s.files.mutation_pending = true);
@@ -244,10 +232,7 @@ pub(crate) fn update_note(
     if id.is_empty() || !state.with_untracked(write_allowed) {
         return None;
     }
-    let operation_id = api::operation_id();
-    if operation_id.is_empty() {
-        return None;
-    }
+    let operation_id = crate::ui::operation_id(state)?;
     let endpoint = format!(
         "/api/file-manager/{collection}/{}/metadata",
         api::segment(&id)
@@ -356,10 +341,7 @@ fn file_mutation(
     if !state.with_untracked(write_allowed) {
         return None;
     }
-    let id = api::operation_id();
-    if id.is_empty() {
-        return None;
-    }
+    let id = crate::ui::operation_id(state)?;
     if action == "select"
         && let Some((repository, path)) = state.with_untracked(|s| {
             s.files

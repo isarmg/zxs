@@ -54,7 +54,7 @@ fn persisted_workspace_requires_explicit_purpose_without_changing_current_bytes(
             r#"{{"base_head":"commit_fixture","branch_id":"br_fixture","created_at":"1","fencing_token":"1","files":{{}},"namespace_operations":[],"principal":"admin","purpose":"{purpose}","state":"open","workspace_id":"ws_fixture"}}"#
         );
         let workspace: Workspace = decode_strict(bytes.as_bytes()).unwrap();
-        assert_eq!(workspace.purpose, purpose);
+        assert_eq!(workspace.purpose.as_str(), purpose);
         assert_eq!(canonical_json(&workspace).unwrap(), bytes.as_bytes());
         // Empty selection maps remain legitimately omitted in the current format.
         assert!(workspace.selected_file_contexts.is_empty());

@@ -13,6 +13,9 @@ pub(super) fn from_protocol(error: storage_contract::client_protocol::ResponseEr
         message: error.message,
         retryable: error.retryable,
         request_id: error.request_id,
+        source: error
+            .source
+            .map(|source| std::sync::Arc::new(super::ErrorSource::Decode(source))),
     }
 }
 

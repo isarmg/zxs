@@ -49,10 +49,7 @@ impl Session {
             path
         };
         let handle_id = self.next_handle;
-        self.next_handle = self
-            .next_handle
-            .checked_add(1)
-            .ok_or_else(|| ApiError::limit("SMB handle identifiers exhausted"))?;
+        self.next_handle += 1;
         // An unwritten branch reads its parent's immutable version. A private
         // write copy starts from those visible bytes, while merely opening and
         // closing the handle leaves the branch without an own version.
@@ -106,7 +103,7 @@ impl Session {
             );
             let result = OpenResult {
                 entry_id,
-                kind: "directory".into(),
+                kind: storage_contract::NamespaceEntryKind::Directory,
                 path,
                 handle: handle_id,
                 size: 0,
@@ -247,18 +244,22 @@ impl Session {
                 ))
             })();
             if result.is_err() {
-                if let Some(id) = pending_workspace {
-                    let _ = self.call(
+                if let Some(id) = pending_workspace
+                    && let Err(error) = self.call(
                         crate::BackendAction::AbortWorkspace,
                         json!({"workspace_id":id}),
-                    );
+                    )
+                {
+                    tracing::warn!(error = ?error, "SMB preparation abort failed; workspace retained for recovery");
                 }
                 if let Some(path) = pending_source {
-                    let _ = fs::remove_file(path.with_extension("work.json"));
-                    let _ = fs::remove_file(path);
-                }
-                if let Some(reservation) = &pending_reservation {
-                    reservation.cleanup_record();
+                    for path in [path.with_extension("work.json"), path] {
+                        if let Err(error) = fs::remove_file(path)
+                            && error.kind() != io::ErrorKind::NotFound
+                        {
+                            tracing::warn!(error = ?error, "SMB preparation files retained after cleanup failure");
+                        }
+                    }
                 }
                 self.release_paths(&[name_policy::path_key(&path)]);
             }
@@ -294,7 +295,7 @@ impl Session {
         self.handles.insert(handle_id, handle);
         let result = OpenResult {
             entry_id,
-            kind: "file".into(),
+            kind: storage_contract::NamespaceEntryKind::File,
             path,
             handle: handle_id,
             size,

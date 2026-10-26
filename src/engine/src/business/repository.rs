@@ -49,7 +49,9 @@ impl Engine {
                         "share branch missing",
                     )
                 })?;
-                if branch.history_tree_id != history.history_tree_id || branch.state != "active" {
+                if branch.history_tree_id != history.history_tree_id
+                    || branch.state != BranchState::Active
+                {
                     return Err(Error::new(
                         storage_contract::ErrorCode::BranchNotActive,
                         "share binding requires a live branch in this repository",
@@ -62,7 +64,7 @@ impl Engine {
                     ));
                 }
                 if engine.workspaces.values().any(|w| {
-                    matches!(w.state.as_str(), "open" | "sealed")
+                    matches!(w.state, WorkspaceState::Open | WorkspaceState::Sealed)
                         && state
                             .branches
                             .get(&w.branch_id)
@@ -207,7 +209,7 @@ impl Engine {
                         root_commit_id: commit_id.clone(),
                         main_branch_id: Some(branch_id.clone()),
                         generation: 1,
-                        state: "active".into(),
+                        state: HistoryState::Active,
                         provenance: None,
                     },
                 );
@@ -220,11 +222,11 @@ impl Engine {
                         name: "main".into(),
                         head_commit_id: commit_id.clone(),
                         fork_commit_id: commit_id.clone(),
-                        branch_kind: "full".into(),
+                        branch_kind: BranchKind::Full,
                         file_id: None,
                         pending_file_versions: Default::default(),
                         generation: 1,
-                        state: "active".into(),
+                        state: BranchState::Active,
                     },
                 );
                 state.commits.insert(

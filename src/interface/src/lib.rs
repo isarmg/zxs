@@ -247,7 +247,9 @@ mod browser {
         let failed_cancel = cancel.clone();
         let failed = EventListener::new(&document, startup::FAILED_EVENT, move |_| {
             if let Some(sender) = failed_cancel.borrow_mut().take() {
-                let _ = sender.send(());
+                match sender.send(()) {
+                    Ok(()) | Err(()) => {}
+                }
             }
             cleanup();
         });
@@ -257,7 +259,9 @@ mod browser {
                 .is_some_and(|event| event.persisted())
             {
                 if let Some(sender) = cancel.borrow_mut().take() {
-                    let _ = sender.send(());
+                    match sender.send(()) {
+                        Ok(()) | Err(()) => {}
+                    }
                 }
                 cleanup();
             }
@@ -306,7 +310,12 @@ mod browser {
                         && let Some(html) = font_document.document_element()
                     {
                         let state = if result.is_ok() { "ready" } else { "failed" };
-                        let _ = html.set_attribute("data-zxs-fonts", state);
+                        if let Err(error) = html.set_attribute("data-zxs-fonts", state) {
+                            web_sys::console::warn_2(
+                                &"Could not publish font readiness".into(),
+                                &error,
+                            );
+                        }
                     }
                 });
                 Ok(())

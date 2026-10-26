@@ -307,7 +307,7 @@ fn listed_current_entry(
                         .state()
                         .branches
                         .get(&context.branch_id)
-                        .is_some_and(|branch| branch.state != "active")
+                        .is_some_and(|branch| branch.state != storage_contract::BranchState::Active)
             })
             .into();
         response["node_id"] = context
@@ -516,7 +516,7 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
         .collect::<Vec<_>>();
     let branches = file_branches
         .iter()
-        .filter(|branch| branch.state != "migrated")
+        .filter(|branch| branch.state != storage_contract::BranchState::Migrated)
         .map(|branch| {
             let mut response = branch_wire(engine, branch)?;
             response["current"] = (selected.as_deref() == Some(branch.branch_id.as_str())).into();
@@ -804,7 +804,7 @@ pub(super) fn call(
                     .state()
                     .branches
                     .get(&context.branch_id)
-                    .is_some_and(|branch| branch.state != "active")
+                    .is_some_and(|branch| branch.state != storage_contract::BranchState::Active)
             {
                 return Err(ApiError::conflict(
                     storage_contract::ErrorCode::BranchNotActive,
@@ -867,7 +867,7 @@ pub(super) fn call(
                 .file_namespace(
                     &repo.repository_id,
                     NamespaceOperation {
-                        kind: kind.into(),
+                        kind: storage_contract::NamespaceOperationKind::Mkdir,
                         path: relative,
                         destination: None,
                     },

@@ -12,6 +12,7 @@ description = "ZXS filesystem durability, SQLite index, and credential primitive
 sqlite-pool = ["sqlite-access/pool", "dep:tokio"]
 
 [dependencies]
+tracing = { version = "0.1", default-features = false, features = ["std"], path = "../foundation/diagnostics/tracing" }
 blake3.workspace = true
 futures = { version = "0.3.34", path = "../foundation/concurrency/futures", default-features = false, features = ["executor", "std"] }
 system-entropy = {version = "0.4", path = "../foundation/cryptography/system-entropy"}
@@ -28,6 +29,7 @@ tokio = { version = "1.53.2", default-features = false, features = ["rt"], optio
 zeroize = {version = "1.8", path = "../foundation/cryptography/zeroize"}
 
 [dev-dependencies]
+log = { path = "../foundation/diagnostics/log", features = ["std"] }
 tokio = { version = "1.53.2", default-features = false, features = ["rt-multi-thread", "macros"], path = "../foundation/concurrency/tokio" }
 
 [lints.rust]

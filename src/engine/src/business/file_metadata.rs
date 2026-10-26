@@ -19,11 +19,11 @@ impl Engine {
             json!({"file_id":file_id,"branch_id":branch_id,"name":name}),
             |engine, state, _| {
                 let current = state.branches.get(branch_id)
-                    .filter(|branch| branch.file_id.as_deref()==Some(file_id)&&branch.state!="migrated")
+                    .filter(|branch| branch.file_id.as_deref()==Some(file_id)&&branch.state!=BranchState::Migrated)
                     .ok_or_else(||Error::new(storage_contract::ErrorCode::FileBranchNotFound,"file branch missing"))?;
                 let repository=engine.repository_for_history(&current.history_tree_id)?;
 
-                if current.state!="active" || state.file_branch_aliases.contains_key(branch_id) {
+                if current.state!=BranchState::Active || state.file_branch_aliases.contains_key(branch_id) {
                     return Err(Error::new(storage_contract::ErrorCode::BranchNotActive,"merged file aliases are read-only"));
                 }
                 if state.branches.values().any(|branch|branch.file_id.as_deref()==Some(file_id)

@@ -167,3 +167,8 @@ version = "0.17.1"
 path = "../../collections/hash-table"
 default-features = false
 optional = true
+
+[[test]]
+name = "fs_asyncify"
+path = "../../../../test/foundation/tokio/tests/fs_asyncify.rs"
+required-features = ["fs", "rt"]

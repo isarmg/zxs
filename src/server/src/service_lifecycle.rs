@@ -7,19 +7,29 @@ use tokio::sync::oneshot;
 /// runtime teardown waits for them instead of silently detaching a writer.
 pub(crate) struct ManagementShutdown {
     backend: Option<Arc<dyn crate::Backend>>,
-    drain: Option<tokio::task::JoinHandle<Result<(), crate::ApiError>>>,
+    drain: Option<tokio::task::JoinHandle<DrainCompletion>>,
 }
 /// Tokio may discard queued non-mandatory blocking jobs during runtime
 /// shutdown. The closure must own a drain-on-drop obligation, not just an Arc.
 struct NativeDrain(Option<Arc<dyn crate::Backend>>);
 impl NativeDrain {
-    fn run(mut self) -> Result<(), crate::ApiError> {
-        match self.0.take() {
-            Some(backend) => backend.drain_management(),
-            None => Ok(()),
+    fn run(mut self) -> DrainCompletion {
+        let backend = self
+            .0
+            .take()
+            .expect("invariant: native drain owns its backend");
+        DrainCompletion(Some(backend.drain_management()))
+    }
+}
+struct DrainCompletion(Option<Result<(), crate::ApiError>>);
+impl Drop for DrainCompletion {
+    fn drop(&mut self) {
+        if let Some(Err(error)) = self.0.take() {
+            tracing::error!(error = ?error, "management shutdown failed");
         }
     }
 }
+
 impl Drop for NativeDrain {
     fn drop(&mut self) {
         if let Some(backend) = self.0.take()
@@ -56,6 +66,9 @@ impl ManagementShutdown {
             drain
                 .await
                 .map_err(io::Error::other)?
+                .0
+                .take()
+                .expect("invariant: completed drain owns its result")
                 .map_err(io::Error::other)?;
         }
         Ok(())
@@ -129,13 +142,31 @@ where
                 drop(bridge);
                 management.begin();
                 let drained = management.finish().await;
-                return result.and(drained);
+                return combine_shutdown_results(result, drained);
             },
             _ = &mut bridge, if !bridge_finished => {
                 // Optional bridge failure must not take management HTTP down.
                 bridge_finished = true;
             }
         }
+    }
+}
+
+#[derive(Debug, error_definition::Error)]
+#[error("HTTP shutdown failed: {http}; management shutdown also failed: {management}")]
+struct HttpAndManagementError {
+    #[source]
+    http: io::Error,
+    management: io::Error,
+}
+
+fn combine_shutdown_results(http: io::Result<()>, management: io::Result<()>) -> io::Result<()> {
+    match (http, management) {
+        (Ok(()), result) | (result, Ok(())) => result,
+        (Err(http), Err(management)) => Err(io::Error::other(HttpAndManagementError {
+            http,
+            management,
+        })),
     }
 }
 
@@ -147,7 +178,7 @@ where
     let work = async {
         let result = http.await;
         let drained = management.finish().await;
-        result.and(drained)
+        combine_shutdown_results(result, drained)
     };
     tokio::pin!(work);
     loop {

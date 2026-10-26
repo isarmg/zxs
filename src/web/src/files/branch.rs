@@ -33,13 +33,11 @@ fn file_source(model: &super::model::Model, target: &Target) -> Option<(String, 
         Target::CurrentFileVersion => model
             .selected
             .as_ref()
-            .filter(|entry| super::model::visible_content(entry))?
-            .clone(),
+            .filter(|entry| super::model::visible_content(entry))?,
         Target::HistoryNode(id) => super::model::history_nodes_ref(&model.file_history)
             .iter()
-            .find(|node| super::model::history_node_id(node) == *id)?
-            .clone(),
-        _ => return None,
+            .find(|node| super::model::history_node_id(node) == *id)?,
+        Target::CurrentDirectory | Target::Directory { .. } => return None,
     };
     let version = record["version_id"]
         .as_str()
@@ -105,7 +103,7 @@ pub(super) fn control(
                 // Each edit receives its own ref so focus also works when a
                 // cancelled editor is opened again.
                 let input = NodeRef::<html::Input>::new();
-                input.on_load(|input| { let _ = input.focus(); });
+                input.on_load(|input| { if let Err(error) = input.focus() { web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error); } });
                 view! {
                     <input class="zxs-branch-name zxs-input zxs-input--compact zxs-input--underline" node_ref=input type="text"
                         aria-label=t("分支名称","Branch name")

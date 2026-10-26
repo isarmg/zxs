@@ -349,12 +349,12 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
             .unwrap();
         for operation in [
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: NamespaceOperationKind::Rename,
                 path: "FOLDER".into(),
                 destination: Some("Moved".into()),
             },
             NamespaceOperation {
-                kind: "delete".into(),
+                kind: NamespaceOperationKind::Delete,
                 path: "Folderish/file.txt".into(),
                 destination: None,
             },

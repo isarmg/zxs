@@ -103,7 +103,7 @@ fn file_history_matches_preprojection_graph_json() {
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation {
-                kind: "rename".into(),
+                kind: storage_contract::NamespaceOperationKind::Rename,
                 path: "before.txt".into(),
                 destination: Some("after.txt".into()),
             },

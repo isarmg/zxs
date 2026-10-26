@@ -126,7 +126,7 @@ fn populated_state() -> State {
         "plan_id": "plan", "kind": "maintenance", "principal": "作者",
         "expected_sequence": "18446744073709551615", "digest": "digest",
         "input": {"nested": [null, false, {"\u{10000}": "supplementary", "\u{e000}": "BMP"}]},
-        "state": "prepared"
+        "state": "ready"
     }});
     value["placement_rules"] = json_codec::json!({"rule": {
         "rule_id": "rule", "repository_id": "repository", "path_prefix": "目录",

@@ -317,3 +317,19 @@ async fn dropping_unstarted_token_performs_no_inventory() {
     assert_eq!(state.status(), "pending");
     assert!(!config.spool_dir.exists());
 }
+
+#[test]
+fn poisoned_spool_state_is_an_invariant_failure_not_unavailable() {
+    let (spool, _startup) = HttpSpool::pending();
+    let worker = spool.clone();
+    assert!(
+        std::thread::spawn(move || {
+            let _state = worker.state.lock().unwrap();
+            panic!("poison fixture");
+        })
+        .join()
+        .is_err()
+    );
+    assert!(std::panic::catch_unwind(|| spool.status()).is_err());
+    assert!(std::panic::catch_unwind(|| spool.budget()).is_err());
+}

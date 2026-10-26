@@ -218,7 +218,7 @@ impl Engine {
             base_snapshot: self.snapshot.clone(),
             base_sequence: self.state.sequence,
             base_next_slot: self.next_slot,
-            config_hash: object_hash("publication-config", &self.config)?,
+            config_hash,
             snapshot_basis,
         })
     }
@@ -246,6 +246,7 @@ impl Engine {
             verified,
             names,
             snapshot_basis,
+            config_hash,
             ..
         } = detached;
         verified
@@ -313,11 +314,10 @@ impl Engine {
             Some(names),
         );
         if let Err(e) = finish {
-            return Err(Error::new(
-                storage_contract::ErrorCode::InDoubt,
-                format!("{}; query operation {} and recover", e, result.operation_id),
-            )
-            .retryable());
+            let message = format!("{e}; query operation {} and recover", result.operation_id);
+            return Err(e
+                .context(storage_contract::ErrorCode::InDoubt, message)
+                .retryable());
         }
         let previous = std::mem::replace(&mut self.state, std::sync::Arc::new(next));
         self.snapshot = Some(candidate.snapshot_hash.clone());
@@ -327,7 +327,7 @@ impl Engine {
             state: std::sync::Arc::downgrade(&self.state),
             snapshot: candidate.snapshot_hash,
             sequence: self.state.sequence,
-            config_hash: object_hash("publication-config", &self.config)?,
+            config_hash,
             roots: candidate.history_manifest_hashes,
             snapshot_basis,
         }));
@@ -354,69 +354,75 @@ impl Engine {
             let disk = self.disk(slot)?;
             validate_seal(&self.config, disk)?;
             let directory = version_dir(disk, &p.version.history_tree_id, &p.version.version_id);
-            if directory.join("version.json").exists() {
-                let existing: FileVersion = read_json(&directory.join("version.json"))?;
-                if object_hash("version", &existing)? != object_hash("version", &p.version)? {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::ObjectCollision,
-                        "version identity already exists with different bytes",
-                    ));
+            match read_json::<FileVersion>(&directory.join("version.json")) {
+                Ok(existing) => {
+                    if object_hash("version", &existing)? != object_hash("version", &p.version)? {
+                        return Err(Error::new(
+                            storage_contract::ErrorCode::ObjectCollision,
+                            "version identity already exists with different bytes",
+                        ));
+                    }
+                    verify_payload(&directory, &p.version)?;
                 }
-                verify_payload(&directory, &p.version)?;
-            } else {
-                let staging = disk.root.join("staging").join(new_id("op"));
-                private_dir(&staging.join("content"))?;
-                let target = staging.join("content").join(&p.version.creation_name);
-                let (size, hash, checks) = full_copy(
-                    &source,
-                    &target,
-                    self.config.checksum_chunk_bytes,
-                    self.config.max_file_bytes,
-                )?;
-                if size != p.version.logical_size
-                    || hash != p.version.content_hash
-                    || blake3::hash(&checks.encode()?).to_hex().as_str()
-                        != p.version.checksum_manifest_hash
+                Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+                | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+                    if error.kind() == std::io::ErrorKind::NotFound =>
                 {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::SourceChanged,
-                        "prepared full file differs from the sealed input",
-                    ));
+                    let staging = disk.root.join("staging").join(new_id("op"));
+                    private_dir(&staging.join("content"))?;
+                    let target = staging.join("content").join(&p.version.creation_name);
+                    let (size, hash, checks) = full_copy(
+                        &source,
+                        &target,
+                        self.config.checksum_chunk_bytes,
+                        self.config.max_file_bytes,
+                    )?;
+                    if size != p.version.logical_size
+                        || hash != p.version.content_hash
+                        || blake3::hash(&checks.encode()?).to_hex().as_str()
+                            != p.version.checksum_manifest_hash
+                    {
+                        return Err(Error::new(
+                            storage_contract::ErrorCode::SourceChanged,
+                            "prepared full file differs from the sealed input",
+                        ));
+                    }
+                    write_json(&staging.join("version.json"), &p.version, false)?;
+                    write_atomic(&staging.join("checksums.bin"), &checks.encode()?, false)?;
+                    write_json(
+                        &staging.join("payload.json"),
+                        &json!({"payload_id":format!("payload_{}",&p.version.version_id[4..]),"version_id":p.version.version_id,"kind":"FULL","size":size.to_string(),"content_hash":hash}),
+                        false,
+                    )?;
+                    sync_dir(&staging)?;
+                    private_dir(directory.parent().expect("version parent"))?;
+                    let staging_parent = platform_io::fs_safety::linux::OpenAt2Root::open(
+                        staging.parent().expect("staging parent"),
+                        platform_io::fs_safety::linux::MountPolicy::SameMount,
+                    )
+                    .map_err(|error| {
+                        let message = error.to_string();
+                        Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
+                    })?;
+                    let version_parent = platform_io::fs_safety::linux::OpenAt2Root::open(
+                        directory.parent().expect("version parent"),
+                        platform_io::fs_safety::linux::MountPolicy::SameMount,
+                    )
+                    .map_err(|error| {
+                        let message = error.to_string();
+                        Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
+                    })?;
+                    rustix::fs::renameat_with(
+                        staging_parent.directory(),
+                        staging.file_name().expect("staging name"),
+                        version_parent.directory(),
+                        directory.file_name().expect("version name"),
+                        rustix::fs::RenameFlags::NOREPLACE,
+                    )
+                    .map_err(std::io::Error::from)?;
+                    sync_dir(directory.parent().expect("version parent"))?;
                 }
-                write_json(&staging.join("version.json"), &p.version, false)?;
-                write_atomic(&staging.join("checksums.bin"), &checks.encode()?, false)?;
-                write_json(
-                    &staging.join("payload.json"),
-                    &json!({"payload_id":format!("payload_{}",&p.version.version_id[4..]),"version_id":p.version.version_id,"kind":"FULL","size":size.to_string(),"content_hash":hash}),
-                    false,
-                )?;
-                sync_dir(&staging)?;
-                private_dir(directory.parent().expect("version parent"))?;
-                let staging_parent = platform_io::fs_safety::linux::OpenAt2Root::open(
-                    staging.parent().expect("staging parent"),
-                    platform_io::fs_safety::linux::MountPolicy::SameMount,
-                )
-                .map_err(|error| {
-                    let message = error.to_string();
-                    Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
-                })?;
-                let version_parent = platform_io::fs_safety::linux::OpenAt2Root::open(
-                    directory.parent().expect("version parent"),
-                    platform_io::fs_safety::linux::MountPolicy::SameMount,
-                )
-                .map_err(|error| {
-                    let message = error.to_string();
-                    Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
-                })?;
-                rustix::fs::renameat_with(
-                    staging_parent.directory(),
-                    staging.file_name().expect("staging name"),
-                    version_parent.directory(),
-                    directory.file_name().expect("version name"),
-                    rustix::fs::RenameFlags::NOREPLACE,
-                )
-                .map_err(std::io::Error::from)?;
-                sync_dir(directory.parent().expect("version parent"))?;
+                Err(error) => return Err(error),
             }
             // Install a real version file in this file's named container before
             // any protection receipt is issued. The next level reads this copy.
@@ -489,7 +495,7 @@ impl Engine {
                     &evidence.version.history_tree_id,
                     &evidence.version.version_id,
                 );
-                if !dir.exists() {
+                if !dir.try_exists()? {
                     continue;
                 }
                 let proof = CommitProof {
@@ -784,48 +790,49 @@ fn run_payload_groups<T: Sync>(
     const WORKERS: usize = 4;
     struct Queue {
         next: usize,
+        closed: bool,
         first_error: Option<(usize, Error)>,
     }
     let queue = std::sync::Mutex::new(Queue {
         next: 0,
+        closed: false,
         first_error: None,
     });
+    struct ClaimedGroup<'a>(&'a std::sync::Mutex<Queue>);
+    impl Drop for ClaimedGroup<'_> {
+        fn drop(&mut self) {
+            if std::thread::panicking() {
+                self.0
+                    .lock()
+                    .expect("invariant: payload preparation queue poisoned")
+                    .closed = true;
+            }
+        }
+    }
     std::thread::scope(|scope| {
         let workers: Vec<_> = (0..WORKERS.min(groups.len()))
             .map(|_| {
-                scope.spawn(|| -> Result<()> {
+                scope.spawn(|| {
                     loop {
                         let index = {
                             let mut queue = queue
                                 .lock()
                                 .expect("invariant: payload preparation queue poisoned");
-                            if queue.first_error.is_some() || queue.next == groups.len() {
-                                return Ok(());
+                            if queue.closed
+                                || queue.first_error.is_some()
+                                || queue.next == groups.len()
+                            {
+                                return;
                             }
                             let index = queue.next;
                             queue.next += 1;
                             index
                         };
-                        // A claimed file keeps its version order even if another file fails.
-                        // Catch its panic here, not at join, so no worker keeps claiming work
-                        // after the failure is recorded. No payload I/O holds the queue lock.
-                        let outcome =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                for payload in &groups[index] {
-                                    work(payload)?;
-                                }
-                                Ok(())
-                            }));
-                        let (error, panic) = match outcome {
-                            Ok(Ok(())) => continue,
-                            Ok(Err(error)) => (error, None),
-                            Err(panic) => (
-                                Error::new(
-                                    storage_contract::ErrorCode::InternalError,
-                                    "payload preparation worker panicked",
-                                ),
-                                Some(panic),
-                            ),
+                        // Close admission during unwinding, after the claim lock was released.
+                        let _claimed = ClaimedGroup(&queue);
+                        let result = groups[index].iter().try_for_each(|payload| work(payload));
+                        let Err(error) = result else {
+                            continue;
                         };
                         {
                             let mut queue = queue
@@ -841,28 +848,24 @@ fn run_payload_groups<T: Sync>(
                                 queue.first_error = Some((index, error));
                             }
                         }
-                        // A custom panic payload may run a destructor; close admission first
-                        // and never drop that payload while holding the queue lock.
-                        drop(panic);
-                        return Ok(());
+                        return;
                     }
                 })
             })
             .collect();
-        let mut worker_error = None;
+        let mut panic = None;
         for worker in workers {
-            let result = worker.join().unwrap_or_else(|_| {
-                Err(Error::new(
-                    storage_contract::ErrorCode::InternalError,
-                    "payload preparation scheduler panicked",
-                ))
-            });
-            if worker_error.is_none() {
-                worker_error = result.err();
+            match worker.join() {
+                Ok(()) => (),
+                Err(payload) => {
+                    panic.get_or_insert(payload);
+                }
             }
         }
-        worker_error.map_or(Ok(()), Err)
-    })?;
+        if let Some(payload) = panic {
+            std::panic::resume_unwind(payload);
+        }
+    });
     queue
         .into_inner()
         .expect("invariant: payload preparation queue poisoned")

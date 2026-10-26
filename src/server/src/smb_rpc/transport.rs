@@ -8,16 +8,37 @@ struct SocketGuard {
 }
 impl Drop for SocketGuard {
     fn drop(&mut self) {
-        if let Ok(mut connections) = self.connections.lock() {
+        {
+            let mut connections = self
+                .connections
+                .lock()
+                .expect("service state lock poisoned");
             for stream in connections.values() {
-                let _ = stream.shutdown(std::net::Shutdown::Both);
+                if let Err(error) = stream.shutdown(std::net::Shutdown::Both)
+                    && error.kind() != io::ErrorKind::NotConnected
+                {
+                    tracing::warn!(error = ?error, "SMB socket shutdown failed");
+                }
             }
             connections.clear();
         }
-        if let Ok(metadata) = fs::symlink_metadata(&self.path)
-            && (metadata.dev(), metadata.ino()) == self.identity
-        {
-            let _ = fs::remove_file(&self.path);
+        let cleanup = (|| -> io::Result<()> {
+            let metadata = match fs::symlink_metadata(&self.path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error),
+            };
+            if (metadata.dev(), metadata.ino()) == self.identity {
+                match fs::remove_file(&self.path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = cleanup {
+            tracing::warn!(error = ?error, "SMB socket cleanup failed");
         }
     }
 }
@@ -27,7 +48,11 @@ struct ConnectionGuard {
 }
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
-        if let Ok(mut connections) = self.connections.lock() {
+        {
+            let mut connections = self
+                .connections
+                .lock()
+                .expect("service state lock poisoned");
             connections.remove(&self.id);
         }
     }
@@ -54,7 +79,12 @@ impl SessionPermit {
 }
 impl Drop for SessionPermit {
     fn drop(&mut self) {
-        if let Ok(mut sessions) = self.shared.authenticated_sessions.lock() {
+        {
+            let mut sessions = self
+                .shared
+                .authenticated_sessions
+                .lock()
+                .expect("service state lock poisoned");
             *sessions -= 1;
         }
     }
@@ -192,7 +222,7 @@ fn send_success(
     if payload.len() > smb_protocol::protocol::MAX_FRAME_BYTES {
         drop(payload);
         return stream.send(&Response::Error {
-            code: storage_contract::ErrorCode::ResponseTooLarge.as_str().to_owned(),
+            code: storage_contract::ErrorCode::ResponseTooLarge,
             message: "result exceeds RPC frame limit; the operation may have completed, query its original identity rather than replaying".into(),
             retryable: false,
             operation_id,
@@ -204,7 +234,7 @@ fn send_success(
 fn response_error(error: ApiError, operation_id: Option<String>) -> Response {
     error.log_response();
     Response::Error {
-        code: error.code.as_str().to_owned(),
+        code: error.code,
         message: error.message,
         retryable: error.retryable,
         operation_id,
@@ -345,9 +375,7 @@ pub async fn serve(
         let stream = stream.into_std()?;
         stream.set_nonblocking(false)?;
         let id = next_connection;
-        next_connection = next_connection
-            .checked_add(1)
-            .ok_or_else(|| io::Error::other("SMB connection identifiers exhausted"))?;
+        next_connection += 1;
         connections
             .lock()
             .expect("service state lock poisoned")
@@ -357,12 +385,16 @@ pub async fn serve(
             connections: connections.clone(),
         };
         let shared = shared.clone();
-        tokio::task::spawn_blocking(move || {
+        let session = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let _connection_guard = connection_guard;
-            match FrameStream::new(stream).and_then(|stream| run_connection(stream, shared)) {
-                Ok(()) => {}
-                Err(error) => tracing::warn!(error = ?error,"SMB local RPC session ended"),
+            FrameStream::new(stream).and_then(|stream| run_connection(stream, shared))
+        });
+        tokio::spawn(async move {
+            match session.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => tracing::warn!(error = ?error, "SMB local RPC session ended"),
+                Err(error) => tracing::error!(error = ?error, "SMB local RPC worker failed"),
             }
         });
     }

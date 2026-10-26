@@ -2,7 +2,7 @@
 use super::*;
 use json_codec::json;
 fn branch_contains_commit(state: &State, branch: &Branch, target: &str) -> Result<bool> {
-    if branch.state == "migrated" {
+    if branch.state == BranchState::Migrated {
         return Err(Error::new(
             storage_contract::ErrorCode::TreeMoved,
             "branch moved to another history",
@@ -60,7 +60,7 @@ impl Engine {
                 "branch not found",
             )
         })?;
-        if branch.state == "migrated" {
+        if branch.state == BranchState::Migrated {
             return Err(Error::new(
                 storage_contract::ErrorCode::TreeMoved,
                 "this branch moved during a history split; use the published mapping",
@@ -216,11 +216,11 @@ impl Engine {
                     name: name.into(),
                     head_commit_id: commit_id.clone(),
                     fork_commit_id: source_commit.into(),
-                    branch_kind: "full".into(),
+                    branch_kind: BranchKind::Full,
                     file_id: None,
                     pending_file_versions,
                     generation: 1,
-                    state: "active".into(),
+                    state: BranchState::Active,
                 };
                 state.branches.insert(id.clone(), created_branch.clone());
                 Ok(json!({
@@ -385,11 +385,10 @@ impl Engine {
                         "select another file branch before archiving this branch",
                     ));
                 }
-                if engine
-                    .workspaces
-                    .values()
-                    .any(|w| w.branch_id == id && matches!(w.state.as_str(), "open" | "sealed"))
-                {
+                if engine.workspaces.values().any(|w| {
+                    w.branch_id == id
+                        && matches!(w.state, WorkspaceState::Open | WorkspaceState::Sealed)
+                }) {
                     return Err(Error::new(
                         storage_contract::ErrorCode::WorkspaceBusy,
                         "branch has an open workspace",
@@ -401,7 +400,7 @@ impl Engine {
                         "branch missing",
                     )
                 })?;
-                b.state = "archived".into();
+                b.state = BranchState::Archived;
                 b.generation = b.generation.checked_add(1).ok_or_else(|| {
                     Error::new(
                         storage_contract::ErrorCode::ResourceLimit,

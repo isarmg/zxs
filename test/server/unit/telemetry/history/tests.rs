@@ -13,7 +13,9 @@ fn sample(at: i64, value: Option<f64>) -> Sample {
                 usage_percent: value.map(|value| value.min(100.0) as f32),
                 logical_count: 4,
                 power_watts: value,
-                power_unavailable_reason: value.is_none().then(|| "sensor_unavailable".into()),
+                power_unavailable_reason: value
+                    .is_none()
+                    .then_some(crate::telemetry::power::PowerUnavailable::SensorUnavailable),
             },
             memory: MemoryStatus {
                 total_bytes: Some("18446744073709551615".into()),
@@ -134,7 +136,9 @@ fn mixed_null_metrics_remain_exact_after_two_aggregations_and_persistence() {
             available_bytes: bytes,
             usage_percent: value,
             power_watts: value,
-            power_unavailable_reason: value.is_none().then(|| "sensor_unavailable".into()),
+            power_unavailable_reason: value
+                .is_none()
+                .then_some(crate::telemetry::power::PowerUnavailable::SensorUnavailable),
         }];
         sample
     };
@@ -234,7 +238,9 @@ fn disk_averages_keep_valid_observations_when_the_bucket_ends_offline() {
             available_bytes: online.then(|| "600".into()),
             usage_percent: online.then_some(30.0),
             power_watts: None,
-            power_unavailable_reason: Some("simulated_disk".into()),
+            power_unavailable_reason: Some(
+                crate::telemetry::power::PowerUnavailable::SimulatedDisk,
+            ),
         }];
         point
     };

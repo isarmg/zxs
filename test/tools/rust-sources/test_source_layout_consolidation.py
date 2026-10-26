@@ -83,6 +83,38 @@ class TerminalConsolidationLayout(unittest.TestCase):
         self.view=layout.load(self.root,self.current)
         self.view.verify_installation(self.previous_layout,self.current,digest(encoded(self.previous_layout)))
 
+    def test_semantic_maintenance_reverses_before_exact_layout_inverse(self):
+        import proof_maintenance as maintenance
+        import source_layout_corrections
+        before_catalog = deepcopy(self.current)
+        before = maintenance.state(before_catalog, self.new)
+        path = 'test/foundation/combined/mini.rs'
+        raw = (self.root / path).read_bytes()
+        changed = raw.replace(b'include!', b'include_str!')
+        material(self.root, {path: changed})
+        owner = self.current['external_tests'][self.new]
+        owner['files'][0]['sha256'] = digest(changed)
+        owner['bytes'] += len(changed) - len(raw)
+        record = dict(schema=1, reason='Preserve an error source after grouped layout',
+                      terminal=self.current['proof_routing_receipts'][0], parent=None,
+                      layout={key:self.current.get(key) for key in (layout.KEY, source_layout_corrections.KEY)},
+                      before=before, after=maintenance.state(deepcopy(self.current), self.new),
+                      files=[dict(before=path, after=path, before_sha256=digest(raw), after_sha256=digest(changed),
+                                  replacements=[dict(old=base64.b64encode(b'include!').decode(),
+                                                     new=base64.b64encode(b'include_str!').decode())])])
+        compressed = gzip.compress(encoded(record), mtime=0); receipt = digest(compressed)
+        material(self.root, {'compliance/proof-maintenance/' + receipt + '.json.gz':compressed})
+        self.current[maintenance.KEY] = [receipt]
+        with layout.activate(self.view), self.assertRaisesRegex(ValueError, 'layout live edited content drift'):
+            layout.read(self.root, path)
+        with patch.object(maintenance, 'RECEIPTS', (receipt,)):
+            view = self.routed()
+            self.assertEqual(view.read('test/foundation/mini/test.rs'), self.before_bytes['test/foundation/mini/test.rs'])
+            with layout.activate(self.view):
+                maintenance.validate_refresh(self.root, before_catalog, self.current)
+        with self.assertRaises(ValueError):
+            self.routed()
+
     def routed(self):
         with layout.activate(self.view):return self.routing.load(self.root,self.current)
 

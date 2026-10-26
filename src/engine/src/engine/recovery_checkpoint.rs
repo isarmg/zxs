@@ -56,10 +56,12 @@ fn named_container(root: &Path, relative: &Path) -> Result<bool> {
     if parts.len() == 5 && parts[4] != "namespace" {
         return Ok(true);
     }
-    Ok(
-        read_json::<String>(&root.join(relative).join(".zxs-container-owner.json"))
-            .is_ok_and(|id| id == parts[3]),
-    )
+    let Some(file) = open_optional_regular(&root.join(relative).join(".zxs-container-owner.json"))?
+    else {
+        return Ok(false);
+    };
+    let owner: String = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
+    Ok(owner == parts[3])
 }
 fn payload(root: &Path, relative: &Path) -> Result<bool> {
     let Some(parent) = relative.parent() else {
@@ -111,9 +113,10 @@ fn excluded(path: &Path) -> bool {
 fn append_only(root: &Path, path: &Path) -> Result<bool> {
     let parts = relative_parts(path)?;
     if path.file_name().is_some_and(|name| name == "versions")
-        && path
-            .parent()
-            .is_some_and(|parent| named_container(root, parent).unwrap_or(false))
+        && match path.parent() {
+            Some(parent) => named_container(root, parent)?,
+            None => false,
+        }
     {
         return Ok(true);
     }
@@ -341,9 +344,10 @@ fn verify_coverage(
                 && parts[0] == "histories"
                 && parts[2] == "file-containers"
                 && parts.last() == Some(&"container.json")
-                && path
-                    .parent()
-                    .is_some_and(|parent| named_container(&d.root, parent).unwrap_or(false))
+                && match path.parent() {
+                    Some(parent) => named_container(&d.root, parent)?,
+                    None => false,
+                }
                 && rebuilt.contains(&(parts[1].to_owned(), parts[3].to_owned()))
             {
                 continue;
@@ -412,30 +416,40 @@ pub(super) fn load(
     engine: &Engine,
     prefixes: &BTreeMap<String, BTreeSet<String>>,
     records: &Records,
-) -> Option<Checkpoint> {
+) -> Result<Option<Checkpoint>> {
     let members = engine.members();
     let mut chosen = None;
     for d in &members {
-        let envelope: Envelope =
-            decode_strict(&read_bytes(&path(d), MAX_CHECKPOINT_BYTES).ok()?).ok()?;
+        let Some(file) = open_optional_regular(&path(d))? else {
+            return Ok(None);
+        };
+        let envelope: Envelope = decode_strict(&read_file_bytes(file, MAX_CHECKPOINT_BYTES)?)?;
         let checkpoint = envelope.checkpoint;
-        if checkpoint.config_hash != object_hash("replay-config", &engine.config).ok()?
+        if checkpoint.config_hash != object_hash("replay-config", &engine.config)?
             || checkpoint.tips.len() != members.len()
             || !checkpoint
                 .tips
                 .iter()
                 .all(|(id, tip)| prefixes.get(id).is_some_and(|hashes| hashes.contains(tip)))
-            || envelope.hash != object_hash("replay-checkpoint", &checkpoint).ok()?
+            || envelope.hash != object_hash("replay-checkpoint", &checkpoint)?
             || chosen.as_ref().is_some_and(|c| c != &checkpoint)
         {
-            return None;
+            return Ok(None);
         }
         chosen = Some(checkpoint);
     }
-    let checkpoint = chosen?;
-    let rebuilt = suffix_rebuilt_containers(engine, &checkpoint, records).ok()?;
-    verify_coverage(engine, &checkpoint, &rebuilt).ok()?;
-    Some(checkpoint)
+    let Some(checkpoint) = chosen else {
+        return Ok(None);
+    };
+    let verified = (|| {
+        let rebuilt = suffix_rebuilt_containers(engine, &checkpoint, records)?;
+        verify_coverage(engine, &checkpoint, &rebuilt)
+    })();
+    match verified {
+        Ok(()) => Ok(Some(checkpoint)),
+        Err(error) if error.code() == ErrorCode::CheckpointInvalid => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 pub(super) fn save(engine: &Engine) -> Result<()> {
@@ -518,7 +532,10 @@ pub(super) fn save(engine: &Engine) -> Result<()> {
         config_hash: object_hash("replay-config", &engine.config)?,
         sequence,
         candidate_hash,
-        snapshot_hash: engine.snapshot.clone().ok_or_else(invalid)?,
+        snapshot_hash: engine
+            .snapshot
+            .clone()
+            .expect("invariant: checkpoint save requires a snapshot"),
         tips,
         coverage: coverage(engine, &absent)?,
         version_ids,
