@@ -143,6 +143,42 @@ impl Backend for Probe {
     fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn workspace_capacity(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn branch_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn branches_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn repositories_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn tree_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadTree<'_>,
+    ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn create_write_session(
         &self,
         _identity: &crate::auth::Identity,
@@ -228,6 +264,16 @@ impl Backend for Probe {
         Err(crate::ApiError::unsupported())
     }
 
+    fn range_content(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadContent<'_>,
+    ) -> Result<crate::Content, crate::ApiError> {
+        match request.context {
+            Some(_) => Err(crate::ApiError::unsupported()),
+            None => self.content(identity, request.version),
+        }
+    }
     fn content(&self, _: &Identity, _: &str) -> Result<Content, ApiError> {
         Err(ApiError::unsupported())
     }

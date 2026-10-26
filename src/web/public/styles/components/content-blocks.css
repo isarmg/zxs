@@ -53,5 +53,4 @@ html:not([data-zxs-appearance]), html[data-zxs-appearance="content-blocks"] {
   .zxs-header-actions svg { width: var(--zxs-header-icon-size,1em); height: var(--zxs-header-icon-size,1em); }
   &:not([data-zxs-selection="custom"]) .zxs-header-navigation [aria-current="page"] { text-decoration: underline; text-underline-offset: .25em; }
   &:not([data-zxs-selection="custom"]) .zxs-button[aria-pressed="true"] { background: transparent; color: var(--zxs-text-primary); text-decoration: underline; text-underline-offset: .25em; text-decoration-thickness: 1px; }
-  @media (forced-colors: active) { :is(button,input,select,a):focus-visible { outline: 2px solid Highlight; outline-offset: 2px; } .zxs-dialog { border: 1px solid CanvasText; } }
 }

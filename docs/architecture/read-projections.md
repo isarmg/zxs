@@ -84,12 +84,12 @@ SMB RPC 入口一次解析路径并直接构造同一类型，替换目标删除
 
 ## 剩余 Value 调用清单
 
-此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 61 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
+此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 53 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
 
 - **工作区 seal／公开发布已接续迁移。** 见[公开提交边界](detached-workspace-commits.md#public-commit-envelope-and-seal)；HTTP 与 SMB 保留各自摘要契约。上传 publication 结果也已接续类型化；namespace 暂存也已接续迁移；write-session 已接续迁移，通用读取仍有 Value，不能据当前迁移宣称全部工作区接口已经分层。
 - **SMB 绑定／只读冻结版本。** Capabilities、Repository 与冻结版本已使用 typed snapshot/准入，生产 Session::call 已删除。不是本次 typed 当前查询的后备路径。
-- **HTTP 通用读取。** repositories/branches/branch/tree/resolve/history/commit/graph/events/compare、目录分支及选择、拓扑／放置／策略／磁盘／健康查询，仍由 HTTP 通用分派调用 `Backend::call`。
-- **HTTP 写入与计划。** 仓库／分支／目录分支创建和选择、SMB binding 配置、policy/placement，以及 split/purge/historical-save/plan 的请求与结果仍需逐组迁移。已有 operation/commit_workspace typed 消费者保持不变，不能据此推定剩余 HTTP action 路径已经移除。
+- **HTTP 通用读取。** resolve/history/commit/graph/events/compare、目录分支及选择、拓扑／放置／策略／磁盘／健康查询，仍由 HTTP 通用分派调用 `Backend::call`。
+- **HTTP 写入与计划。** 仓库／分支／目录分支创建和选择、SMB binding 配置、policy/placement，以及 split/purge/historical-save/plan 的请求与结果仍需逐组迁移。operation HTTP 入口已接续到既有 typed 方法；其余 action 仍需逐项迁移。
 - **文件管理与管理控制面。** `FileManager*` action、setup_operation 等仍有独立 Value 协议；management_status/retry_storage 已接续类型化；需要核对每个 HTTP 消费者，不能以新增一个包裹枚举代替拆除旧 JSON 路径。
 
 这次不改领域 `OperationResult.result`、Plan 输入、持久化编码、canonical 哈希、永久幂等收据或公开 `Commit.kind`。当前 `core.schema.json` 的 `$defs.Commit.properties.kind` 是开放 string，不可仅按内部已见字面量将它收窄为封闭枚举。后续 model/persist/wire 分离应独立建立固定向量和公开消费者证据。
@@ -128,4 +128,61 @@ HTTP 在独立 management_slots 的阻塞任务中读取公告并计算 min(serv
 
 StorageState 移到无 core 依赖的声明并由 management 重导出，原枚举与 15 秒 stale 观测规则不变。management_status 与 retry_storage 返回 StorageStatus：EmbeddedReady 保留省略 recovering 的 wire，Managed 保留真实 recovering bool；retryable 只在出口按状态派生。HTTP storage/status/retry 和外层 management JSON 均在实际 HTTP 边界投影，Management Ready 分派直接比较 typed state。重试仍在受预算阻塞任务中复核当前账号再启动恢复，没有改变后台恢复持有者、撤权或持久化顺序。
 
-回归覆盖完整固定能力字段、冷态、全部状态/可选字段、公开路由真实 panic、注销后的匿名能力例外、独立管理预算及取消后的 permit 持有；HTTP 实测管理未就绪与引擎直接托管两种 wire。此处不宣称 Ready、setup_operation 或所有 FileManager action 已迁移。
+回归覆盖完整固定能力字段、冷态、全部状态/可选字段、公开路由真实 panic、注销后的匿名能力例外、独立管理预算及取消后的 permit 持有；HTTP 实测管理未就绪与引擎直接托管两种 wire。Ready 已在下一组接续迁移；此处不宣称 setup_operation 或所有 FileManager action 已迁移。
+
+
+## HTTP 永久操作查询
+
+这里复用既有 Backend::operation(OperationId)，不重做已经完成的 SMB typed operation，也不把核心 OperationResult.result 或公开 kind 封闭化。HTTP ApiPath/原 query map 在入口接收；backend_slots 内一次解析 OperationId，保持非法ID的 404/OPERATION_NOT_FOUND/原source映射，再进入 typed 方法，最终只在 HTTP 出口调用原 operation_wire。Operation action 与重复引擎分派删除。
+
+身份中间件仍先执行；同其他已迁移入口，格式解析在阻塞任务中的当前 Backend 准入前完成，排队期间撤权与非法ID同时出现时先给格式404，不读取任何收据或正文。有效ID仍严格执行 current admission→永久owner检查→记录授权→锁外health IO→回锁current/记录授权；不缓存旧健康、不裁剪收据、不跳过撤权或绑定。
+
+核心 owner/未知/待决发现失败及 logout/password 回锁矩阵改为真实typed调用；需要检查wire的测试显式在测试客户端投影。原两项 degraded/permanent-loss与publication后损坏证据测试升级为真正HTTP请求，而非公开一个测试专用JSON后门；响应capture与固定publication事实断言保留。公开panic、预算取消、非法ID来源和现有HTTP严格操作ID矩阵继续覆盖真实路径。
+
+
+## Readiness 匿名入口与固定成员观察
+
+Backend::ready() 不接收身份；HTTP /readyz 与后台 observe_storage_once 直接消费 typed Readiness，不再创建 health/monitor 身份或借用 generic action 例外。Managed 成功只表达原 {ready:true}；Engine 成功携带 Mode、u64 sequence 与固定成员统计，HTTP 出口才输出字符串 sequence 和 metadata_redundancy。Ready action 删除后，AuthorizedBackend::call 和 EngineBackend::call 的每个剩余 action 都无条件走当前身份复核，匿名能力/就绪探针只存在于各自显式方法。
+
+引擎保留 read-only拒绝→同锁捕获固定成员/配置/sequence与磁盘观察计划→解锁真实观察→全部配置元数据成员在线校验的顺序。返回值只是一次观察，不授予未来写入或缓存磁盘健康。后台仍持有同一 engine lease完成一次样本、更新时核对当前 backend Arc身份与 admitted状态、保留错误分类/observed_at/15秒过期逻辑；无成员多数表决或刷新间隔变更。
+
+原1–4成员及掉盘拒绝测试改为真实typed调用，固定wire/匿名HTTP/真实panic/管理槽取消矩阵同步，另以全部 BackendAction::ALL 验证缺凭据时每个generic action在读字段前拒绝。management_slots仍独立于工作区backend_slots，取消请求不提前释放阻塞观察持有的许可。
+
+
+## 保留工作区容量投影
+
+contract::WorkspaceCapacity 本来就是只读容量响应契约而非持久化记录；现在 Backend::workspace_capacity 返回该投影，engine同锁复核当前身份后使用 current.principal 捕获预算，不经 Value encode。HTTP 只在真实响应边界序列化一次，保留原 management_slots、不接纳query身份选择、全局/当前主体字段、u64文本及 automatic_retirement=false；没有更改核心计数、near-limit规则、永久证据保留或启动配置。
+
+WorkspaceCapacity action 删除，原 management_call JSON桥已无消费者并删除。授权装饰器、排队撤权、forged principal、真实panic、独立管理槽取消和原live-capacity/多session/logout/不可通过query隐藏全局预算测试均走真实typed方法；其它 FileManager/计划/通用读取仍按剩余库存继续，不据此宣称所有动作完成。
+
+
+## 带逻辑路径的正文下载
+
+HTTP 下载把成对 repository_id/path 查询一次解析为 DownloadContext（LookupPath 缓存查找键），与 version 组成 ReadContent；必需的 Backend::range_content 方法完整传递上下文，不允许默认实现静默丢弃它。FileManagerDownloadContext action 与 HTTP 内部 name 字段 JSON 提取删除。剩余生产 Backend::call 只用于 HTTP 通用分派及其授权/管理转发，不再有下载或 SMB 内部消费者。
+
+引擎在同一锁内按当前身份、上下文仓库、版本存在、history 归属、当前路径文件身份顺序准入，然后捕获下载名与正文读取计划。上下文路径名直接使用当前条目，不再先构造默认名称再覆盖；无上下文时保留现有 file_locations、条目、file_names、creation_name 的合法回退规则。上下文缺失版本仍是 VERSION_NOT_FOUND，无上下文缺失版本仍是 NOT_FOUND；跨 history 或路径文件不匹配仍为 FILE_NOT_FOUND。路径静态格式在 HTTP read_slots 阻塞任务中、Backend 当前准入前解析：同时存在格式错误与缺失仓库/排队撤权时格式错误优先；中间件身份检查仍先执行。
+
+上下文检查与正文计划从两次引擎准入合为一次，避免并发改名/选择在两次观察之间产生混合名称。计划建立后仍解锁执行原读取 I/O，保留已准入读取租约语义，不把下载上下文作为后续请求的授权缓存，也不增加发布式回锁阶段。read_slots 的租约、总超时、Range/HEAD、内容校验和正文句柄生命周期不变。回归覆盖成对/空/非法查询、规范化查找、历史正文与当前文件名、跨 history、GET/HEAD 范围响应、真实 panic 和排队撤权。
+
+
+## 完整树快照的 HTTP 边界
+
+HTTP Tree 用 ReadTree（branch、可选 commit）直接进入 tree_snapshot，返回既有四字段 owned TreeSnapshot；Tree action、引擎内 query Value 解析及 Value 输出删除。HTTP 保持 ApiQuery<BTreeMap> 的原解析政策、忽略其它查询参数、路径 branch 不被 query 覆盖，显式空 commit 不降级到当前 HEAD。当前身份、branch/history 与所选 commit 的归属检查继续由同一引擎锁内的 branch_snapshot 负责，PendingSources 和 list_tree_at 保持原合并与错误顺序；离锁响应投影不成为后续授权证明。HTTP backend_slots 从排队到阻塞结束持有，序列化在实际 HTTP 出口进行。
+
+先前 frozen projection、授权差分、旧实现 pending oracle、SMB 测试客户端和排队撤权测试已迁到实际 typed 方法，不保留旧生产 JSON 后备路径；测试输入向量可在 test-only 客户端转换为 ReadTree，生产无需重建 JSON。没有改变 Entry 持久化/canonical 表示或历史选择规则；响应仍需完整树复制，本组不声称优化为分页或零拷贝。
+
+
+## 仓库列表
+
+Repositories action 已移除，repositories_snapshot 在当前身份准入的同一引擎锁内按原 repositories 映射顺序捕获 Vec<Repository>。HTTP 列表复用单仓库的穷尽 RepositoryResponse，锁外投影与序列化，保留包裹字段、字符串 generation、file_manager_root=false 省略规则和原 query 忽略政策；查询参数不能选择身份或过滤权威列表。现有管理容量/取消、真实 panic、撤权和发布准备期间读锁释放测试都改走实际 typed 方法。SMB 测试客户端直接读取 Repository 字段，不再 Value 取值/重解析。
+
+这是输出规模 O(N) 的 owned snapshot，不声称无需复制或已增加分页；领域/磁盘格式、授权例外及排序政策不变。固定多仓库 HTTP 回归以创建接口的完整对象为参考，核对列表排序、全部字段、单对象一致性与未授权拒绝。
+
+
+## 分支元数据与列表
+
+Branch/Branches 两个 HTTP 读取动作已删除。branch_snapshot 在当前身份准入后按原 repo_for_branch 检查迁移状态/history/仓库；branches_snapshot 先按 repository 准入，再按原映射顺序捕获同 history 的全部分支（不新增逐分支过滤）。两者返回 BranchSnapshot，不从 branch_wire JSON 反解析。捕获函数只借用同一锁内 State，穷尽解构 Branch，合并 head pending 与覆盖优先的 branch pending；不修改 Branch 持久化模型。
+
+显式 BranchResponse 在 HTTP 边界输出字符串 generation、可省略 file_id/file_node_id 和始终存在的合并 pending。文件分支独立捕获可见/源版本、存储 disposition、别名及 node_id，保留旧 LIVE（合法 disposition 缺失）、PENDING（继承）与已有 ContentState 的差异；显式空 source 不降级到 visible；alias_of 在文件分支无别名时是 null，在非文件分支省略。归档/迁移状态和别名决定 read_only，node_id 保留显式节点优先与可见版本回退。
+
+内容归属字段由共享 ContentDispositionSnapshot/Response 生成，旧 content_wire 也仅在原 generic 输出点序列化该类型，不维护第二份继承/状态派生逻辑。显式空 source 的选择/过滤仅在 capture_content 中做一次，响应只消费已捕获选择。CreateBranch 和 FileManager 文件历史仍使用通用 JSON action，其原输出点复用同一 typed 捕获及显式 BranchResponse；这不是已迁移读方法的 JSON 后备路径，也不宣称这些写入口已完全类型化。独立冻结旧 wire oracle 覆盖普通/文件分支、pending覆盖、空/缺失版本、全部ContentState、状态/别名/显式node组合及 u64::MAX；HTTP核对历史fork、列表排序/字段、query不可覆盖路径与具体缺失错误。实际panic/取消准入/撤权矩阵随方法迁移。

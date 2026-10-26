@@ -114,10 +114,10 @@ pub(crate) fn version_identity(
             "file version sequence exhausted",
         )
     })?;
-    let now = OffsetDateTime::now_utc()
-        .replace_nanosecond(0)
-        .expect("invariant: zero nanoseconds is representable");
-    let timestamp = now.format(&Rfc3339)?;
+    let now = version_time(std::time::SystemTime::now())?;
+    let timestamp = now
+        .format(&Rfc3339)
+        .expect("invariant: nonnegative UTC time is within the RFC3339 year range");
     let format = date_time::format_description::parse_borrowed::<3>(
         "[year][month][day]T[hour][minute][second]Z",
     )
@@ -1192,3 +1192,10 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/container_storage/projection_path_tests.rs"]
 mod projection_path_tests;
+
+fn version_time(time: std::time::SystemTime) -> Result<OffsetDateTime> {
+    let seconds = time.duration_since(std::time::UNIX_EPOCH)?.as_secs();
+    // Duration seconds may exceed i64; nanoseconds still fit i128 exactly.
+    OffsetDateTime::from_unix_timestamp_nanos(i128::from(seconds) * 1_000_000_000)
+        .map_err(Error::ClockRange)
+}

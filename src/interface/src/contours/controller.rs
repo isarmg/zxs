@@ -56,6 +56,7 @@ impl ContourController {
     }
 }
 
+/// Start contours in a browser admitted by the application startup contract.
 pub fn start(document: &Document) -> Result<ContourController, JsValue> {
     if let Some(previous) = CONTROLLERS.with(|controllers| {
         let mut controllers = controllers.borrow_mut();
@@ -85,9 +86,6 @@ pub fn start(document: &Document) -> Result<ContourController, JsValue> {
         .create_element("div")?
         .unchecked_into::<HtmlElement>()
         .style();
-    let forced = view
-        .match_media("(forced-colors: active)")?
-        .ok_or_else(|| JsValue::from_str("Forced-color media query is unavailable"))?;
     let color_scheme = view
         .match_media("(prefers-color-scheme: dark)")?
         .ok_or_else(|| JsValue::from_str("Color-scheme media query is unavailable"))?;
@@ -96,7 +94,6 @@ pub fn start(document: &Document) -> Result<ContourController, JsValue> {
         view,
         draft,
         all_properties,
-        forced,
         color_scheme,
         state: RefCell::new(State::default()),
         stopped: Cell::new(false),
@@ -115,10 +112,8 @@ pub fn start(document: &Document) -> Result<ContourController, JsValue> {
 
 fn register_properties(view: &Window) -> Result<(), JsValue> {
     let css = js_sys::Reflect::get(view, &JsValue::from_str("CSS"))?;
-    let register = callable(js_sys::Reflect::get(
-        &css,
-        &JsValue::from_str("registerProperty"),
-    )?)?;
+    let register = js_sys::Reflect::get(&css, &JsValue::from_str("registerProperty"))?
+        .unchecked_into::<js_sys::Function>();
     for (name, syntax, initial) in [
         ("--zxs-contour-extent", "<length-percentage>", "0px"),
         ("--zxs-contour-mode", "*", "paint"),
@@ -182,7 +177,6 @@ struct Inner {
     view: Window,
     draft: CssStyleDeclaration,
     all_properties: Vec<String>,
-    forced: MediaQueryList,
     color_scheme: MediaQueryList,
     state: RefCell<State>,
     stopped: Cell<bool>,
@@ -297,7 +291,6 @@ impl Inner {
                 EventKind::AnimationEnd,
             )?);
         }
-        listeners.push(self.listen(self.forced.as_ref(), "change", false, EventKind::Schedule)?);
         listeners.push(self.listen(
             self.color_scheme.as_ref(),
             "change",
@@ -1043,9 +1036,6 @@ impl State {
         }
         if number(css.get("--zxs-contour-foreground")) > 0.0 && !visible {
             fallback!("not-visible");
-        }
-        if inner.forced.matches() {
-            fallback!("forced-colors");
         }
         if width <= 0.0 || height <= 0.0 {
             fallback!("not-visible");

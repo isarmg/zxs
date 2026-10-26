@@ -656,13 +656,8 @@ fn observe(root: NodeRef<html::Div>, layout: Memo<Layout>, geometry: RwSignal<Ge
             move |_: js_sys::Array, _: web_sys::ResizeObserver| resize_refresh.request(),
         )
             as Box<dyn FnMut(js_sys::Array, web_sys::ResizeObserver)>);
-        let resize = match web_sys::ResizeObserver::new(callback.as_ref().unchecked_ref()) {
-            Ok(resize) => resize,
-            Err(error) => {
-                web_sys::console::warn_2(&"Could not observe version-tree resizing".into(), &error);
-                return;
-            }
-        };
+        let resize = web_sys::ResizeObserver::new(callback.as_ref().unchecked_ref())
+            .expect("invariant: admitted browser constructs a ResizeObserver");
         resize.observe(&element);
         let observe_nodes = {
             let resize = resize.clone();
@@ -690,28 +685,14 @@ fn observe(root: NodeRef<html::Div>, layout: Memo<Layout>, geometry: RwSignal<Ge
             },
         )
             as Box<dyn FnMut(js_sys::Array, web_sys::MutationObserver)>);
-        let mutation =
-            match web_sys::MutationObserver::new(mutation_callback.as_ref().unchecked_ref()) {
-                Ok(observer) => Some(observer),
-                Err(error) => {
-                    web_sys::console::warn_2(
-                        &"Could not observe version-tree updates".into(),
-                        &error,
-                    );
-                    None
-                }
-            };
-        if let Some(observer) = &mutation {
-            let options = web_sys::MutationObserverInit::new();
-            options.set_child_list(true);
-            options.set_subtree(true);
-            if let Err(error) = observer.observe_with_options(&element, &options) {
-                web_sys::console::warn_2(
-                    &"Could not start version-tree observation".into(),
-                    &error,
-                );
-            }
-        }
+        let mutation = web_sys::MutationObserver::new(mutation_callback.as_ref().unchecked_ref())
+            .expect("invariant: admitted browser constructs a MutationObserver");
+        let options = web_sys::MutationObserverInit::new();
+        options.set_child_list(true);
+        options.set_subtree(true);
+        mutation
+            .observe_with_options(&element, &options)
+            .expect("invariant: mounted tree and child-list observation options are valid");
         let cleanup = send_wrapper::SendWrapper::new((
             resize,
             callback,
@@ -722,9 +703,7 @@ fn observe(root: NodeRef<html::Div>, layout: Memo<Layout>, geometry: RwSignal<Ge
         on_cleanup(move || {
             cleanup.4.close();
             cleanup.0.disconnect();
-            if let Some(observer) = &cleanup.2 {
-                observer.disconnect();
-            }
+            cleanup.2.disconnect();
             drop(cleanup);
         });
     });

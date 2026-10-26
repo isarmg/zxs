@@ -558,3 +558,56 @@ fn namespace_bookkeeping_uses_paths_and_keeps_the_first_match_in_unsorted_entrie
     assert!(!state.file_write_origins.contains_key("removed"));
     assert!(state.file_path_nodes.is_empty());
 }
+
+#[test]
+fn system_clock_seconds_preserve_epoch_and_reject_before_epoch() {
+    use std::{
+        error::Error as _,
+        time::{Duration, UNIX_EPOCH},
+    };
+    assert_eq!(super::unix_seconds(UNIX_EPOCH).unwrap(), 0);
+    assert_eq!(
+        super::unix_seconds(UNIX_EPOCH + Duration::new(42, 999_999_999)).unwrap(),
+        42
+    );
+    let error = super::unix_seconds(UNIX_EPOCH - Duration::from_nanos(1)).unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::IoError);
+    assert!(matches!(error, Error::Clock(_)));
+    assert_eq!(
+        error
+            .source()
+            .unwrap()
+            .downcast_ref::<std::time::SystemTimeError>()
+            .unwrap()
+            .duration(),
+        Duration::from_nanos(1)
+    );
+    let large = 253_402_300_800;
+    assert_eq!(
+        super::unix_seconds(UNIX_EPOCH + Duration::from_secs(large)).unwrap(),
+        large
+    );
+}
+
+#[test]
+fn system_clock_receipt_replay_bypasses_new_mutation_planning() {
+    let (_temp, engine, _) = fixture();
+    let receipt = engine.state.operations.values().next().unwrap();
+    let sequence = engine.state.sequence;
+    let plan = engine
+        .plan_mutation_digest(
+            &receipt.kind,
+            "admin",
+            receipt.operation_id,
+            json_codec::Value::Null,
+            Some(receipt.request_digest.clone()),
+            |_, _, _| panic!("receipt replay must not enter new mutation planning"),
+        )
+        .unwrap();
+    let crate::engine::MutationPlan::Existing(replayed) = plan else {
+        panic!("receipt replay must not prepare a new mutation");
+    };
+    assert_eq!(replayed.operation_id, receipt.operation_id);
+    assert_eq!(replayed.result["timestamp"], receipt.result["timestamp"]);
+    assert_eq!(engine.state.sequence, sequence);
+}

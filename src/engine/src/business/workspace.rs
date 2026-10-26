@@ -578,7 +578,7 @@ impl Engine {
                 })
                 .collect(),
             namespace_operations: Vec::new(),
-            created_at: now(),
+            created_at: now()?,
             state: WorkspaceState::Open,
         };
         self.persist_workspace(&w)?;
@@ -594,7 +594,7 @@ impl Engine {
                 "workspace is not open",
             ));
         }
-        if now().saturating_sub(w.created_at) > self.config.workspace_ttl_seconds {
+        if now()?.saturating_sub(w.created_at) > self.config.workspace_ttl_seconds {
             return Err(Error::new(
                 storage_contract::ErrorCode::FencingTokenExpired,
                 "workspace lease expired; pending bytes are preserved",
@@ -1445,7 +1445,7 @@ impl crate::engine::PlanningContext<'_> {
                 "workspace is not writable",
             ));
         }
-        if now().saturating_sub(w.created_at) > self.config.workspace_ttl_seconds {
+        if now()?.saturating_sub(w.created_at) > self.config.workspace_ttl_seconds {
             return Err(Error::new(
                 storage_contract::ErrorCode::FencingTokenExpired,
                 "workspace lease expired",
@@ -1605,7 +1605,7 @@ impl crate::engine::PlanningContext<'_> {
                 let mut snapshot_pending = current.pending_file_versions.clone();
                 snapshot_pending.retain(|file,_| live_files.contains(file) && !written_files.contains(file));
                 state.commits.insert(commit_id.clone(), Commit {
-                    namespace_deletions: namespace::deletion_record(deleted, now()),
+                    namespace_deletions: namespace::deletion_record(deleted, now()?),
                     commit_id: commit_id.clone(), history_tree_id: branch.history_tree_id.clone(),
                     kind: "content".into(), parent_commit_ids: vec![current.commit_id.clone()],
                     tree_id: new_id("tree"), sequence: state.sequence, operation_id: request.operation_id,

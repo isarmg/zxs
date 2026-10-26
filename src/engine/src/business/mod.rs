@@ -27,11 +27,12 @@ pub(crate) use namespace::{
 pub use workspace::{PreparedUpload, UploadPreparation};
 pub(crate) use workspace::{VersionBuild, WorkspaceMutation, native_commit_digest};
 
-pub(crate) fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+pub(crate) fn now() -> Result<u64> {
+    unix_seconds(SystemTime::now())
+}
+
+fn unix_seconds(time: SystemTime) -> Result<u64> {
+    Ok(time.duration_since(UNIX_EPOCH)?.as_secs())
 }
 
 pub fn validate_branch_name(name: &str) -> Result<()> {

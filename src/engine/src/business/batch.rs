@@ -782,7 +782,7 @@ fn apply(
         validate_identities(&draft.entries)?;
         sorted(&mut draft.entries);
     }
-    let deletion_timestamp = now();
+    let deletion_timestamp = now()?;
     let active_ids = active.iter().map(String::as_str).collect::<BTreeSet<_>>();
     let mut active_deleted = Vec::new();
     let mut inactive_deleted = BTreeMap::<String, Vec<DeletedPath>>::new();

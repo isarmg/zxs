@@ -2,7 +2,7 @@
 
 `src/web/styles.css` 是浏览器样式入口；构建后为 `/zxs.css`，只负责令牌、字体、产品排版和组件导入。`components/index.css` 明确按「共享几何 → 组件行为 → 外观 → 登录 → 页面布局」导入，所有路径相对 CSS 文件，不依赖 CDN。已移除没有运行引用的旧侧栏、磁盘卡片、时间线、ESM 页面与日期表单样式。
 
-- `tokens/`：字体别名、间距、明暗主题、作用域 reset 和无障碍规则。应用根使用 `data-zxs-scope`，主题写入 `html[data-zxs-theme]`。
+- `tokens/`：字体别名、间距、明暗主题、作用域 reset、标签隐藏、键盘焦点和减弱动态效果规则。应用根使用 `data-zxs-scope`，主题写入 `html[data-zxs-theme]`。
 - `components/geometry.css`：唯一业务几何层，集中尺寸令牌和可组合布局角色；页面不重新声明行高、字体比例、灰框、G4 角范围或首字内缩。
 - `components/base.css`：共享壳、表单、表格、对话框、通知的基础行为；`content-blocks.css` 仅负责主题配色及 hover、选中、禁用等视觉状态。
 - `components/auth.css`：独立六行登录布局。登录卡使用 `.authentication-card > form`，账号与密码控件分别带 `name="username"` 和 `name="password"`；错误占第 5 行，提交按钮占第 6 行。登录表单字号取卡片宽度的 1/18，最小 14px；控件最小高度 44px，窄屏和错误状态允许卡片自然增高。主题和语言控件置于卡片外的 `.zxs-login-controls`。

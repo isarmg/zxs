@@ -21,8 +21,8 @@ impl Theme {
             Self::Dark => "dark",
         }
     }
-    fn system(query: Option<&web_sys::MediaQueryList>) -> Self {
-        if query.is_some_and(|query| query.matches()) {
+    fn system(query: &web_sys::MediaQueryList) -> Self {
+        if query.matches() {
             Self::Dark
         } else {
             Self::Light
@@ -55,15 +55,13 @@ fn saved(window: &web_sys::Window) -> Option<Theme> {
         }
     }
 }
-fn query(window: &web_sys::Window) -> Option<web_sys::MediaQueryList> {
-    match window.match_media("(prefers-color-scheme: dark)") {
-        Ok(query) => query,
-        Err(error) => {
-            web_sys::console::warn_2(&"System theme preference is unavailable".into(), &error);
-            None
-        }
-    }
+fn query(window: &web_sys::Window) -> web_sys::MediaQueryList {
+    window
+        .match_media("(prefers-color-scheme: dark)")
+        .expect("invariant: admitted browser accepts the system theme query")
+        .expect("invariant: a valid media query returns a MediaQueryList")
 }
+
 fn current_theme() -> Theme {
     let Some(window) = web_sys::window() else {
         return Theme::Light;
@@ -77,7 +75,7 @@ fn current_theme() -> Theme {
     {
         return theme;
     }
-    saved(&window).unwrap_or_else(|| Theme::system(query(&window).as_ref()))
+    saved(&window).unwrap_or_else(|| Theme::system(&query(&window)))
 }
 pub fn current() -> String {
     current_theme().as_str().into()
@@ -113,24 +111,22 @@ pub fn initialize() {
     let saved = saved(&window);
     MANUAL.with(|manual| manual.set(saved.is_some()));
     let query = query(&window);
-    if let Err(error) = apply(saved.unwrap_or_else(|| Theme::system(query.as_ref()))) {
+    if let Err(error) = apply(saved.unwrap_or_else(|| Theme::system(&query))) {
         web_sys::console::error_2(&"Could not initialize the theme".into(), &error);
     }
-    if let Some(query) = query {
-        let listener = EventListener::new(&query, "change", |event| {
-            if MANUAL.with(Cell::get) {
-                return;
-            }
-            if let Some(event) = event.dyn_ref::<web_sys::MediaQueryListEvent>() {
-                change(if event.matches() {
-                    Theme::Dark
-                } else {
-                    Theme::Light
-                });
-            }
-        });
-        SYSTEM_LISTENER.with(|listener_slot| *listener_slot.borrow_mut() = Some(listener));
-    }
+    let listener = EventListener::new(&query, "change", |event| {
+        if MANUAL.with(Cell::get) {
+            return;
+        }
+        if let Some(event) = event.dyn_ref::<web_sys::MediaQueryListEvent>() {
+            change(if event.matches() {
+                Theme::Dark
+            } else {
+                Theme::Light
+            });
+        }
+    });
+    SYSTEM_LISTENER.with(|listener_slot| *listener_slot.borrow_mut() = Some(listener));
 }
 
 pub fn toggle() {

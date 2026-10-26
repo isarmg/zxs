@@ -6,15 +6,11 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
     let result = check(browser);
     // Restore even on failure; these are isolated smoke-test browser settings.
     let cleanup = restore_decoration(browser);
-    let media_cleanup = browser.cdp("Emulation.setEmulatedMedia", json!({"features":[]}));
     let theme_cleanup = select_theme(browser, original_theme.as_str().unwrap_or("light"));
     result?;
     cleanup?;
-    media_cleanup?;
     theme_cleanup?;
-    println!(
-        "PASS real input keyboard focus and Select contour fallback visibility in light/dark and forced colors"
-    );
+    println!("PASS real input keyboard focus and Select contour fallback visibility in light/dark");
     Ok(())
 }
 
@@ -58,47 +54,37 @@ fn select_theme(browser: &Browser, theme: &str) -> Result<()> {
 fn check(browser: &Browser) -> Result<()> {
     for theme in ["light", "dark"] {
         select_theme(browser, theme)?;
-        for forced in ["none", "active"] {
-            browser.cdp(
-                "Emulation.setEmulatedMedia",
-                json!({"features":[{"name":"forced-colors","value":forced}]}),
-            )?;
-            let expected = forced == "active";
-            if browser.script("return matchMedia('(forced-colors: active)').matches")? != expected {
-                return Err("Chrome did not apply the requested forced-colors emulation".into());
-            }
-            browser.click(&browser.button("Account settings", "账号设置")?)?;
-            let username = browser.css(".zxs-account-form input[name='username']")?;
-            browser.click(&username)?;
-            // Real WebDriver Tab input, not focus() or a synthetic DOM event.
-            browser.keys(&username, "\u{e004}")?;
-            wait_for("visible compact password keyboard focus", || {
-                let focus = browser.script(
-                    "const e=document.querySelector('.zxs-account-form input[name=current_password]');\
+        browser.click(&browser.button("Account settings", "账号设置")?)?;
+        let username = browser.css(".zxs-account-form input[name='username']")?;
+        browser.click(&username)?;
+        // Real WebDriver Tab input, not focus() or a synthetic DOM event.
+        browser.keys(&username, "\u{e004}")?;
+        wait_for("visible compact password keyboard focus", || {
+            let focus = browser.script(
+                "const e=document.querySelector('.zxs-account-form input[name=current_password]');\
                      const s=getComputedStyle(e);\
                      return document.activeElement===e && e.matches(':focus-visible') && \
                      parseFloat(s.outlineWidth)>0 && s.outlineStyle!=='none'",
-                )?;
-                if focus == true {
-                    Ok(())
-                } else {
-                    Err(format!("invisible compact input focus in {theme}/{forced}").into())
-                }
-            })?;
-            browser.click(&browser.button("History", "历史记录")?)?;
-            let trigger = browser.css(".zxs-history-toolbar .zxs-select-trigger")?;
-            browser.click(&trigger)?;
-            visible_menu(browser, forced == "active", theme, forced)?;
-            browser.keys(&trigger, "\u{e00c}")?; // Escape.
+            )?;
+            if focus == true {
+                Ok(())
+            } else {
+                Err(format!("invisible compact input focus in {theme}").into())
+            }
+        })?;
+        browser.click(&browser.button("History", "历史记录")?)?;
+        let trigger = browser.css(".zxs-history-toolbar .zxs-select-trigger")?;
+        browser.click(&trigger)?;
+        visible_menu(browser, false, theme, "normal paint")?;
+        browser.keys(&trigger, "\u{e00c}")?; // Escape.
 
-            if forced == "none" {
-                browser.click(&trigger)?;
-                visible_menu(browser, false, theme, "before decoration injection")?;
-                // The controller owns an inline !important shadow declaration.
-                // A stylesheet rule cannot override it. Preserve its exact
-                // value/priority and prove the inline fault reaches computed
-                // style before waiting for the real controller's fallback.
-                let injected = browser.script(
+        browser.click(&trigger)?;
+        visible_menu(browser, false, theme, "before decoration injection")?;
+        // The controller owns an inline !important shadow declaration.
+        // A stylesheet rule cannot override it. Preserve its exact
+        // value/priority and prove the inline fault reaches computed
+        // style before waiting for the real controller's fallback.
+        let injected = browser.script(
                     "if(window.__zxsSmokeDecorationFault)throw new Error('decoration fault already active');\
                      const panel=document.querySelector('.zxs-history-toolbar .zxs-select-panel:popover-open');\
                      if(!panel)throw new Error('open history Select is missing');\
@@ -108,21 +94,18 @@ fn check(browser: &Browser) -> Result<()> {
                      panel.style.setProperty('box-shadow','inset 0 0 1px black','important');\
                      return getComputedStyle(panel).boxShadow",
                 )?;
-                if !injected
-                    .as_str()
-                    .is_some_and(|shadow| shadow.split_whitespace().any(|token| token == "inset"))
-                {
-                    return Err(format!(
-                        "decoration fault did not reach computed box-shadow: {injected}"
-                    )
-                    .into());
-                }
-                visible_menu(browser, true, theme, "unsupported inset shadow")?;
-                restore_decoration(browser)?;
-                visible_menu(browser, false, theme, "after decoration restoration")?;
-                browser.keys(&trigger, "\u{e00c}")?;
-            }
+        if !injected
+            .as_str()
+            .is_some_and(|shadow| shadow.split_whitespace().any(|token| token == "inset"))
+        {
+            return Err(
+                format!("decoration fault did not reach computed box-shadow: {injected}").into(),
+            );
         }
+        visible_menu(browser, true, theme, "unsupported inset shadow")?;
+        restore_decoration(browser)?;
+        visible_menu(browser, false, theme, "after decoration restoration")?;
+        browser.keys(&trigger, "\u{e00c}")?;
     }
     Ok(())
 }
@@ -138,7 +121,6 @@ fn visible_menu(browser: &Browser, fallback: bool, theme: &str, mode: &str) -> R
         let expected = if fallback { "fallback" } else { "clip" };
         let expected_reason = match mode {
             "unsupported inset shadow" => Some("inset-or-unsupported-shadow"),
-            "active" => Some("forced-colors"),
             _ => None,
         };
         if state["state"] == expected

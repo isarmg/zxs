@@ -250,3 +250,61 @@ impl From<Capabilities> for CapabilitiesResponse {
 #[cfg(test)]
 #[path = "../../../test/server/unit/backend_status.rs"]
 mod tests;
+
+/// A successful readiness observation, not a lease for future writes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Readiness {
+    Managed,
+    Engine(EngineReadiness),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EngineReadiness {
+    pub mode: storage_contract::Mode,
+    pub sequence: u64,
+    pub storage_disk_count: usize,
+    pub metadata_member_count: usize,
+}
+#[derive(Serialize)]
+#[serialization(untagged)]
+pub(crate) enum ReadinessResponse {
+    Managed(ManagedReadinessResponse),
+    Engine(EngineReadinessResponse),
+}
+#[derive(Serialize)]
+pub(crate) struct ManagedReadinessResponse {
+    ready: bool,
+}
+#[derive(Serialize)]
+pub(crate) struct EngineReadinessResponse {
+    ready: bool,
+    mode: storage_contract::Mode,
+    #[serialization(with = "storage_contract::u64_string")]
+    sequence: u64,
+    storage_disk_count: usize,
+    metadata_member_count: usize,
+    metadata_redundancy: &'static str,
+}
+impl From<Readiness> for ReadinessResponse {
+    fn from(readiness: Readiness) -> Self {
+        match readiness {
+            Readiness::Managed => Self::Managed(ManagedReadinessResponse { ready: true }),
+            Readiness::Engine(EngineReadiness {
+                mode,
+                sequence,
+                storage_disk_count,
+                metadata_member_count,
+            }) => Self::Engine(EngineReadinessResponse {
+                ready: true,
+                mode,
+                sequence,
+                storage_disk_count,
+                metadata_member_count,
+                metadata_redundancy: if metadata_member_count == 1 {
+                    "none"
+                } else {
+                    "multiple-copies"
+                },
+            }),
+        }
+    }
+}

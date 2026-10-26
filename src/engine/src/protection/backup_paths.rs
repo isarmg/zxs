@@ -632,7 +632,7 @@ impl Engine {
                     state.placements.insert(version.version_id.clone(), placement.clone());
                     pending.push(Prepared { version: version.clone(), placement, source });
                 }
-                Ok(json!({"history_tree_id":repo.history_tree_id,"policy":policy,"scope":{"id":scope.id,"kind":scope.kind,"path":scope.path},"file_count":scope.files.len().to_string(),"version_count":versions.len().to_string(),"target_copies":copies,"backup_prefixes":normalized,"configured_at":now().to_string()}))
+                Ok(json!({"history_tree_id":repo.history_tree_id,"policy":policy,"scope":{"id":scope.id,"kind":scope.kind,"path":scope.path},"file_count":scope.files.len().to_string(),"version_count":versions.len().to_string(),"target_copies":copies,"backup_prefixes":normalized,"configured_at":now()?.to_string()}))
             },
         )
     }

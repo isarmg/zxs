@@ -884,7 +884,7 @@ impl Engine {
                 Ok(json!({"plan_id":plan.plan_id,"repository_id":repository_id,"history_tree_id":history_id,
                     "source_history_tree_id":history,"commit_id":commit_map[cut],"branch_id":new_main,
                     "commit_mapping":commit_map,"branch_mapping":branch_map,"version_mapping":version_map,
-                    "entry_mapping":entry_map,"file_mapping":file_map,"smb_rebind_required":true,"created_at":now().to_string()}))
+                    "entry_mapping":entry_map,"file_mapping":file_map,"smb_rebind_required":true,"created_at":now()?.to_string()}))
             },
         )
     }

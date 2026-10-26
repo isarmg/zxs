@@ -81,7 +81,7 @@ pub(crate) fn rename_node(
             path: new.path().to_owned(),
             previous_path: old.path().to_owned(),
             sequence: state.sequence,
-            created_at: now(),
+            created_at: now()?,
             operation_id: operation,
             author: principal.into(),
         },

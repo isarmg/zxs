@@ -1,6 +1,7 @@
 //! Authorized content read plans and their unlocked I/O execution.
 use super::{
-    EngineBackend, current_protected_identity, error, repo_for_history, workspace_authorize,
+    EngineBackend, current_protected_identity, error, repo_for_history, repository,
+    workspace_authorize,
 };
 use crate::{ApiError, Content, auth::Identity};
 
@@ -8,41 +9,61 @@ impl EngineBackend {
     pub(super) fn open_version_content(
         &self,
         identity: &Identity,
-        version: &str,
+        request: crate::ReadContent<'_>,
     ) -> Result<Content, ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        let record = engine.state().versions.get(version).ok_or_else(|| {
-            ApiError::new(
-                ::http::StatusCode::NOT_FOUND,
-                storage_contract::ErrorCode::NotFound,
-                "version not found",
-            )
-        })?;
+        let version = request.version;
+        // Context checks and the content plan share this admission. The name is
+        // a request-local snapshot, not permission to resolve the path later.
+        let (record, logical_name) = if let Some(context) = request.context {
+            let repo = repository(&engine, &context.repository_id)?;
+            let record = engine.state().versions.get(version).ok_or_else(|| {
+                ApiError::new(
+                    ::http::StatusCode::NOT_FOUND,
+                    storage_contract::ErrorCode::VersionNotFound,
+                    "version missing",
+                )
+            })?;
+            if record.history_tree_id != repo.history_tree_id {
+                return Err(ApiError::new(
+                    ::http::StatusCode::NOT_FOUND,
+                    storage_contract::ErrorCode::FileNotFound,
+                    "version is not in this repository context",
+                ));
+            }
+            let entry = engine
+                .namespace_tree(&repo.main_branch_id)
+                .map_err(error)?
+                .get_key(context.path.key())
+                .filter(|entry| {
+                    entry.kind == storage_contract::NamespaceEntryKind::File
+                        && entry.file_id == record.file_id
+                })
+                .ok_or_else(|| {
+                    ApiError::new(
+                        ::http::StatusCode::NOT_FOUND,
+                        storage_contract::ErrorCode::FileNotFound,
+                        "version file is not present at this logical path",
+                    )
+                })?;
+            (record, Some(entry.name().to_owned()))
+        } else {
+            let record = engine.state().versions.get(version).ok_or_else(|| {
+                ApiError::new(
+                    ::http::StatusCode::NOT_FOUND,
+                    storage_contract::ErrorCode::NotFound,
+                    "version not found",
+                )
+            })?;
+            (record, None)
+        };
         let repo = repo_for_history(&engine, &record.history_tree_id)?;
         let plan = engine.prepare_content(version).map_err(error)?;
-        let tree = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
-        let entries = tree.entries();
-        let preferred = engine
-            .state()
-            .file_locations
-            .get(&record.file_id)
-            .and_then(|path| {
-                tree.get(path).filter(|entry| {
-                    entry.kind == storage_contract::NamespaceEntryKind::File
-                        && entry.file_id == record.file_id
-                })
-            });
-        let download_name = preferred
-            .or_else(|| {
-                entries.iter().find(|entry| {
-                    entry.kind == storage_contract::NamespaceEntryKind::File
-                        && entry.file_id == record.file_id
-                })
-            })
-            .map(|entry| entry.name().to_owned())
-            .or_else(|| engine.state().file_names.get(&record.file_id).cloned())
-            .unwrap_or_else(|| record.creation_name.clone());
+        let download_name = match logical_name {
+            Some(name) => name,
+            None => default_download_name(&engine, repo, record)?,
+        };
         drop(engine);
         let content = plan.open().map_err(error)?;
         Ok(Content {
@@ -98,4 +119,33 @@ impl EngineBackend {
         drop(engine);
         plan.checksums().map_err(error)
     }
+}
+
+fn default_download_name(
+    engine: &storage_engine::Engine,
+    repo: &storage_contract::Repository,
+    record: &storage_contract::FileVersion,
+) -> Result<String, ApiError> {
+    let tree = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
+    let entries = tree.entries();
+    let preferred = engine
+        .state()
+        .file_locations
+        .get(&record.file_id)
+        .and_then(|path| {
+            tree.get(path).filter(|entry| {
+                entry.kind == storage_contract::NamespaceEntryKind::File
+                    && entry.file_id == record.file_id
+            })
+        });
+    Ok(preferred
+        .or_else(|| {
+            entries.iter().find(|entry| {
+                entry.kind == storage_contract::NamespaceEntryKind::File
+                    && entry.file_id == record.file_id
+            })
+        })
+        .map(|entry| entry.name().to_owned())
+        .or_else(|| engine.state().file_names.get(&record.file_id).cloned())
+        .unwrap_or_else(|| record.creation_name.clone()))
 }

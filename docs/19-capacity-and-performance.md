@@ -298,3 +298,5 @@ SQLite 不再保存无生产查询消费者的通用 `entities` 镜像。启动�
 ---
 
 [文档目录](README.md) · [上一章：故障处理与降级行为](18-failure-handling.md) · [下一章：工程结构与依赖约束](20-engineering.md)
+
+版本树 RAF 调度仍由文档 owner 管理：缺少 RAF 在现代浏览器启动准入时拒绝；已准入浏览器的实际调度调用若失败，记录具体 host 错误，不 panic、不立即执行测量替代，也不发布虚假的 pending frame，后续真实 observer 通知可重新申请。测试注入调度拒绝后核对没有同步测量、没有 pending frame，恢复调度后正常合并下一批通知。该场景仍须真实浏览器执行才可记为通过。

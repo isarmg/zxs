@@ -221,6 +221,13 @@
           "source_sha256_before": "422436b26afc21cfbb9fc30b3544ea18f965f8680555131a1c38808c5e6bb281"
         },
         {
+          "path": "test/tools/web-bindings/runtime/modern-loader.mjs",
+          "sha256": "fac42c821082eb4f5cbada5df26bd1d4caeaef84b147e9a9fb370479929e67bc",
+          "source": "test/tools/web-bindings/runtime/modern-loader.mjs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "fac42c821082eb4f5cbada5df26bd1d4caeaef84b147e9a9fb370479929e67bc"
+        },
+        {
           "path": "test/tools/web-bindings/unit/logging_tests.rs",
           "sha256": "2342adb15913193512aaacc267c3d1d7cda1f4ef416a21889dd17f0cbb70c8e2",
           "source": "tools/web-bindings/src/logging_tests.rs",

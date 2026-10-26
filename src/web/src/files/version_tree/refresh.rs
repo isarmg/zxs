@@ -64,13 +64,12 @@ impl FrameRefresh {
         {
             Ok(id) => self.state.set(FrameState::Scheduled(id)),
             Err(error) => {
-                web_sys::console::warn_2(
+                web_sys::console::error_2(
                     &"Could not schedule version-tree measurement".into(),
                     &error,
                 );
-                // Preserve the old immediate-refresh behavior if the browser
-                // refuses scheduling; a later notification may try again.
-                (self.update)();
+                // Scheduling failed at the host boundary. Do not substitute an
+                // immediate layout read; remain Idle for a later notification.
             }
         }
     }

@@ -5,15 +5,10 @@ use std::{os::unix::net::UnixStream, thread::JoinHandle};
 fn connect(shared: Arc<Shared>) -> (FrameStream, JoinHandle<()>) {
     let repository = shared
         .backend
-        .call(
-            crate::BackendAction::Repositories,
-            &identity(&shared),
-            json!({}),
-        )
-        .unwrap()["repositories"][0]["repository_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+        .repositories_snapshot(&identity(&shared))
+        .unwrap()[0]
+        .repository_id
+        .clone();
     // No listening filesystem socket or external service is needed. This is
     // the same framed protocol on two real, connected Unix descriptors.
     let (client, server) = UnixStream::pair().unwrap();
@@ -248,6 +243,42 @@ impl Backend for NamespaceFailure {
     fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
         self.inner.capabilities()
     }
+    fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+        self.inner.ready()
+    }
+    fn workspace_capacity(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+        self.inner.workspace_capacity(identity)
+    }
+    fn branch_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.inner.branch_snapshot(identity, id)
+    }
+    fn branches_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        self.inner.branches_snapshot(identity, id)
+    }
+    fn repositories_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+        self.inner.repositories_snapshot(identity)
+    }
+    fn tree_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadTree<'_>,
+    ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+        self.inner.tree_snapshot(identity, request)
+    }
     fn create_write_session(
         &self,
         identity: &crate::auth::Identity,
@@ -322,6 +353,13 @@ impl Backend for NamespaceFailure {
             .upload_generation(identity, workspace, item, path, source, generation)
     }
 
+    fn range_content(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadContent<'_>,
+    ) -> Result<crate::Content, crate::ApiError> {
+        self.inner.range_content(identity, request)
+    }
     fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
         self.inner.content(identity, version)
     }
@@ -410,11 +448,11 @@ fn namespace_submission_errors_retain_original_operation_without_abort() {
         if publish {
             let operation = backend
                 .inner
-                .call(
-                    crate::BackendAction::Operation,
+                .operation(
                     &identity(&shared),
-                    json!({"operation_id":operation_id}),
+                    operation_id.as_deref().unwrap().parse().unwrap(),
                 )
+                .and_then(crate::operation_wire::operation_wire)
                 .unwrap();
             assert_eq!(operation["commit_state"], "PUBLISHED");
         }
@@ -482,11 +520,11 @@ fn uncertain_namespace_dispatch_never_aborts_its_workspace() {
         if publish {
             let operation = backend
                 .inner
-                .call(
-                    crate::BackendAction::Operation,
+                .operation(
                     &session.identity,
-                    json!({"operation_id":error.operation_id}),
+                    error.operation_id.as_deref().unwrap().parse().unwrap(),
                 )
+                .and_then(crate::operation_wire::operation_wire)
                 .unwrap();
             assert_eq!(operation["commit_state"], "PUBLISHED");
         }
@@ -584,11 +622,11 @@ fn malformed_namespace_requests_are_rejected_before_creating_workspaces() {
         .store(true, Ordering::SeqCst);
     let before = backend
         .inner
-        .call(
-            crate::BackendAction::Tree,
+        .tree_snapshot(
             &session.identity,
-            json!({"branch_id":branch}),
+            crate::tests::tree_request(&(json!({"branch_id":branch}))),
         )
+        .map(|snapshot| json_codec::to_value(snapshot).unwrap())
         .unwrap();
     for (kind, path, destination, replace) in [
         (
@@ -637,11 +675,11 @@ fn malformed_namespace_requests_are_rejected_before_creating_workspaces() {
     }
     let after = backend
         .inner
-        .call(
-            crate::BackendAction::Tree,
+        .tree_snapshot(
             &session.identity,
-            json!({"branch_id":branch}),
+            crate::tests::tree_request(&(json!({"branch_id":branch}))),
         )
+        .map(|snapshot| json_codec::to_value(snapshot).unwrap())
         .unwrap();
     assert_eq!(after, before);
     assert!(
@@ -688,11 +726,8 @@ fn write_through_dirty_error_identifies_the_new_submitted_generation() {
     );
     let operation = backend
         .inner
-        .call(
-            crate::BackendAction::Operation,
-            &session.identity,
-            json!({"operation_id":current}),
-        )
+        .operation(&session.identity, current)
+        .and_then(crate::operation_wire::operation_wire)
         .unwrap();
     assert_eq!(operation["commit_state"], "PUBLISHED");
 }
@@ -853,6 +888,42 @@ impl Backend for PreparationFailure {
     fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
         self.inner.capabilities()
     }
+    fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+        self.inner.ready()
+    }
+    fn workspace_capacity(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+        self.inner.workspace_capacity(identity)
+    }
+    fn branch_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.inner.branch_snapshot(identity, id)
+    }
+    fn branches_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        self.inner.branches_snapshot(identity, id)
+    }
+    fn repositories_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+        self.inner.repositories_snapshot(identity)
+    }
+    fn tree_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadTree<'_>,
+    ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+        self.inner.tree_snapshot(identity, request)
+    }
     fn create_write_session(
         &self,
         identity: &crate::auth::Identity,
@@ -934,6 +1005,13 @@ impl Backend for PreparationFailure {
             .upload_generation(identity, workspace, item, path, source, generation)
     }
 
+    fn range_content(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadContent<'_>,
+    ) -> Result<crate::Content, crate::ApiError> {
+        self.inner.range_content(identity, request)
+    }
     fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
         self.inner.content(identity, version)
     }
@@ -1017,11 +1095,8 @@ fn preparation_and_record_sync_failures_keep_unresolved_recovery_evidence() {
             assert!(
                 backend
                     .inner
-                    .call(
-                        crate::BackendAction::Operation,
-                        &session.identity,
-                        json!({"operation_id":operation_id})
-                    )
+                    .operation(&session.identity, operation_id.parse().unwrap())
+                    .and_then(crate::operation_wire::operation_wire)
                     .is_err(),
                 "preparation failure must not be presented as publication"
             );
@@ -1069,11 +1144,8 @@ fn dropped_successful_rpc_frame_keeps_the_client_allocated_operation_queryable()
     worker.join().unwrap();
     let result = backend
         .inner
-        .call(
-            crate::BackendAction::Operation,
-            &identity(&shared),
-            json!({"operation_id":operation_id}),
-        )
+        .operation(&identity(&shared), operation_id.parse().unwrap())
+        .and_then(crate::operation_wire::operation_wire)
         .unwrap();
     assert_eq!(result["commit_state"], "PUBLISHED");
 }

@@ -147,3 +147,33 @@ impl From<storage_contract::Repository> for RepositoryResponse {
         }
     }
 }
+
+/// A validated existing logical path used only to choose this read's filename.
+#[derive(Clone, Debug)]
+pub struct DownloadContext {
+    pub repository_id: String,
+    pub path: name_policy::LookupPath,
+}
+pub struct ReadContent<'a> {
+    pub version: &'a str,
+    pub context: Option<&'a DownloadContext>,
+}
+
+/// Select a branch head or one immutable commit in the same history.
+pub struct ReadTree<'a> {
+    pub branch: &'a str,
+    pub commit: Option<&'a str>,
+}
+/// Owned response projection captured during one authorized admission.
+#[derive(Debug, Serialize)]
+pub struct TreeSnapshot {
+    pub branch_id: String,
+    pub commit_id: String,
+    pub entries: Vec<storage_contract::Entry>,
+    pub pending_file_versions: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct RepositoryListResponse {
+    pub repositories: Vec<RepositoryResponse>,
+}

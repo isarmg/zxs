@@ -11,7 +11,7 @@ use crate::wit::{
 use crate::wit::{AdapterKind, Instruction, InstructionData};
 use crate::wit::{AuxEnum, AuxExport, AuxExportKind, AuxImport, AuxStruct};
 use crate::wit::{JsImport, JsImportName, NonstandardWitSection, WasmBindgenAux};
-use crate::{Bindgen, EncodeInto, PLACEHOLDER_MODULE};
+use crate::{Bindgen, PLACEHOLDER_MODULE};
 use anyhow::{anyhow, bail, Context as _, Error};
 use std::borrow::Cow;
 use std::collections::btree_map::Entry;
@@ -618,25 +618,7 @@ impl<'a> Context<'a> {
                         throw new Error(`failed to fetch Wasm: ${{module.status}} ${{module.statusText}} fetching '${{module.url}}'`);
                     }}
 
-                    if (typeof WebAssembly.instantiateStreaming === 'function') {{
-                        try {{
-                            return await WebAssembly.instantiateStreaming(module, imports);
-                        }} catch (e) {{
-                            const validResponse = expectedResponseType(module.type);
-
-                            if (validResponse && module.headers.get('Content-Type') !== 'application/wasm') {{
-                                console.warn(\"`WebAssembly.instantiateStreaming` failed \
-                                                because your server does not serve Wasm with \
-                                                `application/wasm` MIME type. Falling back to \
-                                                `WebAssembly.instantiate` which is slower. Original \
-                                                error:\\n\", e);
-
-                            }} else {{ throw e; }}
-                        }}
-                    }}
-
-                    const bytes = await module.arrayBuffer();
-                    return await WebAssembly.instantiate(bytes, imports);
+                    return await WebAssembly.instantiateStreaming(module, imports);
                 }} else {{
                     const instance = await WebAssembly.instantiate(module, imports);
 
@@ -647,12 +629,6 @@ impl<'a> Context<'a> {
                     }}
                 }}
 
-                function expectedResponseType(type) {{
-                    switch (type) {{
-                        case 'basic': case 'cors': case 'default': return true;
-                    }}
-                    return false;
-                }}
             }}
 
             function initSync(module{init_memory_arg}) {{
@@ -1169,11 +1145,7 @@ impl<'a> Context<'a> {
         // Hoisted classes need their finalization registry as a sibling library
         // symbol rather than a `$initBindgen` local.
 
-        let finalization_value = format!(
-            "(typeof FinalizationRegistry === 'undefined')\n\
-                ? {{ register: () => {{}}, unregister: () => {{}} }}\n\
-                : new FinalizationRegistry({finalization_callback})"
-        );
+        let finalization_value = format!("new FinalizationRegistry({finalization_callback})");
         {
             self.globals.push_str(&format!(
                 "const {identifier}Finalization = {finalization_value};\n"
@@ -1719,45 +1691,16 @@ impl<'a> Context<'a> {
                     None,
                 );
 
-                let polyfill_encode_into = "cachedTextEncoder.encodeInto = function (arg, view) {
-                const buf = cachedTextEncoder.encode(arg);
-                view.set(buf);
-                return {
-                    read: arg.length,
-                    written: buf.length
-                };
-            };";
-
-                // `encodeInto` doesn't currently work in any browsers when the memory passed
-                // in is backed by a `SharedArrayBuffer`, so force usage of `encode` if
-                // a `SharedArrayBuffer` is in use.
-                let shared = self.module.memories.get(memory).shared;
-
-                match self.config.encode_into {
-                    EncodeInto::Always if !shared => {}
-                    EncodeInto::Test if !shared => {
-                        dst.push_str(&format!(
-                            "
-                        if (!('encodeInto' in cachedTextEncoder)) {{
-                            {polyfill_encode_into}
-                        }}
-                        "
-                        ));
-                    }
-                    _ => {
-                        // Support audio worklets when able to spawn them.
-                        if shared {
-                            dst.push_str(&format!(
-                                "
-                            if (cachedTextEncoder) {{
-                                {polyfill_encode_into}
-                            }}
-                            "
-                            ));
-                        } else {
-                            dst.push_str(polyfill_encode_into);
-                        }
-                    }
+                // Encoding directly into shared Wasm memory is a separate
+                // host data limitation, not a missing-method compatibility path.
+                if self.module.memories.get(memory).shared {
+                    dst.push_str(
+                        "cachedTextEncoder.encodeInto = function (arg, view) {
+                            const buf = cachedTextEncoder.encode(arg);
+                            view.set(buf);
+                            return { read: arg.length, written: buf.length };
+                        };",
+                    );
                 }
 
                 dst.into()
@@ -2650,9 +2593,7 @@ impl<'a> Context<'a> {
             {
                 format!(
                     "
-                    const CLOSURE_DTORS = (typeof FinalizationRegistry === 'undefined')
-                        ? {{ register: () => {{}}, unregister: () => {{}} }}
-                        : new FinalizationRegistry({prevent_stale});
+                    const CLOSURE_DTORS = new FinalizationRegistry({prevent_stale});
                     "
                 )
             }

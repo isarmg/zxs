@@ -62,3 +62,23 @@ fn capabilities_keep_full_width_upload_limits_at_the_wire_boundary() {
         assert!(wire["max_upload_bytes"].is_string());
     }
 }
+
+#[test]
+fn readiness_wire_preserves_managed_omission_and_engine_counts() {
+    assert_eq!(
+        json_codec::to_value(ReadinessResponse::from(Readiness::Managed)).unwrap(),
+        json_codec::json!({"ready":true})
+    );
+    for count in [1, 2, 3, 4] {
+        let ready = Readiness::Engine(EngineReadiness {
+            mode: storage_contract::Mode::Development,
+            sequence: u64::MAX,
+            storage_disk_count: count,
+            metadata_member_count: count,
+        });
+        assert_eq!(
+            json_codec::to_value(ReadinessResponse::from(ready)).unwrap(),
+            json_codec::json!({"ready":true,"mode":"development","sequence":"18446744073709551615","storage_disk_count":count,"metadata_member_count":count,"metadata_redundancy":if count==1 {"none"} else {"multiple-copies"}})
+        );
+    }
+}

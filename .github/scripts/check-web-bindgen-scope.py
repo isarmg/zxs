@@ -12,6 +12,7 @@ import json
 import os
 import threading
 import shutil
+import re
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGET = Path(os.environ.get('CARGO_TARGET_DIR', ROOT / 'target/web-bindgen-scope-check'))
@@ -90,6 +91,7 @@ def check():
                    '--target-dir', str(TARGET)]
         cargo(*command)
         retired = {
+            'encode_into': 'pub fn old() { wasm_bindgen_cli_support::Bindgen::new().encode_into(wasm_bindgen_cli_support::EncodeInto::Test); }',
             'typescript': 'pub fn old() { wasm_bindgen_cli_support::Bindgen::new().typescript(true); }',
             'typed_array_declarations': 'pub fn old() { wasm_bindgen_cli_support::Bindgen::new().ts_typed_array_buffers(true); }',
             'typescript_output': 'pub fn old(output: wasm_bindgen_cli_support::Output) { output.ts(); }',
@@ -131,8 +133,16 @@ def check():
                          'function message_roundtrip(', 'function unicode_roundtrip(',
                          'function async_roundtrip(', 'class AsyncCounter']:
             assert required in js, f'missing runtime binding: {required}'
-        for forbidden in ['DeclarationMustNotLeak', '@ts-self-types', 'addToLibrary(', 'require(', 'Deno.']:
+        for forbidden in ['DeclarationMustNotLeak', '@ts-self-types', 'addToLibrary(', 'require(', 'Deno.', "if (!('encodeInto' in cachedTextEncoder))", 'cachedTextEncoder.encodeInto = function']:
             assert forbidden not in js, f'unsupported output returned: {forbidden}'
+        for name in ['WidgetFinalization', 'AsyncCounterFinalization', 'CLOSURE_DTORS']:
+            assert re.search(r'const\s+' + name + r'\s*=\s*new FinalizationRegistry\(', js), name
+        for forbidden in ["typeof FinalizationRegistry", "register: () => {}",
+                          "typeof WebAssembly.instantiateStreaming", "Falling back to",
+                          "expectedResponseType", "module.arrayBuffer()"]:
+            assert forbidden not in js, f'legacy browser fallback returned: {forbidden}'
+        subprocess.run(['node', str(ROOT / 'test/tools/web-bindings/runtime/modern-loader.mjs'),
+                        str(output)], cwd=ROOT, check=True)
         browser_result = browser_check(output)
         print(f'Web/no-TypeScript contract: runtime fixture and {len(retired)} negative API groups passed; {browser_result}')
 

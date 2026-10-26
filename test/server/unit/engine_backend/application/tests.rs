@@ -746,11 +746,7 @@ fn commit_preparation_releases_engine_and_rechecks_completed_revocation() {
             let (query_tx, query_rx) = mpsc::channel();
             let reader = std::thread::spawn(move || {
                 query_tx
-                    .send(reader_backend.call(
-                        crate::BackendAction::Repositories,
-                        &reader_owner,
-                        json!({}),
-                    ))
+                    .send(reader_backend.repositories_snapshot(&reader_owner))
                     .unwrap();
             });
             let queried = query_rx.recv_timeout(Duration::from_secs(2));

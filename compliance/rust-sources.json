@@ -52061,7 +52061,7 @@
   },
   "external_test_mappings_sha256": {
     "compliance/external-tests/foundation.json": "c1090e521b6661ccdb1bb21833acfae20d74f09a639a1684ae971c874fc9a23b",
-    "compliance/external-tests/integrated.json": "077a67d9826aabb55364f588a84effed0a6dc5624ac64439b9aaa5e7f2e0ef30",
+    "compliance/external-tests/integrated.json": "4e5232add94a803e60b093deb88047d86d5f3d22156a5d530ebe783a3b003465",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
   "external_tests": {
@@ -78517,9 +78517,9 @@
       ]
     },
     "tools/web-bindings": {
-      "bytes": 14361,
+      "bytes": 19075,
       "directory": "tools/web-bindings",
-      "file_count": 4,
+      "file_count": 5,
       "files": [
         {
           "path": "test/tools/web-bindings/fixtures/contract.rs",
@@ -78532,6 +78532,13 @@
           "sha256": "6bcd4d63ef20fd46d8fdbd9a7f7048f7ff60035a2f177f3c8a14b788370b230d",
           "source": "tools/web-bindings/tests/fixtures/csr-template.rs",
           "source_sha256_before": "422436b26afc21cfbb9fc30b3544ea18f965f8680555131a1c38808c5e6bb281"
+        },
+        {
+          "path": "test/tools/web-bindings/runtime/modern-loader.mjs",
+          "sha256": "fac42c821082eb4f5cbada5df26bd1d4caeaef84b147e9a9fb370479929e67bc",
+          "source": "test/tools/web-bindings/runtime/modern-loader.mjs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "fac42c821082eb4f5cbada5df26bd1d4caeaef84b147e9a9fb370479929e67bc"
         },
         {
           "path": "test/tools/web-bindings/unit/logging_tests.rs",
@@ -78867,6 +78874,7 @@
         "Cargo.toml": "048b2acb4508fded70f45a822085df4e804bde0041d01b78e8beec570be31587",
         "src/animated_show.rs": "7a1e5012b9d0edddbf131b0070eeb8d35bac64f8163b159acab9609fb1ef40eb",
         "src/attribute_interceptor.rs": "7b148fc2ba4b4a07a078ce2c9e063f8e8a9a02d0cac75dc2d1b78220747a1954",
+        "src/browser_support.rs": "1dce46aaa674008ec4c7bb05818afc6264fe15519fc24ee5c4b662de00a0042e",
         "src/children.rs": "774081a72328ff254cd3f087335688fe63c0925fe8b46e4407c4ffb7cdbd96ff",
         "src/component.rs": "4b2ca289417e0075ad8ea42486daca256505125f6d8a73455ac663fd6f84cec4",
         "src/components/account.rs": "5c527f070a2998ec67ef9bbba91c286a7aca00094ad318da4d7b39027f13720a",
@@ -78878,7 +78886,7 @@
         "src/components/select.rs": "4145ddf4328e117ebd977bcf76ff8da7855d374eff864a47e50b2638a271b4a6",
         "src/components/shell.rs": "c4a43e99798a17d58043ddb4762bb07cb6badf4a5580018637d6c1c98cdf4324",
         "src/components/state.rs": "fa0fb1063c77d3823f267acc184c0956897f5b685d173c0e789cc2649ae06012",
-        "src/contours/controller.rs": "acd8ed368ab60db8c3b0924ded4dbc171445456ff7d176f2b8e8751c10e870bd",
+        "src/contours/controller.rs": "cf39b2618ed5c77831c9793f6c6246a7d733adfe183c5f2ae34abf323e7d6e40",
         "src/contours/geometry.rs": "88025d1e2cfc38aff75a80b5622d1e3568dac1bfd383d4e26a15bbd4c6d199d0",
         "src/contours/mod.rs": "6888d8f0ccf5a84a8a96d493c5fbcfdcd3879d89a7abb1c9ef6f73283d036454",
         "src/contours/paint.rs": "948db7cbeb31dfbd4dc55ca1829e6116c018de07518b60ed00bb403b1fbf7b44",
@@ -78887,7 +78895,7 @@
         "src/for_snapshot.rs": "406af645436f3832601d12a7af3eefee7408e0654e39ea198c7d2e39c8049c05",
         "src/i18n.rs": "58303b320714a3fbdfb3b9ce60f97377f7b699435af00f7213bbf27e6b92501b",
         "src/into_view.rs": "63eb8d572837186f8cdd5872e63b78a9bd3142e275d99991f746b1d9c59fabb4",
-        "src/lib.rs": "0eb1344a4649c0fcba1196b176c98b52725bd09bd4fabbad63ec98ad3f22b22f",
+        "src/lib.rs": "5be2ef8ad1acb26638c7368761236e761a2812d64c46ac7a2e572a8734735ff8",
         "src/lifecycle.rs": "ecc68b7bd3dc32316fc8c43d407b71979b8282b7608137766dbe4b43578fb5bb",
         "src/mount.rs": "11d4421e13eea30031f1c226c2f5cde9b450d3ff8ba34d9699bef99b9eceaa41",
         "src/portal.rs": "c67d6f30c1e85446ea3d8542d8337b81ef88e1c49b65d220345cca03da9691db",
@@ -78897,7 +78905,7 @@
         "src/startup.rs": "3a725887bdb1ece400a25030d295000e9389642ed703f3b9292d10064ac3f013",
         "src/tasks.rs": "b57faafda47e096dcb86d4631b6c3f66030034973a35052b3785d4f4bbd4eb69",
         "src/text_prop.rs": "d9a34d8f9a34b0e1c7c230273d3566ad670a731a479f6413b1230bfed53d6c63",
-        "src/theme.rs": "c38a6b18eb6b7e1b99fe773a4da7395f62bbd59394b7be8e1586a331c43b8c60"
+        "src/theme.rs": "7e354645ee340b17999f3e5780b6b0dbc39cf8456e484440adead2d6e2dab7cb"
       },
       "license": "license-file: README.md",
       "license_materials": [
@@ -100822,8 +100830,8 @@
         "src/interpreter/mod.rs": "0bbcfad1dd30e5b8061ed750308e67d15fd16c164bc83b5e154e5d5ce182045a",
         "src/intrinsic.rs": "dd7a4b58680ae2b65094ddbd6c75f9b0dd07139cbf5792f913b39526152771bb",
         "src/js/binding.rs": "fab3c4e24eb6fd7b0b5e764842898a305aee977ea38f1eaa9c5777bc133e9f08",
-        "src/js/mod.rs": "dca61ac29acbc706852e157aa55ffe5a5dc02de91e9c37ce6e7cf31dac729374",
-        "src/lib.rs": "6af7166739cf6876f47274df0c3e499a6f701386e3299dd2d164b2b07a386a01",
+        "src/js/mod.rs": "8069e6c3679a7b91d9d3b552a6f74c813b8c8fa70d7c7ccd7a590f3919afa7e5",
+        "src/lib.rs": "220727fb619356416dbc4d097623411d1eaf35a99815157f578906ca13beac53",
         "src/multivalue.rs": "803c80f3bd132a1bd3bb532be4b0541e35a376367adf9de28686916c9e2ec42a",
         "src/suggest.rs": "b214194973c12ceba055fb4b3365cc168e67cbc4d97ca8af373de36ed2906399",
         "src/transforms/catch_handler.rs": "7a7ae5f8585f513ad52d74b87600dab1c52b9e12275bf1ef4d3e9fdf4492cfa4",

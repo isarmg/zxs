@@ -31,6 +31,8 @@ impl Drop for Release {
 enum BlockedEndpoint {
     Backend,
     Capabilities,
+    Ready,
+    Capacity,
 }
 struct BackendProbe {
     blocked: BlockedEndpoint,
@@ -61,7 +63,8 @@ impl Backend for BackendProbe {
         _: &crate::auth::Identity,
         _: storage_contract::OperationId,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        unreachable!("this test backend does not query operations")
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
     }
     fn commit_workspace(
         &self,
@@ -198,6 +201,50 @@ impl Backend for BackendProbe {
         }
         Ok(crate::Capabilities::for_engine(4096))
     }
+    fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+        if matches!(self.blocked, BlockedEndpoint::Ready) {
+            self.wait()?;
+        }
+        Ok(crate::Readiness::Managed)
+    }
+    fn workspace_capacity(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+        self.wait()?;
+        Ok(probe_capacity())
+    }
+    fn branch_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn branches_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn repositories_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+        self.wait()?;
+        Ok(Vec::new())
+    }
+    fn tree_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadTree<'_>,
+    ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn create_write_session(
         &self,
         _identity: &crate::auth::Identity,
@@ -245,10 +292,7 @@ impl Backend for BackendProbe {
     fn start_management(&self, auth: Arc<Mutex<AuthStore>>) {
         *self.auth.lock().unwrap() = Some(auth);
     }
-    fn call(&self, action: BackendAction, _: &Identity, _: Value) -> Result<Value, ApiError> {
-        if action == BackendAction::Ready {
-            return Ok(json!({}));
-        }
+    fn call(&self, _action: BackendAction, _: &Identity, _: Value) -> Result<Value, ApiError> {
         self.wait().map(|()| json!({}))
     }
 
@@ -274,6 +318,16 @@ impl Backend for BackendProbe {
         Err(crate::ApiError::unsupported())
     }
 
+    fn range_content(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadContent<'_>,
+    ) -> Result<crate::Content, crate::ApiError> {
+        match request.context {
+            Some(_) => Err(crate::ApiError::unsupported()),
+            None => self.content(identity, request.version),
+        }
+    }
     fn content(&self, _: &Identity, _: &str) -> Result<Content, ApiError> {
         Err(ApiError::unsupported())
     }
@@ -545,7 +599,11 @@ async fn workspace_request(app: Router, path: &str) -> Response {
             .method(
                 if path == "/api/workspaces/workspace"
                     || path == "/api/versions/version"
+                    || path.starts_with("/api/branches/branch/tree")
                     || path == "/api/repositories/repository"
+                    || path == "/api/branches/branch"
+                    || path == "/api/repositories/repository/branches"
+                    || path.starts_with("/api/operations/")
                 {
                     "GET"
                 } else {
@@ -566,7 +624,11 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
     for path in [
         "/api/branches/branch/write-sessions",
         "/api/versions/version",
+        "/api/branches/branch/tree?commit_id=commit",
         "/api/repositories/repository",
+        "/api/branches/branch",
+        "/api/repositories/repository/branches",
+        "/api/operations/op_00000000000000000000000000000000",
         "/api/workspaces",
         "/api/workspaces/workspace/abort",
         "/api/workspaces/workspace/seal",
@@ -620,37 +682,61 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
 }
 
 #[tokio::test]
-async fn typed_capabilities_hold_separate_management_slots_after_http_cancellation() {
-    let root = crate::tests::private_tempdir();
-    let (app, gate, _release) = fixture_for(root.path(), 0, false, BlockedEndpoint::Capabilities);
-    let mut jobs = Vec::new();
-    for _ in 0..2 {
-        jobs.push(tokio::spawn(request(app.clone(), "/api/capabilities")));
-    }
-    tokio::time::timeout(Duration::from_secs(5), gate.started.acquire_many(2))
-        .await
-        .unwrap()
-        .unwrap()
-        .forget();
-    overloaded(app.clone(), "/api/capabilities").await;
-    let cancelled = jobs.pop().unwrap();
-    cancelled.abort();
-    assert!(cancelled.await.unwrap_err().is_cancelled());
-    overloaded(app.clone(), "/api/capabilities").await;
-    assert_eq!(
-        request(app.clone(), "/healthz").await.status(),
-        StatusCode::OK
-    );
-    assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
-    gate.release();
-    assert_eq!(jobs.pop().unwrap().await.unwrap().status(), StatusCode::OK);
-    gate.finished.acquire_many(2).await.unwrap().forget();
-    loop {
-        let response = request(app.clone(), "/api/capabilities").await;
-        if response.status() != StatusCode::TOO_MANY_REQUESTS {
-            assert_eq!(response.status(), StatusCode::OK);
-            break;
+async fn typed_management_jobs_hold_separate_slots_after_http_cancellation() {
+    for (blocked, path) in [
+        (BlockedEndpoint::Capabilities, "/api/capabilities"),
+        (BlockedEndpoint::Ready, "/readyz"),
+        (BlockedEndpoint::Capacity, "/api/workspaces/capacity"),
+    ] {
+        let root = crate::tests::private_tempdir();
+        let (app, gate, _release) = fixture_for(root.path(), 0, false, blocked);
+        let mut jobs = Vec::new();
+        for _ in 0..2 {
+            jobs.push(tokio::spawn(request(app.clone(), path)));
         }
-        tokio::task::yield_now().await;
+        tokio::time::timeout(Duration::from_secs(5), gate.started.acquire_many(2))
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        overloaded(app.clone(), path).await;
+        let cancelled = jobs.pop().unwrap();
+        cancelled.abort();
+        assert!(cancelled.await.unwrap_err().is_cancelled());
+        overloaded(app.clone(), path).await;
+        assert_eq!(
+            request(app.clone(), "/healthz").await.status(),
+            StatusCode::OK
+        );
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
+        gate.release();
+        assert_eq!(jobs.pop().unwrap().await.unwrap().status(), StatusCode::OK);
+        gate.finished.acquire_many(2).await.unwrap().forget();
+        loop {
+            let response = request(app.clone(), path).await;
+            if response.status() != StatusCode::TOO_MANY_REQUESTS {
+                assert_eq!(response.status(), StatusCode::OK);
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+}
+
+fn probe_capacity() -> storage_contract::WorkspaceCapacity {
+    let measure = storage_contract::CapacityMeasure {
+        used: 1,
+        limit: 8,
+        remaining: 7,
+    };
+    let scope = storage_contract::WorkspaceCapacityScope {
+        records: measure.clone(),
+        metadata_bytes: measure,
+    };
+    storage_contract::WorkspaceCapacity {
+        global: scope.clone(),
+        principal: scope,
+        warning: storage_contract::CapacityWarning::Ok,
+        automatic_retirement: false,
     }
 }

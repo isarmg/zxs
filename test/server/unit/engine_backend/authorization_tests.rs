@@ -53,22 +53,16 @@ fn missing_credentials_do_not_admit_even_a_named_administrator() {
         admission_session: None,
         smb_binding: None,
     };
-    for action in [
-        crate::BackendAction::Repositories,
-        crate::BackendAction::Disks,
-        crate::BackendAction::Check,
-    ] {
+    // Anonymous probes have separate typed entrances; every remaining generic
+    // action must reject before inspecting its fields or doing storage work.
+    for &action in crate::BackendAction::ALL {
         assert_eq!(
             backend.call(action, &caller, json!({})).unwrap_err().code,
             storage_contract::ErrorCode::Unauthorized
         );
     }
     assert!(backend.capabilities().is_ok());
-    assert!(
-        backend
-            .call(crate::BackendAction::Ready, &caller, json!({}))
-            .is_ok()
-    );
+    assert!(backend.ready().is_ok());
 }
 
 #[test]
@@ -81,20 +75,13 @@ fn a_valid_singleton_admits_its_owner_but_not_arbitrary_callers() {
     .unwrap();
     let identity = install_test_administrator(&mut engine, "owner");
     let backend = EngineBackend::new(engine);
-    assert!(
-        backend
-            .call(crate::BackendAction::Repositories, &identity, json!({}))
-            .is_ok()
-    );
+    assert!(backend.repositories_snapshot(&identity).is_ok());
     let stranger = Identity {
         principal: "other".into(),
         ..identity
     };
     assert_eq!(
-        backend
-            .call(crate::BackendAction::Repositories, &stranger, json!({}))
-            .unwrap_err()
-            .code,
+        backend.repositories_snapshot(&stranger).unwrap_err().code,
         storage_contract::ErrorCode::Unauthorized
     );
 }
@@ -314,5 +301,46 @@ fn typed_workspace_status_distinguishes_admission_errors_from_absent_items() {
             .published_upload_status(&owner, &owned.workspace_id, "missing")
             .unwrap()
             .is_none()
+    );
+}
+
+#[test]
+fn upload_system_clock_failure_is_server_error_with_source() {
+    use std::{
+        error::Error as _,
+        time::{Duration, UNIX_EPOCH},
+    };
+    assert_eq!(upload_time(UNIX_EPOCH).unwrap(), 0);
+    assert_eq!(
+        upload_time(UNIX_EPOCH + Duration::new(42, 999_999_999)).unwrap(),
+        42
+    );
+    let error = upload_time(UNIX_EPOCH - Duration::from_nanos(1)).unwrap_err();
+    assert_eq!(error.status, ::http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(error.code, storage_contract::ErrorCode::IoError);
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<std::time::SystemTimeError>()
+    );
+    let engine_error = storage_engine::Error::from(
+        (UNIX_EPOCH - Duration::from_secs(1))
+            .duration_since(UNIX_EPOCH)
+            .unwrap_err(),
+    );
+    let mapped = super::error(engine_error);
+    assert_eq!(mapped.status, ::http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        mapped
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<std::time::SystemTimeError>()
     );
 }

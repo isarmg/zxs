@@ -26,19 +26,26 @@ mod uploads;
 mod web_assets;
 
 mod backend_action;
+mod backend_branch;
+pub use backend_branch::{BranchSnapshot, ContentDispositionSnapshot, FileBranchSnapshot};
 mod backend_read;
 mod backend_status;
-pub use backend_status::{Capabilities, StorageState, StorageStatus};
+pub use backend_status::{Capabilities, EngineReadiness, Readiness, StorageState, StorageStatus};
 mod backend_workspace;
 pub use backend_workspace::{
     CreateWorkspace, PublishedUploadState, PublishedUploadStatus, StageNamespace,
     WorkspaceWriteSession,
 };
 mod http_workspace;
-pub use backend_read::{DirectorySelection, DirectorySnapshot, ReadDirectory, VersionSnapshot};
+pub use backend_read::{
+    DirectorySelection, DirectorySnapshot, DownloadContext, ReadContent, ReadDirectory, ReadTree,
+    TreeSnapshot, VersionSnapshot,
+};
 use http_workspace::{abort, commit, namespace, seal, workspace, workspace_info, write_session};
+mod http_operation;
 mod operation_wire;
 pub use backend_action::BackendAction;
+use http_operation::operation;
 
 use auth::{AuthStore, Identity};
 use http_auth::{authorize, change_password, login, logout, me};
@@ -282,6 +289,30 @@ pub trait Backend: Send + Sync {
     ) -> Result<storage_contract::Repository, ApiError>;
     fn authorize_repository(&self, identity: &Identity, repository: &str) -> Result<(), ApiError>;
     fn capabilities(&self) -> Result<Capabilities, ApiError>;
+    fn ready(&self) -> Result<Readiness, ApiError>;
+    fn workspace_capacity(
+        &self,
+        identity: &Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, ApiError>;
+    fn branch_snapshot(
+        &self,
+        identity: &Identity,
+        branch: &str,
+    ) -> Result<BranchSnapshot, ApiError>;
+    fn branches_snapshot(
+        &self,
+        identity: &Identity,
+        repository: &str,
+    ) -> Result<Vec<BranchSnapshot>, ApiError>;
+    fn repositories_snapshot(
+        &self,
+        identity: &Identity,
+    ) -> Result<Vec<storage_contract::Repository>, ApiError>;
+    fn tree_snapshot(
+        &self,
+        identity: &Identity,
+        request: ReadTree<'_>,
+    ) -> Result<TreeSnapshot, ApiError>;
     fn create_write_session(
         &self,
         identity: &Identity,
@@ -356,9 +387,11 @@ pub trait Backend: Send + Sync {
     /// Return a fully verified raw descriptor (used by SMB and local consumers).
     fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError>;
     /// HTTP may authenticate only requested chunks, while retaining the read lease.
-    fn range_content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
-        self.content(identity, version)
-    }
+    fn range_content(
+        &self,
+        identity: &Identity,
+        request: ReadContent<'_>,
+    ) -> Result<Content, ApiError>;
     /// Publish the exact caller generation; adapters must not silently discard it.
     fn upload_generation(
         &self,
@@ -505,6 +538,43 @@ impl Backend for AuthorizedBackend {
     fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
         self.backend.capabilities()
     }
+    fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+        self.backend.ready()
+    }
+    fn workspace_capacity(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+        self.backend.workspace_capacity(&self.current(identity)?)
+    }
+    fn branch_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.backend.branch_snapshot(&self.current(identity)?, id)
+    }
+    fn branches_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        self.backend.branches_snapshot(&self.current(identity)?, id)
+    }
+    fn repositories_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+        self.backend.repositories_snapshot(&self.current(identity)?)
+    }
+    fn tree_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadTree<'_>,
+    ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+        self.backend
+            .tree_snapshot(&self.current(identity)?, request)
+    }
     fn create_write_session(
         &self,
         identity: &crate::auth::Identity,
@@ -612,11 +682,7 @@ impl Backend for AuthorizedBackend {
         identity: &Identity,
         input: Value,
     ) -> Result<Value, ApiError> {
-        if action == crate::BackendAction::Ready {
-            self.backend.call(action, identity, input)
-        } else {
-            self.backend.call(action, &self.current(identity)?, input)
-        }
+        self.backend.call(action, &self.current(identity)?, input)
     }
     fn upload(
         &self,
@@ -650,9 +716,13 @@ impl Backend for AuthorizedBackend {
     fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
         self.backend.content(&self.current(identity)?, version)
     }
-    fn range_content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
+    fn range_content(
+        &self,
+        identity: &Identity,
+        request: ReadContent<'_>,
+    ) -> Result<Content, ApiError> {
         self.backend
-            .range_content(&self.current(identity)?, version)
+            .range_content(&self.current(identity)?, request)
     }
     fn workspace_content(
         &self,
@@ -1221,25 +1291,6 @@ async fn call(
     .map_err(ApiError::join)?
     .map(Json)
 }
-async fn management_call(
-    state: AppState,
-    identity: Identity,
-    action: crate::BackendAction,
-    input: Value,
-) -> Result<Json<Value>, ApiError> {
-    let permit = state
-        .management_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("management capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state.backend.call(action, &identity, input)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
-}
 async fn json_body(request: Request) -> Result<Value, ApiError> {
     let bytes = http_boundary::read_body(request, 1024 * 1024).await?;
     if bytes.is_empty() {
@@ -1316,7 +1367,32 @@ macro_rules! id_post_handler {
         }
     };
 }
-list_handler!(repositories, crate::BackendAction::Repositories);
+async fn repositories(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<backend_read::RepositoryListResponse>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state
+            .backend
+            .repositories_snapshot(&identity)
+            .map(|repositories| backend_read::RepositoryListResponse {
+                repositories: repositories
+                    .into_iter()
+                    .map(backend_read::RepositoryResponse::from)
+                    .collect(),
+            })
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
 list_handler!(disks, crate::BackendAction::Disks);
 list_handler!(events, crate::BackendAction::Events);
 list_handler!(check, crate::BackendAction::Check);
@@ -1352,10 +1428,82 @@ read_handler!(
     crate::BackendAction::DefaultBranch,
     "repository_id"
 );
-read_handler!(branches, crate::BackendAction::Branches, "repository_id");
-read_handler!(branch_info, crate::BackendAction::Branch, "branch_id");
-read_handler!(tree, crate::BackendAction::Tree, "branch_id");
-read_handler!(operation, crate::BackendAction::Operation, "operation_id");
+
+async fn branch_info(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<backend_branch::BranchResponse>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state
+            .backend
+            .branch_snapshot(&identity, &id)
+            .map(backend_branch::BranchResponse::from)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
+async fn branches(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<backend_branch::BranchListResponse>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state
+            .backend
+            .branches_snapshot(&identity, &id)
+            .map(|branches| backend_branch::BranchListResponse {
+                branches: branches
+                    .into_iter()
+                    .map(backend_branch::BranchResponse::from)
+                    .collect(),
+            })
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
+async fn tree(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiPath(branch): ApiPath<String>,
+    ApiQuery(mut query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<TreeSnapshot>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    let commit = query.remove("commit_id");
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state.backend.tree_snapshot(
+            &identity,
+            ReadTree {
+                branch: &branch,
+                commit: commit.as_deref(),
+            },
+        )
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
 async fn version(
     State(state): State<AppState>,
     http_routing::Extension(identity): http_routing::Extension<Identity>,
@@ -1497,14 +1645,19 @@ async fn management_status(State(state): State<AppState>) -> Json<Value> {
 async fn workspace_capacity(
     State(state): State<AppState>,
     http_routing::Extension(identity): http_routing::Extension<Identity>,
-) -> Result<Json<Value>, ApiError> {
-    management_call(
-        state,
-        identity,
-        crate::BackendAction::WorkspaceCapacity,
-        json!({}),
-    )
+) -> Result<Json<storage_contract::WorkspaceCapacity>, ApiError> {
+    let permit = state
+        .management_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("management capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state.backend.workspace_capacity(&identity)
+    })
     .await
+    .map_err(ApiError::join)?
+    .map(Json)
 }
 
 async fn storage_status(
@@ -1523,13 +1676,24 @@ async fn storage_retry(
         .map(Json)
 }
 
-async fn ready(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let identity = Identity {
-        admission_session: None,
-        smb_binding: None,
-        principal: "health".into(),
-    };
-    management_call(state, identity, crate::BackendAction::Ready, json!({})).await
+async fn ready(
+    State(state): State<AppState>,
+) -> Result<Json<backend_status::ReadinessResponse>, ApiError> {
+    let permit = state
+        .management_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("management capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state
+            .backend
+            .ready()
+            .map(backend_status::ReadinessResponse::from)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
 }
 async fn capabilities(
     State(state): State<AppState>,

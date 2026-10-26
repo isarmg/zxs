@@ -70,8 +70,8 @@ function fail(stage, error) {
   title.textContent = chinese ? "页面启动失败" : "Page could not start";
   const message = document.createElement("p");
   message.textContent = chinese
-    ? "页面所需资源加载失败或超时。请检查网络连接，然后重新加载页面。"
-    : "Required page resources failed to load or timed out. Check your connection, then reload the page.";
+    ? "浏览器缺少必需能力，或页面资源加载失败或超时。请使用现代浏览器并检查网络连接，然后重新加载页面。"
+    : "Required browser capabilities are unavailable, or page resources failed to load or timed out. Use a modern browser and check your connection, then reload the page.";
   const retry = document.createElement("button");
   retry.type = "button";
   retry.textContent = chinese ? "重新加载页面" : "Reload page";

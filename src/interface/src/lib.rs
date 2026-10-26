@@ -152,6 +152,8 @@ pub mod task {
     pub use reactive_state::{spawn_local_scoped, spawn_local_scoped_with_cancellation};
 }
 
+#[cfg(target_arch = "wasm32")]
+mod browser_support;
 pub mod components;
 #[expect(
     clippy::doc_lazy_continuation,
@@ -236,8 +238,11 @@ mod browser {
         if !APPLICATION.with(|slot| slot.borrow_mut().begin()) {
             return Err(JsValue::from_str("Application mounting already began"));
         }
-        if let Err(error) = startup::begin(&document) {
+        if let Err(error) =
+            startup::begin(&document).and_then(|()| browser_support::require(&window))
+        {
             cleanup();
+            startup::failed(&document, &error);
             return Err(error);
         }
         // Register before yielding, and retain these same listeners through the

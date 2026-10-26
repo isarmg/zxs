@@ -342,6 +342,52 @@ impl Backend for RecordingBackend {
         self.record("capabilities", None, Value::Null)?;
         Ok(crate::Capabilities::for_engine(42))
     }
+    fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+        self.record("ready", None, Value::Null)?;
+        Ok(crate::Readiness::Managed)
+    }
+    fn workspace_capacity(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+        self.record("workspace_capacity", Some(identity), Value::Null)?;
+        Ok(recorded_capacity())
+    }
+    fn branch_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.record("branch_snapshot", Some(identity), json!({"id":id}))?;
+        Ok(recorded_branch())
+    }
+    fn branches_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        self.record("branches_snapshot", Some(identity), json!({"id":id}))?;
+        Ok(vec![recorded_branch()])
+    }
+    fn repositories_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+        self.record("repositories_snapshot", Some(identity), Value::Null)?;
+        Ok(vec![recorded_repository("repository")])
+    }
+    fn tree_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadTree<'_>,
+    ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+        self.record(
+            "tree_snapshot",
+            Some(identity),
+            json!({"branch_id":request.branch,"commit_id":request.commit}),
+        )?;
+        Ok(recorded_tree())
+    }
     fn create_write_session(
         &self,
         identity: &crate::auth::Identity,
@@ -512,8 +558,17 @@ impl Backend for RecordingBackend {
     fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
         self.read("content", identity, json!({"version": version}))
     }
-    fn range_content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
-        self.read("range_content", identity, json!({"version": version}))
+    fn range_content(
+        &self,
+        identity: &Identity,
+        request: crate::ReadContent<'_>,
+    ) -> Result<Content, ApiError> {
+        let context=request.context.map(|context|json!({"repository_id":context.repository_id,"path":context.path.as_str(),"key":context.path.key()}));
+        self.read(
+            "range_content",
+            identity,
+            json!({"version": request.version,"context":context}),
+        )
     }
     fn workspace_content(
         &self,
@@ -709,6 +764,54 @@ impl Fixture {
                     .map(|()| json!({"returned_by":"authorize_repository"})),
             ),
             (
+                "workspace_capacity",
+                backend.workspace_capacity(identity).map(|capacity| {
+                    assert_eq!(capacity, recorded_capacity());
+                    json!({"returned_by":"workspace_capacity"})
+                }),
+            ),
+            (
+                "branch_snapshot",
+                backend.branch_snapshot(identity, "branch").map(|snapshot| {
+                    assert_eq!(snapshot.generation, u64::MAX);
+                    json!({"returned_by":"branch_snapshot"})
+                }),
+            ),
+            (
+                "branches_snapshot",
+                backend
+                    .branches_snapshot(identity, "repository")
+                    .map(|snapshots| {
+                        assert_eq!(snapshots[0].generation, u64::MAX);
+                        json!({"returned_by":"branches_snapshot"})
+                    }),
+            ),
+            (
+                "repositories_snapshot",
+                backend.repositories_snapshot(identity).map(|repositories| {
+                    assert_eq!(repositories, vec![recorded_repository("repository")]);
+                    json!({"returned_by":"repositories_snapshot"})
+                }),
+            ),
+            (
+                "tree_snapshot",
+                backend
+                    .tree_snapshot(
+                        identity,
+                        crate::ReadTree {
+                            branch: "branch",
+                            commit: Some("commit"),
+                        },
+                    )
+                    .map(|snapshot| {
+                        assert_eq!(
+                            json_codec::to_value(snapshot).unwrap(),
+                            json_codec::to_value(recorded_tree()).unwrap()
+                        );
+                        json!({"returned_by":"tree_snapshot"})
+                    }),
+            ),
+            (
                 "create_write_session",
                 backend
                     .create_write_session(identity, "branch")
@@ -826,7 +929,7 @@ impl Fixture {
             ),
             (
                 "call",
-                backend.call(BackendAction::Repositories, identity, json!({"probe": 7})),
+                backend.call(BackendAction::Events, identity, json!({"probe": 7})),
             ),
             (
                 "upload",
@@ -867,7 +970,28 @@ impl Fixture {
             (
                 "range_content",
                 backend
-                    .range_content(identity, "version-range")
+                    .range_content(
+                        identity,
+                        crate::ReadContent {
+                            version: "version-range",
+                            context: None,
+                        },
+                    )
+                    .map(content),
+            ),
+            (
+                "range_content",
+                backend
+                    .range_content(
+                        identity,
+                        crate::ReadContent {
+                            version: "version-context",
+                            context: Some(&crate::DownloadContext {
+                                repository_id: "repository".into(),
+                                path: name_policy::LookupPath::parse("File.txt").unwrap(),
+                            }),
+                        },
+                    )
                     .map(content),
             ),
             (
@@ -931,6 +1055,11 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"version_id":"version"}),
         json!({"repository_id":"repository"}),
         json!({"repository_id":"repository"}),
+        Value::Null,
+        json!({"id":"branch"}),
+        json!({"id":"repository"}),
+        Value::Null,
+        json!({"branch_id":"branch","commit_id":"commit"}),
         json!({"branch_id":"branch"}),
         json!({"workspace_id":"workspace","change":{"kind":"mkdir","path":"File.txt","destination":null}}),
         json!({"workspace":"workspace","logical_size":42}),
@@ -941,11 +1070,12 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"branch":"branch","entry_id":"branch"}),
         json!({"branch":"branch","path":"File.txt","key":"file.txt"}),
         json!({"branch":"branch","commit":"commit","path":"File.txt","key":"file.txt"}),
-        json!({"action": BackendAction::Repositories.as_str(), "input": {"probe": 7}}),
+        json!({"action": BackendAction::Events.as_str(), "input": {"probe": 7}}),
         upload,
         generation,
         json!({"version": "version-content"}),
-        json!({"version": "version-range"}),
+        json!({"version":"version-range","context":null}),
+        json!({"version":"version-context","context":{"repository_id":"repository","path":"File.txt","key":"file.txt"}}),
         json!({"workspace": "workspace-read", "item": "item-read"}),
         json!({"version": "version-checksums"}),
     ];
@@ -988,17 +1118,7 @@ fn public_probes_and_bootstrap_setup_keep_their_explicit_exceptions() {
         fixture.backend.capabilities().unwrap().max_upload_bytes(),
         42
     );
-    assert_eq!(
-        fixture
-            .backend
-            .call(
-                BackendAction::Ready,
-                &fixture.identity,
-                json!({"probe": 11})
-            )
-            .unwrap(),
-        json!({"returned_by": "call"})
-    );
+    assert_eq!(fixture.backend.ready().unwrap(), crate::Readiness::Managed);
     assert_eq!(
         fixture
             .backend
@@ -1011,12 +1131,9 @@ fn public_probes_and_bootstrap_setup_keep_their_explicit_exceptions() {
     assert_eq!(calls[0].method, "capabilities");
     assert!(calls[0].identity.is_none());
     assert_eq!(calls[0].arguments, Value::Null);
-    assert_eq!(calls[1].method, "call");
-    assert_identity(calls[1].identity.as_ref(), &fixture.identity);
-    assert_eq!(
-        calls[1].arguments,
-        json!({"action":"ready","input":{"probe":11}})
-    );
+    assert_eq!(calls[1].method, "ready");
+    assert!(calls[1].identity.is_none());
+    assert_eq!(calls[1].arguments, Value::Null);
     assert_eq!(calls[2].method, "setup_operation");
     assert!(calls[2].identity.is_none());
     assert_eq!(
@@ -1140,5 +1257,52 @@ fn recorded_repository(id: &str) -> storage_contract::Repository {
         smb_enabled: true,
         smb_binding_generation: u64::MAX,
         file_manager_root: false,
+    }
+}
+
+fn recorded_capacity() -> storage_contract::WorkspaceCapacity {
+    let measure = storage_contract::CapacityMeasure {
+        used: 1,
+        limit: 8,
+        remaining: 7,
+    };
+    let scope = storage_contract::WorkspaceCapacityScope {
+        records: measure.clone(),
+        metadata_bytes: measure,
+    };
+    storage_contract::WorkspaceCapacity {
+        global: scope.clone(),
+        principal: scope,
+        warning: storage_contract::CapacityWarning::Ok,
+        automatic_retirement: false,
+    }
+}
+
+fn recorded_tree() -> crate::TreeSnapshot {
+    crate::TreeSnapshot {
+        branch_id: "branch".into(),
+        commit_id: "commit".into(),
+        entries: vec![],
+        pending_file_versions: std::collections::BTreeMap::from([(
+            "file".into(),
+            "version".into(),
+        )]),
+    }
+}
+
+fn recorded_branch() -> crate::BranchSnapshot {
+    crate::BranchSnapshot {
+        branch_id: "branch".into(),
+        history_tree_id: "history".into(),
+        name: "Main".into(),
+        head_commit_id: "head".into(),
+        fork_commit_id: "fork".into(),
+        branch_kind: storage_contract::BranchKind::Full,
+        file_id: None,
+        file_node_id: None,
+        pending_file_versions: std::collections::BTreeMap::new(),
+        generation: u64::MAX,
+        state: storage_contract::BranchState::Active,
+        file: None,
     }
 }

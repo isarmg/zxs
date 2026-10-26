@@ -43,11 +43,13 @@ fn snapshot_lookup_preserves_frozen_identity_equivalent_spelling_and_absence() {
     );
     for invalid in [foreign.as_str(), "missing-commit"] {
         let old = backend
-            .call(
-                BackendAction::Tree,
+            .tree_snapshot(
                 &identity,
-                json!({"branch_id":repo.main_branch_id,"query":{"commit_id":invalid}}),
+                crate::tests::tree_request(
+                    &(json!({"branch_id":repo.main_branch_id,"query":{"commit_id":invalid}})),
+                ),
             )
+            .map(|snapshot| json_codec::to_value(snapshot).unwrap())
             .unwrap_err();
         let new = backend
             .lookup_at(&identity, &repo.main_branch_id, invalid, &path)
@@ -135,11 +137,13 @@ fn measure_snapshot_lookup_against_tree_round_trip() {
         let path = LookupPath::parse("TARGET.TXT").unwrap();
         let old = || {
             let snapshot = backend
-                .call(
-                    BackendAction::Tree,
+                .tree_snapshot(
                     &identity,
-                    json!({"branch_id":repo.main_branch_id,"query":{"commit_id":commit}}),
+                    crate::tests::tree_request(
+                        &(json!({"branch_id":repo.main_branch_id,"query":{"commit_id":commit}})),
+                    ),
                 )
+                .map(|snapshot| json_codec::to_value(snapshot).unwrap())
                 .unwrap();
             let entries: Vec<storage_contract::Entry> =
                 json_codec::from_value(snapshot["entries"].clone()).unwrap();

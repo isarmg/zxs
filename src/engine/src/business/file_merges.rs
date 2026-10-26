@@ -77,7 +77,7 @@ impl Engine {
                         node_id:result.clone(),history_tree_id:body.history_tree_id.clone(),file_id:file.into(),
                         version_id:version.clone(),parent_node_ids:edges.clone(),branch_id:survivor.into(),
                         kind:FileMetadataKind::Merge,tags:super::file_nodes::node_tags(state,chosen_node),
-                        operation_id:operation,author:principal.into(),sequence:state.sequence,created_at:now(),
+                        operation_id:operation,author:principal.into(),sequence:state.sequence,created_at:now()?,
                     });
                 }
                 let merge_id = new_id("fmerge");

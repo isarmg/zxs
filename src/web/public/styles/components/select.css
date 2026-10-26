@@ -34,9 +34,3 @@
 .zxs-select-option[aria-selected=true] { font-weight: 700; }
 .zxs-select-option[aria-disabled=true] { opacity: .5; cursor: not-allowed; }
 .zxs-select-empty { color: var(--zxs-block-muted); }
-@media (forced-colors: active) {
-  :root .zxs-select .zxs-select-trigger:focus-visible { outline-color: Highlight; }
-  .zxs-select-trigger, .zxs-select-panel { color: ButtonText; background: Canvas; border: 1px solid ButtonText; }
-  .zxs-select-option[data-active=true] { background: Highlight; color: HighlightText; }
-  .zxs-select-option[aria-disabled=true] { color: GrayText; opacity: 1; }
-}

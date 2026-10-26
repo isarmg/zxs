@@ -320,7 +320,7 @@ impl Backend for PanickingBackend {
         _: &crate::auth::Identity,
         _: storage_contract::OperationId,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        unreachable!("this test backend does not query operations")
+        panic!("private operation lookup panic detail")
     }
     fn commit_workspace(
         &self,
@@ -442,6 +442,42 @@ impl Backend for PanickingBackend {
     fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
         panic!("private capabilities panic detail")
     }
+    fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+        panic!("private readiness panic detail")
+    }
+    fn workspace_capacity(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+        panic!("private workspace capacity panic detail")
+    }
+    fn branch_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        panic!("private branch_snapshot panic detail")
+    }
+    fn branches_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        panic!("private branches_snapshot panic detail")
+    }
+    fn repositories_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+        panic!("private repositories snapshot panic detail")
+    }
+    fn tree_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadTree<'_>,
+    ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+        panic!("private tree snapshot panic detail")
+    }
     fn create_write_session(
         &self,
         _identity: &crate::auth::Identity,
@@ -518,6 +554,13 @@ impl Backend for PanickingBackend {
         panic!("private upload_generation panic detail")
     }
 
+    fn range_content(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadContent<'_>,
+    ) -> Result<crate::Content, crate::ApiError> {
+        panic!("private range content panic detail")
+    }
     fn content(&self, _identity: &Identity, _version: &str) -> Result<Content, ApiError> {
         panic!("private content panic detail");
     }
@@ -538,9 +581,19 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
     let (token, _, _) = authenticated(&app).await;
     for (method, path, body) in [
         ("GET", "/api/capabilities", None),
+        ("GET", "/readyz", None),
+        ("GET", "/api/workspaces/capacity", None),
         ("POST", "/api/system/storage/retry", Some(json!({}))),
         ("GET", "/api/repositories", None),
+        ("GET", "/api/branches/branch", None),
+        ("GET", "/api/repositories/repository/branches", None),
+        ("GET", "/api/branches/branch/tree?commit_id=commit", None),
         ("GET", "/api/versions/version/content", None),
+        (
+            "GET",
+            "/api/versions/version/content?repository_id=repository&path=file.txt",
+            None,
+        ),
         ("GET", "/api/workspaces/ws/files/item/upload-status", None),
         ("GET", "/api/workspaces/ws", None),
         (
@@ -552,6 +605,11 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         ("POST", "/api/workspaces/ws/seal", Some(json!({}))),
         ("GET", "/api/versions/version", None),
         ("GET", "/api/repositories/repository", None),
+        (
+            "GET",
+            "/api/operations/op_00000000000000000000000000000000",
+            None,
+        ),
         (
             "POST",
             "/api/branches/branch/write-sessions",

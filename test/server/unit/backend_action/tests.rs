@@ -29,6 +29,14 @@ fn every_action_round_trips_and_unknown_actions_are_rejected() {
         "version",
         "repository",
         "capabilities",
+        "operation",
+        "ready",
+        "workspace_capacity",
+        "tree",
+        "repositories",
+        "branch",
+        "branches",
+        "file_manager_download_context",
     ] {
         assert!(BackendAction::try_from(unknown).is_err());
     }

@@ -3,32 +3,14 @@
 //! This is not a cache or a reusable authorization grant, and carries no State,
 //! private authentication data, content read plan, or publication capability.
 use super::wire::PendingSources;
-use super::{encode, error, field, repo_for_branch};
-use crate::{ApiError, DirectorySnapshot};
-use data_serialization::Serialize;
-use json_codec::Value;
-use std::{collections::BTreeMap, sync::MutexGuard};
+use super::{error, repo_for_branch};
+use crate::{ApiError, DirectorySnapshot, TreeSnapshot};
 use storage_engine::Engine;
 
-#[derive(Serialize)]
-pub(super) struct Tree {
-    branch_id: String,
-    commit_id: String,
-    entries: Vec<storage_contract::Entry>,
-    pending_file_versions: BTreeMap<String, String>,
-}
-
-impl Tree {
-    pub(super) fn capture(engine: &Engine, input: &Value) -> Result<Self, ApiError> {
-        let branch = field(input, "branch_id")?;
-        let (commit, snapshot) = branch_snapshot(
-            engine.state(),
-            branch,
-            input
-                .get("query")
-                .and_then(|v| v.get("commit_id"))
-                .and_then(Value::as_str),
-        )?;
+impl TreeSnapshot {
+    pub(super) fn capture(engine: &Engine, request: crate::ReadTree<'_>) -> Result<Self, ApiError> {
+        let branch = request.branch;
+        let (commit, snapshot) = branch_snapshot(engine.state(), branch, request.commit)?;
         #[cfg(test)]
         tests::record_tree_projection(snapshot.entries.len());
         let entries = engine.list_tree_at(branch, commit).map_err(error)?;
@@ -205,16 +187,6 @@ impl DirectorySnapshot {
         }
         Ok(page)
     }
-}
-
-// Taking ownership of the guard makes the release point explicit. Projections
-// must own their data: borrowing from this guard cannot survive its drop.
-pub(super) fn render_unlocked<T: Serialize, E>(
-    engine: MutexGuard<'_, E>,
-    projection: T,
-) -> Result<Value, ApiError> {
-    drop(engine);
-    encode(projection)
 }
 
 #[cfg(test)]

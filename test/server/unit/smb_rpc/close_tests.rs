@@ -186,6 +186,42 @@ impl Backend for CloseFailure {
     fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
         self.inner.capabilities()
     }
+    fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+        self.inner.ready()
+    }
+    fn workspace_capacity(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+        self.inner.workspace_capacity(identity)
+    }
+    fn branch_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.inner.branch_snapshot(identity, id)
+    }
+    fn branches_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        self.inner.branches_snapshot(identity, id)
+    }
+    fn repositories_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+        self.inner.repositories_snapshot(identity)
+    }
+    fn tree_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadTree<'_>,
+    ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+        self.inner.tree_snapshot(identity, request)
+    }
     fn create_write_session(
         &self,
         identity: &crate::auth::Identity,
@@ -265,6 +301,13 @@ impl Backend for CloseFailure {
             .upload_generation(identity, workspace, item, path, source, generation)
     }
 
+    fn range_content(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadContent<'_>,
+    ) -> Result<crate::Content, crate::ApiError> {
+        self.inner.range_content(identity, request)
+    }
     fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
         self.inner.content(identity, version)
     }
@@ -273,15 +316,10 @@ impl Backend for CloseFailure {
 fn connect(shared: Arc<Shared>) -> (Client, JoinHandle<()>) {
     let repository = shared
         .backend
-        .call(
-            crate::BackendAction::Repositories,
-            &identity(&shared),
-            json!({}),
-        )
-        .unwrap()["repositories"][0]["repository_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+        .repositories_snapshot(&identity(&shared))
+        .unwrap()[0]
+        .repository_id
+        .clone();
     let socket = shared.spool.join(format!("{}.sock", new_id("rpc")));
     let listener = UnixListener::bind(&socket).unwrap();
     let worker = std::thread::spawn(move || {
@@ -515,11 +553,8 @@ fn lost_close_reply_retains_original_published_operation_without_resubmitting() 
     );
     let uploads = backend.uploads.load(Ordering::SeqCst);
     let result = backend
-        .call(
-            crate::BackendAction::Operation,
-            &identity(&shared),
-            json!({"operation_id": operation}),
-        )
+        .operation(&identity(&shared), operation.parse().unwrap())
+        .and_then(crate::operation_wire::operation_wire)
         .unwrap();
     assert_eq!(result["commit_state"], "PUBLISHED");
     assert_eq!(fs::read(&retained).unwrap(), b"new");

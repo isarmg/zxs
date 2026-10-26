@@ -9,7 +9,8 @@ pub(crate) fn operation_wire(op: storage_contract::OperationResult) -> Result<Va
         | storage_contract::CurrentHealth::Unavailable
         | storage_contract::CurrentHealth::Unknown) => health,
     };
-    let current_health = json!({"state":health,"checked_at":date_time::OffsetDateTime::now_utc().format(&date_time::format_description::well_known::Rfc3339).map_err(ApiError::invalid_source)?});
+    let current_health =
+        json!({"state":health,"checked_at":checked_at(std::time::SystemTime::now())?});
     let content_save = op.kind == "workspace.commit"
         && op.protection_at_publish != storage_contract::ProtectionAtPublish::NotApplicable;
     if content_save {
@@ -74,3 +75,28 @@ fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, ApiError> {
         .filter(|value| !value.is_empty())
         .ok_or_else(|| ApiError::invalid(format!("missing string field {key}")))
 }
+
+fn checked_at(time: std::time::SystemTime) -> Result<String, ApiError> {
+    let invalid = || {
+        ApiError::new(
+            ::http::StatusCode::INTERNAL_SERVER_ERROR,
+            storage_contract::ErrorCode::IoError,
+            "system clock cannot be represented as a UTC timestamp",
+        )
+    };
+    let duration = time
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|source| invalid().with_source(source))?;
+    // Duration's u64 seconds and subsecond field always fit i128 nanoseconds.
+    let nanos =
+        i128::from(duration.as_secs()) * 1_000_000_000 + i128::from(duration.subsec_nanos());
+    let time = date_time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
+        .map_err(|source| invalid().with_source(source))?;
+    Ok(time
+        .format(&date_time::format_description::well_known::Rfc3339)
+        .expect("invariant: nonnegative UTC time is within the RFC3339 year range"))
+}
+
+#[cfg(test)]
+#[path = "../../../test/server/unit/operation_wire_tests.rs"]
+mod tests;

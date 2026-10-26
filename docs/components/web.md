@@ -2,6 +2,8 @@
 
 `src/web/` 是 Rust/WASM CSR 产品界面，`src/interface/` 将共享组件、浏览器生命周期和 CSR 基础原语直接合为同一包；`src/macros/` 提供过程宏编译目标。所有组件共用根工作区与锁文件，第三方基础实现位于 `src/foundation/`。来源与许可统一见 [compliance](../../compliance/README.md)。
 
+Web 仅支持[现代浏览器能力契约](interface.md#modern-browser-contract)，缺少必需能力明确启动失败，不提供旧浏览器兼容或原生圆角降级；具体浏览器／操作系统组合仍须实际验收。
+
 浏览器通过同源 `/api/` 完成身份验证、文件与版本操作；SMB 是独立的 Samba 集成路径。构建与运行均不依赖兄弟项目目录。
 
 ## UTC 时间约定
@@ -65,7 +67,7 @@ histories/<history-id>/file-containers/<file-id>/<当前文件名>/versions/
 | `src/web/public/styles/components/geometry.css` | 行高、字体比例、字盒内缩、块间距、灰框与 G4 范围的唯一业务尺寸来源；页面组合 stack/flow/row/frame 角色 |
 | `src/web/public/styles/components/base.css`、`content-blocks.css`、`auth.css` | 分别负责组件行为、外观配色、保持独立尺寸的登录布局 |
 | `src/web/public/styles/components/` 其余文件 | 页面专属列布局、排序表现和图表外观，不重复定义业务行几何 |
-| `src/web/public/styles/tokens/`、`src/web/styles.css` | 明暗令牌、无障碍和样式入口 |
+| `src/web/public/styles/tokens/`、`src/web/styles.css` | 明暗令牌、键盘焦点／动态效果和样式入口 |
 | `src/server/src/telemetry/` | CPU/内存/功耗采样、31 天缓存及有界历史聚合；磁盘容量由核心提供 |
 | `src/engine/src/container_storage.rs` | 普通正文路径、容器改名、版本名称及派生缓存 |
 | `tools/web-build/src/` | Rust 构建、通用启动器与资源清单 |

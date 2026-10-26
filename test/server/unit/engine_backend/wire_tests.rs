@@ -1,4 +1,5 @@
 use super::*;
+use json_codec::json;
 use storage_contract::{
     CommitState, OperationResult, ProtectionAtPublish,
     client_protocol::{OperationStatus, operation_status},

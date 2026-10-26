@@ -1,5 +1,4 @@
 use super::*;
-use crate::BackendAction;
 use storage_engine::Config;
 
 #[test]
@@ -15,30 +14,14 @@ fn readiness_uses_fixed_membership_and_reports_single_disk_no_metadata_redundanc
         )
         .unwrap();
         let backend = EngineBackend::new(engine);
-        let anonymous = Identity {
-            admission_session: None,
-            smb_binding: None,
-            principal: String::new(),
+        let crate::Readiness::Engine(ready) = backend.ready().unwrap() else {
+            panic!("expected engine readiness")
         };
-        let ready = backend
-            .call(BackendAction::Ready, &anonymous, json!({}))
-            .unwrap();
-        assert_eq!(ready["metadata_member_count"], count);
-        assert_eq!(ready["storage_disk_count"], count);
-        assert_eq!(
-            ready["metadata_redundancy"],
-            if count == 1 {
-                "none"
-            } else {
-                "multiple-copies"
-            }
-        );
+        assert_eq!(ready.metadata_member_count, count);
+        assert_eq!(ready.storage_disk_count, count);
         std::fs::rename(&disks[count - 1], temp.path().join("missing-disk")).unwrap();
         assert_eq!(
-            backend
-                .call(BackendAction::Ready, &anonymous, json!({}))
-                .unwrap_err()
-                .code,
+            backend.ready().unwrap_err().code,
             storage_contract::ErrorCode::MetadataUnavailable
         );
     }

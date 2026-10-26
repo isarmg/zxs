@@ -217,9 +217,7 @@ async fn blocked_replication_never_blocks_login_and_queued_sessions_revalidate()
         })
     });
     held_rx.recv().unwrap();
-    let queued = std::thread::spawn(move || {
-        engine.call(crate::BackendAction::Repositories, &stale, json!({}))
-    });
+    let queued = std::thread::spawn(move || engine.repositories_snapshot(&stale));
     shared.lock().unwrap().logout(&session.token).unwrap();
     // This is a deadlock guard, not a latency benchmark. The engine remains
     // locked until the result is captured, even on slower test runners.
@@ -506,10 +504,7 @@ fn managed_admission_never_falls_back_to_stale_disaster_recovery_identity() {
         principal: "former-owner".into(),
     };
     assert_eq!(
-        backend
-            .call(crate::BackendAction::Repositories, &caller, json!({}))
-            .unwrap_err()
-            .code,
+        backend.repositories_snapshot(&caller).unwrap_err().code,
         storage_contract::ErrorCode::Unauthorized
     );
     let admin = primary
@@ -519,10 +514,7 @@ fn managed_admission_never_falls_back_to_stale_disaster_recovery_identity() {
         .unwrap();
     drop(primary);
     assert_eq!(
-        backend
-            .call(crate::BackendAction::Repositories, &admin, json!({}))
-            .unwrap_err()
-            .code,
+        backend.repositories_snapshot(&admin).unwrap_err().code,
         storage_contract::ErrorCode::Unauthorized
     );
 }
@@ -1099,10 +1091,7 @@ async fn background_reopen_uses_local_workspace_limits_and_authenticated_capacit
         smb_binding: None,
     };
     assert_eq!(
-        backend
-            .call(crate::BackendAction::WorkspaceCapacity, &forged, json!({}))
-            .unwrap_err()
-            .code,
+        backend.workspace_capacity(&forged).unwrap_err().code,
         storage_contract::ErrorCode::Unauthorized
     );
     assert_eq!(std::fs::read(data.join("config.json")).unwrap(), persisted);

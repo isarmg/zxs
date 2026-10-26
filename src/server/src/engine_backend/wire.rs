@@ -1,7 +1,7 @@
 //! Engine errors, request fields, and public response projections.
 use crate::ApiError;
 use data_serialization::Serialize;
-use json_codec::{Value, json};
+use json_codec::Value;
 use storage_engine::Engine;
 
 pub(crate) fn error(error: storage_engine::Error) -> ApiError {
@@ -36,70 +36,21 @@ pub(super) fn stored_version_content_state(
 /// Response ownership is independent from the version currently visible in a
 /// branch. An unwritten branch reads its parent's immutable version.
 pub(super) fn content_wire(engine: &Engine, visible: Option<&str>, source: Option<&str>) -> Value {
-    let visible = source.or(visible).filter(|version| !version.is_empty());
-    let inherited = source.is_some();
-    let state = visible
-        .and_then(|version| engine.state().content_states.get(version))
-        .map(storage_contract::ContentState::as_str)
-        .unwrap_or("LIVE");
-    json!({"version_id":visible,"materialized":!inherited && visible.is_some(),
-        "inherited":inherited,"own_version_id":(!inherited).then_some(visible).flatten(),
-        "source_version_id":source,"content_state":if inherited { "PENDING" } else { state },
-        "visible_content_state":state})
+    json_codec::to_value(crate::backend_branch::ContentDispositionResponse::from(
+        super::branch::capture_content(engine.state(), visible, source),
+    ))
+    .expect("invariant: internal content response serialization succeeds")
 }
+
 pub(super) fn branch_wire(
     engine: &Engine,
     branch: &storage_contract::Branch,
 ) -> Result<Value, ApiError> {
-    let mut result = encode(branch)?;
-    let snapshot = engine
-        .state()
-        .commits
-        .get(&branch.head_commit_id)
-        .expect("invariant: admitted branch head references an existing commit");
-    let mut pending = snapshot.pending_file_versions.clone();
-    pending.extend(branch.pending_file_versions.clone());
-    result["pending_file_versions"] = encode(&pending)?;
-    result["materialized"] = pending.is_empty().into();
-    result["inherited"] = (!pending.is_empty()).into();
-    result["content_state"] = if pending.is_empty() {
-        "LIVE"
-    } else {
-        "PENDING"
-    }
-    .into();
-    if let Some(file) = branch.file_id.as_deref() {
-        result["read_only"] = (branch.state != storage_contract::BranchState::Active
-            || engine
-                .state()
-                .file_branch_aliases
-                .contains_key(&branch.branch_id))
-        .into();
-        result["alias_of"] = engine
-            .state()
-            .file_branch_aliases
-            .get(&branch.branch_id)
-            .cloned()
-            .into();
-        let visible = snapshot
-            .entries
-            .iter()
-            .find(|entry| entry.file_id == file)
-            .map(|entry| entry.version_id.as_str());
-        result["node_id"] = branch
-            .file_node_id
-            .clone()
-            .or_else(|| visible.map(str::to_owned))
-            .into();
-        result.as_object_mut().unwrap().extend(
-            content_wire(engine, visible, pending.get(file).map(String::as_str))
-                .as_object()
-                .unwrap()
-                .clone(),
-        );
-    }
-    Ok(result)
+    encode(crate::backend_branch::BranchResponse::from(
+        super::branch::capture(engine.state(), branch),
+    ))
 }
+
 enum CurrentContext<'a> {
     Lookup,
     // A missing context has already been resolved; do not search again.

@@ -1,4 +1,4 @@
-/* 可单独导入的键盘、减弱动态效果和高对比度基础规则。 */
+/* 可单独导入的标签隐藏、键盘焦点与减弱动态效果的基础规则。 */
 .zxs-visually-hidden {
   position: absolute !important;
   width: 1px !important;
@@ -24,12 +24,5 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
-  }
-}
-
-@media (forced-colors: active) {
-  [data-zxs-scope] :where(a, button, input, select, textarea):focus-visible {
-    outline-color: Highlight;
-    forced-color-adjust: auto;
   }
 }

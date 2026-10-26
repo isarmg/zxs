@@ -29,11 +29,8 @@ fn failed_publication_reconciliation_retries_without_restaging_or_second_version
                 storage_contract::ErrorCode::MetadataUnavailable
             );
             let published = backend
-                .call(
-                    crate::BackendAction::Operation,
-                    &one.identity,
-                    json!({"operation_id":operation_id}),
-                )
+                .operation(&one.identity, operation_id)
+                .and_then(crate::operation_wire::operation_wire)
                 .unwrap();
             assert_eq!(published["commit_state"], "PUBLISHED");
             assert_eq!(backend.uploads.load(Ordering::SeqCst), 1);

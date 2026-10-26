@@ -147,8 +147,9 @@ pub(super) fn view(state: RwSignal<State>, metric: Metric) -> impl IntoView {
     let dimensions = RwSignal::new((280.0f64, 110.0f64));
     root.on_load(move |element| {
         let element: web_sys::Element = element.unchecked_into();
+        let measured = element.clone();
         let update = move || {
-            let b = element.get_bounding_client_rect();
+            let b = measured.get_bounding_client_rect();
             let next = (b.width().max(1.), b.height().max(1.));
             if dimensions
                 .with_untracked(|old| (old.0 - next.0).abs() > 0.2 || (old.1 - next.1).abs() > 0.2)
@@ -161,21 +162,14 @@ pub(super) fn view(state: RwSignal<State>, metric: Metric) -> impl IntoView {
             move |_: js_sys::Array, _: web_sys::ResizeObserver| update(),
         )
             as Box<dyn FnMut(js_sys::Array, web_sys::ResizeObserver)>);
-        match web_sys::ResizeObserver::new(callback.as_ref().unchecked_ref()) {
-            Ok(observer) => {
-                if let Some(element) = root.get_untracked() {
-                    observer.observe(&element);
-                }
-                let cleanup = send_wrapper::SendWrapper::new((observer, callback));
-                on_cleanup(move || {
-                    cleanup.0.disconnect();
-                    drop(cleanup);
-                });
-            }
-            Err(error) => {
-                web_sys::console::warn_2(&"Could not observe chart resizing".into(), &error)
-            }
-        }
+        let observer = web_sys::ResizeObserver::new(callback.as_ref().unchecked_ref())
+            .expect("invariant: admitted browser constructs a ResizeObserver");
+        observer.observe(&element);
+        let cleanup = send_wrapper::SendWrapper::new((observer, callback));
+        on_cleanup(move || {
+            cleanup.0.disconnect();
+            drop(cleanup);
+        });
     });
     let label = metric.label();
     let aria_label = format!("{} {}", label, t("历史图表", "history chart"));

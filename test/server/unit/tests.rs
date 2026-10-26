@@ -144,6 +144,42 @@ impl Backend for TestBackend {
     fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
         Ok(crate::Capabilities::for_engine(u64::MAX))
     }
+    fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn workspace_capacity(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn branch_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn branches_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn repositories_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn tree_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadTree<'_>,
+    ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn create_write_session(
         &self,
         _identity: &crate::auth::Identity,
@@ -237,6 +273,16 @@ impl Backend for TestBackend {
 
     fn checksums(&self, _identity: &Identity, _version: &str) -> Result<Vec<u8>, ApiError> {
         Ok(vec![7; 128 * 1024])
+    }
+    fn range_content(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadContent<'_>,
+    ) -> Result<crate::Content, crate::ApiError> {
+        match request.context {
+            Some(_) => Err(crate::ApiError::unsupported()),
+            None => self.content(identity, request.version),
+        }
     }
     fn content(&self, _identity: &Identity, _version: &str) -> Result<Content, ApiError> {
         Ok(Content {
@@ -958,6 +1004,42 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
             self.delegate.capabilities()
         }
+        fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+            self.delegate.ready()
+        }
+        fn workspace_capacity(
+            &self,
+            identity: &crate::auth::Identity,
+        ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+            self.delegate.workspace_capacity(identity)
+        }
+        fn branch_snapshot(
+            &self,
+            identity: &crate::auth::Identity,
+            id: &str,
+        ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+            self.delegate.branch_snapshot(identity, id)
+        }
+        fn branches_snapshot(
+            &self,
+            identity: &crate::auth::Identity,
+            id: &str,
+        ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+            self.delegate.branches_snapshot(identity, id)
+        }
+        fn repositories_snapshot(
+            &self,
+            identity: &crate::auth::Identity,
+        ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+            self.delegate.repositories_snapshot(identity)
+        }
+        fn tree_snapshot(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::ReadTree<'_>,
+        ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+            self.delegate.tree_snapshot(identity, request)
+        }
         fn create_write_session(
             &self,
             identity: &crate::auth::Identity,
@@ -1008,6 +1090,13 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             input: Value,
         ) -> Result<Value, ApiError> {
             self.delegate.call(action, identity, input)
+        }
+        fn range_content(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::ReadContent<'_>,
+        ) -> Result<crate::Content, crate::ApiError> {
+            self.delegate.range_content(identity, request)
         }
         fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
             self.delegate.content(identity, version)
@@ -1377,5 +1466,16 @@ async fn canonical_static_origin_drives_http_login_cookie_and_request_rejection(
                     .ends_with("; Secure")
             );
         }
+    }
+}
+
+// Existing JSON fixture vectors are test-client input, never an internal backend path.
+pub(crate) fn tree_request(value: &Value) -> crate::ReadTree<'_> {
+    crate::ReadTree {
+        branch: value["branch_id"].as_str().expect("fixture branch id"),
+        commit: value
+            .get("query")
+            .and_then(|q| q.get("commit_id"))
+            .and_then(Value::as_str),
     }
 }

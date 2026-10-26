@@ -1,14 +1,13 @@
 use crate::{
-    Backend, BackendAction,
+    Backend,
     auth::{AuthStore, Identity},
     engine_backend::EngineBackend,
 };
-use json_codec::{Value, json};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-use storage_contract::{Config, new_id};
+use storage_contract::{Config, OperationId};
 use storage_engine::{CommitRequest, Engine};
 
 const PASSWORD: &str = "integration-test-password";
@@ -19,7 +18,7 @@ fn fixture() -> (
     AuthStore,
     String,
     Identity,
-    Value,
+    OperationId,
 ) {
     let root = crate::tests::private_tempdir();
     let config = Config::development([
@@ -64,19 +63,12 @@ fn fixture() -> (
     let mut auth = backend.protect_auth(auth).unwrap();
     let login = auth.login("owner", PASSWORD).unwrap();
     let identity = auth.authenticate(&login.token).unwrap();
-    (
-        root,
-        backend,
-        auth,
-        login.token,
-        identity,
-        json!({"operation_id": operation}),
-    )
+    (root, backend, auth, login.token, identity, operation)
 }
 
 #[test]
 fn unauthorized_operations_never_start_payload_observation() {
-    let (_root, backend, mut auth, token, identity, input) = fixture();
+    let (_root, backend, mut auth, token, identity, operation_id) = fixture();
     let calls = Arc::new(AtomicUsize::new(0));
     let probe = calls.clone();
     *backend.operation_health_hook.lock().unwrap() = Some(Arc::new(move || {
@@ -92,21 +84,14 @@ fn unauthorized_operations_never_start_payload_observation() {
     };
     for denied in [&foreign, &unknown_session] {
         assert_eq!(
-            backend
-                .call(BackendAction::Operation, denied, input.clone())
-                .unwrap_err()
-                .code,
+            backend.operation(denied, operation_id).unwrap_err().code,
             storage_contract::ErrorCode::Unauthorized
         );
     }
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(
         backend
-            .call(
-                BackendAction::Operation,
-                &identity,
-                json!({"operation_id": new_id("op")})
-            )
+            .operation(&identity, OperationId::generate())
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::OperationNotFound
@@ -122,21 +107,14 @@ fn unauthorized_operations_never_start_payload_observation() {
         .unwrap();
     assert_eq!(
         backend
-            .call(
-                BackendAction::Operation,
-                &identity,
-                json!({"operation_id": foreign_operation})
-            )
+            .operation(&identity, foreign_operation)
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Forbidden
     );
     auth.logout(&token).unwrap();
     assert_eq!(
-        backend
-            .call(BackendAction::Operation, &identity, input)
-            .unwrap_err()
-            .code,
+        backend.operation(&identity, operation_id).unwrap_err().code,
         storage_contract::ErrorCode::Unauthorized
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -146,7 +124,7 @@ fn unauthorized_operations_never_start_payload_observation() {
 fn slow_operation_health_releases_engine_and_rechecks_logged_out_session() {
     use std::sync::mpsc;
     use std::time::Duration;
-    let (_root, backend, mut auth, token, identity, input) = fixture();
+    let (_root, backend, mut auth, token, identity, operation_id) = fixture();
     let (started, receive_started) = mpsc::sync_channel(0);
     let (release, receive_release) = mpsc::sync_channel(0);
     let receive_release = std::sync::Mutex::new(receive_release);
@@ -155,8 +133,7 @@ fn slow_operation_health_releases_engine_and_rechecks_logged_out_session() {
         receive_release.lock().unwrap().recv().unwrap();
     }));
     std::thread::scope(|scope| {
-        let request =
-            scope.spawn(|| backend.call(BackendAction::Operation, &identity, input.clone()));
+        let request = scope.spawn(|| backend.operation(&identity, operation_id));
         receive_started
             .recv_timeout(Duration::from_secs(10))
             .unwrap();
@@ -177,17 +154,13 @@ fn slow_operation_health_releases_engine_and_rechecks_logged_out_session() {
     *backend.operation_health_hook.lock().unwrap() = None;
     let login = auth.login("owner", PASSWORD).unwrap();
     let fresh_identity = auth.authenticate(&login.token).unwrap();
-    assert!(
-        backend
-            .call(BackendAction::Operation, &fresh_identity, input)
-            .is_ok()
-    );
+    assert!(backend.operation(&fresh_identity, operation_id).is_ok());
 }
 
 #[test]
 fn health_observation_rechecks_password_generation_after_unlocked_io() {
     use std::{sync::mpsc, time::Duration};
-    let (_root, backend, mut auth, token, identity, input) = fixture();
+    let (_root, backend, mut auth, token, identity, operation_id) = fixture();
     // Rotation from another valid session must also revoke an in-flight read
     // authenticated with the first session, not only the rotating session.
     let rotating_session = auth.login("owner", PASSWORD).unwrap();
@@ -199,8 +172,7 @@ fn health_observation_rechecks_password_generation_after_unlocked_io() {
         receive_release.lock().unwrap().recv().unwrap();
     }));
     std::thread::scope(|scope| {
-        let request =
-            scope.spawn(|| backend.call(BackendAction::Operation, &identity, input.clone()));
+        let request = scope.spawn(|| backend.operation(&identity, operation_id));
         receive_started
             .recv_timeout(Duration::from_secs(10))
             .unwrap();
@@ -235,23 +207,21 @@ fn health_observation_rechecks_password_generation_after_unlocked_io() {
         .login("owner", "replacement-integration-password")
         .unwrap();
     let fresh_identity = auth.authenticate(&login.token).unwrap();
-    assert!(
-        backend
-            .call(BackendAction::Operation, &fresh_identity, input)
-            .is_ok()
-    );
+    assert!(backend.operation(&fresh_identity, operation_id).is_ok());
 }
 
 #[test]
 fn operation_observation_preserves_publication_wire_facts() {
-    let (_root, backend, _auth, _token, identity, input) = fixture();
+    let (_root, backend, _auth, _token, identity, operation_id) = fixture();
     let before = backend
-        .call(BackendAction::Operation, &identity, input.clone())
+        .operation(&identity, operation_id)
+        .and_then(crate::operation_wire::operation_wire)
         .unwrap();
     assert_eq!(before["current_health"]["state"], "HEALTHY");
     let sequence = backend.engine.lock().unwrap().state().sequence;
     let replay = backend
-        .call(BackendAction::Operation, &identity, input.clone())
+        .operation(&identity, operation_id)
+        .and_then(crate::operation_wire::operation_wire)
         .unwrap();
     // Health timestamps are fresh observations, not publication facts.
     assert!(before["current_health"]["checked_at"].is_string());
@@ -279,7 +249,8 @@ fn operation_observation_preserves_publication_wire_facts() {
         }
     }
     let after = backend
-        .call(BackendAction::Operation, &identity, input)
+        .operation(&identity, operation_id)
+        .and_then(crate::operation_wire::operation_wire)
         .unwrap();
     assert_eq!(after["current_health"]["state"], "UNAVAILABLE");
     assert_eq!(after["commit_state"], before["commit_state"]);
@@ -313,13 +284,7 @@ fn pending_owner_discovery_failure_is_not_a_missing_operation_response() {
             .unwrap();
         }
     }
-    let error = backend
-        .call(
-            BackendAction::Operation,
-            &identity,
-            json!({"operation_id": operation}),
-        )
-        .unwrap_err();
+    let error = backend.operation(&identity, operation).unwrap_err();
     assert_ne!(error.code, storage_contract::ErrorCode::NotFound);
     assert!(error.source().is_some());
 }

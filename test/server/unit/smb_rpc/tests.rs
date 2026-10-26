@@ -8,17 +8,16 @@ use storage_engine::{CommitRequest, Config, Engine};
 
 impl Session {
     pub(super) fn entries(&self) -> Result<Vec<Entry>, ApiError> {
-        let tree = self.shared.backend.call(
-            crate::BackendAction::Tree,
-            &self.identity,
-            json!({"branch_id":self.branch}),
-        )?;
-        json_codec::from_value(
-            tree.get("entries")
-                .cloned()
-                .ok_or_else(|| ApiError::invalid("missing tree entries"))?,
-        )
-        .map_err(ApiError::invalid_source)
+        self.shared
+            .backend
+            .tree_snapshot(
+                &self.identity,
+                crate::ReadTree {
+                    branch: &self.branch,
+                    commit: None,
+                },
+            )
+            .map(|snapshot| snapshot.entries)
     }
 }
 
@@ -256,6 +255,42 @@ impl Backend for LostCommitReply {
     fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
         self.inner.capabilities()
     }
+    fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+        self.inner.ready()
+    }
+    fn workspace_capacity(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+        self.inner.workspace_capacity(identity)
+    }
+    fn branch_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.inner.branch_snapshot(identity, id)
+    }
+    fn branches_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        self.inner.branches_snapshot(identity, id)
+    }
+    fn repositories_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+        self.inner.repositories_snapshot(identity)
+    }
+    fn tree_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadTree<'_>,
+    ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+        self.inner.tree_snapshot(identity, request)
+    }
     fn create_write_session(
         &self,
         identity: &crate::auth::Identity,
@@ -333,6 +368,13 @@ impl Backend for LostCommitReply {
             .upload_generation(identity, workspace, item, path, source, generation)
     }
 
+    fn range_content(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadContent<'_>,
+    ) -> Result<crate::Content, crate::ApiError> {
+        self.inner.range_content(identity, request)
+    }
     fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
         if self
             .reconciliation_failure
@@ -440,15 +482,10 @@ fn identity(shared: &Shared) -> Identity {
 fn repository(shared: &Shared) -> String {
     shared
         .backend
-        .call(
-            crate::BackendAction::Repositories,
-            &identity(shared),
-            json!({}),
-        )
-        .unwrap()["repositories"][0]["repository_id"]
-        .as_str()
-        .unwrap()
-        .to_owned()
+        .repositories_snapshot(&identity(shared))
+        .unwrap()[0]
+        .repository_id
+        .clone()
 }
 
 fn session(shared: Arc<Shared>, branch: &str) -> Session {
@@ -476,11 +513,11 @@ fn select_pending_file(shared: &Shared, branch: &str) -> String {
     let identity = &identity(shared);
     let tree = shared
         .backend
-        .call(
-            crate::BackendAction::Tree,
+        .tree_snapshot(
             identity,
-            json!({"branch_id":branch}),
+            crate::tests::tree_request(&(json!({"branch_id":branch}))),
         )
+        .map(|snapshot| json_codec::to_value(snapshot).unwrap())
         .unwrap();
     let entry = tree["entries"]
         .as_array()
@@ -500,14 +537,8 @@ fn select_pending_file(shared: &Shared, branch: &str) -> String {
 
 fn directory_fixture(shared: &Shared) -> (String, String, String) {
     let identity = &identity(shared);
-    let repositories = shared
-        .backend
-        .call(crate::BackendAction::Repositories, identity, json!({}))
-        .unwrap();
-    let repository = repositories["repositories"][0]["repository_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let repositories = shared.backend.repositories_snapshot(identity).unwrap();
+    let repository = repositories[0].repository_id.clone();
     let created = shared
         .backend
         .call(
@@ -619,13 +650,9 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
         client.close(opened.handle, false).unwrap();
     }
     let identity = &identity(&shared);
-    let repo = shared
-        .backend
-        .call(crate::BackendAction::Repositories, identity, json!({}))
-        .unwrap()["repositories"][0]["repository_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let repo = shared.backend.repositories_snapshot(identity).unwrap()[0]
+        .repository_id
+        .clone();
     let register = |path: &str, name: &str| {
         shared.backend.call(crate::BackendAction::FileManagerDirectoryBranches,identity,json!({
         "slot_id":"P01","path":format!("资料/{path}"),"name":name,"operation_id":new_id("op")

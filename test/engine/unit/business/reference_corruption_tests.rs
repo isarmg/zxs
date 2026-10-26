@@ -407,7 +407,7 @@ fn missing_file_nodes_and_bodies_return_errors_without_publication() {
                         path: entry.path.as_str().to_owned(),
                         previous_path: entry.path.into_string(),
                         sequence,
-                        created_at: now(),
+                        created_at: now().unwrap(),
                         operation_id: storage_contract::OperationId::generate(),
                         author: "admin".into(),
                     },

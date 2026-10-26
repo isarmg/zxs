@@ -651,46 +651,6 @@ pub(super) fn read(
     match action {
         crate::BackendAction::FileManagerEntries => listing::entries(engine, &input),
         crate::BackendAction::FileManagerFileHistory => file_history(engine, &input),
-        crate::BackendAction::FileManagerDownloadContext => {
-            keys(&input, &["repository_id", "path", "version_id"])?;
-            let repo = repository(engine, field(&input, "repository_id")?)?;
-            let path = field(&input, "path")?;
-            name_policy::validate_lookup_path(path).map_err(ApiError::invalid_source)?;
-            let version = engine
-                .state()
-                .versions
-                .get(field(&input, "version_id")?)
-                .ok_or_else(|| {
-                    ApiError::new(
-                        ::http::StatusCode::NOT_FOUND,
-                        storage_contract::ErrorCode::VersionNotFound,
-                        "version missing",
-                    )
-                })?;
-            if version.history_tree_id != repo.history_tree_id {
-                return Err(ApiError::new(
-                    ::http::StatusCode::NOT_FOUND,
-                    storage_contract::ErrorCode::FileNotFound,
-                    "version is not in this repository context",
-                ));
-            }
-            let entry = engine
-                .namespace_tree(&repo.main_branch_id)
-                .map_err(error)?
-                .get(path)
-                .filter(|entry| {
-                    entry.kind == storage_contract::NamespaceEntryKind::File
-                        && entry.file_id == version.file_id
-                })
-                .ok_or_else(|| {
-                    ApiError::new(
-                        ::http::StatusCode::NOT_FOUND,
-                        storage_contract::ErrorCode::FileNotFound,
-                        "version file is not present at this logical path",
-                    )
-                })?;
-            Ok(json!({"name":entry.name()}))
-        }
         crate::BackendAction::FileManagerHistory => activity::read(engine),
         crate::BackendAction::FileManagerBackupConfiguration => {
             let repo = field(&input, "repository_id")?;

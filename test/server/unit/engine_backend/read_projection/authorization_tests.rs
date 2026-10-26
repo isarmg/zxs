@@ -142,7 +142,7 @@ fn narrow_authorization_borrows_metadata_without_tree_projection_and_keeps_paylo
     let input = json!({"branch_id":repo.main_branch_id});
     // Positive control: the work counter observes the old full projection.
     TREE_PROJECTION_WORK.with(|work| work.set((0, 0)));
-    Tree::capture(&engine, &input).unwrap();
+    crate::TreeSnapshot::capture(&engine, crate::tests::tree_request(&input)).unwrap();
     assert_eq!(TREE_PROJECTION_WORK.with(|work| work.get()), (1, 1));
     for count in [0, 1, 100, 1_000, 10_000] {
         let mut state = engine.state().clone();
@@ -177,7 +177,9 @@ fn narrow_authorization_rechecks_identity_sessions_and_binding_before_branch_err
         ..identity.clone()
     };
     let assert_equal = |identity: &Identity, input: Value| {
-        let old = backend.call(BackendAction::Tree, identity, input.clone());
+        let old = backend
+            .tree_snapshot(identity, crate::tests::tree_request(&input))
+            .map(|snapshot| json_codec::to_value(snapshot).unwrap());
         let narrow = backend.authorize_current(identity, field(&input, "branch_id").unwrap());
         assert_eq!(decision(old), decision(narrow));
     };

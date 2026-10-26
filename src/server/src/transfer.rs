@@ -640,6 +640,30 @@ pub(crate) struct ContentQuery {
     repository_id: Option<String>,
     path: Option<String>,
 }
+impl ContentQuery {
+    fn into_context(self) -> Result<Option<crate::DownloadContext>, ApiError> {
+        match (self.repository_id, self.path) {
+            (None, None) => Ok(None),
+            (Some(repository_id), Some(path)) => {
+                if repository_id.is_empty() {
+                    return Err(ApiError::invalid("missing string field repository_id"));
+                }
+                if path.is_empty() {
+                    return Err(ApiError::invalid("missing string field path"));
+                }
+                let path =
+                    name_policy::LookupPath::parse(&path).map_err(ApiError::invalid_source)?;
+                Ok(Some(crate::DownloadContext {
+                    repository_id,
+                    path,
+                }))
+            }
+            _ => Err(ApiError::invalid(
+                "repository_id and path must be supplied together",
+            )),
+        }
+    }
+}
 pub(crate) async fn content(
     State(state): State<AppState>,
     http_routing::Extension(identity): http_routing::Extension<Identity>,
@@ -654,39 +678,14 @@ pub(crate) async fn content(
     let content = tokio::time::timeout_at(
         deadline,
         tokio::task::spawn_blocking(move || {
-            if query.repository_id.is_some() != query.path.is_some() {
-                return Err(ApiError::invalid(
-                    "repository_id and path must be supplied together",
-                ));
-            }
-            let logical_name = if let (Some(repo), Some(path)) = (query.repository_id, query.path) {
-                let metadata = state.backend.call(
-                    crate::BackendAction::FileManagerDownloadContext,
-                    &identity,
-                    json!({
-                        "repository_id":repo,"path":path,"version_id":version
-                    }),
-                )?;
-                Some(
-                    metadata
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| {
-                            ApiError::new(
-                                ::http::StatusCode::INTERNAL_SERVER_ERROR,
-                                storage_contract::ErrorCode::StateInvalid,
-                                "download context has no filename",
-                            )
-                        })?
-                        .to_owned(),
-                )
-            } else {
-                None
-            };
-            let mut content = state.backend.range_content(&identity, &version)?;
-            if logical_name.is_some() {
-                content.download_name = logical_name;
-            }
+            let context = query.into_context()?;
+            let mut content = state.backend.range_content(
+                &identity,
+                crate::ReadContent {
+                    version: &version,
+                    context: context.as_ref(),
+                },
+            )?;
             content.lease = Box::new((content.lease, permit));
             Ok(content)
         }),

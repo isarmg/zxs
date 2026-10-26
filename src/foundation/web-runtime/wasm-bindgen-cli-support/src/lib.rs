@@ -41,7 +41,6 @@ pub struct Bindgen {
     emit_start: bool,
     externref: bool,
     multi_value: bool,
-    encode_into: EncodeInto,
     split_linked_modules: bool,
     generate_reset_state: bool,
     force_enable_abort_handler: bool,
@@ -70,13 +69,6 @@ enum Input {
     None,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum EncodeInto {
-    Test,
-    Always,
-    Never,
-}
-
 impl Bindgen {
     pub fn new() -> Bindgen {
         let externref =
@@ -98,7 +90,6 @@ impl Bindgen {
             emit_start: true,
             externref,
             multi_value,
-            encode_into: EncodeInto::Test,
             omit_default_module_path: true,
 
             split_linked_modules: false,
@@ -184,11 +175,6 @@ impl Bindgen {
 
     pub fn emit_start(&mut self, emit: bool) -> &mut Bindgen {
         self.emit_start = emit;
-        self
-    }
-
-    pub fn encode_into(&mut self, mode: EncodeInto) -> &mut Bindgen {
-        self.encode_into = mode;
         self
     }
 

@@ -4,6 +4,10 @@ use storage_contract::ErrorCode;
 
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
+    #[error("IO_ERROR: system clock precedes the Unix epoch: {0}")]
+    Clock(#[from] std::time::SystemTimeError),
+    #[error("IO_ERROR: system clock is outside the UTC timestamp range: {0}")]
+    ClockRange(#[source] date_time::error::ComponentRange),
     #[error(transparent)]
     Checkpoint(#[from] CheckpointError),
     #[error(transparent)]
@@ -77,6 +81,8 @@ impl Error {
                 source,
             },
             source @ (Self::Checkpoint(_)
+            | Self::Clock(_)
+            | Self::ClockRange(_)
             | Self::Filesystem(_)
             | Self::Sqlite(_)
             | Self::Database(_)
@@ -101,6 +107,8 @@ impl Error {
             Self::Cleanup { operation, .. } => operation.is_retryable(),
             Self::Context { retryable, .. } => *retryable,
             Self::Checkpoint(_)
+            | Self::Clock(_)
+            | Self::ClockRange(_)
             | Self::Filesystem(_)
             | Self::Sqlite(_)
             | Self::Database(_)
@@ -119,6 +127,7 @@ impl Error {
             Self::Contract(source) => source.code(),
             Self::Cleanup { operation, .. } => operation.code(),
             Self::Context { code, .. } => *code,
+            Self::Clock(_) | Self::ClockRange(_) => ErrorCode::IoError,
             Self::Checkpoint(_) => ErrorCode::CheckpointInvalid,
             Self::Filesystem(source) => filesystem_code(source),
             Self::Sqlite(_) | Self::Database(_) => ErrorCode::IndexRebuildFailed,
@@ -157,6 +166,8 @@ impl Error {
                 | platform_io::fs_safety::Error::AlreadyLocked(_)
                 | platform_io::fs_safety::Error::BudgetExceeded) => source.to_string().into(),
             },
+            Self::Clock(source) => source.to_string().into(),
+            Self::ClockRange(source) => source.to_string().into(),
             Self::Checkpoint(source) => source.to_string().into(),
             Self::Sqlite(source) => source.to_string().into(),
             Self::Database(source) => source.to_string().into(),

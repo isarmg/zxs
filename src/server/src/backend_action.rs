@@ -20,8 +20,6 @@ macro_rules! actions {
 }
 actions! {
     Archive => "archive",
-    Branch => "branch",
-    Branches => "branches",
     Check => "check",
     Commit => "commit",
     Compare => "compare",
@@ -38,7 +36,6 @@ actions! {
     FileManagerDirectoryBranches => "file_manager_directory_branches",
     FileManagerDirectorySelect => "file_manager_directory_select",
     FileManagerDisks => "file_manager_disks",
-    FileManagerDownloadContext => "file_manager_download_context",
     FileManagerEntries => "file_manager_entries",
     FileManagerFileHistory => "file_manager_file_history",
     FileManagerFileMetadata => "file_manager_file_metadata",
@@ -58,7 +55,6 @@ actions! {
     InitializeDirectoryScope => "initialize_directory_scope",
     MergeLink => "merge_link",
     MonitorDisks => "monitor_disks",
-    Operation => "operation",
     Placement => "placement",
     PlacementRule => "placement_rule",
     Plan => "plan",
@@ -66,20 +62,16 @@ actions! {
     PlanCommit => "plan_commit",
     Policy => "policy",
     PurgePlan => "purge_plan",
-    Ready => "ready",
     RegisterDisk => "register_disk",
     RenameDirectoryBranch => "rename_directory_branch",
-    Repositories => "repositories",
     Resolve => "resolve",
     SmbBinding => "smb_binding",
     SplitPlan => "split_plan",
     Topology => "topology",
-    Tree => "tree",
     UpdateDefaultBranch => "update_default_branch",
     UpdatePlacementRule => "update_placement_rule",
     UpdatePolicy => "update_policy",
     UpdateSmbBinding => "update_smb_binding",
-    WorkspaceCapacity => "workspace_capacity",
 }
 
 #[cfg(test)]

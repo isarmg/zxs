@@ -197,6 +197,42 @@ impl Backend for NamespaceAfterWorkspace {
     fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
         self.inner.capabilities()
     }
+    fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+        self.inner.ready()
+    }
+    fn workspace_capacity(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+        self.inner.workspace_capacity(identity)
+    }
+    fn branch_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.inner.branch_snapshot(identity, id)
+    }
+    fn branches_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        self.inner.branches_snapshot(identity, id)
+    }
+    fn repositories_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+        self.inner.repositories_snapshot(identity)
+    }
+    fn tree_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadTree<'_>,
+    ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+        self.inner.tree_snapshot(identity, request)
+    }
     fn create_write_session(
         &self,
         identity: &crate::auth::Identity,
@@ -272,6 +308,13 @@ impl Backend for NamespaceAfterWorkspace {
             .upload_generation(identity, workspace, item, path, source, generation)
     }
 
+    fn range_content(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadContent<'_>,
+    ) -> Result<crate::Content, crate::ApiError> {
+        self.inner.range_content(identity, request)
+    }
     fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
         self.inner.content(identity, version)
     }
@@ -395,11 +438,8 @@ fn namespace_preconditions_use_workspace_base_after_concurrent_head_changes() {
         assert!(
             backend
                 .inner
-                .call(
-                    crate::BackendAction::Operation,
-                    &session.identity,
-                    json!({"operation_id":operation_id}),
-                )
+                .operation(&session.identity, operation_id.parse().unwrap())
+                .and_then(crate::operation_wire::operation_wire)
                 .is_err()
         );
     }

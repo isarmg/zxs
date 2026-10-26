@@ -64,11 +64,13 @@ fn shared_snapshot_preserves_tree_errors_and_current_identity_admission() {
         ("missing-branch", commit.as_str()),
     ] {
         let old = backend
-            .call(
-                BackendAction::Tree,
+            .tree_snapshot(
                 &identity,
-                json!({"branch_id":branch,"query":{"commit_id":selected}}),
+                crate::tests::tree_request(
+                    &(json!({"branch_id":branch,"query":{"commit_id":selected}})),
+                ),
             )
+            .map(|snapshot| json_codec::to_value(snapshot).unwrap())
             .unwrap_err();
         let new = backend
             .snapshot_at(&identity, branch, selected)
@@ -150,11 +152,7 @@ fn shared_snapshot_preserves_archived_reads_and_migrated_branch_rejection() {
         .snapshot_at(&identity, &archived.branch_id, &archived.head_commit_id)
         .unwrap();
     let tree = backend
-        .call(
-            BackendAction::Tree,
-            &identity,
-            json!({"branch_id":archived.branch_id,"query":{"commit_id":archived.head_commit_id}}),
-        )
+        .tree_snapshot(&identity, crate::tests::tree_request(&(json!({"branch_id":archived.branch_id,"query":{"commit_id":archived.head_commit_id}})))).map(|snapshot| json_codec::to_value(snapshot).unwrap())
         .unwrap();
     assert_eq!(
         json_codec::to_value(&frozen.entries).unwrap(),
@@ -175,11 +173,13 @@ fn shared_snapshot_preserves_archived_reads_and_migrated_branch_rejection() {
             .unwrap();
     }
     let old = backend
-        .call(
-            BackendAction::Tree,
+        .tree_snapshot(
             &identity,
-            json!({"branch_id":repo.main_branch_id,"query":{"commit_id":cut}}),
+            crate::tests::tree_request(
+                &(json!({"branch_id":repo.main_branch_id,"query":{"commit_id":cut}})),
+            ),
         )
+        .map(|snapshot| json_codec::to_value(snapshot).unwrap())
         .unwrap_err();
     let new = backend
         .snapshot_at(&identity, &repo.main_branch_id, &cut)
@@ -275,11 +275,13 @@ fn measure_shared_snapshot_against_publication_and_namespace_tree_round_trips() 
         let backend = EngineBackend::new(engine);
         let old = || {
             let tree = backend
-                .call(
-                    BackendAction::Tree,
+                .tree_snapshot(
                     &identity,
-                    json!({"branch_id":repo.main_branch_id,"query":{"commit_id":commit}}),
+                    crate::tests::tree_request(
+                        &(json!({"branch_id":repo.main_branch_id,"query":{"commit_id":commit}})),
+                    ),
                 )
+                .map(|snapshot| json_codec::to_value(snapshot).unwrap())
                 .unwrap();
             json_codec::from_value::<Vec<Entry>>(tree["entries"].clone()).unwrap()
         };

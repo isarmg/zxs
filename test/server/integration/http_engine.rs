@@ -2297,16 +2297,29 @@ fn seed_engine_authority(engine: &mut Engine, system: &Path) {
         .unwrap();
 }
 
-fn operation_identity() -> Identity {
-    Identity {
-        admission_session: None,
-        smb_binding: None,
-        principal: "admin".into(),
-    }
+async fn operation_over_http(
+    engine: Engine,
+    system: &Path,
+    operation: storage_contract::OperationId,
+) -> Value {
+    let backend = Arc::new(EngineBackend::new(engine));
+    let auth = backend
+        .protect_auth(AuthStore::open(system).unwrap())
+        .unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::loopback(system)).unwrap();
+    let token = login(&app, "admin", "integration-test-password").await;
+    success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/operations/{operation}?unused=accepted"),
+        None,
+    )
+    .await
 }
 
-#[test]
-fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavailable_slots() {
+#[tokio::test]
+async fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavailable_slots() {
     let root = tempfile::tempdir().unwrap();
     let system = root.path().join("system");
     let config = Config::development([
@@ -2391,14 +2404,7 @@ fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavailable_s
     engine
         .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "admin", true)
         .unwrap();
-    let backend = EngineBackend::new(engine);
-    let wire = backend
-        .call(
-            storage_server::BackendAction::Operation,
-            &operation_identity(),
-            json!({"operation_id":operation}),
-        )
-        .unwrap();
+    let wire = operation_over_http(engine, &system, operation).await;
     assert_eq!(wire["state"], "completed");
     assert_eq!(wire["commit_state"], "PUBLISHED_DEGRADED");
     assert_eq!(wire["result"]["outcome"], "COMMITTED_DEGRADED");
@@ -2430,8 +2436,8 @@ fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavailable_s
     capture_wire("degraded-save-operation.json", &wire);
 }
 
-#[test]
-fn damage_after_normal_publication_keeps_original_target_met_in_save_wire() {
+#[tokio::test]
+async fn damage_after_normal_publication_keeps_original_target_met_in_save_wire() {
     let root = tempfile::tempdir().unwrap();
     let config = Config::development([
         root.path().join("d1"),
@@ -2491,13 +2497,7 @@ fn damage_after_normal_publication_keeps_original_target_met_in_save_wire() {
     );
     std::fs::remove_file(&corrupted).unwrap();
     std::fs::write(&corrupted, b"corruption after successful publication").unwrap();
-    let wire = EngineBackend::new(engine)
-        .call(
-            storage_server::BackendAction::Operation,
-            &operation_identity(),
-            json!({"operation_id":operation}),
-        )
-        .unwrap();
+    let wire = operation_over_http(engine, &root.path().join("system"), operation).await;
     assert_eq!(wire["commit_state"], "PUBLISHED");
     assert_eq!(wire["result"]["outcome"], "COMMITTED_AND_PROTECTED");
     assert_eq!(wire["result"]["protection_at_publish"], "TARGET_MET");

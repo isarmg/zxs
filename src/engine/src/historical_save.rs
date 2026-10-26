@@ -57,7 +57,7 @@ fn historical_workspace(
             "historical workspace is no longer available",
         ));
     }
-    if now().saturating_sub(workspace.created_at) > engine.config.workspace_ttl_seconds {
+    if now()?.saturating_sub(workspace.created_at) > engine.config.workspace_ttl_seconds {
         return Err(Error::new(
             storage_contract::ErrorCode::FencingTokenExpired,
             "historical workspace lease expired; work data is retained",
@@ -192,7 +192,7 @@ impl Engine {
             directory_selection_generations: BTreeMap::new(),
             file_selection_generations: BTreeMap::new(),
             namespace_operations: Vec::new(),
-            created_at: now(),
+            created_at: now()?,
             state: WorkspaceState::Open,
         };
         self.persist_workspace(&workspace)?;
@@ -494,7 +494,7 @@ impl Engine {
                 }
                 validate_entries(&mut entries, engine.config.max_entries)?;
                 state.commits.insert(commit_id.clone(), Commit {
-                    namespace_deletions: deletion_record(deleted, now()),
+                    namespace_deletions: deletion_record(deleted, now()?),
                     commit_id: commit_id.clone(), history_tree_id: history.clone(),
                     kind: "historical_save".into(), parent_commit_ids: vec![source_id.clone()],
                     tree_id: new_id("tree"), sequence: state.sequence, operation_id: operation,

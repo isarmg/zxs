@@ -60,6 +60,7 @@
     window.requestAnimationFrame = function(callback) {
         const root = delivery?.root;
         if (!root) return Reflect.apply(raf, window, [callback]);
+        if (probe.rejectFrame) throw new Error('injected host RAF scheduling failure');
         const frame = {root, callback, canceled: false, ran: false};
         const id = Reflect.apply(raf, window, [time => {
             if (probe.hold || frame.ran) return;
@@ -101,6 +102,16 @@
     probe.turn = () => new Promise(resolve => Reflect.apply(raf, window, [resolve]));
     probe.settle = async () => { await document.fonts.ready; await probe.turn(); await probe.turn(); await probe.turn(); };
     probe.check = (condition, message) => { if (!condition) throw Error('version-tree RAF: ' + message); };
+    probe.rejectScheduling = () => {
+        const root = probe.current(), before = rootState(root).measures;
+        probe.check(probe.pending(root).length === 0, 'no frame before scheduling rejection');
+        const observer = observers.find(o => o.root === root && !o.disconnected);
+        probe.check(!!observer, 'mounted observer for scheduling rejection');
+        probe.rejectFrame = true;
+        try { observer.invoke(); } finally { probe.rejectFrame = false; }
+        probe.check(rootState(root).measures === before, 'failed RAF must not measure synchronously');
+        probe.check(probe.pending(root).length === 0, 'failed RAF must not publish a pending frame');
+    };
     probe.burst = () => {
         const root = probe.current(), state = rootState(root), before = state.measures;
         const records = observers.filter(o => o.root === root && !o.disconnected);
@@ -129,6 +140,7 @@
     };
     probe.restore = () => {
         probe.hold = false;
+        probe.rejectFrame = false;
         window.requestAnimationFrame = raf;
         window.cancelAnimationFrame = cancel;
         Element.prototype.querySelectorAll = query;

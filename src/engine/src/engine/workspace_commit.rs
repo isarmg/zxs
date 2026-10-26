@@ -219,7 +219,7 @@ impl Engine {
                 "workspace no longer admits this commit",
             ));
         }
-        if crate::business::now().saturating_sub(workspace.created_at)
+        if crate::business::now()?.saturating_sub(workspace.created_at)
             > self.config.workspace_ttl_seconds
         {
             return Err(Error::new(

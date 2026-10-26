@@ -131,6 +131,7 @@ pub(super) fn run(browser: &Browser, origin: &str) -> Result<()> {
         )?;
         println!("PASS synchronous startup-ready {event} lifecycle and owner timer cleanup");
     }
+    required_browser_capabilities(browser, origin)?;
     visibility_reads(browser, origin)?;
     pending_session_response(browser, origin)?;
     // Do not leave the browser on the injected failed/disposed page. A normal
@@ -143,6 +144,103 @@ pub(super) fn run(browser: &Browser, origin: &str) -> Result<()> {
         return Err("uncaught error after normal lifecycle recovery navigation".into());
     }
     println!("PASS normal navigation and reload after lifecycle injection removal");
+    Ok(())
+}
+
+// Fault injection removes one required capability before the actual WASM starts.
+// This is startup rejection coverage, not an old-browser compatibility emulator.
+fn required_browser_capabilities(browser: &Browser, origin: &str) -> Result<()> {
+    for (capability, injection) in [
+        ("ResizeObserver", "window.ResizeObserver = undefined;"),
+        (
+            "FinalizationRegistry",
+            "window.FinalizationRegistry = undefined;",
+        ),
+        (
+            "instantiateStreaming",
+            "WebAssembly.instantiateStreaming = undefined;",
+        ),
+        ("registerProperty", "CSS.registerProperty = undefined;"),
+        (
+            "encodeInto",
+            "TextEncoder.prototype.encodeInto = undefined;",
+        ),
+        (
+            "mask-image",
+            "const supports = CSS.supports; CSS.supports = function(...args) { return args[0].includes('mask-image') ? false : Reflect.apply(supports, this, args); };",
+        ),
+    ] {
+        let source = format!(
+            "{}\n{}\n{}",
+            observer("pending"),
+            r#"
+window.__zxsSmokeCapabilities = {ready:0, failures:0, errors:[]};
+document.addEventListener('zxs-startup-ready', () => window.__zxsSmokeCapabilities.ready++);
+document.addEventListener('zxs-startup-failed', () => window.__zxsSmokeCapabilities.failures++);
+const nativeError = console.error;
+console.error = function(...args) {
+  window.__zxsSmokeCapabilities.errors.push(args.map(String).join(' '));
+  return Reflect.apply(nativeError, this, args);
+};
+"#,
+            injection,
+        );
+        let installed = browser.cdp(
+            "Page.addScriptToEvaluateOnNewDocument",
+            json!({"source":source}),
+        )?;
+        let identifier = installed["identifier"]
+            .as_str()
+            .ok_or("missing capability injection identifier")?;
+        with_cleanup(
+            || {
+                browser.command("POST", "/url", Some(json!({"url":origin})))?;
+                wait_for("required browser capability rejection", || {
+                    if browser.script("return document.documentElement.dataset.zxsStartup === 'failed' && !!document.getElementById('zxs-startup-error')")? == true {
+                        Ok(())
+                    } else {
+                        Err("unsupported browser has not shown startup failure".into())
+                    }
+                })?;
+                let state = browser.script("return {...window.__zxsSmokeCapabilities,phase:document.documentElement.dataset.zxsStartup,runtime:document.documentElement.getAttribute('data-zxs-runtime'),readyAttribute:document.documentElement.getAttribute('data-zxs-ready'),login:!!document.querySelector('input[autocomplete=current-password]'),fallback:!!document.querySelector('[data-zxs-contour-state=fallback]'),intervals:window.__zxsSmokeLifecycle.intervals()}")?;
+                if state["ready"] != 0
+                    || state["failures"].as_u64().unwrap_or(0) == 0
+                    || state["phase"] != "failed"
+                    || !state["runtime"].is_null()
+                    || !state["readyAttribute"].is_null()
+                    || state["login"] != false
+                    || state["fallback"] != false
+                    || state["intervals"] != 0
+                    || !state["errors"].as_array().is_some_and(|errors| {
+                        errors.iter().any(|error| {
+                            error
+                                .as_str()
+                                .is_some_and(|error| error.contains(capability))
+                        })
+                    })
+                {
+                    return Err(
+                        format!("missing {capability} did not fail before mount: {state}").into(),
+                    );
+                }
+                Ok(())
+            },
+            || {
+                browser.cdp(
+                    "Page.removeScriptToEvaluateOnNewDocument",
+                    json!({"identifier":identifier}),
+                )?;
+                Ok(())
+            },
+        )?;
+        // A fresh document must recover without retaining the failed admission.
+        browser.command("POST", "/refresh", Some(json!({})))?;
+        browser.css("input[autocomplete='current-password']")?;
+        if browser.script("return document.documentElement.dataset.zxsStartup === 'ready' && !document.getElementById('zxs-startup-error') && window.__zxsSmokeErrors.length === 0")? != true {
+            return Err(format!("normal reload failed after restoring {capability}").into());
+        }
+        println!("PASS missing {capability} rejects startup, then normal reload recovers");
+    }
     Ok(())
 }
 

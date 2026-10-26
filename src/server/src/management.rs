@@ -558,15 +558,7 @@ impl Inner {
             return;
         };
         let observation = {
-            let health = backend.call(
-                BackendAction::Ready,
-                &Identity {
-                    admission_session: None,
-                    smb_binding: None,
-                    principal: "monitor".into(),
-                },
-                json!({}),
-            );
+            let health = backend.ready();
             let mut state = crate::lock(&self.state);
             if state.admitted
                 && state
@@ -713,6 +705,50 @@ impl Backend for ManagementBackend {
     fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
         let capabilities = crate::lock(&self.inner.capabilities).clone();
         Ok(capabilities.with_storage(self.management_status()))
+    }
+    fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+        if self.management_status().state() == StorageState::Ready {
+            Ok(crate::Readiness::Managed)
+        } else {
+            Err(ApiError::new(
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
+                storage_contract::ErrorCode::StorageUnavailable,
+                "storage is not ready",
+            ))
+        }
+    }
+    fn workspace_capacity(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+        self.inner.backend()?.workspace_capacity(identity)
+    }
+    fn branch_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.inner.backend()?.branch_snapshot(identity, id)
+    }
+    fn branches_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        self.inner.backend()?.branches_snapshot(identity, id)
+    }
+    fn repositories_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+        self.inner.backend()?.repositories_snapshot(identity)
+    }
+    fn tree_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadTree<'_>,
+    ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+        self.inner.backend()?.tree_snapshot(identity, request)
     }
     fn create_write_session(
         &self,
@@ -1116,17 +1152,6 @@ impl Backend for ManagementBackend {
         identity: &Identity,
         input: Value,
     ) -> Result<Value, ApiError> {
-        if action == BackendAction::Ready {
-            return if self.management_status().state() == StorageState::Ready {
-                Ok(json!({"ready":true}))
-            } else {
-                Err(ApiError::new(
-                    ::http::StatusCode::SERVICE_UNAVAILABLE,
-                    storage_contract::ErrorCode::StorageUnavailable,
-                    "storage is not ready",
-                ))
-            };
-        }
         self.inner.backend()?.call(action, identity, input)
     }
     fn upload(
@@ -1155,8 +1180,12 @@ impl Backend for ManagementBackend {
     fn content(&self, i: &Identity, v: &str) -> Result<Content, ApiError> {
         self.inner.backend()?.content(i, v)
     }
-    fn range_content(&self, i: &Identity, v: &str) -> Result<Content, ApiError> {
-        self.inner.backend()?.range_content(i, v)
+    fn range_content(
+        &self,
+        i: &Identity,
+        request: crate::ReadContent<'_>,
+    ) -> Result<Content, ApiError> {
+        self.inner.backend()?.range_content(i, request)
     }
     fn workspace_content(&self, i: &Identity, w: &str, item: &str) -> Result<Content, ApiError> {
         self.inner.backend()?.workspace_content(i, w, item)

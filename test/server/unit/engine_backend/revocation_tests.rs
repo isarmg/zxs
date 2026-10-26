@@ -164,6 +164,47 @@ impl Backend for PausedBackend {
     fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
         self.inner.capabilities()
     }
+    fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+        self.inner.ready()
+    }
+    fn workspace_capacity(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+        self.enter();
+        self.inner.workspace_capacity(identity)
+    }
+    fn branch_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.enter();
+        self.inner.branch_snapshot(identity, id)
+    }
+    fn branches_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        self.enter();
+        self.inner.branches_snapshot(identity, id)
+    }
+    fn repositories_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+        self.enter();
+        self.inner.repositories_snapshot(identity)
+    }
+    fn tree_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadTree<'_>,
+    ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+        self.enter();
+        self.inner.tree_snapshot(identity, request)
+    }
     fn create_write_session(
         &self,
         identity: &crate::auth::Identity,
@@ -249,9 +290,13 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.content(identity, version)
     }
-    fn range_content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
+    fn range_content(
+        &self,
+        identity: &Identity,
+        request: crate::ReadContent<'_>,
+    ) -> Result<Content, ApiError> {
         self.enter();
-        self.inner.range_content(identity, version)
+        self.inner.range_content(identity, request)
     }
     fn workspace_content(
         &self,
@@ -392,15 +437,20 @@ enum Request {
     SealWorkspace,
     PublicCommit,
     WorkspaceRead,
+    WorkspaceCapacity,
     UploadStatus,
     Snapshot,
     Version,
     VersionAuthorization,
     RepositorySnapshot,
+    RepositoriesSnapshot,
+    BranchSnapshot,
+    BranchesSnapshot,
     RepositoryAuthorization,
     Namespace,
     Content,
     RangeContent,
+    ContextContent,
     WorkspaceContent,
     Checksums,
     Upload,
@@ -440,18 +490,13 @@ impl Request {
                     }),
                 )
                 .map(|_| ()),
-            Self::Tree => backend
-                .call(
-                    BackendAction::Tree,
-                    identity,
-                    json!({
-                        "branch_id":fixture.repo.main_branch_id
-                    }),
-                )
-                .map(|_| ()),
+            Self::Tree => backend.tree_snapshot(identity, crate::ReadTree {
+                branch: &fixture.repo.main_branch_id, commit: None,
+            }).map(|_| ()),
             Self::Snapshot => backend.snapshot_at(
                 identity, &fixture.repo.main_branch_id, &fixture.workspace.base_head,
             ).map(|_| ()),
+            Self::WorkspaceCapacity => backend.workspace_capacity(identity).map(|_|()),
             Self::WorkspaceRead => backend.workspace(identity, workspace).map(|_| ()),
             Self::UploadStatus => backend.published_upload_status(identity, workspace, "missing-item").map(|_| ()),
             Self::SealWorkspace => backend.seal_workspace(identity, workspace).map(|_| ()),
@@ -497,13 +542,26 @@ impl Request {
             Self::SmbAuthorizeRead => backend.authorize_current(identity, &fixture.repo.main_branch_id),
             // Immutable SMB file handles still authorize their pinned version.
             Self::Version => backend.version_snapshot(identity,&fixture.version).map(|_| ()),
+            Self::BranchSnapshot => backend.branch_snapshot(identity,&fixture.repo.main_branch_id).map(|_|()),
+            Self::BranchesSnapshot => backend.branches_snapshot(identity,&fixture.repo.repository_id).map(|_|()),
+            Self::RepositoriesSnapshot => backend.repositories_snapshot(identity).map(|_|()),
             Self::RepositorySnapshot => backend.repository_snapshot(identity,&fixture.repo.repository_id).map(|_| ()),
             Self::RepositoryAuthorization => backend.authorize_repository(identity,&fixture.repo.repository_id),
             Self::VersionAuthorization => backend.authorize_version(identity,&fixture.version),
             Self::Namespace => backend.stage_namespace(identity,crate::StageNamespace {workspace_id:workspace.clone(),change:storage_contract::NamespaceOperation::Mkdir {path:name_policy::PortablePath::parse("forbidden").unwrap()}}).map(|_|()),
             Self::Content => backend.content(identity, &fixture.version).map(|_| ()),
+            Self::ContextContent => backend.range_content(
+                identity,
+                crate::ReadContent {
+                    version: &fixture.version,
+                    context: Some(&crate::DownloadContext {
+                        repository_id: fixture.repo.repository_id.clone(),
+                        path: name_policy::LookupPath::parse("file.txt").unwrap(),
+                    }),
+                },
+            ).map(|_| ()),
             Self::RangeContent => backend
-                .range_content(identity, &fixture.version)
+                .range_content(identity, crate::ReadContent {version:&fixture.version,context:None})
                 .map(|_| ()),
             Self::WorkspaceContent => backend
                 .workspace_content(identity, workspace, &fixture.item)
@@ -574,16 +632,21 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::SealWorkspace,
                 Request::PublicCommit,
                 Request::WorkspaceRead,
+                Request::WorkspaceCapacity,
                 Request::UploadStatus,
                 Request::SnapshotLookup,
                 Request::Snapshot,
                 Request::Version,
                 Request::VersionAuthorization,
                 Request::RepositorySnapshot,
+                Request::RepositoriesSnapshot,
+                Request::BranchSnapshot,
+                Request::BranchesSnapshot,
                 Request::RepositoryAuthorization,
                 Request::Namespace,
                 Request::Content,
                 Request::RangeContent,
+                Request::ContextContent,
                 Request::WorkspaceContent,
                 Request::Checksums,
                 Request::Upload,
@@ -647,9 +710,7 @@ fn revoked_session_cannot_turn_public_probes_into_data_admission() {
     assert_eq!(
         fixture
             .backend
-            .call(BackendAction::Repositories, &fixture.identity, json!({}))
-            .unwrap()["repositories"]
-            .as_array()
+            .repositories_snapshot(&fixture.identity)
             .unwrap()
             .len(),
         1
@@ -665,11 +726,15 @@ fn revoked_session_cannot_turn_public_probes_into_data_admission() {
             .is_ok()
     );
     fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
-    for action in [
-        BackendAction::Repositories,
-        BackendAction::Events,
-        BackendAction::MonitorDisks,
-    ] {
+    assert_eq!(
+        fixture
+            .backend
+            .repositories_snapshot(&fixture.identity)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Unauthorized
+    );
+    for action in [BackendAction::Events, BackendAction::MonitorDisks] {
         assert_eq!(
             fixture
                 .backend
@@ -685,16 +750,11 @@ fn revoked_session_cannot_turn_public_probes_into_data_admission() {
         principal: String::new(),
     };
     assert!(fixture.backend.capabilities().is_ok());
-    assert!(
-        fixture
-            .backend
-            .call(BackendAction::Ready, &anonymous, json!({}))
-            .is_ok()
-    );
+    assert!(fixture.backend.ready().is_ok());
     assert_eq!(
         fixture
             .backend
-            .call(BackendAction::Repositories, &anonymous, json!({}))
+            .repositories_snapshot(&anonymous)
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized
@@ -729,15 +789,20 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::SealWorkspace,
         Request::PublicCommit,
         Request::WorkspaceRead,
+        Request::WorkspaceCapacity,
         Request::UploadStatus,
         Request::Snapshot,
         Request::Version,
         Request::VersionAuthorization,
         Request::RepositorySnapshot,
+        Request::RepositoriesSnapshot,
+        Request::BranchSnapshot,
+        Request::BranchesSnapshot,
         Request::RepositoryAuthorization,
         Request::Namespace,
         Request::Content,
         Request::RangeContent,
+        Request::ContextContent,
         Request::WorkspaceContent,
         Request::Checksums,
         Request::Upload,

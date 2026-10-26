@@ -10,6 +10,7 @@ mod admission;
 use admission::AdmissionEngine;
 pub mod application;
 use application::Application;
+mod branch;
 mod content;
 mod disk_monitor;
 mod error_registry;
@@ -499,6 +500,100 @@ impl Backend for EngineBackend {
             engine.config().max_file_bytes,
         ))
     }
+    fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+
+        if engine.is_read_only() {
+            return Err(ApiError::new(
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
+                storage_contract::ErrorCode::RecoveryRequired,
+                "storage is open for verified recovery reads only",
+            ));
+        }
+        let configured_members = engine
+            .config()
+            .disks
+            .iter()
+            .filter(|disk| disk.metadata_member)
+            .count();
+        let storage_disks = engine.config().disks.len();
+        let mode = engine.config().mode.clone();
+        let sequence = engine.state().sequence;
+        let observation = engine.prepare_disk_observation();
+        drop(engine);
+        let status = observation.status().map_err(error)?;
+        let members = status
+            .iter()
+            .filter(|disk| disk.metadata_member && disk.online)
+            .count();
+        if members != configured_members {
+            return Err(ApiError::new(
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
+                storage_contract::ErrorCode::MetadataUnavailable,
+                "all configured metadata members are required for normal writes",
+            ));
+        }
+        Ok(crate::Readiness::Engine(crate::EngineReadiness {
+            mode,
+            sequence,
+            storage_disk_count: storage_disks,
+            metadata_member_count: configured_members,
+        }))
+    }
+    fn workspace_capacity(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        Ok(engine.workspace_capacity(&current.principal))
+    }
+    fn branch_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        repo_for_branch(&engine, id)?;
+        Ok(branch::capture(
+            engine.state(),
+            &engine.state().branches[id],
+        ))
+    }
+    fn branches_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        let repo = repository(&engine, id)?;
+        Ok(engine
+            .state()
+            .branches
+            .values()
+            .filter(|branch| branch.history_tree_id == repo.history_tree_id)
+            .map(|branch| branch::capture(engine.state(), branch))
+            .collect())
+    }
+    fn repositories_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        Ok(engine.state().repositories.values().cloned().collect())
+    }
+    fn tree_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadTree<'_>,
+    ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        crate::TreeSnapshot::capture(&engine, request)
+    }
     fn create_write_session(
         &self,
         identity: &crate::auth::Identity,
@@ -547,10 +642,7 @@ impl Backend for EngineBackend {
                 "workspace is no longer open for upload",
             ));
         }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(ApiError::invalid_source)?
-            .as_secs();
+        let now = upload_time(std::time::SystemTime::now())?;
         if now.saturating_sub(workspace.created_at) > engine.config().workspace_ttl_seconds {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::LeaseExpired,
@@ -634,18 +726,9 @@ impl Backend for EngineBackend {
         input: Value,
     ) -> Result<Value, ApiError> {
         let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = if action == crate::BackendAction::Ready {
-            // Readiness remains intentionally available without an account.
-            identity.clone()
-        } else {
-            current_protected_identity(&engine, identity)?
-        };
+        let current = current_protected_identity(&engine, identity)?;
         let identity = &current;
         match action {
-            crate::BackendAction::WorkspaceCapacity => {
-                keys(&input, &[])?;
-                encode(engine.workspace_capacity(&identity.principal))
-            }
             crate::BackendAction::FileManagerDisks => {
                 let access = file_manager::disk_access(&engine);
                 let observation = engine.prepare_disk_observation();
@@ -657,7 +740,6 @@ impl Backend for EngineBackend {
                 Ok(json!({"disks":disks}))
             }
             crate::BackendAction::FileManagerBackupConfiguration
-            | crate::BackendAction::FileManagerDownloadContext
             | crate::BackendAction::FileManagerEntries
             | crate::BackendAction::FileManagerFileHistory
             | crate::BackendAction::FileManagerHistory => {
@@ -683,55 +765,6 @@ impl Backend for EngineBackend {
                 let observation = engine.prepare_disk_observation();
                 drop(engine);
                 disk_monitor::observe(observation)
-            }
-            crate::BackendAction::Ready => {
-                if engine.is_read_only() {
-                    return Err(ApiError::new(
-                        ::http::StatusCode::SERVICE_UNAVAILABLE,
-                        storage_contract::ErrorCode::RecoveryRequired,
-                        "storage is open for verified recovery reads only",
-                    ));
-                }
-                let configured_members = engine
-                    .config()
-                    .disks
-                    .iter()
-                    .filter(|disk| disk.metadata_member)
-                    .count();
-                let storage_disks = engine.config().disks.len();
-                let mode = engine.config().mode.clone();
-                let sequence = engine.state().sequence;
-                let observation = engine.prepare_disk_observation();
-                drop(engine);
-                let status = observation.status().map_err(error)?;
-                let members = status
-                    .iter()
-                    .filter(|disk| disk.metadata_member && disk.online)
-                    .count();
-                if members != configured_members {
-                    return Err(ApiError::new(
-                        ::http::StatusCode::SERVICE_UNAVAILABLE,
-                        storage_contract::ErrorCode::MetadataUnavailable,
-                        "all configured metadata members are required for normal writes",
-                    ));
-                }
-                Ok(
-                    json!({"ready":true,"mode":mode,"sequence":sequence.to_string(),"storage_disk_count":storage_disks,"metadata_member_count":configured_members,"metadata_redundancy":if configured_members == 1 { "none" } else { "multiple-copies" }}),
-                )
-            }
-            crate::BackendAction::Repositories => {
-                let values = engine.state().repositories.values().collect::<Vec<_>>();
-                Ok(json!({"repositories":values}))
-            }
-            crate::BackendAction::Branches => {
-                let repo = repository(&engine, field(&input, "repository_id")?)?;
-                Ok(
-                    json!({"branches":engine.state().branches.values().filter(|branch|branch.history_tree_id==repo.history_tree_id).map(|branch| branch_wire(&engine, branch)).collect::<Result<Vec<_>, _>>()?}),
-                )
-            }
-            crate::BackendAction::Tree => {
-                let projection = read_projection::Tree::capture(&engine, &input)?;
-                read_projection::render_unlocked(engine, projection)
             }
             crate::BackendAction::SmbBinding => {
                 let repo = repository(&engine, field(&input, "repository_id")?)?;
@@ -999,20 +1032,6 @@ impl Backend for EngineBackend {
                         .map_err(error)?,
                 )
             }
-            crate::BackendAction::Branch => {
-                let id = field(&input, "branch_id")?;
-                repo_for_branch(&engine, id)?;
-                branch_wire(
-                    &engine,
-                    engine.state().branches.get(id).ok_or_else(|| {
-                        ApiError::new(
-                            ::http::StatusCode::NOT_FOUND,
-                            storage_contract::ErrorCode::NotFound,
-                            "branch not found",
-                        )
-                    })?,
-                )
-            }
             crate::BackendAction::HistoricalSavePlan => {
                 keys(
                     &input,
@@ -1112,19 +1131,6 @@ impl Backend for EngineBackend {
                         "placement not found",
                     )
                 })?)
-            }
-            crate::BackendAction::Operation => {
-                let operation_id = field(&input, "operation_id")?.parse().map_err(
-                    |source: storage_contract::Error| {
-                        ApiError::new(
-                            ::http::StatusCode::NOT_FOUND,
-                            storage_contract::ErrorCode::OperationNotFound,
-                            "operation not found",
-                        )
-                        .with_source(source)
-                    },
-                )?;
-                operation_wire(self.operation_admitted(engine, identity, operation_id)?)
             }
             crate::BackendAction::PurgePlan => {
                 keys(&input, &["history_tree_id", "version_ids"])?;
@@ -1345,10 +1351,21 @@ impl Backend for EngineBackend {
         finish_authorized_upload(&mut engine, identity, workspace, prepared)
     }
     fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
-        self.range_content(identity, version)?.fully_verified()
+        self.open_version_content(
+            identity,
+            crate::ReadContent {
+                version,
+                context: None,
+            },
+        )?
+        .fully_verified()
     }
-    fn range_content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
-        self.open_version_content(identity, version)
+    fn range_content(
+        &self,
+        identity: &Identity,
+        request: crate::ReadContent<'_>,
+    ) -> Result<Content, ApiError> {
+        self.open_version_content(identity, request)
     }
     fn workspace_content(
         &self,
@@ -1386,3 +1403,16 @@ mod revocation_tests;
 #[cfg(test)]
 #[path = "../../../test/server/unit/engine_backend/scope_dispatch_tests.rs"]
 mod scope_dispatch_tests;
+
+fn upload_time(time: std::time::SystemTime) -> Result<u64, ApiError> {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|source| {
+            ApiError::new(
+                ::http::StatusCode::INTERNAL_SERVER_ERROR,
+                storage_contract::ErrorCode::IoError,
+                "system clock precedes the Unix epoch",
+            )
+            .with_source(source)
+        })
+}

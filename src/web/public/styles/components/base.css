@@ -32,5 +32,4 @@
 .zxs-shell-main { padding: 0 max(var(--zxs-content-spacing,var(--zxs-space-4,16px)),env(safe-area-inset-right,0px)) max(var(--zxs-content-spacing,var(--zxs-space-4,16px)),env(safe-area-inset-bottom,0px)) max(var(--zxs-content-spacing,var(--zxs-space-4,16px)),env(safe-area-inset-left,0px)); min-width: 0; }
 .zxs-skip-link { position: absolute; top: -10rem; inset-inline-start: 1rem; z-index: 30; padding: 1rem; background: var(--zxs-bg-panel,#fff); color: inherit; }
 .zxs-skip-link:focus { top: .5rem; }
-@media(forced-colors:active) { :where(button,[href],input,select,textarea,[tabindex]):focus-visible { outline-color: Highlight; } .zxs-button:disabled { color: GrayText; opacity: 1; } .zxs-app-shell .zxs-frame { border-color: CanvasText; } }
 @media(prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important;transition-duration:.001ms!important;animation-duration:.001ms!important; } }

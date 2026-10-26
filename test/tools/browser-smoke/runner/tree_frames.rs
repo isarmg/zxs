@@ -38,6 +38,17 @@ fn exercise(browser: &Browser) -> Result<()> {
         json!({"width":390,"height":844,"deviceScaleFactor":1,"mobile":false}),
     )?;
     evaluate(browser, "window.__zxsTreeFrames.settle()")?;
+    evaluate(
+        browser,
+        r#"(async()=>{
+        const p=window.__zxsTreeFrames;
+        p.rejectScheduling();
+        p.hold=true;
+        const {root}=p.burst();
+        await p.flush(root);
+        return true;
+    })()"#,
+    )?;
     browser.script(
         r#"
         const p=window.__zxsTreeFrames,root=p.current();

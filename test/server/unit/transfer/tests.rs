@@ -464,6 +464,42 @@ impl crate::Backend for RetainedGenerationBackend {
     fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn workspace_capacity(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn branch_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn branches_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn repositories_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::Repository>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn tree_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadTree<'_>,
+    ) -> Result<crate::TreeSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn create_write_session(
         &self,
         _identity: &crate::auth::Identity,
@@ -547,6 +583,16 @@ impl crate::Backend for RetainedGenerationBackend {
         Ok(staged)
     }
 
+    fn range_content(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadContent<'_>,
+    ) -> Result<crate::Content, crate::ApiError> {
+        match request.context {
+            Some(_) => Err(crate::ApiError::unsupported()),
+            None => self.content(identity, request.version),
+        }
+    }
     fn content(&self, _identity: &Identity, _version: &str) -> Result<Content, ApiError> {
         Err(ApiError::unsupported())
     }
@@ -1135,4 +1181,53 @@ async fn typed_content_hash_header_rejects_noncanonical_values_before_staging() 
     .unwrap();
     assert_eq!(record.content_hash.unwrap().to_string(), hash);
     assert_eq!(std::fs::read(spool.join(record.data_file)).unwrap(), b"abc");
+}
+
+#[test]
+fn download_context_is_paired_nonempty_and_parses_lookup_spelling_once() {
+    assert!(ContentQuery::default().into_context().unwrap().is_none());
+    for (repository_id, path, message) in [
+        (
+            Some("repo"),
+            None,
+            "repository_id and path must be supplied together",
+        ),
+        (
+            None,
+            Some("file.txt"),
+            "repository_id and path must be supplied together",
+        ),
+        (
+            Some(""),
+            Some("file.txt"),
+            "missing string field repository_id",
+        ),
+        (Some("repo"), Some(""), "missing string field path"),
+    ] {
+        let error = ContentQuery {
+            repository_id: repository_id.map(str::to_owned),
+            path: path.map(str::to_owned),
+        }
+        .into_context()
+        .unwrap_err();
+        assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
+        assert_eq!(error.message, message);
+    }
+    let context = ContentQuery {
+        repository_id: Some("repo".into()),
+        path: Some("CAFE\u{301}.TXT".into()),
+    }
+    .into_context()
+    .unwrap()
+    .unwrap();
+    assert_eq!(context.repository_id, "repo");
+    assert_eq!(context.path.key(), "café.txt");
+    let error = ContentQuery {
+        repository_id: Some("repo".into()),
+        path: Some("../file.txt".into()),
+    }
+    .into_context()
+    .unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
+    assert!(std::error::Error::source(&error).is_some());
 }

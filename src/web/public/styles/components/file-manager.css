@@ -65,7 +65,6 @@
    * row height already separates the control from the following list. */
   .zxs-file-toolbar:has(> .zxs-select) + .zxs-surface { margin-block-start: 0; }
 }
-@media (forced-colors: active) { .zxs-file-table tr[aria-selected=true] { outline: 1px solid Highlight; } }
 /* Batch selection reuses compact rows and shared frame geometry. */
 .zxs-app-shell .zxs-file-check,.zxs-app-shell .zxs-file-select-name { gap: .5em; }
 .zxs-file-check input,.zxs-entry-checkbox,.zxs-batch-check input { flex: 0 0 1em; width: 1em; height: 1em; margin: 0; accent-color: var(--zxs-text-link); }

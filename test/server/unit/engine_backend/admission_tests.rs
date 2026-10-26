@@ -273,8 +273,6 @@ fn read_requests(
 ) -> Vec<(crate::BackendAction, Value)> {
     use crate::BackendAction::*;
     vec![
-        (Repositories, json!({})),
-        (Tree, json!({"branch_id":repo.main_branch_id})),
         (
             FileManagerEntries,
             json!({"slot_id":"P01","path":repo.name}),
@@ -285,10 +283,6 @@ fn read_requests(
         (
             FileManagerBackupConfiguration,
             json!({"repository_id":repo.repository_id}),
-        ),
-        (
-            FileManagerDownloadContext,
-            json!({"repository_id":repo.repository_id,"path":entry.path,"version_id":entry.version_id}),
         ),
     ]
 }
@@ -301,6 +295,29 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
         for (action, input) in read_requests(&repo, &entry) {
             backend.call(action, &caller(), input).unwrap();
         }
+        backend.repositories_snapshot(&caller()).unwrap();
+        backend
+            .tree_snapshot(
+                &caller(),
+                crate::ReadTree {
+                    branch: &repo.main_branch_id,
+                    commit: None,
+                },
+            )
+            .unwrap();
+        let context = crate::DownloadContext {
+            repository_id: repo.repository_id.clone(),
+            path: name_policy::LookupPath::parse(&entry.path).unwrap(),
+        };
+        backend
+            .range_content(
+                &caller(),
+                crate::ReadContent {
+                    version: &entry.version_id,
+                    context: Some(&context),
+                },
+            )
+            .unwrap();
     }
     assert_eq!(
         backend
@@ -314,12 +331,47 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
     let mut revoked = snapshot(64);
     revoked["administrator"]["username"] = json!("replacement");
     publish(&mut backend.engine.lock().unwrap(), revoked);
+    assert_eq!(
+        backend.repositories_snapshot(&caller()).unwrap_err().status,
+        401
+    );
     for (action, input) in read_requests(&repo, &entry) {
         assert_eq!(
             backend.call(action, &caller(), input).unwrap_err().status,
             401
         );
     }
+    assert_eq!(
+        backend
+            .tree_snapshot(
+                &caller(),
+                crate::ReadTree {
+                    branch: &repo.main_branch_id,
+                    commit: None
+                }
+            )
+            .unwrap_err()
+            .status,
+        401
+    );
+    let context = crate::DownloadContext {
+        repository_id: repo.repository_id.clone(),
+        path: name_policy::LookupPath::parse(&entry.path).unwrap(),
+    };
+    assert_eq!(
+        backend
+            .range_content(
+                &caller(),
+                crate::ReadContent {
+                    version: &entry.version_id,
+                    context: Some(&context)
+                }
+            )
+            .err()
+            .unwrap()
+            .status,
+        401
+    );
     assert_eq!(
         backend
             .engine
@@ -343,7 +395,6 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
                 json!({"slot_id":"P01","path":"missing"}),
             ),
             (FileManagerEntries, json!({"slot_id":"missing","path":""})),
-            (Tree, json!({"branch_id":"missing"})),
             (
                 FileManagerBackupConfiguration,
                 json!({"repository_id":"missing"}),
@@ -351,6 +402,17 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
         ] {
             assert!(backend.call(action, &caller(), input).is_err());
         }
+        assert!(
+            backend
+                .tree_snapshot(
+                    &caller(),
+                    crate::ReadTree {
+                        branch: "missing",
+                        commit: None
+                    }
+                )
+                .is_err()
+        );
     }
     assert_eq!(
         backend
@@ -392,7 +454,7 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
 fn backend_mutations_and_lazy_root_creation_invalidate_before_following_reads() {
     use crate::{Backend, BackendAction::*};
     let (_root, backend, repo, entry) = backend_fixture();
-    backend.call(Repositories, &caller(), json!({})).unwrap();
+    backend.repositories_snapshot(&caller()).unwrap();
     backend
         .call(
             FileManagerFileMetadata,
@@ -404,7 +466,11 @@ fn backend_mutations_and_lazy_root_creation_invalidate_before_following_reads() 
         .unwrap();
     assert!(backend.engine.lock().unwrap().admission.get().is_none());
     backend
-        .call(Tree, &caller(), json!({"branch_id":repo.main_branch_id}))
+        .tree_snapshot(
+            &caller(),
+            crate::tests::tree_request(&(json!({"branch_id":repo.main_branch_id}))),
+        )
+        .map(|snapshot| json_codec::to_value(snapshot).unwrap())
         .unwrap();
     assert_eq!(
         backend

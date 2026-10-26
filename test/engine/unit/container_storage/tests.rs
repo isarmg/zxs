@@ -1190,3 +1190,33 @@ fn existing_body_sync_io_failure_retains_its_cause() {
     assert_eq!(fs::read(target).unwrap(), b"verified existing body");
     assert_eq!(fs::read(directory.join("unrelated")).unwrap(), b"unrelated");
 }
+
+#[test]
+fn system_clock_version_time_validates_calendar_boundary() {
+    use std::{
+        error::Error as _,
+        time::{Duration, UNIX_EPOCH},
+    };
+    assert_eq!(
+        version_time(UNIX_EPOCH).unwrap().format(&Rfc3339).unwrap(),
+        "1970-01-01T00:00:00Z"
+    );
+    let last = UNIX_EPOCH + Duration::new(253_402_300_799, 999_999_999);
+    assert_eq!(
+        version_time(last).unwrap().format(&Rfc3339).unwrap(),
+        "9999-12-31T23:59:59Z"
+    );
+    let error = version_time(last + Duration::from_nanos(1)).unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::IoError);
+    assert!(matches!(error, Error::ClockRange(_)));
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .is::<date_time::error::ComponentRange>()
+    );
+    assert!(matches!(
+        version_time(UNIX_EPOCH - Duration::from_nanos(1)),
+        Err(Error::Clock(_))
+    ));
+}

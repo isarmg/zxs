@@ -118,5 +118,4 @@ html:not([data-zxs-appearance]), html[data-zxs-appearance="content-blocks"] {
 
   .authentication-card:is([data-zxs-contour-state="clip"], [data-zxs-contour-state="paint"]) > form { padding-inline: max(calc(5.5556% - 100cqh / 24), var(--zxs-contour-text-inset, 26px)); }
   .authentication-card .zxs-input, .authentication-card .zxs-error, .authentication-card > form > button { --zxs-contour-extent: 0px; }
-  @media (forced-colors: active) { .authentication-card { border: 1px solid CanvasText; } .authentication-card .zxs-input { border-bottom-color: ButtonText; } }
 }

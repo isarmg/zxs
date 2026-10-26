@@ -192,10 +192,13 @@ impl<'a> PlanningContext<'a> {
                     )
                 })?;
         }
+        // Existing receipts return before this planner. Reject a bad clock
+        // before invoking the new mutation's preparation work.
+        let timestamp = crate::business::now()?;
         let mut prepared = Vec::new();
         let mut result = change(self, &mut next, &mut prepared)?;
         crate::container_storage::capture_names(&mut next);
-        result["timestamp"] = json_codec::json!(crate::business::now().to_string());
+        result["timestamp"] = json_codec::json!(timestamp.to_string());
         if let Some(branch_id) = result
             .get("branch_id")
             .and_then(|v| v.as_str())

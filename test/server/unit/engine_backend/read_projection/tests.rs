@@ -1,12 +1,13 @@
 use super::*;
+use crate::engine_backend::{encode, field};
 use crate::{
     Backend, BackendAction,
     auth::{AuthStore, Identity},
     engine_backend::{EngineBackend, install_test_administrator},
 };
-use data_serialization::{Serializer, ser::Error};
-use json_codec::json;
-use std::sync::{Arc, Mutex};
+use data_serialization::{Serialize, Serializer, ser::Error};
+use json_codec::{Value, json};
+use std::{collections::BTreeMap, sync::Arc};
 use storage_contract::Config;
 
 #[path = "authorization_tests.rs"]
@@ -53,25 +54,36 @@ fn fixture() -> (
 
 #[test]
 fn rendering_releases_engine_before_serializer_runs() {
-    let (_root, engine, _, _) = fixture();
-    let engine = Mutex::new(engine);
-    struct Probe<'a>(&'a Mutex<Engine>);
+    let (root, engine, repo, _) = fixture();
+    let (backend, _auth, _token, identity) = authenticated_backend(engine, root.path());
+    struct Probe<'a>(&'a EngineBackend, crate::TreeSnapshot);
     impl Serialize for Probe<'_> {
         fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            // Runs on another thread to prove this is not reentrant access.
+            // The real typed backend has returned before HTTP serializes; another
+            // thread must be able to acquire its actual admission lock.
             let available = std::thread::scope(|scope| {
-                scope.spawn(|| self.0.try_lock().is_ok()).join().unwrap()
+                scope
+                    .spawn(|| self.0.engine.try_lock().is_ok())
+                    .join()
+                    .unwrap()
             });
             if !available {
                 return Err(S::Error::custom("serialization retained Engine mutex"));
             }
-            serializer.serialize_bool(available)
+            self.1.serialize(serializer)
         }
     }
-    assert_eq!(
-        render_unlocked(engine.lock().unwrap(), Probe(&engine)).unwrap(),
-        json!(true)
-    );
+    let snapshot = backend
+        .tree_snapshot(
+            &identity,
+            crate::ReadTree {
+                branch: &repo.main_branch_id,
+                commit: None,
+            },
+        )
+        .unwrap();
+    let expected = json!({"branch_id":repo.main_branch_id,"commit_id":snapshot.commit_id,"entries":[],"pending_file_versions":{}});
+    assert_eq!(encode(Probe(&backend, snapshot)).unwrap(), expected);
 }
 
 fn authenticated_backend(
@@ -96,7 +108,8 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
         "entries": engine.list_tree(&repo.main_branch_id).unwrap(),
         "pending_file_versions": {},
     });
-    let projection = Tree::capture(&engine, &input).unwrap();
+    let projection =
+        crate::TreeSnapshot::capture(&engine, crate::tests::tree_request(&input)).unwrap();
     let other = engine
         .create_repository(
             "Other",
@@ -108,11 +121,11 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
         .unwrap();
     let foreign = &engine.state().branches[&other.main_branch_id].head_commit_id;
     assert_eq!(
-        Tree::capture(
+        crate::TreeSnapshot::capture(
             &engine,
-            &json!({
+            crate::tests::tree_request(&json!({
                 "branch_id": repo.main_branch_id, "query": {"commit_id": foreign}
-            })
+            }))
         )
         .err()
         .unwrap()
@@ -123,7 +136,8 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
     assert_eq!(
         backend
-            .call(BackendAction::Tree, &identity, input.clone())
+            .tree_snapshot(&identity, crate::tests::tree_request(&input))
+            .map(|snapshot| json_codec::to_value(snapshot).unwrap())
             .unwrap(),
         expected
     );
@@ -133,19 +147,22 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
     };
     assert_eq!(
         backend
-            .call(BackendAction::Tree, &denied, input.clone())
+            .tree_snapshot(&denied, crate::tests::tree_request(&input))
+            .map(|snapshot| json_codec::to_value(snapshot).unwrap())
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized
     );
     let frozen = {
         let mut engine = backend.engine.lock().unwrap();
-        let frozen = Tree::capture(&engine, &input).unwrap();
+        let frozen =
+            crate::TreeSnapshot::capture(&engine, crate::tests::tree_request(&input)).unwrap();
         save_projection_file(&mut engine, &repo.main_branch_id, "new.txt", b"new content");
         frozen
     };
     let current = backend
-        .call(BackendAction::Tree, &identity, input.clone())
+        .tree_snapshot(&identity, crate::tests::tree_request(&input))
+        .map(|snapshot| json_codec::to_value(snapshot).unwrap())
         .unwrap();
     assert_ne!(current["commit_id"], expected["commit_id"]);
     assert_eq!(current["entries"].as_array().unwrap().len(), 1);
@@ -155,7 +172,8 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
     assert_eq!(encode(frozen).unwrap(), expected);
     assert_eq!(
         backend
-            .call(BackendAction::Tree, &identity, input)
+            .tree_snapshot(&identity, crate::tests::tree_request(&input))
+            .map(|snapshot| json_codec::to_value(snapshot).unwrap())
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized
@@ -368,11 +386,11 @@ fn real_current_and_historical_tree_sources_match_previous_wire_output() {
                     .map(|source| (entry.file_id.clone(), source.to_owned()))
             })
             .collect();
-        let projection = Tree::capture(
+        let projection = crate::TreeSnapshot::capture(
             &engine,
-            &json!({
+            crate::tests::tree_request(&json!({
                 "branch_id": repo.main_branch_id, "query": {"commit_id": commit_id}
-            }),
+            })),
         )
         .unwrap();
         assert_eq!(projection.pending_file_versions, expected);
@@ -447,11 +465,11 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
                     .map(|source| (entry.file_id.clone(), source.to_owned()))
             })
             .collect();
-        let tree = Tree::capture(
+        let tree = crate::TreeSnapshot::capture(
             engine,
-            &json!({
+            crate::tests::tree_request(&json!({
                 "branch_id": branch, "query": {"commit_id": commit_id}
-            }),
+            })),
         )
         .unwrap();
         assert_eq!(tree.pending_file_versions, legacy);
@@ -570,11 +588,11 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
                 .map(|source| (entry.file_id.clone(), source.to_owned()))
         })
         .collect();
-    let projection = Tree::capture(
+    let projection = crate::TreeSnapshot::capture(
         &engine,
-        &json!({
+        crate::tests::tree_request(&json!({
             "branch_id": repo.main_branch_id, "query": {"commit_id": head}
-        }),
+        })),
     )
     .unwrap();
     assert_eq!(projection.pending_file_versions, expected);
@@ -853,15 +871,26 @@ fn namespace_reads_preserve_migrated_branch_error() {
         storage_contract::ErrorCode::TreeMoved
     );
     let input = json!({"branch_id":repo.main_branch_id,"path":"file.txt"});
-    for action in [BackendAction::Tree, BackendAction::Resolve] {
-        assert_eq!(
-            backend
-                .call(action, &identity, input.clone())
-                .unwrap_err()
-                .code,
-            storage_contract::ErrorCode::TreeMoved
-        );
-    }
+    assert_eq!(
+        backend
+            .tree_snapshot(
+                &identity,
+                crate::ReadTree {
+                    branch: &repo.main_branch_id,
+                    commit: None
+                }
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::TreeMoved
+    );
+    assert_eq!(
+        backend
+            .call(BackendAction::Resolve, &identity, input)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::TreeMoved
+    );
 }
 
 #[path = "lookup_at_tests.rs"]
