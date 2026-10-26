@@ -64,52 +64,6 @@ pub struct MergeFileBranches {
     pub operation_id: storage_contract::OperationId,
 }
 
-/// Wire commands accept only canonical decimal strings for generations.
-/// These mutations bind their canonical request in the core, not to a lossy
-/// reserialization of a public envelope.
-#[derive(Debug, Clone, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub struct UpdateProtectionPolicy {
-    #[serialization(deserialize_with = "nonempty_string")]
-    pub policy_id: String,
-    #[serialization(deserialize_with = "nonempty_string")]
-    pub repository_id: String,
-    pub path_prefix: String,
-    pub target_copies: u32,
-    #[serialization(with = "storage_contract::u64_string")]
-    pub expected_generation: u64,
-    #[serialization(deserialize_with = "nonempty_string")]
-    pub operation_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub struct UpdatePlacementRule {
-    #[serialization(deserialize_with = "nonempty_string")]
-    pub rule_id: String,
-    #[serialization(deserialize_with = "nonempty_string")]
-    pub repository_id: String,
-    pub path_prefix: String,
-    #[serialization(deserialize_with = "nonempty_string")]
-    pub primary_slot_id: String,
-    #[serialization(with = "storage_contract::u64_string")]
-    pub expected_generation: u64,
-    #[serialization(deserialize_with = "nonempty_string")]
-    pub operation_id: String,
-}
-
-fn nonempty_string<'de, D: data_serialization::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<String, D::Error> {
-    let value = String::deserialize(deserializer)?;
-    if value.is_empty() {
-        return Err(data_serialization::de::Error::custom(
-            "expected nonempty string",
-        ));
-    }
-    Ok(value)
-}
-
 /// This service borrows a locked engine. It has no transport, JSON dispatch, or
 /// caller-supplied principal; the authenticated identity is bound at creation.
 pub struct Application<'a> {
@@ -120,48 +74,6 @@ pub struct Application<'a> {
 impl<'a> Application<'a> {
     pub(super) fn new(engine: &'a mut Engine, identity: &'a Identity) -> Self {
         Self { engine, identity }
-    }
-
-    pub fn update_protection_policy(
-        &mut self,
-        command: UpdateProtectionPolicy,
-    ) -> Result<storage_engine::OperationResult, ApiError> {
-        repository(self.engine, &command.repository_id)?;
-        self.engine
-            .update_protection_policy(storage_engine::ProtectionPolicyUpdate {
-                policy_id: &command.policy_id,
-                repository_id: &command.repository_id,
-                path_prefix: &command.path_prefix,
-                target_copies: command.target_copies,
-                expected_generation: command.expected_generation,
-                principal: &self.identity.principal,
-                operation_id: command
-                    .operation_id
-                    .parse::<storage_contract::OperationId>()
-                    .map_err(|source| error(source.into()))?,
-            })
-            .map_err(error)
-    }
-
-    pub fn update_placement_rule(
-        &mut self,
-        command: UpdatePlacementRule,
-    ) -> Result<storage_engine::OperationResult, ApiError> {
-        repository(self.engine, &command.repository_id)?;
-        self.engine
-            .update_placement_rule(storage_engine::PlacementRuleUpdate {
-                rule_id: &command.rule_id,
-                repository_id: &command.repository_id,
-                path_prefix: &command.path_prefix,
-                primary_slot_id: &command.primary_slot_id,
-                expected_generation: command.expected_generation,
-                principal: &self.identity.principal,
-                operation_id: command
-                    .operation_id
-                    .parse::<storage_contract::OperationId>()
-                    .map_err(|source| error(source.into()))?,
-            })
-            .map_err(error)
     }
 
     fn commit_request(&self, command: CommitWorkspace) -> Result<CommitRequest, ApiError> {

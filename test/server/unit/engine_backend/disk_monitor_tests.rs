@@ -21,25 +21,21 @@ fn online_observation(capacity: Option<(u64, u64, u64)>) -> DiskObservation {
 
 #[test]
 fn online_member_with_unknown_capacity_keeps_unknown_monitoring_fields() {
-    let value = disk_value(online_observation(None));
-    assert_eq!(value["online"], true);
-    for field in [
-        "total_bytes",
-        "available_bytes",
-        "used_bytes",
-        "usage_percent",
-    ] {
-        assert!(value[field].is_null(), "unknown {field} must remain null");
-    }
+    let value = disk_sample(online_observation(None));
+    assert!(value.online);
+    assert!(value.total_bytes.is_none());
+    assert!(value.available_bytes.is_none());
+    assert!(value.used_bytes.is_none());
+    assert!(value.usage_percent.is_none());
 }
 
 #[test]
 fn monitoring_uses_sampled_physical_bytes_not_logical_accounting() {
-    let value = disk_value(online_observation(Some((1000, 700, 300))));
-    assert_eq!(value["total_bytes"], "1000");
-    assert_eq!(value["available_bytes"], "700");
-    assert_eq!(value["used_bytes"], "300");
-    assert_eq!(value["usage_percent"], 30.0);
+    let value = disk_sample(online_observation(Some((1000, 700, 300))));
+    assert_eq!(value.total_bytes, Some(1000));
+    assert_eq!(value.available_bytes, Some(700));
+    assert_eq!(value.used_bytes, Some(300));
+    assert_eq!(value.usage_percent, Some(30.0));
 }
 
 #[test]
@@ -58,35 +54,20 @@ fn unmounted_member_capacity_is_unknown_in_management_payload() {
     std::fs::rename(&member.root, temporary.path().join("removed-member")).unwrap();
     std::fs::create_dir(&member.root).unwrap();
     std::fs::set_permissions(&member.root, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let result = observe(plan).unwrap();
-    let disks = result["disks"].as_array().unwrap();
+    let disks = observe(plan);
     let missing = disks
         .iter()
-        .find(|disk| disk["id"] == member.slot_id)
+        .find(|disk| disk.slot_id == member.slot_id)
         .unwrap();
-    assert_eq!(missing["online"], false);
-    for field in [
-        "total_bytes",
-        "available_bytes",
-        "used_bytes",
-        "usage_percent",
-    ] {
-        assert!(
-            missing[field].is_null(),
-            "offline {field} must not describe the host filesystem"
-        );
-    }
+    assert!(!missing.online);
+    assert!(missing.total_bytes.is_none());
+    assert!(missing.available_bytes.is_none());
+    assert!(missing.used_bytes.is_none());
+    assert!(missing.usage_percent.is_none());
     let present = disks
         .iter()
-        .find(|disk| disk["id"] == config.disks[1].slot_id)
+        .find(|disk| disk.slot_id == config.disks[1].slot_id)
         .unwrap();
-    assert_eq!(present["online"], true);
-    assert!(
-        present["total_bytes"]
-            .as_str()
-            .unwrap()
-            .parse::<u64>()
-            .unwrap()
-            > 0
-    );
+    assert!(present.online);
+    assert!(present.total_bytes.unwrap() > 0);
 }

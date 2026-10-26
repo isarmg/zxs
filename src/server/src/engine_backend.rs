@@ -608,6 +608,139 @@ impl Backend for EngineBackend {
             )
             .map_err(error)
     }
+    fn protection_policy(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::ProtectionPolicy, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        let record = engine.state().protection_policies.get(id).ok_or_else(|| {
+            ApiError::new(
+                ::http::StatusCode::NOT_FOUND,
+                storage_contract::ErrorCode::NotFound,
+                "protection policy not found",
+            )
+        })?;
+        repository(&engine, &record.repository_id)?;
+        Ok(record.clone())
+    }
+    fn placement_rule(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::PlacementRule, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        let record = engine.state().placement_rules.get(id).ok_or_else(|| {
+            ApiError::new(
+                ::http::StatusCode::NOT_FOUND,
+                storage_contract::ErrorCode::NotFound,
+                "placement rule not found",
+            )
+        })?;
+        repository(&engine, &record.repository_id)?;
+        Ok(record.clone())
+    }
+    fn update_protection_policy(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateProtectionPolicy,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        let mut engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        repository(&engine, &request.repository_id)?;
+        engine
+            .update_protection_policy(storage_engine::ProtectionPolicyUpdate {
+                policy_id: &request.policy_id,
+                target_copies: request.target_copies,
+                repository_id: &request.repository_id,
+                path_prefix: &request.path_prefix,
+                expected_generation: request.expected_generation,
+                principal: &current.principal,
+                operation_id: request.operation_id,
+            })
+            .map_err(error)
+    }
+    fn update_placement_rule(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdatePlacementRule,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        let mut engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        repository(&engine, &request.repository_id)?;
+        engine
+            .update_placement_rule(storage_engine::PlacementRuleUpdate {
+                rule_id: &request.rule_id,
+                primary_slot_id: &request.primary_slot_id,
+                repository_id: &request.repository_id,
+                path_prefix: &request.path_prefix,
+                expected_generation: request.expected_generation,
+                principal: &current.principal,
+                operation_id: request.operation_id,
+            })
+            .map_err(error)
+    }
+    fn compare_commits(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CompareCommits<'_>,
+    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        let (left, right) = {
+            let capture = |id: &str| {
+                let commit = engine.state().commits.get_shared(id).ok_or_else(|| {
+                    ApiError::new(
+                        ::http::StatusCode::NOT_FOUND,
+                        storage_contract::ErrorCode::NotFound,
+                        "comparison commit not found",
+                    )
+                })?;
+                repo_for_history(&engine, &commit.history_tree_id)?;
+                Ok::<_, ApiError>(commit)
+            };
+            (capture(request.left)?, capture(request.right)?)
+        };
+        drop(engine);
+        Ok(storage_contract::CommitComparison::between(left, right))
+    }
+    fn disk_status(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        let observation = engine.prepare_disk_observation();
+        drop(engine);
+        observation.status().map_err(error)
+    }
+    fn integrity_check(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::CheckReport, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        engine.check().map_err(error)
+    }
+    fn file_history(
+        &self,
+        identity: &crate::auth::Identity,
+        file: &str,
+    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        let versions = engine.file_history(file).map_err(error)?;
+        if versions.is_empty() {
+            return Err(ApiError::new(
+                ::http::StatusCode::NOT_FOUND,
+                storage_contract::ErrorCode::NotFound,
+                "file history not found",
+            ));
+        }
+        Ok(versions)
+    }
     fn topology_snapshot(
         &self,
         identity: &crate::auth::Identity,
@@ -889,16 +1022,6 @@ impl Backend for EngineBackend {
         let current = current_protected_identity(&engine, identity)?;
         let identity = &current;
         match action {
-            crate::BackendAction::FileManagerDisks => {
-                let access = file_manager::disk_access(&engine);
-                let observation = engine.prepare_disk_observation();
-                drop(engine);
-                let disks = observation.status().map_err(error)?.into_iter().filter_map(|disk| {
-                    let writable = access.get(&disk.slot_id)?;
-                    Some(json!({"slot_id":disk.slot_id,"level":disk.level,"online":disk.online,"writable":writable,"available_bytes":disk.available_bytes.to_string(),"used_bytes":disk.used_bytes.to_string(),"simulation":disk.simulation}))
-                }).collect::<Vec<_>>();
-                Ok(json!({"disks":disks}))
-            }
             crate::BackendAction::FileManagerBackupConfiguration
             | crate::BackendAction::FileManagerEntries
             | crate::BackendAction::FileManagerFileHistory
@@ -920,11 +1043,6 @@ impl Backend for EngineBackend {
             | crate::BackendAction::FileManagerVersionMetadata
             | crate::BackendAction::FileManagerWriteSession => {
                 file_manager::call(&mut engine, identity, action, input)
-            }
-            crate::BackendAction::MonitorDisks => {
-                let observation = engine.prepare_disk_observation();
-                drop(engine);
-                disk_monitor::observe(observation)
             }
             crate::BackendAction::DefaultBranch => {
                 let repo = repository(&engine, field(&input, "repository_id")?)?;
@@ -1058,22 +1176,6 @@ impl Backend for EngineBackend {
                         .map_err(error)?,
                 )
             }
-            crate::BackendAction::Compare => {
-                keys(&input, &["left_commit_id", "right_commit_id"])?;
-                let left = field(&input, "left_commit_id")?;
-                let right = field(&input, "right_commit_id")?;
-                for id in [left, right] {
-                    let commit = engine.state().commits.get(id).ok_or_else(|| {
-                        ApiError::new(
-                            ::http::StatusCode::NOT_FOUND,
-                            storage_contract::ErrorCode::NotFound,
-                            "comparison commit not found",
-                        )
-                    })?;
-                    repo_for_history(&engine, &commit.history_tree_id)?;
-                }
-                engine.compare_commits(left, right).map_err(error)
-            }
             crate::BackendAction::PlanCancel => {
                 keys(&input, &["plan_id", "operation_id"])?;
                 let plan = engine.plan(field(&input, "plan_id")?).map_err(error)?;
@@ -1144,22 +1246,6 @@ impl Backend for EngineBackend {
                 let command = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
                 encode(Application::new(&mut engine, identity).merge_link(command)?)
             }
-            crate::BackendAction::History => {
-                let file = field(&input, "file_id")?;
-                let versions = engine.file_history(file).map_err(error)?;
-                let visible = versions
-                    .into_iter()
-                    .filter(|version| repo_for_history(&engine, &version.history_tree_id).is_ok())
-                    .collect::<Vec<_>>();
-                if visible.is_empty() {
-                    return Err(ApiError::new(
-                        ::http::StatusCode::NOT_FOUND,
-                        storage_contract::ErrorCode::NotFound,
-                        "file history not found",
-                    ));
-                }
-                Ok(json!({"file_id":file,"versions":visible}))
-            }
             crate::BackendAction::PurgePlan => {
                 keys(&input, &["history_tree_id", "version_ids"])?;
                 let history = field(&input, "history_tree_id")?;
@@ -1197,84 +1283,6 @@ impl Backend for EngineBackend {
                 }
                 let command = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
                 encode(Application::new(&mut engine, identity).commit_plan(command)?)
-            }
-            crate::BackendAction::Policy => {
-                let policy = engine
-                    .state()
-                    .protection_policies
-                    .get(field(&input, "policy_id")?)
-                    .ok_or_else(|| {
-                        ApiError::new(
-                            ::http::StatusCode::NOT_FOUND,
-                            storage_contract::ErrorCode::NotFound,
-                            "protection policy not found",
-                        )
-                    })?;
-                repository(&engine, &policy.repository_id)?;
-                encode(policy)
-            }
-            crate::BackendAction::PlacementRule => {
-                let rule = engine
-                    .state()
-                    .placement_rules
-                    .get(field(&input, "rule_id")?)
-                    .ok_or_else(|| {
-                        ApiError::new(
-                            ::http::StatusCode::NOT_FOUND,
-                            storage_contract::ErrorCode::NotFound,
-                            "placement rule not found",
-                        )
-                    })?;
-                repository(&engine, &rule.repository_id)?;
-                encode(rule)
-            }
-            crate::BackendAction::UpdatePolicy => {
-                keys(
-                    &input,
-                    &[
-                        "policy_id",
-                        "repository_id",
-                        "path_prefix",
-                        "target_copies",
-                        "expected_generation",
-                        "operation_id",
-                    ],
-                )?;
-                let repo = field(&input, "repository_id")?;
-                repository(&engine, repo)?;
-                // Retain the transport's key/admission error ordering while the
-                // application also preserves domain safety checks.
-                let command = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-                let result =
-                    Application::new(&mut engine, identity).update_protection_policy(command)?;
-                operation_wire(result)
-            }
-            crate::BackendAction::UpdatePlacementRule => {
-                keys(
-                    &input,
-                    &[
-                        "rule_id",
-                        "repository_id",
-                        "path_prefix",
-                        "primary_slot_id",
-                        "expected_generation",
-                        "operation_id",
-                    ],
-                )?;
-                let repo = field(&input, "repository_id")?;
-                repository(&engine, repo)?;
-                // Retain the transport's key/admission error ordering while the
-                // application also preserves domain safety checks.
-                let command = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-                let result =
-                    Application::new(&mut engine, identity).update_placement_rule(command)?;
-                operation_wire(result)
-            }
-            crate::BackendAction::Check => encode(engine.check().map_err(error)?),
-            crate::BackendAction::Disks => {
-                let observation = engine.prepare_disk_observation();
-                drop(engine);
-                encode(json!({"disks":observation.status().map_err(error)?}))
             }
             crate::BackendAction::RegisterDisk => Err(ApiError::new(
                 ::http::StatusCode::CONFLICT,
@@ -1376,12 +1384,15 @@ impl Backend for EngineBackend {
     fn checksums(&self, identity: &Identity, version: &str) -> Result<Vec<u8>, ApiError> {
         self.read_version_checksums(identity, version)
     }
-    fn observe_disks(&self, _: &crate::InternalDiskObservation) -> Result<Value, ApiError> {
+    fn observe_disks(
+        &self,
+        _: &crate::InternalDiskObservation,
+    ) -> Result<Vec<crate::DiskSample>, ApiError> {
         let observation = {
             let engine = self.engine.lock().expect("service state lock poisoned");
             engine.prepare_disk_observation()
         };
-        disk_monitor::observe(observation)
+        Ok(disk_monitor::observe(observation))
     }
 }
 

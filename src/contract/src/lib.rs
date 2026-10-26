@@ -12,7 +12,9 @@ pub use operation_id::OperationId;
 pub use public_commit::{
     FilePlacement, PublicCommitEnvelope, PublicCommitParseError, SealedWorkspace,
 };
+mod commit_comparison;
 pub mod model;
+pub use commit_comparison::{CommitChange, CommitComparison};
 mod shared_records;
 mod tracked;
 pub use tracked::{MapChanges, Tracked, TrackedMap, TrackedRecords};

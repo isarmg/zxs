@@ -25,7 +25,7 @@ fn cpu_uses_energy_differences_and_avoids_counting_subzones_twice() {
     let start = Instant::now();
     assert_eq!(
         sampler.sample_at(start).reason,
-        Some(crate::telemetry::power::PowerUnavailable::Sampling)
+        Some(crate::PowerUnavailable::Sampling)
     );
     write(&a.join("energy_uj"), "11000000");
     write(&b.join("energy_uj"), "21000000");
@@ -36,7 +36,7 @@ fn cpu_uses_energy_differences_and_avoids_counting_subzones_twice() {
     fs::remove_file(b.join("energy_uj")).unwrap();
     assert_eq!(
         sampler.sample_at(start + Duration::from_secs(10)).reason,
-        Some(crate::telemetry::power::PowerUnavailable::SensorUnreadable)
+        Some(crate::PowerUnavailable::SensorUnreadable)
     );
 }
 
@@ -65,7 +65,7 @@ fn disk_sensor_requires_drive_ownership_and_does_not_sum_unknown_rails() {
     symlink(&unrelated, hwmon.join("hwmon0/device")).unwrap();
     assert_eq!(
         read_disk_power(&drive, &hwmon, None).reason,
-        Some(crate::telemetry::power::PowerUnavailable::SensorUnavailable)
+        Some(crate::PowerUnavailable::SensorUnavailable)
     );
     write(&hwmon.join("hwmon1/power1_input"), "4200000");
     write(&hwmon.join("hwmon1/power1_average"), "4100000");
@@ -74,10 +74,10 @@ fn disk_sensor_requires_drive_ownership_and_does_not_sum_unknown_rails() {
     write(&hwmon.join("hwmon1/power2_input"), "1500000");
     assert_eq!(
         read_disk_power(&drive, &hwmon, None).reason,
-        Some(crate::telemetry::power::PowerUnavailable::SensorAmbiguous)
+        Some(crate::PowerUnavailable::SensorAmbiguous)
     );
     assert_eq!(
         disk_power("ignored", true, true).1,
-        Some(crate::telemetry::power::PowerUnavailable::SimulatedDisk)
+        Some(crate::PowerUnavailable::SimulatedDisk)
     );
 }

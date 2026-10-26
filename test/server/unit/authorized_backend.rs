@@ -364,6 +364,88 @@ impl Backend for RecordingBackend {
         self.record("update_smb_binding",Some(identity),json!({"repository_id":request.repository,"branch_id":request.branch,"enabled":request.enabled,"expected_history_generation":request.expected_history_generation.to_string(),"operation_id":request.operation}))?;
         Ok(recorded_operation(request.operation, "update_smb_binding"))
     }
+    fn protection_policy(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::ProtectionPolicy, crate::ApiError> {
+        self.record("protection_policy", Some(identity), json!({"id":id}))?;
+        Ok(recorded_protection_policy(id))
+    }
+    fn placement_rule(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::PlacementRule, crate::ApiError> {
+        self.record("placement_rule", Some(identity), json!({"id":id}))?;
+        Ok(recorded_placement_rule(id))
+    }
+    fn update_protection_policy(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateProtectionPolicy,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record("update_protection_policy",Some(identity),json!({"policy_id":request.policy_id,"target_copies":request.target_copies,"repository_id":request.repository_id,"path_prefix":request.path_prefix,"expected_generation":request.expected_generation.to_string(),"operation_id":request.operation_id}))?;
+        Ok(recorded_operation(
+            request.operation_id,
+            "update_protection_policy",
+        ))
+    }
+    fn update_placement_rule(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdatePlacementRule,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record("update_placement_rule",Some(identity),json!({"rule_id":request.rule_id,"primary_slot_id":request.primary_slot_id,"repository_id":request.repository_id,"path_prefix":request.path_prefix,"expected_generation":request.expected_generation.to_string(),"operation_id":request.operation_id}))?;
+        Ok(recorded_operation(
+            request.operation_id,
+            "update_placement_rule",
+        ))
+    }
+    fn compare_commits(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CompareCommits<'_>,
+    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        self.record(
+            "compare_commits",
+            Some(identity),
+            json!({"left_commit_id":request.left,"right_commit_id":request.right}),
+        )?;
+        Ok(storage_contract::CommitComparison::between(
+            recorded_commit(request.left),
+            recorded_commit(request.right),
+        ))
+    }
+    fn disk_status(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
+        self.record("disk_status", Some(identity), Value::Null)?;
+        Ok(vec![])
+    }
+    fn integrity_check(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::CheckReport, crate::ApiError> {
+        self.record("integrity_check", Some(identity), Value::Null)?;
+        Ok(storage_contract::CheckReport {
+            checked_versions: 17,
+            healthy_replicas: 23,
+            tombstoned_versions: 7,
+            issues: vec!["diagnostic".into()],
+        })
+    }
+    fn file_history(
+        &self,
+        identity: &crate::auth::Identity,
+        file: &str,
+    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
+        self.record("file_history", Some(identity), json!({"file_id":file}))?;
+        let mut version = recorded_version("version").version;
+        version.file_id = file.into();
+        Ok(vec![version])
+    }
     fn topology_snapshot(
         &self,
         identity: &crate::auth::Identity,
@@ -606,7 +688,7 @@ impl Backend for RecordingBackend {
         self.record(
             "call",
             Some(identity),
-            json!({"action": action.as_str(), "input": input}),
+            json!({"action": format!("{action:?}"), "input": input}),
         )
     }
     fn upload(
@@ -669,8 +751,12 @@ impl Backend for RecordingBackend {
         self.record("checksums", Some(identity), json!({"version": version}))?;
         Ok(vec![19, 23])
     }
-    fn observe_disks(&self, _: &InternalDiskObservation) -> Result<Value, ApiError> {
+    fn observe_disks(
+        &self,
+        _: &InternalDiskObservation,
+    ) -> Result<Vec<crate::DiskSample>, ApiError> {
         self.record("observe_disks", None, Value::Null)
+            .map(|_| vec![])
     }
 }
 
@@ -882,6 +968,105 @@ impl Fixture {
                         );
                         json!({"returned_by":"update_smb_binding"})
                     }),
+            ),
+            (
+                "protection_policy",
+                backend.protection_policy(identity, "policy").map(|policy| {
+                    assert_eq!(policy.generation, 17);
+                    json!({"returned_by":"protection_policy"})
+                }),
+            ),
+            (
+                "placement_rule",
+                backend.placement_rule(identity, "rule").map(|rule| {
+                    assert_eq!(rule.generation, 17);
+                    json!({"returned_by":"placement_rule"})
+                }),
+            ),
+            (
+                "update_protection_policy",
+                backend
+                    .update_protection_policy(
+                        identity,
+                        crate::UpdateProtectionPolicy {
+                            policy_id: "policy".into(),
+                            repository_id: "repository".into(),
+                            path_prefix: "Folder".into(),
+                            target_copies: 3,
+                            expected_generation: 17,
+                            operation_id,
+                        },
+                    )
+                    .map(|result| {
+                        assert_eq!(
+                            result,
+                            recorded_operation(operation_id, "update_protection_policy")
+                        );
+                        json!({"returned_by":"update_protection_policy"})
+                    }),
+            ),
+            (
+                "update_placement_rule",
+                backend
+                    .update_placement_rule(
+                        identity,
+                        crate::UpdatePlacementRule {
+                            rule_id: "rule".into(),
+                            repository_id: "repository".into(),
+                            path_prefix: "Folder".into(),
+                            primary_slot_id: "P01".into(),
+                            expected_generation: 17,
+                            operation_id,
+                        },
+                    )
+                    .map(|result| {
+                        assert_eq!(
+                            result,
+                            recorded_operation(operation_id, "update_placement_rule")
+                        );
+                        json!({"returned_by":"update_placement_rule"})
+                    }),
+            ),
+            (
+                "compare_commits",
+                backend
+                    .compare_commits(
+                        identity,
+                        crate::CompareCommits {
+                            left: "left",
+                            right: "right",
+                        },
+                    )
+                    .map(|comparison| {
+                        assert_eq!(comparison.left_id(), "left");
+                        assert_eq!(comparison.right_id(), "right");
+                        json!({"returned_by":"compare_commits"})
+                    }),
+            ),
+            (
+                "disk_status",
+                backend.disk_status(identity).map(|disks| {
+                    assert!(disks.is_empty());
+                    json!({"returned_by":"disk_status"})
+                }),
+            ),
+            (
+                "integrity_check",
+                backend.integrity_check(identity).map(|report| {
+                    assert_eq!(report.checked_versions, 17);
+                    assert_eq!(report.healthy_replicas, 23);
+                    assert_eq!(report.tombstoned_versions, 7);
+                    assert_eq!(report.issues, ["diagnostic"]);
+                    json!({"returned_by":"integrity_check"})
+                }),
+            ),
+            (
+                "file_history",
+                backend.file_history(identity, "file").map(|versions| {
+                    assert_eq!(versions[0].logical_size, u64::MAX);
+                    assert_eq!(versions[0].file_id, "file");
+                    json!({"returned_by":"file_history"})
+                }),
             ),
             (
                 "topology_snapshot",
@@ -1097,7 +1282,7 @@ impl Fixture {
             ),
             (
                 "call",
-                backend.call(BackendAction::Check, identity, json!({"probe": 7})),
+                backend.call(BackendAction::Archive, identity, json!({"probe": 7})),
             ),
             (
                 "upload",
@@ -1226,6 +1411,14 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         Value::Null,
         json!({"repository_id":"repository"}),
         json!({"repository_id":"repository","branch_id":"branch","enabled":false,"expected_history_generation":"7","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"id":"policy"}),
+        json!({"id":"rule"}),
+        json!({"policy_id":"policy","repository_id":"repository","path_prefix":"Folder","target_copies":3,"expected_generation":"17","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"rule_id":"rule","repository_id":"repository","path_prefix":"Folder","primary_slot_id":"P01","expected_generation":"17","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"left_commit_id":"left","right_commit_id":"right"}),
+        Value::Null,
+        Value::Null,
+        json!({"file_id":"file"}),
         Value::Null,
         json!({"version_id":"version"}),
         json!({"after":"17"}),
@@ -1246,7 +1439,7 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"branch":"branch","entry_id":"branch"}),
         json!({"branch":"branch","path":"File.txt","key":"file.txt"}),
         json!({"branch":"branch","commit":"commit","path":"File.txt","key":"file.txt"}),
-        json!({"action": BackendAction::Check.as_str(), "input": {"probe": 7}}),
+        json!({"action": format!("{:?}", BackendAction::Archive), "input": {"probe": 7}}),
         upload,
         generation,
         json!({"version": "version-content"}),
@@ -1537,5 +1730,28 @@ fn recorded_graph(id: &str) -> crate::HistoryGraphSnapshot {
         branches: vec![],
         merge_links: vec![],
         boundary_marks: vec![],
+    }
+}
+
+fn recorded_protection_policy(id: &str) -> storage_contract::ProtectionPolicy {
+    storage_contract::ProtectionPolicy {
+        policy_id: id.into(),
+        repository_id: "repository".into(),
+        path_prefix: "".into(),
+        target_copies: 3,
+        inheritable: true,
+        scope_directory_id: None,
+        scope_file_id: None,
+        backup_prefixes: Default::default(),
+        generation: 17,
+    }
+}
+fn recorded_placement_rule(id: &str) -> storage_contract::PlacementRule {
+    storage_contract::PlacementRule {
+        rule_id: id.into(),
+        repository_id: "repository".into(),
+        path_prefix: "".into(),
+        primary_slot_id: "P01".into(),
+        generation: 17,
     }
 }

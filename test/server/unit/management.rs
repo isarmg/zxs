@@ -601,7 +601,7 @@ fn completed_disk_observation_releases_engine_before_retry() {
     let observation = backend
         .observe_disks(&crate::InternalDiskObservation(()))
         .unwrap();
-    assert_eq!(observation["disks"][0]["online"], false);
+    assert!(!observation[0].online);
     assert_eq!(
         observed_engine.strong_count(),
         1,

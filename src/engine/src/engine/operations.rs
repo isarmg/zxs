@@ -4,7 +4,7 @@
 use super::{ContentReadPlan, Engine};
 use crate::journal::RecordType;
 use crate::{journal::*, publication_evidence::verified_object, *};
-use std::{collections::BTreeSet, sync::Arc};
+use std::collections::BTreeSet;
 
 /// Only the selected operation and its owner, never a clone of the whole State.
 /// The publication facts remain unchanged when current content health changes.
@@ -126,7 +126,6 @@ impl Engine {
         else {
             return plan;
         };
-        let config = Arc::new(self.config.clone());
         let mut selected = BTreeSet::new();
         for entry in commit
             .entries
@@ -136,7 +135,7 @@ impl Engine {
             if !selected.insert(&entry.version_id) {
                 continue;
             }
-            let prepared = self.prepare_content_with_config(&entry.version_id, Arc::clone(&config));
+            let prepared = self.prepare_content(&entry.version_id);
             match prepared {
                 Ok(content) => {
                     let target = self.state.placements[&entry.version_id].target_copies;

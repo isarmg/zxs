@@ -15,12 +15,12 @@ fn sample(at: i64, value: Option<f64>) -> Sample {
                 power_watts: value,
                 power_unavailable_reason: value
                     .is_none()
-                    .then_some(crate::telemetry::power::PowerUnavailable::SensorUnavailable),
+                    .then_some(crate::PowerUnavailable::SensorUnavailable),
             },
             memory: MemoryStatus {
-                total_bytes: Some("18446744073709551615".into()),
-                used_bytes: Some("10".into()),
-                available_bytes: Some("18446744073709551605".into()),
+                total_bytes: Some(18446744073709551615),
+                used_bytes: Some(10),
+                available_bytes: Some(18446744073709551605),
             },
             disks: vec![],
         },
@@ -45,10 +45,7 @@ fn restart_recovers_real_samples_and_keeps_missing_values_absent() {
             .iter()
             .all(|sample| sample.cpu.power_watts.is_none() && sample.cpu.usage_percent.is_none())
     );
-    assert_eq!(
-        result[0].memory.total_bytes.as_deref(),
-        Some("18446744073709551615")
-    );
+    assert_eq!(result[0].memory.total_bytes, Some(18446744073709551615));
     assert_eq!(cache.minutes.len(), 1);
 }
 
@@ -121,24 +118,24 @@ fn mixed_null_metrics_remain_exact_after_two_aggregations_and_persistence() {
     let now = 1_800_000_120;
     let metric = |at, value: Option<f64>| {
         let mut sample = sample(at, value);
-        let bytes = value.map(|value| (value as u64).to_string());
-        sample.status.memory.total_bytes = bytes.clone();
-        sample.status.memory.used_bytes = bytes.clone();
-        sample.status.memory.available_bytes = bytes.clone();
+        let bytes = value.map(|value| value as u64);
+        sample.status.memory.total_bytes = bytes;
+        sample.status.memory.used_bytes = bytes;
+        sample.status.memory.available_bytes = bytes;
         sample.status.disks = vec![super::super::DiskStatus {
             id: "P01".into(),
             name: "P01".into(),
             online: true,
             read_only: false,
             simulation: false,
-            total_bytes: bytes.clone(),
-            used_bytes: bytes.clone(),
+            total_bytes: bytes,
+            used_bytes: bytes,
             available_bytes: bytes,
             usage_percent: value,
             power_watts: value,
             power_unavailable_reason: value
                 .is_none()
-                .then_some(crate::telemetry::power::PowerUnavailable::SensorUnavailable),
+                .then_some(crate::PowerUnavailable::SensorUnavailable),
         }];
         sample
     };
@@ -165,12 +162,12 @@ fn mixed_null_metrics_remain_exact_after_two_aggregations_and_persistence() {
     let expected = 100.0 / 13.0;
     assert!((twice.status.cpu.usage_percent.unwrap() - expected as f32).abs() < 0.00001);
     assert_eq!(twice.status.cpu.power_watts, Some(expected));
-    assert_eq!(twice.status.memory.used_bytes.as_deref(), Some("7"));
-    assert_eq!(twice.status.memory.total_bytes.as_deref(), Some("7"));
-    assert_eq!(twice.status.memory.available_bytes.as_deref(), Some("7"));
+    assert_eq!(twice.status.memory.used_bytes, Some(7));
+    assert_eq!(twice.status.memory.total_bytes, Some(7));
+    assert_eq!(twice.status.memory.available_bytes, Some(7));
     assert_eq!(twice.status.disks[0].usage_percent, Some(expected));
     assert_eq!(twice.status.disks[0].power_watts, Some(expected));
-    assert_eq!(twice.status.disks[0].used_bytes.as_deref(), Some("7"));
+    assert_eq!(twice.status.disks[0].used_bytes, Some(7));
     assert_eq!(
         json_codec::to_value(twice.status).unwrap(),
         json_codec::to_value(direct.status).unwrap()
@@ -181,11 +178,11 @@ fn mixed_null_metrics_remain_exact_after_two_aggregations_and_persistence() {
 fn byte_statistics_round_trip_u128_sums_and_avoid_repeated_integer_rounding() {
     let now = 1_800_000_120;
     let mut a = sample(now, Some(1.0));
-    a.status.memory.used_bytes = Some("0".into());
+    a.status.memory.used_bytes = Some(0);
     let mut b = sample(now + 5, Some(1.0));
-    b.status.memory.used_bytes = Some("1".into());
+    b.status.memory.used_bytes = Some(1);
     let minute = average(&[a, b]);
-    assert_eq!(minute.status.memory.used_bytes.as_deref(), Some("0"));
+    assert_eq!(minute.status.memory.used_bytes, Some(0));
     // total_bytes is u64::MAX per observation, so its serialized sum is
     // larger than u64. The cache must preserve that u128 integer exactly.
     let encoded = json_codec::to_vec(&minute).unwrap();
@@ -193,12 +190,12 @@ fn byte_statistics_round_trip_u128_sums_and_avoid_repeated_integer_rounding() {
     let restored: Sample = json_codec::from_slice(&encoded).unwrap();
     assert!(restored.valid_at(now + 60));
     let mut c = sample(now + 60, Some(1.0));
-    c.status.memory.used_bytes = Some("2".into());
+    c.status.memory.used_bytes = Some(2);
     let combined = average(&[restored, c]);
-    assert_eq!(combined.status.memory.used_bytes.as_deref(), Some("1"));
+    assert_eq!(combined.status.memory.used_bytes, Some(1));
     assert_eq!(
-        combined.status.memory.total_bytes.as_deref(),
-        Some("18446744073709551615")
+        combined.status.memory.total_bytes,
+        Some(18446744073709551615)
     );
 }
 
@@ -233,14 +230,12 @@ fn disk_averages_keep_valid_observations_when_the_bucket_ends_offline() {
             online,
             read_only: false,
             simulation: true,
-            total_bytes: online.then(|| "1000".into()),
-            used_bytes: online.then(|| "300".into()),
-            available_bytes: online.then(|| "600".into()),
+            total_bytes: online.then_some(1000),
+            used_bytes: online.then_some(300),
+            available_bytes: online.then_some(600),
             usage_percent: online.then_some(30.0),
             power_watts: None,
-            power_unavailable_reason: Some(
-                crate::telemetry::power::PowerUnavailable::SimulatedDisk,
-            ),
+            power_unavailable_reason: Some(crate::PowerUnavailable::SimulatedDisk),
         }];
         point
     };
@@ -257,10 +252,7 @@ fn disk_averages_keep_valid_observations_when_the_bucket_ends_offline() {
         assert_eq!(aggregate.observations, 2);
         assert_eq!(aggregate.status.disks[0].online, last_online);
         assert_eq!(aggregate.status.disks[0].usage_percent, expected);
-        assert_eq!(
-            aggregate.status.disks[0].used_bytes.as_deref(),
-            expected.map(|_| "300")
-        );
+        assert_eq!(aggregate.status.disks[0].used_bytes, expected.map(|_| 300));
     }
 }
 
@@ -308,4 +300,43 @@ fn symlink_cache_directory_and_files_are_not_followed() {
     assert!(cache.record(sample(1_800_000_120, Some(1.0))).is_err());
     assert_eq!(fs::read(&external).unwrap(), b"untouched");
     assert_eq!(cache.samples(1_800_000_120, 1_800_000_120, 5).len(), 1);
+}
+
+#[test]
+fn cache_recovery_rejects_bad_byte_encodings_and_out_of_range_statistics() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("cache");
+    let now = 1_800_000_120;
+    let mut cache = HistoryStore::open(&directory, now).unwrap();
+    cache.record(sample(now, Some(1.0))).unwrap();
+    drop(cache);
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(directory.join(format!("recent-{}.jsonl", now / 3600)))
+        .unwrap();
+    for bad in [
+        json_codec::json!("01"),
+        json_codec::json!("-1"),
+        json_codec::json!("18446744073709551616"),
+        json_codec::json!("bad"),
+        json_codec::json!(1),
+    ] {
+        let mut encoded = json_codec::to_value(sample(now + 5, Some(2.0))).unwrap();
+        encoded["status"]["memory"]["used_bytes"] = bad;
+        assert!(json_codec::from_value::<Sample>(encoded.clone()).is_err());
+        writeln!(file, "{}", json_codec::to_string(&encoded).unwrap()).unwrap();
+    }
+    // The actual cache codec supports u128 sums; Value deliberately does not.
+    let encoded = json_codec::to_string(&average(&[sample(now + 10, Some(3.0))])).unwrap();
+    let original = "\"memory/total\":[18446744073709551615,1]";
+    assert!(encoded.contains(original));
+    let encoded = encoded.replace(original, &format!("\"memory/total\":[{},1]", u128::MAX));
+    let poisoned: Sample = json_codec::from_str(&encoded).unwrap();
+    assert!(!poisoned.valid_at(now + 10));
+    writeln!(file, "{encoded}").unwrap();
+    drop(file);
+    let cache = HistoryStore::open(&directory, now + 10).unwrap();
+    assert_eq!(cache.recent.len(), 1);
+    assert_eq!(cache.recent[0].unix_seconds, now);
+    assert_eq!(cache.recent[0].status.memory.used_bytes, Some(10));
 }

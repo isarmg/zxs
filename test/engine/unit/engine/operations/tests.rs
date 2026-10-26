@@ -222,3 +222,57 @@ fn pending_receipt_does_not_turn_corrupt_journals_into_not_found() {
     let owner_error = engine.operation_owner(operation).unwrap_err();
     assert_eq!(owner_error.code(), storage_contract::ErrorCode::LogCorrupt);
 }
+
+#[test]
+fn batch_health_owns_configuration_after_engine_drop_and_rechecks_member_identity() {
+    for replace_members in [false, true] {
+        let (root, mut engine, repo) = fixture();
+        let workspace = engine
+            .create_workspace(&repo.main_branch_id, "owner")
+            .unwrap();
+        for path in ["first", "second"] {
+            engine
+                .stage_bytes(&workspace.workspace_id, path, path.as_bytes())
+                .unwrap();
+        }
+        let published = engine
+            .commit_workspace(CommitRequest {
+                workspace_id: workspace.workspace_id,
+                operation_id: storage_contract::OperationId::generate(),
+                principal: "owner".into(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: String::new(),
+                request_digest: None,
+            })
+            .unwrap();
+        let plan = engine
+            .prepare_operation_health(engine.operation_record(published.operation_id).unwrap());
+        assert_eq!(plan.versions.len(), 2);
+        let roots: Vec<_> = engine
+            .config
+            .disks
+            .iter()
+            .map(|disk| disk.root.clone())
+            .collect();
+        drop(engine);
+        if replace_members {
+            for (index, member) in roots.iter().enumerate() {
+                let removed = root.path().join(format!("removed-{index}"));
+                fs::rename(member, &removed).unwrap();
+                fs::create_dir(member).unwrap();
+                fs::copy(removed.join("disk.json"), member.join("disk.json")).unwrap();
+            }
+        }
+        let observed = plan.check().into_result();
+        assert_eq!(
+            observed.current_health.as_str(),
+            if replace_members {
+                "UNAVAILABLE"
+            } else {
+                "HEALTHY"
+            }
+        );
+        assert_frozen(&observed, &published);
+    }
+}

@@ -287,6 +287,60 @@ impl Backend for LostCommitReply {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.update_smb_binding(identity, request)
     }
+    fn protection_policy(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::ProtectionPolicy, crate::ApiError> {
+        self.inner.protection_policy(identity, id)
+    }
+    fn placement_rule(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::PlacementRule, crate::ApiError> {
+        self.inner.placement_rule(identity, id)
+    }
+    fn update_protection_policy(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateProtectionPolicy,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.update_protection_policy(identity, request)
+    }
+    fn update_placement_rule(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdatePlacementRule,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.update_placement_rule(identity, request)
+    }
+    fn compare_commits(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CompareCommits<'_>,
+    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        self.inner.compare_commits(identity, request)
+    }
+    fn disk_status(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
+        self.inner.disk_status(identity)
+    }
+    fn integrity_check(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::CheckReport, crate::ApiError> {
+        self.inner.integrity_check(identity)
+    }
+    fn file_history(
+        &self,
+        identity: &crate::auth::Identity,
+        file: &str,
+    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
+        self.inner.file_history(identity, file)
+    }
     fn topology_snapshot(
         &self,
         identity: &crate::auth::Identity,
@@ -1224,14 +1278,8 @@ fn lost_commit_reply_reconciles_same_operation_without_restaging_or_second_versi
         .into_iter()
         .find(|entry| entry.path == "report.txt")
         .unwrap();
-    let history = backend
-        .call(
-            crate::BackendAction::History,
-            &one.identity,
-            json!({"file_id":entry.file_id}),
-        )
-        .unwrap();
-    assert_eq!(history["versions"].as_array().unwrap().len(), 2);
+    let history = backend.file_history(&one.identity, &entry.file_id).unwrap();
+    assert_eq!(history.len(), 2);
     one.close(opened.handle, false).unwrap();
 }
 

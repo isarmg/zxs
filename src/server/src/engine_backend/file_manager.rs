@@ -632,16 +632,6 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
     Ok(response)
 }
 
-/// Capture admission before physical disk probes leave the engine lock.
-pub(super) fn disk_access(engine: &Engine) -> BTreeMap<String, bool> {
-    engine
-        .config()
-        .disks
-        .iter()
-        .map(|disk| (disk.slot_id.clone(), disk.level == 1))
-        .collect()
-}
-
 /// Read handlers cannot obtain mutable Engine access or create lazy disk roots.
 pub(super) fn read(
     engine: &Engine,

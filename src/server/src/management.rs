@@ -46,7 +46,7 @@ struct Inner {
     stopping: AtomicBool,
     recovery_worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     generation: AtomicU64,
-    disk_observation: Mutex<Option<(std::time::Instant, Value)>>,
+    disk_observation: Mutex<Option<(std::time::Instant, Vec<crate::DiskSample>)>>,
     capabilities: Mutex<crate::Capabilities>,
     setup_disks: BTreeMap<String, PathBuf>,
     setup_configs: BTreeMap<String, PathBuf>,
@@ -737,6 +737,64 @@ impl Backend for ManagementBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.backend()?.update_smb_binding(identity, request)
     }
+    fn protection_policy(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::ProtectionPolicy, crate::ApiError> {
+        self.inner.backend()?.protection_policy(identity, id)
+    }
+    fn placement_rule(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::PlacementRule, crate::ApiError> {
+        self.inner.backend()?.placement_rule(identity, id)
+    }
+    fn update_protection_policy(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateProtectionPolicy,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner
+            .backend()?
+            .update_protection_policy(identity, request)
+    }
+    fn update_placement_rule(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdatePlacementRule,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner
+            .backend()?
+            .update_placement_rule(identity, request)
+    }
+    fn compare_commits(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CompareCommits<'_>,
+    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        self.inner.backend()?.compare_commits(identity, request)
+    }
+    fn disk_status(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
+        self.inner.backend()?.disk_status(identity)
+    }
+    fn integrity_check(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::CheckReport, crate::ApiError> {
+        self.inner.backend()?.integrity_check(identity)
+    }
+    fn file_history(
+        &self,
+        identity: &crate::auth::Identity,
+        file: &str,
+    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
+        self.inner.backend()?.file_history(identity, file)
+    }
     fn topology_snapshot(
         &self,
         identity: &crate::auth::Identity,
@@ -1248,7 +1306,10 @@ impl Backend for ManagementBackend {
     fn checksums(&self, i: &Identity, v: &str) -> Result<Vec<u8>, ApiError> {
         self.inner.backend()?.checksums(i, v)
     }
-    fn observe_disks(&self, _o: &InternalDiskObservation) -> Result<Value, ApiError> {
+    fn observe_disks(
+        &self,
+        _o: &InternalDiskObservation,
+    ) -> Result<Vec<crate::DiskSample>, ApiError> {
         // Only a single background observer can block on disk I/O. HTTP host
         // diagnostics read a bounded cache and explicitly reject stale data.
         let cache = crate::lock(&self.inner.disk_observation);

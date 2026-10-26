@@ -20,8 +20,13 @@ use std::{
 #[derive(Clone, Debug, Deserialize)]
 #[serialization(try_from = "Config")]
 pub struct ValidatedConfig {
-    config: Arc<Config>,
-    metadata_members: Arc<[usize]>,
+    admitted: Arc<AdmittedConfig>,
+}
+
+#[derive(Clone, Debug)]
+struct AdmittedConfig {
+    config: Config,
+    metadata_members: Box<[usize]>,
     workspace_limits: Option<super::RetainedWorkspaceLimits>,
 }
 
@@ -37,9 +42,11 @@ impl TryFrom<Config> for ValidatedConfig {
             .filter_map(|(index, disk)| disk.metadata_member.then_some(index))
             .collect();
         Ok(Self {
-            config: Arc::new(config),
-            metadata_members,
-            workspace_limits: None,
+            admitted: Arc::new(AdmittedConfig {
+                config,
+                metadata_members,
+                workspace_limits: None,
+            }),
         })
     }
 }
@@ -49,7 +56,7 @@ impl Serialize for ValidatedConfig {
         &self,
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
-        self.config.as_ref().serialize(serializer)
+        self.admitted.config.serialize(serializer)
     }
 }
 
@@ -57,15 +64,16 @@ impl Deref for ValidatedConfig {
     type Target = Config;
 
     fn deref(&self) -> &Config {
-        &self.config
+        &self.admitted.config
     }
 }
 
 impl ValidatedConfig {
     pub(super) fn metadata_members(&self) -> impl ExactSizeIterator<Item = &DiskConfig> {
-        self.metadata_members
+        self.admitted
+            .metadata_members
             .iter()
-            .map(|&index| &self.config.disks[index])
+            .map(|&index| &self.admitted.config.disks[index])
     }
 
     /// Rebind the existing disks in order, preserving membership and resource limits.
@@ -73,14 +81,19 @@ impl ValidatedConfig {
     /// # Errors
     /// Rejects a different disk count, relative roots, traversal or overlapping roots.
     pub fn with_disk_roots(mut self, roots: Vec<PathBuf>) -> Result<Self> {
-        if roots.len() != self.config.disks.len() {
+        if roots.len() != self.admitted.config.disks.len() {
             return Err(Error::new(
                 ErrorCode::ConfigInvalid,
                 "disk root count differs from configured membership",
             ));
         }
         validate_disk_roots(roots.iter().map(PathBuf::as_path))?;
-        for (disk, root) in Arc::make_mut(&mut self.config).disks.iter_mut().zip(roots) {
+        for (disk, root) in Arc::make_mut(&mut self.admitted)
+            .config
+            .disks
+            .iter_mut()
+            .zip(roots)
+        {
             disk.root = root;
         }
         Ok(self)
@@ -97,12 +110,13 @@ impl ValidatedConfig {
         if let Some(limits) = limits {
             limits.validate_for(&self)?;
         }
-        self.workspace_limits = limits;
+        Arc::make_mut(&mut self.admitted).workspace_limits = limits;
         Ok(self)
     }
 
     pub(super) fn effective_workspace_limits(&self) -> super::RetainedWorkspaceLimits {
-        self.workspace_limits
+        self.admitted
+            .workspace_limits
             .unwrap_or_else(|| super::RetainedWorkspaceLimits::from_config(self))
     }
 }

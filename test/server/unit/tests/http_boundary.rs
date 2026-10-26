@@ -465,6 +465,60 @@ impl Backend for PanickingBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         panic!("private SMB binding panic detail")
     }
+    fn protection_policy(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::ProtectionPolicy, crate::ApiError> {
+        panic!("private protection policy panic detail")
+    }
+    fn placement_rule(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::PlacementRule, crate::ApiError> {
+        panic!("private protection policy panic detail")
+    }
+    fn update_protection_policy(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdateProtectionPolicy,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private protection policy panic detail")
+    }
+    fn update_placement_rule(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdatePlacementRule,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private protection policy panic detail")
+    }
+    fn compare_commits(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CompareCommits<'_>,
+    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        panic!("private comparison panic detail")
+    }
+    fn disk_status(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
+        panic!("private disk_status panic detail")
+    }
+    fn integrity_check(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::CheckReport, crate::ApiError> {
+        panic!("private integrity_check panic detail")
+    }
+    fn file_history(
+        &self,
+        _identity: &crate::auth::Identity,
+        _file: &str,
+    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
+        panic!("private file history panic detail")
+    }
     fn topology_snapshot(
         &self,
         _identity: &crate::auth::Identity,
@@ -645,6 +699,31 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         ("GET", "/api/history-trees/history/graph", None),
         ("GET", "/api/events?after=17", None),
         ("GET", "/api/backup-topologies/default", None),
+        ("GET", "/api/files/file/history", None),
+        ("GET", "/api/admin/disks", None),
+        ("GET", "/api/file-manager/disks", None),
+        ("GET", "/api/admin/check", None),
+        (
+            "POST",
+            "/api/compare",
+            Some(json!({"left_commit_id":"left","right_commit_id":"right"})),
+        ),
+        ("GET", "/api/policies/policy", None),
+        ("GET", "/api/primary-placement-rules/rule", None),
+        (
+            "PUT",
+            "/api/policies/policy",
+            Some(
+                json!({"repository_id":"repository","path_prefix":"Folder","target_copies":3,"expected_generation":"0","operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "PUT",
+            "/api/primary-placement-rules/rule",
+            Some(
+                json!({"repository_id":"repository","path_prefix":"Folder","primary_slot_id":"P01","expected_generation":"0","operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
         ("GET", "/api/versions/version/placement", None),
         ("GET", "/api/repositories/repository/smb-binding", None),
         (

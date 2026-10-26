@@ -230,18 +230,21 @@ fn indexed_commit_comparison_preserves_normalized_identity_and_change_order() {
         .commit_id
         .unwrap();
     let comparison = engine.compare_commits(&left, &right).unwrap();
-    let changes = comparison["changes"].as_array().unwrap();
+    let changes = comparison.changes().collect::<Vec<_>>();
     assert_eq!(changes.len(), 3);
-    assert_eq!(changes[0]["change"], "modified");
-    assert_eq!(changes[0]["path"], "KEEP.txt");
-    assert_eq!(
-        changes[0]["before"]["version_id"],
-        changes[0]["after"]["version_id"]
-    );
-    assert_eq!(changes[1]["change"], "removed");
-    assert_eq!(changes[1]["path"], "remove.txt");
-    assert_eq!(changes[2]["change"], "added");
-    assert_eq!(changes[2]["path"], "added.txt");
+    let CommitChange::Modified { before, after } = changes[0] else {
+        panic!("expected modified")
+    };
+    assert_eq!(after.path(), "KEEP.txt");
+    assert_eq!(before.version_id, after.version_id);
+    let CommitChange::Removed { before } = changes[1] else {
+        panic!("expected removed")
+    };
+    assert_eq!(before.path(), "remove.txt");
+    let CommitChange::Added { after } = changes[2] else {
+        panic!("expected added")
+    };
+    assert_eq!(after.path(), "added.txt");
 }
 
 #[test]

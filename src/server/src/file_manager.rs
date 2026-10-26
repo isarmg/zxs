@@ -92,7 +92,27 @@ pub(crate) fn routes() -> Router<AppState> {
             post(version_metadata),
         )
 }
-list_handler!(disks, crate::BackendAction::FileManagerDisks);
+async fn disks(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<backend_diagnostics::FileManagerDisksResponse>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state
+            .backend
+            .disk_status(&identity)
+            .map(backend_diagnostics::FileManagerDisksResponse::from)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
 list_handler!(history, crate::BackendAction::FileManagerHistory);
 read_handler!(entries, crate::BackendAction::FileManagerEntries, "slot_id");
 read_handler!(

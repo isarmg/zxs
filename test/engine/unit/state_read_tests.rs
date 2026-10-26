@@ -14,6 +14,7 @@ enum Corruption {
     Cycle,
     MultipleParents,
     OrphanCommit,
+    OrphanVersion,
     OrphanContentState,
     MissingPlacement,
     OrphanFileSelection,
@@ -54,6 +55,7 @@ fn stored_snapshots_reject_broken_reference_closure_before_engine_admission() {
         Cycle,
         MultipleParents,
         OrphanCommit,
+        OrphanVersion,
         OrphanContentState,
         MissingPlacement,
         OrphanFileSelection,
@@ -112,6 +114,21 @@ fn stored_snapshots_reject_broken_reference_closure_before_engine_admission() {
                 commit.history_tree_id = new_id("history");
                 state.commits.insert(commit.commit_id.clone(), commit);
             }
+            OrphanVersion => {
+                let mut orphan = state.versions[&version].clone();
+                orphan.version_id = new_id("ver");
+                orphan.file_id = new_id("file");
+                orphan.history_tree_id = new_id("history");
+                let mut placement = state.placements[&version].clone();
+                placement.version_id = orphan.version_id.clone();
+                state
+                    .placements
+                    .insert(orphan.version_id.clone(), placement);
+                state
+                    .content_states
+                    .insert(orphan.version_id.clone(), ContentState::Available);
+                state.versions.insert(orphan.version_id.clone(), orphan);
+            }
             OrphanContentState => {
                 state
                     .content_states
@@ -155,6 +172,12 @@ fn stored_snapshots_reject_broken_reference_closure_before_engine_admission() {
             ErrorCode::StateInvalid,
             "{corruption:?}: {error}"
         );
+        if matches!(corruption, OrphanVersion) {
+            assert_eq!(
+                error.message(),
+                "snapshot versions contains unowned records"
+            );
+        }
         assert!(
             crate::publication_evidence::verified_snapshot(&fixture.config.disks, &hash).is_err(),
             "{corruption:?}"

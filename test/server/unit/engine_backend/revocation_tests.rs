@@ -190,6 +190,68 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.update_smb_binding(identity, request)
     }
+    fn protection_policy(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::ProtectionPolicy, crate::ApiError> {
+        self.enter();
+        self.inner.protection_policy(identity, id)
+    }
+    fn placement_rule(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::PlacementRule, crate::ApiError> {
+        self.enter();
+        self.inner.placement_rule(identity, id)
+    }
+    fn update_protection_policy(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateProtectionPolicy,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.update_protection_policy(identity, request)
+    }
+    fn update_placement_rule(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdatePlacementRule,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.update_placement_rule(identity, request)
+    }
+    fn compare_commits(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CompareCommits<'_>,
+    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        self.enter();
+        self.inner.compare_commits(identity, request)
+    }
+    fn disk_status(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
+        self.enter();
+        self.inner.disk_status(identity)
+    }
+    fn integrity_check(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::CheckReport, crate::ApiError> {
+        self.enter();
+        self.inner.integrity_check(identity)
+    }
+    fn file_history(
+        &self,
+        identity: &crate::auth::Identity,
+        file: &str,
+    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
+        self.enter();
+        self.inner.file_history(identity, file)
+    }
     fn topology_snapshot(
         &self,
         identity: &crate::auth::Identity,
@@ -513,6 +575,13 @@ enum Request {
     HistoryGraph,
     EventPage,
     TopologySnapshot,
+    FileHistory,
+    DiskStatus,
+    IntegrityCheck,
+    CompareCommits,
+    ProtectionPolicy,
+    PlacementRule,
+    UpdateProtectionPolicy,
     PlacementSnapshot,
     SmbBindingStatus,
     UpdateSmbBinding,
@@ -533,22 +602,30 @@ impl Request {
         let workspace = &fixture.workspace.workspace_id;
         match self {
             Self::Operation => backend.operation(identity, fixture.operation).map(|_| ()),
-            Self::CommitWorkspace => backend.commit_workspace(identity, crate::CommitWorkspace {
-                workspace_id: workspace.clone(),
-                operation_id: storage_contract::OperationId::generate(),
-                expected_head: fixture.workspace.base_head.clone(),
-                fencing_token: fixture.workspace.fencing_token,
-                message: String::new(),
-                request_digest: None,
-            }).map(|_| ()),
-            Self::Metadata => backend
-                .call(
-                    BackendAction::UpdatePlacementRule,
+            Self::CommitWorkspace => backend
+                .commit_workspace(
                     identity,
-                    json!({
-                        "repository_id":fixture.repo.repository_id,"rule_id":new_id("rule"),"path_prefix":"",
-                        "primary_slot_id":"P01","expected_generation":"0","operation_id":new_id("op")
-                    }),
+                    crate::CommitWorkspace {
+                        workspace_id: workspace.clone(),
+                        operation_id: storage_contract::OperationId::generate(),
+                        expected_head: fixture.workspace.base_head.clone(),
+                        fencing_token: fixture.workspace.fencing_token,
+                        message: String::new(),
+                        request_digest: None,
+                    },
+                )
+                .map(|_| ()),
+            Self::Metadata => backend
+                .update_placement_rule(
+                    identity,
+                    crate::UpdatePlacementRule {
+                        repository_id: fixture.repo.repository_id.clone(),
+                        rule_id: new_id("rule"),
+                        path_prefix: String::new(),
+                        primary_slot_id: "P01".into(),
+                        expected_generation: 0,
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
                 )
                 .map(|_| ()),
             Self::Administrator => backend
@@ -561,15 +638,27 @@ impl Request {
                     }),
                 )
                 .map(|_| ()),
-            Self::Tree => backend.tree_snapshot(identity, crate::ReadTree {
-                branch: &fixture.repo.main_branch_id, commit: None,
-            }).map(|_| ()),
-            Self::Snapshot => backend.snapshot_at(
-                identity, &fixture.repo.main_branch_id, &fixture.workspace.base_head,
-            ).map(|_| ()),
-            Self::WorkspaceCapacity => backend.workspace_capacity(identity).map(|_|()),
+            Self::Tree => backend
+                .tree_snapshot(
+                    identity,
+                    crate::ReadTree {
+                        branch: &fixture.repo.main_branch_id,
+                        commit: None,
+                    },
+                )
+                .map(|_| ()),
+            Self::Snapshot => backend
+                .snapshot_at(
+                    identity,
+                    &fixture.repo.main_branch_id,
+                    &fixture.workspace.base_head,
+                )
+                .map(|_| ()),
+            Self::WorkspaceCapacity => backend.workspace_capacity(identity).map(|_| ()),
             Self::WorkspaceRead => backend.workspace(identity, workspace).map(|_| ()),
-            Self::UploadStatus => backend.published_upload_status(identity, workspace, "missing-item").map(|_| ()),
+            Self::UploadStatus => backend
+                .published_upload_status(identity, workspace, "missing-item")
+                .map(|_| ()),
             Self::SealWorkspace => backend.seal_workspace(identity, workspace).map(|_| ()),
             Self::PublicCommit => {
                 let body = json!({
@@ -586,61 +675,180 @@ impl Request {
                     "sealed_manifest_hash": "manifest",
                     "request_digest": "digest"
                 });
-                let envelope = storage_contract::PublicCommitEnvelope::parse(workspace, body).unwrap();
-                backend.commit_workspace_public(identity, envelope).map(|_| ())
+                let envelope =
+                    storage_contract::PublicCommitEnvelope::parse(workspace, body).unwrap();
+                backend
+                    .commit_workspace_public(identity, envelope)
+                    .map(|_| ())
             }
-            Self::UploadAdmission => backend.authorize_upload(identity, &fixture.workspace.workspace_id, Some(42)),
-            Self::WriteSession => backend.create_write_session(identity, &fixture.repo.main_branch_id).map(|_| ()),
-            Self::WorkspaceCreate => backend.create_workspace(identity, crate::CreateWorkspace {
-                branch_id: fixture.repo.main_branch_id.clone(), source_commit_id: None,
-            }).map(|_| ()),
-            Self::WorkspaceAbort => backend.abort_workspace(identity, &fixture.workspace.workspace_id),
-            Self::WorkspaceSelection => backend.authorize_workspace_selection(identity,
-                &fixture.workspace.workspace_id, &name_policy::PortablePath::parse("file.txt").unwrap()),
-            Self::DirectoryRead => backend.read_directory(identity, crate::ReadDirectory {
-                branch: &fixture.repo.main_branch_id, entry_id: &fixture.repo.main_branch_id,
-                path: None, selection: crate::DirectorySelection::Capture,
-            }).map(|_| ()),
-            Self::CurrentLookup => backend.lookup_current(
-                identity, &fixture.repo.main_branch_id,
-                &name_policy::LookupPath::parse("file.txt").unwrap(),
-            ).map(|_| ()),
-            Self::SnapshotLookup => backend.lookup_at(
-                identity, &fixture.repo.main_branch_id, &fixture.workspace.base_head,
-                &name_policy::LookupPath::parse("file.txt").unwrap(),
-            ).map(|_| ()),
-            // SMB directory/write handles need current admission, not a tree.
-            Self::SmbAuthorizeRead => backend.authorize_current(identity, &fixture.repo.main_branch_id),
-            // Immutable SMB file handles still authorize their pinned version.
-            Self::Version => backend.version_snapshot(identity,&fixture.version).map(|_| ()),
-            Self::SmbBindingStatus => backend.smb_binding_status(identity,&fixture.repo.repository_id).map(|_|()),
-            Self::UpdateSmbBinding => backend.update_smb_binding(identity,crate::UpdateSmbBinding {repository:&fixture.repo.repository_id,branch:&fixture.repo.main_branch_id,enabled:false,expected_history_generation:1,operation:storage_contract::OperationId::generate()}).map(|_|()),
-            Self::TopologySnapshot => backend.topology_snapshot(identity).map(|_|()),
-            Self::PlacementSnapshot => backend.placement_snapshot(identity,&fixture.version).map(|_|()),
-            Self::EventPage => backend.event_page(identity,u64::MAX).map(|_|()),
-            Self::HistoryGraph => backend.history_graph(identity,&fixture.repo.history_tree_id).map(|_|()),
-            Self::CommitSnapshot => backend.commit_snapshot(identity,&fixture.workspace.base_head).map(|_|()),
-            Self::Resolve => backend.resolve_entry(identity,crate::ResolveEntry {branch:&fixture.repo.main_branch_id,path:&name_policy::LookupPath::parse("file.txt").unwrap(),commit:None}).map(|_|()),
-            Self::BranchSnapshot => backend.branch_snapshot(identity,&fixture.repo.main_branch_id).map(|_|()),
-            Self::BranchesSnapshot => backend.branches_snapshot(identity,&fixture.repo.repository_id).map(|_|()),
-            Self::RepositoriesSnapshot => backend.repositories_snapshot(identity).map(|_|()),
-            Self::RepositorySnapshot => backend.repository_snapshot(identity,&fixture.repo.repository_id).map(|_| ()),
-            Self::RepositoryAuthorization => backend.authorize_repository(identity,&fixture.repo.repository_id),
-            Self::VersionAuthorization => backend.authorize_version(identity,&fixture.version),
-            Self::Namespace => backend.stage_namespace(identity,crate::StageNamespace {workspace_id:workspace.clone(),change:storage_contract::NamespaceOperation::Mkdir {path:name_policy::PortablePath::parse("forbidden").unwrap()}}).map(|_|()),
-            Self::Content => backend.content(identity, &fixture.version).map(|_| ()),
-            Self::ContextContent => backend.range_content(
+            Self::UploadAdmission => {
+                backend.authorize_upload(identity, &fixture.workspace.workspace_id, Some(42))
+            }
+            Self::WriteSession => backend
+                .create_write_session(identity, &fixture.repo.main_branch_id)
+                .map(|_| ()),
+            Self::WorkspaceCreate => backend
+                .create_workspace(
+                    identity,
+                    crate::CreateWorkspace {
+                        branch_id: fixture.repo.main_branch_id.clone(),
+                        source_commit_id: None,
+                    },
+                )
+                .map(|_| ()),
+            Self::WorkspaceAbort => {
+                backend.abort_workspace(identity, &fixture.workspace.workspace_id)
+            }
+            Self::WorkspaceSelection => backend.authorize_workspace_selection(
                 identity,
-                crate::ReadContent {
-                    version: &fixture.version,
-                    context: Some(&crate::DownloadContext {
+                &fixture.workspace.workspace_id,
+                &name_policy::PortablePath::parse("file.txt").unwrap(),
+            ),
+            Self::DirectoryRead => backend
+                .read_directory(
+                    identity,
+                    crate::ReadDirectory {
+                        branch: &fixture.repo.main_branch_id,
+                        entry_id: &fixture.repo.main_branch_id,
+                        path: None,
+                        selection: crate::DirectorySelection::Capture,
+                    },
+                )
+                .map(|_| ()),
+            Self::CurrentLookup => backend
+                .lookup_current(
+                    identity,
+                    &fixture.repo.main_branch_id,
+                    &name_policy::LookupPath::parse("file.txt").unwrap(),
+                )
+                .map(|_| ()),
+            Self::SnapshotLookup => backend
+                .lookup_at(
+                    identity,
+                    &fixture.repo.main_branch_id,
+                    &fixture.workspace.base_head,
+                    &name_policy::LookupPath::parse("file.txt").unwrap(),
+                )
+                .map(|_| ()),
+            // SMB directory/write handles need current admission, not a tree.
+            Self::SmbAuthorizeRead => {
+                backend.authorize_current(identity, &fixture.repo.main_branch_id)
+            }
+            // Immutable SMB file handles still authorize their pinned version.
+            Self::Version => backend
+                .version_snapshot(identity, &fixture.version)
+                .map(|_| ()),
+            Self::SmbBindingStatus => backend
+                .smb_binding_status(identity, &fixture.repo.repository_id)
+                .map(|_| ()),
+            Self::UpdateSmbBinding => backend
+                .update_smb_binding(
+                    identity,
+                    crate::UpdateSmbBinding {
+                        repository: &fixture.repo.repository_id,
+                        branch: &fixture.repo.main_branch_id,
+                        enabled: false,
+                        expected_history_generation: 1,
+                        operation: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::ProtectionPolicy => backend
+                .protection_policy(identity, "missing-policy")
+                .map(|_| ()),
+            Self::PlacementRule => backend.placement_rule(identity, "missing-rule").map(|_| ()),
+            Self::UpdateProtectionPolicy => backend
+                .update_protection_policy(
+                    identity,
+                    crate::UpdateProtectionPolicy {
                         repository_id: fixture.repo.repository_id.clone(),
-                        path: name_policy::LookupPath::parse("file.txt").unwrap(),
-                    }),
-                },
-            ).map(|_| ()),
+                        policy_id: new_id("policy"),
+                        path_prefix: String::new(),
+                        target_copies: 3,
+                        expected_generation: 0,
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::CompareCommits => backend
+                .compare_commits(
+                    identity,
+                    crate::CompareCommits {
+                        left: &fixture.workspace.base_head,
+                        right: "missing",
+                    },
+                )
+                .map(|_| ()),
+            Self::DiskStatus => backend.disk_status(identity).map(|_| ()),
+            Self::IntegrityCheck => backend.integrity_check(identity).map(|_| ()),
+            Self::FileHistory => backend.file_history(identity, "missing-file").map(|_| ()),
+            Self::TopologySnapshot => backend.topology_snapshot(identity).map(|_| ()),
+            Self::PlacementSnapshot => backend
+                .placement_snapshot(identity, &fixture.version)
+                .map(|_| ()),
+            Self::EventPage => backend.event_page(identity, u64::MAX).map(|_| ()),
+            Self::HistoryGraph => backend
+                .history_graph(identity, &fixture.repo.history_tree_id)
+                .map(|_| ()),
+            Self::CommitSnapshot => backend
+                .commit_snapshot(identity, &fixture.workspace.base_head)
+                .map(|_| ()),
+            Self::Resolve => backend
+                .resolve_entry(
+                    identity,
+                    crate::ResolveEntry {
+                        branch: &fixture.repo.main_branch_id,
+                        path: &name_policy::LookupPath::parse("file.txt").unwrap(),
+                        commit: None,
+                    },
+                )
+                .map(|_| ()),
+            Self::BranchSnapshot => backend
+                .branch_snapshot(identity, &fixture.repo.main_branch_id)
+                .map(|_| ()),
+            Self::BranchesSnapshot => backend
+                .branches_snapshot(identity, &fixture.repo.repository_id)
+                .map(|_| ()),
+            Self::RepositoriesSnapshot => backend.repositories_snapshot(identity).map(|_| ()),
+            Self::RepositorySnapshot => backend
+                .repository_snapshot(identity, &fixture.repo.repository_id)
+                .map(|_| ()),
+            Self::RepositoryAuthorization => {
+                backend.authorize_repository(identity, &fixture.repo.repository_id)
+            }
+            Self::VersionAuthorization => backend.authorize_version(identity, &fixture.version),
+            Self::Namespace => backend
+                .stage_namespace(
+                    identity,
+                    crate::StageNamespace {
+                        workspace_id: workspace.clone(),
+                        change: storage_contract::NamespaceOperation::Mkdir {
+                            path: name_policy::PortablePath::parse("forbidden").unwrap(),
+                        },
+                    },
+                )
+                .map(|_| ()),
+            Self::Content => backend.content(identity, &fixture.version).map(|_| ()),
+            Self::ContextContent => backend
+                .range_content(
+                    identity,
+                    crate::ReadContent {
+                        version: &fixture.version,
+                        context: Some(&crate::DownloadContext {
+                            repository_id: fixture.repo.repository_id.clone(),
+                            path: name_policy::LookupPath::parse("file.txt").unwrap(),
+                        }),
+                    },
+                )
+                .map(|_| ()),
             Self::RangeContent => backend
-                .range_content(identity, crate::ReadContent {version:&fixture.version,context:None})
+                .range_content(
+                    identity,
+                    crate::ReadContent {
+                        version: &fixture.version,
+                        context: None,
+                    },
+                )
                 .map(|_| ()),
             Self::WorkspaceContent => backend
                 .workspace_content(identity, workspace, &fixture.item)
@@ -699,6 +907,8 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::CommitWorkspace,
                 Request::Metadata,
                 Request::Administrator,
+                Request::DiskStatus,
+                Request::IntegrityCheck,
                 Request::Tree,
                 Request::SmbAuthorizeRead,
                 Request::CurrentLookup,
@@ -723,8 +933,13 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::Resolve,
                 Request::CommitSnapshot,
                 Request::HistoryGraph,
+                Request::FileHistory,
                 Request::EventPage,
                 Request::TopologySnapshot,
+                Request::CompareCommits,
+                Request::ProtectionPolicy,
+                Request::PlacementRule,
+                Request::UpdateProtectionPolicy,
                 Request::PlacementSnapshot,
                 Request::SmbBindingStatus,
                 Request::UpdateSmbBinding,
@@ -821,13 +1036,15 @@ fn revoked_session_cannot_turn_public_probes_into_data_admission() {
             .code,
         storage_contract::ErrorCode::Unauthorized
     );
-    for action in [BackendAction::Check, BackendAction::MonitorDisks] {
+    for result in [
+        fixture.backend.disk_status(&fixture.identity).map(|_| ()),
+        fixture
+            .backend
+            .integrity_check(&fixture.identity)
+            .map(|_| ()),
+    ] {
         assert_eq!(
-            fixture
-                .backend
-                .call(action, &fixture.identity, json!({}))
-                .unwrap_err()
-                .code,
+            result.unwrap_err().code,
             storage_contract::ErrorCode::Unauthorized
         );
     }
@@ -889,6 +1106,13 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::HistoryGraph,
         Request::EventPage,
         Request::TopologySnapshot,
+        Request::FileHistory,
+        Request::DiskStatus,
+        Request::IntegrityCheck,
+        Request::CompareCommits,
+        Request::ProtectionPolicy,
+        Request::PlacementRule,
+        Request::UpdateProtectionPolicy,
         Request::PlacementSnapshot,
         Request::SmbBindingStatus,
         Request::UpdateSmbBinding,
@@ -922,7 +1146,7 @@ fn private_disk_sampling_cannot_grant_public_monitoring_access() {
         .backend
         .observe_disks(&crate::InternalDiskObservation(()))
         .unwrap();
-    assert_eq!(observed["disks"].as_array().unwrap().len(), 3);
+    assert_eq!(observed.len(), 3);
     assert!(fixture.snapshot() == before);
 
     let synthetic = Identity {
@@ -931,18 +1155,14 @@ fn private_disk_sampling_cannot_grant_public_monitoring_access() {
         principal: "zxs-system-telemetry".into(),
     };
     assert_eq!(
-        fixture
-            .backend
-            .call(BackendAction::MonitorDisks, &synthetic, json!({}))
-            .unwrap_err()
-            .code,
+        fixture.backend.disk_status(&synthetic).unwrap_err().code,
         storage_contract::ErrorCode::Unauthorized
     );
     fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
     assert_eq!(
         fixture
             .backend
-            .call(BackendAction::MonitorDisks, &fixture.identity, json!({}))
+            .disk_status(&fixture.identity)
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized

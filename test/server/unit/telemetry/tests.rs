@@ -1,4 +1,5 @@
 use super::*;
+use json_codec::{Value, json};
 
 #[test]
 fn unavailable_and_invalid_samples_are_not_fabricated_zero_usage() {
@@ -7,10 +8,8 @@ fn unavailable_and_invalid_samples_are_not_fabricated_zero_usage() {
     assert_eq!(normalized_cpu_usage(150.0), Some(100.0));
     assert!(memory_status(0, 0).total_bytes.is_none());
     assert_eq!(
-        memory_status(u64::MAX, u64::MAX - 123)
-            .used_bytes
-            .as_deref(),
-        Some("123")
+        memory_status(u64::MAX, u64::MAX - 123).used_bytes,
+        Some(123)
     );
 }
 
@@ -180,6 +179,60 @@ impl Backend for MonitorBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn protection_policy(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::ProtectionPolicy, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn placement_rule(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::PlacementRule, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn update_protection_policy(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdateProtectionPolicy,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn update_placement_rule(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdatePlacementRule,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn compare_commits(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CompareCommits<'_>,
+    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn disk_status(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn integrity_check(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::CheckReport, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn file_history(
+        &self,
+        _identity: &crate::auth::Identity,
+        _file: &str,
+    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn topology_snapshot(
         &self,
         _identity: &crate::auth::Identity,
@@ -298,8 +351,11 @@ impl Backend for MonitorBackend {
     ) -> Result<Value, ApiError> {
         panic!("private monitoring must not forge a user identity")
     }
-    fn observe_disks(&self, _: &crate::InternalDiskObservation) -> Result<Value, ApiError> {
-        Ok(json!({"disks":[]}))
+    fn observe_disks(
+        &self,
+        _: &crate::InternalDiskObservation,
+    ) -> Result<Vec<crate::DiskSample>, ApiError> {
+        Ok(vec![])
     }
     fn upload(
         &self,
@@ -594,4 +650,45 @@ async fn rejected_symlink_cache_preserves_target_and_management_across_restarts(
 #[test]
 fn history_range_rejects_enum_objects() {
     assert!(json_codec::from_value::<HistoryRange>(json!({"1min": null})).is_err());
+}
+
+#[test]
+fn typed_monitor_sample_and_history_envelope_keep_exact_wire() {
+    let disk = DiskStatus::from(crate::DiskSample {
+        slot_id: "P01".into(),
+        online: true,
+        read_only: false,
+        simulation: true,
+        total_bytes: Some(u64::MAX),
+        available_bytes: None,
+        used_bytes: Some(7),
+        usage_percent: Some(30.0),
+        power_watts: None,
+        power_unavailable_reason: Some(crate::PowerUnavailable::SimulatedDisk),
+    });
+    let expected = json!({"id":"P01","name":"P01","online":true,"read_only":false,"simulation":true,"total_bytes":"18446744073709551615","available_bytes":null,"used_bytes":"7","usage_percent":30.0,"power_watts":null,"power_unavailable_reason":"simulated_disk"});
+    assert_eq!(json_codec::to_value(&disk).unwrap(), expected);
+    assert_eq!(
+        json_codec::to_vec(&disk).unwrap(),
+        br#"{"id":"P01","name":"P01","online":true,"read_only":false,"simulation":true,"total_bytes":"18446744073709551615","available_bytes":null,"used_bytes":"7","usage_percent":30.0,"power_watts":null,"power_unavailable_reason":"simulated_disk"}"#
+    );
+    let restored: DiskStatus = json_codec::from_value(expected).unwrap();
+    assert_eq!(restored.total_bytes, Some(u64::MAX));
+    assert_eq!(restored.available_bytes, None);
+    let memory = memory_status(u64::MAX, u64::MAX - 123);
+    assert_eq!(
+        json_codec::to_value(memory).unwrap(),
+        json!({"total_bytes":"18446744073709551615","used_bytes":"123","available_bytes":"18446744073709551492"})
+    );
+    let response = HistoryResponse {
+        range: HistoryRange::Hour,
+        interval_seconds: 10,
+        from: "from".into(),
+        to: "to".into(),
+        samples: vec![],
+    };
+    assert_eq!(
+        storage_contract::canonical_json(&response).unwrap(),
+        br#"{"from":"from","interval_seconds":10,"range":"1h","samples":[],"to":"to"}"#
+    );
 }

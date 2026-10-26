@@ -196,7 +196,7 @@ impl Engine {
 /// The lease is acquired before releasing that lock, so purge cannot remove the
 /// selected version while publication evidence and payload handles are opened.
 pub struct ContentReadPlan {
-    config: Arc<ValidatedConfig>,
+    config: ValidatedConfig,
     disks: Vec<DiskConfig>,
     version: FileVersion,
     lease: ReadLease,
@@ -214,14 +214,6 @@ pub struct RangeContent {
 impl Engine {
     /// Does no filesystem access and reads no payload bytes.
     pub fn prepare_content(&self, version_id: &str) -> Result<ContentReadPlan> {
-        self.prepare_content_with_config(version_id, Arc::new(self.config.clone()))
-    }
-
-    pub(super) fn prepare_content_with_config(
-        &self,
-        version_id: &str,
-        config: Arc<ValidatedConfig>,
-    ) -> Result<ContentReadPlan> {
         if self
             .state
             .content_states
@@ -262,7 +254,7 @@ impl Engine {
             .entry(version_id.into())
             .or_default() += 1;
         Ok(ContentReadPlan {
-            config,
+            config: self.config.clone(),
             disks,
             version,
             lease: ReadLease {

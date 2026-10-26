@@ -30,6 +30,14 @@ mod backend_smb_binding;
 pub use backend_smb_binding::{SmbBindingStatus, UpdateSmbBinding};
 mod http_smb_binding;
 use http_smb_binding::{smb_binding, update_smb_binding};
+mod backend_comparison;
+pub use backend_comparison::CompareCommits;
+mod http_comparison;
+use http_comparison::compare;
+mod backend_protection;
+pub use backend_protection::{UpdatePlacementRule, UpdateProtectionPolicy};
+mod http_protection;
+use http_protection::{placement_rule, policy, update_placement_rule, update_policy};
 mod backend_storage_metadata;
 pub use backend_storage_metadata::{TopologySlot, TopologySnapshot};
 mod backend_events;
@@ -38,6 +46,9 @@ mod backend_graph;
 pub use backend_graph::HistoryGraphSnapshot;
 mod backend_branch;
 pub use backend_branch::{BranchSnapshot, ContentDispositionSnapshot, FileBranchSnapshot};
+mod backend_diagnostics;
+mod backend_monitoring;
+pub use backend_monitoring::{DiskSample, PowerUnavailable};
 mod backend_read;
 mod backend_status;
 pub use backend_status::{Capabilities, EngineReadiness, Readiness, StorageState, StorageStatus};
@@ -317,6 +328,44 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         request: UpdateSmbBinding<'_>,
     ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn protection_policy(
+        &self,
+        identity: &Identity,
+        id: &str,
+    ) -> Result<storage_contract::ProtectionPolicy, ApiError>;
+    fn placement_rule(
+        &self,
+        identity: &Identity,
+        id: &str,
+    ) -> Result<storage_contract::PlacementRule, ApiError>;
+    fn update_protection_policy(
+        &self,
+        identity: &Identity,
+        request: UpdateProtectionPolicy,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn update_placement_rule(
+        &self,
+        identity: &Identity,
+        request: UpdatePlacementRule,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn compare_commits(
+        &self,
+        identity: &Identity,
+        request: CompareCommits<'_>,
+    ) -> Result<storage_contract::CommitComparison, ApiError>;
+    fn disk_status(
+        &self,
+        identity: &Identity,
+    ) -> Result<Vec<storage_contract::DiskStatus>, ApiError>;
+    fn integrity_check(
+        &self,
+        identity: &Identity,
+    ) -> Result<storage_contract::CheckReport, ApiError>;
+    fn file_history(
+        &self,
+        identity: &Identity,
+        file: &str,
+    ) -> Result<Vec<storage_contract::FileVersion>, ApiError>;
     fn topology_snapshot(&self, identity: &Identity) -> Result<TopologySnapshot, ApiError>;
     fn placement_snapshot(
         &self,
@@ -460,7 +509,10 @@ pub trait Backend: Send + Sync {
     }
     /// Internal monitoring only. Protocol requests must use authenticated
     /// actions instead; support is opt-in and never derived from an identity.
-    fn observe_disks(&self, _: &InternalDiskObservation) -> Result<Value, ApiError> {
+    fn observe_disks(
+        &self,
+        _: &InternalDiskObservation,
+    ) -> Result<Vec<crate::DiskSample>, ApiError> {
         Err(ApiError::unsupported())
     }
 }
@@ -607,6 +659,63 @@ impl Backend for AuthorizedBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.backend
             .update_smb_binding(&self.current(identity)?, request)
+    }
+    fn protection_policy(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::ProtectionPolicy, crate::ApiError> {
+        self.backend.protection_policy(&self.current(identity)?, id)
+    }
+    fn placement_rule(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::PlacementRule, crate::ApiError> {
+        self.backend.placement_rule(&self.current(identity)?, id)
+    }
+    fn update_protection_policy(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateProtectionPolicy,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .update_protection_policy(&self.current(identity)?, request)
+    }
+    fn update_placement_rule(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdatePlacementRule,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .update_placement_rule(&self.current(identity)?, request)
+    }
+    fn compare_commits(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CompareCommits<'_>,
+    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        self.backend
+            .compare_commits(&self.current(identity)?, request)
+    }
+    fn disk_status(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
+        self.backend.disk_status(&self.current(identity)?)
+    }
+    fn integrity_check(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::CheckReport, crate::ApiError> {
+        self.backend.integrity_check(&self.current(identity)?)
+    }
+    fn file_history(
+        &self,
+        identity: &crate::auth::Identity,
+        file: &str,
+    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
+        self.backend.file_history(&self.current(identity)?, file)
     }
     fn topology_snapshot(
         &self,
@@ -1417,17 +1526,6 @@ fn with_id(mut body: Value, key: &str, id: String) -> Result<Value, ApiError> {
     Ok(body)
 }
 
-macro_rules! list_handler {
-    ($name:ident, $action:expr) => {
-        async fn $name(
-            State(state): State<AppState>,
-            http_routing::Extension(identity): http_routing::Extension<Identity>,
-            ApiQuery(query): ApiQuery<BTreeMap<String, String>>,
-        ) -> Result<Json<Value>, ApiError> {
-            call(state, identity, $action, json!({"query": query})).await
-        }
-    };
-}
 macro_rules! read_handler {
     ($name:ident, $action:expr, $key:literal) => {
         async fn $name(
@@ -1497,7 +1595,27 @@ async fn repositories(
     .map_err(ApiError::join)?
     .map(Json)
 }
-list_handler!(disks, crate::BackendAction::Disks);
+async fn disks(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<backend_diagnostics::DisksResponse>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state
+            .backend
+            .disk_status(&identity)
+            .map(backend_diagnostics::DisksResponse::from)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
 async fn events(
     State(state): State<AppState>,
     http_routing::Extension(identity): http_routing::Extension<Identity>,
@@ -1523,7 +1641,27 @@ async fn events(
     .map_err(ApiError::join)?
     .map(Json)
 }
-list_handler!(check, crate::BackendAction::Check);
+async fn check(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<backend_diagnostics::CheckResponse>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state
+            .backend
+            .integrity_check(&identity)
+            .map(backend_diagnostics::CheckResponse::from)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
 async fn repository(
     State(state): State<AppState>,
     http_routing::Extension(identity): http_routing::Extension<Identity>,
@@ -1672,7 +1810,28 @@ async fn placement(
     .map_err(ApiError::join)?
     .map(Json)
 }
-read_handler!(history, crate::BackendAction::History, "file_id");
+async fn history(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiPath(file): ApiPath<String>,
+    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<backend_read::FileHistoryResponse>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state
+            .backend
+            .file_history(&identity, &file)
+            .map(|versions| backend_read::FileHistoryResponse::new(file, versions))
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
 async fn commit_info(
     State(state): State<AppState>,
     http_routing::Extension(identity): http_routing::Extension<Identity>,
@@ -1740,12 +1899,7 @@ async fn topology(
 }
 
 read_handler!(plan_info, crate::BackendAction::Plan, "plan_id");
-read_handler!(policy, crate::BackendAction::Policy, "policy_id");
-read_handler!(
-    placement_rule,
-    crate::BackendAction::PlacementRule,
-    "rule_id"
-);
+
 read_handler!(
     directory_branch_scopes,
     crate::BackendAction::DirectoryBranchScopes,
@@ -1758,7 +1912,7 @@ id_post_handler!(
 );
 post_handler!(create_repository, crate::BackendAction::CreateRepository);
 post_handler!(register_disk, crate::BackendAction::RegisterDisk);
-post_handler!(compare, crate::BackendAction::Compare);
+
 id_post_handler!(
     create_branch,
     crate::BackendAction::CreateBranch,
@@ -1813,16 +1967,7 @@ id_post_handler!(
     crate::BackendAction::HistoricalSavePlan,
     "history_tree_id"
 );
-id_post_handler!(
-    update_policy,
-    crate::BackendAction::UpdatePolicy,
-    "policy_id"
-);
-id_post_handler!(
-    update_placement_rule,
-    crate::BackendAction::UpdatePlacementRule,
-    "rule_id"
-);
+
 id_post_handler!(plan_commit, crate::BackendAction::PlanCommit, "plan_id");
 id_post_handler!(plan_cancel, crate::BackendAction::PlanCancel, "plan_id");
 

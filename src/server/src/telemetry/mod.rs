@@ -7,7 +7,6 @@ use crate::{ApiError, AppState, Backend, auth::Identity, http_boundary::ApiQuery
 use data_serialization::{Deserialize, Serialize};
 use history::{HistoryStore, Sample};
 use http_routing::{Extension, Json, extract::State};
-use json_codec::{Value, json};
 use power::CpuPowerSampler;
 use std::{
     path::Path,
@@ -25,14 +24,17 @@ pub(super) struct CpuStatus {
     usage_percent: Option<f32>,
     logical_count: usize,
     power_watts: Option<f64>,
-    power_unavailable_reason: Option<power::PowerUnavailable>,
+    power_unavailable_reason: Option<crate::PowerUnavailable>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct MemoryStatus {
-    total_bytes: Option<String>,
-    used_bytes: Option<String>,
-    available_bytes: Option<String>,
+    #[serialization(with = "storage_contract::optional_u64_string")]
+    total_bytes: Option<u64>,
+    #[serialization(with = "storage_contract::optional_u64_string")]
+    used_bytes: Option<u64>,
+    #[serialization(with = "storage_contract::optional_u64_string")]
+    available_bytes: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -42,15 +44,48 @@ pub(super) struct DiskStatus {
     online: bool,
     read_only: bool,
     simulation: bool,
-    total_bytes: Option<String>,
-    available_bytes: Option<String>,
-    used_bytes: Option<String>,
+    #[serialization(with = "storage_contract::optional_u64_string")]
+    total_bytes: Option<u64>,
+    #[serialization(with = "storage_contract::optional_u64_string")]
+    available_bytes: Option<u64>,
+    #[serialization(with = "storage_contract::optional_u64_string")]
+    used_bytes: Option<u64>,
     #[serialization(default)]
     usage_percent: Option<f64>,
     #[serialization(default)]
     power_watts: Option<f64>,
     #[serialization(default)]
-    power_unavailable_reason: Option<power::PowerUnavailable>,
+    power_unavailable_reason: Option<crate::PowerUnavailable>,
+}
+
+impl From<crate::DiskSample> for DiskStatus {
+    fn from(sample: crate::DiskSample) -> Self {
+        let crate::DiskSample {
+            slot_id,
+            online,
+            read_only,
+            simulation,
+            total_bytes,
+            available_bytes,
+            used_bytes,
+            usage_percent,
+            power_watts,
+            power_unavailable_reason,
+        } = sample;
+        Self {
+            id: slot_id.clone(),
+            name: slot_id,
+            online,
+            read_only,
+            simulation,
+            total_bytes,
+            available_bytes,
+            used_bytes,
+            usage_percent,
+            power_watts,
+            power_unavailable_reason,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -121,9 +156,9 @@ fn normalized_cpu_usage(value: f32) -> Option<f32> {
 fn memory_status(total: u64, available: u64) -> MemoryStatus {
     let available = available.min(total);
     MemoryStatus {
-        total_bytes: (total > 0).then(|| total.to_string()),
-        used_bytes: (total > 0).then(|| total.saturating_sub(available).to_string()),
-        available_bytes: (total > 0).then(|| available.to_string()),
+        total_bytes: (total > 0).then_some(total),
+        used_bytes: (total > 0).then_some(total - available),
+        available_bytes: (total > 0).then_some(available),
     }
 }
 
@@ -186,11 +221,7 @@ impl Telemetry {
         let disks = self
             .backend
             .observe_disks(&crate::InternalDiskObservation(()))
-            .and_then(|value| {
-                json_codec::from_value::<Vec<DiskStatus>>(value["disks"].clone()).map_err(
-                    |source| unavailable("disk sampling is unavailable").with_source(source),
-                )
-            });
+            .map(|disks| disks.into_iter().map(DiskStatus::from).collect());
         let (disks, disk_sampling_unavailable) = match disks {
             Ok(disks) => (disks, false),
             Err(error) => {
@@ -274,15 +305,12 @@ async fn telemetry_job<T: Send + 'static>(
 pub(crate) async fn status(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<Snapshot>, ApiError> {
     telemetry_job(state.telemetry.request_slots.clone(), move || {
         require_current_session(&state.auth, &identity)?;
         state.telemetry.current().and_then(|status| {
             require_current_session(&state.auth, &identity)?;
-            Ok(Json(
-                json_codec::to_value(status)
-                    .expect("invariant: host snapshot serialization succeeds"),
-            ))
+            Ok(Json(status))
         })
     })
     .await
@@ -337,20 +365,41 @@ pub(crate) struct HistoryQuery {
     range: HistoryRange,
 }
 
+#[derive(Serialize)]
+pub(crate) struct HistoryResponse {
+    range: HistoryRange,
+    interval_seconds: i64,
+    from: String,
+    to: String,
+    samples: Vec<Snapshot>,
+}
+
 pub(crate) async fn history(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
     ApiQuery(query): ApiQuery<HistoryQuery>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<HistoryResponse>, ApiError> {
     telemetry_job(state.telemetry.request_slots.clone(), move || {
         require_current_session(&state.auth, &identity)?;
         let (seconds, interval) = query.range.parameters();
         let to = date_time::OffsetDateTime::now_utc().unix_timestamp();
         let from = to - seconds;
-        let samples = state.telemetry.history.lock().expect("service state lock poisoned").samples(from, to, interval);
+        let samples = state
+            .telemetry
+            .history
+            .lock()
+            .expect("service state lock poisoned")
+            .samples(from, to, interval);
         require_current_session(&state.auth, &identity)?;
-        Ok(Json(json!({"range": query.range, "interval_seconds": interval, "from": timestamp(from)?, "to": timestamp(to)?, "samples": samples})))
-    }).await
+        Ok(Json(HistoryResponse {
+            range: query.range,
+            interval_seconds: interval,
+            from: timestamp(from)?,
+            to: timestamp(to)?,
+            samples,
+        }))
+    })
+    .await
 }
 
 fn require_current_session(

@@ -167,6 +167,60 @@ impl Backend for TestBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn protection_policy(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::ProtectionPolicy, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn placement_rule(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::PlacementRule, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn update_protection_policy(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdateProtectionPolicy,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn update_placement_rule(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdatePlacementRule,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn compare_commits(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CompareCommits<'_>,
+    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn disk_status(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn integrity_check(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::CheckReport, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn file_history(
+        &self,
+        _identity: &crate::auth::Identity,
+        _file: &str,
+    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn topology_snapshot(
         &self,
         _identity: &crate::auth::Identity,
@@ -286,7 +340,7 @@ impl Backend for TestBackend {
         match action {
             crate::BackendAction::CreateRepository => Ok(json!({"accepted":true})),
             BackendAction::DirectoryBranchScopes | BackendAction::DirectoryBranchSelection => {
-                Ok(json!({"action":action.as_str()}))
+                Ok(json!({"action":format!("{action:?}")}))
             }
             _ => Err(ApiError::unsupported()),
         }
@@ -1082,6 +1136,60 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         ) -> Result<storage_contract::OperationResult, crate::ApiError> {
             self.delegate.update_smb_binding(identity, request)
         }
+        fn protection_policy(
+            &self,
+            identity: &crate::auth::Identity,
+            id: &str,
+        ) -> Result<storage_contract::ProtectionPolicy, crate::ApiError> {
+            self.delegate.protection_policy(identity, id)
+        }
+        fn placement_rule(
+            &self,
+            identity: &crate::auth::Identity,
+            id: &str,
+        ) -> Result<storage_contract::PlacementRule, crate::ApiError> {
+            self.delegate.placement_rule(identity, id)
+        }
+        fn update_protection_policy(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::UpdateProtectionPolicy,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.update_protection_policy(identity, request)
+        }
+        fn update_placement_rule(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::UpdatePlacementRule,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.update_placement_rule(identity, request)
+        }
+        fn compare_commits(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::CompareCommits<'_>,
+        ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+            self.delegate.compare_commits(identity, request)
+        }
+        fn disk_status(
+            &self,
+            identity: &crate::auth::Identity,
+        ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
+            self.delegate.disk_status(identity)
+        }
+        fn integrity_check(
+            &self,
+            identity: &crate::auth::Identity,
+        ) -> Result<storage_contract::CheckReport, crate::ApiError> {
+            self.delegate.integrity_check(identity)
+        }
+        fn file_history(
+            &self,
+            identity: &crate::auth::Identity,
+            file: &str,
+        ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
+            self.delegate.file_history(identity, file)
+        }
         fn topology_snapshot(
             &self,
             identity: &crate::auth::Identity,
@@ -1432,7 +1540,9 @@ async fn directory_scope_routes_select_distinct_actions_and_preserve_csrf() {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(body["action"], expected.as_str());
+        // The fake reports Debug only to prove typed route dispatch; this is
+        // not a production wire action name or response contract.
+        assert_eq!(body["action"], format!("{expected:?}"));
     }
     let response = app
         .oneshot(

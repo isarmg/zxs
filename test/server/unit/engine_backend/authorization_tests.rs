@@ -61,6 +61,15 @@ fn missing_credentials_do_not_admit_even_a_named_administrator() {
             storage_contract::ErrorCode::Unauthorized
         );
     }
+    for result in [
+        backend.disk_status(&caller).map(|_| ()),
+        backend.integrity_check(&caller).map(|_| ()),
+    ] {
+        assert_eq!(
+            result.unwrap_err().code,
+            storage_contract::ErrorCode::Unauthorized
+        );
+    }
     assert!(backend.capabilities().is_ok());
     assert!(backend.ready().is_ok());
 }

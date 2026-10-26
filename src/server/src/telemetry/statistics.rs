@@ -17,24 +17,15 @@ impl Statistics {
         let mut result = Self::default();
         result.float("cpu/usage", status.cpu.usage_percent.map(f64::from));
         result.float("cpu/power", status.cpu.power_watts);
-        result.byte("memory/total", status.memory.total_bytes.as_deref());
-        result.byte("memory/used", status.memory.used_bytes.as_deref());
-        result.byte("memory/available", status.memory.available_bytes.as_deref());
+        result.byte("memory/total", status.memory.total_bytes);
+        result.byte("memory/used", status.memory.used_bytes);
+        result.byte("memory/available", status.memory.available_bytes);
         for disk in &status.disks {
             result.float(&format!("disk/{}/usage", disk.id), disk.usage_percent);
             result.float(&format!("disk/{}/power", disk.id), disk.power_watts);
-            result.byte(
-                &format!("disk/{}/total", disk.id),
-                disk.total_bytes.as_deref(),
-            );
-            result.byte(
-                &format!("disk/{}/used", disk.id),
-                disk.used_bytes.as_deref(),
-            );
-            result.byte(
-                &format!("disk/{}/available", disk.id),
-                disk.available_bytes.as_deref(),
-            );
+            result.byte(&format!("disk/{}/total", disk.id), disk.total_bytes);
+            result.byte(&format!("disk/{}/used", disk.id), disk.used_bytes);
+            result.byte(&format!("disk/{}/available", disk.id), disk.available_bytes);
         }
         result
     }
@@ -43,12 +34,10 @@ impl Statistics {
         self.floating
             .insert(key.into(), value.map_or((0.0, 0), |value| (value, 1)));
     }
-    fn byte(&mut self, key: &str, value: Option<&str>) {
+    fn byte(&mut self, key: &str, value: Option<u64>) {
         self.bytes.insert(
             key.into(),
-            value
-                .and_then(|value| value.parse::<u64>().ok())
-                .map_or((0, 0), |value| (u128::from(value), 1)),
+            value.map_or((0, 0), |value| (u128::from(value), 1)),
         );
     }
     pub(super) fn merge(&mut self, source: &Self) {
@@ -67,9 +56,12 @@ impl Statistics {
         let (sum, count) = self.floating.get(key)?;
         (*count > 0).then(|| *sum / f64::from(*count))
     }
-    fn byte_mean(&self, key: &str) -> Option<String> {
+    fn byte_mean(&self, key: &str) -> Option<u64> {
         let (sum, count) = self.bytes.get(key)?;
-        (*count > 0).then(|| (*sum / u128::from(*count)).to_string())
+        (*count > 0).then(|| {
+            u64::try_from(*sum / u128::from(*count))
+                .expect("invariant: admitted byte statistics have a u64 average")
+        })
     }
     pub(super) fn apply(&self, status: &mut Snapshot) {
         status.cpu.usage_percent = self.floating_mean("cpu/usage").map(|value| value as f32);

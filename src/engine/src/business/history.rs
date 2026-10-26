@@ -412,45 +412,20 @@ impl Engine {
         )
     }
 
-    pub fn compare_commits(&self, left: &str, right: &str) -> Result<json_codec::Value> {
-        let a = self.state.commits.get(left).ok_or_else(|| {
+    pub fn compare_commits(&self, left: &str, right: &str) -> Result<CommitComparison> {
+        let left = self.state.commits.get_shared(left).ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::CommitNotFound,
                 "left commit missing",
             )
         })?;
-        let b = self.state.commits.get(right).ok_or_else(|| {
+        let right = self.state.commits.get_shared(right).ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::CommitNotFound,
                 "right commit missing",
             )
         })?;
-        fn index(entries: &[Entry]) -> std::collections::BTreeMap<&str, &Entry> {
-            entries
-                .iter()
-                .map(|entry| (entry.lookup_key(), entry))
-                .collect()
-        }
-        let left_entries = index(&a.entries);
-        let right_entries = index(&b.entries);
-        let mut changes = Vec::new();
-        for e in &a.entries {
-            match right_entries.get(e.lookup_key()) {
-                None => changes.push(json!({"path":e.path(),"change":"removed","before":e})),
-                Some(other) if e.version_id != other.version_id || e.path() != other.path() => {
-                    changes.push(
-                        json!({"path":other.path(),"change":"modified","before":e,"after":other}),
-                    )
-                }
-                _ => {}
-            }
-        }
-        for e in &b.entries {
-            if !left_entries.contains_key(e.lookup_key()) {
-                changes.push(json!({"path":e.path(),"change":"added","after":e}));
-            }
-        }
-        Ok(json!({"left":left,"right":right,"changes":changes}))
+        Ok(CommitComparison::between(left, right))
     }
 }
 

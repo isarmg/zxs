@@ -277,7 +277,6 @@ fn read_requests(
             FileManagerEntries,
             json!({"slot_id":"P01","path":repo.name}),
         ),
-        (History, json!({"file_id":entry.file_id})),
         (FileManagerHistory, json!({})),
         (FileManagerFileHistory, json!({"file_id":entry.file_id})),
         (
@@ -296,6 +295,7 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
             backend.call(action, &caller(), input).unwrap();
         }
         backend.repositories_snapshot(&caller()).unwrap();
+        backend.file_history(&caller(), &entry.file_id).unwrap();
         backend
             .tree_snapshot(
                 &caller(),
@@ -333,6 +333,13 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
     publish(&mut backend.engine.lock().unwrap(), revoked);
     assert_eq!(
         backend.repositories_snapshot(&caller()).unwrap_err().status,
+        401
+    );
+    assert_eq!(
+        backend
+            .file_history(&caller(), &entry.file_id)
+            .unwrap_err()
+            .status,
         401
     );
     for (action, input) in read_requests(&repo, &entry) {
@@ -432,6 +439,13 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
     replaced["administrator"]["username"] = json!("replacement");
     publish(&mut backend.engine.lock().unwrap(), replaced);
     for _ in 0..3 {
+        assert_eq!(
+            backend
+                .file_history(&caller(), &entry.file_id)
+                .unwrap_err()
+                .code,
+            storage_contract::ErrorCode::Unauthorized
+        );
         for (action, input) in read_requests(&repo, &entry) {
             assert_eq!(
                 backend.call(action, &caller(), input).unwrap_err().code,

@@ -268,12 +268,8 @@ fn validated_config_shares_large_topology_and_rebinds_roots_without_changing_sna
     }
     let config = ValidatedConfig::try_from(draft).unwrap();
     let snapshot = config.clone();
-    assert!(Arc::ptr_eq(&config.config, &snapshot.config));
-    assert!(Arc::ptr_eq(
-        &config.metadata_members,
-        &snapshot.metadata_members
-    ));
-    assert_eq!(&*snapshot.metadata_members, &[0]);
+    assert!(Arc::ptr_eq(&config.admitted, &snapshot.admitted));
+    assert_eq!(&*snapshot.admitted.metadata_members, &[0]);
     let rebound = config
         .with_disk_roots(
             (0..96)
@@ -281,11 +277,11 @@ fn validated_config_shares_large_topology_and_rebinds_roots_without_changing_sna
                 .collect(),
         )
         .unwrap();
-    assert!(!Arc::ptr_eq(&rebound.config, &snapshot.config));
-    assert!(Arc::ptr_eq(
-        &rebound.metadata_members,
-        &snapshot.metadata_members
-    ));
+    assert!(!Arc::ptr_eq(&rebound.admitted, &snapshot.admitted));
+    assert_eq!(
+        rebound.admitted.metadata_members,
+        snapshot.admitted.metadata_members
+    );
     assert_eq!(
         snapshot.metadata_members().next().unwrap().root,
         Path::new("/draft/disk-0")
@@ -296,6 +292,45 @@ fn validated_config_shares_large_topology_and_rebinds_roots_without_changing_sna
     );
     let encoded = json_codec::to_vec(&snapshot).unwrap();
     let decoded: ValidatedConfig = json_codec::from_slice(&encoded).unwrap();
-    assert_eq!(&*decoded.metadata_members, &[0]);
+    assert_eq!(&*decoded.admitted.metadata_members, &[0]);
     assert_eq!(encoded, json_codec::to_vec(&*snapshot).unwrap());
+}
+
+#[test]
+fn restart_limit_rebinding_keeps_the_previous_admitted_snapshot() {
+    let original = ValidatedConfig::try_from(Config::development(["/draft/p".into()])).unwrap();
+    let baseline = original.effective_workspace_limits();
+    let mut raised = baseline;
+    raised.max_retained_workspaces += 1;
+    let override_config = original
+        .clone()
+        .with_workspace_limits(Some(raised))
+        .unwrap();
+    assert!(!Arc::ptr_eq(&original.admitted, &override_config.admitted));
+    assert_eq!(original.effective_workspace_limits(), baseline);
+    assert_eq!(override_config.effective_workspace_limits(), raised);
+    let restored = override_config.clone().with_workspace_limits(None).unwrap();
+    assert_eq!(restored.effective_workspace_limits(), baseline);
+    assert_eq!(override_config.effective_workspace_limits(), raised);
+    assert_eq!(
+        json_codec::to_vec(&original).unwrap(),
+        json_codec::to_vec(&override_config).unwrap()
+    );
+}
+
+#[test]
+fn admitted_config_serialization_matches_fixed_raw_config_bytes() {
+    let wire = concat!(
+        r#"{"pool_id":"pool_00000000000000000000000000000001","mode":"development","disks":["#,
+        r#"{"slot_id":"P01","disk_id":"disk_00000000000000000000000000000002","root":"/fixed/member","level":1,"upstream_slot_id":null,"metadata_member":true,"binding_generation":"1","capacity_bytes":null}],"#,
+        r#""checksum_chunk_bytes":262144,"max_file_bytes":"1024","max_workspace_bytes":"2048","max_workspaces":3,"#,
+        r#""max_retained_workspaces":4,"max_retained_workspaces_per_principal":2,"max_retained_workspace_metadata_bytes":"4096","max_retained_workspace_metadata_bytes_per_principal":"2048","#,
+        r#""max_entries":5,"metadata_reserve_bytes":"512","workspace_ttl_seconds":"60"}"#,
+    );
+    let raw: Config = decode_strict(wire.as_bytes()).unwrap();
+    assert_eq!(json_codec::to_vec(&raw).unwrap(), wire.as_bytes());
+    let admitted = ValidatedConfig::try_from(raw).unwrap();
+    assert_eq!(json_codec::to_vec(&admitted).unwrap(), wire.as_bytes());
+    let decoded: ValidatedConfig = decode_strict(wire.as_bytes()).unwrap();
+    assert_eq!(json_codec::to_vec(&decoded).unwrap(), wire.as_bytes());
 }

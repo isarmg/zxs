@@ -471,3 +471,54 @@ fn prepare_rejects_source_growth_after_planning_without_installing_payload() {
         assert!(!directory.exists());
     }
 }
+
+#[test]
+fn content_plan_keeps_admitted_roots_and_limits_after_rebinding_and_engine_drop() {
+    let (temp, mut engine, version) = commit_fixture();
+    let baseline = engine.effective_workspace_limits();
+    let plan = engine.prepare_content(&version.version_id).unwrap();
+    assert!(std::ptr::eq(&*plan.config, &*engine.config));
+    let original_root = plan.config.disks[0].root.clone();
+    let mut raised = baseline;
+    raised.max_retained_workspaces += 1;
+    engine.config = engine
+        .config
+        .clone()
+        .with_disk_roots(
+            (0..3)
+                .map(|i| temp.path().join(format!("unused-{i}")))
+                .collect(),
+        )
+        .unwrap()
+        .with_workspace_limits(Some(raised))
+        .unwrap();
+    assert_eq!(engine.effective_workspace_limits(), raised);
+    drop(engine);
+    assert_eq!(plan.config.disks[0].root, original_root);
+    assert_eq!(plan.config.effective_workspace_limits(), baseline);
+    let mut bytes = Vec::new();
+    plan.open().unwrap().file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"original");
+}
+
+#[test]
+fn detached_content_plan_checks_current_member_identity_and_preserves_cause() {
+    let (temp, engine, version) = commit_fixture();
+    let plan = engine.prepare_content(&version.version_id).unwrap();
+    let roots: Vec<_> = engine
+        .config
+        .disks
+        .iter()
+        .map(|disk| disk.root.clone())
+        .collect();
+    drop(engine);
+    for (index, root) in roots.iter().enumerate() {
+        let removed = temp.path().join(format!("removed-{index}"));
+        fs::rename(root, &removed).unwrap();
+        fs::create_dir(root).unwrap();
+        fs::copy(removed.join("disk.json"), root.join("disk.json")).unwrap();
+    }
+    let error = plan.open().err().unwrap();
+    assert_eq!(error.code(), ErrorCode::ContentUnavailable);
+    assert!(std::error::Error::source(&error).is_some());
+}

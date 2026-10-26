@@ -1064,3 +1064,12 @@ mod smb_binding_tests;
 
 #[path = "storage_metadata_tests.rs"]
 mod storage_metadata_tests;
+
+#[path = "comparison_tests.rs"]
+mod comparison_tests;
+
+#[path = "history_tests.rs"]
+mod history_tests;
+
+#[path = "diagnostics_tests.rs"]
+mod diagnostics_tests;

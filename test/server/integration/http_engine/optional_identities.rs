@@ -1158,3 +1158,393 @@ async fn typed_storage_metadata_http_has_one_topology_and_frozen_placement() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(error["error"]["message"], "version not found");
 }
+
+#[tokio::test]
+async fn typed_protection_http_keeps_replay_wire_and_static_boundary_errors() {
+    let (_root, app, _, _, _) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let repositories = success(&app, &token, "GET", "/api/repositories", None).await;
+    let repository = repositories["repositories"][0]["repository_id"]
+        .as_str()
+        .unwrap();
+    for is_policy in [true, false] {
+        let (prefix, kind, id_key) = if is_policy {
+            ("/api/policies", "policy", "policy_id")
+        } else {
+            ("/api/primary-placement-rules", "rule", "rule_id")
+        };
+        let id = new_id(kind);
+        let path = format!("{prefix}/{id}");
+        let mut body = json!({"repository_id":repository,"path_prefix":"Folder","expected_generation":"0","operation_id":new_id("op")});
+        body[if is_policy {
+            "target_copies"
+        } else {
+            "primary_slot_id"
+        }] = if is_policy { json!(1) } else { json!("P01") };
+        let published = success(&app, &token, "PUT", &path, Some(body.clone())).await;
+        let record = &published["result"][kind];
+        assert_eq!(record["generation"], "1");
+        assert_eq!(
+            success(
+                &app,
+                &token,
+                "GET",
+                &format!("{path}?{id_key}=missing"),
+                None
+            )
+            .await,
+            *record
+        );
+        let replay = success(&app, &token, "PUT", &path, Some(body.clone())).await;
+        for key in [
+            "operation_id",
+            "operation_kind",
+            "request_digest",
+            "publication_sequence",
+            "result",
+        ] {
+            assert_eq!(published[key], replay[key], "{key}");
+        }
+        let mut changed = body.clone();
+        changed["path_prefix"] = json!("Other");
+        let (status, error) = send(&app, Some(&token), "PUT", &path, Some(changed)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(error["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
+        let mut invalid_path = body.clone();
+        invalid_path["path_prefix"] = json!("../invalid");
+        let (status, error) = send(&app, Some(&token), "PUT", &path, Some(invalid_path)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], "NAME_INVALID_CHARACTER");
+        let mut extra = body.clone();
+        extra["unexpected"] = json!(true);
+        let (status, error) = send(&app, Some(&token), "PUT", &path, Some(extra)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["message"], "unknown field unexpected");
+        let mut malformed = body.clone();
+        malformed["expected_generation"] = json!(1);
+        let (status, _) = send(&app, None, "PUT", &path, Some(malformed.clone())).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, error) = send(&app, Some(&token), "PUT", &path, Some(malformed)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], "INVALID_REQUEST");
+        let mut invalid_operation = body.clone();
+        invalid_operation["operation_id"] = json!("invalid");
+        let (status, error) = send(&app, Some(&token), "PUT", &path, Some(invalid_operation)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], "INVALID_ID");
+        let mut update = body.clone();
+        update["expected_generation"] = json!("1");
+        update["operation_id"] = json!(new_id("op"));
+        let applied = success(&app, &token, "PUT", &path, Some(update.clone())).await;
+        assert_eq!(applied["result"][kind]["generation"], "2");
+        update["operation_id"] = json!(new_id("op"));
+        let (status, error) = send(&app, Some(&token), "PUT", &path, Some(update)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(error["error"]["code"], "CONFIG_CONFLICT");
+        assert_eq!(
+            success(&app, &token, "GET", &path, None).await,
+            applied["result"][kind]
+        );
+        let (status, error) = send(
+            &app,
+            Some(&token),
+            "GET",
+            &format!("{prefix}/missing"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            error["error"]["message"],
+            if is_policy {
+                "protection policy not found"
+            } else {
+                "placement rule not found"
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn typed_comparison_http_keeps_entry_wire_scope_and_identity_precedence() {
+    let (_root, app, _, left, right) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let before = success(&app, &token, "GET", &format!("/api/commits/{left}"), None).await;
+    let after = success(&app, &token, "GET", &format!("/api/commits/{right}"), None).await;
+    let comparison = success(
+        &app,
+        &token,
+        "POST",
+        "/api/compare",
+        Some(json!({"left_commit_id":left,"right_commit_id":right})),
+    )
+    .await;
+    assert_eq!(
+        comparison,
+        json!({"left":left,"right":right,"changes":[{"path":"data.txt","change":"modified","before":before["entries"][0],"after":after["entries"][0]}]})
+    );
+    assert_eq!(
+        success(
+            &app,
+            &token,
+            "POST",
+            "/api/compare",
+            Some(json!({"left_commit_id":left,"right_commit_id":left}))
+        )
+        .await,
+        json!({"left":left,"right":left,"changes":[]})
+    );
+    let other=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Comparison other","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    let branch = other["main_branch_id"].as_str().unwrap();
+    let tree = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/branches/{branch}/tree"),
+        None,
+    )
+    .await;
+    let other_commit = tree["commit_id"].as_str().unwrap();
+    let cross = success(
+        &app,
+        &token,
+        "POST",
+        "/api/compare",
+        Some(json!({"left_commit_id":left,"right_commit_id":other_commit})),
+    )
+    .await;
+    assert_eq!(
+        cross,
+        json!({"left":left,"right":other_commit,"changes":[{"path":"data.txt","change":"removed","before":before["entries"][0]}]})
+    );
+    for (body, message) in [
+        (json!(null), "expected object"),
+        (json!({"unexpected":true}), "unknown field unexpected"),
+        (
+            json!({"right_commit_id":right}),
+            "missing string field left_commit_id",
+        ),
+        (
+            json!({"left_commit_id":left,"right_commit_id":""}),
+            "missing string field right_commit_id",
+        ),
+    ] {
+        let (status, error) = send(&app, Some(&token), "POST", "/api/compare", Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["message"], message);
+    }
+    let (status, error) = send(
+        &app,
+        Some(&token),
+        "POST",
+        "/api/compare",
+        Some(json!({"left_commit_id":left,"right_commit_id":"missing"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error"]["message"], "comparison commit not found");
+    let (status, _) = send(
+        &app,
+        None,
+        "POST",
+        "/api/compare",
+        Some(json!({"unexpected":true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let duplicate=app.clone().oneshot(Request::builder().method("POST").uri("/api/compare").header("authorization",format!("Bearer {token}")).header("content-type","application/json").body(Body::from(r#"{"left_commit_id":"left","left_commit_id":"other","right_commit_id":"right"}"#)).unwrap()).await.unwrap();
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn typed_raw_file_history_http_preserves_version_records_and_path_binding() {
+    let (_root, app, _, left, right) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let before = success(&app, &token, "GET", &format!("/api/commits/{left}"), None).await;
+    let after = success(&app, &token, "GET", &format!("/api/commits/{right}"), None).await;
+    let file = before["entries"][0]["file_id"].as_str().unwrap();
+    let history = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/files/{file}/history?file_id=missing&unused=yes"),
+        None,
+    )
+    .await;
+    assert_eq!(history.as_object().unwrap().len(), 2);
+    assert_eq!(history["file_id"], file);
+    let versions = history["versions"].as_array().unwrap();
+    assert_eq!(versions.len(), 2);
+    assert_eq!(
+        versions[0]["version_id"],
+        before["entries"][0]["version_id"]
+    );
+    assert_eq!(versions[1]["version_id"], after["entries"][0]["version_id"]);
+    for version in versions {
+        assert!(version.get("content_state").is_none());
+        assert!(version["version_sequence"].is_string());
+        assert!(version["logical_size"].is_string());
+        let id = version["version_id"].as_str().unwrap();
+        let mut single = success(&app, &token, "GET", &format!("/api/versions/{id}"), None).await;
+        single.as_object_mut().unwrap().remove("content_state");
+        assert_eq!(*version, single);
+    }
+    let (status, error) = send(
+        &app,
+        Some(&token),
+        "GET",
+        "/api/files/missing/history",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error"]["message"], "file history not found");
+    let (status, _) = send(
+        &app,
+        None,
+        "GET",
+        &format!("/api/files/{file}/history"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn typed_administrator_diagnostics_keep_wire_queries_and_offline_reports() {
+    let (root, app, _, _, _) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let disks = success(&app, &token, "GET", "/api/admin/disks?unused=yes", None).await;
+    assert_eq!(disks.as_object().unwrap().len(), 1);
+    let disk = &disks["disks"][0];
+    assert_eq!(disk.as_object().unwrap().len(), 10);
+    assert_eq!(disk["slot_id"], "P01");
+    assert_eq!(disk["online"], true);
+    assert_eq!(disk["simulation"], true);
+    assert!(disk["upstream_slot_id"].is_null());
+    for field in ["available_bytes", "used_bytes"] {
+        assert!(disk[field].as_str().unwrap().parse::<u64>().is_ok());
+    }
+    assert!(disk.get("root").is_none());
+    let report = success(&app, &token, "GET", "/api/admin/check?unused=yes", None).await;
+    assert_eq!(report.as_object().unwrap().len(), 4);
+    for field in [
+        "checked_versions",
+        "healthy_replicas",
+        "tombstoned_versions",
+    ] {
+        assert!(report[field].is_number());
+    }
+    assert!(report["healthy_replicas"].as_u64().unwrap() > 0);
+    assert!(report["issues"].as_array().unwrap().is_empty());
+    std::fs::rename(root.path().join("disk"), root.path().join("removed-disk")).unwrap();
+    let disks = success(&app, &token, "GET", "/api/admin/disks", None).await;
+    assert_eq!(disks["disks"][0]["online"], false);
+    let report = success(&app, &token, "GET", "/api/admin/check", None).await;
+    assert!(!report["issues"].as_array().unwrap().is_empty());
+    for route in ["/api/admin/disks", "/api/admin/check"] {
+        let (status, body) = send(&app, None, "GET", route, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"]["code"], "UNAUTHORIZED");
+    }
+}
+
+#[tokio::test]
+async fn typed_private_disk_samples_reach_host_http_without_json_reparse() {
+    let (root, app, _, _, _) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let status = success(&app, &token, "GET", "/api/system/status", None).await;
+    assert_eq!(status["disk_sampling_unavailable"], false);
+    assert_eq!(status["disks"].as_array().unwrap().len(), 1);
+    let disk = &status["disks"][0];
+    assert_eq!(disk["id"], "P01");
+    assert_eq!(disk["name"], "P01");
+    assert_eq!(disk["online"], true);
+    assert_eq!(disk["simulation"], true);
+    for field in ["total_bytes", "available_bytes", "used_bytes"] {
+        assert!(disk[field].as_str().unwrap().parse::<u64>().is_ok());
+        assert!(
+            status["memory"][field]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .is_ok()
+        );
+    }
+    let history = success(&app, &token, "GET", "/api/system/history?range=1h", None).await;
+    assert_eq!(history.as_object().unwrap().len(), 5);
+    assert_eq!(history["range"], "1h");
+    assert_eq!(history["interval_seconds"], 10);
+    assert!(!history["samples"].as_array().unwrap().is_empty());
+    let (status, _) = send(
+        &app,
+        Some(&token),
+        "GET",
+        "/api/system/history?range=invalid",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    std::fs::rename(root.path().join("disk"), root.path().join("detached-disk")).unwrap();
+    let status = success(&app, &token, "GET", "/api/system/status", None).await;
+    assert_eq!(status["disk_sampling_unavailable"], false);
+    assert_eq!(status["disks"][0]["online"], false);
+    for field in ["total_bytes", "available_bytes", "used_bytes"] {
+        assert!(status["disks"][0][field].is_null());
+    }
+    for route in ["/api/system/status", "/api/system/history"] {
+        let (status, body) = send(&app, None, "GET", route, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"]["code"], "UNAUTHORIZED");
+    }
+}
+
+#[tokio::test]
+async fn typed_file_manager_disks_keep_projection_without_creating_roots() {
+    let (root, app, _, _, _) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let before = success(&app, &token, "GET", "/api/repositories", None).await;
+    let disks = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks?unused=yes",
+        None,
+    )
+    .await;
+    assert_eq!(disks.as_object().unwrap().len(), 1);
+    assert_eq!(disks["disks"].as_array().unwrap().len(), 1);
+    let disk = &disks["disks"][0];
+    assert_eq!(disk.as_object().unwrap().len(), 7);
+    assert_eq!(disk["slot_id"], "P01");
+    assert_eq!(disk["level"], 1);
+    assert_eq!(disk["online"], true);
+    assert_eq!(disk["writable"], true);
+    assert_eq!(disk["simulation"], true);
+    for field in ["available_bytes", "used_bytes"] {
+        assert!(disk[field].as_str().unwrap().parse::<u64>().is_ok());
+    }
+    for field in [
+        "disk_id",
+        "upstream_slot_id",
+        "metadata_member",
+        "physical_device",
+        "root",
+    ] {
+        assert!(disk.get(field).is_none());
+    }
+    assert_eq!(
+        success(&app, &token, "GET", "/api/repositories", None).await,
+        before
+    );
+    std::fs::rename(root.path().join("disk"), root.path().join("offline-disk")).unwrap();
+    let disks = success(&app, &token, "GET", "/api/file-manager/disks", None).await;
+    assert_eq!(disks["disks"][0]["online"], false);
+    assert_eq!(
+        disks["disks"][0]["writable"], true,
+        "writable is the primary-level policy, not sampled availability"
+    );
+    let (status, body) = send(&app, None, "GET", "/api/file-manager/disks", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"]["code"], "UNAUTHORIZED");
+}

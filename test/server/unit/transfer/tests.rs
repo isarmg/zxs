@@ -487,6 +487,60 @@ impl crate::Backend for RetainedGenerationBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn protection_policy(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::ProtectionPolicy, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn placement_rule(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::PlacementRule, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn update_protection_policy(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdateProtectionPolicy,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn update_placement_rule(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdatePlacementRule,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn compare_commits(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CompareCommits<'_>,
+    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn disk_status(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn integrity_check(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::CheckReport, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn file_history(
+        &self,
+        _identity: &crate::auth::Identity,
+        _file: &str,
+    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn topology_snapshot(
         &self,
         _identity: &crate::auth::Identity,

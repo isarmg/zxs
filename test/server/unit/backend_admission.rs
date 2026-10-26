@@ -230,6 +230,68 @@ impl Backend for BackendProbe {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
+    fn protection_policy(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::ProtectionPolicy, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn placement_rule(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::PlacementRule, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn update_protection_policy(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdateProtectionPolicy,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn update_placement_rule(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdatePlacementRule,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn compare_commits(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CompareCommits<'_>,
+    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn disk_status(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn integrity_check(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<storage_contract::CheckReport, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn file_history(
+        &self,
+        _identity: &crate::auth::Identity,
+        _file: &str,
+    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn topology_snapshot(
         &self,
         _identity: &crate::auth::Identity,
@@ -650,8 +712,14 @@ async fn upload_status_retains_read_admission_after_cancellation() {
 async fn workspace_request(app: Router, method: &str, path: &str) -> Response {
     let body = if path == "/api/workspaces" {
         json!({"branch_id":"branch"})
+    } else if method == "PUT" && path.starts_with("/api/policies/") {
+        json!({"repository_id":"repository","path_prefix":"Folder","target_copies":3,"expected_generation":"0","operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "PUT" && path.starts_with("/api/primary-placement-rules/") {
+        json!({"repository_id":"repository","path_prefix":"Folder","primary_slot_id":"P01","expected_generation":"0","operation_id":"op_00000000000000000000000000000000"})
     } else if method == "PUT" && path.ends_with("/smb-binding") {
         json!({"branch_id":"branch","enabled":false,"expected_history_generation":"1","operation_id":"op_00000000000000000000000000000000"})
+    } else if path == "/api/compare" {
+        json!({"left_commit_id":"left","right_commit_id":"right"})
     } else if path.ends_with("/resolve") {
         json!({"path":"file.txt"})
     } else if path.ends_with("/namespace-operations") {
@@ -686,6 +754,15 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
         ("GET", "/api/history-trees/history/graph"),
         ("GET", "/api/events?after=17"),
         ("GET", "/api/backup-topologies/default"),
+        ("GET", "/api/files/file/history"),
+        ("GET", "/api/admin/disks"),
+        ("GET", "/api/file-manager/disks"),
+        ("GET", "/api/admin/check"),
+        ("POST", "/api/compare"),
+        ("GET", "/api/policies/policy"),
+        ("GET", "/api/primary-placement-rules/rule"),
+        ("PUT", "/api/policies/policy"),
+        ("PUT", "/api/primary-placement-rules/rule"),
         ("GET", "/api/versions/version/placement"),
         ("GET", "/api/repositories/repository/smb-binding"),
         ("PUT", "/api/repositories/repository/smb-binding"),

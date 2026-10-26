@@ -84,12 +84,12 @@ SMB RPC 入口一次解析路径并直接构造同一类型，替换目标删除
 
 ## 剩余 Value 调用清单
 
-此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 45 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
+此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 35 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
 
 - **工作区 seal／公开发布已接续迁移。** 见[公开提交边界](detached-workspace-commits.md#public-commit-envelope-and-seal)；HTTP 与 SMB 保留各自摘要契约。上传 publication 结果也已接续类型化；namespace 暂存也已接续迁移；write-session 已接续迁移，通用读取仍有 Value，不能据当前迁移宣称全部工作区接口已经分层。
 - **SMB 绑定／只读冻结版本。** 绑定 GET/PUT、Capabilities、Repository 与冻结版本已使用 typed 请求/快照/准入，生产 Session::call 已删除。不是本次 typed 当前查询的后备路径。
-- **HTTP 通用读取。** history/compare、目录分支及选择、放置规则／策略／磁盘／健康查询，仍由 HTTP 通用分派调用 `Backend::call`。
-- **HTTP 写入与计划。** 仓库／分支／目录分支创建和选择、policy/placement，以及 split/purge/historical-save/plan 的请求与结果仍需逐组迁移。operation HTTP 入口已接续到既有 typed 方法；其余 action 仍需逐项迁移。
+- **HTTP 通用读取。** 默认分支、目录分支及选择，仍由 HTTP 通用分派调用 `Backend::call`。
+- **HTTP 写入与计划。** 仓库／分支／目录分支创建和选择、split/purge/historical-save/plan 的请求与结果仍需逐组迁移。operation HTTP 入口已接续到既有 typed 方法；其余 action 仍需逐项迁移。
 - **文件管理与管理控制面。** `FileManager*` action、setup_operation 等仍有独立 Value 协议；management_status/retry_storage 已接续类型化；需要核对每个 HTTP 消费者，不能以新增一个包裹枚举代替拆除旧 JSON 路径。
 
 这次不改领域 `OperationResult.result`、Plan 输入、持久化编码、canonical 哈希、永久幂等收据或公开 `Commit.kind`。当前 `core.schema.json` 的 `$defs.Commit.properties.kind` 是开放 string，不可仅按内部已见字面量将它收窄为封闭枚举。后续 model/persist/wire 分离应独立建立固定向量和公开消费者证据。
@@ -239,4 +239,67 @@ GET `/api/events` 的after在HTTP边界解析一次为u64；缺失明确表示0�
 
 Backend::placement_snapshot仍按当前身份→version→history/repository→placement存在性顺序，返回owned Placement而不是锁内Value。HTTP显式穷尽映射version_id/primary_slot_id/target_copies/route_slot_ids/topology_generation/binding_generations，保留冻结路由顺序、十进制字符串map及原缺失错误；query不能覆盖路由version。两项旧action删除，锁外编码；不更改磁盘配置、核心拓扑发布、物理盘检查、历史版本放置或持久化格式。
 
-回归涵盖旧完整wire/规范字节、MAX代际map、metadata_member=false/upstream=null保留、六字段白名单、本机路径不泄露、真实发布后快照/owner释放/锁外序列化、缺失与撤权首错。实际HTTP对default认证入口与其它拓扑名（包括匿名）404分开断言；panic/取消槽占用/排队撤权矩阵走required typed方法，不用默认unsupported冒充入口覆盖。保护策略及放置规则的写入仍在remaining清单，未将本组只读投影当作其完整迁移。
+回归涵盖旧完整wire/规范字节、MAX代际map、metadata_member=false/upstream=null保留、六字段白名单、本机路径不泄露、真实发布后快照/owner释放/锁外序列化、缺失与撤权首错。实际HTTP对default认证入口与其它拓扑名（包括匿名）404分开断言；panic/取消槽占用/排队撤权矩阵走required typed方法，不用默认unsupported冒充入口覆盖。保护策略及放置规则已在下节独立接续迁移，未将本组只读投影当作其完整迁移。
+
+
+## 保护策略与一级放置规则
+
+Policy/PlacementRule GET和PUT四个action已删除。HTTP持有backend_slots的阻塞任务按unknown字段→repository非空→其余DTO类型/规范generation→OperationId顺序解析一次；repository从object移出后不再由DTO重复验证，private fields仅在已检查字段集合后反序列化。公共DTO不携带principal；generation与OperationId进入Backend即为类型，未再传回Value。原Application两套仅用于此分派的Deserialize命令、二次repository检查和operation文本解析删除。
+
+PUT在同锁current身份复核后检查repository一次，直接构造既有core ProtectionPolicyUpdate/PlacementRuleUpdate并返回OperationResult；鉴权使用current.principal。core公共Engine入口仍有真实直接消费者，原rule/policy ID及path_prefix检查保留，且不在HTTP重复检查：其先于永久receipt的错误顺序、同输入重放先于generation/作用域检查、canonical kind/principal/body、原scope/retained规则拒绝均未改变。静态DTO格式错误现在先于Backend repository/当前准入（HTTP认证中间件仍在前）；没有声称所有公共core字符串都已变成受约束类型。
+
+GET仍按当前身份→指定policy/rule存在→所属repository存在顺序捕获owned记录，锁外显式穷尽wire；policy的scope_directory_id/scope_file_id与空backup_prefixes省略、inheritable和字符串generation原样保留，rule保留完整五字段。mutation结果只在HTTP最终operation_wire编码；core持久化结果与摘要格式不动。
+
+原形状矩阵迁到真实HTTP parser，原core-replay测试改用typed方法并保留永久摘要、result、sequence、变更输入冲突、撤权/未准入身份与陈旧generation断言；原malformed/unknown请求的认证优先级另由真实HTTP覆盖，不把不能构造的坏DTO继续塞进内部接口。固定wire覆盖scope/保留字段及MAX，实际HTTP覆盖GET与操作result一致、重放、非法operation/整数、core路径错误先于同op冲突及更新后generation。panic/取消/排队撤权测试调用新required方法。公共core ID/path受约束类型改造仍是明确后续边界工作，不能凭本批删检查或声称全部parse已迁出core。
+
+
+## 不复制条目的提交比较
+
+POST `/api/compare` 只在HTTP解析unknown/left/right字段，保持unknown优先与left先于right的错误；严格JSON/重复键、认证中间件、backend_slots继续承担原边界责任。Backend::compare_commits同锁当前准入后依原顺序捕获left共享commit并复核history/repository，再捕获right并复核；缺失仍为comparison commit not found。随后释放引擎锁再运行纯比较，不再授权时查一次、core里重新查一次；不同history/repository的已授权提交仍可比较，没有暗加同history限制。
+
+portable CommitComparison拥有两个Arc<Commit>及私有变更索引，不存Value或自引用，公开changes仅返回借用Entry的视图。索引完全由这些private不可变owner的entries枚举生成，读取直接依赖内部不变量；不为打印ID加无用校验。两个临时BTree索引借用cached lookup_key，保留左entries顺序的removed/modified后接右entries顺序的added；modified仍只比较version_id和display path，不擅自扩大到size/file_id/其它元数据，重复key的旧last-match行为也由差分测试锁定。没有Entry clone、额外历史缓存或生命周期trait；core公开Engine::compare_commits也返回同一typed结果，不保留JSON旁路。
+
+HTTP ComparisonResponse按借用change视图流式SerializeSeq，显式三个wire变体及原before/after省略，不再分配Entry副本或中间Value。原Entry/model持久化与wire尚未全分离，仍沿用既有Entry序列化格式并以完整字段/规范字节回归，不借本批声称全模型分层完成。当前公开Commit.kind保持开放字符串。
+
+回归覆盖旧比较算法差分矩阵、顺序/casefold/重复key、未参与modified的元数据、Entry指针与Arc持有数、COW与owner释放、空比较固定字节、实际engine原回归和HTTP当前/历史/跨repository/同提交/格式/重复键。实际backend测试在后续发布及撤权后仍序列化已准入快照并证明锁可取，下次调用重新拒绝；panic/取消/排队撤权矩阵走required typed方法。纯比较保持原O((L+R)log(L+R))索引成本，主要变化是CPU/编码移出引擎锁及移除payload复制，不宣称未经测量的吞吐倍数。
+
+
+## 文件历史的类型化读取
+
+HTTP `/api/files/{file}/history` 与实际 SMB 测试消费者直接调用 required `Backend::file_history`，History action 删除。路径绑定和 query 规则保持不变；同一引擎锁内复核当前身份、调用既有核心 file_history。核心的选择性 SQLite 索引、回退与 version_sequence 排序不变；不把索引 I/O 宣称为锁外操作。返回 owned FileVersion 列表后，HTTP 才用已有 VersionRecordResponse 显式输出原始版本记录，不额外注入 content_state。
+
+原 is_ok 筛选把内部缺父记录默默隐藏；不能把它重写成具名 missing 分支后当业务语义。现直接信任 Engine 已准入版本，不再逐版本重查 history/repository。磁盘边界 journal::resolve_admitted_snapshot 经 RawState→AdmittedState，history manifest 验证 repository 双向归属，HistoryCoverage::finish 明确覆盖全部 versions；普通/降级恢复及 checkpoint 使用 verified_snapshot，同样不接纳孤儿。SQLite 历史索引仅选候选，实际记录仍取自当前 State。真实写入从现有 branch/repository 建版本；split 在同一候选里补齐新父链；package import 先验证闭包，生产没有删除 history/repository 后保留版本的路径。未发布的候选不会成为并发读取状态。
+
+保留外部按 history 查找的两条 NotFound 和未知 file 的 file history not found，不添加 active/content-state/跨仓库筛选。原手造损坏 State 的服务器“不可见”测试已删除；真实磁盘 store/load/verified_snapshot 负例覆盖 MissingHistory、MissingRepository，并新增仅版本孤儿触发 versions coverage 拒绝的断言。合法状态回归覆盖真实核心查询与原 wire 规范字节一致、后续发布/撤权与已准入快照生命周期、锁外序列化、HTTP 路径不可被 query 覆盖、原始版本 wire 对齐，以及真实 typed 方法的授权、撤权、panic 和取消预算矩阵。领域/持久化 FileVersion 分离并未因这次 wire 投影而全面完成。
+
+
+## 内部动作枚举不承担字符串协议
+
+剩余 BackendAction 只由生产 Rust 调用方传递，不是 HTTP/RPC 字符串协议。其无生产消费者的 as_str/TryFrom 与旧 roundtrip/retired 字符串列表已删除；同一宏声明生成 enum 和仅 cfg(test) 可见的 ALL，真实未认证全动作授权矩阵仍遍历全部剩余动作，不维护第二份动作清单。两个测试记录器用 Debug 标记验证 typed 路由/装饰器转发，不把 fake 响应误当公开协议。此清理不减少剩余 Value payload 数量，也不替代后续逐组迁移。
+
+
+## 管理员磁盘状态与完整性检查
+
+GET `/api/admin/disks` 和 `/api/admin/check` 的真实管理 Web 消费者改走 required `disk_status`/`integrity_check`，删除 Disks/Check action 以及不再有消费者的 list_handler 宏。HTTP 继续解析并忽略原 query，持有 backend_slots；同锁 current 准入之后，Disks 捕获原 DiskObservationPlan 再解锁采样，Check 保持原核心离线完整性检查的锁内 I/O 与逐盘问题聚合语义。不借本次类型迁移改变检查时序、后台缓存或磁盘完整性策略。
+
+Backend 返回既有 Vec<DiskStatus>/CheckReport，HTTP 才做穷尽 wire 投影：磁盘十字段、nullable upstream、字符串 u64 bytes、原始 physical_device 不变；Check 的三个 usize 计数仍是 JSON number、issues 原顺序保留，不机械改成字符串。真实掉盘继续输出观察/检查报告而不是用新的默认状态掩盖错误。MonitorDisks 和 FileManagerDisks 具有不同采样、字段与资源策略，未被这组假称完成；私有监控采样已在下节独立接续，FileManagerDisks 也在后节复用同一已类型化采样方法。
+
+测试覆盖原 wire 及固定规范字节、真实核心检查与掉盘报告、当前身份/撤权/排队准入、已准入 owned 响应的锁外序列化与 owner 释放、HTTP 查询及匿名拒绝、真实 panic 和取消预算矩阵。没有新增副本、fsync、权威状态或永久幂等格式。
+
+
+## 私有监控采样、缓存与整数统计
+
+真实路径 EngineBackend::observe_disks→management 的 15 秒新鲜度缓存→Telemetry::collect 直接传 Vec<DiskSample>，不再构造 Value、克隆 disks JSON 再 from_value。DiskSample 表达非权威物理观察，不能授权写入；InternalDiskObservation 私有能力与 AuthorizedBackend 默认拒绝仍保留，未伪造系统用户。原 MonitorDisks generic 没有生产调用方，已删除，原权限测试改验证真实公开 disk_status 不因私有采样而放行。management 单后台观察者、过期/失败清缓存、锁外 I/O 与 owner 释放不变。
+
+采样内存/磁盘字节保持 Option<u64>，Statistics 直接做 u128 累计，不再 string→parse().ok 丢失坏值；每指标独立有效计数和多次聚合精度保留。cache 的 Sample 解码在真实磁盘边界用 optional_u64_string 严格接收当前 canonical decimal/null，随后沿原 valid_at/valid_for 验证统计范围，再进入缓存和平均；非法字符串不是“无传感器”，无旧格式迁移。均值转换依赖已准入样本与 sum≤u64::MAX×count 的既有统计不变量，不为每次读取重复校验。
+
+既有 Snapshot/cache/HTTP 的字段和字符串 bytes 格式不变，Snapshot 尚承担共同投影，不宣称所有 model/persist/wire 已全面拆分。status 返回 Json<Snapshot>，history 返回具名 HistoryResponse，删除内部 to_value/序列化 expect；采样前后当前 session 检查、独立 2 槽、取消持有许可、31 日保留/文件/内存预算、后台生命周期与时钟策略不变。回归覆盖 exact wire、真实 HTTP 在线/掉盘/匿名/范围拒绝、物理 bytes 不冒充逻辑计数、混合 null 与两次聚合/restart、u128大数、损坏 bytes/统计在真实缓存恢复边界被拒绝，以及 capability/缓存owner/撤权/取消矩阵。
+
+
+## 文件管理器磁盘投影复用真实准入
+
+`/api/file-manager/disks` 的实际 Web 消费者位于 files/actions/browse.rs。该入口复用 required Backend::disk_status，不新增并行包装或重复引擎准入；仍在 backend_slots 内同锁当前身份→捕获 DiskObservationPlan→解锁物理采样，HTTP 最终穷尽映射原七字段，排除 disk_id/upstream/metadata_member/physical_device。
+
+原 disk_access 只是同一 config.disks 的 slot→level==1 映射；观察计划捕获同一配置，filter_map 查询缺槽不是合法业务分支。映射、二次查表/静默过滤、FileManagerDisks action 已删除，writable 直接使用捕获的 level==1。它描述一级盘策略，不是假装当前 online；掉盘一级盘仍 writable=true、online=false，已有实际写入口的可用性/只读授权不变。配置顺序和全部槽保持，不创建 lazy 根仓库、不新增账户过滤，未知 query 沿原规则忽略。
+
+回归验证两级/掉盘/最大bytes/七字段白名单，真实HTTP调用不创建根仓库、匿名拒绝和旧多槽场景；同一真实disk_status方法的公开panic和取消许可矩阵扩至文件管理路由。删除的是每次请求额外O(n log n)映射及查表，不改变核心采样I/O或声明未经测量的吞吐提升。
