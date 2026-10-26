@@ -256,3 +256,98 @@ fn socket_and_connection_cleanup_during_unwind_consume_only_owned_poisoned_fds()
         assert!(connections.lock().unwrap_err().into_inner().is_empty());
     }
 }
+
+#[test]
+fn accept_retries_only_explicit_transient_errors_with_a_finite_budget() {
+    for kind in [io::ErrorKind::Interrupted, io::ErrorKind::ConnectionAborted] {
+        let error = io::Error::from(kind);
+        for attempt in 0..MAX_ACCEPT_RETRIES {
+            assert!(retry_accept(&error, attempt));
+        }
+        assert!(!retry_accept(&error, MAX_ACCEPT_RETRIES));
+    }
+    for kind in [
+        io::ErrorKind::WouldBlock,
+        io::ErrorKind::PermissionDenied,
+        io::ErrorKind::InvalidInput,
+        io::ErrorKind::NotConnected,
+        io::ErrorKind::OutOfMemory,
+        io::ErrorKind::Other,
+    ] {
+        assert!(!retry_accept(&io::Error::from(kind), 0));
+    }
+    for errno in [
+        rustix::io::Errno::BADF,
+        rustix::io::Errno::MFILE,
+        rustix::io::Errno::NFILE,
+    ] {
+        assert!(!retry_accept(
+            &io::Error::from_raw_os_error(errno.raw_os_error()),
+            0
+        ));
+    }
+}
+
+#[tokio::test]
+async fn stopped_worker_admission_releases_connection_guard_and_permit() {
+    let mut shutdown = ConnectionShutdown::new();
+    let registry = shutdown.registry();
+    shutdown.finish().await.unwrap();
+    let admission = Arc::new(tokio::sync::Semaphore::new(1));
+    let permit = admission.clone().try_acquire_owned().unwrap();
+    let connections = Arc::new(Mutex::new(BTreeMap::new()));
+    let guard = ConnectionGuard {
+        id: 1,
+        connections: Arc::clone(&connections),
+    };
+    let error = registry
+        .spawn(move || {
+            let _permit = permit;
+            let _guard = guard;
+            panic!("stopped registry must never execute work");
+        })
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    assert_eq!(admission.available_permits(), 1);
+    assert_eq!(Arc::strong_count(&connections), 1);
+    assert!(connections.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn connection_preparation_rejects_wrong_peer_without_retaining_a_descriptor() {
+    let (server, mut client) = tokio::net::UnixStream::pair().unwrap();
+    let wrong_uid = server.peer_cred().unwrap().uid() ^ 1;
+    assert_eq!(
+        prepare_connection(server, wrong_uid).unwrap_err().kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    use tokio::io::AsyncReadExt;
+    assert_eq!(client.read(&mut [0]).await.unwrap(), 0);
+}
+
+#[cfg(feature = "core")]
+#[test]
+fn session_permit_drop_during_unwind_does_not_recover_a_poisoned_counter() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let (_root, shared, _backend, _branch) = super::super::tests::fixture();
+    let permit = SessionPermit::acquire(&shared).unwrap();
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _counter = shared.authenticated_sessions.lock().unwrap();
+            panic!("poison business state");
+        }))
+        .is_err()
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(move || {
+            let _permit = permit;
+            panic!("release during an existing unwind");
+        }))
+        .is_err()
+    );
+    assert!(shared.authenticated_sessions.is_poisoned());
+    assert_eq!(
+        **shared.authenticated_sessions.lock().unwrap_err().get_ref(),
+        1
+    );
+}

@@ -39,16 +39,12 @@ fn namespace<'a>(state: &'a State, repository: &str) -> Result<&'a Commit> {
             "backup repository missing",
         )
     })?;
-    state
+    // AdmittedState validates repository -> main branch -> head commit.
+    Ok(state
         .branches
         .get(&repo.main_branch_id)
         .and_then(|branch| state.commits.get(&branch.head_commit_id))
-        .ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "backup namespace missing",
-            )
-        })
+        .expect("invariant: admitted repository has its main namespace"))
 }
 fn within(root: &str, path: &str) -> bool {
     let root = name_policy::path_key(root);
@@ -63,7 +59,8 @@ pub(super) fn scope_path<'a>(state: &'a State, policy: &'a ProtectionPolicy) -> 
     if policy.scope_directory_id.as_deref() == Some(policy.repository_id.as_str()) {
         return Some("");
     }
-    let commit = namespace(state, &policy.repository_id).ok()?;
+    let commit = namespace(state, &policy.repository_id)
+        .expect("invariant: admitted policy belongs to an existing repository");
     if let Some(directory) = &policy.scope_directory_id {
         return commit
             .entries
@@ -103,15 +100,25 @@ pub(super) fn effective_policy<'a>(
     path: &str,
 ) -> Option<&'a ProtectionPolicy> {
     let file = file.or_else(|| {
-        namespace(state, repository)
-            .ok()
-            .and_then(|commit| find_unordered(&commit.entries, path))
-            .filter(|entry| entry.kind == NamespaceEntryKind::File)
-            .map(|entry| entry.file_id.as_str())
+        find_unordered(
+            &namespace(state, repository)
+                .expect("invariant: placement caller resolved the repository")
+                .entries,
+            path,
+        )
+        .filter(|entry| entry.kind == NamespaceEntryKind::File)
+        .map(|entry| entry.file_id.as_str())
     });
     if let Some(policy) = file
         .and_then(|file| state.file_backup_policies.get(file))
-        .and_then(|id| state.protection_policies.get(id))
+        .map(|id| {
+            state
+                .protection_policies
+                .get(id)
+                .expect("invariant: admitted file backup binding names its history policy")
+        })
+        // The public placement query accepts an optional file from its caller;
+        // admission proves the binding, not that caller's repository choice.
         .filter(|policy| policy.repository_id == repository)
     {
         return Some(policy);

@@ -359,15 +359,19 @@ fn atomic_write(
         file.sync_all()?;
         validate_destination(directory, name)?;
         if create_only {
-            let published =
-                no_clobber_publish(directory, &RelativePath::new(&temporary)?, destination);
-            if matches!(
-                &published,
-                Ok(()) | Err(Error::PublishedDurabilityUnknown(_) | Error::IdentityChanged(_))
-            ) {
-                cleanup.armed = false;
+            regular_single_link(&file, Path::new(&temporary))?;
+            let staged = statat(
+                &directory.directory,
+                temporary.as_str(),
+                AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(io::Error::from)?;
+            if (identity.st_dev, identity.st_ino) != (staged.st_dev, staged.st_ino) {
+                return Err(Error::IdentityChanged(temporary.clone().into()));
             }
-            published?;
+            // This exclusive staging descriptor has just completed its file barrier.
+            // Publish only; the shared tail verifies its inode and syncs the directory.
+            rename_no_replace(directory, OsStr::new(&temporary), name)?;
         } else {
             renameat(
                 &directory.directory,
@@ -504,6 +508,25 @@ pub(super) fn no_clobber_publish(
     );
     let identity = regular_single_link(&file, Path::new(source))?;
     file.sync_all()?;
+    rename_no_replace(directory, source, destination)?;
+    let current = statat(&directory.directory, destination, AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(|error| Error::PublishedDurabilityUnknown(error.into()))?;
+    if (identity.st_dev, identity.st_ino) != (current.st_dev, current.st_ino) {
+        return Err(Error::IdentityChanged(destination.into()));
+    }
+    directory
+        .directory
+        .sync_all()
+        .map_err(Error::PublishedDurabilityUnknown)
+}
+
+// Both callers sync their held source file before this namespace-only step and
+// verify the published inode before completing the destination directory barrier.
+fn rename_no_replace(
+    directory: &PrivateDirectory,
+    source: &OsStr,
+    destination: &OsStr,
+) -> Result<(), Error> {
     rustix::fs::renameat_with(
         &directory.directory,
         source,
@@ -517,16 +540,7 @@ pub(super) fn no_clobber_publish(
         } else {
             io::Error::from(error).into()
         }
-    })?;
-    let current = statat(&directory.directory, destination, AtFlags::SYMLINK_NOFOLLOW)
-        .map_err(|error| Error::PublishedDurabilityUnknown(error.into()))?;
-    if (identity.st_dev, identity.st_ino) != (current.st_dev, current.st_ino) {
-        return Err(Error::IdentityChanged(destination.into()));
-    }
-    directory
-        .directory
-        .sync_all()
-        .map_err(Error::PublishedDurabilityUnknown)
+    })
 }
 
 /// DFS keeps at most 128 directory handles, independent of directory width.

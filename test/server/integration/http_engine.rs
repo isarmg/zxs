@@ -32,6 +32,8 @@ mod paginated_listing;
 mod plan_lookup;
 #[path = "http_engine/strict_objects.rs"]
 mod strict_objects;
+#[path = "http_engine/upload_status.rs"]
+mod upload_status;
 
 /// Resolve only fixture payloads for deliberate corruption. Production reads
 /// continue through the engine's verified replica and read-lease interfaces.

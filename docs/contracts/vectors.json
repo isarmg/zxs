@@ -1367,6 +1367,42 @@
           }
         ]
       }
+    },
+    {
+      "name": "upload-receiving",
+      "schema": "UploadStatus",
+      "layer": "schema",
+      "value": {
+        "workspace_id": "ws_00000000000000000000000000000001",
+        "item_id": "entry_00000000000000000000000000000001",
+        "upload_generation": "1",
+        "logical_size": "3",
+        "content_hash": "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85",
+        "state": "RECEIVING",
+        "durable_ranges": [],
+        "sealed_manifest_hash": null
+      }
+    },
+    {
+      "name": "upload-checksum-mismatch",
+      "schema": "UploadStatus",
+      "layer": "schema",
+      "value": {
+        "workspace_id": "ws_00000000000000000000000000000001",
+        "item_id": "entry_00000000000000000000000000000001",
+        "upload_generation": "1",
+        "logical_size": "3",
+        "content_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "state": "CHECKSUM_MISMATCH",
+        "durable_ranges": [
+          {
+            "offset": "0",
+            "length": "3",
+            "content_hash": "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+          }
+        ],
+        "sealed_manifest_hash": null
+      }
     }
   ],
   "negative": [
@@ -5230,6 +5266,42 @@
           }
         ],
         "created_at": "18446744073709551615"
+      }
+    },
+    {
+      "name": "checksum-mismatch-with-missing-bytes",
+      "schema": "UploadStatus",
+      "layer": "semantic",
+      "value": {
+        "workspace_id": "ws_00000000000000000000000000000001",
+        "item_id": "entry_00000000000000000000000000000001",
+        "upload_generation": "1",
+        "logical_size": "3",
+        "content_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "state": "CHECKSUM_MISMATCH",
+        "durable_ranges": [],
+        "sealed_manifest_hash": null
+      }
+    },
+    {
+      "name": "upload-internal-state-is-not-wire-alias",
+      "schema": "UploadStatus",
+      "layer": "schema",
+      "value": {
+        "workspace_id": "ws_00000000000000000000000000000001",
+        "item_id": "entry_00000000000000000000000000000001",
+        "upload_generation": "1",
+        "logical_size": "3",
+        "content_hash": "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85",
+        "state": "checksum_mismatch",
+        "durable_ranges": [
+          {
+            "offset": "0",
+            "length": "3",
+            "content_hash": "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+          }
+        ],
+        "sealed_manifest_hash": null
       }
     }
   ],

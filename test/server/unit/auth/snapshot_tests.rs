@@ -198,3 +198,66 @@ fn failed_system_authority_rename_blocks_readers_without_publishing_revocation()
             .contains(".tmp-")
     }));
 }
+
+#[test]
+fn sole_identity_reads_committed_authority_while_writer_mutex_is_held() {
+    let root = crate::tests::private_tempdir();
+    let writer = Mutex::new(AuthStore::initialize(root.path(), "owner", PASSWORD).unwrap());
+    let guard = writer.lock().unwrap();
+    let reader = guard.reader();
+    let (report, result) = mpsc::channel();
+    let read = std::thread::spawn(move || report.send(reader.sole_identity()).unwrap());
+    let identity = result.recv_timeout(Duration::from_secs(5));
+    drop(guard);
+    read.join().unwrap();
+    let identity = identity
+        .expect("committed reader must not wait for credential writer")
+        .unwrap();
+    assert_eq!(identity.principal, "owner");
+    assert!(identity.admission_session.is_none());
+    assert!(identity.smb_binding.is_none());
+}
+
+#[test]
+fn sole_identity_rejects_blocked_and_dropped_authority_without_retaining_file_lock() {
+    let root = crate::tests::private_tempdir();
+    let store = AuthStore::initialize(root.path(), "owner", PASSWORD).unwrap();
+    let reader = store.reader();
+    assert_eq!(reader.sole_identity().unwrap().principal, "owner");
+    store.blocked.store(true, Ordering::SeqCst);
+    assert_eq!(
+        reader.sole_identity().unwrap_err().code,
+        storage_contract::ErrorCode::RecoveryRequired
+    );
+    drop(store);
+    assert_eq!(
+        reader.sole_identity().unwrap_err().code,
+        storage_contract::ErrorCode::Unauthorized
+    );
+    // A surviving reader neither retains the OS lock nor adopts a new store.
+    let replacement = AuthStore::open(root.path()).unwrap();
+    assert_eq!(
+        replacement.reader().sole_identity().unwrap().principal,
+        "owner"
+    );
+    assert_eq!(
+        reader.sole_identity().unwrap_err().code,
+        storage_contract::ErrorCode::Unauthorized
+    );
+}
+
+#[test]
+fn sole_identity_rejects_store_drop_even_with_in_flight_channel_owners() {
+    let root = crate::tests::private_tempdir();
+    let store = AuthStore::initialize(root.path(), "owner", PASSWORD).unwrap();
+    let reader = store.reader();
+    let _committed = reader.committed.upgrade().unwrap();
+    let _blocked = reader.blocked.upgrade().unwrap();
+    drop(store);
+    assert_eq!(
+        reader.sole_identity().unwrap_err().code,
+        storage_contract::ErrorCode::RecoveryRequired
+    );
+    let replacement = AuthStore::open(root.path()).unwrap();
+    assert_eq!(replacement.sole_identity().unwrap().principal, "owner");
+}

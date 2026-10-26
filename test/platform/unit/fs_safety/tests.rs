@@ -185,3 +185,196 @@ fn randomness_failure_preserves_its_entropy_source() {
     let source = std::error::Error::source(&error).expect("entropy source must survive");
     assert!(source.downcast_ref::<system_entropy::Error>().is_some());
 }
+
+#[test]
+fn create_and_public_publish_preserve_existing_destinations_and_sources() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::create(temp.path().join("private")).unwrap();
+    let destination = EntryName::new("destination").unwrap();
+    AtomicFile::create(&directory, &destination, b"original").unwrap();
+    assert!(matches!(
+        AtomicFile::create(&directory, &destination, b"replacement"),
+        Err(Error::DestinationExists(_))
+    ));
+    let source = RelativePath::new("source").unwrap();
+    fs::write(directory.resolve(&source), b"staged").unwrap();
+    assert!(matches!(
+        NoClobberPublish::publish(&directory, &source, &destination.as_relative()),
+        Err(Error::DestinationExists(_))
+    ));
+    assert_eq!(fs::read(directory.resolve(&source)).unwrap(), b"staged");
+    assert_eq!(
+        fs::read(directory.path().join("destination")).unwrap(),
+        b"original"
+    );
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
+    assert_eq!(
+        fs::metadata(directory.path().join("destination"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+}
+
+#[test]
+#[ignore = "requires atomic-io.sh isolated LD_PRELOAD children"]
+fn atomic_io_barriers_and_failures() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = std::path::PathBuf::from(std::env::var_os("ZXS_ATOMIC_ROOT").unwrap());
+    let log = std::path::PathBuf::from(std::env::var_os("ZXS_ATOMIC_LOG").unwrap());
+    let mode = std::env::var("ZXS_ATOMIC_MODE").unwrap();
+    let stage = std::env::var("ZXS_ATOMIC_STAGE").unwrap();
+    let directory = PrivateDirectory::open_existing(&root).unwrap();
+    let destination = EntryName::new("destination").unwrap();
+    let source = RelativePath::new("source").unwrap();
+    if mode == "replace" {
+        fs::write(root.join("destination"), b"old").unwrap();
+    } else if mode == "public" {
+        fs::write(root.join("source"), b"new").unwrap();
+        fs::set_permissions(root.join("source"), fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    fs::write(root.join(".inject"), b"").unwrap();
+    let result = match mode.as_str() {
+        "create" => AtomicFile::create(&directory, &destination, b"new"),
+        "replace" => AtomicFile::replace(&directory, &destination.as_relative(), b"new"),
+        "public" => NoClobberPublish::publish(&directory, &source, &destination.as_relative()),
+        _ => panic!("unknown test mode"),
+    };
+    fs::remove_file(root.join(".inject")).unwrap();
+    let events = fs::read_to_string(log).unwrap();
+    match stage.as_str() {
+        "success" | "directory-sync" => {
+            if stage == "success" {
+                result.unwrap();
+            } else {
+                assert!(
+                    matches!(result, Err(Error::PublishedDurabilityUnknown(ref error)) if error.raw_os_error() == Some(5))
+                );
+            }
+            assert_eq!(events, "file-sync\ndirectory-sync\n");
+            assert_eq!(fs::read(root.join("destination")).unwrap(), b"new");
+            assert_eq!(
+                fs::metadata(root.join("destination"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+            assert!(!root.join("source").exists());
+        }
+        "write" | "file-sync" => {
+            assert!(matches!(result, Err(Error::Io(ref error)) if error.raw_os_error() == Some(5)));
+            assert_eq!(
+                events,
+                if stage == "write" {
+                    "write-failure\n"
+                } else {
+                    "file-sync\n"
+                }
+            );
+            if mode == "replace" {
+                assert_eq!(fs::read(root.join("destination")).unwrap(), b"old");
+            } else {
+                assert!(!root.join("destination").exists());
+            }
+        }
+        "publish" => {
+            assert_eq!(events, "file-sync\n");
+            if mode == "replace" {
+                assert!(
+                    matches!(result, Err(Error::UnsafeFileType(ref path)) if path == std::path::Path::new("destination"))
+                );
+                assert!(root.join("destination").is_dir());
+            } else {
+                assert!(matches!(result, Err(Error::DestinationExists(_))));
+                assert_eq!(fs::read(root.join("destination")).unwrap(), b"");
+            }
+        }
+        _ => panic!("unknown test stage"),
+    }
+    if mode == "public" && matches!(stage.as_str(), "file-sync" | "publish") {
+        assert_eq!(fs::read(root.join("source")).unwrap(), b"new");
+    }
+    assert!(root.is_dir());
+    assert!(fs::read_dir(&root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".state-atomic-")
+    }));
+}
+
+#[test]
+fn public_publish_rejects_unsafe_sources_and_cross_directory_names() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::create(temp.path().join("private")).unwrap();
+    fs::write(temp.path().join("outside"), b"original").unwrap();
+    symlink(
+        temp.path().join("outside"),
+        directory.path().join("symlink"),
+    )
+    .unwrap();
+    fs::hard_link(
+        temp.path().join("outside"),
+        directory.path().join("hardlink"),
+    )
+    .unwrap();
+    fs::create_dir(directory.path().join("nested")).unwrap();
+    fs::write(directory.path().join("nested/source"), b"nested").unwrap();
+    let destination = RelativePath::new("destination").unwrap();
+    for source in ["symlink", "hardlink", "nested/source"] {
+        assert!(
+            NoClobberPublish::publish(
+                &directory,
+                &RelativePath::new(source).unwrap(),
+                &destination
+            )
+            .is_err()
+        );
+        assert!(!directory.path().join("destination").exists());
+        assert!(fs::symlink_metadata(directory.path().join(source)).is_ok());
+    }
+    fs::write(directory.path().join("source"), b"staged").unwrap();
+    assert!(
+        NoClobberPublish::publish(
+            &directory,
+            &RelativePath::new("source").unwrap(),
+            &RelativePath::new("nested/destination").unwrap()
+        )
+        .is_err()
+    );
+    assert_eq!(
+        fs::read(directory.path().join("source")).unwrap(),
+        b"staged"
+    );
+    assert_eq!(fs::read(temp.path().join("outside")).unwrap(), b"original");
+    assert_eq!(
+        fs::read(directory.path().join("nested/source")).unwrap(),
+        b"nested"
+    );
+    assert!(!directory.path().join("nested/destination").exists());
+}
+
+#[test]
+fn io_error_source_preserves_errno_without_changing_display() {
+    use std::error::Error as _;
+    let source = io::Error::from_raw_os_error(13);
+    let message = source.to_string();
+    let error = Error::from(source);
+    assert_eq!(error.to_string(), message);
+    assert_eq!(
+        error
+            .source()
+            .unwrap()
+            .downcast_ref::<io::Error>()
+            .unwrap()
+            .raw_os_error(),
+        Some(13)
+    );
+}

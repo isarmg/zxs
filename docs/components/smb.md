@@ -193,3 +193,33 @@ bash .github/scripts/smb-sdk.sh
 `*.namespace.json` 使用 `smb-protocol-namespace` 格式，包含身份、分支、操作种类、源/目标路径及 `commit_request`。`publication_outcome: "unconfirmed"` 仅表示已建立意图关联，不能证明准备变更或提交已经执行。记录可先于 Tree 检查和 Namespace staging；因此不能直接重放 `commit_request`。文件或父目录同步失败时虽保留已写证据，但不承诺掉电后的耐久性。先用原 `operation_id` 查询权威操作状态，未决或未知时走核心恢复流程，不重放该文件或另造操作号，也不把存在记录当作失败证明。确认成功后桥接会删除记录；若删除或目录同步失败，残留记录仍应按原操作查询，不重复提交。
 
 相关回归位于 `test/server/unit/smb_rpc/namespace_tests.rs`，覆盖目标种类拒绝、旧模糊删除命令拒绝、实际发布前/后返回错误时保留原操作和工作区、不错误 Abort、成功后的记录清理、成功 RPC 帧丢弃后按客户端原操作号查询、准备/Abort 及文件/父目录同步故障，以及 write-through 新一代操作号。协议测试复用 VFS 实际调用的 flags/操作号构造函数，并用真实 Unix socketpair 验证传输错误保留原操作号和全克隆断开。socketpair 桥接测试不等于真实监听 socket 的进程/权限生命周期，也不等于固定 Samba SDK/客户端互操作；这些仍须独立验证。
+
+## Listener 错误隔离与关闭所有权
+
+监听端的启动、权限设置、reactor 注册及永久 accept 错误仍返回调用方；不能用
+`continue` 隐藏坏 listener 或进程 fd 耗尽。只有 `Interrupted` 和
+`ConnectionAborted` 可连续重试三次，每次间隔 25 ms，成功 accept 重置该预算；
+第四次连续瞬时失败仍携带原 I/O 错误退出。资源耗尽、无效 fd、权限和其它未知
+accept 错误立即退出，listener 本身不执行无限重建或重试。
+
+已接受连接的 peer credential、标准流转换、阻塞模式设置及关闭用 fd 复制失败
+只丢弃本连接，决策层保留 I/O 原因；错误 UID 和容量拒绝用 debug 诊断。
+复制成功之后才插入关闭库存；worker 入队闭包同时拥有连接 guard 和资源 permit，
+入队失败由闭包析构释放，成功则由 worker 结束释放。原有 managed worker 保留
+JoinHandle、错误报告和关闭/join 所有权。会话计数锁中毒时 Drop 仅记录错误，
+不修复业务计数、不清除 poison；后续业务准入仍按统一 fail-closed 策略处理。
+
+`startup_tests` 包含无 socket 的有限 accept 分类、停止后入队资源释放测试；
+实际 peer UID 拒绝需 AF_UNIX。`admission_tests` 的真实 listener 回归先断开坏
+Hello，再拒绝错误用户名，最后成功认证第二类正常连接并在仍持客户端时关闭/join。
+这些测试与 Samba SDK/真实客户端验收分开；受限环境不能用 socketpair 或提权绕过
+AF_UNIX 禁令。测试源码存在与格式检查通过不代表这些运行时测试已执行。
+
+SMB Hello 的唯一管理员映射从 `AuthReader` 的已提交快照读取，不取得认证写入
+Mutex；它仍在可信 UID、协议、能力和配置 Samba 用户名准入之后执行，不增加匿名
+访问。`Shared` 只持弱 reader，监听函数单独持有真正 `AuthStore` 的强 owner，并在
+socket 资源之后释放它，保证独立调用者转移最后一个 owner 时 listener 仍可用。
+reader 不延长凭据 OS 锁；owner 被销毁或权威发布被阻断后，后续读取拒绝。
+Hello 得到的身份不是长期准入证明：repository/binding generation 与每次操作在
+引擎锁内的当前权威验证保持不变。无 socket 快照测试覆盖认证写锁被持有时读取、
+blocked/owner drop 和凭据锁释放；真实 listener 的 owner 生命周期留给 AF_UNIX CI。

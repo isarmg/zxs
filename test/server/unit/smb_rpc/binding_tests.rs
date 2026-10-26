@@ -217,12 +217,12 @@ fn authorize_read_rechecks_current_owner_and_account_for_every_open_handle_kind(
                 "RECOVERY_REQUIRED",
             )
         };
-        shared.auth.lock().unwrap().replace_authority(replacement);
+        temp.auth.lock().unwrap().replace_authority(replacement);
         check_read_authorization(&mut client, &backend, &branch, &handles, Some(error));
         // A missing handle still fails locally, even while admission is denied.
         missing_read_handle(&mut client, &backend, u64::MAX);
         let original = AuthStore::open(&temp.path().join("auth")).unwrap();
-        shared.auth.lock().unwrap().replace_authority(original);
+        temp.auth.lock().unwrap().replace_authority(original);
         // Failed authorization did not consume or retarget any existing handle.
         check_read_authorization(&mut client, &backend, &branch, &handles, None);
         close_authorization_handles(&mut client, &handles);

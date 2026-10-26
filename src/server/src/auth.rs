@@ -200,6 +200,13 @@ pub(crate) struct AuthReader {
 }
 
 impl AuthReader {
+    /// Map a trusted protocol handshake to the current sole administrator.
+    /// This snapshot is not authentication or a reusable authorization proof.
+    pub(crate) fn sole_identity(&self) -> Result<Identity, ApiError> {
+        let database = self.database()?;
+        database.identity(&database.administrator.username)
+    }
+
     fn database(&self) -> Result<Arc<Database>, ApiError> {
         let committed = self
             .committed

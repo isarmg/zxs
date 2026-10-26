@@ -6640,6 +6640,7 @@
           "state": {
             "enum": [
               "RECEIVING",
+              "CHECKSUM_MISMATCH",
               "COMPLETE",
               "SEALED"
             ]

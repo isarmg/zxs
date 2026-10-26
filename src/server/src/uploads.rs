@@ -223,8 +223,80 @@ fn persist_held(
     .map_err(crate::upload_fs_error)
 }
 
+// HTTP projection is separate from the durable record. In particular, neither
+// owner identity nor filesystem paths belong in the public status response.
+#[derive(Serialize)]
+#[serialization(rename_all = "SCREAMING_SNAKE_CASE")]
+enum UploadStatusState {
+    Receiving,
+    ChecksumMismatch,
+    Complete,
+}
+impl From<UploadState> for UploadStatusState {
+    fn from(state: UploadState) -> Self {
+        match state {
+            UploadState::Incomplete => Self::Receiving,
+            UploadState::ChecksumMismatch => Self::ChecksumMismatch,
+            UploadState::Complete => Self::Complete,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct UploadStatus<'a> {
+    workspace_id: &'a str,
+    item_id: &'a str,
+    #[serialization(with = "storage_contract::u64_string")]
+    upload_generation: u64,
+    #[serialization(with = "storage_contract::u64_string")]
+    logical_size: u64,
+    content_hash: Option<storage_contract::ContentHash>,
+    state: UploadStatusState,
+    durable_ranges: Vec<ReceivedRange<'a>>,
+    sealed_manifest_hash: Option<&'a str>,
+}
+#[derive(Serialize)]
+struct ReceivedRange<'a> {
+    #[serialization(with = "storage_contract::u64_string")]
+    offset: u64,
+    #[serialization(with = "storage_contract::u64_string")]
+    length: u64,
+    content_hash: &'a str,
+}
+
 pub(crate) fn status(record: &UploadRecord) -> json_codec::Value {
-    json_codec::json!({"workspace_id":record.workspace_id,"item_id":record.item_id,"upload_generation":record.generation.to_string(),"logical_size":record.logical_size.to_string(),"content_hash":record.content_hash,"state":if record.state==UploadState::Complete{"COMPLETE"}else{"RECEIVING"},"durable_ranges":if record.persisted_bytes>0{vec![json_codec::json!({"offset":"0","length":record.persisted_bytes.to_string(),"content_hash":record.persisted_hash})]}else{vec![]},"sealed_manifest_hash":null})
+    let UploadRecord {
+        workspace_id,
+        item_id,
+        generation,
+        logical_size,
+        content_hash,
+        persisted_bytes,
+        persisted_hash,
+        state,
+        principal: _,
+        path: _,
+        data_file: _,
+    } = record;
+    let status = UploadStatus {
+        workspace_id,
+        item_id,
+        upload_generation: *generation,
+        logical_size: *logical_size,
+        content_hash: *content_hash,
+        state: (*state).into(),
+        durable_ranges: if *persisted_bytes > 0 {
+            vec![ReceivedRange {
+                offset: 0,
+                length: *persisted_bytes,
+                content_hash: persisted_hash,
+            }]
+        } else {
+            vec![]
+        },
+        sealed_manifest_hash: None,
+    };
+    json_codec::to_value(status).expect("invariant: upload status serialization succeeds")
 }
 #[cfg(test)]
 pub(crate) struct RetainGenerationHook {

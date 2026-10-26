@@ -289,7 +289,7 @@ pub enum Error {
     DestinationExists(PathBuf),
     #[error("directory inventory budget exceeded")]
     BudgetExceeded,
-    #[error(transparent)]
+    #[error("{0}")]
     Io(#[from] io::Error),
 }
 

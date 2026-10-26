@@ -286,3 +286,40 @@ fn upload_record_rejects_noncanonical_body_hash_and_retains_progress_evidence() 
         assert_eq!(fs::read(&data).unwrap(), b"partial");
     }
 }
+
+#[test]
+fn status_projects_each_durable_state_without_private_fields_or_payload_reads() {
+    let mut record = UploadRecord {
+        workspace_id: "ws".into(),
+        item_id: "item".into(),
+        principal: "private-owner".into(),
+        path: "private-path".into(),
+        generation: u64::MAX,
+        logical_size: u64::MAX,
+        content_hash: Some("0".repeat(64).parse().unwrap()),
+        persisted_bytes: u64::MAX,
+        persisted_hash: "1".repeat(64),
+        state: UploadState::Incomplete,
+        // No such file: projecting status must not read or hash payload data.
+        data_file: "unavailable-private-file.data".into(),
+    };
+    for (state, wire) in [
+        (UploadState::Incomplete, "RECEIVING"),
+        (UploadState::ChecksumMismatch, "CHECKSUM_MISMATCH"),
+        (UploadState::Complete, "COMPLETE"),
+    ] {
+        record.state = state;
+        assert_eq!(
+            status(&record),
+            json_codec::json!({
+                "workspace_id":"ws", "item_id":"item", "upload_generation":u64::MAX.to_string(),
+                "logical_size":u64::MAX.to_string(), "content_hash":"0".repeat(64),
+                "state":wire, "sealed_manifest_hash":null,
+                "durable_ranges":[{"offset":"0", "length":u64::MAX.to_string(), "content_hash":"1".repeat(64)}]
+            })
+        );
+    }
+    record.persisted_bytes = 0;
+    record.logical_size = 0;
+    assert_eq!(status(&record)["durable_ranges"], json_codec::json!([]));
+}

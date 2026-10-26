@@ -325,7 +325,10 @@ fn semantics(name: &str, value: &Value) -> Result {
                 complete &= start == end;
                 end = next;
             }
-            if value["state"] == "COMPLETE" || value["state"] == "SEALED" {
+            if value["state"] == "COMPLETE"
+                || value["state"] == "SEALED"
+                || value["state"] == "CHECKSUM_MISMATCH"
+            {
                 require(complete && end == size, "missing upload bytes")?;
             }
         }

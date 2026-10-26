@@ -864,3 +864,101 @@ fn public_envelope(body: json_codec::Value) -> storage_contract::PublicCommitEnv
     let workspace = body["workspace_id"].as_str().unwrap().to_owned();
     storage_contract::PublicCommitEnvelope::parse(&workspace, body).unwrap()
 }
+
+#[test]
+fn absent_saved_request_mirror_can_use_the_exact_surviving_copy() {
+    for absent in [0, 1] {
+        let (_temp, mut engine, _, request) = saved();
+        let expected = engine.commit_workspace(request.clone()).unwrap();
+        let paths = request_paths(&engine, &request);
+        fs::remove_file(&paths[absent]).unwrap();
+        assert_eq!(engine.commit_workspace(request).unwrap(), expected);
+        assert!(!paths[absent].exists());
+    }
+}
+
+#[test]
+fn corrupt_request_mirrors_keep_the_parse_error_source() {
+    use std::error::Error as _;
+    let (_temp, mut engine, _, request) = saved();
+    for path in request_paths(&engine, &request) {
+        fs::write(path, b"{truncated").unwrap();
+    }
+    let error = engine.commit_workspace(request).unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::RecoveryRequired);
+    let mut cause = error.source();
+    let mut found = false;
+    while let Some(source) = cause {
+        found |= source.downcast_ref::<json_codec::Error>().is_some();
+        cause = source.source();
+    }
+    assert!(found, "parse source must survive: {error:?}");
+}
+
+#[test]
+#[ignore = "requires workspace_read_error.c as LD_PRELOAD and ZXS_TEST_WORKSPACE_ERRNO=5 or 13"]
+fn workspace_evidence_io_failure_is_not_absence_or_corrupt_mirror() {
+    use std::error::Error as _;
+    let errno: i32 = std::env::var("ZXS_TEST_WORKSPACE_ERRNO")
+        .unwrap()
+        .parse()
+        .unwrap();
+    for name in ["commit-request.json", "workspace.json"] {
+        let (_temp, mut engine, _, request) = saved();
+        let path = request_paths(&engine, &request)[0].with_file_name(name);
+        let original = fs::read(&path).unwrap();
+        let marker = path.with_extension("read-error");
+        fs::write(&marker, b"inject read errno only for this file").unwrap();
+        let error = if name == "commit-request.json" {
+            engine.commit_workspace(request).unwrap_err()
+        } else {
+            let root = engine.root().to_owned();
+            drop(engine);
+            Engine::open(&root)
+                .err()
+                .expect("I/O error must reject recovery")
+        };
+        assert_eq!(error.code(), storage_contract::ErrorCode::IoError);
+        let mut cause = error.source();
+        let mut actual = None;
+        while let Some(source) = cause {
+            if let Some(source) = source.downcast_ref::<std::io::Error>() {
+                actual = source.raw_os_error();
+            }
+            cause = source.source();
+        }
+        assert_eq!(actual, Some(errno), "{error:?}");
+        fs::remove_file(marker).unwrap();
+        assert_eq!(fs::read(path).unwrap(), original);
+    }
+}
+
+#[test]
+#[ignore = "requires an unprivileged process for real EACCES (no chmod bypass capability)"]
+fn unreadable_workspace_request_is_not_a_missing_mirror() {
+    use std::{error::Error as _, os::unix::fs::PermissionsExt};
+    let (_temp, mut engine, _, request) = saved();
+    let path = request_paths(&engine, &request)[0].clone();
+    let permissions = fs::metadata(&path).unwrap().permissions();
+    let original = fs::read(&path).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    let probe = fs::File::open(&path);
+    let result = engine.commit_workspace(request);
+    fs::set_permissions(&path, permissions).unwrap();
+    assert_eq!(
+        probe.unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    let error = result.unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::IoError);
+    let mut cause = error.source();
+    let mut denied = false;
+    while let Some(source) = cause {
+        denied |= source
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied);
+        cause = source.source();
+    }
+    assert!(denied, "permission source must survive: {error:?}");
+    assert_eq!(fs::read(path).unwrap(), original);
+}

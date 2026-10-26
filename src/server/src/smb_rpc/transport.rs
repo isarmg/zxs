@@ -73,13 +73,9 @@ impl SessionPermit {
 }
 impl Drop for SessionPermit {
     fn drop(&mut self) {
-        {
-            let mut sessions = self
-                .shared
-                .authenticated_sessions
-                .lock()
-                .expect("service state lock poisoned");
-            *sessions -= 1;
+        match self.shared.authenticated_sessions.lock() {
+            Ok(mut sessions) => *sessions -= 1,
+            Err(_) => tracing::error!("SMB session counter poisoned during release"),
         }
     }
 }
@@ -116,7 +112,7 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
         if username != shared.username {
             return Err(ApiError::forbidden());
         }
-        let mut identity = crate::lock(&shared.auth).sole_identity()?;
+        let mut identity = shared.auth.sole_identity()?;
         let permit = SessionPermit::acquire(&shared)?;
         let repo = shared
             .backend
@@ -326,6 +322,34 @@ pub async fn serve(
     result
 }
 
+// Only errors that describe an interrupted accept or a vanished pending peer
+// are transient here. Resource exhaustion and a broken listener fail closed.
+const MAX_ACCEPT_RETRIES: usize = 3;
+const ACCEPT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(25);
+
+fn retry_accept(error: &io::Error, consecutive_failures: usize) -> bool {
+    consecutive_failures < MAX_ACCEPT_RETRIES
+        && matches!(
+            error.kind(),
+            io::ErrorKind::Interrupted | io::ErrorKind::ConnectionAborted
+        )
+}
+
+fn prepare_connection(
+    stream: tokio::net::UnixStream,
+    allowed_uid: u32,
+) -> io::Result<std::os::unix::net::UnixStream> {
+    if stream.peer_cred()?.uid() != allowed_uid {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "SMB peer uid is not allowed",
+        ));
+    }
+    let stream = stream.into_std()?;
+    stream.set_nonblocking(false)?;
+    Ok(stream)
+}
+
 pub(crate) async fn serve_owned(
     config: crate::SmbConfig,
     auth: Arc<Mutex<AuthStore>>,
@@ -333,6 +357,10 @@ pub(crate) async fn serve_owned(
     max_file_bytes: u64,
     workers: ConnectionRegistry,
 ) -> io::Result<()> {
+    // The reader must not extend the credential file lock. The listener owns
+    // the real store, including when serve() receives its last strong reference.
+    // Declare it before socket resources so they are closed before it is dropped.
+    let auth_owner = auth;
     let crate::SmbConfig {
         socket,
         spool_dir,
@@ -357,7 +385,7 @@ pub(crate) async fn serve_owned(
         authenticated_sessions: Mutex::new(0),
         backend,
         username,
-        auth,
+        auth: crate::lock(&auth_owner).reader(),
         spool,
         file_writers: Mutex::new(BTreeSet::new()),
         namespace_operations: Mutex::new(BTreeSet::new()),
@@ -365,24 +393,50 @@ pub(crate) async fn serve_owned(
     workers.attach_connections(Arc::clone(&connections));
     let admission = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     let mut next_connection = 1u64;
+    let mut accept_failures = 0;
     loop {
-        let (stream, _) = listener.accept().await?;
-        if stream.peer_cred()?.uid() != allowed_uid {
-            drop(stream);
-            continue;
-        }
-        let Ok(permit) = admission.clone().try_acquire_owned() else {
-            drop(stream);
-            continue;
+        let stream = match listener.accept().await {
+            Ok((stream, _)) => {
+                accept_failures = 0;
+                stream
+            }
+            Err(error) if retry_accept(&error, accept_failures) => {
+                accept_failures += 1;
+                tracing::debug!(error = ?error, accept_failures, "retrying transient SMB accept failure");
+                tokio::time::sleep(ACCEPT_RETRY_DELAY).await;
+                continue;
+            }
+            Err(error) => return Err(error),
         };
-        let stream = stream.into_std()?;
-        stream.set_nonblocking(false)?;
+        let stream = match prepare_connection(stream, allowed_uid) {
+            Ok(stream) => stream,
+            Err(error) => {
+                tracing::debug!(error = ?error, "SMB connection preparation rejected");
+                continue;
+            }
+        };
+        let permit = match admission.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(error) => {
+                tracing::debug!(error = ?error, "SMB connection capacity rejected");
+                continue;
+            }
+        };
+        let shutdown_stream = match stream.try_clone() {
+            Ok(stream) => stream,
+            Err(error) => {
+                tracing::warn!(error = ?error, "SMB connection shutdown descriptor unavailable");
+                continue;
+            }
+        };
         let id = next_connection;
-        next_connection += 1;
+        next_connection = next_connection
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("SMB connection identifiers exhausted"))?;
         connections
             .lock()
             .expect("service state lock poisoned")
-            .insert(id, stream.try_clone()?);
+            .insert(id, shutdown_stream);
         let connection_guard = ConnectionGuard {
             id,
             connections: connections.clone(),

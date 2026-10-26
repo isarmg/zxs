@@ -28,3 +28,30 @@ ZXS 独立的 Linux 服务端基础库，在本项目维护和构建。
 
 
 平台库的 Tokio 直接生产依赖仅启用 `rt`；SQLite 依赖自行声明所需的 `sync`/`time`。测试单独启用宏和多线程运行时，以覆盖两种执行环境。这不会移除服务端实际需要的多线程运行时，也不改变 SQLite 持久化策略。
+
+## 原子写屏障所有权
+
+`AtomicFile::create` 与 `replace` 都在本次独占临时文件上完成写入和
+`File::sync_all`，再修改目录项，核对发布 inode，最后同步持有的目标目录。
+create-only 在发布前保留单链接检查及临时名称到持有 inode 的对应检查，
+只复用私有 `rename_no_replace` 目录项步骤，不重新打开并同步同一临时文件。
+公共 `NoClobberPublish::publish` 接受未知持久性的 staging，仍独立完成打开、
+单链接准入、文件同步、NOREPLACE、发布身份检查和目录同步。
+三个入口都只接受同一持有目录内的单个名称，不新增跨目录发布能力。
+
+rename 前失败保留原目标；内部临时文件由清理守卫回收，公共发布的 source
+由调用方拥有。rename 成功即解除临时清理；之后目录同步失败返回
+`PublishedDurabilityUnknown` 并保留已发布目标，不伪称回滚。replace、权限、
+现存对象重试屏障、锁文件与祖先目录持久化协议不变。
+
+普通 fresh create 的静态预算从两次文件同步加两次目录同步降为各一次
+（不计创建祖先目录）；这不是端到端性能实测。故意仅在被删除的第二次同步
+注入 EIO 时，错误表现当然不再逐调用相同；耐久顺序仍为文件先于 rename、
+目录后于 rename。根测试 `test/platform/unit/fs_safety/atomic-io.sh` 接受已编译的
+platform-io libtest 二进制，隔离运行 create/replace/public 的成功、写失败、
+文件同步失败、真实发布冲突和目录同步失败；断言命名空间、源保全与清理。
+replace 的目录冲突由 rename 前类型检查拒绝，create/public 由 NOREPLACE 拒绝；
+这不冒称每种发布冲突都到达了 rename 系统调用。
+其 LD_PRELOAD 日志只覆盖 `std::fs::File` 的 libc write/fsync 路径，检查文件屏障
+时目标尚非该 inode、目录屏障时已存在目标，不声称拦截 rustix direct syscall、
+全进程 syscall 总数、精确 rename 时间或物理断电行为。

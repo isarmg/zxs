@@ -46,11 +46,16 @@ fn filesystem_context_keeps_durability_and_path_status_policy() {
             std::io::Error::from_raw_os_error(raw),
         ));
         assert_eq!(error.code(), expected);
-        assert!(
-            error
+        let filesystem = error.source().unwrap();
+        assert!(filesystem.is::<platform_io::fs_safety::Error>());
+        assert_eq!(
+            filesystem
                 .source()
                 .unwrap()
-                .is::<platform_io::fs_safety::Error>()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .raw_os_error(),
+            Some(raw)
         );
     }
 }

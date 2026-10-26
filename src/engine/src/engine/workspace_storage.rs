@@ -44,9 +44,7 @@ impl Engine {
         let Some(operation) = self.state.operations.get(&request.operation_id) else {
             return Ok(false);
         };
-        if crate::business::native_commit_digest(workspace, request)
-            .is_ok_and(|digest| digest == operation.request_digest)
-        {
+        if crate::business::native_commit_digest(workspace, request)? == operation.request_digest {
             return Ok(true);
         }
         // Completion advances the live fence, but the wire manifest commits
@@ -54,19 +52,18 @@ impl Engine {
         // files, namespace operations, branch and base must remain unchanged.
         let mut frozen = workspace.clone();
         frozen.fencing_token = request.fencing_token;
-        let Ok(manifest) = crate::wire::manifest_hash(&frozen) else {
-            return Ok(false);
-        };
+        let manifest = crate::wire::manifest_hash(&frozen)?;
         // Wire requests use a different envelope. Verify the original body,
-        // not merely its caller-supplied digest string. Missing legacy body
-        // copies leave the workspace untouched rather than guessing its state.
+        // not merely its caller-supplied digest string. Absent body copies do
+        // not establish completion; an unreadable copy is not absence.
+        let mut damage = None;
         for directory in directories {
-            let body = match read_json::<json_codec::Value>(&directory.join("wire-request.json")) {
-                Ok(body) => body,
-                Err(error) if error.code() == storage_contract::ErrorCode::UnsafePath => {
-                    return Err(error);
-                }
-                Err(_) => continue,
+            let Some(body) = read_workspace_evidence::<json_codec::Value>(
+                &directory.join("wire-request.json"),
+                &mut damage,
+            )?
+            else {
+                continue;
             };
             if body["operation_id"].as_str() == Some(request.operation_id.to_string().as_str())
                 && body["workspace_id"].as_str() == Some(workspace.workspace_id.as_str())
@@ -77,11 +74,17 @@ impl Engine {
                 && body["message"].as_str() == Some(request.message.as_str())
                 && body["request_digest"].as_str() == Some(operation.request_digest.as_str())
                 && body["sealed_manifest_hash"].as_str() == Some(manifest.as_str())
-                && crate::wire::commit_request_digest(&workspace.workspace_id, &body)
-                    .is_ok_and(|digest| digest == operation.request_digest)
+                && crate::wire::commit_request_digest(&workspace.workspace_id, &body)?
+                    == operation.request_digest
             {
                 return Ok(true);
             }
+        }
+        if let Some(error) = damage {
+            return Err(error.context(
+                ErrorCode::RecoveryRequired,
+                "no healthy wire request evidence",
+            ));
         }
         Ok(false)
     }
@@ -185,22 +188,20 @@ impl Engine {
         self.reset_workspace_budget();
         for (id, paths) in candidates {
             let mut healthy = Vec::new();
-            let mut damaged = false;
+            let mut damage = None;
             for path in &paths {
-                match read_json::<Workspace>(path) {
-                    Ok(workspace) => {
-                        self.validate_workspace_mirror(&id, path, &workspace, authoritative)?;
-                        healthy.push(workspace);
-                    }
-                    Err(error) if error.code() == storage_contract::ErrorCode::UnsafePath => {
-                        return Err(error);
-                    }
-                    Err(_) => damaged = true,
+                if let Some(workspace) = read_workspace_evidence::<Workspace>(path, &mut damage)? {
+                    self.validate_workspace_mirror(&id, path, &workspace, authoritative)?;
+                    healthy.push(workspace);
                 }
             }
             if healthy.is_empty() {
-                return Err(recovery_required("no healthy workspace manifest mirror"));
+                return Err(missing_evidence(
+                    damage,
+                    "no healthy workspace manifest mirror",
+                ));
             }
+            let damaged = healthy.len() != paths.len();
             if authoritative && healthy.len() == 2 {
                 self.reconcile_completion_contexts(&mut healthy)?;
             }
@@ -349,12 +350,14 @@ impl Engine {
                     "workspace staging path escapes owned directory",
                 ));
             }
-            // Missing bytes can be an existing unavailable-content condition,
-            // but an unsafe source must not be hidden by a healthy JSON mirror.
-            if let Err(error) = open_regular(&file.source_path)
-                && error.code() == storage_contract::ErrorCode::UnsafePath
-            {
-                return Err(error);
+            // Missing bytes can be an existing unavailable-content condition.
+            // Permission and I/O failures are not evidence of missing content.
+            match open_regular(&file.source_path) {
+                Ok(_) => {}
+                Err(Error::Filesystem(platform_io::fs_safety::Error::Io(source)))
+                | Err(Error::Contract(storage_contract::Error::Io { source, .. }))
+                    if source.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
             }
         }
         Ok(())
@@ -402,13 +405,14 @@ impl Engine {
             self.root.join("workspaces").join(&workspace.workspace_id),
             self.workspace_recovery_directory(workspace)?,
         ];
+        let mut damage = None;
         for directory in &directories {
-            let request = match read_json::<CommitRequest>(&directory.join("commit-request.json")) {
-                Ok(request) => request,
-                Err(error) if error.code() == storage_contract::ErrorCode::UnsafePath => {
-                    return Err(error);
-                }
-                Err(_) => continue,
+            let Some(request) = read_workspace_evidence::<CommitRequest>(
+                &directory.join("commit-request.json"),
+                &mut damage,
+            )?
+            else {
+                continue;
             };
             if !self.workspace_request_matches_operation(workspace, &request)
                 || workspace.fencing_token != request.fencing_token
@@ -461,7 +465,8 @@ impl Engine {
                 }
             }
         }
-        Err(recovery_required(
+        Err(missing_evidence(
+            damage,
             "workspace completion has no bound publication snapshot",
         ))
     }
@@ -472,13 +477,14 @@ impl Engine {
             self.workspace_recovery_directory(workspace)?,
         ];
         let mut completion = None;
+        let mut damage = None;
         for directory in &directories {
-            let request = match read_json::<CommitRequest>(&directory.join("commit-request.json")) {
-                Ok(request) => request,
-                Err(error) if error.code() == storage_contract::ErrorCode::UnsafePath => {
-                    return Err(error);
-                }
-                Err(_) => continue,
+            let Some(request) = read_workspace_evidence::<CommitRequest>(
+                &directory.join("commit-request.json"),
+                &mut damage,
+            )?
+            else {
+                continue;
             };
             if self.workspace_request_matches_operation(workspace, &request)
                 && self.saved_request_digest_matches(workspace, &request, &directories)?
@@ -516,15 +522,26 @@ impl Engine {
                     && plan.input["workspace_id"].as_str() == Some(workspace.workspace_id.as_str())
                     && plan.input["source_commit_id"].as_str() == Some(workspace.base_head.as_str())
             }) {
-                let Some(fence) = plan.input["workspace_fencing_token"]
-                    .as_str()
-                    .and_then(|fence| fence.parse::<u64>().ok())
-                else {
-                    continue;
-                };
-                let Some(next) = fence.checked_add(1) else {
-                    continue;
-                };
+                let fence = std::num::NonZeroU64::new(
+                    storage_contract::parse_u64_decimal(
+                        plan.input["workspace_fencing_token"]
+                            .as_str()
+                            .ok_or_else(|| {
+                                recovery_required("historical workspace plan lacks fencing token")
+                            })?,
+                    )
+                    .map_err(|source| {
+                        Error::from(source).context(
+                            ErrorCode::RecoveryRequired,
+                            "invalid historical workspace fencing token",
+                        )
+                    })?,
+                )
+                .ok_or_else(|| recovery_required("historical workspace fencing token is zero"))?;
+                let fence = fence.get();
+                let next = fence
+                    .checked_add(1)
+                    .ok_or_else(|| recovery_required("workspace fencing generation exhausted"))?;
                 let mut frozen = workspace.clone();
                 frozen.fencing_token = fence;
                 if plan.input["sealed_manifest_hash"].as_str()
@@ -544,6 +561,14 @@ impl Engine {
                 }
                 completion = Some(next);
             }
+        }
+        if completion.is_none()
+            && let Some(error) = damage
+        {
+            return Err(error.context(
+                ErrorCode::RecoveryRequired,
+                "no healthy workspace request evidence",
+            ));
         }
         if let Some(fence) = completion {
             if workspace.purpose == WorkspacePurpose::Normal
@@ -586,11 +611,11 @@ impl crate::engine::PlanningContext<'_> {
             .join("workspaces")
             .join(&workspace.workspace_id)
             .join("commit-request.json");
-        let matches = |path: &std::path::Path| -> Result<bool> {
-            match read_json::<CommitRequest>(path) {
-                Ok(saved) => Ok(canonical_json(&saved)? == expected),
-                Err(error) if error.code() == storage_contract::ErrorCode::UnsafePath => Err(error),
-                Err(_) => Ok(false),
+        let mut damage = None;
+        let mut matches = |path: &std::path::Path| -> Result<bool> {
+            match read_workspace_evidence::<CommitRequest>(path, &mut damage)? {
+                Some(saved) => Ok(canonical_json(&saved)? == expected),
+                None => Ok(false),
             }
         };
         if matches(&local)? {
@@ -602,8 +627,8 @@ impl crate::engine::PlanningContext<'_> {
         if matches(&data)? {
             return Ok(());
         }
-        Err(Error::new(
-            storage_contract::ErrorCode::RecoveryRequired,
+        Err(missing_evidence(
+            damage,
             "no exact saved workspace commit request is available",
         ))
     }
@@ -617,3 +642,38 @@ impl crate::engine::PlanningContext<'_> {
         Ok(disk.root.join("staging/workspaces").join(&w.workspace_id))
     }
 }
+
+// These bounded redundant files may be absent or contain a torn JSON mirror.
+// I/O/permission failures are not evidence of absence or recoverable corruption.
+fn read_workspace_evidence<T: data_serialization::de::DeserializeOwned>(
+    path: &Path,
+    damage: &mut Option<Error>,
+) -> Result<Option<T>> {
+    match read_json(path) {
+        Ok(value) => Ok(Some(value)),
+        Err(Error::Filesystem(platform_io::fs_safety::Error::Io(source)))
+        | Err(Error::Contract(storage_contract::Error::Io { source, .. }))
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            Ok(None)
+        }
+        Err(error @ Error::Contract(storage_contract::Error::Json { .. })) => {
+            if damage.is_none() {
+                *damage = Some(error);
+            }
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn missing_evidence(damage: Option<Error>, message: &str) -> Error {
+    match damage {
+        Some(error) => error.context(ErrorCode::RecoveryRequired, message),
+        None => recovery_required(message),
+    }
+}
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/engine/workspace_storage_tests.rs"]
+mod tests;

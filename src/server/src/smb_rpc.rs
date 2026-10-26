@@ -2,7 +2,7 @@
 //! mutable files remain unpublished until the normal core commit succeeds.
 use crate::{
     ApiError, Backend, Content,
-    auth::{AuthStore, Identity},
+    auth::{AuthReader, AuthStore, Identity},
 };
 use json_codec::{Value, json};
 use smb_protocol::protocol::{
@@ -47,7 +47,7 @@ mod tests;
 struct Shared {
     backend: Arc<dyn Backend>,
     username: String,
-    auth: Arc<Mutex<AuthStore>>,
+    auth: AuthReader,
     spool: PathBuf,
     budget: Arc<budget::Budget>,
     max_file_bytes: u64,

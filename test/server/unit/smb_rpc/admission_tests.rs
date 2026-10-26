@@ -126,8 +126,7 @@ fn configured_samba_account_binds_the_current_single_authority_and_fails_closed_
     let (mut live, response) = connect(shared.clone(), "samba-owner", &repository);
     assert!(matches!(response, Response::Ok { result } if result["principal"] == "alice"));
 
-    shared
-        .auth
+    temp.auth
         .lock()
         .unwrap()
         .replace_authority(AuthStore::unavailable(&temp.path().join("recovering")));
@@ -150,7 +149,7 @@ fn configured_samba_account_binds_the_current_single_authority_and_fails_closed_
     disconnect(live, false);
     assert_eq!(*shared.authenticated_sessions.lock().unwrap(), 0);
 
-    shared.auth.lock().unwrap().replace_authority(
+    temp.auth.lock().unwrap().replace_authority(
         AuthStore::initialize(
             &temp.path().join("restored-auth"),
             "restored-owner",
@@ -161,4 +160,90 @@ fn configured_samba_account_binds_the_current_single_authority_and_fails_closed_
     let (restored, response) = connect(shared.clone(), "samba-owner", &repository);
     assert!(matches!(response, Response::Ok { result } if result["principal"] == "restored-owner"));
     disconnect(restored, false);
+}
+
+// Real listener coverage belongs to AF_UNIX-capable CI, not restricted sandboxes.
+#[tokio::test]
+async fn listener_survives_bad_clients_and_joins_the_next_authenticated_connection() {
+    let (temp, shared, _backend, _branch) = fixture();
+    let repository = repository(&shared);
+    let socket = temp.path().join("listener/rpc.sock");
+    let config = crate::SmbConfig {
+        socket: socket.clone(),
+        spool_dir: temp.path().join("listener-spool"),
+        allowed_uid: rustix::process::geteuid().as_raw(),
+        username: "alice".into(),
+        spool_limits: crate::SpoolLimits::default(),
+    };
+    let mut shutdown = ConnectionShutdown::new();
+    let owner = Arc::downgrade(&temp.auth);
+    let Fixture { auth, root: _root } = temp;
+    let listener = tokio::spawn(serve_owned(
+        config,
+        auth,
+        shared.backend.clone(),
+        4096,
+        shutdown.registry(),
+    ));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match fs::symlink_metadata(&socket) {
+                Ok(_) => break,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    assert!(!listener.is_finished(), "listener failed before binding");
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("socket readiness: {error}"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let client = tokio::task::spawn_blocking(move || {
+        // EOF during Hello must be owned by one worker, not by the listener.
+        drop(UnixStream::connect(&socket).unwrap());
+        for username in ["not-alice", "alice"] {
+            let stream = UnixStream::connect(&socket).unwrap();
+            let mut wire = FrameStream::with_timeout(stream, Duration::from_secs(5)).unwrap();
+            wire.send(
+                &Request::<String>::Hello {
+                    protocol: PROTOCOL.into(),
+                    capabilities: REQUIRED_CAPABILITIES
+                        .iter()
+                        .map(|value| (*value).into())
+                        .collect(),
+                    username: username.into(),
+                    repository_id: repository.clone(),
+                },
+                None,
+            )
+            .unwrap();
+            let response = wire.receive::<Response>().unwrap().0;
+            if username == "alice" {
+                assert!(matches!(response, Response::Ok { .. }));
+                return wire;
+            }
+            assert!(matches!(
+                response,
+                Response::Error {
+                    code: storage_contract::ErrorCode::Forbidden,
+                    ..
+                }
+            ));
+        }
+        unreachable!()
+    })
+    .await
+    .unwrap();
+    assert!(!listener.is_finished());
+    assert!(owner.upgrade().is_some());
+    listener.abort();
+    assert!(listener.await.unwrap_err().is_cancelled());
+    assert!(owner.upgrade().is_none());
+    assert!(shared.auth.sole_identity().is_err());
+    tokio::time::timeout(Duration::from_secs(5), shutdown.finish())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(client);
 }

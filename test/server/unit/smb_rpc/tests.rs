@@ -39,7 +39,7 @@ mod reconciliation_tests;
 const RECONCILIATION_SNAPSHOT: usize = 1;
 const RECONCILIATION_CONTENT: usize = 2;
 
-struct LostCommitReply {
+pub(super) struct LostCommitReply {
     inner: EngineBackend,
     calls: Mutex<Vec<(crate::BackendAction, Value)>>,
     authorizations: Mutex<Vec<String>>,
@@ -514,7 +514,17 @@ impl Backend for LostCommitReply {
     }
 }
 
-fn fixture() -> (tempfile::TempDir, Arc<Shared>, Arc<LostCommitReply>, String) {
+pub(super) struct Fixture {
+    auth: Arc<Mutex<AuthStore>>,
+    root: tempfile::TempDir,
+}
+impl Fixture {
+    fn path(&self) -> &Path {
+        self.root.path()
+    }
+}
+
+pub(super) fn fixture() -> (Fixture, Arc<Shared>, Arc<LostCommitReply>, String) {
     let temp = tempfile::tempdir().unwrap();
     let config = Config::development([
         temp.path().join("p"),
@@ -588,15 +598,20 @@ fn fixture() -> (tempfile::TempDir, Arc<Shared>, Arc<LostCommitReply>, String) {
         authenticated_sessions: Mutex::new(0),
         backend: backend.clone(),
         username: "alice".into(),
-        auth,
+        auth: crate::lock(&auth).reader(),
         spool,
         file_writers: Mutex::new(BTreeSet::new()),
         namespace_operations: Mutex::new(BTreeSet::new()),
     });
-    (temp, shared, backend, repo.main_branch_id)
+    (
+        Fixture { auth, root: temp },
+        shared,
+        backend,
+        repo.main_branch_id,
+    )
 }
 fn identity(shared: &Shared) -> Identity {
-    shared.auth.lock().unwrap().sole_identity().unwrap()
+    shared.auth.sole_identity().unwrap()
 }
 fn repository(shared: &Shared) -> String {
     shared
@@ -1617,7 +1632,7 @@ async fn cancellation_closes_blocked_rpc_sessions_and_removes_its_socket() {
     let server_spool = temp.path().join("management/smb-spool");
     let repository = repository(&shared);
     let username = shared.username.clone();
-    let auth = shared.auth.clone();
+    let auth = temp.auth.clone();
     let backend = shared.backend.clone();
     let server = tokio::spawn(async move {
         serve(

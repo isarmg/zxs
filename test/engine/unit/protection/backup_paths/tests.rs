@@ -803,3 +803,139 @@ fn path_only_protection_policy_follows_the_path_for_future_versions() {
             .contains_key(&updated.file_id)
     );
 }
+
+#[test]
+fn admission_rejects_missing_namespace_or_bound_policy_before_copy_selection() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut engine, repo) = initialize(temp.path(), 1, None);
+    let file = save(&mut engine, &repo, "docs/file", b"body");
+    engine
+        .configure_backups(crate::BackupConfigurationRequest {
+            repository_id: &repo.repository_id,
+            path: "docs",
+            target_copies: 3,
+            backup_prefixes: &prefixes(&[("B01", "one"), ("C01", "two")]),
+            expected_generation: 0,
+            principal: "admin",
+            operation_id: storage_contract::OperationId::generate(),
+        })
+        .unwrap();
+    let state = engine.state().clone();
+    assert_eq!(
+        effective_policy(
+            &state,
+            &repo.repository_id,
+            Some(&file.file_id),
+            "docs/file"
+        )
+        .unwrap()
+        .target_copies,
+        3
+    );
+    for missing in ["branch", "commit", "policy", "policy_repository"] {
+        let mut broken = state.clone();
+        match missing {
+            "branch" => {
+                broken.branches.remove(&repo.main_branch_id);
+            }
+            "commit" => {
+                let head = broken.branches[&repo.main_branch_id].head_commit_id.clone();
+                broken.commits.remove(&head);
+            }
+            "policy" => {
+                let id = broken.file_backup_policies[&file.file_id].clone();
+                broken.protection_policies.remove(&id);
+            }
+            "policy_repository" => {
+                let id = broken.file_backup_policies[&file.file_id].clone();
+                broken
+                    .protection_policies
+                    .get_mut(&id)
+                    .unwrap()
+                    .repository_id = new_id("repo");
+            }
+            _ => unreachable!(),
+        }
+        let raw: crate::history_package::RawState =
+            decode_strict(&canonical_json(&broken).unwrap()).unwrap();
+        assert_eq!(
+            State::try_from(raw).err().unwrap().code(),
+            storage_contract::ErrorCode::StateInvalid,
+            "{missing}"
+        );
+    }
+}
+
+#[test]
+fn removed_scope_is_absent_but_its_retained_file_binding_still_applies() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut engine, repo) = initialize(temp.path(), 1, None);
+    let file = save(&mut engine, &repo, "docs/file", b"body");
+    engine
+        .configure_backups(crate::BackupConfigurationRequest {
+            repository_id: &repo.repository_id,
+            path: "docs",
+            target_copies: 3,
+            backup_prefixes: &prefixes(&[("B01", "one"), ("C01", "two")]),
+            expected_generation: 0,
+            principal: "admin",
+            operation_id: storage_contract::OperationId::generate(),
+        })
+        .unwrap();
+    engine
+        .file_namespace(
+            &repo.repository_id,
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::DeleteTree,
+                "docs",
+                None,
+            )
+            .unwrap(),
+            "admin",
+            OperationId::generate(),
+        )
+        .unwrap();
+    let state = engine.state();
+    let policy = &state.protection_policies[&state.file_backup_policies[&file.file_id]];
+    assert_eq!(scope_path(state, policy), None);
+    assert_eq!(
+        effective_policy(
+            state,
+            &repo.repository_id,
+            Some(&file.file_id),
+            "elsewhere/file"
+        )
+        .unwrap()
+        .target_copies,
+        3
+    );
+    assert!(effective_policy(state, &repo.repository_id, None, "docs/new").is_none());
+}
+
+#[test]
+fn public_placement_query_does_not_inherit_another_repositories_file_policy() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut engine, repo) = initialize(temp.path(), 1, None);
+    let file = save(&mut engine, &repo, "file", b"body");
+    engine
+        .configure_backups(crate::BackupConfigurationRequest {
+            repository_id: &repo.repository_id,
+            path: "file",
+            target_copies: 3,
+            backup_prefixes: &prefixes(&[("B01", "one"), ("C01", "two")]),
+            expected_generation: 0,
+            principal: "admin",
+            operation_id: OperationId::generate(),
+        })
+        .unwrap();
+    let other = engine
+        .create_repository("other", "P01", 2, "admin", OperationId::generate())
+        .unwrap();
+    assert_eq!(
+        engine
+            .new_file_placement_for_file(&other.repository_id, Some(&file.file_id), "file")
+            .unwrap()
+            .1,
+        2
+    );
+}
