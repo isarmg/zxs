@@ -16,7 +16,7 @@ use std::{
     path::Path,
 };
 
-fn upload_fingerprint_file(input: std::fs::File, maximum: u64) -> Result<(u64, String)> {
+fn upload_fingerprint_file(input: std::fs::File, maximum: u64) -> Result<(u64, ContentHash)> {
     let mut digest = blake3::Hasher::new();
     let mut size = 0u64;
     let mut buffer = [0u8; 65536];
@@ -39,7 +39,7 @@ fn upload_fingerprint_file(input: std::fs::File, maximum: u64) -> Result<(u64, S
         }
         digest.update(&buffer[..n]);
     }
-    Ok((size, digest.finalize().to_hex().to_string()))
+    Ok((size, ContentHash::from_digest(digest.finalize())))
 }
 
 fn preparation_fs_error(error: platform_io::fs_safety::Error) -> Error {
@@ -105,7 +105,7 @@ pub struct UploadPreparation {
     item: String,
     path: name_policy::PortablePath,
     source: std::fs::File,
-    expected_content: Option<(u64, String)>,
+    expected_content: Option<(u64, ContentHash)>,
     generation: u64,
     base_version_id: Option<String>,
     directory: std::path::PathBuf,
@@ -124,7 +124,8 @@ pub struct UploadPreparation {
 pub struct PreparedUpload {
     plan: UploadPreparation,
     size: u64,
-    hash: String,
+    // None exists only while the scratch cleanup guard owns an unfinished copy.
+    hash: Option<ContentHash>,
     scratch: Option<std::path::PathBuf>,
     verified: Option<VerifiedUploadFile>,
 }
@@ -183,11 +184,11 @@ impl UploadPreparation {
             .map_err(preparation_fs_error)
     }
 
-    fn verify_retained(&self, size: u64, hash: &str) -> Result<VerifiedUploadFile> {
+    fn verify_retained(&self, size: u64, hash: &ContentHash) -> Result<VerifiedUploadFile> {
         let file = self.retained_file()?;
         let stamp = UploadFileStamp::of(&file)?;
         let actual = upload_fingerprint_file(file.try_clone()?, self.max_file_bytes)?;
-        if actual.0 != size || actual.1 != hash || UploadFileStamp::of(&file)? != stamp {
+        if actual.0 != size || actual.1 != *hash || UploadFileStamp::of(&file)? != stamp {
             return Err(Error::new(
                 storage_contract::ErrorCode::ChecksumMismatch,
                 "retained upload generation no longer matches its receipt",
@@ -196,7 +197,7 @@ impl UploadPreparation {
         Ok(VerifiedUploadFile { file, stamp })
     }
 
-    fn verify_content(&self, size: u64, hash: &str) -> Result<()> {
+    fn verify_content(&self, size: u64, hash: &ContentHash) -> Result<()> {
         if self
             .expected_content
             .as_ref()
@@ -239,7 +240,7 @@ impl UploadPreparation {
             return Ok(PreparedUpload {
                 plan: self,
                 size,
-                hash,
+                hash: Some(hash),
                 scratch: None,
                 verified: Some(retained),
             });
@@ -262,7 +263,7 @@ impl UploadPreparation {
             return Ok(PreparedUpload {
                 plan: self,
                 size: incoming.0,
-                hash: incoming.1,
+                hash: Some(incoming.1),
                 scratch: None,
                 verified: Some(retained),
             });
@@ -273,7 +274,7 @@ impl UploadPreparation {
         let mut prepared = PreparedUpload {
             plan: self,
             size: 0,
-            hash: String::new(),
+            hash: None,
             scratch: Some(scratch.clone()),
             verified: None,
         };
@@ -288,7 +289,7 @@ impl UploadPreparation {
         )?;
         prepared.plan.verify_content(size, &hash)?;
         prepared.size = size;
-        prepared.hash = hash;
+        prepared.hash = Some(hash);
         prepared.verified = Some(VerifiedUploadFile {
             stamp: UploadFileStamp::of(&file)?,
             file,
@@ -796,7 +797,7 @@ impl Engine {
         path: &name_policy::PortablePath,
         source: std::fs::File,
         generation: u64,
-        expected_content: Option<(u64, String)>,
+        expected_content: Option<(u64, ContentHash)>,
     ) -> Result<UploadPreparation> {
         platform_io::fs_safety::linux::SingleLinkRequirement::check(&source)
             .map_err(preparation_fs_error)?;
@@ -965,7 +966,9 @@ impl Engine {
             path: plan.path.clone(),
             source_path: plan.target.clone(),
             size: prepared.size,
-            content_hash: prepared.hash.clone(),
+            content_hash: prepared
+                .hash
+                .expect("invariant: completed upload has a body digest"),
             dirty_generation: plan.generation,
             base_version_id: plan.base_version_id.clone(),
         };
@@ -1038,24 +1041,19 @@ impl Engine {
                 &mut source.take(previous.size.saturating_add(1)),
                 &mut temporary,
             )?;
-            Some((previous.size, previous.content_hash.clone()))
+            Some((previous.size, previous.content_hash))
         } else if let Some(entry) = base.get_key(parsed.key()) {
             let source = self.open_content(&entry.version_id)?;
             std::io::copy(
                 &mut (&source.file).take(source.size.saturating_add(1)),
                 &mut temporary,
             )?;
-            Some((source.size, source.content_hash.clone()))
+            Some((source.size, source.content_hash))
         } else {
             None
         };
         if let Some((size, hash)) = expected {
-            let digest = blake3::Hash::from_hex(&hash).map_err(|source| {
-                Error::from(source).context(
-                    storage_contract::ErrorCode::ChecksumMismatch,
-                    "invalid staged content digest",
-                )
-            })?;
+            let digest = hash.digest();
             // Verify the copied snapshot before applying edits, so corruption
             // (including changes during copying) cannot become authenticated
             // untouched bytes in a new staged generation.
@@ -1349,7 +1347,7 @@ impl crate::engine::PlanningContext<'_> {
             chunks,
         };
         let digest = full.finalize();
-        let content_hash = digest.to_hex().to_string();
+        let content_hash = ContentHash::from_digest(digest);
         if expected.is_some_and(|original| {
             original.logical_size != size || original.content_hash != content_hash
         }) {

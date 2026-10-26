@@ -20,6 +20,8 @@ pub(crate) enum ApiErrorSource {
     Join(#[from] tokio::task::JoinError),
     #[error("{0}")]
     Contract(#[from] storage_contract::Error),
+    #[error("{0}")]
+    ContentHash(#[from] storage_contract::ParseContentHashError),
     #[cfg(feature = "core")]
     #[error("{0}")]
     Engine(#[from] storage_engine::Error),

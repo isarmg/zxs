@@ -42,7 +42,7 @@ pub(crate) struct UploadRecord {
     pub generation: u64,
     #[serialization(with = "storage_contract::u64_string")]
     pub logical_size: u64,
-    pub content_hash: Option<String>,
+    pub content_hash: Option<storage_contract::ContentHash>,
     #[serialization(with = "storage_contract::u64_string")]
     pub persisted_bytes: u64,
     pub persisted_hash: String,
@@ -83,12 +83,7 @@ pub(crate) fn load(
                 || record.data_file.starts_with('.')
                 || record.data_file.is_empty()
                 || record.generation == 0
-                || record.content_hash.as_ref().is_none_or(|hash| {
-                    hash.len() != 64
-                        || !hash
-                            .bytes()
-                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-                })
+                || record.content_hash.is_none()
                 || record.persisted_hash.len() != 64
                 || !record
                     .persisted_hash
@@ -152,7 +147,11 @@ impl StagedFile {
             reservation,
         }))
     }
-    pub fn source(&self, size: u64, hash: String) -> Result<crate::UploadSource, ApiError> {
+    pub fn source(
+        &self,
+        size: u64,
+        hash: storage_contract::ContentHash,
+    ) -> Result<crate::UploadSource, ApiError> {
         let writer = crate::lock(&self.writer);
         self.directory
             .verify_payload(&self.name, &writer)

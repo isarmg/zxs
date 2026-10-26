@@ -34,7 +34,7 @@ fn record(name: &str, principal: &str) -> UploadRecord {
         path: "file".into(),
         generation: 1,
         logical_size: 20,
-        content_hash: Some("0".repeat(64)),
+        content_hash: Some("0".repeat(64).parse().unwrap()),
         persisted_bytes: 3,
         persisted_hash: blake3::hash(b"abc").to_hex().to_string(),
         state: crate::uploads::UploadState::Complete,
@@ -277,7 +277,9 @@ fn rejected_batch_headroom_preserves_actual_tail_and_verified_retry_accounting()
     retained(&budget, "alice", "batch.data", size, b"abcdef");
     let mut progress = record("batch.data", "alice");
     progress.logical_size = size;
-    progress.content_hash = Some(blake3::hash(&complete).to_hex().to_string());
+    progress.content_hash = Some(storage_contract::ContentHash::from_digest(blake3::hash(
+        &complete,
+    )));
     progress.state = crate::uploads::UploadState::Incomplete;
     uploads::persist(root.path(), &progress).unwrap();
     drop(budget);

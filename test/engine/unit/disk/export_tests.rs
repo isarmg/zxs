@@ -19,7 +19,7 @@ fn full_copy_publishes_read_only_bytes_with_unchanged_hash_commitments() {
     let destination = temporary.path().join("copy");
     assert_eq!(fs::read(&destination).unwrap(), bytes);
     assert_eq!(size, bytes.len() as u64);
-    assert_eq!(hash, blake3::hash(&bytes).to_hex().as_str());
+    assert_eq!(hash, ContentHash::from_digest(blake3::hash(&bytes)));
     assert_eq!(manifest.chunk_bytes, chunk_bytes);
     assert_eq!(manifest.logical_size, size);
     assert_eq!(
@@ -45,7 +45,7 @@ fn full_copy_preserves_empty_file_commitments_and_final_mode() {
     fs::write(&source, []).unwrap();
     let (size, hash, manifest) = full_copy(&source, &destination, 64 * 1024, 0).unwrap();
     assert_eq!(size, 0);
-    assert_eq!(hash, blake3::hash(&[]).to_hex().as_str());
+    assert_eq!(hash, ContentHash::from_digest(blake3::hash(&[])));
     assert_eq!(manifest.logical_size, 0);
     assert!(manifest.chunks.is_empty());
     assert_eq!(fs::metadata(destination).unwrap().mode() & 0o777, 0o400);
@@ -290,7 +290,7 @@ fn offline_tombstones_bind_retained_version_metadata_and_directory() {
         for field in ["content_hash", "history_tree_id"] {
             let mut damaged = version.clone();
             match field {
-                "content_hash" => damaged.content_hash = "0".repeat(64),
+                "content_hash" => damaged.content_hash = "0".repeat(64).parse().unwrap(),
                 "history_tree_id" => damaged.history_tree_id = new_id("history"),
                 _ => unreachable!(),
             }
@@ -399,4 +399,26 @@ fn offline_check_does_not_treat_unreadable_histories_as_empty() {
     std::fs::rename(&histories, temp.path().join("retained-histories")).unwrap();
     std::os::unix::fs::symlink("histories", &histories).unwrap();
     assert!(offline_check(root).is_err());
+}
+
+#[test]
+fn typed_content_hash_disk_decode_rejects_noncanonical_digest_without_touching_evidence() {
+    let (temporary, directory, version) = published_body();
+    let body = crate::container_storage::content_path(&directory, &version).unwrap();
+    let original = fs::read(&body).unwrap();
+    let record = temporary.path().join("external-version.json");
+    let mut value = json_codec::to_value(&version).unwrap();
+    for bad in [
+        String::new(),
+        "0".repeat(63),
+        version.content_hash.to_string().to_uppercase(),
+    ] {
+        value["content_hash"] = json_codec::json!(bad);
+        let bytes = canonical_json(&value).unwrap();
+        fs::write(&record, &bytes).unwrap();
+        let error = read_json::<FileVersion>(&record).unwrap_err();
+        assert!(std::error::Error::source(&error).is_some());
+        assert_eq!(fs::read(&record).unwrap(), bytes);
+        assert_eq!(fs::read(&body).unwrap(), original);
+    }
 }

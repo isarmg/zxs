@@ -130,7 +130,7 @@ impl Engine {
         Ok(WorkspaceReadPlan(OpenedContent {
             file,
             size: staged.size,
-            content_hash: staged.content_hash.clone(),
+            content_hash: staged.content_hash,
             lease: ReadLease {
                 version: key,
                 reads: Arc::clone(&self.reads),
@@ -206,7 +206,7 @@ pub struct RangeContent {
     pub fallback_files: Vec<std::fs::File>,
     pub file: std::fs::File,
     pub size: u64,
-    pub content_hash: String,
+    pub content_hash: crate::ContentHash,
     pub manifest: ChecksumManifest,
     pub lease: ReadLease,
 }
@@ -404,7 +404,7 @@ impl WorkspaceReadPlan {
             })?;
             hash.update(&buffer[..count]);
         }
-        if remaining != 0 || hash.finalize().to_hex().as_str() != self.0.content_hash {
+        if remaining != 0 || ContentHash::from_digest(hash.finalize()) != self.0.content_hash {
             return Err(Error::new(
                 storage_contract::ErrorCode::ChecksumMismatch,
                 "workspace full file was modified outside the engine",

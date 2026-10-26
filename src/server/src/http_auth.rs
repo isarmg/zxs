@@ -2,7 +2,7 @@
 //!
 //! Credential algorithms come directly from `authentication`;
 //! persistent administrator/session state remains in `auth::AuthStore`.
-use crate::{ApiError, AppState, ServerConfig, auth::Identity, lock};
+use crate::{AdmittedServerConfig, ApiError, AppState, ServerConfig, auth::Identity, lock};
 use data_serialization::Deserialize;
 use http_routing::{
     Json,
@@ -199,7 +199,7 @@ fn client_ip(request: &Request, config: &ServerConfig) -> Result<IpAddr, ApiErro
 
 pub(crate) fn same_origin(
     headers: &HeaderMap,
-    config: &ServerConfig,
+    config: &AdmittedServerConfig,
     required: bool,
 ) -> Result<(), ApiError> {
     let Some(origin) = headers.get(header::ORIGIN) else {
@@ -215,8 +215,9 @@ pub(crate) fn same_origin(
     let origin = origin
         .to_str()
         .map_err(|source| ApiError::forbidden().with_source(source))?;
-    let expected = match config.normalized_external_origin()? {
-        Some(origin) => origin,
+    let loopback_origin;
+    let expected = match &config.external_origin {
+        Some(origin) => origin.0.as_str(),
         None => {
             let host = headers
                 .get(header::HOST)
@@ -230,7 +231,8 @@ pub(crate) fn same_origin(
             ) {
                 return Err(ApiError::forbidden());
             }
-            format!("http://{host}")
+            loopback_origin = format!("http://{host}");
+            loopback_origin.as_str()
         }
     };
     if origin != expected {

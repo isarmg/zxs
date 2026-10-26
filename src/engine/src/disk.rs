@@ -262,7 +262,7 @@ pub(crate) fn full_copy(
     destination: &Path,
     chunk_bytes: u32,
     max_bytes: u64,
-) -> Result<(u64, String, ChecksumManifest)> {
+) -> Result<(u64, ContentHash, ChecksumManifest)> {
     let source = open_regular(source)?;
     full_copy_to_path(source, destination, chunk_bytes, max_bytes, None)
         .map(|(size, hash, checksums, _file)| (size, hash, checksums))
@@ -345,7 +345,7 @@ fn full_copy_to_path(
     chunk_bytes: u32,
     max_bytes: u64,
     expected: Option<&FileVersion>,
-) -> std::result::Result<(u64, String, ChecksumManifest, File), CopyFailure> {
+) -> std::result::Result<(u64, ContentHash, ChecksumManifest, File), CopyFailure> {
     let destination = absolute_path(destination)?;
     let parent = destination.parent().ok_or_else(|| {
         Error::new(
@@ -386,7 +386,7 @@ pub(crate) fn full_copy_held(
     destination_name: &EntryName,
     chunk_bytes: u32,
     max_bytes: u64,
-) -> Result<(u64, String, ChecksumManifest, File)> {
+) -> Result<(u64, ContentHash, ChecksumManifest, File)> {
     full_copy_checked(
         source,
         directory,
@@ -405,7 +405,7 @@ fn full_copy_checked(
     chunk_bytes: u32,
     max_bytes: u64,
     expected: Option<&FileVersion>,
-) -> std::result::Result<(u64, String, ChecksumManifest, File), CopyFailure> {
+) -> std::result::Result<(u64, ContentHash, ChecksumManifest, File), CopyFailure> {
     let temporary = format!(".zxs-full-{}", new_id("req"));
     let mut target = File::from(
         rustix::fs::openat(
@@ -458,7 +458,7 @@ fn full_copy_checked(
             full.update(&buf[..used]);
             chunks.push(*blake3::hash(&buf[..used]).as_bytes());
         }
-        let hash = full.finalize().to_hex().to_string();
+        let hash = ContentHash::from_digest(full.finalize());
         let checksums = ChecksumManifest {
             chunk_bytes,
             logical_size: size,
@@ -564,7 +564,7 @@ pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Re
             "payload length changed during verification",
         ));
     }
-    if full.finalize().to_hex().as_str() != version.content_hash {
+    if ContentHash::from_digest(full.finalize()) != version.content_hash {
         return Err(Error::new(
             storage_contract::ErrorCode::ChecksumMismatch,
             "complete payload hash differs",

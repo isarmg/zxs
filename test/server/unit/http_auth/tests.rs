@@ -11,7 +11,7 @@ fn configured_external_origins_match_canonical_browser_origins() {
     ] {
         let mut config = ServerConfig::loopback(root.path());
         config.external_origin = Some(configured.into());
-        config.validate().unwrap();
+        let config = config.admit().unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(header::ORIGIN, HeaderValue::from_str(browser).unwrap());
         headers.insert("sec-fetch-site", HeaderValue::from_static("same-origin"));
@@ -28,7 +28,7 @@ fn external_origin_normalization_preserves_scheme_host_and_port_boundaries() {
     let root = tempfile::tempdir().unwrap();
     let mut config = ServerConfig::loopback(root.path());
     config.external_origin = Some("https://EXAMPLE.COM:443".into());
-    config.validate().unwrap();
+    let config = config.admit().unwrap();
     for origin in [
         "null",
         "http://example.com",
@@ -47,7 +47,9 @@ fn external_origin_normalization_preserves_scheme_host_and_port_boundaries() {
             "{origin}"
         );
     }
+    let mut config = ServerConfig::loopback(root.path());
     config.external_origin = Some("https://example.com:8443".into());
+    let config = config.admit().unwrap();
     let mut headers = HeaderMap::new();
     headers.insert(
         header::ORIGIN,
@@ -216,14 +218,14 @@ fn proxy_clients_have_separate_budgets_but_cannot_rotate_guesses_to_bypass_sourc
 #[test]
 fn proxy_configuration_requires_loopback_peer_and_valid_https_origin() {
     let mut config = proxy_config();
-    config.validate().unwrap();
+    config.clone().admit().unwrap();
     config.external_origin = None;
-    assert!(config.validate().is_err());
+    assert!(config.clone().admit().is_err());
     config.external_origin = Some("http://storage.example.org".into());
-    assert!(config.validate().is_err());
+    assert!(config.clone().admit().is_err());
     config.external_origin = Some("https://storage.example.org".into());
     config.trusted_proxy_ips = vec![address(1)];
-    assert!(config.validate().is_err());
+    assert!(config.clone().admit().is_err());
 }
 
 #[test]
@@ -527,6 +529,20 @@ impl crate::Backend for RetryProbe {
     ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn seal_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn commit_workspace_public(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: storage_contract::PublicCommitEnvelope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn authorize_upload(
         &self,
         _identity: &crate::auth::Identity,
@@ -570,9 +586,21 @@ impl crate::Backend for RetryProbe {
         _: &str,
         _: &name_policy::PortablePath,
         _: &crate::UploadSource,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         Err(ApiError::unsupported())
     }
+    fn upload_generation(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _item: &str,
+        _path: &name_policy::PortablePath,
+        _source: &crate::UploadSource,
+        _generation: u64,
+    ) -> Result<storage_contract::StagedFile, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
     fn content(&self, _: &Identity, _: &str) -> Result<crate::Content, ApiError> {
         Err(ApiError::unsupported())
     }
@@ -775,4 +803,44 @@ fn forwarded_address_parse_failure_preserves_source() {
         source = cause.source();
     }
     panic!("missing address parse source");
+}
+
+#[test]
+fn admitted_configuration_shares_paths_proxies_and_canonical_origin() {
+    let config = proxy_config().admit().unwrap();
+    let cloned = Arc::clone(&config);
+    assert!(Arc::ptr_eq(&config, &cloned));
+    assert!(std::ptr::eq(
+        config.spool_dir.as_path(),
+        cloned.spool_dir.as_path()
+    ));
+    assert!(std::ptr::eq(
+        config.trusted_proxy_ips.as_ptr(),
+        cloned.trusted_proxy_ips.as_ptr()
+    ));
+    assert!(std::ptr::eq(
+        config.external_origin.as_ref().unwrap().0.as_ptr(),
+        cloned.external_origin.as_ref().unwrap().0.as_ptr(),
+    ));
+}
+
+#[test]
+fn request_origin_admission_still_rejects_missing_duplicate_and_cross_site_headers() {
+    let config = proxy_config().admit().unwrap();
+    let mut headers = HeaderMap::new();
+    assert!(same_origin(&headers, &config, false).is_ok());
+    assert!(same_origin(&headers, &config, true).is_err());
+    headers.insert(
+        header::ORIGIN,
+        HeaderValue::from_static("https://storage.example.org"),
+    );
+    assert!(same_origin(&headers, &config, true).is_ok());
+    headers.insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+    assert!(same_origin(&headers, &config, true).is_err());
+    headers.remove("sec-fetch-site");
+    headers.append(
+        header::ORIGIN,
+        HeaderValue::from_static("https://storage.example.org"),
+    );
+    assert!(same_origin(&headers, &config, true).is_err());
 }

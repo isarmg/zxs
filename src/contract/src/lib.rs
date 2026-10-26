@@ -2,10 +2,16 @@
 #![forbid(unsafe_code)]
 pub mod api_path;
 pub mod client_protocol;
+mod content_hash;
 pub mod encoding;
 mod integer_json;
+pub use content_hash::{ContentHash, ParseContentHashError};
 mod operation_id;
+mod public_commit;
 pub use operation_id::OperationId;
+pub use public_commit::{
+    FilePlacement, PublicCommitEnvelope, PublicCommitParseError, SealedWorkspace,
+};
 pub mod model;
 mod shared_records;
 mod tracked;

@@ -21,6 +21,9 @@
 | `test/evidence/` | 保留探针的源代码与固定输入，使用限制见[探针操作](validation/evidence.md) |
 | `../test/tools/contract-check/gitignore.rs` | 临时 Git 仓库中的目录忽略策略回归，保护源码和固定样例，排除运行生成物 |
 
+正文摘要的解析边界、固定字节 oracle 与保留的完整性检查见
+[正文摘要类型边界](validation/typed-content-hash.md)。
+
 ## 执行与结果
 
 执行入口见[CI](ci.md)、[浏览器冒烟](tools/browser-smoke.md)及[发行验收清单](validation/release-checklist.md)。结果须绑定实际提交、构建产物、输入和环境，失败、取消、跳过与未执行不能记为通过。

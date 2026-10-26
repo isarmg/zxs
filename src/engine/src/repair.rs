@@ -26,12 +26,7 @@ fn matching(path: &Path, version: &FileVersion) -> Result<bool> {
         Ok(_) => {}
     }
     let mut file = open_regular(path)?;
-    let hash = blake3::Hash::from_hex(&version.content_hash).map_err(|source| {
-        Error::from(source).context(
-            ErrorCode::RecoveryRequired,
-            "candidate content digest is invalid",
-        )
-    })?;
+    let hash = version.content_hash.digest();
     match verify_full(
         &mut file,
         Expectation {

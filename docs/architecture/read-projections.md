@@ -66,11 +66,19 @@ HTTP Workspace GET 使用 `Backend::workspace` 捕获当前已授权领域快照
 
 三条旧 actions 已删除。授权／撤权矩阵覆盖新方法；预算取消测试覆盖 GET 与状态读取；现有真实 HTTP 回归覆盖新代次未完成、相等代次完成／sealed 以及无本机 spool 的跨入口上传。typed wire 测试覆盖 u64 最大值、零长度和 sealed manifest；这些测试不等于真实 AF_UNIX / SDK 验证。
 
+## 上传发布结果
+
+`Backend::upload` 与 `upload_generation` 直接返回已完成的 `StagedFile`，`finish_authorized_upload` 不再先序列化、递归删除 source_path 再返回 Value。SMB 新建文件 Open 直接取得 `staged.item_id`，Flush 不为丢弃结果生成 JSON；HTTP 最后投影为现有显式 `StagedFileResponse`，公开结构不含本机 source_path，保留 size/dirty_generation 文本及可空 base_version_id。该类型也用于 WorkspaceResponse 内嵌文件，两处 wire 规则不再重复。
+
+prepare 锁内所有者／代次检查、锁外完整副本验证、finish 回锁撤权与工作区检查均未改。HTTP 阻塞发布仍持有上传 admission/claim，结果返回前先持久写入 complete 状态；取消、超时未知结果、同代次重试和永久操作收据行为不变。`upload_generation` 不再有忽略 generation 的 trait 默认实现，production 原来已有的三个显式实现继续转发精确代次；测试代理也必须显式选择支持或拒绝。此组消除真实结果往返，但没有删除 BackendAction 变体，库存数字不因此虚减。
+
+独立 wire 测试覆盖本机路径脱敏与 u64::MAX；真实 HTTP 上传辅助函数逐次断言完整字段集和整数编码。现有 SMB 句柄身份稳定、重试／丢回复和上传后回锁撤权测试继续覆盖真实方法。
+
 ## 剩余 Value 调用清单
 
-此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 68 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
+此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 66 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
 
-- **下一组：工作区 seal 与发布入口。** `SealWorkspace` 仍通过 HTTP JSON action 返回 seal 数据；`CommitWorkspace` action 与已有 typed commit_workspace 的实际消费者和永久幂等错误顺序需要继续核对。上传 publication 的结果、write-session 与 namespace 仍有 Value，不能据当前查询迁移宣称全部工作区接口已经分层。
+- **工作区 seal／公开发布已接续迁移。** 见[公开提交边界](detached-workspace-commits.md#public-commit-envelope-and-seal)；HTTP 与 SMB 保留各自摘要契约。上传 publication 结果也已接续类型化；下一组 write-session 与 namespace 仍有 Value，不能据当前迁移宣称全部工作区接口已经分层。
 - **SMB 绑定／只读冻结版本。** transport/session 的 `Repository`、transport 的 `Capabilities`、只读句柄的 `Version` 仍经 Value；命名空间修改 `Namespace` 仍使用 JSON 请求。不是本次 typed 当前查询的后备路径。
 - **HTTP 通用读取。** repositories/repository/branches/branch/tree/resolve/history/commit/version/graph/events/compare、目录分支及选择、拓扑／放置／策略／磁盘／健康查询，仍由 HTTP 通用分派调用 `Backend::call`。
 - **HTTP 写入与计划。** 仓库／分支／目录分支创建和选择、SMB binding 配置、namespace、workspace/write-session/upload、policy/placement，以及 split/purge/historical-save/plan 的请求与结果仍需逐组迁移。已有 operation/commit_workspace typed 消费者保持不变，不能据此推定剩余 HTTP action 路径已经移除。

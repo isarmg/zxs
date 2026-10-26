@@ -22,6 +22,8 @@ fn every_action_round_trips_and_unknown_actions_are_rejected() {
         "workspace",
         "workspace_authorize",
         "upload_status",
+        "seal_workspace",
+        "commit_workspace",
     ] {
         assert!(BackendAction::try_from(unknown).is_err());
     }

@@ -134,9 +134,25 @@ impl Backend for BackendProbe {
         Ok(Some(crate::PublishedUploadStatus {
             generation: 1,
             logical_size: 0,
-            content_hash: blake3::hash(b"").to_hex().to_string(),
+            content_hash: storage_contract::ContentHash::from_digest(blake3::hash(b"")),
             state: crate::PublishedUploadState::Complete,
         }))
+    }
+    fn seal_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn commit_workspace_public(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: storage_contract::PublicCommitEnvelope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
     }
     fn authorize_upload(
         &self,
@@ -183,9 +199,21 @@ impl Backend for BackendProbe {
         _: &str,
         _: &name_policy::PortablePath,
         _: &crate::UploadSource,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         Err(ApiError::unsupported())
     }
+    fn upload_generation(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _item: &str,
+        _path: &name_policy::PortablePath,
+        _source: &crate::UploadSource,
+        _generation: u64,
+    ) -> Result<storage_contract::StagedFile, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
     fn content(&self, _: &Identity, _: &str) -> Result<Content, ApiError> {
         Err(ApiError::unsupported())
     }
@@ -435,6 +463,8 @@ async fn upload_status_retains_read_admission_after_cancellation() {
 async fn workspace_request(app: Router, path: &str) -> Response {
     let body = if path == "/api/workspaces" {
         json!({"branch_id":"branch"})
+    } else if path.ends_with("/commit") {
+        json!({"workspace_id":"workspace","operation_id":"op_00000000000000000000000000000000","repository_id":"repo","branch_id":"branch","expected_head":"head","fencing_token":"1","message":"","requested_protection":"strict","file_placement":{},"expected_topology_generation":"1","sealed_manifest_hash":"manifest","request_digest":"digest"})
     } else {
         json!({})
     };
@@ -459,6 +489,8 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
     for path in [
         "/api/workspaces",
         "/api/workspaces/workspace/abort",
+        "/api/workspaces/workspace/seal",
+        "/api/workspaces/workspace/commit",
         "/api/workspaces/workspace",
     ] {
         let root = crate::tests::private_tempdir();

@@ -6,37 +6,10 @@
 //! presentation/redaction belongs to the transport adapter.
 use super::{error, repo_for_branch, repo_for_history, repository, workspace_authorize};
 use crate::{ApiError, auth::Identity};
-use data_serialization::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use data_serialization::Deserialize;
 use storage_engine::{CommitRequest, Engine, FileLocation, NamespaceOperation};
 
 use crate::CommitWorkspace;
-
-/// The frozen public envelope uses decimal strings deliberately: their exact
-/// spelling participates in the canonical request digest and binding checks.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serialization(deny_unknown_fields)]
-pub struct PublicCommitWorkspace {
-    pub workspace_id: String,
-    pub operation_id: String,
-    pub repository_id: String,
-    pub branch_id: String,
-    pub expected_head: String,
-    pub fencing_token: String,
-    pub message: String,
-    pub requested_protection: String,
-    pub file_placement: BTreeMap<String, FilePlacement>,
-    pub expected_topology_generation: String,
-    pub sealed_manifest_hash: String,
-    pub request_digest: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serialization(deny_unknown_fields)]
-pub struct FilePlacement {
-    pub primary_slot_id: String,
-    pub target_copies: u32,
-}
 
 pub struct StageNamespace {
     pub workspace_id: String,
@@ -217,33 +190,27 @@ impl<'a> Application<'a> {
 
     fn public_commit_request(
         &self,
-        command: PublicCommitWorkspace,
-    ) -> Result<(CommitRequest, json_codec::Value), ApiError> {
-        let fencing_token = storage_contract::parse_u64_decimal(&command.fencing_token)
-            .map_err(ApiError::invalid_source)?;
-        let body = json_codec::to_value(&command)
-            .expect("invariant: internal JSON serialization succeeds");
-        let request = self.commit_request(CommitWorkspace {
-            workspace_id: command.workspace_id,
-            operation_id: command
-                .operation_id
-                .parse::<storage_contract::OperationId>()
-                .map_err(|source| error(source.into()))?,
-            expected_head: command.expected_head,
-            fencing_token,
-            message: command.message,
-            request_digest: Some(command.request_digest),
-        })?;
-        Ok((request, body))
+        command: &storage_contract::PublicCommitEnvelope,
+    ) -> Result<CommitRequest, ApiError> {
+        workspace_authorize(self.engine, self.identity, command.workspace_id())?;
+        Ok(CommitRequest {
+            workspace_id: command.workspace_id().into(),
+            operation_id: command.operation_id(),
+            principal: self.identity.principal.clone(),
+            expected_head: command.expected_head().into(),
+            fencing_token: command.fencing_token(),
+            message: command.message().into(),
+            request_digest: Some(command.claimed_digest().into()),
+        })
     }
 
     pub fn commit_workspace_public(
         &mut self,
-        command: PublicCommitWorkspace,
+        command: storage_contract::PublicCommitEnvelope,
     ) -> Result<storage_engine::OperationResult, ApiError> {
-        let (request, body) = self.public_commit_request(command)?;
+        let request = self.public_commit_request(&command)?;
         self.engine
-            .commit_workspace_wire(request, body)
+            .commit_workspace_wire(request, command)
             .map_err(error)
     }
 
@@ -259,11 +226,11 @@ impl<'a> Application<'a> {
 
     pub fn prepare_commit_workspace_public(
         &mut self,
-        command: PublicCommitWorkspace,
+        command: storage_contract::PublicCommitEnvelope,
     ) -> Result<storage_engine::WorkspaceCommitPreparation, ApiError> {
-        let (request, body) = self.public_commit_request(command)?;
+        let request = self.public_commit_request(&command)?;
         self.engine
-            .prepare_workspace_commit(request, Some(body))
+            .prepare_workspace_commit(request, Some(command))
             .map_err(error)
     }
 

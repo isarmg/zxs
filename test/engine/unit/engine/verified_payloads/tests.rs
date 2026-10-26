@@ -177,7 +177,7 @@ fn held_proof_rejects_disk_seal_replacement_and_candidate_changes() {
     let (_temp, engine, candidate) = fixture();
     let proof = VerifiedPayloadSet::prepare(&engine.config, &candidate).unwrap();
     let mut changed = candidate.clone();
-    changed.versions[0].version.content_hash = "0".repeat(64);
+    changed.versions[0].version.content_hash = "0".repeat(64).parse().unwrap();
     assert_eq!(
         proof.validate(&engine.config, &changed).unwrap_err().code(),
         storage_contract::ErrorCode::PreparationStale

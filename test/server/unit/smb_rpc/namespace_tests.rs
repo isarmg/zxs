@@ -203,6 +203,20 @@ impl Backend for NamespaceFailure {
         self.inner
             .published_upload_status(identity, workspace, item)
     }
+    fn seal_workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        self.inner.seal_workspace(identity, workspace)
+    }
+    fn commit_workspace_public(
+        &self,
+        identity: &crate::auth::Identity,
+        command: storage_contract::PublicCommitEnvelope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.commit_workspace_public(identity, command)
+    }
     fn authorize_upload(
         &self,
         identity: &crate::auth::Identity,
@@ -247,9 +261,22 @@ impl Backend for NamespaceFailure {
         item: &str,
         path: &name_policy::PortablePath,
         source: &crate::UploadSource,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         self.inner.upload(identity, workspace, item, path, source)
     }
+    fn upload_generation(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        item: &str,
+        path: &name_policy::PortablePath,
+        source: &crate::UploadSource,
+        generation: u64,
+    ) -> Result<storage_contract::StagedFile, crate::ApiError> {
+        self.inner
+            .upload_generation(identity, workspace, item, path, source, generation)
+    }
+
     fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
         self.inner.content(identity, version)
     }
@@ -736,6 +763,20 @@ impl Backend for PreparationFailure {
         self.inner
             .published_upload_status(identity, workspace, item)
     }
+    fn seal_workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        self.inner.seal_workspace(identity, workspace)
+    }
+    fn commit_workspace_public(
+        &self,
+        identity: &crate::auth::Identity,
+        command: storage_contract::PublicCommitEnvelope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.commit_workspace_public(identity, command)
+    }
     fn authorize_upload(
         &self,
         identity: &crate::auth::Identity,
@@ -789,9 +830,22 @@ impl Backend for PreparationFailure {
         item: &str,
         path: &name_policy::PortablePath,
         source: &crate::UploadSource,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         self.inner.upload(identity, workspace, item, path, source)
     }
+    fn upload_generation(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        item: &str,
+        path: &name_policy::PortablePath,
+        source: &crate::UploadSource,
+        generation: u64,
+    ) -> Result<storage_contract::StagedFile, crate::ApiError> {
+        self.inner
+            .upload_generation(identity, workspace, item, path, source, generation)
+    }
+
     fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
         self.inner.content(identity, version)
     }

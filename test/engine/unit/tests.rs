@@ -1519,7 +1519,10 @@ fn explicit_upload_generations_and_sealed_wire_requests_are_stable() {
         fs::read(staged.source_path).unwrap(),
         b"generation one hundred"
     );
-    let mut body = e.seal_workspace(&w.workspace_id, "admin").unwrap();
+    let mut body = e
+        .seal_workspace(&w.workspace_id, "admin")
+        .map(|seal| json_codec::to_value(seal).unwrap())
+        .unwrap();
     body["file_placement"][&item]["target_copies"] = json!(1);
     body["request_digest"] = json!(commit_request_digest(&w.workspace_id, &body).unwrap());
     let request = CommitRequest {
@@ -1534,7 +1537,7 @@ fn explicit_upload_generations_and_sealed_wire_requests_are_stable() {
     let mut wrong = body.clone();
     wrong["request_digest"] = json!("0".repeat(64));
     assert_eq!(
-        e.commit_workspace_wire(request.clone(), wrong)
+        e.commit_workspace_wire(request.clone(), public_envelope(wrong))
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::RequestDigestMismatch
@@ -1544,7 +1547,7 @@ fn explicit_upload_generations_and_sealed_wire_requests_are_stable() {
             .is_err()
     );
     let result = e
-        .commit_workspace_wire(request.clone(), body.clone())
+        .commit_workspace_wire(request.clone(), public_envelope(body.clone()))
         .unwrap();
     let version = e.list_tree(&r.main_branch_id).unwrap()[0]
         .version_id
@@ -1552,7 +1555,9 @@ fn explicit_upload_generations_and_sealed_wire_requests_are_stable() {
     assert_eq!(e.state().placements[&version].route_slot_ids, ["P01"]);
     save(&mut e, &r.main_branch_id, "b", b"later head");
     assert_eq!(
-        e.commit_workspace_wire(request, body).unwrap().commit_id,
+        e.commit_workspace_wire(request, public_envelope(body))
+            .unwrap()
+            .commit_id,
         result.commit_id
     );
     drop(e);
@@ -2003,7 +2008,9 @@ fn retained_generations_and_sealed_workspaces_keep_their_resource_and_file_owner
         storage_contract::ErrorCode::ResourceLimit
     );
     assert_eq!(fs::read(first.source_path).unwrap(), b"1234");
-    e.seal_workspace(&w.workspace_id, "admin").unwrap();
+    e.seal_workspace(&w.workspace_id, "admin")
+        .map(|seal| json_codec::to_value(seal).unwrap())
+        .unwrap();
     let second = e.create_workspace(&r.main_branch_id, "admin").unwrap();
     assert_eq!(
         e.stage_bytes(&second.workspace_id, "a", b"no")
@@ -2724,6 +2731,7 @@ fn sealed_batch_checksum_failure_rolls_back_all_files_and_retries_after_restart(
     }
     engine
         .seal_workspace(&workspace.workspace_id, "admin")
+        .map(|seal| json_codec::to_value(seal).unwrap())
         .unwrap();
     // Corrupt the last item in execution order, after another file has already
     // been composed into the transaction's private candidate state.
@@ -3031,6 +3039,7 @@ fn shared_client_prepares_real_seal_without_losing_frozen_head() {
             .unwrap();
         let seal = engine
             .seal_workspace(&workspace.workspace_id, "admin")
+            .map(|seal| json_codec::to_value(seal).unwrap())
             .unwrap();
         let operation_id = storage_contract::OperationId::generate();
         let body = storage_contract::client_protocol::prepare_commit(
@@ -3056,11 +3065,11 @@ fn shared_client_prepares_real_seal_without_losing_frozen_head() {
             request_digest: Some(body["request_digest"].as_str().unwrap().into()),
         };
         let committed = engine
-            .commit_workspace_wire(request.clone(), body.clone())
+            .commit_workspace_wire(request.clone(), public_envelope(body.clone()))
             .unwrap();
         assert_eq!(
             engine
-                .commit_workspace_wire(request, body)
+                .commit_workspace_wire(request, public_envelope(body))
                 .unwrap()
                 .commit_id,
             committed.commit_id
@@ -3651,13 +3660,14 @@ fn detached_public_wire_commit_keeps_exact_digest_and_retry_binding() {
     };
     let mut body = engine
         .seal_workspace(&workspace.workspace_id, "admin")
+        .map(|seal| json_codec::to_value(seal).unwrap())
         .unwrap();
     request.operation_id = body["operation_id"].as_str().unwrap().parse().unwrap();
     request.message.clear();
     body["request_digest"] =
         json_codec::json!(commit_request_digest(&workspace.workspace_id, &body).unwrap());
     let prepared = engine
-        .prepare_workspace_commit(request.clone(), Some(body.clone()))
+        .prepare_workspace_commit(request.clone(), Some(public_envelope(body.clone())))
         .unwrap()
         .execute()
         .unwrap();
@@ -3667,7 +3677,7 @@ fn detached_public_wire_commit_keeps_exact_digest_and_retry_binding() {
         body["request_digest"].as_str().unwrap()
     );
     let retry = engine
-        .prepare_workspace_commit(request.clone(), Some(body.clone()))
+        .prepare_workspace_commit(request.clone(), Some(public_envelope(body.clone())))
         .unwrap()
         .execute()
         .unwrap();
@@ -3677,7 +3687,7 @@ fn detached_public_wire_commit_keeps_exact_digest_and_retry_binding() {
     );
     body["message"] = json_codec::json!("changed retry");
     let plan = engine
-        .prepare_workspace_commit(request, Some(body))
+        .prepare_workspace_commit(request, Some(public_envelope(body)))
         .unwrap();
     assert_eq!(
         plan.execute().err().unwrap().code(),
@@ -3991,7 +4001,7 @@ fn upload_preparation_reads_the_opened_inode_after_source_path_swap() {
     let input = fixture.temp.path().join("upload-input");
     fs::write(&input, b"verified stream").unwrap();
     let item = new_id("entry");
-    let hash = blake3::hash(b"verified stream").to_hex().to_string();
+    let hash = ContentHash::from_digest(blake3::hash(b"verified stream"));
     let mut source = fs::File::open(&input).unwrap();
     std::io::Seek::seek(&mut source, std::io::SeekFrom::Start(4)).unwrap();
     let plan = engine
@@ -4001,7 +4011,7 @@ fn upload_preparation_reads_the_opened_inode_after_source_path_swap() {
             &name_policy::PortablePath::parse("prepared").unwrap(),
             source.try_clone().unwrap(),
             1,
-            Some((15, hash.clone())),
+            Some((15, hash)),
         )
         .unwrap();
     fs::rename(&input, input.with_extension("held")).unwrap();
@@ -4034,7 +4044,7 @@ fn upload_preparation_rejects_copied_bytes_not_matching_verified_stream() {
                 1,
                 Some((
                     if wrong_size { 14 } else { 15 },
-                    blake3::hash(b"verified stream").to_hex().to_string(),
+                    ContentHash::from_digest(blake3::hash(b"verified stream")),
                 )),
             )
             .unwrap();
@@ -4230,3 +4240,8 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
 }
 
 mod state_read_tests;
+
+fn public_envelope(body: json_codec::Value) -> storage_contract::PublicCommitEnvelope {
+    let workspace = body["workspace_id"].as_str().unwrap().to_owned();
+    storage_contract::PublicCommitEnvelope::parse(&workspace, body).unwrap()
+}

@@ -615,7 +615,7 @@ pub struct FileVersion {
     pub logical_size: u64,
     #[serialization(with = "crate::u64_string")]
     pub version_sequence: u64,
-    pub content_hash: String,
+    pub content_hash: crate::ContentHash,
     pub checksum_chunk_bytes: u32,
     pub checksum_manifest_hash: String,
     pub creation_name: String,
@@ -670,7 +670,7 @@ pub struct StagedFile {
     pub source_path: PathBuf,
     #[serialization(with = "crate::u64_string")]
     pub size: u64,
-    pub content_hash: String,
+    pub content_hash: crate::ContentHash,
     #[serialization(with = "crate::u64_string")]
     pub dirty_generation: u64,
     pub base_version_id: Option<String>,

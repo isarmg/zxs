@@ -203,7 +203,7 @@ fn protection_commands_preserve_core_replay_and_transport_contract() {
 
 #[test]
 fn public_commit_roundtrip_preserves_canonical_envelope_and_executes() {
-    let (_root, mut engine, repo, identity) = fixture();
+    let (root, mut engine, repo, identity) = fixture();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, &identity.principal)
         .unwrap();
@@ -220,12 +220,18 @@ fn public_commit_roundtrip_preserves_canonical_envelope_and_executes() {
         .unwrap();
     let mut body = engine
         .seal_workspace(&workspace.workspace_id, &identity.principal)
+        .map(|seal| json_codec::to_value(seal).unwrap())
         .unwrap();
+    body["message"] = "目录 😀".into();
     body["request_digest"] = storage_engine::commit_request_digest(&workspace.workspace_id, &body)
         .unwrap()
         .into();
-    let command: PublicCommitWorkspace = json_codec::from_value(body.clone()).unwrap();
-    assert_eq!(json_codec::to_value(&command).unwrap(), body);
+    let command =
+        crate::http_workspace::public_commit(&workspace.workspace_id, body.clone()).unwrap();
+    assert_eq!(
+        command.claimed_digest(),
+        body["request_digest"].as_str().unwrap()
+    );
     let result = Application::new(&mut engine, &identity)
         .commit_workspace_public(command.clone())
         .unwrap();
@@ -233,6 +239,26 @@ fn public_commit_roundtrip_preserves_canonical_envelope_and_executes() {
         .commit_workspace_public(command)
         .unwrap();
     assert_eq!(replay.commit_id, result.commit_id);
+    let expected = storage_contract::canonical_json(&body).unwrap();
+    for parent in [
+        root.path().join("system/workspaces"),
+        root.path().join("d1/staging/workspaces"),
+    ] {
+        assert_eq!(
+            std::fs::read(
+                parent
+                    .join(&workspace.workspace_id)
+                    .join("wire-request.json")
+            )
+            .unwrap(),
+            expected
+        );
+    }
+    assert_eq!(
+        result.request_digest,
+        body["request_digest"].as_str().unwrap()
+    );
+
     assert!(
         engine
             .list_tree(&repo.main_branch_id)
@@ -307,10 +333,10 @@ fn workspace_ownership_and_session_admission_apply_to_typed_and_wire_paths() {
 
 #[test]
 fn public_commit_decode_rejects_unknown_missing_and_numeric_decimal_fields() {
-    let body = json!({"workspace_id":"ws", "operation_id":"op", "repository_id":"repo", "branch_id":"branch",
+    let body = json!({"workspace_id":"ws", "operation_id":"op_00000000000000000000000000000000", "repository_id":"repo", "branch_id":"branch",
             "expected_head":"head", "fencing_token":"1", "message":"", "requested_protection":"strict",
             "file_placement":{}, "expected_topology_generation":"1", "sealed_manifest_hash":"hash", "request_digest":"digest"});
-    assert!(json_codec::from_value::<PublicCommitWorkspace>(body.clone()).is_ok());
+    assert!(crate::http_workspace::public_commit("ws", body.clone()).is_ok());
     for field in [
         "workspace_id",
         "operation_id",
@@ -321,7 +347,7 @@ fn public_commit_decode_rejects_unknown_missing_and_numeric_decimal_fields() {
         let mut missing = body.clone();
         missing.as_object_mut().unwrap().remove(field);
         assert!(
-            json_codec::from_value::<PublicCommitWorkspace>(missing).is_err(),
+            crate::http_workspace::public_commit("ws", missing).is_err(),
             "{field}"
         );
     }
@@ -329,13 +355,13 @@ fn public_commit_decode_rejects_unknown_missing_and_numeric_decimal_fields() {
         let mut numeric = body.clone();
         numeric[field] = json!(1);
         assert!(
-            json_codec::from_value::<PublicCommitWorkspace>(numeric).is_err(),
+            crate::http_workspace::public_commit("ws", numeric).is_err(),
             "{field}"
         );
     }
     let mut extra = body;
     extra["principal"] = "someone-else".into();
-    assert!(json_codec::from_value::<PublicCommitWorkspace>(extra).is_err());
+    assert!(crate::http_workspace::public_commit("ws", extra).is_err());
 }
 
 #[test]
@@ -632,6 +658,7 @@ fn commit_preparation_releases_engine_and_rechecks_completed_revocation() {
             let input = if public {
                 let mut input = engine
                     .seal_workspace(&workspace.workspace_id, &owner.principal)
+                    .map(|seal| json_codec::to_value(seal).unwrap())
                     .unwrap();
                 input["operation_id"] = operation.to_string().into();
                 input["request_digest"] =
@@ -671,7 +698,11 @@ fn commit_preparation_releases_engine_and_rechecks_completed_revocation() {
                 }
                 let result = if public {
                     backend
-                        .call(crate::BackendAction::CommitWorkspace, &owner, input)
+                        .commit_workspace_public(
+                            &owner,
+                            crate::http_workspace::public_commit(&workspace.workspace_id, input)
+                                .unwrap(),
+                        )
                         .map(|_| ())
                 } else {
                     backend.commit_workspace(&owner, command).map(|_| ())
@@ -697,7 +728,11 @@ fn commit_preparation_releases_engine_and_rechecks_completed_revocation() {
             let writer = std::thread::spawn(move || {
                 if public {
                     writer_backend
-                        .call(crate::BackendAction::CommitWorkspace, &writer_owner, input)
+                        .commit_workspace_public(
+                            &writer_owner,
+                            crate::http_workspace::public_commit(&workspace.workspace_id, input)
+                                .unwrap(),
+                        )
                         .map(|_| ())
                 } else {
                     writer_backend

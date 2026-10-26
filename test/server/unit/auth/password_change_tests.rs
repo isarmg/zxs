@@ -88,6 +88,20 @@ impl crate::Backend for UnusedBackend {
     ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn seal_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn commit_workspace_public(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: storage_contract::PublicCommitEnvelope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn authorize_upload(
         &self,
         _identity: &crate::auth::Identity,
@@ -126,9 +140,21 @@ impl crate::Backend for UnusedBackend {
         _: &str,
         _: &name_policy::PortablePath,
         _: &crate::UploadSource,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         Err(ApiError::unsupported())
     }
+    fn upload_generation(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _item: &str,
+        _path: &name_policy::PortablePath,
+        _source: &crate::UploadSource,
+        _generation: u64,
+    ) -> Result<storage_contract::StagedFile, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
     fn content(&self, _: &Identity, _: &str) -> Result<crate::Content, ApiError> {
         Err(ApiError::unsupported())
     }
@@ -142,7 +168,7 @@ fn application(root: &Path, store: AuthStore) -> (Router, Arc<Mutex<AuthStore>>)
     let app = crate::router_shared(
         runtime.backend,
         runtime.auth,
-        config,
+        config.admit().unwrap(),
         runtime.telemetry,
         spool,
     )

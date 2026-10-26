@@ -9,59 +9,35 @@ pub(crate) struct WireCommit {
     pub body: Value,
     pub placements: BTreeMap<String, (String, u32)>,
 }
-/// Shape-checked wire input and its request digest, computed at admission.
-pub(crate) struct ParsedWireEnvelope {
-    body: Value,
-    digest: String,
+// A single-use proof for this planning State only. It is consumed by planning,
+// never stored in PreparedWorkspaceCommit; finish rechecks the live receipt.
+pub(crate) struct ReceiptCheckedEnvelope<'state> {
+    envelope: PublicCommitEnvelope,
+    _state: &'state State,
 }
-impl ParsedWireEnvelope {
-    pub(crate) fn parse(request: &CommitRequest, state: &State, body: Value) -> Result<Self> {
-        let fields = [
-            "operation_id",
-            "workspace_id",
-            "repository_id",
-            "branch_id",
-            "expected_head",
-            "fencing_token",
-            "message",
-            "requested_protection",
-            "file_placement",
-            "expected_topology_generation",
-            "sealed_manifest_hash",
-            "request_digest",
-        ];
-        let object = body.as_object().ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::InvalidRequest,
-                "commit body must be an object",
-            )
-        })?;
-        if object.len() != fields.len() || object.keys().any(|k| !fields.contains(&k.as_str())) {
-            return Err(Error::new(
-                storage_contract::ErrorCode::InvalidRequest,
-                "commit body has missing or unknown fields",
-            ));
-        }
-        let wire_digest = commit_request_digest(&request.workspace_id, &body)?;
-        if let Some(existing) = state.operations.get(&request.operation_id)
-            && (existing.request_digest != wire_digest
-                || text(&body, "request_digest")? != wire_digest
-                || state
-                    .operation_principals
-                    .get(&request.operation_id)
-                    .map(String::as_str)
-                    != Some(&request.principal))
-        {
-            return Err(Error::new(
-                storage_contract::ErrorCode::IdempotencyKeyReused,
-                "completed wire request differs from its registered digest",
-            ));
-        }
-        Ok(Self {
-            body,
-            digest: wire_digest,
-        })
+pub(crate) fn admit_public_commit<'state>(
+    envelope: PublicCommitEnvelope,
+    request: &CommitRequest,
+    state: &'state State,
+) -> Result<ReceiptCheckedEnvelope<'state>> {
+    if let Some(existing) = state.operations.get(&request.operation_id)
+        && (existing.request_digest != envelope.digest()
+            || envelope.claimed_digest() != envelope.digest()
+            || state
+                .operation_principals
+                .get(&request.operation_id)
+                .map(String::as_str)
+                != Some(&request.principal))
+    {
+        return Err(Error::new(
+            ErrorCode::IdempotencyKeyReused,
+            "completed wire request differs from its registered digest",
+        ));
     }
+    Ok(ReceiptCheckedEnvelope {
+        envelope,
+        _state: state,
+    })
 }
 
 pub fn manifest_hash(w: &Workspace) -> Result<String> {
@@ -80,16 +56,8 @@ pub fn commit_request_digest(workspace: &str, body: &Value) -> Result<String> {
     )
     .map_err(Into::into)
 }
-fn text<'a>(body: &'a Value, key: &str) -> Result<&'a str> {
-    body.get(key).and_then(Value::as_str).ok_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::InvalidRequest,
-            format!("missing string {key}"),
-        )
-    })
-}
 impl Engine {
-    pub fn seal_workspace(&mut self, id: &str, principal: &str) -> Result<Value> {
+    pub fn seal_workspace(&mut self, id: &str, principal: &str) -> Result<SealedWorkspace> {
         self.require_write()?;
         let mut w = self.workspace(id)?;
         if w.principal != principal {
@@ -104,30 +72,44 @@ impl Engine {
                 "workspace cannot be sealed",
             ));
         }
-        self.repository_for_branch(&w.branch_id)?;
         let repository = self.repository_for_branch(&w.branch_id)?.clone();
         // Once sealed, no uploader or namespace request can mutate this generation.
         w.state = WorkspaceState::Sealed;
         self.persist_workspace(&w)?;
         self.workspaces.insert(id.into(), w.clone());
-        let mut placement = json_codec::Map::new();
+        let mut placement = BTreeMap::new();
         for f in w.files.values() {
             let (primary, copies) = self.new_file_placement(&repository.repository_id, &f.path)?;
             placement.insert(
                 f.item_id.clone(),
-                json!({"primary_slot_id":primary,"target_copies":copies}),
+                FilePlacement {
+                    primary_slot_id: primary,
+                    target_copies: copies,
+                },
             );
         }
-        Ok(
-            json!({"operation_id":OperationId::generate(),"workspace_id":id,"repository_id":repository.repository_id,"branch_id":w.branch_id,"expected_head":w.base_head,"fencing_token":w.fencing_token.to_string(),"message":"","requested_protection":"strict","file_placement":placement,"expected_topology_generation":self.state.topology_generation.to_string(),"sealed_manifest_hash":manifest_hash(&w)?}),
-        )
+        let sealed_manifest_hash = manifest_hash(&w)?;
+        Ok(SealedWorkspace {
+            operation_id: OperationId::generate(),
+            workspace_id: id.into(),
+            repository_id: repository.repository_id,
+            branch_id: w.branch_id,
+            expected_head: w.base_head,
+            fencing_token: w.fencing_token,
+            message: String::new(),
+            requested_protection: "strict",
+            file_placement: placement,
+            expected_topology_generation: self.state.topology_generation,
+            sealed_manifest_hash,
+        })
     }
+
     pub fn commit_workspace_wire(
         &mut self,
         request: CommitRequest,
-        body: Value,
+        envelope: PublicCommitEnvelope,
     ) -> Result<OperationResult> {
-        let plan = self.plan_workspace_commit_wire(request, body)?;
+        let plan = self.plan_workspace_commit_wire(request, envelope)?;
         self.persist_workspace_commit_request(&plan)?;
         let result = match plan.mutation {
             crate::engine::MutationPlan::Existing(result) => return Ok(result),
@@ -145,9 +127,9 @@ impl Engine {
     pub(crate) fn plan_workspace_commit_wire(
         &self,
         request: CommitRequest,
-        body: Value,
+        envelope: PublicCommitEnvelope,
     ) -> Result<crate::business::WorkspaceMutation> {
-        let envelope = ParsedWireEnvelope::parse(&request, &self.state, body)?;
+        let envelope = admit_public_commit(envelope, &request, &self.state)?;
         let workspace = self.workspace(&request.workspace_id)?;
         let replay = if self.state.operations.contains_key(&request.operation_id) {
             Some(self.prepare_operation_health(self.operation_record(request.operation_id)?))
@@ -203,24 +185,23 @@ impl crate::engine::PlanningContext<'_> {
         &self,
         workspace: Workspace,
         mut request: CommitRequest,
-        envelope: ParsedWireEnvelope,
+        envelope: ReceiptCheckedEnvelope<'_>,
         replay: Option<crate::engine::OperationReadPlan>,
     ) -> Result<crate::business::WorkspaceMutation> {
-        let ParsedWireEnvelope {
-            body,
-            digest: wire_digest,
-        } = envelope;
+        let envelope = envelope.envelope;
+        let wire_digest = envelope.digest().to_owned();
         // Replay skips live topology/manifest preconditions, never immutable
         // binding between the authenticated request and its original body.
         let w = workspace;
         let repo = self.repository_for_branch(&w.branch_id)?;
-        if text(&body, "operation_id")? != request.operation_id.to_string()
-            || text(&body, "workspace_id")? != w.workspace_id
-            || text(&body, "repository_id")? != repo.repository_id
-            || text(&body, "branch_id")? != w.branch_id
-            || text(&body, "expected_head")? != request.expected_head
-            || text(&body, "fencing_token")? != request.fencing_token.to_string()
-            || text(&body, "message")? != request.message
+        if envelope.route_workspace() != request.workspace_id
+            || envelope.operation_id() != request.operation_id
+            || envelope.workspace_id() != w.workspace_id
+            || envelope.repository_id() != repo.repository_id
+            || envelope.branch_id() != w.branch_id
+            || envelope.expected_head() != request.expected_head
+            || envelope.fencing_token() != request.fencing_token
+            || envelope.message() != request.message
         {
             return Err(Error::new(
                 storage_contract::ErrorCode::RequestBindingMismatch,
@@ -237,40 +218,33 @@ impl crate::engine::PlanningContext<'_> {
                 wire: None,
             });
         }
-        if text(&body, "requested_protection")? != "strict" {
+        if envelope.requested_protection() != "strict" {
             return Err(Error::new(
                 storage_contract::ErrorCode::SaveModeUnsupported,
                 "only strict full-file saves are supported",
             ));
         }
-        if text(&body, "expected_topology_generation")?
-            != self.state.topology_generation.to_string()
-        {
+        if envelope.expected_topology_generation() != self.state.topology_generation.to_string() {
             return Err(Error::new(
                 storage_contract::ErrorCode::TopologyGenerationMismatch,
                 "topology changed after request preparation",
             ));
         }
-        if text(&body, "sealed_manifest_hash")? != manifest_hash(&w)? {
+        if envelope.sealed_manifest_hash() != manifest_hash(&w)? {
             return Err(Error::new(
                 storage_contract::ErrorCode::SealedManifestMismatch,
                 "workspace bytes or namespace order differ from the sealed request",
             ));
         }
         let digest = wire_digest;
-        if text(&body, "request_digest")? != digest {
+        if envelope.claimed_digest() != digest {
             return Err(Error::new(
                 storage_contract::ErrorCode::RequestDigestMismatch,
                 "server canonical request digest differs",
             ));
         }
         let mut placements = BTreeMap::new();
-        let requested = body["file_placement"].as_object().ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::InvalidRequest,
-                "file placement must be an object",
-            )
-        })?;
+        let requested = envelope.file_placement();
         if requested.len() != w.files.len() {
             return Err(Error::new(
                 storage_contract::ErrorCode::PlacementInvalid,
@@ -284,33 +258,10 @@ impl crate::engine::PlanningContext<'_> {
                     "placement contains an unknown item",
                 ));
             }
-            let obj = p.as_object().ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::PlacementInvalid,
-                    "placement entry is not an object",
-                )
-            })?;
-            if obj.len() != 2
-                || !obj.contains_key("primary_slot_id")
-                || !obj.contains_key("target_copies")
-            {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::PlacementInvalid,
-                    "invalid placement fields",
-                ));
-            }
-            let primary = text(p, "primary_slot_id")?;
-            let copies = p["target_copies"]
-                .as_u64()
-                .and_then(|n| u32::try_from(n).ok())
-                .ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::PlacementInvalid,
-                        "target copies must be a positive bounded integer",
-                    )
-                })?;
+            let primary = &p.primary_slot_id;
+            let copies = p.target_copies;
             self.route(primary, copies)?;
-            placements.insert(item.clone(), (primary.into(), copies));
+            placements.insert(item.clone(), (primary.clone(), copies));
         }
         if w.state != WorkspaceState::Sealed
             && !self.state.operations.contains_key(&request.operation_id)
@@ -326,7 +277,7 @@ impl crate::engine::PlanningContext<'_> {
             request,
             Some(WireCommit {
                 digest,
-                body,
+                body: envelope.into_body(),
                 placements,
             }),
             None,

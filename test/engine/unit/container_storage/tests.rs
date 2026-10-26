@@ -11,7 +11,7 @@ fn version(state: &State, history: &str, file: &str, name: &str, bytes: &[u8]) -
         creation_primary_slot_id: "P01".into(),
         logical_size: bytes.len() as u64,
         version_sequence: 900,
-        content_hash: hash.to_hex().to_string(),
+        content_hash: ContentHash::from_digest(hash),
         checksum_chunk_bytes: 262_144,
         checksum_manifest_hash: "0".repeat(64),
         creation_name: name.into(),
@@ -779,7 +779,7 @@ fn rename_and_note_projection_replays_without_changing_body_identity() {
     assert!(!original.exists());
     assert_eq!(fs::metadata(&renamed).unwrap().ino(), inode);
     assert_eq!(
-        blake3::hash(&fs::read(&renamed).unwrap()).to_hex().as_str(),
+        ContentHash::from_digest(blake3::hash(&fs::read(&renamed).unwrap())),
         item.content_hash
     );
     let cache = renamed

@@ -14,7 +14,6 @@ compile_error!(
     "platform-io requires Linux amd64 (64-bit x86_64); browser clients must use storage-contract"
 );
 
-pub mod error;
 pub mod fs_safety;
 pub mod payload;
 pub mod schema_identity;

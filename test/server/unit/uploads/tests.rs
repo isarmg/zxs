@@ -44,7 +44,9 @@ fn failed_atomic_staged_progress_retains_bytes_and_blocks_admission_until_invent
         path: "file".into(),
         generation: 1,
         logical_size: 9,
-        content_hash: Some(blake3::hash(b"new bytes").to_hex().to_string()),
+        content_hash: Some(storage_contract::ContentHash::from_digest(blake3::hash(
+            b"new bytes",
+        ))),
         persisted_bytes: 9,
         persisted_hash: blake3::hash(b"new bytes").to_hex().to_string(),
         state: crate::uploads::UploadState::Incomplete,
@@ -91,7 +93,7 @@ fn interrupted_upload_retains_and_checks_its_persisted_prefix() {
         path: "file".into(),
         generation: 1,
         logical_size: 30,
-        content_hash: Some("0".repeat(64)),
+        content_hash: Some("0".repeat(64).parse().unwrap()),
         persisted_bytes: 16,
         persisted_hash: blake3::hash(b"original partial").to_hex().to_string(),
         state: crate::uploads::UploadState::Incomplete,
@@ -134,7 +136,9 @@ fn failed_atomic_progress_publication_cleans_up_its_temporary_file() {
         path: "file".into(),
         generation: 1,
         logical_size: 0,
-        content_hash: Some(blake3::hash(b"").to_hex().to_string()),
+        content_hash: Some(storage_contract::ContentHash::from_digest(blake3::hash(
+            b"",
+        ))),
         persisted_bytes: 0,
         persisted_hash: blake3::hash(b"").to_hex().to_string(),
         state: crate::uploads::UploadState::Incomplete,
@@ -171,7 +175,10 @@ fn replaced_http_payload_or_parent_cannot_be_submitted() {
         fs::set_permissions(spool.join("upload.data"), fs::Permissions::from_mode(0o600)).unwrap();
         assert!(
             staged
-                .source(8, blake3::hash(b"original").to_hex().to_string())
+                .source(
+                    8,
+                    storage_contract::ContentHash::from_digest(blake3::hash(b"original"))
+                )
                 .is_err()
         );
     }
@@ -190,7 +197,9 @@ fn upload_progress_and_retry_prefix_reject_links_without_reading_targets() {
         path: "file".into(),
         generation: 1,
         logical_size: 8,
-        content_hash: Some(blake3::hash(b"original").to_hex().to_string()),
+        content_hash: Some(storage_contract::ContentHash::from_digest(blake3::hash(
+            b"original",
+        ))),
         persisted_bytes: 8,
         persisted_hash: blake3::hash(b"original").to_hex().to_string(),
         state: crate::uploads::UploadState::Incomplete,
@@ -249,5 +258,31 @@ fn upload_state_accepts_only_known_string_states() {
         json_codec::json!(null),
     ] {
         assert!(json_codec::from_value::<UploadState>(invalid).is_err());
+    }
+}
+
+#[test]
+fn upload_record_rejects_noncanonical_body_hash_and_retains_progress_evidence() {
+    let dir = private_tempdir();
+    let path = dir.path().join(format!("{}.json", key("ws", "item")));
+    let data = dir.path().join("data");
+    fs::write(&data, b"partial").unwrap();
+    for hash in ["".to_string(), "0".repeat(63), "A".repeat(64)] {
+        let bytes = storage_contract::canonical_json(&json_codec::json!({
+            "workspace_id":"ws", "item_id":"item", "principal":"alice", "path":"file",
+            "generation":"1", "logical_size":"9", "content_hash":hash,
+            "persisted_bytes":"7", "persisted_hash":blake3::hash(b"partial").to_hex().to_string(),
+            "state":"incomplete", "data_file":"data"
+        }))
+        .unwrap();
+        fs::write(&path, &bytes).unwrap();
+        let error = match load(dir.path(), "ws", "item") {
+            Err(error) => error,
+            Ok(_) => panic!("invalid hash accepted"),
+        };
+        assert_eq!(error.code, storage_contract::ErrorCode::UploadStateInvalid);
+        assert!(std::error::Error::source(&error).is_some());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::read(&data).unwrap(), b"partial");
     }
 }

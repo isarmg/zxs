@@ -692,6 +692,22 @@ impl Backend for ManagementBackend {
             .backend()?
             .published_upload_status(identity, workspace, item)
     }
+    fn seal_workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        self.inner.backend()?.seal_workspace(identity, workspace)
+    }
+    fn commit_workspace_public(
+        &self,
+        identity: &crate::auth::Identity,
+        command: storage_contract::PublicCommitEnvelope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner
+            .backend()?
+            .commit_workspace_public(identity, command)
+    }
     fn authorize_upload(
         &self,
         identity: &Identity,
@@ -1102,7 +1118,7 @@ impl Backend for ManagementBackend {
         item: &str,
         path: &name_policy::PortablePath,
         source: &crate::UploadSource,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         self.inner.backend()?.upload(i, w, item, path, source)
     }
     fn upload_generation(
@@ -1113,7 +1129,7 @@ impl Backend for ManagementBackend {
         path: &name_policy::PortablePath,
         source: &crate::UploadSource,
         g: u64,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         self.inner
             .backend()?
             .upload_generation(i, w, item, path, source, g)

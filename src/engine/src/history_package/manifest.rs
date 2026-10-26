@@ -1327,13 +1327,11 @@ impl HistoryManifest {
                 return Err(invalid("version, placement or tombstone identity differs"));
             }
             if !SUPPORTED_CHECKSUM_CHUNK_BYTES.contains(&version.checksum_chunk_bytes)
-                || ![&version.content_hash, &version.checksum_manifest_hash]
-                    .iter()
-                    .all(|h| {
-                        h.len() == 64
-                            && h.bytes()
-                                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                    })
+                || version.checksum_manifest_hash.len() != 64
+                || !version
+                    .checksum_manifest_hash
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
             {
                 return Err(invalid("version checksum metadata is invalid"));
             }

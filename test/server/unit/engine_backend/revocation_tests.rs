@@ -113,6 +113,22 @@ impl Backend for PausedBackend {
         self.inner
             .published_upload_status(identity, workspace, item)
     }
+    fn seal_workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        self.enter();
+        self.inner.seal_workspace(identity, workspace)
+    }
+    fn commit_workspace_public(
+        &self,
+        identity: &crate::auth::Identity,
+        command: storage_contract::PublicCommitEnvelope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.commit_workspace_public(identity, command)
+    }
     fn authorize_upload(
         &self,
         identity: &crate::auth::Identity,
@@ -161,7 +177,7 @@ impl Backend for PausedBackend {
         item: &str,
         path: &name_policy::PortablePath,
         source: &crate::UploadSource,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         self.enter();
         self.inner.upload(identity, workspace, item, path, source)
     }
@@ -173,7 +189,7 @@ impl Backend for PausedBackend {
         path: &name_policy::PortablePath,
         source: &crate::UploadSource,
         generation: u64,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         self.enter();
         self.inner
             .upload_generation(identity, workspace, item, path, source, generation)
@@ -321,6 +337,8 @@ enum Request {
     WorkspaceCreate,
     WorkspaceAbort,
     UploadAdmission,
+    SealWorkspace,
+    PublicCommit,
     WorkspaceRead,
     UploadStatus,
     Snapshot,
@@ -381,6 +399,25 @@ impl Request {
             ).map(|_| ()),
             Self::WorkspaceRead => backend.workspace(identity, workspace).map(|_| ()),
             Self::UploadStatus => backend.published_upload_status(identity, workspace, "missing-item").map(|_| ()),
+            Self::SealWorkspace => backend.seal_workspace(identity, workspace).map(|_| ()),
+            Self::PublicCommit => {
+                let body = json!({
+                    "workspace_id": workspace,
+                    "operation_id": fixture.operation,
+                    "repository_id": fixture.repo.repository_id,
+                    "branch_id": fixture.repo.main_branch_id,
+                    "expected_head": fixture.workspace.base_head,
+                    "fencing_token": fixture.workspace.fencing_token.to_string(),
+                    "message": "",
+                    "requested_protection": "strict",
+                    "file_placement": {},
+                    "expected_topology_generation": "1",
+                    "sealed_manifest_hash": "manifest",
+                    "request_digest": "digest"
+                });
+                let envelope = storage_contract::PublicCommitEnvelope::parse(workspace, body).unwrap();
+                backend.commit_workspace_public(identity, envelope).map(|_| ())
+            }
             Self::UploadAdmission => backend.authorize_upload(identity, &fixture.workspace.workspace_id, Some(42)),
             Self::WorkspaceCreate => backend.create_workspace(identity, crate::CreateWorkspace {
                 branch_id: fixture.repo.main_branch_id.clone(), source_commit_id: None,
@@ -490,6 +527,8 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::WorkspaceCreate,
                 Request::WorkspaceAbort,
                 Request::UploadAdmission,
+                Request::SealWorkspace,
+                Request::PublicCommit,
                 Request::WorkspaceRead,
                 Request::UploadStatus,
                 Request::SnapshotLookup,
@@ -635,6 +674,8 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::WorkspaceCreate,
         Request::WorkspaceAbort,
         Request::UploadAdmission,
+        Request::SealWorkspace,
+        Request::PublicCommit,
         Request::WorkspaceRead,
         Request::UploadStatus,
         Request::Snapshot,

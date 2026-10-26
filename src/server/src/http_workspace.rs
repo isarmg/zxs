@@ -128,3 +128,72 @@ pub(crate) async fn workspace_info(
     .map_err(ApiError::join)?
     .map(Json)
 }
+
+pub(crate) fn public_commit(
+    workspace: &str,
+    body: json_codec::Value,
+) -> Result<storage_contract::PublicCommitEnvelope, ApiError> {
+    storage_contract::PublicCommitEnvelope::parse(workspace, body).map_err(|error| match error {
+        storage_contract::PublicCommitParseError::Shape(source) => ApiError::invalid_source(source),
+        storage_contract::PublicCommitParseError::Fence(source) => ApiError::invalid_source(source),
+        storage_contract::PublicCommitParseError::Field(source) => ApiError::new(
+            ::http::StatusCode::BAD_REQUEST,
+            source.code(),
+            source.message(),
+        )
+        .with_source(source),
+    })
+}
+
+pub(crate) async fn commit(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ApiPath(id): ApiPath<String>,
+    request: Request,
+) -> Result<Json<json_codec::Value>, ApiError> {
+    let body = crate::with_id(crate::json_body(request).await?, "workspace_id", id.clone())?;
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let command = public_commit(&id, body)?;
+        state
+            .backend
+            .commit_workspace_public(&identity, command)
+            .and_then(crate::operation_wire::operation_wire)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
+
+pub(crate) async fn seal(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ApiPath(id): ApiPath<String>,
+    request: Request,
+) -> Result<Json<storage_contract::SealedWorkspace>, ApiError> {
+    let body: AbortBody = body(request).await?;
+    if body
+        .workspace_id
+        .as_ref()
+        .is_some_and(|body_id| body_id != &id)
+    {
+        return Err(ApiError::invalid("path and body identity disagree"));
+    }
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state.backend.seal_workspace(&identity, &id)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}

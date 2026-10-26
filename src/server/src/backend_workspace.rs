@@ -90,7 +90,7 @@ impl From<storage_contract::Workspace> for WorkspaceResponse {
 }
 
 #[derive(Serialize)]
-struct StagedFileResponse {
+pub(crate) struct StagedFileResponse {
     item_id: String,
     path: name_policy::PortablePath,
     #[serialization(with = "storage_contract::u64_string")]
@@ -115,7 +115,7 @@ impl From<storage_contract::StagedFile> for StagedFileResponse {
             item_id,
             path,
             size,
-            content_hash,
+            content_hash: content_hash.to_string(),
             dirty_generation,
             base_version_id,
         }
@@ -137,7 +137,7 @@ mod tests;
 pub struct PublishedUploadStatus {
     pub generation: u64,
     pub logical_size: u64,
-    pub content_hash: String,
+    pub content_hash: storage_contract::ContentHash,
     pub state: PublishedUploadState,
 }
 

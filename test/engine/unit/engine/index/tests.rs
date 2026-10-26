@@ -9,7 +9,7 @@ fn version(id: &str, file: &str, sequence: u64) -> FileVersion {
         creation_primary_slot_id: "P01".into(),
         logical_size: 0,
         version_sequence: sequence,
-        content_hash: "hash".into(),
+        content_hash: "a".repeat(64).parse().unwrap(),
         checksum_chunk_bytes: 1,
         checksum_manifest_hash: "manifest".into(),
         creation_name: "name".into(),

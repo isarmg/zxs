@@ -489,8 +489,7 @@ fn wire_envelope_errors_precede_missing_workspace_lookup() {
     };
     for body in [json_codec::Value::Null, json_codec::json!({})] {
         assert_eq!(
-            engine
-                .commit_workspace_wire(request.clone(), body)
+            storage_contract::PublicCommitEnvelope::parse(&request.workspace_id, body)
                 .unwrap_err()
                 .code(),
             ErrorCode::InvalidRequest
@@ -512,7 +511,7 @@ fn wire_envelope_errors_precede_missing_workspace_lookup() {
     });
     assert_eq!(
         engine
-            .commit_workspace_wire(request.clone(), body.clone())
+            .commit_workspace_wire(request.clone(), public_envelope(body.clone()))
             .unwrap_err()
             .code(),
         ErrorCode::WorkspaceNotFound
@@ -524,9 +523,99 @@ fn wire_envelope_errors_precede_missing_workspace_lookup() {
     request.operation_id = operation;
     assert_eq!(
         engine
-            .commit_workspace_wire(request, body)
+            .commit_workspace_wire(request, public_envelope(body))
             .unwrap_err()
             .code(),
         ErrorCode::IdempotencyKeyReused
     );
+}
+
+fn public_envelope(body: json_codec::Value) -> storage_contract::PublicCommitEnvelope {
+    let workspace = body["workspace_id"].as_str().unwrap().to_owned();
+    storage_contract::PublicCommitEnvelope::parse(&workspace, body).unwrap()
+}
+
+#[test]
+fn public_preparation_fences_registration_and_finish_rechecks_live_receipt() {
+    for change in ["same", "digest", "actor"] {
+        let root = tempfile::tempdir().unwrap();
+        let mut engine = Engine::initialize(
+            &root.path().join("system"),
+            Config::development([root.path().join("disk")]),
+        )
+        .unwrap();
+        let repo = engine
+            .create_repository("receipt race", "P01", 1, "owner", OperationId::generate())
+            .unwrap();
+        let workspace = engine
+            .create_workspace(&repo.main_branch_id, "owner")
+            .unwrap();
+        let mut body = json_codec::to_value(
+            engine
+                .seal_workspace(&workspace.workspace_id, "owner")
+                .unwrap(),
+        )
+        .unwrap();
+        body["request_digest"] = crate::commit_request_digest(&workspace.workspace_id, &body)
+            .unwrap()
+            .into();
+        let envelope = public_envelope(body.clone());
+        let request = CommitRequest {
+            workspace_id: workspace.workspace_id.clone(),
+            operation_id: envelope.operation_id(),
+            principal: "owner".into(),
+            expected_head: workspace.base_head.clone(),
+            fencing_token: workspace.fencing_token,
+            message: String::new(),
+            request_digest: Some(envelope.claimed_digest().into()),
+        };
+        let plan = engine
+            .prepare_workspace_commit(request.clone(), Some(envelope))
+            .unwrap();
+        let mut registered_body = body;
+        let mut registered_request = request.clone();
+        if change == "digest" {
+            registered_body["message"] = "different registration".into();
+            registered_request.message = "different registration".into();
+            registered_body["request_digest"] =
+                crate::commit_request_digest(&workspace.workspace_id, &registered_body)
+                    .unwrap()
+                    .into();
+            registered_request.request_digest =
+                Some(registered_body["request_digest"].as_str().unwrap().into());
+        }
+        assert_eq!(
+            engine
+                .commit_workspace_wire(
+                    registered_request.clone(),
+                    public_envelope(registered_body.clone())
+                )
+                .unwrap_err()
+                .code(),
+            ErrorCode::CommitPreparationBusy
+        );
+        let mut prepared = plan.execute().unwrap();
+        // Production keeps this admission until finish. Release it explicitly in
+        // this unit fixture to exercise the live-receipt branch independently of
+        // today's global write fence; this is not a claim that writers bypass it.
+        drop(prepared._admission.take());
+        let registered = engine
+            .commit_workspace_wire(registered_request, public_envelope(registered_body))
+            .unwrap();
+        if change == "actor" {
+            // Simulate a conflicting actor receipt after capture, without adding
+            // any production hook or pretending another actor owns this workspace.
+            Arc::make_mut(&mut engine.state)
+                .operation_principals
+                .insert(request.operation_id, "different-actor".into());
+        }
+        let sequence = engine.state.sequence;
+        let result = engine.finish_workspace_commit(prepared);
+        if change == "same" {
+            assert_eq!(result.unwrap(), registered);
+        } else {
+            assert_eq!(result.unwrap_err().code(), ErrorCode::IdempotencyKeyReused);
+        }
+        assert_eq!(engine.state.sequence, sequence);
+    }
 }

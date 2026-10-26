@@ -61,3 +61,17 @@ HTTP 与 SMB 应用边界通过拥有独立所有权的准备 API 处理普通�
 其他变更类型、包导入/导出、历史保存操作和恢复仍走现有同步路径。
 本文不声称全部 Engine 工作都无锁。确定性测试检查阶段边界、验证、过期状态、授权、
 故障点和工作线程数量上限；不能从这些结构测试或 tmpfs 计时推导吞吐量结论。
+
+<a id="public-commit-envelope-and-seal"></a>
+
+## 公开提交 envelope 与 seal 类型边界
+
+HTTP `seal` 的核心返回 `SealedWorkspace`（OperationId、u64 fence/topology、类型化 placement），只在响应序列化时产生原字符串整数格式；创建工作区 seal 状态、持久化、placement 路由和 manifest 的先后顺序不变。历史保存调用仍消费同一核心操作，不走隐藏的旧 Value API。
+
+HTTP commit 有界 strict JSON 与 path/body 身份绑定后，阻塞任务持有 backend_slots，在 HTTP 边界构造私有字段的 `PublicCommitEnvelope`。公开 DTO、operation ID、fence 只解析一次，canonical request digest 只计算一次；保留不可变原 Value 作为落盘证据而非从领域字段重建另一份请求。该 portable contract 不依赖 engine，server 的 no-core 构建继续可用。`expected_topology_generation` 等原字符串语义保留，例如 `0007` 不是被宽松归一化为 7，而仍交给原 topology precondition 拒绝。请求预算仍覆盖解码／摘要 CPU 与后续阻塞工作；JSON 对象／路径错误在预算前，envelope 语法错误在预算后、当前 Backend 准入前。因此格式错误不再占引擎锁，语义冲突顺序不变。
+
+Backend 显式接收 envelope 并返回领域 OperationResult，HTTP 最后调用原 operation wire 投影。Application 不再 DTO → Value，Engine 不再对自己生成的 Value 重解析。prepare 保存 `Option<PublicCommitEnvelope>`；SMB 内部提交仍为 `None`，两种摘要契约没有合并。两个旧 JSON actions 已删除。
+
+公开规划先按当前规划 State 检查已登记 operation 的摘要／actor 冲突，再核对 workspace/repository/branch/head/fence/message 及 envelope 路由绑定；replay 跳过仅适用于新保存的 live topology/manifest 条件，不跳过不可变绑定。新保存随后按原顺序检查 strict、topology、manifest、claimed digest、placement 与 sealed 状态。`ReceiptCheckedEnvelope` 是规划内一次性私有证明，不进入 Prepared，不构成跨 State 的授权／未登记缓存。finish 回到活动锁后仍检查当前 receipt 的 actor、请求绑定与 expected digest；当前账号和工作区所有权仍由应用收尾重新检查。
+
+实际普通登记在准备持有期间受全局写 fence 拒绝。回归先证明同／异摘要的登记均返回 COMMIT_PREPARATION_BUSY，再在明确标注的单元 fixture 中释放准备占用、真实登记 receipt，测试 finish 对相同摘要重放、不同摘要拒绝；不同 actor 记录用测试内状态交错构造，不声称它能绕过生产所有权。现有 public/SMB 回锁撤权、同步／脱锁 replay、恢复与永久收据测试继续执行。固定 canonical body 字节与摘要向量包含 Unicode、u64::MAX 和保留的 topology 拼写；实际系统／数据盘 wire-request.json 与原边界 Value 的 canonical 字节逐字节相等。

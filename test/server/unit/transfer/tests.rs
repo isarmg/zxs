@@ -419,6 +419,20 @@ impl crate::Backend for RetainedGenerationBackend {
     ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn seal_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn commit_workspace_public(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: storage_contract::PublicCommitEnvelope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn authorize_upload(
         &self,
         _identity: &crate::auth::Identity,
@@ -463,8 +477,29 @@ impl crate::Backend for RetainedGenerationBackend {
         _item: &str,
         _path: &name_policy::PortablePath,
         _source: &crate::UploadSource,
-    ) -> Result<Value, ApiError> {
-        Ok(json!({"accepted":true}))
+    ) -> Result<storage_contract::StagedFile, ApiError> {
+        Ok(storage_contract::StagedFile {
+            item_id: _item.into(),
+            path: _path.clone(),
+            source_path: "/private/upload-fixture".into(),
+            size: _source.size,
+            content_hash: _source.hash,
+            dirty_generation: 1,
+            base_version_id: None,
+        })
+    }
+    fn upload_generation(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        item: &str,
+        path: &name_policy::PortablePath,
+        source: &crate::UploadSource,
+        generation: u64,
+    ) -> Result<storage_contract::StagedFile, crate::ApiError> {
+        let mut staged = self.upload(identity, workspace, item, path, source)?;
+        staged.dirty_generation = generation;
+        Ok(staged)
     }
 
     fn content(&self, _identity: &Identity, _version: &str) -> Result<Content, ApiError> {
@@ -978,7 +1013,7 @@ fn published_upload_wire_preserves_large_integers_empty_ranges_and_sealed_manife
             crate::PublishedUploadStatus {
                 generation: u64::MAX,
                 logical_size: size,
-                content_hash: hash.clone(),
+                content_hash: hash.parse().unwrap(),
                 state,
             },
         );
@@ -987,4 +1022,72 @@ fn published_upload_wire_preserves_large_integers_empty_ranges_and_sealed_manife
             json!({"workspace_id":"workspace","item_id":"item","upload_generation":u64::MAX.to_string(),"logical_size":size.to_string(),"content_hash":hash,"state":if manifest.is_some(){"SEALED"}else{"COMPLETE"},"durable_ranges":if size>0{vec![json!({"offset":"0","length":size.to_string(),"content_hash":hash})]}else{vec![]},"sealed_manifest_hash":manifest})
         );
     }
+}
+
+#[tokio::test]
+async fn typed_content_hash_header_rejects_noncanonical_values_before_staging() {
+    use service_stack::ServiceExt;
+    let root = crate::tests::private_tempdir();
+    let mut auth =
+        crate::AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
+    let token = auth.login("admin", "a-long-test-password").unwrap().token;
+    let mut config = crate::ServerConfig::loopback(root.path());
+    config.http_spool_limits.recovery_reserve_bytes = 1;
+    let spool = config.spool_dir.clone();
+    let app = crate::router(Arc::new(RetainedGenerationBackend), auth, config).unwrap();
+    let hash = blake3::hash(b"abc").to_hex().to_string();
+    let uri = "/api/workspaces/ws_00000000000000000000000000000000/files/entry_00000000000000000000000000000000/content?path=file";
+    let initial: Vec<_> = std::fs::read_dir(&spool)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    for values in [
+        vec![],
+        vec![String::new()],
+        vec![hash.to_uppercase()],
+        vec!["0".repeat(63)],
+        vec!["g".repeat(64)],
+        vec![hash.clone(), hash.clone()],
+    ] {
+        let mut request = Request::builder()
+            .method("PUT")
+            .uri(uri)
+            .header("authorization", format!("Bearer {token}"))
+            .header("x-zxs-logical-size", "3");
+        for value in values {
+            request = request.header("x-zxs-content-hash", value);
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::from("abc")).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let current: Vec<_> = std::fs::read_dir(&spool)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            current, initial,
+            "invalid hash must not create staged data or receipt"
+        );
+    }
+    let request = Request::builder()
+        .method("PUT")
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .header("x-zxs-logical-size", "3")
+        .header("x-zxs-content-hash", &hash)
+        .body(Body::from("abc"))
+        .unwrap();
+    assert_eq!(app.oneshot(request).await.unwrap().status(), StatusCode::OK);
+    let record = uploads::load(
+        &spool,
+        "ws_00000000000000000000000000000000",
+        "entry_00000000000000000000000000000000",
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(record.content_hash.unwrap().to_string(), hash);
+    assert_eq!(std::fs::read(spool.join(record.data_file)).unwrap(), b"abc");
 }

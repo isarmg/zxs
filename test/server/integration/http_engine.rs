@@ -509,7 +509,26 @@ async fn upload(
         "upload {path}: {}",
         String::from_utf8_lossy(&bytes)
     );
-    json_codec::from_slice(&bytes).unwrap()
+    let value: Value = json_codec::from_slice(&bytes).unwrap();
+    assert_eq!(
+        value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([
+            "item_id",
+            "path",
+            "size",
+            "content_hash",
+            "dirty_generation",
+            "base_version_id"
+        ])
+    );
+    assert!(value["size"].is_string());
+    assert!(value["dirty_generation"].is_string());
+    value
 }
 
 async fn version_bytes(app: &Router, token: &str, version: &str) -> Vec<u8> {

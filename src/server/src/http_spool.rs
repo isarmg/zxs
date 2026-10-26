@@ -1,5 +1,5 @@
 //! Optional HTTP staging startup. Only a complete exclusive inventory admits work.
-use crate::{ApiError, ServerConfig, spool_budget::SpoolBudget};
+use crate::{AdmittedServerConfig, ApiError, ServerConfig, spool_budget::SpoolBudget};
 use std::sync::{Arc, Mutex};
 
 enum State {
@@ -62,7 +62,7 @@ impl HttpSpool {
 }
 
 impl Startup {
-    pub(crate) async fn run(self, config: ServerConfig) {
+    pub(crate) async fn run(self, config: Arc<AdmittedServerConfig>) {
         self.run_with(move || config.open_http_spool()).await;
     }
 

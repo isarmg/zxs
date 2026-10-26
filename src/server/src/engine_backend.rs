@@ -242,10 +242,10 @@ fn finish_authorized_upload(
     identity: &Identity,
     workspace: &str,
     prepared: storage_engine::PreparedUpload,
-) -> Result<Value, ApiError> {
+) -> Result<storage_contract::StagedFile, ApiError> {
     let current = current_protected_identity(engine, identity)?;
     workspace_authorize(engine, &current, workspace)?;
-    sanitized(engine.finish_upload(prepared).map_err(error)?)
+    engine.finish_upload(prepared).map_err(error)
 }
 
 impl EngineBackend {
@@ -396,9 +396,42 @@ impl Backend for EngineBackend {
         Ok(Some(crate::PublishedUploadStatus {
             generation: staged.dirty_generation,
             logical_size: staged.size,
-            content_hash: staged.content_hash.clone(),
+            content_hash: staged.content_hash,
             state,
         }))
+    }
+
+    fn seal_workspace(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::SealedWorkspace, ApiError> {
+        let mut engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        workspace_authorize(&engine, &current, workspace)?;
+        engine
+            .seal_workspace(workspace, &current.principal)
+            .map_err(error)
+    }
+    fn commit_workspace_public(
+        &self,
+        identity: &Identity,
+        command: storage_contract::PublicCommitEnvelope,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        let workspace_id = command.workspace_id().to_owned();
+        let plan =
+            Application::new(&mut engine, &current).prepare_commit_workspace_public(command)?;
+        drop(engine);
+        #[cfg(test)]
+        if let Some(hook) = self.commit_preparation_hook.lock().unwrap().clone() {
+            hook();
+        }
+        let prepared = plan.execute().map_err(error)?;
+        let mut engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        Application::new(&mut engine, &current).finish_workspace_commit(&workspace_id, prepared)
     }
 
     fn authorize_upload(
@@ -953,41 +986,6 @@ impl Backend for EngineBackend {
                     },
                 )?)
             }
-            crate::BackendAction::SealWorkspace => {
-                keys(&input, &["workspace_id"])?;
-                let workspace =
-                    workspace_authorize(&engine, identity, field(&input, "workspace_id")?)?;
-                let workspace_id = workspace.workspace_id.clone();
-                let principal = workspace.principal.clone();
-                engine
-                    .seal_workspace(&workspace_id, &principal)
-                    .map_err(error)
-            }
-            crate::BackendAction::CommitWorkspace => {
-                for key in [
-                    "workspace_id",
-                    "operation_id",
-                    "expected_head",
-                    "fencing_token",
-                ] {
-                    field(&input, key)?;
-                }
-                let workspace_id = field(&input, "workspace_id")?.to_owned();
-                let command = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-                let plan = Application::new(&mut engine, identity)
-                    .prepare_commit_workspace_public(command)?;
-                drop(engine);
-                #[cfg(test)]
-                if let Some(hook) = self.commit_preparation_hook.lock().unwrap().clone() {
-                    hook();
-                }
-                let prepared = plan.execute().map_err(error)?;
-                let mut engine = self.engine.lock().expect("service state lock poisoned");
-                let current = current_protected_identity(&engine, identity)?;
-                let result = Application::new(&mut engine, &current)
-                    .finish_workspace_commit(&workspace_id, prepared)?;
-                operation_wire(result)
-            }
             crate::BackendAction::CreateBranch => {
                 for key in ["repository_id", "source_commit_id", "name", "operation_id"] {
                     field(&input, key)?;
@@ -1249,16 +1247,16 @@ impl Backend for EngineBackend {
         &self,
         identity: &Identity,
         workspace: &str,
-        _item: &str,
+        item: &str,
         path: &name_policy::PortablePath,
         source: &crate::UploadSource,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         let current = current_protected_identity(&engine, identity)?;
         let workspace_record = workspace_authorize(&engine, &current, workspace)?;
         let generation = workspace_record
             .files
-            .get(_item)
+            .get(item)
             .map(|file| file.dirty_generation.checked_add(1))
             .unwrap_or(Some(1))
             .ok_or_else(|| {
@@ -1270,11 +1268,11 @@ impl Backend for EngineBackend {
         let plan = engine
             .prepare_upload_file(
                 workspace,
-                _item,
+                item,
                 path,
                 source.file.try_clone().map_err(ApiError::io)?,
                 generation,
-                Some((source.size, source.hash.clone())),
+                Some((source.size, source.hash)),
             )
             .map_err(error)?;
         drop(engine);
@@ -1290,7 +1288,7 @@ impl Backend for EngineBackend {
         path: &name_policy::PortablePath,
         source: &crate::UploadSource,
         generation: u64,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         let current = current_protected_identity(&engine, identity)?;
         workspace_authorize(&engine, &current, workspace)?;
@@ -1301,7 +1299,7 @@ impl Backend for EngineBackend {
                 path,
                 source.file.try_clone().map_err(ApiError::io)?,
                 generation,
-                Some((source.size, source.hash.clone())),
+                Some((source.size, source.hash)),
             )
             .map_err(error)?;
         drop(engine);

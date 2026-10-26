@@ -209,7 +209,7 @@ impl Session {
                             self.max_file_bytes,
                         )?,
                     )?;
-                    entry_id = field(&staged, "item_id")?.to_owned();
+                    entry_id = staged.item_id;
                 }
                 let fd = OwnedFd::from(file.try_clone().map_err(ApiError::io)?);
                 let workspace_id = workspace.workspace_id.clone();

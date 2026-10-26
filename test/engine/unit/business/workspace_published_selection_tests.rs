@@ -247,6 +247,7 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
         let body = wire.then(|| {
             let mut body = engine
                 .seal_workspace(&workspace.workspace_id, "admin")
+                .map(|seal| json_codec::to_value(seal).unwrap())
                 .unwrap();
             body["request_digest"] =
                 json!(crate::wire::commit_request_digest(&workspace.workspace_id, &body).unwrap());
@@ -282,7 +283,7 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
         assert!(!before.selected_file_contexts.contains_key(&key));
         engine.inject_fault_once("after_local_publications");
         let result = if let Some(body) = body.clone() {
-            engine.commit_workspace_wire(request.clone(), body)
+            engine.commit_workspace_wire(request.clone(), public_envelope(body))
         } else {
             engine.commit_workspace(request.clone())
         };
@@ -365,7 +366,7 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
             storage_contract::ErrorCode::FileBranchConflict
         );
         let replayed = if let Some(body) = body {
-            engine.commit_workspace_wire(request.clone(), body)
+            engine.commit_workspace_wire(request.clone(), public_envelope(body))
         } else {
             engine.commit_workspace(request.clone())
         }
@@ -380,4 +381,9 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
             original_manifests
         );
     }
+}
+
+fn public_envelope(body: json_codec::Value) -> storage_contract::PublicCommitEnvelope {
+    let workspace = body["workspace_id"].as_str().unwrap().to_owned();
+    storage_contract::PublicCommitEnvelope::parse(&workspace, body).unwrap()
 }

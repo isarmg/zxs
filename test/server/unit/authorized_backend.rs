@@ -261,9 +261,34 @@ impl Backend for RecordingBackend {
         Ok(Some(crate::PublishedUploadStatus {
             generation: 42,
             logical_size: 0,
-            content_hash: blake3::hash(b"").to_hex().to_string(),
+            content_hash: storage_contract::ContentHash::from_digest(blake3::hash(b"")),
             state: crate::PublishedUploadState::Complete,
         }))
+    }
+    fn seal_workspace(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::SealedWorkspace, ApiError> {
+        self.record(
+            "seal_workspace",
+            Some(identity),
+            json!({"workspace":workspace}),
+        )?;
+        Ok(public_seal())
+    }
+    fn commit_workspace_public(
+        &self,
+        identity: &Identity,
+        command: storage_contract::PublicCommitEnvelope,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let operation = command.operation_id();
+        self.record(
+            "commit_workspace_public",
+            Some(identity),
+            command.into_body(),
+        )?;
+        Ok(recorded_operation(operation, "commit_workspace_public"))
     }
     fn authorize_upload(
         &self,
@@ -355,12 +380,13 @@ impl Backend for RecordingBackend {
         item: &str,
         path: &name_policy::PortablePath,
         source: &UploadSource,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         self.record(
             "upload",
             Some(identity),
             upload_arguments(workspace, item, path, source),
-        )
+        )?;
+        Ok(staged_result("upload", path, source, 1))
     }
     fn upload_generation(
         &self,
@@ -370,10 +396,11 @@ impl Backend for RecordingBackend {
         path: &name_policy::PortablePath,
         source: &UploadSource,
         generation: u64,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         let mut arguments = upload_arguments(workspace, item, path, source);
         arguments["generation"] = generation.into();
-        self.record("upload_generation", Some(identity), arguments)
+        self.record("upload_generation", Some(identity), arguments)?;
+        Ok(staged_result("upload_generation", path, source, generation))
     }
     fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
         self.read("content", identity, json!({"version": version}))
@@ -518,6 +545,19 @@ impl Fixture {
                     }),
             ),
             (
+                "seal_workspace",
+                backend.seal_workspace(identity, "workspace").map(|seal| {
+                    assert_eq!(seal.fencing_token, 41);
+                    json!({"returned_by":"seal_workspace"})
+                }),
+            ),
+            (
+                "commit_workspace_public",
+                backend
+                    .commit_workspace_public(identity, public_envelope())
+                    .map(|result| result.result),
+            ),
+            (
                 "authorize_upload",
                 backend
                     .authorize_upload(identity, "workspace", Some(42))
@@ -612,24 +652,35 @@ impl Fixture {
             ),
             (
                 "upload",
-                backend.upload(
-                    identity,
-                    "workspace",
-                    "item",
-                    &name_policy::PortablePath::parse("path").unwrap(),
-                    source,
-                ),
+                backend
+                    .upload(
+                        identity,
+                        "workspace",
+                        "item",
+                        &name_policy::PortablePath::parse("path").unwrap(),
+                        source,
+                    )
+                    .map(|staged| {
+                        assert_eq!(staged.item_id, "upload");
+                        json!({"returned_by":"upload"})
+                    }),
             ),
             (
                 "upload_generation",
-                backend.upload_generation(
-                    identity,
-                    "workspace",
-                    "item",
-                    &name_policy::PortablePath::parse("path").unwrap(),
-                    source,
-                    37,
-                ),
+                backend
+                    .upload_generation(
+                        identity,
+                        "workspace",
+                        "item",
+                        &name_policy::PortablePath::parse("path").unwrap(),
+                        source,
+                        37,
+                    )
+                    .map(|staged| {
+                        assert_eq!(staged.item_id, "upload_generation");
+                        assert_eq!(staged.dirty_generation, 37);
+                        json!({"returned_by":"upload_generation"})
+                    }),
             ),
             (
                 "content",
@@ -696,6 +747,8 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"branch":"branch","commit":"commit"}),
         json!({"workspace":"workspace"}),
         json!({"workspace":"workspace","item":"item"}),
+        json!({"workspace":"workspace"}),
+        public_envelope().into_body(),
         json!({"workspace":"workspace","logical_size":42}),
         json!({"branch_id":"branch","source_commit_id":"source"}),
         json!({"workspace_id":"workspace"}),
@@ -819,4 +872,42 @@ fn lifecycle_delegation_preserves_errors_and_private_hook_boundaries() {
         ]
     );
     assert!(calls.iter().all(|call| call.identity.is_none()));
+}
+
+fn public_seal() -> storage_contract::SealedWorkspace {
+    storage_contract::SealedWorkspace {
+        operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
+        workspace_id: "workspace".into(),
+        repository_id: "repo".into(),
+        branch_id: "branch".into(),
+        expected_head: "head".into(),
+        fencing_token: 41,
+        message: "public".into(),
+        requested_protection: "strict",
+        file_placement: BTreeMap::new(),
+        expected_topology_generation: 3,
+        sealed_manifest_hash: "manifest".into(),
+    }
+}
+fn public_envelope() -> storage_contract::PublicCommitEnvelope {
+    let mut body = json_codec::to_value(public_seal()).unwrap();
+    body["request_digest"] = "digest".into();
+    storage_contract::PublicCommitEnvelope::parse("workspace", body).unwrap()
+}
+
+fn staged_result(
+    item: &str,
+    path: &name_policy::PortablePath,
+    source: &UploadSource,
+    generation: u64,
+) -> storage_contract::StagedFile {
+    storage_contract::StagedFile {
+        item_id: item.into(),
+        path: path.clone(),
+        source_path: "/private/recorded-upload".into(),
+        size: source.size,
+        content_hash: source.hash,
+        dirty_generation: generation,
+        base_version_id: None,
+    }
 }

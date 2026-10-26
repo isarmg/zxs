@@ -84,7 +84,7 @@ impl Drop for ReadLease {
 pub struct OpenedContent {
     pub file: File,
     pub size: u64,
-    pub content_hash: String,
+    pub content_hash: crate::ContentHash,
     pub lease: ReadLease,
 }
 pub(crate) struct Prepared {

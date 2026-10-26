@@ -62,6 +62,13 @@ can be outside RFC3339's year range, so formatting them also retains its source.
 Only constant formats, validated generated header values, internal serializers
 and poisoned locks use invariant assertions.
 
+## 平台原语边界
+
+`platform-io` 只为文件系统、SQLite、负载及其他平台操作提供具体错误，
+不定义业务错误码或 HTTP JSON 信封。产品使用上述 `storage_contract::ErrorCode`
+与服务端 `ApiError`；平台错误通过引擎或服务端的具体来源变体保留，
+HTTP/SMB 映射仍属于协议适配层。
+
 ## Staging limits
 
 These layers do not claim that all repository error paths are migrated. Other

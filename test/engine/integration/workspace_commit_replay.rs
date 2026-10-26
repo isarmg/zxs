@@ -201,6 +201,7 @@ fn wire_commit_reconciles_after_publication_and_system_disk_loss() {
             .unwrap();
         let mut body = engine
             .seal_workspace(&workspace.workspace_id, "admin")
+            .map(|seal| json_codec::to_value(seal).unwrap())
             .unwrap();
         body["request_digest"] = json_codec::json!(
             storage_engine::commit_request_digest(&workspace.workspace_id, &body).unwrap()
@@ -217,7 +218,7 @@ fn wire_commit_reconciles_after_publication_and_system_disk_loss() {
         engine.inject_fault_once("after_publication_3");
         assert_eq!(
             engine
-                .commit_workspace_wire(request.clone(), body.clone())
+                .commit_workspace_wire(request.clone(), public_envelope(body.clone()))
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::InDoubt
@@ -248,7 +249,9 @@ fn wire_commit_reconciles_after_publication_and_system_disk_loss() {
             }
         );
         let sequence = engine.state().sequence;
-        let result = engine.commit_workspace_wire(request, body).unwrap();
+        let result = engine
+            .commit_workspace_wire(request, public_envelope(body))
+            .unwrap();
         assert_eq!(
             result.commit_state,
             storage_contract::CommitState::Published
@@ -288,6 +291,7 @@ fn saved_wire() -> (tempfile::TempDir, Engine, CommitRequest, json_codec::Value)
         .unwrap();
     let mut body = engine
         .seal_workspace(&workspace.workspace_id, "admin")
+        .map(|seal| json_codec::to_value(seal).unwrap())
         .unwrap();
     body["request_digest"] = json_codec::json!(
         storage_engine::commit_request_digest(&workspace.workspace_id, &body).unwrap()
@@ -302,7 +306,7 @@ fn saved_wire() -> (tempfile::TempDir, Engine, CommitRequest, json_codec::Value)
         request_digest: None,
     };
     engine
-        .commit_workspace_wire(request.clone(), body.clone())
+        .commit_workspace_wire(request.clone(), public_envelope(body.clone()))
         .unwrap();
     (temp, engine, request, body)
 }
@@ -332,7 +336,7 @@ fn wire_receipt_cannot_close_a_different_manifest_with_the_same_workspace_id() {
         } else {
             let staged = workspace.files.values_mut().next().unwrap();
             staged.size += 1;
-            staged.content_hash = "0".repeat(64);
+            staged.content_hash = "0".repeat(64).parse().unwrap();
         }
         for path in request_paths(&engine, &request) {
             fs::write(
@@ -368,13 +372,15 @@ fn assert_wire_request_binding(detached: bool) {
         }
         let error = if detached {
             engine
-                .prepare_workspace_commit(request, Some(body))
+                .prepare_workspace_commit(request, Some(public_envelope(body)))
                 .unwrap()
                 .execute()
                 .err()
                 .expect("changed request must not replay")
         } else {
-            engine.commit_workspace_wire(request, body).unwrap_err()
+            engine
+                .commit_workspace_wire(request, public_envelope(body))
+                .unwrap_err()
         };
         assert_eq!(
             error.code(),
@@ -470,7 +476,8 @@ fn workspace_mirrors_never_select_newest_or_first_conflicting_manifest() {
             match field {
                 "owner" => workspace.principal = "someone-else".into(),
                 "content" => {
-                    workspace.files.values_mut().next().unwrap().content_hash = "0".repeat(64)
+                    workspace.files.values_mut().next().unwrap().content_hash =
+                        "0".repeat(64).parse().unwrap()
                 }
                 "fence" => workspace.fencing_token += 50,
                 "state" => workspace.state = storage_contract::WorkspaceState::Aborted,
@@ -730,6 +737,7 @@ fn partial_workspace_completion_uses_original_published_file_contexts() {
                 .unwrap();
             engine
                 .seal_workspace(&workspace.workspace_id, "admin")
+                .map(|seal| json_codec::to_value(seal).unwrap())
                 .unwrap();
             let before = engine.workspace(&workspace.workspace_id).unwrap();
             let request = CommitRequest {
@@ -850,4 +858,9 @@ fn absent_primary_preserves_read_only_workspace_receipt_recovery() {
             assert_eq!(fs::read_dir(primary).unwrap().count(), 0);
         }
     }
+}
+
+fn public_envelope(body: json_codec::Value) -> storage_contract::PublicCommitEnvelope {
+    let workspace = body["workspace_id"].as_str().unwrap().to_owned();
+    storage_contract::PublicCommitEnvelope::parse(&workspace, body).unwrap()
 }

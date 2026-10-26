@@ -176,7 +176,7 @@ pub(crate) async fn upload(
     ApiPath((workspace, item)): ApiPath<(String, String)>,
     ApiQuery(query): ApiQuery<UploadQuery>,
     request: Request,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<crate::backend_workspace::StagedFileResponse>, ApiError> {
     state.http_spool()?;
     let deadline = UploadDeadline {
         at: tokio::time::Instant::now() + state.config.http_transfer_limits.total_timeout,
@@ -209,7 +209,7 @@ async fn upload_inner(
     query: UploadQuery,
     request: Request,
     deadline: &UploadDeadline,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<crate::backend_workspace::StagedFileResponse>, ApiError> {
     let _permit = state.upload_slots.acquire()?;
     let key = uploads::key(&workspace, &item);
     {
@@ -266,8 +266,12 @@ async fn upload_inner(
         .map(|value| {
             value
                 .to_str()
-                .map(str::to_owned)
                 .map_err(ApiError::invalid_source)
+                .and_then(|value| {
+                    value
+                        .parse::<storage_contract::ContentHash>()
+                        .map_err(ApiError::invalid_source)
+                })
         })
         .transpose()?;
     if expected_hash.is_none() {
@@ -275,14 +279,6 @@ async fn upload_inner(
     }
     if headers.get_all("x-zxs-content-hash").iter().count() != 1 {
         return Err(ApiError::invalid("duplicate content hash header"));
-    }
-    if expected_hash.as_ref().is_some_and(|hash| {
-        hash.len() != 64
-            || !hash
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    }) {
-        return Err(ApiError::invalid("invalid BLAKE3 upload hash"));
     }
     storage_contract::validate_id(&item, "entry").map_err(ApiError::invalid_source)?;
     let backend = state.backend.clone();
@@ -371,7 +367,7 @@ async fn upload_inner(
         path: query.path.clone(),
         generation,
         logical_size: expected_length,
-        content_hash: expected_hash.clone(),
+        content_hash: expected_hash,
         persisted_bytes: 0,
         persisted_hash: blake3::hash(b"").to_hex().to_string(),
         state: crate::uploads::UploadState::Incomplete,
@@ -526,7 +522,7 @@ async fn upload_inner(
             "upload ended before its declared length; durable work data is retained",
         ));
     }
-    let actual_hash = hash.finalize().to_hex().to_string();
+    let actual_hash = storage_contract::ContentHash::from_digest(hash.finalize());
     if expected_hash.is_some_and(|expected| expected != actual_hash) {
         record.state = crate::uploads::UploadState::ChecksumMismatch;
         persist_upload(&record, &admission, &staged_file).await?;
@@ -536,7 +532,7 @@ async fn upload_inner(
             "uploaded bytes do not match the declared hash; work data is retained",
         ));
     }
-    record.content_hash = Some(actual_hash.clone());
+    record.content_hash = Some(actual_hash);
     let backend = state.backend.clone();
     let owner = identity.clone();
     let ws = workspace.clone();
@@ -558,7 +554,7 @@ async fn upload_inner(
     })
     .await
     .map_err(ApiError::join)??;
-    Ok(Json(staged))
+    Ok(Json(staged.into()))
 }
 
 fn parse_range(value: &str, size: u64) -> Result<(u64, u64), ApiError> {

@@ -228,7 +228,7 @@ fn verify_replica(
         full.update(&buffer[..n]);
         remaining -= n as u64;
     }
-    if remaining != 0 || full.finalize().to_hex().as_str() != version.content_hash {
+    if remaining != 0 || ContentHash::from_digest(full.finalize()) != version.content_hash {
         return Err(Error::new(
             storage_contract::ErrorCode::ChecksumMismatch,
             "complete payload hash differs",

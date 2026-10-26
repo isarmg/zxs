@@ -470,7 +470,7 @@ impl Engine {
                             let staged = workspace.as_ref()
                                 .and_then(|workspace| workspace.files.get(item))
                                 .expect("invariant: staged entries were composed from this workspace");
-                            (staged.source_path.clone(), staged.base_version_id.clone().into_iter().collect::<Vec<_>>(), staged.content_hash.clone(), staged.size)
+                            (staged.source_path.clone(), staged.base_version_id.clone().into_iter().collect::<Vec<_>>(), staged.content_hash, staged.size)
                         } else {
                             pending_file_versions.insert(entry.file_id.clone(), entry.version_id.clone());
                             continue;

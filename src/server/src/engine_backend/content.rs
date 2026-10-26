@@ -50,7 +50,7 @@ impl EngineBackend {
             fallback_files: content.fallback_files,
             file: content.file,
             size: content.size,
-            hash: content.content_hash,
+            hash: content.content_hash.to_string(),
             lease: Box::new(content.lease),
             download_name: Some(download_name),
         })
@@ -74,7 +74,7 @@ impl EngineBackend {
             fallback_files: Vec::new(),
             file: opened.file,
             size: opened.size,
-            hash: opened.content_hash,
+            hash: opened.content_hash.to_string(),
             lease: Box::new(opened.lease),
             download_name: None,
         })

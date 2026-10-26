@@ -64,14 +64,6 @@ pub(crate) fn validate_version(version: &FileVersion) -> Result<()> {
     validate_id(&version.history_tree_id, "history")?;
     validate_id(&version.version_id, "ver")?;
     name_policy::validate_name(&version.creation_name)?;
-    if version.content_hash.len() != 64
-        || !version
-            .content_hash
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(invalid("version content digest is invalid"));
-    }
     let name = &version.storage_name;
     sequence(name)?;
     let digest = name
@@ -79,7 +71,7 @@ pub(crate) fn validate_version(version: &FileVersion) -> Result<()> {
         .nth(2)
         .and_then(|value| value.split('.').next())
         .unwrap_or("");
-    if digest != &version.content_hash[..8] {
+    if digest != &version.content_hash.digest().to_hex()[..8] {
         return Err(invalid(
             "version storage name does not identify its content digest",
         ));
@@ -392,7 +384,9 @@ fn verify_body(path: &Path, version: &FileVersion) -> Result<fs::File> {
         }
         digest.update(&buffer[..count]);
     }
-    if size != version.logical_size || digest.finalize().to_hex().as_str() != version.content_hash {
+    if size != version.logical_size
+        || ContentHash::from_digest(digest.finalize()) != version.content_hash
+    {
         return Err(Error::new(
             storage_contract::ErrorCode::ContentCorrupt,
             "version body content differs",

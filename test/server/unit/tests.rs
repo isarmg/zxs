@@ -99,6 +99,20 @@ impl Backend for TestBackend {
     ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
         Ok(None)
     }
+    fn seal_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn commit_workspace_public(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: storage_contract::PublicCommitEnvelope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn authorize_upload(
         &self,
         _identity: &crate::auth::Identity,
@@ -146,18 +160,38 @@ impl Backend for TestBackend {
     fn upload(
         &self,
         _identity: &Identity,
+        _workspace: &str,
+        item: &str,
+        path: &name_policy::PortablePath,
+        source: &crate::UploadSource,
+    ) -> Result<storage_contract::StagedFile, ApiError> {
+        let mut bytes = vec![0; source.size as usize];
+        std::os::unix::fs::FileExt::read_exact_at(&source.file, &mut bytes, 0)
+            .map_err(ApiError::io)?;
+        Ok(storage_contract::StagedFile {
+            item_id: item.into(),
+            path: path.clone(),
+            source_path: "/private/upload-fixture".into(),
+            size: bytes.len() as u64,
+            content_hash: storage_contract::ContentHash::from_digest(blake3::hash(&bytes)),
+            dirty_generation: 1,
+            base_version_id: None,
+        })
+    }
+    fn upload_generation(
+        &self,
+        identity: &crate::auth::Identity,
         workspace: &str,
         item: &str,
         path: &name_policy::PortablePath,
         source: &crate::UploadSource,
-    ) -> Result<Value, ApiError> {
-        let mut bytes = vec![0; source.size as usize];
-        std::os::unix::fs::FileExt::read_exact_at(&source.file, &mut bytes, 0)
-            .map_err(ApiError::io)?;
-        Ok(
-            json!({"workspace_id":workspace,"item_id":item,"path":path,"size":bytes.len().to_string(),"content_hash":blake3::hash(&bytes).to_hex().to_string()}),
-        )
+        generation: u64,
+    ) -> Result<storage_contract::StagedFile, crate::ApiError> {
+        let mut staged = self.upload(identity, workspace, item, path, source)?;
+        staged.dirty_generation = generation;
+        Ok(staged)
     }
+
     fn checksums(&self, _identity: &Identity, _version: &str) -> Result<Vec<u8>, ApiError> {
         Ok(vec![7; 128 * 1024])
     }
@@ -836,6 +870,20 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             self.delegate
                 .published_upload_status(identity, workspace, item)
         }
+        fn seal_workspace(
+            &self,
+            identity: &crate::auth::Identity,
+            workspace: &str,
+        ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+            self.delegate.seal_workspace(identity, workspace)
+        }
+        fn commit_workspace_public(
+            &self,
+            identity: &crate::auth::Identity,
+            command: storage_contract::PublicCommitEnvelope,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.commit_workspace_public(identity, command)
+        }
         fn authorize_upload(
             &self,
             identity: &crate::auth::Identity,
@@ -883,7 +931,7 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             item: &str,
             path: &name_policy::PortablePath,
             source: &crate::UploadSource,
-        ) -> Result<Value, ApiError> {
+        ) -> Result<storage_contract::StagedFile, ApiError> {
             if let Some(started) = self.started.lock().unwrap().take() {
                 let _ = started.send(());
             }
@@ -894,6 +942,19 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             }
             self.delegate
                 .upload(identity, workspace, item, path, source)
+        }
+        fn upload_generation(
+            &self,
+            identity: &crate::auth::Identity,
+            workspace: &str,
+            item: &str,
+            path: &name_policy::PortablePath,
+            source: &crate::UploadSource,
+            generation: u64,
+        ) -> Result<storage_contract::StagedFile, crate::ApiError> {
+            let mut staged = self.upload(identity, workspace, item, path, source)?;
+            staged.dirty_generation = generation;
+            Ok(staged)
         }
     }
     struct Release(Arc<(Mutex<bool>, std::sync::Condvar)>);
@@ -1151,6 +1212,81 @@ async fn upload_path_admission_rejects_nonportable_names_and_keeps_display_spell
                 uploads::load(&root.path().join("api-spool"), "ws", &item)
                     .unwrap()
                     .is_none()
+            );
+        }
+    }
+}
+
+#[test]
+fn public_router_rejects_invalid_static_origins_before_preparing_spool() {
+    for origin in [
+        "not a URL",
+        "",
+        "null",
+        "http://example.com",
+        "https://example.com/",
+        "https://example.com/path",
+        "https://user@example.com",
+        "https://user:password@example.com",
+        "https://example.com?query=1",
+        "https://example.com#fragment",
+    ] {
+        let root = private_tempdir();
+        let mut config = ServerConfig::loopback(root.path());
+        config.external_origin = Some(origin.into());
+        let spool = config.spool_dir.clone();
+        let auth = AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
+        let result = router(
+            Arc::new(TestBackend {
+                path: root.path().join("content"),
+            }),
+            auth,
+            config,
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("accepted invalid origin {origin}"),
+        };
+        assert_eq!(error.status, 400, "{origin}");
+        assert!(
+            !spool.exists(),
+            "invalid configuration must precede spool I/O"
+        );
+    }
+}
+
+#[tokio::test]
+async fn canonical_static_origin_drives_http_login_cookie_and_request_rejection() {
+    let root = private_tempdir();
+    let mut config = ServerConfig::loopback(root.path());
+    config.external_origin = Some("https://EXAMPLE.COM:443".into());
+    let app = application_config(root.path(), config);
+    for (origin, expected) in [
+        ("https://example.com", StatusCode::OK),
+        ("https://example.com:8443", StatusCode::FORBIDDEN),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/login")
+                    .header(header::ORIGIN, origin)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"username":"admin","password":"a-long-test-password"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            assert!(
+                response.headers()[header::SET_COOKIE]
+                    .to_str()
+                    .unwrap()
+                    .ends_with("; Secure")
             );
         }
     }

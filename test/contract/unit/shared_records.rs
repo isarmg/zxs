@@ -248,7 +248,7 @@ fn file_version_records_preserve_map_bytes_hashes_and_state_roundtrip() {
                     creation_primary_slot_id: "P01".into(),
                     logical_size: u64::MAX,
                     version_sequence: sequence,
-                    content_hash: "a".repeat(64),
+                    content_hash: "a".repeat(64).parse().unwrap(),
                     checksum_chunk_bytes: 4096,
                     checksum_manifest_hash: "b".repeat(64),
                     creation_name: "文件\n\".txt".into(),

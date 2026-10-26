@@ -20,7 +20,6 @@ libc = {version = "0.2", path = "../foundation/platform/libc"}
 libsqlite3-sys = { version = "=0.37.0", features = ["bundled"], path = "../foundation/data-storage/libsqlite3-sys"}
 rustix = { version = "1.1.5", features = ["fs", "process"], path = "../foundation/platform/rustix"}
 data-serialization.workspace = true
-json-codec.workspace = true
 sha2 = {version = "0.11.0", path = "../foundation/cryptography/sha2"}
 sqlite-access = { version = "=0.9.0", default-features = false, features = ["sqlite-bundled"], path = "../foundation/data-storage/sqlite-access"}
 tempfile.workspace = true
@@ -29,6 +28,7 @@ tokio = { version = "1.53.2", default-features = false, features = ["rt"], optio
 zeroize = {version = "1.8", path = "../foundation/cryptography/zeroize"}
 
 [dev-dependencies]
+json-codec.workspace = true
 log = { path = "../foundation/diagnostics/log", features = ["std"] }
 tokio = { version = "1.53.2", default-features = false, features = ["rt-multi-thread", "macros"], path = "../foundation/concurrency/tokio" }
 

@@ -99,6 +99,20 @@ impl Backend for Probe {
     ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn seal_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn commit_workspace_public(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: storage_contract::PublicCommitEnvelope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn authorize_upload(
         &self,
         _identity: &crate::auth::Identity,
@@ -141,10 +155,22 @@ impl Backend for Probe {
         _: &str,
         _: &name_policy::PortablePath,
         _: &crate::UploadSource,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Err(ApiError::unsupported())
     }
+    fn upload_generation(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _item: &str,
+        _path: &name_policy::PortablePath,
+        _source: &crate::UploadSource,
+        _generation: u64,
+    ) -> Result<storage_contract::StagedFile, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
     fn content(&self, _: &Identity, _: &str) -> Result<Content, ApiError> {
         Err(ApiError::unsupported())
     }
@@ -195,7 +221,7 @@ async fn stalled_real_inventory_keeps_management_responsive_and_uploads_pending(
     let app = crate::router_shared(
         runtime.backend,
         runtime.auth,
-        config.clone(),
+        config.clone().admit().unwrap(),
         runtime.telemetry,
         spool.clone(),
     )
@@ -342,7 +368,7 @@ async fn failed_inventory_and_panicked_job_become_terminal_unavailable() {
         if failure == "panic" {
             startup.run_with(|| panic!("injected startup panic")).await;
         } else {
-            startup.run(config.clone()).await;
+            startup.run(config.clone().admit().unwrap()).await;
         }
         assert_eq!(state.status(), "unavailable", "{failure}");
         assert_eq!(
@@ -419,7 +445,7 @@ async fn dropping_unstarted_token_performs_no_inventory() {
     let root = crate::tests::private_tempdir();
     let config = ServerConfig::loopback(root.path());
     let (state, startup) = HttpSpool::pending();
-    let future = startup.run(config.clone());
+    let future = startup.run(config.clone().admit().unwrap());
     drop(future);
     assert_eq!(state.status(), "pending");
     assert!(!config.spool_dir.exists());

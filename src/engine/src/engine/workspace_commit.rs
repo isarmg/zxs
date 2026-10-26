@@ -50,7 +50,7 @@ impl PlanningSnapshot {
 pub struct WorkspaceCommitPreparation {
     snapshot: PlanningSnapshot,
     request: CommitRequest,
-    wire_body: Option<json_codec::Value>,
+    wire_body: Option<crate::PublicCommitEnvelope>,
     frozen_workspace: Vec<u8>,
     admission: PreparationAdmission,
 }
@@ -105,7 +105,7 @@ impl Engine {
     pub fn prepare_workspace_commit(
         &self,
         request: CommitRequest,
-        wire_body: Option<json_codec::Value>,
+        wire_body: Option<crate::PublicCommitEnvelope>,
     ) -> Result<WorkspaceCommitPreparation> {
         let workspace = self.workspace(&request.workspace_id)?;
         if workspace.principal != request.principal {
@@ -253,9 +253,9 @@ impl WorkspaceCommitPreparation {
     pub fn execute(mut self) -> Result<PreparedWorkspaceCommit> {
         let replay = self.snapshot.replay.take();
         let engine = self.snapshot.context();
-        let plan = if let Some(body) = self.wire_body.take() {
+        let plan = if let Some(envelope) = self.wire_body.take() {
             let envelope =
-                crate::wire::ParsedWireEnvelope::parse(&self.request, &self.snapshot.state, body)?;
+                crate::wire::admit_public_commit(envelope, &self.request, &self.snapshot.state)?;
             engine.plan_workspace_commit_wire(
                 self.snapshot.workspace.clone(),
                 self.request,

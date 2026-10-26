@@ -308,7 +308,11 @@ async fn bounded_body_counts_streamed_bytes_and_preserves_read_failures() {
     assert!(!body.to_string().contains("private transport detail"));
 }
 
-struct PanickingBackend;
+// When a public route moves off call(), migrate its real typed method here too.
+// An unsupported stub proves neither panic mapping nor blocking-job cleanup.
+struct PanickingBackend {
+    upload_admission_panics: bool,
+}
 
 impl Backend for PanickingBackend {
     fn operation(
@@ -365,14 +369,14 @@ impl Backend for PanickingBackend {
         _identity: &crate::auth::Identity,
         _command: crate::CreateWorkspace,
     ) -> Result<storage_contract::Workspace, crate::ApiError> {
-        Err(crate::ApiError::unsupported())
+        panic!("private create_workspace panic detail")
     }
     fn abort_workspace(
         &self,
         _identity: &crate::auth::Identity,
         _workspace: &str,
     ) -> Result<(), crate::ApiError> {
-        Err(crate::ApiError::unsupported())
+        panic!("private abort_workspace panic detail")
     }
 
     fn workspace(
@@ -380,7 +384,7 @@ impl Backend for PanickingBackend {
         _identity: &crate::auth::Identity,
         _workspace: &str,
     ) -> Result<storage_contract::Workspace, crate::ApiError> {
-        Err(crate::ApiError::unsupported())
+        panic!("private workspace panic detail")
     }
     fn published_upload_status(
         &self,
@@ -388,7 +392,21 @@ impl Backend for PanickingBackend {
         _workspace: &str,
         _item: &str,
     ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
-        panic!("private upload status panic detail")
+        panic!("private published_upload_status panic detail")
+    }
+    fn seal_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        panic!("private seal_workspace panic detail")
+    }
+    fn commit_workspace_public(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: storage_contract::PublicCommitEnvelope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private commit_workspace_public panic detail")
     }
     fn authorize_upload(
         &self,
@@ -396,7 +414,10 @@ impl Backend for PanickingBackend {
         _workspace: &str,
         _logical_size: Option<u64>,
     ) -> Result<(), crate::ApiError> {
-        Err(crate::ApiError::unsupported())
+        if self.upload_admission_panics {
+            panic!("private upload admission panic detail");
+        }
+        Ok(())
     }
 
     fn lookup_current(
@@ -434,8 +455,19 @@ impl Backend for PanickingBackend {
         _item: &str,
         _path: &name_policy::PortablePath,
         _source: &crate::UploadSource,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         panic!("private upload panic detail");
+    }
+    fn upload_generation(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _item: &str,
+        _path: &name_policy::PortablePath,
+        _source: &crate::UploadSource,
+        _generation: u64,
+    ) -> Result<storage_contract::StagedFile, crate::ApiError> {
+        panic!("private upload_generation panic detail")
     }
 
     fn content(&self, _identity: &Identity, _version: &str) -> Result<Content, ApiError> {
@@ -448,25 +480,47 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
     let root = crate::tests::private_tempdir();
     let auth = AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
     let app = router(
-        Arc::new(PanickingBackend),
+        Arc::new(PanickingBackend {
+            upload_admission_panics: false,
+        }),
         auth,
         ServerConfig::loopback(root.path()),
     )
     .unwrap();
     let (token, _, _) = authenticated(&app).await;
-    for path in [
-        "/api/capabilities",
-        "/api/repositories",
-        "/api/versions/version/content",
-        "/api/workspaces/ws/files/item/upload-status",
+    for (method, path, body) in [
+        ("GET", "/api/capabilities", None),
+        ("GET", "/api/repositories", None),
+        ("GET", "/api/versions/version/content", None),
+        ("GET", "/api/workspaces/ws/files/item/upload-status", None),
+        ("GET", "/api/workspaces/ws", None),
+        (
+            "POST",
+            "/api/workspaces",
+            Some(json!({"branch_id":"branch"})),
+        ),
+        ("POST", "/api/workspaces/ws/abort", Some(json!({}))),
+        ("POST", "/api/workspaces/ws/seal", Some(json!({}))),
+        (
+            "POST",
+            "/api/workspaces/ws/commit",
+            Some(
+                json!({"workspace_id":"ws","operation_id":"op_00000000000000000000000000000000","repository_id":"repo","branch_id":"branch","expected_head":"head","fencing_token":"1","message":"","requested_protection":"strict","file_placement":{},"expected_topology_generation":"1","sealed_manifest_hash":"manifest","request_digest":"digest"}),
+            ),
+        ),
     ] {
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
+                    .method(method)
                     .uri(path)
                     .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                    .body(Body::empty())
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(
+                        body.map(|body| Body::from(json_codec::to_vec(&body).unwrap()))
+                            .unwrap_or_else(Body::empty),
+                    )
                     .unwrap(),
             )
             .await
@@ -815,4 +869,40 @@ fn server_startup_error_preserves_its_concrete_io_cause() {
             .raw_os_error(),
         Some(13)
     );
+}
+
+#[tokio::test]
+async fn typed_upload_admission_and_publication_panics_are_internal_errors() {
+    for upload_admission_panics in [true, false] {
+        let root = crate::tests::private_tempdir();
+        let auth = AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
+        let app = router(
+            Arc::new(PanickingBackend {
+                upload_admission_panics,
+            }),
+            auth,
+            ServerConfig::loopback(root.path()),
+        )
+        .unwrap();
+        let (token, _, _) = authenticated(&app).await;
+        let bytes = b"abc";
+        let request = Request::builder()
+            .method("PUT")
+            .uri("/api/workspaces/ws/files/entry_00000000000000000000000000000000/content?path=file.txt")
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header("x-zxs-logical-size", bytes.len().to_string())
+            .header("x-zxs-content-hash", blake3::hash(bytes).to_hex().as_str())
+            .body(Body::from(bytes.to_vec()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let body = assert_error(
+            response,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            true,
+        )
+        .await;
+        assert_eq!(body["error"]["message"], "request task failed");
+        assert!(!body.to_string().contains("panic"));
+    }
 }

@@ -253,10 +253,7 @@ impl Engine {
                 // mirror, so all damaged evidence remains available for repair.
                 for file in selected.files.values() {
                     let mut source = open_regular(&file.source_path)?;
-                    let digest = blake3::Hash::from_hex(&file.content_hash).map_err(|source| {
-                        Error::from(source)
-                            .context(ErrorCode::RecoveryRequired, "invalid staged content digest")
-                    })?;
+                    let digest = file.content_hash.digest();
                     platform_io::payload::verify_full(
                         &mut source,
                         platform_io::payload::Expectation {

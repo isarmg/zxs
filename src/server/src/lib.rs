@@ -31,7 +31,7 @@ mod backend_workspace;
 pub use backend_workspace::{CreateWorkspace, PublishedUploadState, PublishedUploadStatus};
 mod http_workspace;
 pub use backend_read::{DirectorySelection, DirectorySnapshot, ReadDirectory};
-use http_workspace::{abort, workspace, workspace_info};
+use http_workspace::{abort, commit, seal, workspace, workspace_info};
 mod operation_wire;
 pub use backend_action::BackendAction;
 
@@ -69,7 +69,7 @@ fn upload_fs_error(error: platform_io::fs_safety::Error) -> ApiError {
 pub struct UploadSource {
     pub file: std::fs::File,
     pub size: u64,
-    pub hash: String,
+    pub hash: storage_contract::ContentHash,
 }
 impl UploadSource {
     pub fn from_file(file: std::fs::File, maximum: u64) -> Result<Self, ApiError> {
@@ -95,7 +95,7 @@ impl UploadSource {
         Ok(Self {
             file,
             size,
-            hash: digest.finalize().to_hex().to_string(),
+            hash: storage_contract::ContentHash::from_digest(digest.finalize()),
         })
     }
 }
@@ -254,6 +254,16 @@ pub trait Backend: Send + Sync {
     ) -> Result<storage_contract::Workspace, ApiError>;
     /// Abort only a currently owned workspace; retain existing pending-operation decisions.
     fn abort_workspace(&self, identity: &Identity, workspace: &str) -> Result<(), ApiError>;
+    fn seal_workspace(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::SealedWorkspace, ApiError>;
+    fn commit_workspace_public(
+        &self,
+        identity: &Identity,
+        command: storage_contract::PublicCommitEnvelope,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
     fn workspace(
         &self,
         identity: &Identity,
@@ -306,6 +316,7 @@ pub trait Backend: Send + Sync {
     ) -> Result<Option<storage_contract::Entry>, ApiError>;
     /// Consume the held inode with positional reads and verify its declared
     /// size/hash against the copied snapshot before accepting any generation.
+    /// Publish the next workspace generation chosen under current admission.
     fn upload(
         &self,
         identity: &Identity,
@@ -313,13 +324,14 @@ pub trait Backend: Send + Sync {
         item: &str,
         path: &name_policy::PortablePath,
         source: &crate::UploadSource,
-    ) -> Result<Value, ApiError>;
+    ) -> Result<storage_contract::StagedFile, ApiError>;
     /// Return a fully verified raw descriptor (used by SMB and local consumers).
     fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError>;
     /// HTTP may authenticate only requested chunks, while retaining the read lease.
     fn range_content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError> {
         self.content(identity, version)
     }
+    /// Publish the exact caller generation; adapters must not silently discard it.
     fn upload_generation(
         &self,
         identity: &Identity,
@@ -327,10 +339,8 @@ pub trait Backend: Send + Sync {
         item: &str,
         path: &name_policy::PortablePath,
         source: &crate::UploadSource,
-        _generation: u64,
-    ) -> Result<Value, ApiError> {
-        self.upload(identity, workspace, item, path, source)
-    }
+        generation: u64,
+    ) -> Result<storage_contract::StagedFile, ApiError>;
     fn workspace_content(
         &self,
         _identity: &Identity,
@@ -415,6 +425,22 @@ impl Backend for AuthorizedBackend {
     ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
         self.backend
             .published_upload_status(&self.current(identity)?, workspace, item)
+    }
+    fn seal_workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        self.backend
+            .seal_workspace(&self.current(identity)?, workspace)
+    }
+    fn commit_workspace_public(
+        &self,
+        identity: &crate::auth::Identity,
+        command: storage_contract::PublicCommitEnvelope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .commit_workspace_public(&self.current(identity)?, command)
     }
     fn authorize_upload(
         &self,
@@ -523,7 +549,7 @@ impl Backend for AuthorizedBackend {
         item: &str,
         path: &name_policy::PortablePath,
         source: &crate::UploadSource,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         self.backend
             .upload(&self.current(identity)?, workspace, item, path, source)
     }
@@ -535,7 +561,7 @@ impl Backend for AuthorizedBackend {
         path: &name_policy::PortablePath,
         source: &crate::UploadSource,
         generation: u64,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<storage_contract::StagedFile, ApiError> {
         self.backend.upload_generation(
             &self.current(identity)?,
             workspace,
@@ -623,36 +649,7 @@ impl ServerConfig {
             }
         }
     }
-    fn secure_cookie(&self) -> bool {
-        self.normalized_external_origin()
-            .is_ok_and(|origin| origin.is_some())
-    }
-    /// Match browser Origin serialization, including host case, default ports
-    /// and IPv6 compression. Validation and cookie policy share this boundary.
-    fn normalized_external_origin(&self) -> Result<Option<String>, ApiError> {
-        self.external_origin
-            .as_ref()
-            .map(|origin| {
-                let parsed =
-                    url_encoding::address::Url::parse(origin).map_err(ApiError::invalid_source)?;
-                if parsed.scheme() != "https"
-                    || parsed.host_str().is_none()
-                    || !parsed.username().is_empty()
-                    || parsed.password().is_some()
-                    || parsed.path() != "/"
-                    || parsed.query().is_some()
-                    || parsed.fragment().is_some()
-                    || origin.ends_with('/')
-                {
-                    return Err(ApiError::invalid(
-                        "external origin must be an HTTPS origin without trailing slash",
-                    ));
-                }
-                Ok(parsed.origin().ascii_serialization())
-            })
-            .transpose()
-    }
-    fn validate(&self) -> Result<(), ApiError> {
+    fn admit(self) -> Result<Arc<AdmittedServerConfig>, ApiError> {
         if !self.listen.ip().is_loopback() {
             return Err(ApiError::invalid(
                 "API must listen on loopback; publish through a TLS terminator",
@@ -680,8 +677,55 @@ impl ServerConfig {
                 "SMB requires one explicit authenticated Samba username",
             ));
         }
-        self.normalized_external_origin()?;
-        Ok(())
+        let external_origin = self
+            .external_origin
+            .as_deref()
+            .map(ExternalOrigin::parse)
+            .transpose()?;
+        Ok(Arc::new(AdmittedServerConfig {
+            raw: self,
+            external_origin,
+        }))
+    }
+}
+
+/// Immutable startup proof. Only shared borrows of the original configuration
+/// are exposed, so its normalized origin cannot become stale.
+struct AdmittedServerConfig {
+    raw: ServerConfig,
+    external_origin: Option<ExternalOrigin>,
+}
+impl std::ops::Deref for AdmittedServerConfig {
+    type Target = ServerConfig;
+    fn deref(&self) -> &Self::Target {
+        &self.raw
+    }
+}
+impl AdmittedServerConfig {
+    fn secure_cookie(&self) -> bool {
+        self.external_origin.is_some()
+    }
+}
+
+/// Canonical browser serialization of an admitted HTTPS origin.
+struct ExternalOrigin(String);
+impl ExternalOrigin {
+    fn parse(origin: &str) -> Result<Self, ApiError> {
+        let parsed = url_encoding::address::Url::parse(origin).map_err(ApiError::invalid_source)?;
+        if parsed.scheme() != "https"
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.path() != "/"
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || origin.ends_with('/')
+        {
+            return Err(ApiError::invalid(
+                "external origin must be an HTTPS origin without trailing slash",
+            ));
+        }
+        Ok(Self(parsed.origin().ascii_serialization()))
     }
 }
 
@@ -694,7 +738,7 @@ struct AppState {
     auth_reader: auth::AuthReader,
     backend: Arc<dyn Backend>,
     auth: Arc<Mutex<AuthStore>>,
-    config: ServerConfig,
+    config: Arc<AdmittedServerConfig>,
     attempts: Arc<Mutex<HashMap<String, http_auth::Attempts>>>,
     #[cfg(feature = "core")]
     setup_attempts: Arc<Mutex<HashMap<String, http_auth::Attempts>>>,
@@ -725,12 +769,16 @@ fn lock<T>(value: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// Construct an embedded router synchronously, including complete HTTP spool
 /// inventory. Network serving uses pending staging and inventories in the owned
 /// auxiliary startup future instead; neither path admits unaccounted uploads.
+///
+/// # Errors
+/// Invalid configuration (including the external HTTPS origin) is rejected
+/// before router startup I/O. Management startup failures are propagated.
 pub fn router(
     backend: Arc<dyn Backend>,
     auth: AuthStore,
     config: ServerConfig,
 ) -> Result<Router, ApiError> {
-    config.validate()?;
+    let config = config.admit()?;
     let spool_budget = http_spool::HttpSpool::open_blocking(&config);
     let runtime = ManagementRuntime::start(backend, auth, &config)?;
     router_shared(
@@ -780,7 +828,7 @@ impl ManagementRuntime {
 fn router_shared(
     backend: Arc<dyn Backend>,
     auth: Arc<Mutex<AuthStore>>,
-    config: ServerConfig,
+    config: Arc<AdmittedServerConfig>,
     telemetry: Arc<telemetry::Telemetry>,
     spool_budget: Arc<http_spool::HttpSpool>,
 ) -> Result<Router, ApiError> {
@@ -800,7 +848,7 @@ fn router_shared(
         backend,
         auth,
         telemetry,
-        config: config.clone(),
+        config: Arc::clone(&config),
         spool_budget,
         attempts: Arc::new(Mutex::new(HashMap::new())),
         #[cfg(feature = "core")]
@@ -929,9 +977,9 @@ fn router_shared(
         .route("/api/auth/login", post(login))
         .method_not_allowed_fallback(http_boundary::method_not_allowed)
         .fallback(http_boundary::not_found);
-    if let Some(web_dir) = config.web_dir {
+    if let Some(web_dir) = &config.web_dir {
         app = app.fallback_service(if web_assets_available {
-            web_assets::fallback(web_dir)
+            web_assets::fallback(web_dir.clone())
         } else {
             web_assets::unavailable_fallback()
         });
@@ -977,6 +1025,10 @@ pub async fn serve(
 }
 
 /// Serve with handlers installed by the process before opening management state.
+///
+/// # Errors
+/// Returns invalid configuration, listener I/O, or lifecycle failures. Static
+/// configuration is admitted once before binding or starting auxiliary work.
 pub async fn serve_with_shutdown(
     backend: Arc<dyn Backend>,
     auth: AuthStore,
@@ -988,7 +1040,7 @@ pub async fn serve_with_shutdown(
         management_shutdown.finish().await?;
         return Ok(());
     }
-    config.validate()?;
+    let config = config.admit()?;
     let (spool_budget, spool_startup) = http_spool::HttpSpool::pending();
     // Skip further startup if the runtime has already delivered a stop signal.
     // Signals still awaiting reactor dispatch are handled by shutdown.wait()
@@ -1007,7 +1059,7 @@ pub async fn serve_with_shutdown(
     let smb = config.smb.clone();
     let smb_max_file_bytes = config.max_upload_bytes;
     let bridge_auth = auth.clone();
-    let spool_config = config.clone();
+    let spool_config = Arc::clone(&config);
     let app = router_shared(backend.clone(), auth, config, telemetry, spool_budget)?;
     let http = |stopped| http_shutdown::serve(listener, app, stopped);
     let smb_connections = management_shutdown.smb_connections();
@@ -1282,12 +1334,7 @@ id_post_handler!(
 );
 id_post_handler!(archive, crate::BackendAction::Archive, "branch_id");
 id_post_handler!(namespace, crate::BackendAction::Namespace, "workspace_id");
-id_post_handler!(
-    commit,
-    crate::BackendAction::CommitWorkspace,
-    "workspace_id"
-);
-id_post_handler!(seal, crate::BackendAction::SealWorkspace, "workspace_id");
+
 id_post_handler!(
     merge_link,
     crate::BackendAction::MergeLink,
