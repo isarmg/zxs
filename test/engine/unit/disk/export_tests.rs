@@ -127,8 +127,9 @@ fn verified_export_rejects_truncated_and_changed_bytes_before_publication() {
         fs::write(path, bytes).unwrap();
         let destination = temporary.path().join("exports").join("body.txt");
         assert_eq!(
-            verified_full_copy(source, &destination, &version)
+            verified_full_copy(source, &destination, &version, version.logical_size)
                 .unwrap_err()
+                .into_error()
                 .code(),
             storage_contract::ErrorCode::SourceChanged
         );
@@ -152,10 +153,10 @@ fn verified_export_pins_checked_inode_and_keeps_no_overwrite_policy() {
     fs::rename(&path, path.with_extension("old")).unwrap();
     fs::write(&path, b"replacement data").unwrap();
     let destination = temporary.path().join("exports").join("body.txt");
-    verified_full_copy(source, &destination, &version).unwrap();
+    verified_full_copy(source, &destination, &version, version.logical_size).unwrap();
     assert_eq!(fs::read(&destination).unwrap(), b"published bytes");
     let checked = open_regular(&path.with_extension("old")).unwrap();
-    assert!(verified_full_copy(checked, &destination, &version).is_err());
+    assert!(verified_full_copy(checked, &destination, &version, version.logical_size).is_err());
     assert_eq!(fs::read(&destination).unwrap(), b"published bytes");
     assert_eq!(
         fs::read_dir(destination.parent().unwrap()).unwrap().count(),
@@ -170,8 +171,9 @@ fn verified_export_compares_checksum_commitment_before_publication() {
     version.checksum_manifest_hash = "0".repeat(64);
     let destination = temporary.path().join("exports").join("body.txt");
     assert_eq!(
-        verified_full_copy(source, &destination, &version)
+        verified_full_copy(source, &destination, &version, version.logical_size)
             .unwrap_err()
+            .into_error()
             .code(),
         storage_contract::ErrorCode::SourceChanged
     );

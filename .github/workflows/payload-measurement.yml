@@ -1,0 +1,79 @@
+name: Single-pass payload copy comparison
+
+on:
+  push:
+    branches: ['verify/payload-copy-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    if: startsWith(github.ref, 'refs/heads/verify/payload-copy-')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: '2'
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install tracer and repository toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y strace
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
+      - name: Install identical fixture and build isolated binaries
+        run: |
+          set -euo pipefail
+          mkdir -p payload-measurement
+          baseline="$RUNNER_TEMP/zxs-payload-baseline"
+          git worktree add --detach "$baseline" 9552cf36910b6b644d97d149f692e5c6e2cee841
+          cp test/engine/unit/engine/payload_measurement.rs "$baseline/test/engine/unit/engine/payload_measurement.rs"
+          printf '\n#[cfg(test)]\n#[path = "../../../test/engine/unit/engine/payload_measurement.rs"]\nmod payload_measurement;\n' >> "$baseline/src/engine/src/engine.rs"
+          cmp test/engine/unit/engine/payload_measurement.rs "$baseline/test/engine/unit/engine/payload_measurement.rs"
+          for label in baseline candidate; do
+            source="$GITHUB_WORKSPACE"
+            if [ "$label" = baseline ]; then source="$baseline"; fi
+            (
+              cd "$source"
+              CARGO_TARGET_DIR="$RUNNER_TEMP/payload-target-$label" \
+                cargo test -p storage-engine --lib --no-run --offline --locked --message-format=json
+            ) > "payload-measurement/$label-build.json" 2> "payload-measurement/$label-build.log"
+          done
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for label in ('baseline', 'candidate'):
+              artifacts = [json.loads(line) for line in Path(f'payload-measurement/{label}-build.json').read_text().splitlines()]
+              binaries = [a['executable'] for a in artifacts if a.get('executable') and a.get('target', {}).get('name') == 'storage_engine']
+              assert len(binaries) == 1, binaries
+              Path(f'payload-measurement/{label}-binary.txt').write_text(binaries[0])
+          PY
+      - name: Record source and binary provenance
+        run: |
+          python3 tools/perf-check/payload-provenance.py \
+            "$RUNNER_TEMP/zxs-payload-baseline" "$GITHUB_WORKSPACE" payload-measurement
+      - name: Check measurement evidence tools
+        run: python3 -m unittest discover -s test/tools/perf-check -p 'test_payload_*.py'
+      - name: Compare untraced time and RSS, then exact traced payload bytes
+        run: |
+          python3 tools/perf-check/payload-syscalls.py \
+            "$(cat payload-measurement/baseline-binary.txt)" \
+            "$(cat payload-measurement/candidate-binary.txt)" \
+            payload-measurement
+      - name: Preserve raw evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: payload-copy-comparison-${{ github.sha }}
+          path: payload-measurement/
+          if-no-files-found: error

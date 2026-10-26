@@ -14,6 +14,19 @@ impl Engine {
         Ok((content, version))
     }
     fn verified_replica(&self, version_id: &str) -> Result<(std::fs::File, FileVersion, PathBuf)> {
+        self.with_replica(version_id, |directory, version| {
+            let mut file = verify_payload_held(directory, version)?;
+            use std::io::{Seek, SeekFrom};
+            file.seek(SeekFrom::Start(0))?;
+            Ok((file, version.clone(), directory.to_path_buf()))
+        })
+    }
+
+    fn with_replica<T>(
+        &self,
+        version_id: &str,
+        mut read: impl FnMut(&Path, &FileVersion) -> Result<T>,
+    ) -> Result<T> {
         if self
             .state
             .content_states
@@ -44,11 +57,7 @@ impl Engine {
                 validate_seal(&self.config, d)?;
                 let dir = version_dir(d, &version.history_tree_id, version_id);
                 verify_local_publication(&dir, version)?;
-                let mut file = verify_payload_held(&dir, version)?;
-                // Retain the exact verified inode rather than reopening a pathname.
-                use std::io::{Seek, SeekFrom};
-                file.seek(SeekFrom::Start(0))?;
-                Ok((file, version.clone(), dir))
+                read(&dir, version)
             })();
             match candidate {
                 Ok(replica) => return Ok(replica),
@@ -150,8 +159,14 @@ impl Engine {
         Ok(checks)
     }
     pub fn export_version(&self, version_id: &str, destination: &Path) -> Result<()> {
-        let (file, version, _) = self.verified_replica(version_id)?;
-        verified_full_copy(file, destination, &version)
+        self.with_replica(version_id, |directory, version| {
+            let (file, _) = open_payload(directory, version)?;
+            match verified_full_copy(file, destination, version, version.logical_size) {
+                Ok(_) => Ok(Ok(())),
+                Err(CopyFailure::Source(error)) => Err(error),
+                Err(CopyFailure::Destination(error)) => Ok(Err(error)),
+            }
+        })?
     }
     pub fn check(&self) -> Result<CheckReport> {
         let mut result = CheckReport {

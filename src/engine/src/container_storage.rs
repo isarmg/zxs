@@ -356,7 +356,7 @@ fn held_directory(path: &Path) -> Result<OpenAt2Root> {
     })
 }
 
-fn verify_body(path: &Path, version: &FileVersion) -> Result<()> {
+fn verify_body(path: &Path, version: &FileVersion) -> Result<fs::File> {
     if !file_exists(path)? {
         return Err(Error::new(
             storage_contract::ErrorCode::ContentMissing,
@@ -399,12 +399,27 @@ fn verify_body(path: &Path, version: &FileVersion) -> Result<()> {
         ));
     }
     file.sync_all()?;
-    Ok(())
+    Ok(file)
+}
+
+pub(crate) enum PreparedContent<'a> {
+    Existing(&'a FileVersion),
+    Copied(VerifiedCopy<'a>),
 }
 
 /// Move a verified prepared body on its existing filesystem. Never hardlink,
 /// reflink or duplicate the payload to represent a version or rename.
-pub(crate) fn install_version_content(directory: &Path, version: &FileVersion) -> Result<PathBuf> {
+pub(crate) fn install_version_content(
+    directory: &Path,
+    content: PreparedContent<'_>,
+) -> Result<PathBuf> {
+    let (version, copied) = match content {
+        PreparedContent::Existing(version) => (version, None),
+        PreparedContent::Copied(copied) => {
+            let (version, file) = copied.into_parts();
+            (version, Some(file))
+        }
+    };
     validate_version(version)?;
     let source = directory.join("content").join(&version.creation_name);
     let name = &version.storage_name;
@@ -427,7 +442,10 @@ pub(crate) fn install_version_content(directory: &Path, version: &FileVersion) -
     if file_exists(&target)? {
         verify_body(&target, version)?;
         if file_exists(&source)? {
-            verify_body(&source, version)?;
+            let _source = match copied {
+                Some(file) => file,
+                None => verify_body(&source, version)?,
+            };
             let parent = held_directory(source.parent().expect("source parent"))?;
             rustix::fs::unlinkat(
                 parent.directory(),
@@ -447,7 +465,10 @@ pub(crate) fn install_version_content(directory: &Path, version: &FileVersion) -
         sync_dir(&stable)?;
         return Ok(target);
     }
-    verify_body(&source, version)?;
+    let _source = match copied {
+        Some(file) => file,
+        None => verify_body(&source, version)?,
+    };
     let from = held_directory(source.parent().expect("source parent"))?;
     let to = held_directory(&versions)?;
     rustix::fs::renameat_with(

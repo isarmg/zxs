@@ -310,3 +310,158 @@ fn accounting_exposes_dangling_internal_placement() {
         .remove(&id);
     engine.used_bytes("P01");
 }
+
+fn commit_fixture() -> (tempfile::TempDir, Engine, FileVersion) {
+    let (temp, mut engine, workspace) = fixture();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: new_id("op"),
+            principal: "admin".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: "save".into(),
+            request_digest: None,
+        })
+        .unwrap();
+    let id = &engine.list_tree(&workspace.branch_id).unwrap()[0].version_id;
+    let version = engine.state.versions[id].clone();
+    (temp, engine, version)
+}
+
+fn replace_replica(engine: &Engine, version: &FileVersion, slot: &str, bytes: &[u8]) {
+    let directory = version_dir(
+        engine.disk(slot).unwrap(),
+        &version.history_tree_id,
+        &version.version_id,
+    );
+    let path = crate::container_storage::content_path(&directory, version).unwrap();
+    let replacement = path.with_extension("replacement");
+    fs::write(&replacement, bytes).unwrap();
+    fs::rename(replacement, path).unwrap();
+}
+
+#[test]
+fn export_verifies_while_copying_and_falls_back_from_bad_replica() {
+    for damaged in [
+        b"tampered".as_slice(),
+        b"short".as_slice(),
+        b"original-extra",
+    ] {
+        let (temp, engine, version) = commit_fixture();
+        let placement = &engine.state.placements[&version.version_id];
+        replace_replica(&engine, &version, &placement.route_slot_ids[0], damaged);
+        let destination = temp.path().join("exports/body");
+        engine
+            .export_version(&version.version_id, &destination)
+            .unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"original");
+        assert_eq!(
+            fs::read_dir(destination.parent().unwrap()).unwrap().count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn export_rejects_bad_manifest_and_seal_before_copying_replica() {
+    let (temp, engine, version) = commit_fixture();
+    let placement = &engine.state.placements[&version.version_id];
+    let first = engine.disk(&placement.route_slot_ids[0]).unwrap();
+    let first_dir = version_dir(first, &version.history_tree_id, &version.version_id);
+    let checks = first_dir.join("checksums.bin");
+    fs::remove_file(&checks).unwrap();
+    fs::write(checks, b"damaged").unwrap();
+    let second = engine.disk(&placement.route_slot_ids[1]).unwrap();
+    fs::remove_file(second.root.join("disk.json")).unwrap();
+    let destination = temp.path().join("exports/body");
+    engine
+        .export_version(&version.version_id, &destination)
+        .unwrap();
+    assert_eq!(fs::read(&destination).unwrap(), b"original");
+    assert_eq!(
+        fs::read_dir(destination.parent().unwrap()).unwrap().count(),
+        1
+    );
+}
+
+#[test]
+fn export_all_corrupt_replicas_leave_no_destination_or_temporary_copy() {
+    let (temp, engine, version) = commit_fixture();
+    for slot in &engine.state.placements[&version.version_id].route_slot_ids {
+        replace_replica(&engine, &version, slot, b"tampered");
+    }
+    let destination = temp.path().join("exports/body");
+    let error = engine
+        .export_version(&version.version_id, &destination)
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ContentUnavailable);
+    assert!(std::error::Error::source(&error).is_some());
+    assert!(!destination.exists());
+    assert_eq!(
+        fs::read_dir(destination.parent().unwrap()).unwrap().count(),
+        0
+    );
+}
+
+#[test]
+fn export_destination_failure_keeps_its_error_and_existing_bytes() {
+    let (temp, engine, version) = commit_fixture();
+    let destination = temp.path().join("export");
+    fs::write(&destination, b"existing destination").unwrap();
+    let error = engine
+        .export_version(&version.version_id, &destination)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        Error::Contract(storage_contract::Error::Io { ref source, .. })
+            if source.kind() == std::io::ErrorKind::AlreadyExists
+    ));
+    assert_eq!(fs::read(destination).unwrap(), b"existing destination");
+    assert!(!fs::read_dir(temp.path()).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_str()
+            .unwrap()
+            .starts_with(".zxs-full-")
+    }));
+}
+
+#[test]
+fn prepare_rejects_source_growth_after_planning_without_installing_payload() {
+    let (_temp, engine, workspace) = fixture();
+    let plan = engine
+        .plan_workspace_commit_inner(
+            CommitRequest {
+                workspace_id: workspace.workspace_id,
+                operation_id: new_id("op"),
+                principal: "admin".into(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: String::new(),
+                request_digest: None,
+            },
+            None,
+        )
+        .unwrap();
+    let crate::engine::MutationPlan::Prepared { prepared, .. } = plan.mutation else {
+        panic!("new workspace content has a payload plan");
+    };
+    let payload = &prepared[0];
+    let replacement = payload.source.with_extension("replacement");
+    fs::write(&replacement, b"original but longer").unwrap();
+    fs::rename(replacement, &payload.source).unwrap();
+    assert_eq!(
+        engine.prepare_payload(payload).unwrap_err().code(),
+        ErrorCode::SourceChanged
+    );
+    for slot in &payload.placement.route_slot_ids {
+        let directory = version_dir(
+            engine.disk(slot).unwrap(),
+            &payload.version.history_tree_id,
+            &payload.version.version_id,
+        );
+        assert!(!directory.exists());
+    }
+}

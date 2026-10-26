@@ -265,21 +265,78 @@ pub(crate) fn full_copy(
 ) -> Result<(u64, String, ChecksumManifest)> {
     let source = open_regular(source)?;
     full_copy_to_path(source, destination, chunk_bytes, max_bytes, None)
+        .map(|(size, hash, checksums, _file)| (size, hash, checksums))
+        .map_err(CopyFailure::into_error)
 }
 
-pub(crate) fn verified_full_copy(
+/// Owns the freshly written, verified and synced output until installation.
+#[derive(Debug)]
+pub(crate) struct VerifiedCopy<'a> {
+    file: File,
+    version: &'a FileVersion,
+    checksums: ChecksumManifest,
+}
+
+impl<'a> VerifiedCopy<'a> {
+    pub(crate) fn checksums(&self) -> &ChecksumManifest {
+        &self.checksums
+    }
+
+    pub(crate) fn into_parts(self) -> (&'a FileVersion, File) {
+        (self.version, self.file)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum CopyFailure {
+    Source(Error),
+    Destination(Error),
+}
+
+impl CopyFailure {
+    pub(crate) fn into_error(self) -> Error {
+        match self {
+            Self::Source(error) | Self::Destination(error) => error,
+        }
+    }
+}
+
+impl From<Error> for CopyFailure {
+    fn from(error: Error) -> Self {
+        Self::Destination(error)
+    }
+}
+
+impl From<std::io::Error> for CopyFailure {
+    fn from(error: std::io::Error) -> Self {
+        Self::Destination(error.into())
+    }
+}
+
+impl From<storage_contract::Error> for CopyFailure {
+    fn from(error: storage_contract::Error) -> Self {
+        Self::Destination(error.into())
+    }
+}
+
+pub(crate) fn verified_full_copy<'a>(
     source: File,
     destination: &Path,
-    version: &FileVersion,
-) -> Result<()> {
+    version: &'a FileVersion,
+    max_bytes: u64,
+) -> std::result::Result<VerifiedCopy<'a>, CopyFailure> {
     full_copy_to_path(
         source,
         destination,
         version.checksum_chunk_bytes,
-        version.logical_size,
+        max_bytes,
         Some(version),
     )
-    .map(|_| ())
+    .map(|(_, _, checksums, file)| VerifiedCopy {
+        file,
+        version,
+        checksums,
+    })
 }
 
 fn full_copy_to_path(
@@ -288,7 +345,7 @@ fn full_copy_to_path(
     chunk_bytes: u32,
     max_bytes: u64,
     expected: Option<&FileVersion>,
-) -> Result<(u64, String, ChecksumManifest)> {
+) -> std::result::Result<(u64, String, ChecksumManifest, File), CopyFailure> {
     let destination = absolute_path(destination)?;
     let parent = destination.parent().ok_or_else(|| {
         Error::new(
@@ -304,7 +361,7 @@ fn full_copy_to_path(
             private_dir(parent)?;
             OpenAt2Root::open(parent, MountPolicy::SameMount).map_err(fs_error)?
         }
-        Err(error) => return Err(fs_error(error)),
+        Err(error) => return Err(fs_error(error).into()),
     };
     let destination_name = EntryName::new(destination.file_name().ok_or_else(|| {
         Error::new(
@@ -321,7 +378,6 @@ fn full_copy_to_path(
         max_bytes,
         expected,
     )
-    .map(|(size, hash, checksums, _file)| (size, hash, checksums))
 }
 
 pub(crate) fn full_copy_held(
@@ -339,6 +395,7 @@ pub(crate) fn full_copy_held(
         max_bytes,
         None,
     )
+    .map_err(CopyFailure::into_error)
 }
 
 fn full_copy_checked(
@@ -348,7 +405,7 @@ fn full_copy_checked(
     chunk_bytes: u32,
     max_bytes: u64,
     expected: Option<&FileVersion>,
-) -> Result<(u64, String, ChecksumManifest, File)> {
+) -> std::result::Result<(u64, String, ChecksumManifest, File), CopyFailure> {
     let temporary = format!(".zxs-full-{}", new_id("req"));
     let mut target = File::from(
         rustix::fs::openat(
@@ -375,7 +432,8 @@ fn full_copy_checked(
                     &source,
                     &mut buf[used..],
                     size + used as u64,
-                )?;
+                )
+                .map_err(|error| CopyFailure::Source(error.into()))?;
                 if n == 0 {
                     break;
                 }
@@ -385,16 +443,16 @@ fn full_copy_checked(
                 break;
             }
             size = size.checked_add(used as u64).ok_or_else(|| {
-                Error::new(
+                CopyFailure::Source(Error::new(
                     storage_contract::ErrorCode::FileTooLarge,
                     "file length overflow",
-                )
+                ))
             })?;
             if size > max_bytes {
-                return Err(Error::new(
+                return Err(CopyFailure::Source(Error::new(
                     storage_contract::ErrorCode::FileTooLarge,
                     "file exceeds configured maximum",
-                ));
+                )));
             }
             target.write_all(&buf[..used])?;
             full.update(&buf[..used]);
@@ -406,18 +464,17 @@ fn full_copy_checked(
             logical_size: size,
             chunks,
         };
-        // Validate the bytes actually copied, not an earlier read of the source.
-        // Never expose the final pathname until all published commitments match.
+        // Bind the output to all published commitments before exposing its name.
         if let Some(expected) = expected
             && (size != expected.logical_size
                 || hash != expected.content_hash
                 || blake3::hash(&checksums.encode()?).to_hex().as_str()
                     != expected.checksum_manifest_hash)
         {
-            return Err(Error::new(
+            return Err(CopyFailure::Source(Error::new(
                 storage_contract::ErrorCode::SourceChanged,
-                "exported content differs from the published manifest",
-            ));
+                "copied content differs from the published manifest",
+            )));
         }
         target.set_permissions(fs::Permissions::from_mode(0o400))?;
         // Persist the complete bytes and final mode together before publishing
@@ -442,10 +499,10 @@ fn full_copy_checked(
             rustix::fs::AtFlags::empty(),
         ) {
             Ok(()) | Err(rustix::io::Errno::NOENT) => Err(operation),
-            Err(cleanup) => Err(Error::Cleanup {
-                operation: Box::new(operation),
+            Err(cleanup) => Err(CopyFailure::Destination(Error::Cleanup {
+                operation: Box::new(operation.into_error()),
                 cleanup: cleanup.into(),
-            }),
+            })),
         },
     }
 }
@@ -453,7 +510,10 @@ pub(crate) fn verify_payload(directory: &Path, version: &FileVersion) -> Result<
     verify_payload_held(directory, version).map(|_| ())
 }
 
-pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Result<File> {
+pub(crate) fn open_payload(
+    directory: &Path,
+    version: &FileVersion,
+) -> Result<(File, ChecksumManifest)> {
     let checks = read_bytes(&directory.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
     if blake3::hash(&checks).to_hex().as_str() != version.checksum_manifest_hash {
         return Err(Error::new(
@@ -470,13 +530,18 @@ pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Re
             "checksum header differs from version",
         ));
     }
-    let mut file = open_regular(&crate::container_storage::content_path(directory, version)?)?;
+    let file = open_regular(&crate::container_storage::content_path(directory, version)?)?;
     if file.metadata()?.len() != version.logical_size {
         return Err(Error::new(
             storage_contract::ErrorCode::ChecksumMismatch,
             "payload length differs",
         ));
     }
+    Ok((file, manifest))
+}
+
+pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Result<File> {
+    let (mut file, manifest) = open_payload(directory, version)?;
     let mut full = blake3::Hasher::new();
     let mut buf = vec![0u8; manifest.chunk_bytes as usize];
     let mut remaining = manifest.logical_size;
@@ -769,17 +834,20 @@ pub fn offline_export(root: &Path, version_id: &str, destination: &Path) -> Resu
         name_policy::validate_name(&version.creation_name)?;
         crate::journal::verify_local_publication(&directory, &version)?;
         let source = verify_payload_held(&directory, &version)?;
-        return verified_full_copy(source, destination, &version).map_err(|error| match error {
-            Error::Contract(storage_contract::Error::Io { ref source, .. })
-                if source.kind() == std::io::ErrorKind::AlreadyExists =>
-            {
-                error.context(
-                    storage_contract::ErrorCode::DestinationExists,
-                    "export does not overwrite existing files",
-                )
-            }
-            error => error,
-        });
+        return verified_full_copy(source, destination, &version, version.logical_size)
+            .map(|_| ())
+            .map_err(CopyFailure::into_error)
+            .map_err(|error| match error {
+                Error::Contract(storage_contract::Error::Io { ref source, .. })
+                    if source.kind() == std::io::ErrorKind::AlreadyExists =>
+                {
+                    error.context(
+                        storage_contract::ErrorCode::DestinationExists,
+                        "export does not overwrite existing files",
+                    )
+                }
+                error => error,
+            });
     }
     Err(Error::new(
         storage_contract::ErrorCode::VersionNotFound,

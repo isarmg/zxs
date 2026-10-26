@@ -867,7 +867,7 @@ impl crate::engine::PlanningContext<'_> {
             let disk = self.disk(slot)?;
             validate_seal(self.config, disk)?;
             let directory = version_dir(disk, &p.version.history_tree_id, &p.version.version_id);
-            match read_json::<FileVersion>(&directory.join("version.json")) {
+            let content = match read_json::<FileVersion>(&directory.join("version.json")) {
                 Ok(existing) => {
                     if object_hash("version", &existing)? != object_hash("version", &p.version)? {
                         return Err(Error::new(
@@ -876,6 +876,7 @@ impl crate::engine::PlanningContext<'_> {
                         ));
                     }
                     verify_payload(&directory, &p.version)?;
+                    crate::container_storage::PreparedContent::Existing(&p.version)
                 }
                 Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
                 | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
@@ -884,27 +885,22 @@ impl crate::engine::PlanningContext<'_> {
                     let staging = disk.root.join("staging").join(new_id("op"));
                     private_dir(&staging.join("content"))?;
                     let target = staging.join("content").join(&p.version.creation_name);
-                    let (size, hash, checks) = full_copy(
-                        &source,
+                    let copied = verified_full_copy(
+                        open_regular(&source)?,
                         &target,
-                        self.config.checksum_chunk_bytes,
+                        &p.version,
                         self.config.max_file_bytes,
-                    )?;
-                    if size != p.version.logical_size
-                        || hash != p.version.content_hash
-                        || blake3::hash(&checks.encode()?).to_hex().as_str()
-                            != p.version.checksum_manifest_hash
-                    {
-                        return Err(Error::new(
-                            storage_contract::ErrorCode::SourceChanged,
-                            "prepared full file differs from the sealed input",
-                        ));
-                    }
+                    )
+                    .map_err(CopyFailure::into_error)?;
                     write_json(&staging.join("version.json"), &p.version, false)?;
-                    write_atomic(&staging.join("checksums.bin"), &checks.encode()?, false)?;
+                    write_atomic(
+                        &staging.join("checksums.bin"),
+                        &copied.checksums().encode()?,
+                        false,
+                    )?;
                     write_json(
                         &staging.join("payload.json"),
-                        &json!({"payload_id":format!("payload_{}",&p.version.version_id[4..]),"version_id":p.version.version_id,"kind":"FULL","size":size.to_string(),"content_hash":hash}),
+                        &json!({"payload_id":format!("payload_{}",&p.version.version_id[4..]),"version_id":p.version.version_id,"kind":"FULL","size":p.version.logical_size.to_string(),"content_hash":p.version.content_hash}),
                         false,
                     )?;
                     sync_dir(&staging)?;
@@ -934,12 +930,13 @@ impl crate::engine::PlanningContext<'_> {
                     )
                     .map_err(std::io::Error::from)?;
                     sync_dir(directory.parent().expect("version parent"))?;
+                    crate::container_storage::PreparedContent::Copied(copied)
                 }
                 Err(error) => return Err(error),
-            }
+            };
             // Install a real version file in this file's named container before
             // any protection receipt is issued. The next level reads this copy.
-            source = crate::container_storage::install_version_content(&directory, &p.version)?;
+            source = crate::container_storage::install_version_content(&directory, content)?;
         }
         Ok(())
     }

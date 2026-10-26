@@ -168,7 +168,8 @@ fn unsupported_legacy_containers_are_rejected_without_cleanup_or_migration() {
             );
             let history = config.disks[0].root.join("histories").join(history_id);
             let directory = prepare(&history, &item, b"body");
-            let body = install_version_content(&directory, &item).unwrap();
+            let body =
+                install_version_content(&directory, PreparedContent::Existing(&item)).unwrap();
             let inode = fs::metadata(&body).unwrap().ino();
             let named = body.parent().unwrap().parent().unwrap();
             let legacy = named.join(legacy_name);
@@ -184,7 +185,7 @@ fn unsupported_legacy_containers_are_rejected_without_cleanup_or_migration() {
                 storage_contract::ErrorCode::FormatUnsupported
             );
             assert_eq!(
-                install_version_content(&directory, &item)
+                install_version_content(&directory, PreparedContent::Existing(&item))
                     .unwrap_err()
                     .code(),
                 storage_contract::ErrorCode::FormatUnsupported
@@ -225,7 +226,7 @@ fn inherited_references_update_cache_without_creating_files_and_follow_rename() 
     );
     let history = config.disks[0].root.join("histories").join(&history_id);
     let directory = prepare(&history, &item, b"body");
-    let body = install_version_content(&directory, &item).unwrap();
+    let body = install_version_content(&directory, PreparedContent::Existing(&item)).unwrap();
     let body_inode = fs::metadata(&body).unwrap().ino();
     let previous = with_version(&item);
     let mut pending = previous.clone();
@@ -297,7 +298,7 @@ fn physical_move_preserves_one_body_and_old_version_identity_across_replay() {
     );
     let history = config.disks[0].root.join("histories").join(&history_id);
     let directory = prepare(&history, &item, b"retained parent bytes");
-    let original = install_version_content(&directory, &item).unwrap();
+    let original = install_version_content(&directory, PreparedContent::Existing(&item)).unwrap();
     let inode = fs::metadata(&original).unwrap().ino();
     let previous = with_version(&item);
     let mut in_a = previous.clone();
@@ -508,7 +509,7 @@ fn canonical_location_handles_reserved_looking_user_names_and_prefix_moves() {
     );
     let history = config.disks[0].root.join("histories").join(&history_id);
     let directory = prepare(&history, &item, b"single body");
-    let original = install_version_content(&directory, &item).unwrap();
+    let original = install_version_content(&directory, PreparedContent::Existing(&item)).unwrap();
     let inode = fs::metadata(&original).unwrap().ino();
     let mut state = with_version(&item);
     for location in [
@@ -544,7 +545,7 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
     let item = version(&State::default(), &history_id, &file, "file.txt", b"body");
     let history = config.disks[0].root.join("histories").join(&history_id);
     let directory = prepare(&history, &item, b"body");
-    let original = install_version_content(&directory, &item).unwrap();
+    let original = install_version_content(&directory, PreparedContent::Existing(&item)).unwrap();
     let inode = fs::metadata(&original).unwrap().ino();
     let previous = with_version(&item);
     let mut published = previous.clone();
@@ -677,13 +678,16 @@ fn installation_moves_one_ordinary_inode_and_missing_paths_remain_classifiable()
         "a prepared body remains readable before its atomic move"
     );
     let before = fs::metadata(&prepared).unwrap();
-    let target = install_version_content(&directory, &item).unwrap();
+    let target = install_version_content(&directory, PreparedContent::Existing(&item)).unwrap();
     assert!(!prepared.exists());
     let after = fs::metadata(&target).unwrap();
     assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
     assert_eq!(after.nlink(), 1);
     assert_eq!(fs::read(&target).unwrap(), b"complete bytes");
-    assert_eq!(install_version_content(&directory, &item).unwrap(), target);
+    assert_eq!(
+        install_version_content(&directory, PreparedContent::Existing(&item)).unwrap(),
+        target
+    );
     assert_eq!(content_path(&directory, &item).unwrap(), target);
     fs::remove_file(&target).unwrap();
     assert_eq!(
@@ -722,7 +726,7 @@ fn rename_and_note_projection_replays_without_changing_body_identity() {
         b"one unique full file",
     );
     let directory = prepare(&history, &item, b"one unique full file");
-    let original = install_version_content(&directory, &item).unwrap();
+    let original = install_version_content(&directory, PreparedContent::Existing(&item)).unwrap();
     let inode = fs::metadata(&original).unwrap().ino();
     previous
         .versions
@@ -911,4 +915,100 @@ fn name_capture_exposes_missing_internal_main_branch() {
         .clone();
     state.branches.remove(&branch);
     capture_names(&mut state);
+}
+
+#[test]
+fn copied_body_installs_owned_inode_but_existing_corrupt_target_is_rejected() {
+    use std::os::unix::fs::PermissionsExt;
+    let temporary = tempfile::tempdir().unwrap();
+    let history_id = new_id("history");
+    let history = temporary.path().join(&history_id);
+    let bytes = b"a complete copied payload";
+    let mut item = version(
+        &State::default(),
+        &history_id,
+        &new_id("file"),
+        "body",
+        bytes,
+    );
+    let manifest = ChecksumManifest {
+        logical_size: bytes.len() as u64,
+        chunk_bytes: item.checksum_chunk_bytes,
+        chunks: vec![*blake3::hash(bytes).as_bytes()],
+    };
+    item.checksum_manifest_hash = blake3::hash(&manifest.encode().unwrap())
+        .to_hex()
+        .to_string();
+    let external = temporary.path().join("external");
+    fs::write(&external, bytes).unwrap();
+    let directory = history.join("versions").join(&item.version_id);
+    private_dir(&directory.join("content")).unwrap();
+    let source = directory.join("content").join(&item.creation_name);
+    let copied = verified_full_copy(
+        open_regular(&external).unwrap(),
+        &source,
+        &item,
+        item.logical_size,
+    )
+    .unwrap();
+    let before = fs::metadata(&source).unwrap();
+    let target = install_version_content(&directory, PreparedContent::Copied(copied)).unwrap();
+    let installed = fs::metadata(&target).unwrap();
+    assert_eq!(
+        (before.dev(), before.ino()),
+        (installed.dev(), installed.ino())
+    );
+    assert_eq!(installed.nlink(), 1);
+    assert_eq!(installed.mode() & 0o777, 0o400);
+    assert!(!source.exists());
+    assert_eq!(fs::read(&target).unwrap(), bytes);
+
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&target, b"a corrupted copy payload").unwrap();
+    let copied = verified_full_copy(
+        open_regular(&external).unwrap(),
+        &source,
+        &item,
+        item.logical_size,
+    )
+    .unwrap();
+    assert_eq!(
+        install_version_content(&directory, PreparedContent::Copied(copied))
+            .unwrap_err()
+            .code(),
+        ErrorCode::ContentCorrupt
+    );
+    assert_eq!(fs::read(&source).unwrap(), bytes);
+    assert_eq!(fs::read(&target).unwrap(), b"a corrupted copy payload");
+    assert_eq!(
+        install_version_content(&directory, PreparedContent::Existing(&item))
+            .unwrap_err()
+            .code(),
+        ErrorCode::ContentCorrupt
+    );
+}
+
+#[test]
+fn resumed_installation_verifies_external_prepared_body() {
+    let temporary = tempfile::tempdir().unwrap();
+    let history_id = new_id("history");
+    let history = temporary.path().join(&history_id);
+    let item = version(
+        &State::default(),
+        &history_id,
+        &new_id("file"),
+        "body",
+        b"original",
+    );
+    let directory = prepare(&history, &item, b"modified");
+    assert_eq!(
+        install_version_content(&directory, PreparedContent::Existing(&item))
+            .unwrap_err()
+            .code(),
+        ErrorCode::ContentCorrupt
+    );
+    assert_eq!(
+        fs::read(directory.join("content/body")).unwrap(),
+        b"modified"
+    );
 }

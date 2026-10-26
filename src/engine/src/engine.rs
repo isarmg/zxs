@@ -728,3 +728,7 @@ impl Engine {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/engine/payload_measurement.rs"]
+mod payload_measurement;
