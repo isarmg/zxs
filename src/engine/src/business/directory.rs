@@ -43,25 +43,28 @@ fn frozen_context(
         "snapshot file branch reference missing",
     )?;
     required(
-        contexts.get(&entry.lookup_key),
+        contexts.get(entry.lookup_key()),
         "snapshot file path context missing",
     )
     .cloned()
 }
 
-pub(crate) fn context_key(repository: &str, path: &str) -> String {
-    format!("{repository}/{}", name_policy::path_key(path))
+pub(crate) fn context_key_from_key(repository: &str, key: &str) -> String {
+    format!("{repository}/{key}")
 }
-pub(crate) fn context_at(state: &State, repository: &str, path: &str) -> Option<FileContext> {
-    if let Some(context) = state.file_contexts.get(&context_key(repository, path)) {
+pub(crate) fn context_at_key(state: &State, repository: &str, key: &str) -> Option<FileContext> {
+    if let Some(context) = state
+        .file_contexts
+        .get(&context_key_from_key(repository, key))
+    {
         return Some(context.clone());
     }
     let repo = state.repositories.get(repository)?;
     let commit = state
         .commits
         .get(&state.branches.get(&repo.main_branch_id)?.head_commit_id)?;
-    let entry =
-        find_unordered(&commit.entries, path).filter(|e| e.kind == NamespaceEntryKind::File)?;
+    let entry = namespace::find_unordered_key(&commit.entries, key)
+        .filter(|e| e.kind == NamespaceEntryKind::File)?;
     Some(context_for_entry(state, repo, entry))
 }
 
@@ -83,14 +86,18 @@ fn context_for_entry(state: &State, repo: &Repository, entry: &Entry) -> FileCon
         inherited_from: state.file_write_origins.get(&entry.file_id).cloned(),
     }
 }
-pub(crate) fn branch_context_at(state: &State, namespace: &str, path: &str) -> Option<FileContext> {
+pub(crate) fn branch_context_at_key(
+    state: &State,
+    namespace: &str,
+    key: &str,
+) -> Option<FileContext> {
     let branch = state.branches.get(namespace)?;
     if let Some(repo) = state
         .repositories
         .values()
         .find(|r| r.main_branch_id == namespace)
     {
-        context_at(state, &repo.repository_id, path)
+        context_at_key(state, &repo.repository_id, key)
     } else {
         Some(FileContext {
             node_id: branch.file_node_id.clone(),
@@ -130,7 +137,7 @@ pub(crate) fn scope(
         commit
             .entries
             .iter()
-            .find(|e| e.kind == NamespaceEntryKind::Directory && e.lookup_key == key)
+            .find(|e| e.kind == NamespaceEntryKind::Directory && e.lookup_key() == key)
             .ok_or_else(|| {
                 Error::new(
                     storage_contract::ErrorCode::DirectoryNotFound,
@@ -143,7 +150,7 @@ pub(crate) fn scope(
     let entries = commit
         .entries
         .iter()
-        .filter(|e| key.is_empty() || namespace::is_descendant(&e.lookup_key, &key))
+        .filter(|e| key.is_empty() || namespace::is_descendant(e.lookup_key(), &key))
         .cloned()
         .collect();
     Ok((id, entries, commit.commit_id.clone()))
@@ -172,13 +179,32 @@ pub(crate) fn rebase_path(path: &str, from: &str, to: &str) -> Result<String> {
 }
 
 pub(crate) fn rebase_entries(entries: &[Entry], from: &str, to: &str) -> Result<Vec<Entry>> {
+    let depth = if from.is_empty() {
+        0
+    } else {
+        from.split('/').count()
+    };
+    let target = if to.is_empty() {
+        None
+    } else {
+        Some(name_policy::PortablePath::parse(to)?)
+    };
     entries
         .iter()
-        .map(|e| {
-            let path = rebase_path(&e.path, from, to)?;
-            let mut e = e.clone();
-            namespace::relocate_entry(&mut e, path)?;
-            Ok(e)
+        .map(|entry| {
+            let path = if let Some(target) = &target {
+                entry.location().rebase(depth, target)?
+            } else {
+                entry.location().strip_components(depth).ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::StateInvalid,
+                        "directory snapshot contains its own root",
+                    )
+                })?
+            };
+            let mut entry = entry.clone();
+            entry.relocate(path);
+            Ok(entry)
         })
         .collect()
 }
@@ -199,15 +225,14 @@ fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
         current
             .entries
             .iter()
-            .find(|entry| entry.lookup_key == key && entry.kind == NamespaceEntryKind::Directory)
+            .find(|entry| entry.lookup_key() == key && entry.kind == NamespaceEntryKind::Directory)
             .ok_or_else(|| {
                 Error::new(
                     storage_contract::ErrorCode::DirectoryNotFound,
                     "directory missing",
                 )
             })?
-            .path
-            .as_str()
+            .path()
     };
     let mut files = BTreeMap::new();
     for e in entries
@@ -225,16 +250,18 @@ fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
         .map(|e| {
             let branch_id =
                 required(files.get(&e.file_id), "snapshot file branch missing")?.clone();
-            let context = context_at(state, repository, &e.path).unwrap_or(FileContext {
-                node_id: None,
-                selection_generation: 0,
-                branch_id,
-                inherited_from: None,
-            });
-            state
-                .file_contexts
-                .insert(context_key(repository, &e.path), context.clone());
-            Ok((e.lookup_key.clone(), context))
+            let context =
+                context_at_key(state, repository, e.lookup_key()).unwrap_or(FileContext {
+                    node_id: None,
+                    selection_generation: 0,
+                    branch_id,
+                    inherited_from: None,
+                });
+            state.file_contexts.insert(
+                context_key_from_key(repository, e.lookup_key()),
+                context.clone(),
+            );
+            Ok((e.lookup_key().to_owned(), context))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
     let inherited_files = state
@@ -367,7 +394,7 @@ pub(crate) fn snapshot_pending(state: &State, entries: &[Entry]) -> BTreeMap<Str
                         .get(&e.version_id)
                         .is_some_and(|v| v.history_tree_id == r.history_tree_id)
                 })
-                .and_then(|r| context_at(state, &r.repository_id, &e.path));
+                .and_then(|r| context_at_key(state, &r.repository_id, e.lookup_key()));
             context.and_then(|c| {
                 if c.inherited_from.is_some()
                     || state
@@ -397,7 +424,7 @@ pub(crate) fn set_namespace_location(
         .file_locations
         .get(&file.file_id)
         .cloned()
-        .unwrap_or_else(|| file.path.clone());
+        .unwrap_or_else(|| file.path().to_owned());
     let path = namespace_location(old, file, source, destination, kind, is_directory);
     state.file_names.insert(
         file.file_id.clone(),
@@ -438,7 +465,7 @@ fn namespace_location(
     } else {
         let depth = source.split('/').count();
         let suffix = file
-            .path
+            .path()
             .split('/')
             .skip(depth)
             .collect::<Vec<_>>()
@@ -465,19 +492,25 @@ pub(crate) fn prepare_renamed_directories(
         .iter()
         .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
     {
-        let mut path = dir.path.clone();
-        for change in changes
-            .iter()
-            .filter(|change| change.kind == NamespaceOperationKind::Rename)
-        {
-            if let Some(destination) = &change.destination
-                && let Some(next) = renamed_path(&path, &change.path, destination)
-            {
-                path = next;
+        let mut path = std::borrow::Cow::Borrowed(dir.location());
+        for change in changes {
+            let NamespaceOperation::Rename {
+                source,
+                destination,
+            } = change
+            else {
+                continue;
+            };
+            if path.key() == source.key() {
+                path = std::borrow::Cow::Owned(destination.clone());
+            } else if namespace::is_descendant(path.key(), source.key()) {
+                path = std::borrow::Cow::Owned(
+                    path.rebase(source.as_str().split('/').count(), destination)?,
+                );
             }
         }
-        if path != dir.path {
-            old_paths.push(dir.path.clone());
+        if path.as_str() != dir.path() {
+            old_paths.push(dir.path().to_owned());
             renamed.push(format!("{path}/"));
         }
     }
@@ -512,24 +545,6 @@ pub(crate) fn prepare_independent_renamed_directories(
     Ok(renamed)
 }
 
-/// Follow a path through an ordered rename without slicing normalized UTF-8.
-fn renamed_path(path: &str, source: &str, destination: &str) -> Option<String> {
-    let key = name_policy::path_key(path);
-    let source_key = name_policy::path_key(source);
-    if key == source_key {
-        return Some(destination.into());
-    }
-    if !namespace::is_descendant(&key, &source_key) {
-        return None;
-    }
-    let suffix = path
-        .split('/')
-        .skip(source.split('/').count())
-        .collect::<Vec<_>>()
-        .join("/");
-    Some(format!("{destination}/{suffix}"))
-}
-
 pub(crate) fn namespace_locations(
     state: &mut State,
     repository: &str,
@@ -543,15 +558,14 @@ pub(crate) fn namespace_locations(
     // just like `find`, without rescanning all siblings for every file.
     let mut after_by_path = BTreeMap::new();
     for entry in after {
-        after_by_path
-            .entry(entry.lookup_key.as_str())
-            .or_insert(entry);
+        after_by_path.entry(entry.lookup_key()).or_insert(entry);
     }
     let original_contexts = before
         .iter()
         .filter(|e| e.kind == NamespaceEntryKind::File)
         .filter_map(|e| {
-            context_at(state, repository, &e.path).map(|c| (context_key(repository, &e.path), c))
+            context_at_key(state, repository, e.lookup_key())
+                .map(|c| (context_key_from_key(repository, e.lookup_key()), c))
         })
         .collect::<BTreeMap<_, _>>();
     let mut physical_outcomes = BTreeMap::<String, String>::new();
@@ -566,63 +580,69 @@ pub(crate) fn namespace_locations(
             .file_locations
             .get(&old.file_id)
             .cloned()
-            .unwrap_or_else(|| old.path.clone());
+            .unwrap_or_else(|| old.path().to_owned());
         let original_physical_path = physical_path.clone();
         for change in changes {
-            let source = name_policy::path_key(&change.path);
-            if (change.kind == NamespaceOperationKind::Delete && moved.lookup_key == source)
-                || (change.kind == NamespaceOperationKind::DeleteTree
-                    && (moved.lookup_key == source
-                        || namespace::is_descendant(&moved.lookup_key, &source)))
+            let source = change.key();
+            if (change.kind() == NamespaceOperationKind::Delete && moved.lookup_key() == source)
+                || (change.kind() == NamespaceOperationKind::DeleteTree
+                    && (moved.lookup_key() == source
+                        || namespace::is_descendant(moved.lookup_key(), source)))
             {
                 deleted = true;
                 break;
             }
-            if change.kind != NamespaceOperationKind::Rename {
-                continue;
-            }
-            let Some(destination) = &change.destination else {
+            let NamespaceOperation::Rename { destination, .. } = change else {
                 continue;
             };
-            let Some(path) = renamed_path(&moved.path, &change.path, destination) else {
+            let path = if moved.lookup_key() == source {
+                destination.clone()
+            } else if namespace::is_descendant(moved.lookup_key(), source) {
+                moved
+                    .location()
+                    .rebase(change.path().split('/').count(), destination)?
+            } else {
                 continue;
             };
-            if path == moved.path {
+            if path.as_str() == moved.path() {
                 continue;
             }
             physical_path = namespace_location(
                 physical_path,
                 &moved,
-                &change.path,
+                change.path(),
                 destination,
                 "rename",
-                moved.lookup_key != source,
+                moved.lookup_key() != source,
             );
-            namespace::relocate_entry(&mut moved, path)?;
+            moved.relocate(path);
             renamed = true;
         }
         if !deleted
-            && let Some(current) = after_by_path.get(moved.lookup_key.as_str()).filter(|e| {
+            && let Some(current) = after_by_path.get(moved.lookup_key()).filter(|e| {
                 e.kind == NamespaceEntryKind::File
                     && e.entry_id == old.entry_id
                     && e.file_id == old.file_id
             })
         {
             let context = original_contexts
-                .get(&context_key(repository, &old.path))
+                .get(&context_key_from_key(repository, old.lookup_key()))
                 .cloned();
-            let context = if current.path != old.path {
+            let context = if current.path() != old.path() {
                 Some(file_paths::rename_node(
                     state, repository, old, current, context, principal, operation,
                 )?)
             } else {
                 state
                     .file_contexts
-                    .get(&context_key(repository, &old.path))
+                    .get(&context_key_from_key(repository, old.lookup_key()))
                     .cloned()
             };
             if let Some(context) = context {
-                contexts.insert(context_key(repository, &current.path), context);
+                contexts.insert(
+                    context_key_from_key(repository, current.lookup_key()),
+                    context,
+                );
             }
             // Renaming a non-owning alias directory does not propose a
             // competing physical location. Compare net outcomes so a
@@ -652,7 +672,7 @@ pub(crate) fn namespace_locations(
     for old in before.iter().filter(|e| e.kind == NamespaceEntryKind::File) {
         state
             .file_contexts
-            .remove(&context_key(repository, &old.path));
+            .remove(&context_key_from_key(repository, old.lookup_key()));
     }
     state.file_contexts.extend(contexts);
     let live = after
@@ -673,29 +693,29 @@ pub(crate) fn namespace_locations(
 pub(crate) fn unwritten_source_at<'a>(
     state: &'a State,
     branch: &str,
-    path: &str,
+    key: &str,
 ) -> Option<&'a str> {
-    branch_context_at(state, branch, path)?
+    branch_context_at_key(state, branch, key)?
         .inherited_from
         .as_ref()?;
-    find_unordered(
+    namespace::find_unordered_key(
         &state
             .commits
             .get(&state.branches.get(branch)?.head_commit_id)?
             .entries,
-        path,
+        key,
     )
-    .map(|e| e.version_id.as_str())
+    .map(|entry| entry.version_id.as_str())
 }
 
 /// Fork inherited file intent only at the first actual save. An explicit file
 /// selection removes the intent and continues the selected public branch.
 pub(crate) fn prepare_file_write(
-    engine: &Engine,
+    engine: &crate::engine::PlanningContext<'_>,
     state: &mut State,
     branch: &str,
     file_id: &str,
-    path: &str,
+    key: &str,
     principal: &str,
     operation: &str,
 ) -> Result<()> {
@@ -707,18 +727,18 @@ pub(crate) fn prepare_file_write(
     else {
         return Ok(());
     };
-    let Some(origin) = context_at(state, &repository, path).and_then(|c| c.inherited_from) else {
+    let Some(origin) = context_at_key(state, &repository, key).and_then(|c| c.inherited_from)
+    else {
         return Ok(());
     };
     let head = required(state.branches.get(branch), "repository main branch missing")?;
-    let key = name_policy::path_key(path);
     let original = required(
         state.commits.get(&head.head_commit_id),
         "repository head commit missing",
     )?
     .entries
     .iter()
-    .find(|e| e.lookup_key == key && e.kind == NamespaceEntryKind::File)
+    .find(|e| e.lookup_key() == key && e.kind == NamespaceEntryKind::File)
     .cloned()
     .ok_or_else(|| {
         Error::new(
@@ -781,7 +801,7 @@ pub(crate) fn prepare_file_write(
             "file fork receipt missing",
         )
     })?;
-    let inherited_node = context_at(state, &repository, path).and_then(|c| c.node_id);
+    let inherited_node = context_at_key(state, &repository, key).and_then(|c| c.node_id);
     state
         .branches
         .get_mut(id)
@@ -795,7 +815,7 @@ pub(crate) fn prepare_file_write(
     state.file_selections.insert(file_id.into(), id.into());
     state.file_write_origins.remove(file_id);
     state.file_contexts.insert(
-        context_key(&repository, path),
+        context_key_from_key(&repository, key),
         FileContext {
             node_id: inherited_node.clone(),
             selection_generation: 0,
@@ -931,8 +951,8 @@ pub(crate) fn select_change(
                     "directory no longer exists",
                 )
             })?
-            .path
-            .clone()
+            .path()
+            .to_owned()
     };
     let (_, old_entries, _) = scope(state, repository, &path)?;
     let restored = rebase_entries(&selected.entries, &selected.path, &path)?;
@@ -943,7 +963,7 @@ pub(crate) fn select_change(
         .filter(|(_, e)| e.kind == NamespaceEntryKind::File)
         .map(|(old, e)| {
             let context = frozen_context(&selected.file_contexts, &selected.file_branches, old)?;
-            Ok((context_key(repository, &e.path), context))
+            Ok((context_key_from_key(repository, e.lookup_key()), context))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
     for (file, branch) in &selected.file_branches {
@@ -979,7 +999,7 @@ pub(crate) fn select_change(
     // replacement before changing any selections or publishing a commit.
     let key = name_policy::path_key(&path);
     let mut entries = previous.entries.clone();
-    entries.retain(|e| !key.is_empty() && !namespace::is_descendant(&e.lookup_key, &key));
+    entries.retain(|e| !key.is_empty() && !namespace::is_descendant(e.lookup_key(), &key));
     entries.extend(restored);
     validate_entries(&mut entries, max_entries)?;
 
@@ -989,7 +1009,7 @@ pub(crate) fn select_change(
     {
         state
             .file_contexts
-            .remove(&context_key(repository, &e.path));
+            .remove(&context_key_from_key(repository, e.lookup_key()));
     }
     state.file_contexts.extend(selected_contexts);
     let old_ids = old_entries
@@ -1085,7 +1105,7 @@ pub(crate) fn select_change(
 
 impl Engine {
     pub fn file_context(&self, repository: &str, path: &str) -> Option<FileContext> {
-        context_at(&self.state, repository, path)
+        context_at_key(&self.state, repository, &name_policy::path_key(path))
     }
 
     /// Resolve an entry already borrowed from this repository's current main
@@ -1099,7 +1119,7 @@ impl Engine {
         if let Some(context) = self
             .state
             .file_contexts
-            .get(&context_key(repository, &entry.path))
+            .get(&context_key_from_key(repository, entry.lookup_key()))
         {
             return Some(std::borrow::Cow::Borrowed(context));
         }
@@ -1191,13 +1211,13 @@ impl Engine {
                         frozen_context(&tree.file_contexts, &tree.file_branches, entry)?;
                     context.selection_generation = 0;
                     context.inherited_from = Some(id.clone());
-                    file_contexts.insert(entry.lookup_key.clone(), context);
+                    file_contexts.insert(entry.lookup_key().to_owned(), context);
                     let file_branch = required(
                         tree.file_branches.get(&entry.file_id),
                         "snapshot file branch reference missing",
                     )?;
                     files.push(json!({"file_id":entry.file_id,"branch_id":file_branch,
-                        "path":entry.path,"version_id":entry.version_id}));
+                        "path":entry.path(),"version_id":entry.version_id}));
                 }
                 let branch = DirectoryBranch {
                     directory_branch_id: id.clone(),

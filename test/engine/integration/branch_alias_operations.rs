@@ -450,11 +450,12 @@ fn workspace_namespace_renames_two_aliases_atomically_with_distinct_write_contex
         p.engine
             .namespace_operation(
                 &workspace.workspace_id,
-                NamespaceOperation {
-                    kind: storage_contract::NamespaceOperationKind::Rename,
-                    path: path.into(),
-                    destination: Some(destination.into()),
-                },
+                NamespaceOperation::parse(
+                    storage_contract::NamespaceOperationKind::Rename,
+                    path,
+                    Some(destination),
+                )
+                .unwrap(),
             )
             .unwrap();
     }
@@ -708,11 +709,12 @@ fn workspace_conflicting_alias_names_reject_the_complete_namespace_decision() {
         p.engine
             .namespace_operation(
                 &workspace.workspace_id,
-                NamespaceOperation {
-                    kind: storage_contract::NamespaceOperationKind::Rename,
-                    path: path.into(),
-                    destination: Some(destination.into()),
-                },
+                NamespaceOperation::parse(
+                    storage_contract::NamespaceOperationKind::Rename,
+                    path,
+                    Some(destination),
+                )
+                .unwrap(),
             )
             .unwrap();
     }
@@ -780,11 +782,12 @@ fn chained_workspace_directory_renames_keep_context_and_physical_owner() {
         p.engine
             .namespace_operation(
                 &workspace.workspace_id,
-                NamespaceOperation {
-                    kind: storage_contract::NamespaceOperationKind::Rename,
-                    path: path.into(),
-                    destination: Some(destination.into()),
-                },
+                NamespaceOperation::parse(
+                    storage_contract::NamespaceOperationKind::Rename,
+                    path,
+                    Some(destination),
+                )
+                .unwrap(),
             )
             .unwrap();
     }
@@ -799,7 +802,7 @@ fn chained_workspace_directory_renames_keep_context_and_physical_owner() {
     assert_eq!(updated.inherited_from, context.inherited_from);
     assert_eq!(
         p.engine.state().file_locations[&original.file_id],
-        renamed.path
+        renamed.path()
     );
     assert_eq!(p.branch(&draft).path, "final");
     assert!(updated.node_id.is_some());
@@ -809,7 +812,7 @@ fn chained_workspace_directory_renames_keep_context_and_physical_owner() {
         assert_eq!(engine.file_context(&repo, &renamed.path).unwrap(), updated);
         assert_eq!(
             engine.state().file_locations[&original.file_id],
-            renamed.path
+            renamed.path()
         );
     });
 }
@@ -843,11 +846,12 @@ fn workspace_path_swap_preserves_each_files_exact_branch_context() {
         p.engine
             .namespace_operation(
                 &workspace.workspace_id,
-                NamespaceOperation {
-                    kind: storage_contract::NamespaceOperationKind::Rename,
-                    path: path.into(),
-                    destination: Some(destination.into()),
-                },
+                NamespaceOperation::parse(
+                    storage_contract::NamespaceOperationKind::Rename,
+                    path,
+                    Some(destination),
+                )
+                .unwrap(),
             )
             .unwrap();
     }
@@ -884,16 +888,18 @@ fn workspace_delete_then_replace_path_keeps_surviving_files_context() {
         .create_workspace(&p.repo.main_branch_id, "admin")
         .unwrap();
     for change in [
-        NamespaceOperation {
-            kind: storage_contract::NamespaceOperationKind::Delete,
-            path: "a.txt".into(),
-            destination: None,
-        },
-        NamespaceOperation {
-            kind: storage_contract::NamespaceOperationKind::Rename,
-            path: "b.txt".into(),
-            destination: Some("a.txt".into()),
-        },
+        NamespaceOperation::parse(
+            storage_contract::NamespaceOperationKind::Delete,
+            "a.txt",
+            None,
+        )
+        .unwrap(),
+        NamespaceOperation::parse(
+            storage_contract::NamespaceOperationKind::Rename,
+            "b.txt",
+            Some("a.txt"),
+        )
+        .unwrap(),
     ] {
         p.engine
             .namespace_operation(&workspace.workspace_id, change)
@@ -942,11 +948,12 @@ fn chained_alias_renames_preserve_distinct_contexts_and_one_physical_owner() {
         p.engine
             .namespace_operation(
                 &workspace.workspace_id,
-                NamespaceOperation {
-                    kind: storage_contract::NamespaceOperationKind::Rename,
-                    path: path.into(),
-                    destination: Some(destination.into()),
-                },
+                NamespaceOperation::parse(
+                    storage_contract::NamespaceOperationKind::Rename,
+                    path,
+                    Some(destination),
+                )
+                .unwrap(),
             )
             .unwrap();
     }
@@ -1004,11 +1011,12 @@ fn renaming_both_alias_directories_moves_only_the_actual_physical_owner() {
             p.engine
                 .namespace_operation(
                     &workspace.workspace_id,
-                    NamespaceOperation {
-                        kind: storage_contract::NamespaceOperationKind::Rename,
-                        path: path.into(),
-                        destination: Some(destination.into()),
-                    },
+                    NamespaceOperation::parse(
+                        storage_contract::NamespaceOperationKind::Rename,
+                        path,
+                        Some(destination),
+                    )
+                    .unwrap(),
                 )
                 .unwrap();
         }
@@ -1036,11 +1044,12 @@ fn exact_no_op_rename_of_stale_alias_preserves_physical_name() {
     p.engine
         .file_namespace(
             &p.repo.repository_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Rename,
-                path: "a/report.txt".into(),
-                destination: Some("a/new.txt".into()),
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                "a/report.txt",
+                Some("a/new.txt"),
+            )
+            .unwrap(),
             "admin",
             &new_id("op"),
         )
@@ -1060,11 +1069,12 @@ fn exact_no_op_rename_of_stale_alias_preserves_physical_name() {
     p.engine
         .namespace_operation(
             &workspace.workspace_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Rename,
-                path: "b/report.txt".into(),
-                destination: Some("b/report.txt".into()),
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                "b/report.txt",
+                Some("b/report.txt"),
+            )
+            .unwrap(),
         )
         .unwrap();
     p.commit(workspace);

@@ -4,11 +4,8 @@ fn mkdir(engine: &mut Engine, repo: &Repository, path: &str) {
     engine
         .file_namespace(
             &repo.repository_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Mkdir,
-                path: path.into(),
-                destination: None,
-            },
+            NamespaceOperation::parse(storage_contract::NamespaceOperationKind::Mkdir, path, None)
+                .unwrap(),
             "admin",
             &new_id("op"),
         )

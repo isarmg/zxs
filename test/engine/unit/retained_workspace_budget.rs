@@ -1,5 +1,11 @@
 use super::*;
 
+fn replace_configuration(engine: &mut Engine, change: impl FnOnce(&mut Config)) {
+    let mut config = engine.config().clone();
+    change(&mut config);
+    engine.config = ValidatedConfig::try_from(config).unwrap();
+}
+
 #[test]
 fn aborted_records_consume_global_and_principal_budgets_after_restart() {
     let mut f = Fixture::new();
@@ -58,11 +64,12 @@ fn namespace_growth_is_charged_and_rejection_preserves_durable_evidence() {
             let before = canonical_json(&e.workspace(&w.workspace_id).unwrap()).unwrap();
             match e.namespace_operation(
                 &w.workspace_id,
-                NamespaceOperation {
-                    kind: storage_contract::NamespaceOperationKind::Mkdir,
-                    path: format!("directory-{accepted:04}"),
-                    destination: None,
-                },
+                NamespaceOperation::parse(
+                    storage_contract::NamespaceOperationKind::Mkdir,
+                    &(format!("directory-{accepted:04}")),
+                    None,
+                )
+                .unwrap(),
             ) {
                 Ok(_) => {
                     accepted += 1;
@@ -113,11 +120,12 @@ fn uncertain_manifest_write_blocks_further_admission_until_restart() {
     assert!(
         e.namespace_operation(
             &w.workspace_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Mkdir,
-                path: "unacknowledged".into(),
-                destination: None,
-            }
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Mkdir,
+                "unacknowledged",
+                None
+            )
+            .unwrap()
         )
         .is_err()
     );
@@ -204,18 +212,21 @@ fn committed_file_context_receipt_fits_exact_reserved_metadata_budget() {
     assert!(!old_contexts.is_empty());
     e.namespace_operation(
         &w.workspace_id,
-        NamespaceOperation {
-            kind: storage_contract::NamespaceOperationKind::Mkdir,
-            path: "extra-directory".into(),
-            destination: None,
-        },
+        NamespaceOperation::parse(
+            storage_contract::NamespaceOperationKind::Mkdir,
+            "extra-directory",
+            None,
+        )
+        .unwrap(),
     )
     .unwrap();
     e.stage_bytes(&w.workspace_id, "nested/new-file", b"retained payload")
         .unwrap();
     let charge = e.retained_workspace_metadata_bytes();
-    e.config.max_retained_workspace_metadata_bytes = charge;
-    e.config.max_retained_workspace_metadata_bytes_per_principal = charge;
+    replace_configuration(&mut e, |config| {
+        config.max_retained_workspace_metadata_bytes = charge;
+        config.max_retained_workspace_metadata_bytes_per_principal = charge
+    });
     crate::disk::write_json(&f.root.join("config.json"), &e.config, true).unwrap();
     e.commit_workspace(CommitRequest {
         workspace_id: w.workspace_id.clone(),
@@ -384,17 +395,27 @@ fn capacity_metadata_warning_boundaries_are_exact_and_overflow_safe() {
     let repo = repository(&mut e, 1);
     e.create_workspace(&repo.main_branch_id, "admin").unwrap();
     let used = e.retained_workspace_metadata_bytes();
-    e.config.max_retained_workspace_metadata_bytes = used * 5 / 4 + 1;
+    replace_configuration(&mut e, |config| {
+        config.max_retained_workspace_metadata_bytes = used * 5 / 4 + 1
+    });
     assert_eq!(capacity_report(&e, "admin")["warning"], "ok");
-    e.config.max_retained_workspace_metadata_bytes = used * 5 / 4;
+    replace_configuration(&mut e, |config| {
+        config.max_retained_workspace_metadata_bytes = used * 5 / 4
+    });
     assert_eq!(capacity_report(&e, "admin")["warning"], "near_limit");
-    e.config.max_retained_workspace_metadata_bytes = used;
+    replace_configuration(&mut e, |config| {
+        config.max_retained_workspace_metadata_bytes = used
+    });
     assert_eq!(capacity_report(&e, "admin")["warning"], "exhausted");
-    e.config.max_retained_workspace_metadata_bytes = u64::MAX;
-    e.config.max_retained_workspace_metadata_bytes_per_principal = used;
+    replace_configuration(&mut e, |config| {
+        config.max_retained_workspace_metadata_bytes = u64::MAX;
+        config.max_retained_workspace_metadata_bytes_per_principal = used
+    });
     assert_eq!(capacity_report(&e, "admin")["warning"], "exhausted");
     assert_eq!(capacity_report(&e, "absent-actor")["warning"], "ok");
-    e.config.max_retained_workspace_metadata_bytes_per_principal = u64::MAX;
+    replace_configuration(&mut e, |config| {
+        config.max_retained_workspace_metadata_bytes_per_principal = u64::MAX
+    });
     assert_eq!(capacity_report(&e, "admin")["warning"], "ok");
 }
 
@@ -404,7 +425,7 @@ fn capacity_reports_global_pressure_even_without_actor_charges() {
     let mut e = f.initialize();
     let repo = repository(&mut e, 1);
     e.create_workspace(&repo.main_branch_id, "admin").unwrap();
-    e.config.max_retained_workspaces = 1;
+    replace_configuration(&mut e, |config| config.max_retained_workspaces = 1);
     let report = capacity_report(&e, "absent-actor");
     assert_eq!(report["global"]["records"]["used"], "1");
     assert_eq!(report["global"]["records"]["remaining"], "0");
@@ -426,12 +447,15 @@ fn admission_errors_identify_each_exhausted_dimension_without_changing_evidence(
         let w = e.create_workspace(&repo.main_branch_id, "admin").unwrap();
         e.abort_workspace(&w.workspace_id, "admin").unwrap();
         let used = e.retained_workspace_metadata_bytes();
-        match dimension {
-            "global record count" => e.config.max_retained_workspaces = 1,
-            "principal record count" => e.config.max_retained_workspaces_per_principal = 1,
-            "global metadata bytes" => e.config.max_retained_workspace_metadata_bytes = used,
-            _ => e.config.max_retained_workspace_metadata_bytes_per_principal = used,
-        }
+        replace_configuration(&mut e, |config| match dimension {
+            "global record count" => config.max_retained_workspaces = 1,
+            "principal record count" => config.max_retained_workspaces_per_principal = 1,
+            "global metadata bytes" => config.max_retained_workspace_metadata_bytes = used,
+            "principal metadata bytes" => {
+                config.max_retained_workspace_metadata_bytes_per_principal = used
+            }
+            other => panic!("unexpected test dimension: {other}"),
+        });
         let before = capacity_report(&e, "admin");
         let manifest_before = canonical_json(e.workspaces.get(&w.workspace_id).unwrap()).unwrap();
         let error = e

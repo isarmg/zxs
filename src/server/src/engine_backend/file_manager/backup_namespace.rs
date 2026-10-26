@@ -231,7 +231,7 @@ pub(super) fn entries(
                 .state()
                 .file_locations
                 .get(&entry.file_id)
-                .is_some_and(|owner| name_policy::path_key(owner) == entry.lookup_key);
+                .is_some_and(|owner| name_policy::path_key(owner) == entry.lookup_key());
             if owner || !canonical.contains_key(entry.file_id.as_str()) {
                 canonical.insert(&entry.file_id, (index, entry));
             }

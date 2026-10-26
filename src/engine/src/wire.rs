@@ -9,6 +9,61 @@ pub(crate) struct WireCommit {
     pub body: Value,
     pub placements: BTreeMap<String, (String, u32)>,
 }
+/// Shape-checked wire input and its request digest, computed at admission.
+pub(crate) struct ParsedWireEnvelope {
+    body: Value,
+    digest: String,
+}
+impl ParsedWireEnvelope {
+    pub(crate) fn parse(request: &CommitRequest, state: &State, body: Value) -> Result<Self> {
+        let fields = [
+            "operation_id",
+            "workspace_id",
+            "repository_id",
+            "branch_id",
+            "expected_head",
+            "fencing_token",
+            "message",
+            "requested_protection",
+            "file_placement",
+            "expected_topology_generation",
+            "sealed_manifest_hash",
+            "request_digest",
+        ];
+        let object = body.as_object().ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::InvalidRequest,
+                "commit body must be an object",
+            )
+        })?;
+        if object.len() != fields.len() || object.keys().any(|k| !fields.contains(&k.as_str())) {
+            return Err(Error::new(
+                storage_contract::ErrorCode::InvalidRequest,
+                "commit body has missing or unknown fields",
+            ));
+        }
+        let wire_digest = commit_request_digest(&request.workspace_id, &body)?;
+        if let Some(existing) = state.operations.get(&request.operation_id)
+            && (existing.request_digest != wire_digest
+                || text(&body, "request_digest")? != wire_digest
+                || state
+                    .operation_principals
+                    .get(&request.operation_id)
+                    .map(String::as_str)
+                    != Some(&request.principal))
+        {
+            return Err(Error::new(
+                storage_contract::ErrorCode::IdempotencyKeyReused,
+                "completed wire request differs from its registered digest",
+            ));
+        }
+        Ok(Self {
+            body,
+            digest: wire_digest,
+        })
+    }
+}
+
 pub fn manifest_hash(w: &Workspace) -> Result<String> {
     object_hash(
         "workspace-manifest",
@@ -89,50 +144,75 @@ impl Engine {
     }
     pub(crate) fn plan_workspace_commit_wire(
         &self,
-        mut request: CommitRequest,
+        request: CommitRequest,
         body: Value,
     ) -> Result<crate::business::WorkspaceMutation> {
-        let fields = [
-            "operation_id",
-            "workspace_id",
-            "repository_id",
-            "branch_id",
-            "expected_head",
-            "fencing_token",
-            "message",
-            "requested_protection",
-            "file_placement",
-            "expected_topology_generation",
-            "sealed_manifest_hash",
-            "request_digest",
-        ];
-        let object = body.as_object().ok_or_else(|| {
+        let envelope = ParsedWireEnvelope::parse(&request, &self.state, body)?;
+        let workspace = self.workspace(&request.workspace_id)?;
+        let replay = if self.state.operations.contains_key(&request.operation_id) {
+            Some(self.prepare_operation_health(self.operation_record(&request.operation_id)?))
+        } else {
+            None
+        };
+        self.planning_context()
+            .plan_workspace_commit_wire(workspace, request, envelope, replay)
+    }
+    pub fn version_health(&self, version: &str) -> Result<String> {
+        let v = self.state.versions.get(version).ok_or_else(|| {
             Error::new(
-                storage_contract::ErrorCode::InvalidRequest,
-                "commit body must be an object",
+                storage_contract::ErrorCode::VersionNotFound,
+                "version not found",
             )
         })?;
-        if object.len() != fields.len() || object.keys().any(|k| !fields.contains(&k.as_str())) {
-            return Err(Error::new(
-                storage_contract::ErrorCode::InvalidRequest,
-                "commit body has missing or unknown fields",
-            ));
-        }
-        let wire_digest = commit_request_digest(&request.workspace_id, &body)?;
-        if let Some(existing) = self.state.operations.get(&request.operation_id)
-            && (existing.request_digest != wire_digest
-                || text(&body, "request_digest")? != wire_digest
-                || self.operation_owner(&request.operation_id)?.as_deref()
-                    != Some(&request.principal))
+        if let Some(state) = self.state.content_states.get(version)
+            && (*state == ContentState::Purged || *state == ContentState::Migrated)
         {
-            return Err(Error::new(
-                storage_contract::ErrorCode::IdempotencyKeyReused,
-                "completed wire request differs from its registered digest",
-            ));
+            return Ok("PURGED".into());
         }
+        let p = self.state.placements.get(version).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::PlacementNotFound,
+                "placement not found",
+            )
+        })?;
+        let mut healthy = 0;
+        for slot in &p.route_slot_ids {
+            let d = self.disk(slot)?;
+            if validate_seal(&self.config, d).is_ok() {
+                let dir = version_dir(d, &v.history_tree_id, version);
+                if crate::journal::verify_local_publication(&dir, v).is_ok()
+                    && verify_payload(&dir, v).is_ok()
+                {
+                    healthy += 1;
+                }
+            }
+        }
+        Ok(if healthy == 0 {
+            "UNAVAILABLE"
+        } else if healthy < p.target_copies as usize {
+            "DEGRADED"
+        } else {
+            "HEALTHY"
+        }
+        .into())
+    }
+}
+
+impl crate::engine::PlanningContext<'_> {
+    pub(crate) fn plan_workspace_commit_wire(
+        &self,
+        workspace: Workspace,
+        mut request: CommitRequest,
+        envelope: ParsedWireEnvelope,
+        replay: Option<crate::engine::OperationReadPlan>,
+    ) -> Result<crate::business::WorkspaceMutation> {
+        let ParsedWireEnvelope {
+            body,
+            digest: wire_digest,
+        } = envelope;
         // Replay skips live topology/manifest preconditions, never immutable
         // binding between the authenticated request and its original body.
-        let w = self.workspace(&request.workspace_id)?;
+        let w = workspace;
         let repo = self.repository_for_branch(&w.branch_id)?;
         if text(&body, "operation_id")? != request.operation_id
             || text(&body, "workspace_id")? != w.workspace_id
@@ -147,12 +227,11 @@ impl Engine {
                 "wire request differs from authenticated workspace input",
             ));
         }
-        if self.state.operations.contains_key(&request.operation_id) {
-            let workspace = self.validate_workspace_commit_replay(&request, &wire_digest)?;
+        if let Some(result) = replay {
+            self.validate_workspace_commit_replay(&w, &request, &wire_digest)?;
+            let workspace = w;
             return Ok(crate::business::WorkspaceMutation {
-                mutation: crate::engine::MutationPlan::Existing(
-                    self.operation(&request.operation_id)?,
-                ),
+                mutation: crate::engine::MutationPlan::Existing(result.check().into_result()),
                 workspace,
                 request,
                 wire: None,
@@ -178,7 +257,7 @@ impl Engine {
                 "workspace bytes or namespace order differ from the sealed request",
             ));
         }
-        let digest = commit_request_digest(&w.workspace_id, &body)?;
+        let digest = wire_digest;
         if text(&body, "request_digest")? != digest {
             return Err(Error::new(
                 storage_contract::ErrorCode::RequestDigestMismatch,
@@ -243,51 +322,14 @@ impl Engine {
         }
         request.request_digest = Some(digest.clone());
         self.plan_workspace_commit_inner(
+            w,
             request,
             Some(WireCommit {
                 digest,
                 body,
                 placements,
             }),
+            None,
         )
-    }
-    pub fn version_health(&self, version: &str) -> Result<String> {
-        let v = self.state.versions.get(version).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::VersionNotFound,
-                "version not found",
-            )
-        })?;
-        if let Some(state) = self.state.content_states.get(version)
-            && (*state == ContentState::Purged || *state == ContentState::Migrated)
-        {
-            return Ok("PURGED".into());
-        }
-        let p = self.state.placements.get(version).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::PlacementNotFound,
-                "placement not found",
-            )
-        })?;
-        let mut healthy = 0;
-        for slot in &p.route_slot_ids {
-            let d = self.disk(slot)?;
-            if validate_seal(&self.config, d).is_ok() {
-                let dir = version_dir(d, &v.history_tree_id, version);
-                if crate::journal::verify_local_publication(&dir, v).is_ok()
-                    && verify_payload(&dir, v).is_ok()
-                {
-                    healthy += 1;
-                }
-            }
-        }
-        Ok(if healthy == 0 {
-            "UNAVAILABLE"
-        } else if healthy < p.target_copies as usize {
-            "DEGRADED"
-        } else {
-            "HEALTHY"
-        }
-        .into())
     }
 }

@@ -45,7 +45,7 @@ impl Tree {
 
 /// The same branch/head checks as Tree, without inspecting or copying entries.
 /// Callers must hold the engine admission lock; a snapshot is not an auth grant.
-fn branch_snapshot<'a>(
+pub(super) fn branch_snapshot<'a>(
     state: &'a storage_contract::State,
     branch: &str,
     selected_commit: Option<&'a str>,
@@ -200,8 +200,8 @@ impl SmbDirectory {
             format!("{key}/")
         };
         let start = entries.partition_point(|entry| {
-            entry.lookup_key.as_str() < prefix.as_str()
-                || after.is_some_and(|after| entry.lookup_key.as_str() <= after)
+            entry.lookup_key() < prefix.as_str()
+                || after.is_some_and(|after| entry.lookup_key() <= after)
         });
         let mut page = Self {
             commit_id: commit_id.into(),
@@ -217,7 +217,7 @@ impl SmbDirectory {
         .expect("invariant: internal JSON serialization succeeds")
         .len();
         for entry in &entries[start..] {
-            let Some(rest) = entry.lookup_key.strip_prefix(&prefix) else {
+            let Some(rest) = entry.lookup_key().strip_prefix(&prefix) else {
                 break;
             };
             if rest.is_empty() || rest.contains('/') {

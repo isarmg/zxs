@@ -40,7 +40,7 @@ impl EngineBackend {
                         && entry.file_id == record.file_id
                 })
             })
-            .map(|entry| entry.name.clone())
+            .map(|entry| entry.name().to_owned())
             .or_else(|| engine.state().file_names.get(&record.file_id).cloned())
             .unwrap_or_else(|| record.creation_name.clone());
         drop(engine);

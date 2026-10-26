@@ -185,7 +185,7 @@ fn batch_rejects_missing_references_without_publication() {
                 source: DirectoryNamespaceSource {
                     directory_branch_id: branch_id.clone(),
                     expected_tree_id: branch.head_tree_id.clone(),
-                    path: entry.path,
+                    path: entry.path.into_string(),
                     entry_id: entry.entry_id,
                 },
                 target: Some(DirectoryNamespaceTarget {
@@ -333,7 +333,7 @@ fn file_node_publication_requires_frozen_path_contexts_without_publication() {
             }
             _ => unreachable!(),
         };
-        assert!(contexts.remove(&entry.lookup_key).is_some());
+        assert!(contexts.remove(entry.lookup_key()).is_some());
         let before = canonical_json(engine.state()).unwrap();
         let sequence = engine.state.sequence;
         let slot = engine.next_slot;
@@ -394,8 +394,8 @@ fn missing_file_nodes_and_bodies_return_errors_without_publication() {
                         version_id: "missing".into(),
                         parent_node_ids: vec![entry.version_id],
                         branch_id: branch.clone(),
-                        path: entry.path.clone(),
-                        previous_path: entry.path,
+                        path: entry.path.as_str().to_owned(),
+                        previous_path: entry.path.into_string(),
                         sequence,
                         created_at: now(),
                         operation_id: new_id("op"),
@@ -507,11 +507,12 @@ fn exhausted_branch_generations_reject_metadata_mutations_atomically() {
             ),
             "namespace" => engine.file_namespace(
                 &repo.repository_id,
-                NamespaceOperation {
-                    kind: NamespaceOperationKind::Rename,
-                    path: entry.path.clone(),
-                    destination: Some("folder/renamed.txt".into()),
-                },
+                NamespaceOperation::parse(
+                    NamespaceOperationKind::Rename,
+                    &(entry.path.clone()),
+                    Some("folder/renamed.txt"),
+                )
+                .unwrap(),
                 "admin",
                 &operation,
             ),
@@ -632,7 +633,7 @@ fn exhausted_main_generation_rejects_active_namespace_batch() {
             source: DirectoryNamespaceSource {
                 directory_branch_id: directory.directory_branch_id.clone(),
                 expected_tree_id: directory.head_tree_id.clone(),
-                path: entry.path,
+                path: entry.path.into_string(),
                 entry_id: entry.entry_id,
             },
             target: Some(DirectoryNamespaceTarget {

@@ -47,9 +47,8 @@ impl Engine {
         file_id: Option<&str>,
         path: &str,
     ) -> Result<(String, u32)> {
-        let (primary, copies) = self.file_placement_settings(repository, file_id, path)?;
-        self.route(&primary, copies)?;
-        Ok((primary, copies))
+        self.planning_context()
+            .new_file_placement_for_file(repository, file_id, path)
     }
     // Resolve settings separately so configuration can repair a moved file
     // whose old copy count exceeds its new primary's fixed chain.
@@ -59,24 +58,8 @@ impl Engine {
         file_id: Option<&str>,
         path: &str,
     ) -> Result<(String, u32)> {
-        let repo = self.state.repositories.get(repository).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::RepositoryNotFound,
-                "repository does not exist",
-            )
-        })?;
-        let primary = self
-            .state
-            .placement_rules
-            .values()
-            .filter(|r| r.repository_id == repository && applies(&r.path_prefix, path))
-            .max_by_key(|r| r.path_prefix.len())
-            .map(|r| r.primary_slot_id.clone())
-            .unwrap_or_else(|| repo.primary_slot_id.clone());
-        let copies = backup_paths::effective_policy(&self.state, repository, file_id, path)
-            .map(|p| p.target_copies)
-            .unwrap_or(repo.target_copies);
-        Ok((primary, copies))
+        self.planning_context()
+            .file_placement_settings(repository, file_id, path)
     }
     pub fn update_placement_rule(
         &mut self,
@@ -139,5 +122,46 @@ impl Engine {
             state.protection_policies.insert(id.into(),policy.clone());
             Ok(json!({"policy":policy}))
         })
+    }
+}
+
+impl crate::engine::PlanningContext<'_> {
+    pub fn new_file_placement_for_file(
+        &self,
+        repository: &str,
+        file_id: Option<&str>,
+        path: &str,
+    ) -> Result<(String, u32)> {
+        let (primary, copies) = self.file_placement_settings(repository, file_id, path)?;
+        self.route(&primary, copies)?;
+        Ok((primary, copies))
+    }
+}
+
+impl crate::engine::PlanningContext<'_> {
+    fn file_placement_settings(
+        &self,
+        repository: &str,
+        file_id: Option<&str>,
+        path: &str,
+    ) -> Result<(String, u32)> {
+        let repo = self.state.repositories.get(repository).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::RepositoryNotFound,
+                "repository does not exist",
+            )
+        })?;
+        let primary = self
+            .state
+            .placement_rules
+            .values()
+            .filter(|r| r.repository_id == repository && applies(&r.path_prefix, path))
+            .max_by_key(|r| r.path_prefix.len())
+            .map(|r| r.primary_slot_id.clone())
+            .unwrap_or_else(|| repo.primary_slot_id.clone());
+        let copies = backup_paths::effective_policy(self.state, repository, file_id, path)
+            .map(|p| p.target_copies)
+            .unwrap_or(repo.target_copies);
+        Ok((primary, copies))
     }
 }

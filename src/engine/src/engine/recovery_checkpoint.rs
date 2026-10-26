@@ -452,7 +452,10 @@ pub(super) fn load(
     }
 }
 
-pub(super) fn save(engine: &Engine) -> Result<()> {
+pub(super) fn save(
+    engine: &Engine,
+    scanned_journals: &BTreeMap<String, Vec<(Record, String)>>,
+) -> Result<()> {
     if engine.blocked || engine.snapshot.is_none() {
         return Ok(());
     }
@@ -462,14 +465,10 @@ pub(super) fn save(engine: &Engine) -> Result<()> {
     let mut version_ids = BTreeSet::new();
     for d in engine.members() {
         validate_seal(&engine.config, &d)?;
-        let scanned = scan(&d)?;
-        if scanned.torn_tail {
-            return Ok(());
-        }
+        let records = &scanned_journals[&d.disk_id];
         // Preserve absences that made historical recovery skip local proof or
         // container work. Restoring such a prefix path requires full repair.
-        for (record, _) in scanned
-            .records
+        for (record, _) in records
             .iter()
             .filter(|(r, _)| r.record_type == RecordType::Publication)
         {
@@ -504,12 +503,11 @@ pub(super) fn save(engine: &Engine) -> Result<()> {
                 }
             }
         }
-        let Some((last, hash)) = scanned.records.last() else {
+        let Some((last, hash)) = records.last() else {
             return Ok(());
         };
         tips.insert(d.disk_id.clone(), hash.clone());
-        let published = scanned
-            .records
+        let published = records
             .iter()
             .rev()
             .find(|(r, _)| r.record_type == RecordType::Publication)

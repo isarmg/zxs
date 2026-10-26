@@ -162,7 +162,7 @@ fn legacy_pending_entry_source<'a>(
     }
     let state = engine.state();
     let visible = commit.entries.iter().find(|visible| {
-        visible.lookup_key == entry.lookup_key && visible.file_id == entry.file_id
+        visible.lookup_key() == entry.lookup_key() && visible.file_id == entry.file_id
     })?;
     let current = state.branches.get(branch)?;
     if current.head_commit_id == commit.commit_id {
@@ -187,7 +187,7 @@ fn legacy_pending_entry_source<'a>(
         .directory_trees
         .values()
         .filter(|tree| tree.commit_id == commit.commit_id)
-        .find_map(|tree| tree.file_contexts.get(&entry.lookup_key))
+        .find_map(|tree| tree.file_contexts.get(entry.lookup_key()))
     {
         return context
             .inherited_from
@@ -219,9 +219,7 @@ fn synthetic_commit(
             let path = format!("file-{index:05}.txt");
             storage_contract::Entry {
                 entry_id: format!("entry-{index}"),
-                name: path.clone(),
-                lookup_key: path.clone(),
-                path,
+                path: name_policy::PortablePath::parse(&path).unwrap(),
                 kind: storage_contract::NamespaceEntryKind::File,
                 file_id: format!("file-{index}"),
                 version_id: format!("version-{index}"),
@@ -568,9 +566,7 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
 fn directory_entry(index: usize, path: String) -> storage_contract::Entry {
     storage_contract::Entry {
         entry_id: format!("entry_{index:032x}"),
-        name: path.rsplit('/').next().unwrap().into(),
-        lookup_key: name_policy::path_key(&path),
-        path,
+        path: name_policy::PortablePath::parse(&path).unwrap(),
         kind: storage_contract::NamespaceEntryKind::File,
         file_id: format!("file_{index:032x}"),
         version_id: format!("version_{index:032x}"),
@@ -588,7 +584,7 @@ fn large_directory_is_paginated_by_actual_bytes_and_count_without_full_tree_copi
     for entry in &entries {
         name_policy::validate_path(&entry.path).unwrap();
     }
-    entries.sort_by(|left, right| left.lookup_key.cmp(&right.lookup_key));
+    entries.sort_by(|left, right| left.lookup_key().cmp(right.lookup_key()));
     assert!(
         json_codec::to_vec(&json!({"entries":entries}))
             .unwrap()
@@ -615,7 +611,10 @@ fn large_directory_is_paginated_by_actual_bytes_and_count_without_full_tree_copi
                 <= MAX_DIRECTORY_PAGE_BYTES
         );
         assert!(!page.more || !page.entries.is_empty());
-        after = page.entries.last().map(|entry| entry.lookup_key.clone());
+        after = page
+            .entries
+            .last()
+            .map(|entry| entry.lookup_key().to_owned());
         seen.extend(page.entries.iter().map(|entry| entry.entry_id.clone()));
         if !page.more {
             break;
@@ -813,6 +812,18 @@ fn namespace_reads_preserve_migrated_branch_error() {
         .commit_plan(&plan.plan_id, "owner", &new_id("op"))
         .unwrap();
     let backend = EngineBackend::new(engine);
+    assert_eq!(
+        backend
+            .lookup_at(
+                &identity,
+                &repo.main_branch_id,
+                &cut,
+                &name_policy::LookupPath::parse("file.txt").unwrap()
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::TreeMoved
+    );
     let input = json!({"branch_id":repo.main_branch_id,"path":"file.txt"});
     for action in [
         BackendAction::Tree,
@@ -828,3 +839,9 @@ fn namespace_reads_preserve_migrated_branch_error() {
         );
     }
 }
+
+#[path = "lookup_at_tests.rs"]
+mod lookup_at_tests;
+
+#[path = "snapshot_at_tests.rs"]
+mod snapshot_at_tests;

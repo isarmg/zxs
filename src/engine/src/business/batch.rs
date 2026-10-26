@@ -12,10 +12,8 @@ struct CopiedFile {
     size: u64,
 }
 
-fn contains(scope: &str, path: &str) -> bool {
-    let scope = name_policy::path_key(scope);
-    let path = name_policy::path_key(path);
-    scope.is_empty() || namespace::is_descendant(&path, &scope)
+fn contains_key(scope: &str, path: &str) -> bool {
+    scope.is_empty() || namespace::is_descendant(path, scope)
 }
 
 /// Active compositions are published by complete subtree replacement. Parent
@@ -51,7 +49,7 @@ fn active_scopes(
                     entry.kind == NamespaceEntryKind::Directory
                         && entry.entry_id == branch.directory_id
                 })
-                .map(|entry| entry.lookup_key.clone())
+                .map(|entry| entry.lookup_key().to_owned())
                 .ok_or_else(|| {
                     Error::new(
                         storage_contract::ErrorCode::DirectoryBranchConflict,
@@ -61,7 +59,7 @@ fn active_scopes(
         };
         if paths
             .iter()
-            .any(|other| path == *other || contains(other, &path) || contains(&path, other))
+            .any(|other| path == *other || contains_key(other, &path) || contains_key(&path, other))
         {
             return Err(Error::new(
                 storage_contract::ErrorCode::BatchScopeConflict,
@@ -74,25 +72,25 @@ fn active_scopes(
     Ok(active)
 }
 fn remove(branch: &mut DirectoryBranch, source: &Entry) {
-    let key = &source.lookup_key;
+    let key = &source.lookup_key();
     let removed = branch
         .entries
         .iter()
-        .filter(|e| e.lookup_key == *key || namespace::is_descendant(&e.lookup_key, key))
+        .filter(|e| e.lookup_key() == *key || namespace::is_descendant(e.lookup_key(), key))
         .cloned()
         .collect::<Vec<_>>();
     branch
         .entries
-        .retain(|e| e.lookup_key != *key && !namespace::is_descendant(&e.lookup_key, key));
+        .retain(|e| e.lookup_key() != *key && !namespace::is_descendant(e.lookup_key(), key));
     for e in removed {
         if e.kind == NamespaceEntryKind::File {
-            branch.file_contexts.remove(&e.lookup_key);
+            branch.file_contexts.remove(e.lookup_key());
             if let Some(remaining) = branch
                 .entries
                 .iter()
                 .find(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == e.file_id)
             {
-                if let Some(context) = branch.file_contexts.get(&remaining.lookup_key) {
+                if let Some(context) = branch.file_contexts.get(remaining.lookup_key()) {
                     branch
                         .file_branches
                         .insert(e.file_id.clone(), context.branch_id.clone());
@@ -113,18 +111,16 @@ fn remove(branch: &mut DirectoryBranch, source: &Entry) {
         }
     }
 }
-fn relocate(entry: &Entry, source: &str, target: &str) -> Entry {
+fn relocate(entry: &Entry, source: &str, target: &name_policy::PortablePath) -> Result<Entry> {
     let depth = source.split('/').count();
-    let mut e = entry.clone();
-    let suffix = e.path.split('/').skip(depth).collect::<Vec<_>>().join("/");
-    e.path = if suffix.is_empty() {
-        target.into()
+    let path = if entry.path().split('/').count() == depth {
+        target.clone()
     } else {
-        format!("{target}/{suffix}")
+        entry.location().rebase(depth, target)?
     };
-    e.name = e.path.rsplit('/').next().unwrap_or("").into();
-    e.lookup_key = name_policy::path_key(&e.path);
-    e
+    let mut moved = entry.clone();
+    moved.relocate(path);
+    Ok(moved)
 }
 fn validate_identities(entries: &[Entry]) -> Result<()> {
     let mut dirs = BTreeSet::new();
@@ -152,7 +148,7 @@ fn file_context(branch: &DirectoryBranch, entry: &Entry) -> Result<FileContext> 
     })?;
     branch
         .file_contexts
-        .get(&entry.lookup_key)
+        .get(entry.lookup_key())
         .cloned()
         .ok_or_else(|| {
             Error::new(
@@ -195,7 +191,7 @@ fn save_inactive(
             .iter()
             .filter(|e| {
                 e.kind == NamespaceEntryKind::Directory
-                    && (e.lookup_key == key || namespace::is_descendant(&key, &e.lookup_key))
+                    && (e.lookup_key() == key || namespace::is_descendant(&key, e.lookup_key()))
             })
             .cloned(),
     );
@@ -282,14 +278,20 @@ fn apply(
         ));
     }
     let mut originals = BTreeMap::new();
+    let mut paths = Vec::with_capacity(request.items.len());
     for item in &request.items {
-        name_policy::validate_path(&item.source.path)?;
+        let source_path = name_policy::PortablePath::parse(&item.source.path)?;
+        let target_path = item
+            .target
+            .as_ref()
+            .map(|target| name_policy::PortablePath::parse(&target.path).map(|path| (target, path)))
+            .transpose()?;
+        paths.push((source_path, target_path));
         let mut refs = vec![(
             &item.source.directory_branch_id,
             &item.source.expected_tree_id,
         )];
         if let Some(target) = &item.target {
-            name_policy::validate_path(&target.path)?;
             refs.push((&target.directory_branch_id, &target.expected_tree_id));
         }
         if (request.kind == "delete") != item.target.is_none() {
@@ -344,15 +346,18 @@ fn apply(
     let mut mappings = BTreeSet::new();
     let mut planned = Vec::new();
     let mut deleted = Vec::<(String, DeletedPath)>::new();
-    for item in &request.items {
+    for (item, (source_path, target_path)) in request.items.iter().zip(&paths) {
         let source_scope = &originals[&item.source.directory_branch_id];
-        if !contains(&source_scope.path, &item.source.path) {
+        if !contains_key(
+            &name_policy::path_key(&source_scope.path),
+            source_path.key(),
+        ) {
             return Err(Error::new(
                 storage_contract::ErrorCode::DirectoryBranchScope,
                 "source path outside selected scope",
             ));
         }
-        let source = namespace::find_unordered(&source_scope.entries, &item.source.path)
+        let source = namespace::find_unordered_key(&source_scope.entries, source_path.key())
             .cloned()
             .filter(|e| e.entry_id == item.source.entry_id)
             .ok_or_else(|| {
@@ -365,31 +370,24 @@ fn apply(
             .entry(source_scope.directory_branch_id.clone())
             .or_default();
         if ranges.iter().any(|key| {
-            *key != source.lookup_key
-                && (namespace::is_descendant(key, &source.lookup_key)
-                    || namespace::is_descendant(&source.lookup_key, key))
+            *key != source.lookup_key()
+                && (namespace::is_descendant(key, source.lookup_key())
+                    || namespace::is_descendant(source.lookup_key(), key))
         }) {
             return Err(Error::new(
                 storage_contract::ErrorCode::BatchScopeConflict,
                 "overlapping source entries must be selected once",
             ));
         }
-        ranges.push(source.lookup_key.clone());
-        let target_key = item
-            .target
+        ranges.push(source.lookup_key().to_owned());
+        let target_key = target_path
             .as_ref()
-            .map(|t| {
-                format!(
-                    "{}:{}",
-                    t.directory_branch_id,
-                    name_policy::path_key(&t.path)
-                )
-            })
+            .map(|(target, path)| format!("{}:{}", target.directory_branch_id, path.key()))
             .unwrap_or_default();
         if !mappings.insert((
             source_scope.directory_branch_id.clone(),
             source.entry_id.clone(),
-            source.lookup_key.clone(),
+            source.lookup_key().to_owned(),
             target_key,
         )) {
             return Err(Error::new(
@@ -399,7 +397,7 @@ fn apply(
         }
         if request.kind == "rename"
             && item.target.as_ref().is_some_and(|t| {
-                t.directory_branch_id == source_scope.directory_branch_id && t.path == source.path
+                t.directory_branch_id == source_scope.directory_branch_id && t.path == source.path()
             })
         {
             continue;
@@ -408,8 +406,8 @@ fn apply(
             // Capture only actual deletions, never the temporary removals used
             // to plan moves or renames. Keep request and source-entry order.
             for entry in &drafts[&source_scope.directory_branch_id].entries {
-                if entry.lookup_key == source.lookup_key
-                    || namespace::is_descendant(&entry.lookup_key, &source.lookup_key)
+                if entry.lookup_key() == source.lookup_key()
+                    || namespace::is_descendant(entry.lookup_key(), source.lookup_key())
                 {
                     deleted.push((
                         source_scope.directory_branch_id.clone(),
@@ -427,11 +425,14 @@ fn apply(
             );
             touched.insert(source_scope.directory_branch_id.clone());
         }
-        let Some(target) = &item.target else {
+        let Some((target, target_path)) = target_path else {
             continue;
         };
         let target_original = &originals[&target.directory_branch_id];
-        if !contains(&target_original.path, &target.path) {
+        if !contains_key(
+            &name_policy::path_key(&target_original.path),
+            target_path.key(),
+        ) {
             return Err(Error::new(
                 storage_contract::ErrorCode::DirectoryBranchScope,
                 "destination outside selected scope",
@@ -446,7 +447,7 @@ fn apply(
             ));
         }
         if source.kind == NamespaceEntryKind::Directory
-            && namespace::is_descendant(&name_policy::path_key(&target.path), &source.lookup_key)
+            && namespace::is_descendant(target_path.key(), source.lookup_key())
         {
             return Err(Error::new(
                 storage_contract::ErrorCode::InvalidMove,
@@ -454,7 +455,7 @@ fn apply(
             ));
         }
         touched.insert(target.directory_branch_id.clone());
-        planned.push((item, source));
+        planned.push((item, source, target, target_path));
     }
     // Every source was resolved against its original frozen composition, and
     // all non-copy sources are now absent from drafts. Check the complete
@@ -463,23 +464,22 @@ fn apply(
         .iter()
         .map(|id| (id.clone(), drafts[id].entries.clone()))
         .collect::<BTreeMap<_, _>>();
-    for (item, source) in &planned {
+    for (item, source, target, target_path) in &planned {
         let source_scope = &originals[&item.source.directory_branch_id];
-        let target = item.target.as_ref().expect("planned destination");
         let target_scope = &originals[&target.directory_branch_id];
         let entries = projected
             .get_mut(&target.directory_branch_id)
             .expect("checked");
-        if namespace::find_unordered(entries, &target.path).is_some() {
+        if namespace::find_unordered_key(entries, target_path.key()).is_some() {
             return Err(Error::new(
                 storage_contract::ErrorCode::NameCollision,
                 "batch destination exists",
             ));
         }
         // A destination must have a real parent after all sources are removed.
-        if let Some((parent, _)) = target.path.rsplit_once('/')
-            && name_policy::path_key(parent) != name_policy::path_key(&target_scope.path)
-            && !namespace::find_unordered(entries, parent)
+        if let Some((parent, _)) = target_path.key().rsplit_once('/')
+            && parent != name_policy::path_key(&target_scope.path)
+            && !namespace::find_unordered_key(entries, parent)
                 .is_some_and(|e| e.kind == NamespaceEntryKind::Directory)
         {
             return Err(Error::new(
@@ -492,10 +492,11 @@ fn apply(
                 .entries
                 .iter()
                 .filter(|entry| {
-                    entry.lookup_key == source.lookup_key
-                        || namespace::is_descendant(&entry.lookup_key, &source.lookup_key)
+                    entry.lookup_key() == source.lookup_key()
+                        || namespace::is_descendant(entry.lookup_key(), source.lookup_key())
                 })
-                .map(|entry| relocate(entry, &source.path, &target.path)),
+                .map(|entry| relocate(entry, source.path(), target_path))
+                .collect::<Result<Vec<_>>>()?,
         );
     }
     for id in &touched {
@@ -507,9 +508,10 @@ fn apply(
     let active_rename_changes = request
         .items
         .iter()
-        .filter_map(|item| {
+        .zip(&paths)
+        .filter_map(|(item, (source_path, target_path))| {
             let source = &originals[&item.source.directory_branch_id];
-            let target = item.target.as_ref()?;
+            let (_, destination) = target_path.as_ref()?;
             if request.kind != "rename" && request.kind != "move" {
                 return None;
             }
@@ -526,14 +528,13 @@ fn apply(
             {
                 return None;
             }
-            let entry = find_unordered(&current.entries, &item.source.path)?;
+            let entry = namespace::find_unordered_key(&current.entries, source_path.key())?;
             if entry.entry_id != item.source.entry_id {
                 return None;
             }
-            Some(NamespaceOperation {
-                kind: NamespaceOperationKind::Rename,
-                path: item.source.path.clone(),
-                destination: Some(target.path.clone()),
+            Some(NamespaceOperation::Rename {
+                source: source_path.clone().into(),
+                destination: destination.clone(),
             })
         })
         .collect::<Vec<_>>();
@@ -552,9 +553,8 @@ fn apply(
     let mut copies = BTreeMap::<(String, String, String, String), CopiedFile>::new();
     let mut directory_copies = BTreeMap::<(String, String, String), String>::new();
     let mut copy_receipts = Vec::new();
-    for (item, source) in planned {
+    for (item, source, target, target_path) in planned {
         let source_scope = &originals[&item.source.directory_branch_id];
-        let target = item.target.as_ref().expect("planned destination");
         let target_draft = drafts
             .get_mut(&target.directory_branch_id)
             .expect("checked");
@@ -562,18 +562,19 @@ fn apply(
             .entries
             .iter()
             .filter(|e| {
-                e.lookup_key == source.lookup_key
-                    || namespace::is_descendant(&e.lookup_key, &source.lookup_key)
+                e.lookup_key() == source.lookup_key()
+                    || namespace::is_descendant(e.lookup_key(), source.lookup_key())
             })
             .cloned()
             .collect::<Vec<_>>();
+        let target_scope_key = name_policy::path_key(&target_draft.path);
         for member in members {
-            let mut moved = relocate(&member, &source.path, &target.path);
-            let parent_id = if let Some((parent, _)) = moved.path.rsplit_once('/') {
-                if name_policy::path_key(parent) == name_policy::path_key(&target_draft.path) {
+            let mut moved = relocate(&member, source.path(), target_path)?;
+            let parent_id = if let Some((parent, _)) = moved.lookup_key().rsplit_once('/') {
+                if parent == target_scope_key {
                     target_draft.directory_id.clone()
                 } else {
-                    find_unordered(&target_draft.entries, parent)
+                    namespace::find_unordered_key(&target_draft.entries, parent)
                         .map(|e| e.entry_id.clone())
                         .ok_or_else(|| {
                             Error::new(
@@ -590,7 +591,12 @@ fn apply(
                     let key = (
                         member.entry_id.clone(),
                         parent_id.clone(),
-                        name_policy::lookup_key(&moved.name),
+                        moved
+                            .lookup_key()
+                            .rsplit('/')
+                            .next()
+                            .expect("invariant: path has a leaf component")
+                            .to_owned(),
                     );
                     if let Some(previous) = directory_copies.get(&key) {
                         moved.entry_id = previous.clone();
@@ -603,7 +609,12 @@ fn apply(
                         member.file_id.clone(),
                         member.version_id.clone(),
                         parent_id.clone(),
-                        name_policy::lookup_key(&moved.name),
+                        moved
+                            .lookup_key()
+                            .rsplit('/')
+                            .next()
+                            .expect("invariant: path has a leaf component")
+                            .to_owned(),
                     );
                     if let Some(existing) = copies.get(&cache_key) {
                         // Frozen target branches can name the same directory
@@ -617,14 +628,14 @@ fn apply(
                         let new_file = new_id("file");
                         let (source_path, original) = engine.valid_replica(&member.version_id)?;
                         let (primary, count) =
-                            engine.new_file_placement(repository, &moved.path)?;
+                            engine.new_file_placement(repository, moved.path())?;
                         let version = engine.build_copied_version(
                             state,
                             pending,
                             crate::business::VersionBuild {
                                 history: &repo.history_tree_id,
                                 file_id: &new_file,
-                                path: &moved.path,
+                                path: moved.location(),
                                 source: &source_path,
                                 primary: &primary,
                                 copies: count,
@@ -637,7 +648,7 @@ fn apply(
                         moved.file_id = new_file;
                         moved.version_id = version.version_id;
                         moved.size = version.logical_size;
-                        copy_receipts.push(json!({"source_file_id":member.file_id,"source_version_id":member.version_id,"file_id":moved.file_id,"version_id":moved.version_id,"path":moved.path}));
+                        copy_receipts.push(json!({"source_file_id":member.file_id,"source_version_id":member.version_id,"file_id":moved.file_id,"version_id":moved.version_id,"path":moved.path()}));
                         copies.insert(
                             cache_key,
                             CopiedFile {
@@ -668,7 +679,7 @@ fn apply(
                     validate_entries(&mut commit.entries, engine.config.max_entries)?;
                     let branch = file::ensure_shared_file_branch(state, &commit, &moved)?;
                     target_draft.file_contexts.insert(
-                        moved.lookup_key.clone(),
+                        moved.lookup_key().to_owned(),
                         FileContext {
                             node_id: None,
                             selection_generation: 0,
@@ -684,15 +695,15 @@ fn apply(
                     state
                         .file_locations
                         .entry(moved.file_id.clone())
-                        .or_insert_with(|| moved.path.clone());
+                        .or_insert_with(|| moved.path().to_owned());
                     state
                         .file_names
                         .entry(moved.file_id.clone())
-                        .or_insert_with(|| moved.name.clone());
+                        .or_insert_with(|| moved.name().to_owned());
                 }
             } else if moved.kind == NamespaceEntryKind::File {
                 let context = file_context(source_scope, &member)?;
-                let context = if member.path != moved.path {
+                let context = if member.path() != moved.path() {
                     file_paths::rename_node(
                         state,
                         repository,
@@ -707,7 +718,7 @@ fn apply(
                 };
                 target_draft
                     .file_contexts
-                    .insert(moved.lookup_key.clone(), context);
+                    .insert(moved.lookup_key().to_owned(), context);
                 let branch = source_scope
                     .file_branches
                     .get(&member.file_id)
@@ -728,7 +739,7 @@ fn apply(
                 directory::set_namespace_location(
                     state,
                     &member,
-                    &source.path,
+                    source.path(),
                     &target.path,
                     &request.kind,
                     source.kind == NamespaceEntryKind::Directory,
@@ -789,7 +800,7 @@ fn apply(
                 .find(|e| {
                     e.kind == NamespaceEntryKind::Directory && e.entry_id == draft.directory_id
                 })
-                .map(|e| e.path.clone())
+                .map(|e| e.path().to_owned())
                 .ok_or_else(|| {
                     Error::new(
                         storage_contract::ErrorCode::DirectoryBranchConflict,
@@ -801,15 +812,15 @@ fn apply(
         let key = name_policy::path_key(&path);
         let removed = entries
             .iter()
-            .filter(|e| key.is_empty() || namespace::is_descendant(&e.lookup_key, &key))
+            .filter(|e| key.is_empty() || namespace::is_descendant(e.lookup_key(), &key))
             .cloned()
             .collect::<Vec<_>>();
-        entries.retain(|e| !key.is_empty() && !namespace::is_descendant(&e.lookup_key, &key));
+        entries.retain(|e| !key.is_empty() && !namespace::is_descendant(e.lookup_key(), &key));
         for e in &removed {
             if e.kind == NamespaceEntryKind::File {
                 state
                     .file_contexts
-                    .remove(&directory::context_key(repository, &e.path));
+                    .remove(&directory::context_key_from_key(repository, e.lookup_key()));
             }
         }
         for e in removed {
@@ -831,7 +842,7 @@ fn apply(
             let context = file_context(draft, e)?;
             let restored = directory::rebase_entries(std::slice::from_ref(e), &draft.path, &path)?;
             state.file_contexts.insert(
-                directory::context_key(repository, &restored[0].path),
+                directory::context_key_from_key(repository, restored[0].lookup_key()),
                 context,
             );
         }
@@ -908,8 +919,8 @@ fn apply(
     let mut affected = touched;
     affected.extend(ancestors);
     let changes=affected.iter().map(|id| {let b=&state.directory_branches[id];json!({"directory_branch_id":id,"previous_tree_id":baseline_heads.get(id),"head_tree_id":b.head_tree_id,"path":b.path})}).collect::<Vec<_>>();
-    let transfers=request.items.iter().map(|item| {
-        let source=&originals[&item.source.directory_branch_id];let e=namespace::find_unordered(&source.entries,&item.source.path).expect("source checked");
+    let transfers=request.items.iter().zip(&paths).map(|(item,(source_path,_))| {
+        let source=&originals[&item.source.directory_branch_id];let e=namespace::find_unordered_key(&source.entries,source_path.key()).expect("source checked");
         json!({"source":item.source,"target":item.target,"file_id":e.file_id,"version_id":e.version_id,"physical_path":state.file_locations.get(&e.file_id)})
     }).collect::<Vec<_>>();
     Ok(
@@ -936,7 +947,7 @@ fn ensure_parents_for_scope(
             .iter()
             .filter(|e| {
                 e.kind == NamespaceEntryKind::Directory
-                    && (e.lookup_key == key || namespace::is_descendant(&key, &e.lookup_key))
+                    && (e.lookup_key() == key || namespace::is_descendant(&key, e.lookup_key()))
             })
             .cloned(),
     );

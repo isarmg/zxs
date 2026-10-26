@@ -729,7 +729,7 @@ impl Engine {
         for disk in &member_disks {
             store_object(disk, "candidate", &candidate)?;
             store_object(disk, "recovery-plan", &plan)?;
-            reprotect.push(append(
+            reprotect.push(self.append_journal(
                 disk,
                 RecordType::Reprotect,
                 candidate.sequence,
@@ -748,7 +748,7 @@ impl Engine {
         let mut finalize_receipts = Vec::new();
         for disk in &member_disks {
             store_object(disk, "finalize", &finalize)?;
-            finalize_receipts.push(append(
+            finalize_receipts.push(self.append_journal(
                 disk,
                 RecordType::Finalize,
                 candidate.sequence,

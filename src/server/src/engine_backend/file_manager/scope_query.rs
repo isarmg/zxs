@@ -112,7 +112,7 @@ fn selected_entry_facts(
             if value.0 == 1 {
                 value.1 = Some(entry);
             }
-            let key = (entry.entry_id.as_str(), name_policy::path_key(&entry.path));
+            let key = (entry.entry_id.as_str(), entry.lookup_key().to_owned());
             if selected_keys.contains(&key) {
                 exact.insert(key, entry);
             }

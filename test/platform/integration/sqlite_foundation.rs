@@ -133,8 +133,8 @@ async fn deny_rollback(connection: &mut sqlite_access::SqliteConnection) {
         _: *const c_char,
         _: *const c_char,
     ) -> c_int {
-        // SAFETY: SQLite supplies a NUL-terminated first argument for SQLITE_TRANSACTION.
         if action == libsqlite3_sys::SQLITE_TRANSACTION
+            // SAFETY: SQLite supplies a NUL-terminated first argument for SQLITE_TRANSACTION.
             && unsafe { CStr::from_ptr(argument) }.to_bytes() == b"ROLLBACK"
         {
             libsqlite3_sys::SQLITE_DENY

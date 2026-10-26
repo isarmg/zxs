@@ -1,6 +1,6 @@
 //! Restart-only process policy, deliberately absent from persisted configuration.
 use super::Engine;
-use crate::{Config, Error, Result};
+use crate::{Error, Result, ValidatedConfig};
 
 /// Explicit finite retained-evidence limits. These may raise, but never lower,
 /// the persisted pool baseline; terminal records remain charged as before.
@@ -29,8 +29,7 @@ impl RetainedWorkspaceLimits {
     }
 
     /// An override cannot reduce any actual persisted configuration dimension.
-    pub fn validate_for(&self, config: &Config) -> Result<()> {
-        self.validate()?;
+    pub fn validate_for(&self, config: &ValidatedConfig) -> Result<()> {
         if self.max_retained_workspaces < config.max_retained_workspaces
             || self.max_retained_workspaces_per_principal
                 < config.max_retained_workspaces_per_principal
@@ -47,7 +46,7 @@ impl RetainedWorkspaceLimits {
         Ok(())
     }
 
-    fn from_config(config: &Config) -> Self {
+    pub(super) fn from_config(config: &ValidatedConfig) -> Self {
         Self {
             max_retained_workspaces: config.max_retained_workspaces,
             max_retained_workspaces_per_principal: config.max_retained_workspaces_per_principal,
@@ -60,7 +59,6 @@ impl RetainedWorkspaceLimits {
 
 impl Engine {
     pub(super) fn effective_workspace_limits(&self) -> RetainedWorkspaceLimits {
-        self.retained_workspace_limits
-            .unwrap_or_else(|| RetainedWorkspaceLimits::from_config(&self.config))
+        self.config.effective_workspace_limits()
     }
 }

@@ -100,14 +100,11 @@ pub(super) fn finish_publication(
     writer.last_head = field(result.get("result").unwrap_or(&result), "commit_id")?.to_owned();
     // Bytes may have changed after a response was lost. Never acknowledge the
     // earlier publication as if it included those later FD-backed writes.
-    let tree = shared.backend.call(
-        crate::BackendAction::Tree,
-        identity,
-        json!({"branch_id":branch,"query":{"commit_id":writer.last_head}}),
-    )?;
-    let entries: Vec<Entry> =
-        json_codec::from_value(tree["entries"].clone()).map_err(ApiError::invalid_source)?;
-    let entry = entries
+    let snapshot = shared
+        .backend
+        .snapshot_at(identity, branch, &writer.last_head)?;
+    let entry = snapshot
+        .entries
         .iter()
         .find(|entry| entry.entry_id == writer.item_id)
         .ok_or_else(|| {
@@ -167,7 +164,10 @@ impl Session {
                 }
                 _ => return Err(ApiError::forbidden()),
             };
-        self.call(crate::BackendAction::Tree, json!({"branch_id":self.branch}))?;
+        self.call(
+            crate::BackendAction::SmbAuthorizeRead,
+            json!({"branch_id":self.branch}),
+        )?;
         // Even an already published handle remains bound to the selection it
         // opened. A same-content default switch must not retarget this FD.
         self.call(
@@ -179,23 +179,19 @@ impl Session {
         let new_workspace = if needs_workspace {
             let workspace = self.workspace()?;
             let validate = (|| {
-                let original = self.call(
-                    crate::BackendAction::Tree,
-                    json!({"branch_id":self.branch,"query":{"commit_id":last_head}}),
+                let lookup = name_policy::LookupPath::from(&path);
+                let previous = self.shared.backend.lookup_at(
+                    &self.identity,
+                    &self.branch,
+                    &last_head,
+                    &lookup,
                 )?;
-                let current = self.call(
-                    crate::BackendAction::Tree,
-                    json!({"branch_id":self.branch,"query":{"commit_id":workspace.base_head}}),
+                let current = self.shared.backend.lookup_at(
+                    &self.identity,
+                    &self.branch,
+                    &workspace.base_head,
+                    &lookup,
                 )?;
-                let select = |tree: &Value| -> Result<Option<Entry>, ApiError> {
-                    let entries: Vec<Entry> = json_codec::from_value(tree["entries"].clone())
-                        .map_err(ApiError::invalid_source)?;
-                    Ok(entries
-                        .into_iter()
-                        .find(|entry| entry.lookup_key == name_policy::path_key(&path)))
-                };
-                let previous = select(&original)?;
-                let current = select(&current)?;
                 if previous
                     .as_ref()
                     .map(|e| (&e.entry_id, &e.version_id, &e.path))
@@ -377,7 +373,7 @@ impl Session {
                     retain_detached(&writer, &self.identity.principal, &self.branch, error);
                 }
             }
-            self.release_paths(&[name_policy::path_key(&writer.path)]);
+            self.release_paths(&[writer.path.key().to_owned()]);
         }
         saved?;
         Ok(json!({"closed":true,"aborted":abort}))
@@ -401,7 +397,7 @@ impl Session {
                 "SMB handle detached without saving; retained work requires reconciliation",
             );
             retain_detached(&writer, &self.identity.principal, &self.branch, &reason);
-            self.release_paths(&[name_policy::path_key(&writer.path)]);
+            self.release_paths(&[writer.path.key().to_owned()]);
             result["operation_id"] = json!(writer.operation_id);
         }
         Ok(result)

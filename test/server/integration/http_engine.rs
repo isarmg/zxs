@@ -2756,7 +2756,7 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         .list_tree(&namespace)
         .unwrap()
         .into_iter()
-        .find(|e| e.name == "one.txt")
+        .find(|e| e.name() == "one.txt")
         .unwrap();
     assert_eq!(visible.version_id, original["version_id"]);
 }
@@ -3835,7 +3835,7 @@ async fn engine_upload_generation_conflicts_reach_http_as_conflicts() {
             },
             ws,
             &item,
-            "file.txt",
+            &name_policy::PortablePath::parse("file.txt").unwrap(),
             &storage_server::UploadSource::from_file(
                 std::fs::File::open(&source).unwrap(),
                 u64::MAX,

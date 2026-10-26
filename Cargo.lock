@@ -796,7 +796,8 @@ dependencies = [
 name = "name-policy"
 version = "0.1.1"
 dependencies = [
- "storage-contract",
+ "data-serialization",
+ "error-definition",
  "tinyvec",
 ]
 
@@ -1315,6 +1316,7 @@ dependencies = [
  "data-serialization",
  "error-definition",
  "json-codec",
+ "name-policy",
  "uuid",
 ]
 

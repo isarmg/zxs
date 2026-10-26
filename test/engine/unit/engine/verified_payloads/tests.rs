@@ -199,7 +199,9 @@ fn detached_decision_rejects_changed_topology_before_journaling() {
         .unwrap();
     let sequence = engine.state.sequence;
     let slot = engine.next_slot;
-    engine.config.metadata_reserve_bytes += 1;
+    let mut config = engine.config().clone();
+    config.metadata_reserve_bytes += 1;
+    engine.config = ValidatedConfig::try_from(config).unwrap();
     assert_eq!(
         engine.decide_publication(detached).unwrap_err().code(),
         storage_contract::ErrorCode::PreparationStale
@@ -223,7 +225,10 @@ fn preparation_pins_disk_identity_before_payload_work() {
 }
 
 // Pre-optimization reference: retain the discarded first pass explicitly.
-fn reference_prepare(config: &Config, candidate: &Candidate) -> Result<VerifiedPayloadSet> {
+fn reference_prepare(
+    config: &ValidatedConfig,
+    candidate: &Candidate,
+) -> Result<VerifiedPayloadSet> {
     let preparation = PayloadPreparation::new(config, candidate)?;
     let replicas: usize = candidate
         .versions

@@ -19,6 +19,25 @@ struct Probe {
     mutations: AtomicUsize,
 }
 impl Backend for Probe {
+    fn snapshot_at(
+        &self,
+        _: &crate::auth::Identity,
+        _: &str,
+        _: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        unreachable!("this test backend does not serve snapshots")
+    }
+
+    fn lookup_at(
+        &self,
+        _: &crate::auth::Identity,
+        _: &str,
+        _: &str,
+        _: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        unreachable!("this test backend does not serve snapshot lookups")
+    }
+
     fn setup_operation(
         &self,
         action: &'static str,
@@ -45,7 +64,7 @@ impl Backend for Probe {
         _: &Identity,
         _: &str,
         _: &str,
-        _: &str,
+        _: &name_policy::PortablePath,
         _: &crate::UploadSource,
     ) -> Result<Value, ApiError> {
         Err(ApiError::unsupported())

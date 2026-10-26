@@ -475,7 +475,7 @@ fn file_manager_borrowed_tree_reads_preserve_listing_and_path_context() {
         .unwrap();
     assert_eq!(listing["entries"].as_array().unwrap().len(), 1);
     assert_eq!(listing["entries"][0]["entry_id"], entry.entry_id);
-    assert_eq!(listing["entries"][0]["repository_path"], entry.path);
+    assert_eq!(listing["entries"][0]["repository_path"], entry.path());
     let history = backend
         .call(
             BackendAction::FileManagerFileHistory,
@@ -491,7 +491,7 @@ fn file_manager_borrowed_tree_reads_preserve_listing_and_path_context() {
         )
         .unwrap();
     assert_eq!(contextual, history);
-    assert_eq!(history["path"], entry.path);
+    assert_eq!(history["path"], entry.path());
     assert_eq!(history["versions"].as_array().unwrap().len(), 1);
     let missing = backend
         .call(

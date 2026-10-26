@@ -68,7 +68,7 @@ impl NodePaths<'_> {
                             entry.file_id == version.file_id && entry.version_id == current
                         })
                     })
-                    .map(|entry| entry.path.clone())
+                    .map(|entry| entry.path().to_owned())
                     .unwrap_or_else(|| version.creation_name.clone());
             }
             if let Some(metadata) = state.file_metadata_nodes.get(&current) {
@@ -183,7 +183,7 @@ pub(super) fn unified_history(
                         .iter()
                         .find(|entry| entry.file_id == file && entry.version_id == id)
                 })
-                .map(|entry| entry.path.clone())
+                .map(|entry| entry.path().to_owned())
                 .unwrap_or_else(|| version.download_name.to_owned())
                 .into();
             node["previous_path"] = Value::Null;

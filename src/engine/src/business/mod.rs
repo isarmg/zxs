@@ -22,7 +22,7 @@ pub use file_requests::{FileBranchMergeRequest, FileLocation, FileNodeTagsUpdate
 pub use namespace::NamespaceTree;
 pub(crate) use namespace::{
     apply_namespace, apply_workspace_namespace, deletion_record, ensure_parents, find_unordered,
-    sorted, validate_entries, validate_workspace_dependencies,
+    find_unordered_key, sorted, validate_entries, validate_workspace_dependencies,
 };
 pub use workspace::{PreparedUpload, UploadPreparation};
 pub(crate) use workspace::{VersionBuild, WorkspaceMutation, native_commit_digest};

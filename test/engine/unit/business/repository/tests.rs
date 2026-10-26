@@ -168,11 +168,8 @@ fn disk_root_uses_one_explicit_primary_on_short_and_complete_routes() {
         engine
             .file_namespace(
                 &repo.repository_id,
-                NamespaceOperation {
-                    kind: NamespaceOperationKind::Mkdir,
-                    path: "Documents".into(),
-                    destination: None,
-                },
+                NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "Documents", None)
+                    .unwrap(),
                 "admin",
                 &new_id("op"),
             )

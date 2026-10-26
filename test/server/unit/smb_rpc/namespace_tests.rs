@@ -95,6 +95,25 @@ struct NamespaceFailure {
     aborts: AtomicUsize,
 }
 impl Backend for NamespaceFailure {
+    fn snapshot_at(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        commit: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        self.inner.snapshot_at(identity, branch, commit)
+    }
+
+    fn lookup_at(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        commit: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        self.inner.lookup_at(identity, branch, commit, path)
+    }
+
     fn call(
         &self,
         action: crate::BackendAction,
@@ -132,7 +151,7 @@ impl Backend for NamespaceFailure {
         identity: &Identity,
         workspace: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &crate::UploadSource,
     ) -> Result<Value, ApiError> {
         self.inner.upload(identity, workspace, item, path, source)
@@ -490,14 +509,46 @@ fn write_through_dirty_error_identifies_the_new_submitted_generation() {
     assert_eq!(operation["commit_state"], "PUBLISHED");
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PreparationStage {
+    Snapshot,
+    Namespace,
+}
+
 struct PreparationFailure {
     inner: Arc<dyn Backend>,
-    failure: Option<crate::BackendAction>,
+    failure: Option<PreparationStage>,
     abort_fails: bool,
     aborts: AtomicUsize,
     commits: AtomicUsize,
 }
 impl Backend for PreparationFailure {
+    fn snapshot_at(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        commit: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        if self.failure == Some(PreparationStage::Snapshot) {
+            return Err(ApiError::new(
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
+                storage_contract::ErrorCode::InvalidRequest,
+                "injected snapshot failure",
+            ));
+        }
+        self.inner.snapshot_at(identity, branch, commit)
+    }
+
+    fn lookup_at(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        commit: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        self.inner.lookup_at(identity, branch, commit, path)
+    }
+
     fn call(
         &self,
         action: crate::BackendAction,
@@ -517,7 +568,9 @@ impl Backend for PreparationFailure {
                 ));
             }
         }
-        if Some(action) == self.failure {
+        if action == crate::BackendAction::Namespace
+            && self.failure == Some(PreparationStage::Namespace)
+        {
             return Err(ApiError::new(
                 ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::InvalidRequest,
@@ -531,7 +584,7 @@ impl Backend for PreparationFailure {
         identity: &Identity,
         workspace: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &crate::UploadSource,
     ) -> Result<Value, ApiError> {
         self.inner.upload(identity, workspace, item, path, source)
@@ -544,8 +597,8 @@ impl Backend for PreparationFailure {
 #[test]
 fn preparation_and_record_sync_failures_keep_unresolved_recovery_evidence() {
     for (failure, directory_sync) in [
-        (Some(crate::BackendAction::Tree), false),
-        (Some(crate::BackendAction::Namespace), false),
+        (Some(PreparationStage::Snapshot), false),
+        (Some(PreparationStage::Namespace), false),
         (None, false),
         (None, true),
     ] {

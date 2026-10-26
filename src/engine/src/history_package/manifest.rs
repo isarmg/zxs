@@ -376,7 +376,7 @@ impl HistoryManifest {
             if !commit.entries.iter().any(|entry| {
                 entry.kind == NamespaceEntryKind::Directory
                     && entry.entry_id == branch.directory_id
-                    && entry.lookup_key == scope_key
+                    && entry.lookup_key() == scope_key
             }) {
                 return Err(invalid(
                     "directory composition stable identity is absent from its snapshot",
@@ -389,12 +389,9 @@ impl HistoryManifest {
         let mut files = BTreeSet::new();
         for entry in &branch.entries {
             Self::validate_entry_envelope(entry)?;
-            name_policy::validate_path(&entry.path)?;
-            if (!scope_key.is_empty() && !entry.lookup_key.starts_with(&prefix))
+            if (!scope_key.is_empty() && !entry.lookup_key().starts_with(&prefix))
                 || entry.entry_id == branch.directory_id
-                || entry.name != entry.path.rsplit('/').next().unwrap_or("")
-                || entry.lookup_key != name_policy::path_key(&entry.path)
-                || !paths.insert(entry.lookup_key.as_str())
+                || !paths.insert(entry.lookup_key())
             {
                 return Err(invalid(
                     "directory composition entry escapes its scope or normalized identity",
@@ -451,7 +448,7 @@ impl HistoryManifest {
         for entry in file_entries {
             let context = branch
                 .file_contexts
-                .get(&entry.lookup_key)
+                .get(entry.lookup_key())
                 .ok_or_else(|| invalid("directory path write context is missing"))?;
             self.validate_file_context(context, &entry.file_id, &entry.version_id)?;
         }
@@ -1247,7 +1244,7 @@ impl HistoryManifest {
             let entry = live
                 .entries
                 .iter()
-                .find(|entry| entry.kind == NamespaceEntryKind::File && entry.lookup_key == path)
+                .find(|entry| entry.kind == NamespaceEntryKind::File && entry.lookup_key() == path)
                 .ok_or_else(|| invalid("current file path context has no namespace entry"))?;
             self.validate_file_context(context, &entry.file_id, &entry.version_id)?;
         }

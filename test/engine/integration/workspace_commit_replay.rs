@@ -315,13 +315,14 @@ fn wire_receipt_cannot_close_a_different_manifest_with_the_same_workspace_id() {
         assert_eq!(workspace.fencing_token, request.fencing_token + 1);
         workspace.state = storage_contract::WorkspaceState::Sealed;
         if namespace {
-            workspace
-                .namespace_operations
-                .push(storage_engine::NamespaceOperation {
-                    kind: storage_contract::NamespaceOperationKind::Mkdir,
-                    path: "not-published".into(),
-                    destination: None,
-                });
+            workspace.namespace_operations.push(
+                storage_engine::NamespaceOperation::parse(
+                    storage_contract::NamespaceOperationKind::Mkdir,
+                    "not-published",
+                    None,
+                )
+                .unwrap(),
+            );
         } else {
             let staged = workspace.files.values_mut().next().unwrap();
             staged.size += 1;

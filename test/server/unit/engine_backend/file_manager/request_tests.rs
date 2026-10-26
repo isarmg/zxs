@@ -151,11 +151,12 @@ fn destructive_path_only_requests_never_mutate_or_create_a_disk_root() {
     engine
         .file_namespace(
             &repo.repository_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Mkdir,
-                path: "folder".into(),
-                destination: None,
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Mkdir,
+                "folder",
+                None,
+            )
+            .unwrap(),
             "owner",
             &storage_engine::new_id("op"),
         )
@@ -443,11 +444,12 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                 engine
                     .file_namespace(
                         &root.repository_id,
-                        NamespaceOperation {
-                            kind: storage_contract::NamespaceOperationKind::Mkdir,
-                            path,
-                            destination: None,
-                        },
+                        NamespaceOperation::parse(
+                            storage_contract::NamespaceOperationKind::Mkdir,
+                            &path,
+                            None,
+                        )
+                        .unwrap(),
                         "owner",
                         &storage_engine::new_id("op"),
                     )
@@ -457,11 +459,12 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
             engine
                 .file_namespace(
                     &named.repository_id,
-                    NamespaceOperation {
-                        kind: storage_contract::NamespaceOperationKind::Mkdir,
-                        path: "named-only".into(),
-                        destination: None,
-                    },
+                    NamespaceOperation::parse(
+                        storage_contract::NamespaceOperationKind::Mkdir,
+                        "named-only",
+                        None,
+                    )
+                    .unwrap(),
                     "owner",
                     &storage_engine::new_id("op"),
                 )
@@ -544,11 +547,12 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
             engine
                 .file_namespace(
                     &root.repository_id,
-                    NamespaceOperation {
-                        kind: storage_contract::NamespaceOperationKind::Rename,
-                        path: root_name.into(),
-                        destination: Some(repaired.clone()),
-                    },
+                    NamespaceOperation::parse(
+                        storage_contract::NamespaceOperationKind::Rename,
+                        root_name,
+                        Some(&repaired),
+                    )
+                    .unwrap(),
                     "owner",
                     &storage_engine::new_id("op"),
                 )

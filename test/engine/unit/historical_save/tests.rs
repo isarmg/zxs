@@ -283,11 +283,12 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
     engine
         .namespace_operation(
             &workspace.workspace_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Delete,
-                path: "file.txt".into(),
-                destination: None,
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Delete,
+                "file.txt",
+                None,
+            )
+            .unwrap(),
         )
         .unwrap();
     let before = engine.state.commits.clone();

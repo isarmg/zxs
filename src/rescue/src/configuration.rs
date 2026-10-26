@@ -3,7 +3,7 @@ use crate::{Result, print, private_io};
 use command_line::Subcommand;
 use json_codec::json;
 use std::path::{Path, PathBuf};
-use storage_engine::{Config, Engine};
+use storage_engine::{Config, ValidatedConfig};
 #[derive(Subcommand)]
 pub(crate) enum Command {
     /// Produce an uninitialized draft; does not access or initialize devices.
@@ -41,10 +41,10 @@ pub(crate) fn run(command: Command) -> Result<()> {
             output,
         } => {
             let mut config = Config::development(disks);
-            Engine::validate_configuration(&config)?;
             if production {
                 config.mode = storage_engine::Mode::Production;
             }
+            let config = ValidatedConfig::try_from(config)?;
             if let Some(path) = output {
                 if path.to_str().is_none() {
                     return Err("configuration output path must be valid UTF-8".into());
@@ -107,9 +107,9 @@ fn register_disk(
     let original = transaction.read_owned_bytes(MAX_DRAFT_BYTES)?;
     let mut draft: Config = storage_engine::decode_strict(&original)?;
     draft.disks.push(disk);
-    Engine::validate_configuration(&draft)?;
-    ensure_uninitialized_draft(transaction, &draft)?;
+    let draft = ValidatedConfig::try_from(draft)?;
     let candidate = json_codec::to_vec_pretty(&draft)?;
+    ensure_uninitialized_draft(transaction, draft)?;
     if candidate.len() > MAX_DRAFT_BYTES {
         return Err("configuration draft exceeds its byte limit".into());
     }
@@ -133,7 +133,7 @@ fn register_disk(
 /// whether this is an offline draft. Stat only: never initialize or lock disks.
 fn ensure_uninitialized_draft(
     transaction: &private_io::DraftTransaction,
-    config: &Config,
+    config: ValidatedConfig,
 ) -> Result<()> {
     for marker in [
         "auth.json",
@@ -149,21 +149,21 @@ fn ensure_uninitialized_draft(
             return Err("disk registration modifies only an uninitialized configuration draft; live migration requires a protected topology plan".into());
         }
     }
-    let mut resolved = config.clone();
-    for disk in &mut resolved.disks {
-        disk.root = resolve_draft_disk_root(&disk.root)?;
+    let mut roots = Vec::with_capacity(config.disks.len());
+    for disk in &config.disks {
+        let root = resolve_draft_disk_root(&disk.root)?;
         // An enrolled disk remains enrolled when the draft was copied outside
         // the system root, or when the new path is nested inside its root.
-        for ancestor in disk.root.ancestors() {
+        for ancestor in root.ancestors() {
             for marker in ["disk.json", ".writer.lock"] {
                 reject_initialized_marker(&ancestor.join(marker))?;
             }
         }
-        reject_initialized_marker(&disk.root.join("metadata/pool-membership/config.json"))?;
+        reject_initialized_marker(&root.join("metadata/pool-membership/config.json"))?;
+        roots.push(root);
     }
-    // Existing directory aliases and aliases of a not-yet-created child must
-    // not hide overlapping disk roots from the shared topology validation.
-    Engine::validate_configuration(&resolved)?;
+    // Resolve aliases of existing parents before checking the draft roots.
+    config.with_disk_roots(roots)?;
     Ok(())
 }
 

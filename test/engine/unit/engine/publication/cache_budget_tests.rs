@@ -50,6 +50,7 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
         .map(|disk| std::fs::read(log_path(disk)).unwrap())
         .collect();
     let error = engine
+        .planning_context()
         .prepare_publication_bounded(next.clone(), Vec::new(), result.clone(), MAX_METADATA, 128)
         .err()
         .unwrap();
@@ -75,6 +76,7 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
     let mut engine = Engine::open_for_recovery(&root).unwrap();
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     let detached = engine
+        .planning_context()
         .prepare_publication_bounded(next, Vec::new(), result.clone(), MAX_METADATA, MAX_METADATA)
         .unwrap();
     engine.inject_fault_once("after_accept_1");
@@ -159,7 +161,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
             crate::business::VersionBuild {
                 history: &repo.history_tree_id,
                 file_id: &old_entry.file_id,
-                path: "renamed.txt",
+                path: &name_policy::PortablePath::parse("renamed.txt").unwrap(),
                 source: &source,
                 primary: "P01",
                 copies: 3,
@@ -176,9 +178,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
     commit.kind = "content".into();
     commit.entries = vec![Entry {
         entry_id: new_id("entry"),
-        path: "renamed.txt".into(),
-        name: "renamed.txt".into(),
-        lookup_key: "renamed.txt".into(),
+        path: name_policy::PortablePath::parse("renamed.txt").unwrap(),
         kind: NamespaceEntryKind::File,
         file_id: old_entry.file_id.clone(),
         version_id: version.version_id.clone(),
@@ -207,6 +207,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
         })
         .collect();
     let error = engine
+        .planning_context()
         .prepare_publication_bounded(next.clone(), pending, result.clone(), MAX_METADATA, 128)
         .err()
         .unwrap();
@@ -245,6 +246,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
     let mut engine = Engine::open(&root).unwrap();
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     let detached = engine
+        .planning_context()
         .prepare_publication_bounded(
             next,
             retry_pending,

@@ -21,7 +21,30 @@ impl Drop for PreparationAdmission {
 /// planning clones it. Payload workers share this view rather than cloning
 /// State per file, and one per-engine admission bounds active preparations.
 struct PlanningSnapshot {
-    engine: Engine,
+    root: std::path::PathBuf,
+    config: ValidatedConfig,
+    state: Arc<State>,
+    workspace: Workspace,
+    blocked: bool,
+    snapshot: Option<String>,
+    published_state_base: Option<Arc<super::publication::PublishedStateBase>>,
+    next_slot: u64,
+    replay: Option<super::OperationReadPlan>,
+    locks: Vec<File>,
+}
+impl PlanningSnapshot {
+    fn context(&self) -> super::PlanningContext<'_> {
+        super::PlanningContext {
+            root: &self.root,
+            config: &self.config,
+            state: &self.state,
+            snapshot: &self.snapshot,
+            next_slot: self.next_slot,
+            blocked: self.blocked,
+            admission: super::planning::Admission::Detached,
+            published_state_base: self.published_state_base.as_ref(),
+        }
+    }
 }
 
 pub struct WorkspaceCommitPreparation {
@@ -59,22 +82,8 @@ impl Engine {
         workspace: &Workspace,
         request: &CommitRequest,
     ) -> bool {
-        self.state
-            .operations
-            .get(&request.operation_id)
-            .is_some_and(|operation| {
-                operation.kind == "workspace.commit"
-                    && workspace.workspace_id == request.workspace_id
-                    && workspace.principal == request.principal
-                    && workspace.base_head == request.expected_head
-                    && operation.branch_id.as_deref() == Some(workspace.branch_id.as_str())
-                    && self.state.operation_principals.get(&request.operation_id)
-                        == Some(&request.principal)
-                    && request
-                        .request_digest
-                        .as_deref()
-                        .is_none_or(|digest| digest == operation.request_digest)
-            })
+        self.planning_context()
+            .workspace_request_matches_operation(workspace, request)
     }
 
     /// One immutable request boundary for synchronous, wire and detached replay.
@@ -86,31 +95,8 @@ impl Engine {
         digest: &str,
     ) -> Result<Workspace> {
         let workspace = self.workspace(&request.workspace_id)?;
-        if workspace.principal != request.principal {
-            return Err(Error::new(
-                storage_contract::ErrorCode::PermissionDenied,
-                "workspace belongs to another principal",
-            ));
-        }
-        self.repository_for_branch(&workspace.branch_id)?;
-        let existing = self
-            .state
-            .operations
-            .get(&request.operation_id)
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::OperationNotFound,
-                    "published workspace operation is absent",
-                )
-            })?;
-        if !self.workspace_request_matches_operation(&workspace, request)
-            || existing.request_digest != digest
-        {
-            return Err(Error::new(
-                storage_contract::ErrorCode::IdempotencyKeyReused,
-                "commit retry differs from the published request",
-            ));
-        }
+        self.planning_context()
+            .validate_workspace_commit_replay(&workspace, request, digest)?;
         Ok(workspace)
     }
 
@@ -154,30 +140,24 @@ impl Engine {
         // Duplicate the existing open-file descriptions: they keep this pool's
         // process locks alive even if the original Engine is dropped meanwhile.
         let locks = self.retain_writer_locks()?;
-        let engine = Engine {
+        let snapshot = PlanningSnapshot {
             root: self.root.clone(),
             config: self.config.clone(),
             state: Arc::clone(&self.state),
-            // Planning reads only this workspace, with no workspace admission or recovery.
-            workspaces: [(workspace.workspace_id.clone(), workspace.clone())].into(),
-            workspace_budget: self.workspace_budget.clone(),
-            retained_workspace_limits: self.retained_workspace_limits,
+            workspace: workspace.clone(),
             blocked: self.blocked,
             snapshot: self.snapshot.clone(),
             published_state_base: self.published_state_base.clone(),
             next_slot: self.next_slot,
-            reads: self.reads.clone(),
-            upload_preparations: self.upload_preparations.clone(),
-            // The frozen view may plan writes; only the live Engine is fenced.
-            commit_preparation: Arc::new(AtomicBool::new(false)),
-            history_query_proof: std::sync::Mutex::new(super::index::QueryProof::default()),
-            recovery_warnings: super::RecoveryWarnings::default(),
-            _locks: locks,
-            #[cfg(feature = "fault-injection")]
-            fault: None,
+            replay: if replay {
+                Some(self.prepare_operation_health(self.operation_record(&request.operation_id)?))
+            } else {
+                None
+            },
+            locks,
         };
         Ok(WorkspaceCommitPreparation {
-            snapshot: PlanningSnapshot { engine },
+            snapshot,
             request,
             wire_body,
             frozen_workspace: canonical_json(&workspace)?,
@@ -271,11 +251,24 @@ impl Engine {
 impl WorkspaceCommitPreparation {
     /// Run on a bounded blocking worker, outside the live Engine mutex.
     pub fn execute(mut self) -> Result<PreparedWorkspaceCommit> {
-        let engine = &self.snapshot.engine;
+        let replay = self.snapshot.replay.take();
+        let engine = self.snapshot.context();
         let plan = if let Some(body) = self.wire_body.take() {
-            engine.plan_workspace_commit_wire(self.request, body)?
+            let envelope =
+                crate::wire::ParsedWireEnvelope::parse(&self.request, &self.snapshot.state, body)?;
+            engine.plan_workspace_commit_wire(
+                self.snapshot.workspace.clone(),
+                self.request,
+                envelope,
+                replay,
+            )?
         } else {
-            engine.plan_workspace_commit_inner(self.request, None)?
+            engine.plan_workspace_commit_inner(
+                self.snapshot.workspace.clone(),
+                self.request,
+                None,
+                replay,
+            )?
         };
         let (publication, existing, expected_digest) = match plan.mutation {
             MutationPlan::Existing(result) => {
@@ -300,14 +293,14 @@ impl WorkspaceCommitPreparation {
                 )
             }
         };
-        let base_root = engine.root.clone();
+        let base_root = engine.root.to_path_buf();
         let base_topology = engine.state.topology_generation;
         let base_business = engine.state.business_generation;
         let base_snapshot = engine.snapshot.clone();
         let base_slot = engine.next_slot;
         let base_sequence = engine.state.sequence;
         let frozen_config = canonical_json(&engine.config)?;
-        let locks = std::mem::take(&mut self.snapshot.engine._locks);
+        let locks = self.snapshot.locks;
         Ok(PreparedWorkspaceCommit {
             publication,
             existing,
@@ -332,3 +325,64 @@ impl WorkspaceCommitPreparation {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/workspace_commit/tests.rs"]
 mod tests;
+
+impl super::PlanningContext<'_> {
+    pub(crate) fn workspace_request_matches_operation(
+        &self,
+        workspace: &Workspace,
+        request: &CommitRequest,
+    ) -> bool {
+        self.state
+            .operations
+            .get(&request.operation_id)
+            .is_some_and(|operation| {
+                operation.kind == "workspace.commit"
+                    && workspace.workspace_id == request.workspace_id
+                    && workspace.principal == request.principal
+                    && workspace.base_head == request.expected_head
+                    && operation.branch_id.as_deref() == Some(workspace.branch_id.as_str())
+                    && self.state.operation_principals.get(&request.operation_id)
+                        == Some(&request.principal)
+                    && request
+                        .request_digest
+                        .as_deref()
+                        .is_none_or(|digest| digest == operation.request_digest)
+            })
+    }
+}
+
+impl super::PlanningContext<'_> {
+    pub(crate) fn validate_workspace_commit_replay(
+        &self,
+        workspace: &Workspace,
+        request: &CommitRequest,
+        digest: &str,
+    ) -> Result<()> {
+        if workspace.principal != request.principal {
+            return Err(Error::new(
+                storage_contract::ErrorCode::PermissionDenied,
+                "workspace belongs to another principal",
+            ));
+        }
+        self.repository_for_branch(&workspace.branch_id)?;
+        let existing = self
+            .state
+            .operations
+            .get(&request.operation_id)
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::OperationNotFound,
+                    "published workspace operation is absent",
+                )
+            })?;
+        if !self.workspace_request_matches_operation(workspace, request)
+            || existing.request_digest != digest
+        {
+            return Err(Error::new(
+                storage_contract::ErrorCode::IdempotencyKeyReused,
+                "commit retry differs from the published request",
+            ));
+        }
+        Ok(())
+    }
+}

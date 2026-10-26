@@ -71,14 +71,14 @@ pub(super) fn scope_path<'a>(state: &'a State, policy: &'a ProtectionPolicy) -> 
             .find(|entry| {
                 entry.kind == NamespaceEntryKind::Directory && entry.entry_id == *directory
             })
-            .map(|entry| entry.path.as_str());
+            .map(|entry| entry.path());
     }
     if let Some(file) = &policy.scope_file_id {
         return commit
             .entries
             .iter()
             .find(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == *file)
-            .map(|entry| entry.path.as_str());
+            .map(|entry| entry.path());
     }
     Some(&policy.path_prefix)
 }
@@ -144,47 +144,62 @@ struct Scope {
     files: BTreeMap<String, Entry>,
 }
 fn source_scope(state: &State, repository: &str, path: &str) -> Result<Scope> {
-    if !path.is_empty() {
-        name_policy::validate_path(path)?;
-    }
-    let commit = namespace(state, repository)?;
-    let mut scope = if path.is_empty() {
-        Scope {
-            id: repository.into(),
-            kind: NamespaceEntryKind::Directory,
-            path: String::new(),
-            files: BTreeMap::new(),
-        }
+    let requested = if path.is_empty() {
+        None
     } else {
-        let entry = find_unordered(&commit.entries, path).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::EntryNotFound,
-                "backup scope no longer exists",
-            )
-        })?;
-        Scope {
-            id: if entry.kind == NamespaceEntryKind::File {
-                entry.file_id.clone()
-            } else {
-                entry.entry_id.clone()
-            },
-            kind: entry.kind,
-            path: entry.path.clone(),
-            files: BTreeMap::new(),
-        }
+        Some(name_policy::PortablePath::parse(path)?)
     };
+    let commit = namespace(state, repository)?;
+    let (mut scope, target) = if let Some(requested) = &requested {
+        let entry = crate::business::find_unordered_key(&commit.entries, requested.key())
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::EntryNotFound,
+                    "backup scope no longer exists",
+                )
+            })?;
+        (
+            Scope {
+                id: if entry.kind == NamespaceEntryKind::File {
+                    entry.file_id.clone()
+                } else {
+                    entry.entry_id.clone()
+                },
+                kind: entry.kind,
+                path: entry.path().to_owned(),
+                files: BTreeMap::new(),
+            },
+            Some(entry.location()),
+        )
+    } else {
+        (
+            Scope {
+                id: repository.into(),
+                kind: NamespaceEntryKind::Directory,
+                path: String::new(),
+                files: BTreeMap::new(),
+            },
+            None,
+        )
+    };
+    let scope_key = target.map_or("", name_policy::PortablePath::key);
     for entry in commit.entries.iter().filter(|entry| {
         entry.kind == NamespaceEntryKind::File
             && if scope.kind == NamespaceEntryKind::File {
                 entry.file_id == scope.id
             } else {
-                within(&scope.path, &entry.path)
+                scope_key.is_empty()
+                    || scope_key == entry.lookup_key()
+                    || entry
+                        .lookup_key()
+                        .strip_prefix(scope_key)
+                        .is_some_and(|suffix| suffix.starts_with('/'))
             }
     }) {
         let prefer = state
             .file_locations
             .get(&entry.file_id)
-            .is_some_and(|owner| name_policy::path_key(owner) == entry.lookup_key);
+            .is_some_and(|owner| name_policy::path_key(owner) == entry.lookup_key());
         if prefer || !scope.files.contains_key(&entry.file_id) {
             scope.files.insert(entry.file_id.clone(), entry.clone());
         }
@@ -207,22 +222,21 @@ fn source_scope(state: &State, repository: &str, path: &str) -> Result<Scope> {
                 .iter()
                 .filter(|entry| entry.kind == NamespaceEntryKind::File)
             {
-                scope.files.entry(entry.file_id.clone()).or_insert_with(|| {
+                if let std::collections::btree_map::Entry::Vacant(slot) =
+                    scope.files.entry(entry.file_id.clone())
+                {
                     let mut entry = entry.clone();
-                    let suffix = entry
-                        .path
-                        .split('/')
-                        .skip(depth)
-                        .collect::<Vec<_>>()
-                        .join("/");
-                    entry.path = if scope.path.is_empty() {
-                        suffix
+                    let path = if let Some(target) = target {
+                        entry.location().rebase(depth, target)?
                     } else {
-                        format!("{}/{suffix}", scope.path)
+                        entry
+                            .location()
+                            .strip_components(depth)
+                            .expect("invariant: retained file is below its directory scope")
                     };
-                    entry.lookup_key = name_policy::path_key(&entry.path);
-                    entry
-                });
+                    entry.relocate(path);
+                    slot.insert(entry);
+                }
             }
         }
     }
@@ -284,7 +298,7 @@ fn retain_inherited_files(
             state,
             &scope.path,
             previous,
-            effective_policy(state, repository, Some(file), &entry.path),
+            effective_policy(state, repository, Some(file), entry.path()),
         )
     });
 }
@@ -315,7 +329,7 @@ fn backup_primaries(engine: &Engine, repository: &str, scope: &Scope) -> Result<
     for (file, entry) in &scope.files {
         primaries.insert(
             engine
-                .file_placement_settings(repository, Some(file), &entry.path)?
+                .file_placement_settings(repository, Some(file), entry.path())?
                 .0,
         );
     }
@@ -597,7 +611,7 @@ impl Engine {
                     }
                 }
                 for (file, entry) in &scope.files {
-                    let relative = relative_path(&scope.path, &entry.path, scope.kind == NamespaceEntryKind::File);
+                    let relative = relative_path(&scope.path, entry.path(), scope.kind == NamespaceEntryKind::File);
                     for (slot, prefix) in &normalized {
                         state.file_backup_paths.entry(file.clone()).or_default()
                             .insert(slot.clone(), backup_path(prefix, &relative)?);

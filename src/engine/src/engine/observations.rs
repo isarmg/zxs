@@ -9,7 +9,7 @@ use platform_io::fs_safety::linux::{MountPolicy, OpenAt2Root};
 use std::collections::BTreeMap;
 
 pub struct DiskObservationPlan {
-    config: Config,
+    config: ValidatedConfig,
     used_bytes: BTreeMap<String, u64>,
 }
 

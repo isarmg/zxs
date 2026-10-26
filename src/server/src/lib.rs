@@ -210,6 +210,23 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         input: Value,
     ) -> Result<Value, ApiError>;
+    /// Share a frozen published commit after current branch and identity admission.
+    /// The returned snapshot owns no authorization for later reads or writes.
+    fn snapshot_at(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+    ) -> Result<Arc<storage_contract::Commit>, ApiError>;
+    /// Look up one entry in a frozen published snapshot, with current admission.
+    /// A missing path is `Ok(None)`; admission and snapshot failures are errors.
+    fn lookup_at(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, ApiError>;
     /// Consume the held inode with positional reads and verify its declared
     /// size/hash against the copied snapshot before accepting any generation.
     fn upload(
@@ -217,7 +234,7 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         workspace: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &crate::UploadSource,
     ) -> Result<Value, ApiError>;
     /// Return a fully verified raw descriptor (used by SMB and local consumers).
@@ -231,7 +248,7 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         workspace: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &crate::UploadSource,
         _generation: u64,
     ) -> Result<Value, ApiError> {
@@ -266,6 +283,27 @@ impl AuthorizedBackend {
     }
 }
 impl Backend for AuthorizedBackend {
+    fn snapshot_at(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+    ) -> Result<Arc<storage_contract::Commit>, ApiError> {
+        self.backend
+            .snapshot_at(&self.current(identity)?, branch, commit)
+    }
+
+    fn lookup_at(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        self.backend
+            .lookup_at(&self.current(identity)?, branch, commit, path)
+    }
+
     // Startup runs on the raw backend before this wrapper is constructed;
     // telemetry also retains that raw backend for private disk sampling. Keep
     // start_management and observe_disks on their inert defaults here.
@@ -316,7 +354,7 @@ impl Backend for AuthorizedBackend {
         identity: &Identity,
         workspace: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &crate::UploadSource,
     ) -> Result<Value, ApiError> {
         self.backend
@@ -327,7 +365,7 @@ impl Backend for AuthorizedBackend {
         identity: &Identity,
         workspace: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &crate::UploadSource,
         generation: u64,
     ) -> Result<Value, ApiError> {

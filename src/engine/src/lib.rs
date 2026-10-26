@@ -16,6 +16,8 @@ mod historical_save;
 pub use engine::{PreparedWorkspaceCommit, WorkspaceCommitPreparation};
 mod history_package;
 mod journal;
+#[cfg(feature = "fault-injection")]
+pub use journal::JournalFault;
 mod maintenance;
 mod metadata_budget;
 mod protection;
@@ -32,7 +34,7 @@ pub use disk::{offline_check, offline_export};
 pub use engine::{
     ContentReadPlan, DiskObservation, DiskObservationPlan, Engine, OpenedContent,
     OperationReadPlan, OperationRecord, RangeContent, ReadLease, RecoveryWarnings,
-    RetainedWorkspaceLimits, WorkspaceReadPlan,
+    RetainedWorkspaceLimits, ValidatedConfig, WorkspaceReadPlan,
 };
 pub use historical_save::HistoricalSaveOptions;
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};

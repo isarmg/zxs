@@ -131,12 +131,12 @@ impl Engine {
             })
             .collect();
         for file in workspace.files.values() {
-            let path = name_policy::path_key(&file.path);
+            let path = file.path.key();
             // The repository prefix is a fixed-width repo ID. Use a stable
             // placeholder so charging also works before journal replay and
             // does not change when a repository's current main branch moves.
             let key = format!("repo_{}/{path}", "0".repeat(32));
-            let existing = context_keys.get(&path).cloned();
+            let existing = context_keys.get(path).cloned();
             let context = existing
                 .and_then(|key| reserved.selected_file_contexts.remove(&key))
                 .unwrap_or(FileContext {

@@ -455,18 +455,84 @@ pub struct DirectoryNamespaceTarget {
     pub path: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serialization(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
     pub entry_id: String,
-    pub path: String,
-    pub name: String,
-    pub lookup_key: String,
+    pub path: name_policy::PortablePath,
     pub kind: NamespaceEntryKind,
     pub file_id: String,
     pub version_id: String,
-    #[serialization(with = "crate::u64_string")]
     pub size: u64,
+}
+impl Entry {
+    pub fn path(&self) -> &str {
+        self.path.as_str()
+    }
+    pub fn name(&self) -> &str {
+        self.path.file_name()
+    }
+    pub fn lookup_key(&self) -> &str {
+        self.path.key()
+    }
+    pub fn location(&self) -> &name_policy::PortablePath {
+        &self.path
+    }
+    pub fn relocate(&mut self, location: name_policy::PortablePath) {
+        self.path = location;
+    }
+}
+impl Serialize for Entry {
+    fn serialize<S: data_serialization::Serializer>(
+        &self,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        use data_serialization::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("Entry", 8)?;
+        state.serialize_field("entry_id", &self.entry_id)?;
+        state.serialize_field("path", self.path())?;
+        state.serialize_field("name", self.name())?;
+        state.serialize_field("lookup_key", self.lookup_key())?;
+        state.serialize_field("kind", &self.kind)?;
+        state.serialize_field("file_id", &self.file_id)?;
+        state.serialize_field("version_id", &self.version_id)?;
+        state.serialize_field("size", &self.size.to_string())?;
+        state.end()
+    }
+}
+impl<'de> Deserialize<'de> for Entry {
+    fn deserialize<D: data_serialization::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serialization(deny_unknown_fields)]
+        struct WireEntry {
+            entry_id: String,
+            path: String,
+            name: String,
+            lookup_key: String,
+            kind: NamespaceEntryKind,
+            file_id: String,
+            version_id: String,
+            #[serialization(with = "crate::u64_string")]
+            size: u64,
+        }
+        let raw = WireEntry::deserialize(deserializer)?;
+        let location = name_policy::PortablePath::parse(&raw.path)
+            .map_err(data_serialization::de::Error::custom)?;
+        if raw.name != location.file_name() || raw.lookup_key != location.key() {
+            return Err(data_serialization::de::Error::custom(
+                "entry name or lookup key differs from path",
+            ));
+        }
+        Ok(Self {
+            entry_id: raw.entry_id,
+            path: location,
+            kind: raw.kind,
+            file_id: raw.file_id,
+            version_id: raw.version_id,
+            size: raw.size,
+        })
+    }
 }
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serialization(rename_all = "snake_case")]
@@ -598,7 +664,7 @@ pub struct HistoryBoundary {
 #[serialization(deny_unknown_fields)]
 pub struct StagedFile {
     pub item_id: String,
-    pub path: String,
+    pub path: name_policy::PortablePath,
     pub source_path: PathBuf,
     #[serialization(with = "crate::u64_string")]
     pub size: u64,
@@ -607,12 +673,116 @@ pub struct StagedFile {
     pub dirty_generation: u64,
     pub base_version_id: Option<String>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub struct NamespaceOperation {
-    pub kind: NamespaceOperationKind,
-    pub path: String,
-    pub destination: Option<String>,
+#[derive(Clone, Debug)]
+pub enum NamespaceOperation {
+    Mkdir {
+        path: name_policy::PortablePath,
+    },
+    Delete {
+        path: name_policy::LookupPath,
+    },
+    DeleteTree {
+        path: name_policy::LookupPath,
+    },
+    Rename {
+        source: name_policy::LookupPath,
+        destination: name_policy::PortablePath,
+    },
+}
+impl NamespaceOperation {
+    pub fn parse(
+        kind: NamespaceOperationKind,
+        path: &str,
+        destination: Option<&str>,
+    ) -> crate::Result<Self> {
+        match (kind, destination) {
+            (NamespaceOperationKind::Mkdir, None) => Ok(Self::Mkdir {
+                path: name_policy::PortablePath::parse(path)?,
+            }),
+            (NamespaceOperationKind::Delete, None) => Ok(Self::Delete {
+                path: name_policy::LookupPath::parse(path)?,
+            }),
+            (NamespaceOperationKind::DeleteTree, None) => Ok(Self::DeleteTree {
+                path: name_policy::LookupPath::parse(path)?,
+            }),
+            (NamespaceOperationKind::Rename, Some(destination)) => Ok(Self::Rename {
+                source: name_policy::LookupPath::parse(path)?,
+                destination: name_policy::PortablePath::parse(destination)?,
+            }),
+            (NamespaceOperationKind::Rename, None) => Err(crate::Error::new(
+                crate::ErrorCode::InvalidRequest,
+                "rename needs destination",
+            )),
+            (
+                NamespaceOperationKind::Mkdir
+                | NamespaceOperationKind::Delete
+                | NamespaceOperationKind::DeleteTree,
+                Some(_),
+            ) => Err(crate::Error::new(
+                crate::ErrorCode::InvalidRequest,
+                "only rename accepts destination",
+            )),
+        }
+    }
+    pub fn kind(&self) -> NamespaceOperationKind {
+        match self {
+            Self::Mkdir { .. } => NamespaceOperationKind::Mkdir,
+            Self::Delete { .. } => NamespaceOperationKind::Delete,
+            Self::DeleteTree { .. } => NamespaceOperationKind::DeleteTree,
+            Self::Rename { .. } => NamespaceOperationKind::Rename,
+        }
+    }
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Mkdir { path } => path.as_str(),
+            Self::Delete { path }
+            | Self::DeleteTree { path }
+            | Self::Rename { source: path, .. } => path.as_str(),
+        }
+    }
+    pub fn key(&self) -> &str {
+        match self {
+            Self::Mkdir { path } => path.key(),
+            Self::Delete { path }
+            | Self::DeleteTree { path }
+            | Self::Rename { source: path, .. } => path.key(),
+        }
+    }
+    pub fn destination(&self) -> Option<&name_policy::PortablePath> {
+        match self {
+            Self::Mkdir { .. } | Self::Delete { .. } | Self::DeleteTree { .. } => None,
+            Self::Rename { destination, .. } => Some(destination),
+        }
+    }
+}
+impl Serialize for NamespaceOperation {
+    fn serialize<S: data_serialization::Serializer>(
+        &self,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        use data_serialization::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("NamespaceOperation", 3)?;
+        state.serialize_field("kind", &self.kind())?;
+        state.serialize_field("path", self.path())?;
+        state.serialize_field("destination", &self.destination())?;
+        state.end()
+    }
+}
+impl<'de> Deserialize<'de> for NamespaceOperation {
+    fn deserialize<D: data_serialization::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serialization(deny_unknown_fields)]
+        struct Raw {
+            kind: NamespaceOperationKind,
+            path: String,
+            destination: Option<String>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Self::parse(raw.kind, &raw.path, raw.destination.as_deref())
+            .map_err(data_serialization::de::Error::custom)
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]

@@ -152,7 +152,7 @@ impl<'a> PendingSources<'a> {
         self.commit.entries.iter().find(|visible| {
             #[cfg(test)]
             self.matching_visits.set(self.matching_visits.get() + 1);
-            visible.lookup_key == entry.lookup_key && visible.file_id == entry.file_id
+            visible.lookup_key() == entry.lookup_key() && visible.file_id == entry.file_id
         })
     }
 
@@ -238,12 +238,12 @@ impl<'a> PendingSources<'a> {
             }
         } else {
             let context = match historical {
-                Some(contexts) => contexts.get(entry.lookup_key.as_str()).copied(),
+                Some(contexts) => contexts.get(entry.lookup_key()).copied(),
                 None => state
                     .directory_trees
                     .values()
                     .filter(|tree| tree.commit_id == self.commit.commit_id)
-                    .find_map(|tree| tree.file_contexts.get(&entry.lookup_key)),
+                    .find_map(|tree| tree.file_contexts.get(entry.lookup_key())),
             };
             if let Some(context) = context {
                 return context

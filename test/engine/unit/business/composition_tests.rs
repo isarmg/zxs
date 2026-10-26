@@ -29,7 +29,7 @@ fn entries(e: &Engine, r: &Repository) -> BTreeMap<String, Entry> {
     e.list_tree(&r.main_branch_id)
         .unwrap()
         .into_iter()
-        .map(|x| (x.path.clone(), x))
+        .map(|x| (x.path().to_owned(), x))
         .collect()
 }
 fn body(e: &Engine, id: &str) -> Vec<u8> {
@@ -106,11 +106,12 @@ fn selecting_old_directory_restores_names_membership_and_hierarchy() {
     let old = e.state().directory_branches[&draft].head_tree_id.clone();
     e.file_namespace(
         &r.repository_id,
-        NamespaceOperation {
-            kind: NamespaceOperationKind::Rename,
-            path: "folder/old.txt".into(),
-            destination: Some("folder/new.txt".into()),
-        },
+        NamespaceOperation::parse(
+            NamespaceOperationKind::Rename,
+            "folder/old.txt",
+            Some("folder/new.txt"),
+        )
+        .unwrap(),
         "admin",
         &new_id("op"),
     )
@@ -390,11 +391,7 @@ fn a_directory_created_after_workspace_open_still_fences_new_file_staging() {
     let w = e.create_workspace(&r.main_branch_id, "admin").unwrap();
     e.file_namespace(
         &r.repository_id,
-        NamespaceOperation {
-            kind: NamespaceOperationKind::Mkdir,
-            path: "new".into(),
-            destination: None,
-        },
+        NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "new", None).unwrap(),
         "admin",
         &new_id("op"),
     )
@@ -425,10 +422,10 @@ fn content_save_with_equivalent_spelling_preserves_the_existing_display_path() {
         assert_ne!(current.version_id, original.version_id);
         assert_eq!(body(&e, &current.version_id), b"after");
         assert_eq!(e.state().file_locations[&current.file_id], original_path);
-        assert_eq!(e.state().file_names[&current.file_id], original.name);
+        assert_eq!(e.state().file_names[&current.file_id], original.name());
         assert_eq!(
             e.state().versions[&current.version_id].creation_name,
-            original.name
+            original.name()
         );
         assert!(e.state().file_path_nodes.is_empty());
         let selected = &e.state().file_selections[&current.file_id];
@@ -445,11 +442,12 @@ fn content_save_with_equivalent_spelling_preserves_the_existing_display_path() {
         // Explicit equivalent-key renames remain real metadata changes.
         e.file_namespace(
             &r.repository_id,
-            NamespaceOperation {
-                kind: NamespaceOperationKind::Rename,
-                path: original_path.into(),
-                destination: Some(lookup_path.into()),
-            },
+            NamespaceOperation::parse(
+                NamespaceOperationKind::Rename,
+                original_path,
+                Some(lookup_path),
+            )
+            .unwrap(),
             "admin",
             &new_id("op"),
         )
@@ -475,9 +473,7 @@ fn namespace_bookkeeping_uses_paths_and_keeps_the_first_match_in_unsorted_entrie
         let key = name_policy::path_key(path);
         before.push(Entry {
             entry_id: path.into(),
-            path: path.into(),
-            name: path.into(),
-            lookup_key: key.clone(),
+            path: name_policy::PortablePath::parse(path).unwrap(),
             kind: NamespaceEntryKind::File,
             file_id: file.into(),
             version_id: "version".into(),
@@ -508,11 +504,7 @@ fn namespace_bookkeeping_uses_paths_and_keeps_the_first_match_in_unsorted_entrie
         "repo",
         &before,
         &after,
-        &[NamespaceOperation {
-            kind: NamespaceOperationKind::Delete,
-            path: "Gone.txt".into(),
-            destination: None,
-        }],
+        &[NamespaceOperation::parse(NamespaceOperationKind::Delete, "Gone.txt", None).unwrap()],
         "admin",
         "op",
     )

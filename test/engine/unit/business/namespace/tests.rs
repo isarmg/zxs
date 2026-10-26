@@ -3,9 +3,7 @@ use super::*;
 fn entry(path: &str, kind: NamespaceEntryKind) -> Entry {
     Entry {
         entry_id: new_id("entry"),
-        path: path.into(),
-        name: path.rsplit('/').next().unwrap().into(),
-        lookup_key: name_policy::path_key(path),
+        path: name_policy::PortablePath::parse(path).unwrap(),
         kind,
         file_id: if kind == NamespaceEntryKind::File {
             new_id("file")
@@ -27,10 +25,10 @@ fn relocating_entry_updates_path_fields_without_changing_identity_or_body() {
     file.size = 123;
     let original = file.clone();
     for path in ["Straße/文档.txt", "STRASSE/文档.txt", "STRASSE/文档.txt"] {
-        relocate_entry(&mut file, path.into()).unwrap();
+        relocate_entry(&mut file, name_policy::PortablePath::parse(path).unwrap());
         assert_eq!(file.path, path);
-        assert_eq!(file.name, "文档.txt");
-        assert_eq!(file.lookup_key, name_policy::path_key(path));
+        assert_eq!(file.name(), "文档.txt");
+        assert_eq!(file.lookup_key(), name_policy::path_key(path));
         assert_eq!(file.entry_id, original.entry_id);
         assert_eq!(file.file_id, original.file_id);
         assert_eq!(file.version_id, original.version_id);
@@ -38,7 +36,7 @@ fn relocating_entry_updates_path_fields_without_changing_identity_or_body() {
         assert_eq!(file.size, original.size);
     }
     let before = json_codec::to_value(&file).unwrap();
-    assert!(relocate_entry(&mut file, "../escape".into()).is_err());
+    assert!(name_policy::PortablePath::parse("../escape").is_err());
     assert_eq!(json_codec::to_value(&file).unwrap(), before);
 }
 
@@ -49,9 +47,9 @@ fn rebasing_directory_preserves_identity_and_uses_component_depth() {
         super::super::directory::rebase_entries(std::slice::from_ref(&original), "Straße", "Moved")
             .unwrap();
     assert_eq!(rebased[0].path, "Moved/文档.txt");
-    assert_eq!(rebased[0].name, "文档.txt");
+    assert_eq!(rebased[0].name(), "文档.txt");
     assert_eq!(
-        rebased[0].lookup_key,
+        rebased[0].lookup_key(),
         name_policy::path_key("Moved/文档.txt")
     );
     assert_eq!(rebased[0].entry_id, original.entry_id);
@@ -82,11 +80,8 @@ fn directory_rename_follows_normalized_ancestry_without_slicing_utf8_by_key_leng
             .clone();
         apply_namespace(
             &mut entries,
-            &NamespaceOperation {
-                kind: NamespaceOperationKind::Rename,
-                path: alias.into(),
-                destination: Some("Moved".into()),
-            },
+            &NamespaceOperation::parse(NamespaceOperationKind::Rename, alias, Some("Moved"))
+                .unwrap(),
         )
         .unwrap();
         validate_entries(&mut entries, 10).unwrap();
@@ -104,23 +99,23 @@ fn directory_rename_follows_normalized_ancestry_without_slicing_utf8_by_key_leng
 fn namespace_deletion_facts_follow_operations_not_identity_or_final_paths() {
     let first = entry("first.txt", NamespaceEntryKind::File);
     let mut second = first.clone();
-    relocate_entry(&mut second, "second.txt".into()).unwrap();
+    relocate_entry(
+        &mut second,
+        name_policy::PortablePath::parse("second.txt").unwrap(),
+    );
     let base = vec![first, second];
     let mut entries = base.clone();
     let deleted = apply_workspace_namespace(
         &mut entries,
         &base,
         &[
-            NamespaceOperation {
-                kind: NamespaceOperationKind::Delete,
-                path: "first.txt".into(),
-                destination: None,
-            },
-            NamespaceOperation {
-                kind: NamespaceOperationKind::Rename,
-                path: "second.txt".into(),
-                destination: Some("first.txt".into()),
-            },
+            NamespaceOperation::parse(NamespaceOperationKind::Delete, "first.txt", None).unwrap(),
+            NamespaceOperation::parse(
+                NamespaceOperationKind::Rename,
+                "second.txt",
+                Some("first.txt"),
+            )
+            .unwrap(),
         ],
     )
     .unwrap();
@@ -130,11 +125,12 @@ fn namespace_deletion_facts_follow_operations_not_identity_or_final_paths() {
     assert_eq!(entries, vec![base[0].clone()]);
     let deleted = apply_namespace(
         &mut entries,
-        &NamespaceOperation {
-            kind: NamespaceOperationKind::Rename,
-            path: "first.txt".into(),
-            destination: Some("FIRST.txt".into()),
-        },
+        &NamespaceOperation::parse(
+            NamespaceOperationKind::Rename,
+            "first.txt",
+            Some("FIRST.txt"),
+        )
+        .unwrap(),
     )
     .unwrap();
     assert!(deleted.is_empty());
@@ -153,31 +149,13 @@ fn namespace_deletion_facts_preserve_repeated_intermediate_paths_and_tree_member
         &mut entries,
         &base,
         &[
-            NamespaceOperation {
-                kind: NamespaceOperationKind::Rename,
-                path: "a".into(),
-                destination: Some("temporary".into()),
-            },
-            NamespaceOperation {
-                kind: NamespaceOperationKind::Delete,
-                path: "temporary".into(),
-                destination: None,
-            },
-            NamespaceOperation {
-                kind: NamespaceOperationKind::Rename,
-                path: "b".into(),
-                destination: Some("temporary".into()),
-            },
-            NamespaceOperation {
-                kind: NamespaceOperationKind::Delete,
-                path: "temporary".into(),
-                destination: None,
-            },
-            NamespaceOperation {
-                kind: NamespaceOperationKind::DeleteTree,
-                path: "tree".into(),
-                destination: None,
-            },
+            NamespaceOperation::parse(NamespaceOperationKind::Rename, "a", Some("temporary"))
+                .unwrap(),
+            NamespaceOperation::parse(NamespaceOperationKind::Delete, "temporary", None).unwrap(),
+            NamespaceOperation::parse(NamespaceOperationKind::Rename, "b", Some("temporary"))
+                .unwrap(),
+            NamespaceOperation::parse(NamespaceOperationKind::Delete, "temporary", None).unwrap(),
+            NamespaceOperation::parse(NamespaceOperationKind::DeleteTree, "tree", None).unwrap(),
         ],
     )
     .unwrap();
@@ -202,11 +180,7 @@ fn rejected_namespace_delete_does_not_remove_entries_or_return_facts() {
         assert!(
             apply_namespace(
                 &mut entries,
-                &NamespaceOperation {
-                    kind: NamespaceOperationKind::Delete,
-                    path: path.into(),
-                    destination: None,
-                }
+                &NamespaceOperation::parse(NamespaceOperationKind::Delete, path, None).unwrap()
             )
             .is_err()
         );
@@ -225,27 +199,16 @@ fn canonical_equivalent_namespace_sources_preserve_identity_and_strict_destinati
         let mut entries = vec![original.clone()];
         let before = json_codec::to_value(&entries).unwrap();
         for operation in [
-            NamespaceOperation {
-                kind: NamespaceOperationKind::Mkdir,
-                path: query.into(),
-                destination: None,
-            },
-            NamespaceOperation {
-                kind: NamespaceOperationKind::Rename,
-                path: stored.into(),
-                destination: Some(query.into()),
-            },
+            NamespaceOperation::parse(NamespaceOperationKind::Mkdir, query, None),
+            NamespaceOperation::parse(NamespaceOperationKind::Rename, stored, Some(query)),
         ] {
-            assert!(apply_namespace(&mut entries, &operation).is_err());
+            assert!(operation.is_err());
             assert_eq!(json_codec::to_value(&entries).unwrap(), before);
         }
         apply_namespace(
             &mut entries,
-            &NamespaceOperation {
-                kind: NamespaceOperationKind::Rename,
-                path: query.into(),
-                destination: Some("renamed.txt".into()),
-            },
+            &NamespaceOperation::parse(NamespaceOperationKind::Rename, query, Some("renamed.txt"))
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(entries[0].entry_id, original.entry_id);
@@ -255,13 +218,52 @@ fn canonical_equivalent_namespace_sources_preserve_identity_and_strict_destinati
         let mut entries = vec![original];
         apply_namespace(
             &mut entries,
-            &NamespaceOperation {
-                kind: NamespaceOperationKind::Delete,
-                path: query.into(),
-                destination: None,
-            },
+            &NamespaceOperation::parse(NamespaceOperationKind::Delete, query, None).unwrap(),
         )
         .unwrap();
         assert!(entries.is_empty());
+    }
+}
+
+#[test]
+#[ignore = "release-mode parsed-path cost comparison"]
+fn parsed_path_namespace_cost() {
+    use std::{hint::black_box, time::Instant};
+    for count in [1_000, 10_000] {
+        let fixture = (0..count)
+            .map(|index| {
+                entry(
+                    &format!("Straße-Café-报告-{index:06}.txt"),
+                    NamespaceEntryKind::File,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut legacy = fixture.clone();
+        let mut typed = fixture.clone();
+        // Conservative old loop: includes the old display clone/normalization,
+        // but omits the former separately allocated Entry.name string.
+        let old_start = Instant::now();
+        for _ in 0..20 {
+            for entry in &mut legacy {
+                entry.path = name_policy::PortablePath::parse(entry.path()).unwrap();
+            }
+            validate_entries(black_box(&mut legacy), count).unwrap();
+        }
+        let old = old_start.elapsed();
+        let new_start = Instant::now();
+        for _ in 0..20 {
+            validate_entries(black_box(&mut typed), count).unwrap();
+        }
+        let new = new_start.elapsed();
+        assert_eq!(
+            canonical_json(&legacy).unwrap(),
+            canonical_json(&typed).unwrap()
+        );
+        eprintln!(
+            "parsed-path namespace count={count} rounds=20 old_ns={} typed_ns={} ratio={:.2}",
+            old.as_nanos(),
+            new.as_nanos(),
+            old.as_secs_f64() / new.as_secs_f64()
+        );
     }
 }

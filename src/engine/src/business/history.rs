@@ -428,23 +428,26 @@ impl Engine {
         fn index(entries: &[Entry]) -> std::collections::BTreeMap<&str, &Entry> {
             entries
                 .iter()
-                .map(|entry| (entry.lookup_key.as_str(), entry))
+                .map(|entry| (entry.lookup_key(), entry))
                 .collect()
         }
         let left_entries = index(&a.entries);
         let right_entries = index(&b.entries);
         let mut changes = Vec::new();
         for e in &a.entries {
-            match right_entries.get(e.lookup_key.as_str()) {
-                None => changes.push(json!({"path":e.path,"change":"removed","before":e})),
-                Some(other) if e.version_id != other.version_id || e.path != other.path => changes
-                    .push(json!({"path":other.path,"change":"modified","before":e,"after":other})),
+            match right_entries.get(e.lookup_key()) {
+                None => changes.push(json!({"path":e.path(),"change":"removed","before":e})),
+                Some(other) if e.version_id != other.version_id || e.path() != other.path() => {
+                    changes.push(
+                        json!({"path":other.path(),"change":"modified","before":e,"after":other}),
+                    )
+                }
                 _ => {}
             }
         }
         for e in &b.entries {
-            if !left_entries.contains_key(e.lookup_key.as_str()) {
-                changes.push(json!({"path":e.path,"change":"added","after":e}));
+            if !left_entries.contains_key(e.lookup_key()) {
+                changes.push(json!({"path":e.path(),"change":"added","after":e}));
             }
         }
         Ok(json!({"left":left,"right":right,"changes":changes}))

@@ -175,7 +175,7 @@ impl Publication<'_> {
         {
             let mut context = tree
                 .file_contexts
-                .get(&entry.lookup_key)
+                .get(entry.lookup_key())
                 .cloned()
                 .ok_or_else(|| {
                     Error::new(
@@ -194,7 +194,8 @@ impl Publication<'_> {
             )?;
             entry.version_id = self.version.into();
             entry.size = self.size;
-            tree.file_contexts.insert(entry.lookup_key.clone(), context);
+            tree.file_contexts
+                .insert(entry.lookup_key().to_owned(), context);
             changed = true;
         }
         for reference in tree.directory_refs.values_mut() {
@@ -210,7 +211,7 @@ impl Publication<'_> {
                 .entries
                 .iter()
                 .find(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == self.file)
-                && let Some(context) = tree.file_contexts.get(&entry.lookup_key)
+                && let Some(context) = tree.file_contexts.get(entry.lookup_key())
             {
                 tree.file_branches
                     .insert(self.file.into(), context.branch_id.clone());
@@ -235,8 +236,8 @@ impl Publication<'_> {
                     .iter()
                     .filter(|entry| {
                         entry.kind == NamespaceEntryKind::Directory
-                            && (entry.lookup_key == key
-                                || namespace::is_descendant(&key, &entry.lookup_key))
+                            && (entry.lookup_key() == key
+                                || namespace::is_descendant(&key, entry.lookup_key()))
                     })
                     .cloned(),
             );
@@ -246,7 +247,7 @@ impl Publication<'_> {
                 .iter()
                 .filter(|entry| entry.kind == NamespaceEntryKind::File)
                 .filter_map(|entry| {
-                    let context = tree.file_contexts.get(&entry.lookup_key)?;
+                    let context = tree.file_contexts.get(entry.lookup_key())?;
                     (context.inherited_from.is_some()
                         || state
                             .branches
@@ -416,7 +417,8 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
         .iter_mut()
         .filter(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file)
     {
-        let Some(mut context) = directory::context_at(state, &repo.repository_id, &entry.path)
+        let Some(mut context) =
+            directory::context_at_key(state, &repo.repository_id, entry.lookup_key())
         else {
             continue;
         };
@@ -432,10 +434,10 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
         entry.version_id = version.clone();
         entry.size = logical_size;
         state.file_contexts.insert(
-            directory::context_key(&repo.repository_id, &entry.path),
+            directory::context_key_from_key(&repo.repository_id, entry.lookup_key()),
             context,
         );
-        changed_paths.push(entry.path.clone());
+        changed_paths.push(entry.path().to_owned());
     }
     if !changed_paths.is_empty() {
         validate_entries(&mut entries, maximum)?;

@@ -7,6 +7,12 @@ use crate::publication_evidence::{
 use crate::{disk::*, journal::*, *};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RecoveryMode {
+    CompletePending,
+    PreservePending,
+}
+
 impl Engine {
     /// A surviving full publication barrier can disprove an empty or truncated
     /// journal, but cannot authorize inventing the missing decision history.
@@ -70,23 +76,32 @@ impl Engine {
         repair_snapshot_copies(&members, &members, hash, &mut BTreeSet::new())
     }
 
-    pub(super) fn recover_mode(&mut self, complete_unpublished: bool) -> Result<()> {
+    fn repair_journal_tails(&mut self) -> Result<()> {
+        for journal in self.journals.values_mut() {
+            if let Err(error) = journal.repair_torn_tail() {
+                self.blocked = true;
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn recover_mode(&mut self, mode: RecoveryMode) -> Result<()> {
         self.recovery_warnings = super::RecoveryWarnings::default();
         let members = self.members();
         let mut online = Vec::new();
         let mut prefixes = BTreeMap::<String, BTreeSet<String>>::new();
-        let mut journal_stamps = BTreeMap::new();
+        let mut opened_journals = BTreeMap::new();
+        let mut scanned_journals = BTreeMap::new();
         let mut torn_tail = false;
         let mut records = BTreeMap::<u64, BTreeMap<String, Vec<(String, Record)>>>::new();
         for d in &members {
             if validate_seal(&self.config, d).is_err() {
                 continue;
             }
-            let scanned = scan(d)?;
+            let opened = OpenJournal::scan(d)?;
+            let scanned = &opened.scan;
             torn_tail |= scanned.torn_tail;
-            if let Some(stamp) = scanned.stamp {
-                journal_stamps.insert(d.disk_id.clone(), stamp);
-            }
             prefixes.insert(
                 d.disk_id.clone(),
                 scanned
@@ -95,7 +110,7 @@ impl Engine {
                     .map(|(_, hash)| hash.clone())
                     .collect(),
             );
-            for (r, _) in scanned.records {
+            for (r, _) in &scanned.records {
                 self.next_slot =
                     self.next_slot.max(r.sequence.checked_add(1).ok_or_else(|| {
                         Error::new(
@@ -108,8 +123,9 @@ impl Engine {
                     .or_default()
                     .entry(r.candidate_hash.clone())
                     .or_default()
-                    .push((d.slot_id.clone(), r));
+                    .push((d.slot_id.clone(), r.clone()));
             }
+            opened_journals.insert(d.disk_id.clone(), opened);
             online.push(d.clone());
         }
         if online.len() < self.config.metadata_quorum() {
@@ -135,6 +151,14 @@ impl Engine {
             })
             .collect();
         self.reject_unjournaled_publications(&online, &journaled)?;
+        for disk in &online {
+            let opened = opened_journals
+                .remove(&disk.disk_id)
+                .expect("scanned online journal");
+            scanned_journals.insert(disk.disk_id.clone(), opened.scan.records.clone());
+            self.journals
+                .insert(disk.disk_id.clone(), opened.into_writer(disk)?);
+        }
         let checkpoint = if online.len() == members.len() && !torn_tail {
             match super::recovery_checkpoint::load(self, &prefixes, &records) {
                 Ok(checkpoint) => checkpoint.filter(|c| {
@@ -237,11 +261,14 @@ impl Engine {
             let mut next = verified_snapshot(&online, &candidate.snapshot_hash)?;
             let history_objects =
                 crate::history_package::bound_history_objects(&online, &candidate, Some(&next))?;
-            if publication.is_none() && !complete_unpublished {
+            if publication.is_none() && mode == RecoveryMode::PreservePending {
                 self.blocked = true;
                 break;
             }
-            if publication.is_none() && complete_unpublished && online.len() == members.len() {
+            if publication.is_none()
+                && mode == RecoveryMode::CompletePending
+                && online.len() == members.len()
+            {
                 let result = next
                     .operations
                     .get(&candidate.operation_id)
@@ -298,19 +325,40 @@ impl Engine {
                         &hash,
                         &next,
                         publication,
-                        |d, pub_hash| {
-                            let scanned = journal_stamps
-                                .get(&d.disk_id)
-                                .zip(prefixes.get(&d.disk_id))
-                                .zip(rs.iter().find(|(slot, r)| {
-                                    slot == &d.slot_id && r.record_type == RecordType::Publication
-                                }))
-                                .map(|((stamp, hashes), (_, record))| ScannedReceipt {
-                                    stamp,
-                                    hashes,
-                                    record,
-                                });
-                            replay_publication(d, candidate.sequence, &hash, pub_hash, scanned)
+                        |engine, d, pub_hash| {
+                            if let Some((record, frame_hash)) =
+                                scanned_journals[&d.disk_id].iter().find(|(record, _)| {
+                                    record.record_type == RecordType::Publication
+                                        && record.sequence == candidate.sequence
+                                        && record.candidate_hash == hash
+                                        && record.object_hash == pub_hash
+                                })
+                            {
+                                Ok(Receipt {
+                                    disk_id: d.disk_id.clone(),
+                                    slot_id: d.slot_id.clone(),
+                                    frame_hash: frame_hash.clone(),
+                                    record: record.clone(),
+                                })
+                            } else {
+                                match mode {
+                                    RecoveryMode::CompletePending => engine
+                                        .append_recovered_journal(
+                                            d,
+                                            RecordType::Publication,
+                                            candidate.sequence,
+                                            &hash,
+                                            pub_hash,
+                                        ),
+                                    RecoveryMode::PreservePending => engine.append_journal(
+                                        d,
+                                        RecordType::Publication,
+                                        candidate.sequence,
+                                        &hash,
+                                        pub_hash,
+                                    ),
+                                }
+                            }
                         },
                     )?;
                 } else {
@@ -348,8 +396,20 @@ impl Engine {
                 self.blocked = true;
                 break;
             }
+            // Preserve every receipt written during this replay before the tail advances to another slot.
+            for disk in &online {
+                let history = scanned_journals
+                    .get_mut(&disk.disk_id)
+                    .expect("scanned online member");
+                retain_replayed_records(history, self.journals[&disk.disk_id].records());
+            }
         }
         if online.len() != members.len() {
+            self.blocked = true;
+        }
+        if mode == RecoveryMode::CompletePending && !self.blocked {
+            self.repair_journal_tails()?;
+        } else if self.journals.values().any(JournalWriter::needs_recovery) {
             self.blocked = true;
         }
         self.cleanup_purged()?;
@@ -359,11 +419,23 @@ impl Engine {
         if checkpoint
             .as_ref()
             .is_none_or(|c| c.sequence < self.state.sequence)
-            && let Err(error) = super::recovery_checkpoint::save(self)
+            && let Err(error) = super::recovery_checkpoint::save(self, &scanned_journals)
         {
             self.recovery_warnings.checkpoint_save = Some(error);
         }
         Ok(())
+    }
+}
+
+fn retain_replayed_records(history: &mut Vec<(Record, String)>, tail: &[(Record, String)]) {
+    let Some((first, _)) = tail.first() else {
+        return;
+    };
+    let start = history.partition_point(|(record, _)| record.sequence < first.sequence);
+    for (record, hash) in tail {
+        if !history[start..].iter().any(|(_, old)| old == hash) {
+            history.push((record.clone(), hash.clone()));
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 //! Offline draft edits must never rewrite a live pool or publish invalid topology.
 use super::*;
 use std::{fs, path::PathBuf};
+use storage_engine::Engine;
 
 fn draft(root: &Path) -> Config {
     Config::development([root.join("p"), root.join("b"), root.join("c")])
@@ -220,7 +221,7 @@ fn ordinary_draft_permissions_remain_supported_without_initializing_disks() {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
     run(registration(root.path(), path.clone())).unwrap();
     let saved: Config = storage_engine::decode_strict(&fs::read(&path).unwrap()).unwrap();
-    Engine::validate_configuration(&saved).unwrap();
+    let saved = ValidatedConfig::try_from(saved).unwrap();
     assert!(saved.disks.iter().all(|disk| !disk.root.exists()));
     assert_eq!(
         fs::read(registration_backup(&path).unwrap()).unwrap(),

@@ -653,7 +653,7 @@ impl Engine {
                             new
                         } else {
                             let (path, _) = engine.valid_replica(&old.version_id)?;
-                            engine.build_copied_version(state, pending, crate::business::VersionBuild { history: &history_id, file_id, path: &entry.path, source: &path, primary: &placement.primary_slot_id, copies: placement.target_copies, source_ids: Vec::new(), checkpoint: true }, &old)?
+                            engine.build_copied_version(state, pending, crate::business::VersionBuild { history: &history_id, file_id, path: entry.location(), source: &path, primary: &placement.primary_slot_id, copies: placement.target_copies, source_ids: Vec::new(), checkpoint: true }, &old)?
                         };
                         version_map.insert(old.version_id, new.version_id);
                     }

@@ -77,7 +77,7 @@ struct Writer {
     file: File,
     directory: platform_io::fs_safety::PrivateDirectory,
     source: PathBuf,
-    path: String,
+    path: name_policy::PortablePath,
     item_id: String,
     workspace: Workspace,
     dirty: bool,

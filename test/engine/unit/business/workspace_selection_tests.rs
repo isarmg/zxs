@@ -49,8 +49,8 @@ fn generation_first_conflict(state: &State, workspace: &Workspace, path: &str) -
             }) || base.entries.iter().chain(&current.entries).any(|entry| {
                 entry.kind == NamespaceEntryKind::Directory
                     && entry.entry_id == *id
-                    && (path == entry.lookup_key
-                        || path.starts_with(&format!("{}/", entry.lookup_key)))
+                    && (path == entry.lookup_key()
+                        || path.starts_with(&format!("{}/", entry.lookup_key())))
             });
             relevant
                 && workspace
@@ -65,9 +65,7 @@ fn generation_first_conflict(state: &State, workspace: &Workspace, path: &str) -
 fn directory(path: &str) -> Entry {
     Entry {
         entry_id: new_id("entry"),
-        path: path.into(),
-        name: path.rsplit('/').next().unwrap().into(),
-        lookup_key: name_policy::path_key(path),
+        path: name_policy::PortablePath::parse(path).unwrap(),
         kind: NamespaceEntryKind::Directory,
         file_id: String::new(),
         version_id: String::new(),
@@ -142,7 +140,11 @@ fn directory_generation_checks_match_both_views_roots_and_component_boundaries()
                     "unrelated.txt",
                 ] {
                     let expected = generation_first_conflict(&state, &workspace, path);
-                    let actual = validate_directory_selection(&state, &workspace, path);
+                    let actual = validate_directory_selection_key(
+                        &state,
+                        &workspace,
+                        &name_policy::path_key(path),
+                    );
                     assert_eq!(
                         actual.is_err(),
                         expected,
@@ -187,7 +189,7 @@ fn empty_generations_still_validate_workspace_references_in_order() {
                 "current namespace missing"
             }
         };
-        let error = validate_directory_selection(&state, &workspace, "new.txt").unwrap_err();
+        let error = validate_directory_selection_key(&state, &workspace, "new.txt").unwrap_err();
         assert!(error.to_string().contains(expected), "{missing}: {error}");
     }
 }
@@ -280,9 +282,13 @@ fn workspace_capture_matches_path_lookup_for_bootstrap_and_inherited_contexts() 
             .filter(|entry| entry.kind == NamespaceEntryKind::File)
             .map(|entry| {
                 (
-                    directory::context_key(&repo.repository_id, &entry.path),
-                    directory::context_at(engine.state(), &repo.repository_id, &entry.path)
-                        .unwrap(),
+                    directory::context_key_from_key(&repo.repository_id, entry.lookup_key()),
+                    directory::context_at_key(
+                        engine.state(),
+                        &repo.repository_id,
+                        entry.lookup_key(),
+                    )
+                    .unwrap(),
                 )
             })
             .collect::<BTreeMap<_, _>>();
@@ -348,16 +354,10 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
             .create_workspace(&repo.main_branch_id, "admin")
             .unwrap();
         for operation in [
-            NamespaceOperation {
-                kind: NamespaceOperationKind::Rename,
-                path: "FOLDER".into(),
-                destination: Some("Moved".into()),
-            },
-            NamespaceOperation {
-                kind: NamespaceOperationKind::Delete,
-                path: "Folderish/file.txt".into(),
-                destination: None,
-            },
+            NamespaceOperation::parse(NamespaceOperationKind::Rename, "FOLDER", Some("Moved"))
+                .unwrap(),
+            NamespaceOperation::parse(NamespaceOperationKind::Delete, "Folderish/file.txt", None)
+                .unwrap(),
         ] {
             engine
                 .namespace_operation(&workspace.workspace_id, operation)

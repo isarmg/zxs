@@ -86,7 +86,7 @@ pub(super) struct PayloadPreparation {
     disks: Vec<HeldDisk>,
 }
 impl PayloadPreparation {
-    pub(super) fn new(config: &Config, candidate: &Candidate) -> Result<Self> {
+    pub(super) fn new(config: &ValidatedConfig, candidate: &Candidate) -> Result<Self> {
         let mut disks = Vec::new();
         for disk in &config.disks {
             if !disk.metadata_member
@@ -112,7 +112,7 @@ impl PayloadPreparation {
     }
     pub(super) fn verify(
         self,
-        config: &Config,
+        config: &ValidatedConfig,
         candidate: &Candidate,
     ) -> Result<VerifiedPayloadSet> {
         let replicas = candidate
@@ -149,7 +149,11 @@ impl PayloadPreparation {
         Ok(proof)
     }
 }
-fn verify_replica(config: &Config, version: &FileVersion, slot: &str) -> Result<VerifiedPayload> {
+fn verify_replica(
+    config: &ValidatedConfig,
+    version: &FileVersion,
+    slot: &str,
+) -> Result<VerifiedPayload> {
     #[cfg(test)]
     VERIFICATION_COST.with(|cost| {
         let (replicas, bytes) = cost.get();
@@ -246,7 +250,7 @@ fn verify_replica(config: &Config, version: &FileVersion, slot: &str) -> Result<
 
 impl VerifiedPayloadSet {
     #[cfg(test)]
-    fn prepare(config: &Config, candidate: &Candidate) -> Result<Self> {
+    fn prepare(config: &ValidatedConfig, candidate: &Candidate) -> Result<Self> {
         PayloadPreparation::new(config, candidate)?.verify(config, candidate)
     }
     fn validate_disks(&self) -> Result<()> {
@@ -269,7 +273,7 @@ impl VerifiedPayloadSet {
         }
         Ok(())
     }
-    pub(super) fn validate(&self, config: &Config, candidate: &Candidate) -> Result<()> {
+    pub(super) fn validate(&self, config: &ValidatedConfig, candidate: &Candidate) -> Result<()> {
         self.validate_disks()?;
         let expected: usize = candidate
             .versions
@@ -301,7 +305,7 @@ impl VerifiedPayloadSet {
     }
     pub(super) fn validate_payload(
         &self,
-        config: &Config,
+        config: &ValidatedConfig,
         version: &FileVersion,
         slot: &str,
     ) -> Result<()> {

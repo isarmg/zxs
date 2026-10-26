@@ -1,8 +1,8 @@
 //! Historical branch records retain lineage; only staged writes gain content.
 use crate::{
     business::{
-        apply_workspace_namespace, deletion_record, ensure_parents, find_unordered, now,
-        validate_entries, validate_workspace_dependencies,
+        apply_workspace_namespace, deletion_record, ensure_parents, now, validate_entries,
+        validate_workspace_dependencies,
     },
     disk::*,
     *,
@@ -78,7 +78,8 @@ fn final_entries(
     let mut entries = source.entries.clone();
     if let Some(workspace) = workspace {
         for staged in workspace.files.values() {
-            let previous = find_unordered(&entries, &staged.path).cloned();
+            let previous =
+                crate::business::find_unordered_key(&entries, staged.path.key()).cloned();
             if previous
                 .as_ref()
                 .is_some_and(|entry| entry.kind != NamespaceEntryKind::File)
@@ -89,17 +90,10 @@ fn final_entries(
                 ));
             }
             ensure_parents(&mut entries, &staged.path)?;
-            let key = name_policy::path_key(&staged.path);
+            let key = staged.path.key();
             let entry = Entry {
                 entry_id: staged.item_id.clone(),
                 path: staged.path.clone(),
-                name: staged
-                    .path
-                    .rsplit('/')
-                    .next()
-                    .expect("invariant: split yields a final component")
-                    .into(),
-                lookup_key: key.clone(),
                 kind: NamespaceEntryKind::File,
                 file_id: previous
                     .as_ref()
@@ -108,7 +102,7 @@ fn final_entries(
                 version_id: format!("staged:{}", staged.item_id),
                 size: staged.size,
             };
-            entries.retain(|entry| entry.lookup_key != key);
+            entries.retain(|entry| entry.lookup_key() != key);
             entries.push(entry);
         }
         deleted = apply_workspace_namespace(
@@ -300,7 +294,7 @@ impl Engine {
             }
             let (primary, copies) = match (&options.primary_slot_id, options.target_copies) {
                 (Some(primary), Some(copies)) => (primary.clone(), copies),
-                _ => self.new_file_placement(&repository.repository_id, &entry.path)?,
+                _ => self.new_file_placement(&repository.repository_id, entry.path())?,
             };
             for slot in self.route(&primary, copies)? {
                 let bytes = per_slot.entry(slot).or_default();
@@ -486,10 +480,10 @@ impl Engine {
                     }
                     let (primary, copies) = match (&primary_override, copies_override) {
                         (Some(primary), Some(copies)) => (primary.clone(), copies),
-                        _ => engine.new_file_placement(&repository.repository_id, &entry.path)?,
+                        _ => engine.new_file_placement(&repository.repository_id, entry.path())?,
                     };
                     let version = engine.build_version(
-                        state, pending, crate::business::VersionBuild { history: &history, file_id: &entry.file_id, path: &entry.path, source: &source_path, primary: &primary, copies, source_ids: source_versions, checkpoint: true },
+                        state, pending, crate::business::VersionBuild { history: &history, file_id: &entry.file_id, path: entry.location(), source: &source_path, primary: &primary, copies, source_ids: source_versions, checkpoint: true },
                     )?;
                     if version.logical_size != expected_size || version.content_hash != expected_hash {
                         return Err(Error::new(storage_contract::ErrorCode::ChecksumMismatch, "historical source changed after sealing"));

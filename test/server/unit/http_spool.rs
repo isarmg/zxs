@@ -20,6 +20,25 @@ const DEADLINE: Duration = Duration::from_secs(10);
 #[derive(Default)]
 struct Probe(AtomicUsize);
 impl Backend for Probe {
+    fn snapshot_at(
+        &self,
+        _: &crate::auth::Identity,
+        _: &str,
+        _: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        unreachable!("this test backend does not serve snapshots")
+    }
+
+    fn lookup_at(
+        &self,
+        _: &crate::auth::Identity,
+        _: &str,
+        _: &str,
+        _: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        unreachable!("this test backend does not serve snapshot lookups")
+    }
+
     fn call(&self, _: BackendAction, _: &Identity, _: Value) -> Result<Value, ApiError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Err(ApiError::unsupported())
@@ -32,7 +51,7 @@ impl Backend for Probe {
         _: &Identity,
         _: &str,
         _: &str,
-        _: &str,
+        _: &name_policy::PortablePath,
         _: &crate::UploadSource,
     ) -> Result<Value, ApiError> {
         self.0.fetch_add(1, Ordering::SeqCst);

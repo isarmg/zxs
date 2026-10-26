@@ -8,10 +8,10 @@ fn public_validation_checks_paths_without_creating_them() {
         root.path().join("b"),
         root.path().join("c"),
     ]);
-    Engine::validate_configuration(&config).unwrap();
+    ValidatedConfig::try_from(config.clone()).unwrap();
     for path in ["relative", "/draft/../p"] {
         config.disks[0].root = path.into();
-        assert!(Engine::validate_configuration(&config).is_err());
+        assert!(ValidatedConfig::try_from(config.clone()).is_err());
     }
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
 }
@@ -23,7 +23,7 @@ fn impossible_upstream_level_is_rejected_without_overflow() {
     config.disks[0].upstream_slot_id = Some("B01".into());
     config.disks[1].level = u32::MAX;
     config.disks[1].upstream_slot_id = Some("C01".into());
-    assert!(validate_config(&config).is_err());
+    assert!(ValidatedConfig::try_from(config.clone()).is_err());
 }
 
 #[test]
@@ -31,7 +31,7 @@ fn one_disk_and_optional_backup_chains_are_valid_without_creating_paths() {
     let root = tempfile::tempdir().unwrap();
     for count in 1..=6 {
         let config = Config::development((0..count).map(|i| root.path().join(format!("disk{i}"))));
-        Engine::validate_configuration(&config).unwrap();
+        ValidatedConfig::try_from(config.clone()).unwrap();
     }
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
 }
@@ -39,20 +39,20 @@ fn one_disk_and_optional_backup_chains_are_valid_without_creating_paths() {
 #[test]
 fn empty_membership_is_rejected_even_with_data_disks() {
     let mut config = Config::development(Vec::new());
-    assert!(validate_config(&config).is_err());
+    assert!(ValidatedConfig::try_from(config.clone()).is_err());
     config = Config::development(["/draft/only".into()]);
     config.disks[0].metadata_member = false;
-    assert!(validate_config(&config).is_err());
+    assert!(ValidatedConfig::try_from(config.clone()).is_err());
 }
 
 #[test]
 fn optional_backup_membership_does_not_require_three_voters() {
     let mut config = Config::development(["/draft/p".into(), "/draft/b".into()]);
     config.disks[1].metadata_member = false;
-    validate_config(&config).unwrap();
+    ValidatedConfig::try_from(config.clone()).unwrap();
     assert_eq!(config.metadata_quorum(), 1);
     config.disks[1].upstream_slot_id = None;
-    assert!(validate_config(&config).is_err());
+    assert!(ValidatedConfig::try_from(config.clone()).is_err());
 }
 
 #[test]
@@ -84,8 +84,178 @@ fn retained_workspace_limits_default_for_legacy_configuration_and_reject_zero() 
             _ => invalid.max_retained_workspace_metadata_bytes_per_principal = 0,
         }
         assert_eq!(
-            validate_config(&invalid).unwrap_err().code(),
+            ValidatedConfig::try_from(invalid).unwrap_err().code(),
             storage_contract::ErrorCode::ConfigInvalid
         );
     }
+}
+
+#[test]
+fn validated_configuration_serialization_preserves_the_disk_contract() {
+    let config = Config::development(["/draft/p".into(), "/draft/b".into()]);
+    let encoded = json_codec::to_vec(&config).unwrap();
+    let validated: ValidatedConfig = decode_strict(&encoded).unwrap();
+    assert_eq!(json_codec::to_vec(&validated).unwrap(), encoded);
+
+    let mut invalid = json_codec::to_value(&config).unwrap();
+    invalid["max_file_bytes"] = json_codec::json!("0");
+    assert!(json_codec::from_value::<ValidatedConfig>(invalid).is_err());
+    let mut unknown = json_codec::to_value(&config).unwrap();
+    unknown["unknown_option"] = json_codec::json!(true);
+    assert!(json_codec::from_value::<ValidatedConfig>(unknown).is_err());
+}
+
+#[test]
+fn validated_configuration_rejects_external_limits_and_identities() {
+    let config = Config::development(["/draft/p".into(), "/draft/b".into()]);
+    let invalid: &[fn(&mut Config)] = &[
+        |c| c.pool_id = "bad".into(),
+        |c| c.max_file_bytes = 0,
+        |c| c.max_file_bytes = u64::MAX,
+        |c| {
+            c.max_file_bytes = u64::MAX;
+            c.max_workspace_bytes = u64::MAX;
+        },
+        |c| c.max_workspace_bytes = 0,
+        |c| c.max_workspace_bytes = c.max_file_bytes - 1,
+        |c| c.max_workspaces = 0,
+        |c| c.max_entries = 0,
+        |c| c.checksum_chunk_bytes = 0,
+        |c| c.checksum_chunk_bytes = 1,
+        |c| c.disks[0].slot_id = "bad/slot".into(),
+        |c| c.disks[1].slot_id = "p01".into(),
+        |c| c.disks[0].disk_id = "bad".into(),
+        |c| c.disks[1].disk_id = c.disks[0].disk_id.clone(),
+        |c| c.disks[0].binding_generation = 0,
+        |c| c.disks[0].level = 0,
+        |c| c.disks[0].upstream_slot_id = Some("B01".into()),
+        |c| c.disks[1].upstream_slot_id = None,
+        |c| c.disks[1].upstream_slot_id = Some("unknown".into()),
+        |c| c.disks[1].level = 3,
+    ];
+    for mutate in invalid {
+        let mut candidate = config.clone();
+        mutate(&mut candidate);
+        assert!(ValidatedConfig::try_from(candidate).is_err());
+    }
+    ValidatedConfig::try_from(config).unwrap();
+}
+
+#[test]
+fn root_rebinding_preserves_admitted_topology_and_only_replaces_roots() {
+    let config = Config::development(["/draft/p".into(), "/draft/b".into()]);
+    let mut expected = config.clone();
+    expected.disks[0].root = "/moved/p".into();
+    expected.disks[1].root = "/moved/b".into();
+    let moved = ValidatedConfig::try_from(config)
+        .unwrap()
+        .with_disk_roots(vec!["/moved/p".into(), "/moved/b".into()])
+        .unwrap();
+    assert_eq!(
+        json_codec::to_vec(&moved).unwrap(),
+        json_codec::to_vec(&expected).unwrap()
+    );
+}
+
+#[test]
+fn root_rebinding_rejects_external_count_traversal_overlap_and_aliases() {
+    let config =
+        ValidatedConfig::try_from(Config::development(["/draft/p".into(), "/draft/b".into()]))
+            .unwrap();
+    for roots in [
+        vec!["/moved/p"],
+        vec!["/moved/p", "relative"],
+        vec!["/moved/p", "/moved/q/../b"],
+        vec!["/moved/p", "/moved/p/nested"],
+        vec!["/moved/p/nested", "/moved/p"],
+        vec!["/moved/p", "/moved/p"],
+    ] {
+        assert_eq!(
+            config
+                .clone()
+                .with_disk_roots(roots.into_iter().map(PathBuf::from).collect())
+                .unwrap_err()
+                .code(),
+            ErrorCode::ConfigInvalid
+        );
+    }
+    let root = tempfile::tempdir().unwrap();
+    let disk = root.path().join("disk");
+    let alias = root.path().join("alias");
+    std::fs::create_dir(&disk).unwrap();
+    std::os::unix::fs::symlink(&disk, &alias).unwrap();
+    assert!(
+        config
+            .with_disk_roots(vec![
+                disk.canonicalize().unwrap(),
+                alias.canonicalize().unwrap()
+            ])
+            .is_err()
+    );
+}
+
+#[test]
+fn admitted_runtime_limits_survive_root_rebinding_but_are_not_persisted() {
+    let config = Config::development(["/draft/p".into()]);
+    let encoded = json_codec::to_vec(&config).unwrap();
+    let config = ValidatedConfig::try_from(config).unwrap();
+    let baseline = super::super::RetainedWorkspaceLimits::from_config(&config);
+    let mut raised = baseline;
+    raised.max_retained_workspaces += 1;
+    let admitted = config.with_workspace_limits(Some(raised)).unwrap();
+    assert_eq!(admitted.effective_workspace_limits(), raised);
+    assert_eq!(json_codec::to_vec(&admitted).unwrap(), encoded);
+    let restored: ValidatedConfig = decode_strict(&encoded).unwrap();
+    assert_eq!(restored.effective_workspace_limits(), baseline);
+    let moved = admitted.with_disk_roots(vec!["/moved/p".into()]).unwrap();
+    assert_eq!(moved.effective_workspace_limits(), raised);
+    for lower in [0, baseline.max_retained_workspaces - 1] {
+        let mut limits = baseline;
+        limits.max_retained_workspaces = lower;
+        assert!(
+            restored
+                .clone()
+                .with_workspace_limits(Some(limits))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn restore_rebinds_moved_member_and_preserves_the_admitted_pool_baseline() {
+    let temporary = tempfile::tempdir().unwrap();
+    let original_root = temporary.path().join("disk");
+    let mut expected = Config::development([original_root.clone()]);
+    expected.max_workspaces = 7;
+    drop(Engine::initialize(&temporary.path().join("system"), expected.clone()).unwrap());
+    let moved = temporary.path().join("moved-disk");
+    std::fs::rename(original_root, &moved).unwrap();
+    expected.disks[0].root = moved.clone();
+    let system = temporary.path().join("restored-system");
+    let restored = Engine::restore_from_disks(&system, &[moved]).unwrap();
+    assert_eq!(
+        canonical_json(restored.config()).unwrap(),
+        canonical_json(&expected).unwrap()
+    );
+    drop(restored);
+    assert_eq!(
+        canonical_json(Engine::open(&system).unwrap().config()).unwrap(),
+        canonical_json(&expected).unwrap()
+    );
+}
+
+#[test]
+fn restore_rejects_rebound_metadata_root_nested_in_an_unsupplied_data_root() {
+    let temporary = tempfile::tempdir().unwrap();
+    let primary = temporary.path().join("primary");
+    let backup = temporary.path().join("backup");
+    let mut config = Config::development([primary.clone(), backup.clone()]);
+    config.disks[1].metadata_member = false;
+    drop(Engine::initialize(&temporary.path().join("system"), config).unwrap());
+    let moved = backup.join("moved-primary");
+    std::fs::rename(primary, &moved).unwrap();
+    let system = temporary.path().join("restored-system");
+    let error = Engine::restore_from_disks(&system, &[moved]).err().unwrap();
+    assert_eq!(error.code(), ErrorCode::ConfigInvalid);
+    assert!(!system.exists());
 }

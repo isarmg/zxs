@@ -94,7 +94,7 @@ pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError>
         // direct children for page selection; descendants contribute only to
         // the existing recursive file count, never to a full JSON projection.
         for (index, entry) in tree.iter().enumerate() {
-            let Some(relative) = entry.lookup_key.strip_prefix(&prefix) else {
+            let Some(relative) = entry.lookup_key().strip_prefix(&prefix) else {
                 continue;
             };
             if entry.kind == storage_contract::NamespaceEntryKind::File {
@@ -104,14 +104,14 @@ pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError>
                 continue;
             }
             let display = if repo.file_manager_root {
-                entry.path.clone()
+                entry.path().to_owned()
             } else {
                 format!("{}/{}", repo.name, entry.path)
             };
             page.consider(
                 SortKey::new(
                     entry.kind == storage_contract::NamespaceEntryKind::Directory,
-                    &entry.name,
+                    entry.name(),
                     &display,
                     &entry.entry_id,
                 ),

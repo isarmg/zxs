@@ -147,7 +147,7 @@ fn ensure_unambiguous_disk_path(
             .list_tree_ref(&root.main_branch_id)
             .map_err(error)?
             .iter()
-            .any(|entry| names.contains(&entry.lookup_key))
+            .any(|entry| names.contains(entry.lookup_key()))
     {
         return Err(ApiError::conflict(
             storage_contract::ErrorCode::NameCollision,
@@ -289,12 +289,12 @@ fn listed_current_entry(
             )
         })?;
     let display = if prefix.is_empty() {
-        entry.path.clone()
+        entry.path().to_owned()
     } else {
         format!("{prefix}/{}", entry.path)
     };
     let context = engine.file_context_for_current_entry(&repo.repository_id, entry);
-    let mut response = json!({"entry_id":entry.entry_id,"name":entry.name,"path":display,"kind":entry.kind,
+    let mut response = json!({"entry_id":entry.entry_id,"name":entry.name(),"path":display,"kind":entry.kind,
         "repository_id":repo.repository_id,"repository_path":entry.path,
         "container":entry.kind == storage_contract::NamespaceEntryKind::File,"size":entry.size.to_string(),"file_id":entry.file_id,
         "version_id":entry.version_id,"selected_branch_id":context.as_ref().map(|context|context.branch_id.clone()).or_else(||engine.state().file_selections.get(&entry.file_id).cloned())});
@@ -363,7 +363,7 @@ fn scoped_directory_branches<'a>(
             .iter()
             .find(|entry| {
                 entry.kind == storage_contract::NamespaceEntryKind::Directory
-                    && entry.lookup_key == *key
+                    && entry.lookup_key() == *key
             })
             .map(|entry| entry.entry_id.clone())
     });
@@ -574,7 +574,7 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
             }) && seen.insert(id.as_str())
         }).collect::<Vec<_>>();
         let commit = first_commits.get(version.version_id.as_str()).copied();
-        let download_name = current.as_ref().map(|entry| entry.name.as_str())
+        let download_name = current.as_ref().map(|entry| entry.name())
             .or_else(|| state.file_names.get(file).map(String::as_str))
             .unwrap_or(&version.creation_name);
         history_nodes::HistoryVersion {
@@ -685,7 +685,7 @@ pub(super) fn read(
                         "version file is not present at this logical path",
                     )
                 })?;
-            Ok(json!({"name":entry.name}))
+            Ok(json!({"name":entry.name()}))
         }
         crate::BackendAction::FileManagerHistory => activity::read(engine),
         crate::BackendAction::FileManagerBackupConfiguration => {
@@ -866,11 +866,12 @@ pub(super) fn call(
             let result = engine
                 .file_namespace(
                     &repo.repository_id,
-                    NamespaceOperation {
-                        kind: storage_contract::NamespaceOperationKind::Mkdir,
-                        path: relative,
-                        destination: None,
-                    },
+                    NamespaceOperation::parse(
+                        storage_contract::NamespaceOperationKind::Mkdir,
+                        &relative,
+                        None,
+                    )
+                    .map_err(|source| error(source.into()))?,
                     &identity.principal,
                     operation,
                 )

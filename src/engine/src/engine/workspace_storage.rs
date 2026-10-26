@@ -34,41 +34,6 @@ impl Engine {
         }
         result
     }
-    /// Match the exact requested receipt, never the first decodable JSON file.
-    /// Its digest and owner are independently bound to the published operation
-    /// by validate_workspace_commit_replay before this redundant storage lookup.
-    pub(crate) fn require_saved_workspace_request(
-        &self,
-        workspace: &Workspace,
-        request: &CommitRequest,
-    ) -> Result<()> {
-        let expected = canonical_json(request)?;
-        let local = self
-            .root
-            .join("workspaces")
-            .join(&workspace.workspace_id)
-            .join("commit-request.json");
-        let matches = |path: &std::path::Path| -> Result<bool> {
-            match read_json::<CommitRequest>(path) {
-                Ok(saved) => Ok(canonical_json(&saved)? == expected),
-                Err(error) if error.code() == storage_contract::ErrorCode::UnsafePath => Err(error),
-                Err(_) => Ok(false),
-            }
-        };
-        if matches(&local)? {
-            return Ok(());
-        }
-        let data = self
-            .workspace_data_directory(workspace)?
-            .join("commit-request.json");
-        if matches(&data)? {
-            return Ok(());
-        }
-        Err(Error::new(
-            storage_contract::ErrorCode::RecoveryRequired,
-            "no exact saved workspace commit request is available",
-        ))
-    }
 
     fn saved_request_digest_matches(
         &self,
@@ -121,11 +86,8 @@ impl Engine {
         Ok(false)
     }
 
-    pub(crate) fn workspace_data_directory(&self, w: &Workspace) -> Result<PathBuf> {
-        let repo = self.repository_for_branch(&w.branch_id)?;
-        let disk = self.disk(&repo.primary_slot_id)?;
-        validate_seal(&self.config, disk)?;
-        Ok(disk.root.join("staging/workspaces").join(&w.workspace_id))
+    pub(crate) fn workspace_data_directory(&self, workspace: &Workspace) -> Result<PathBuf> {
+        self.planning_context().workspace_data_directory(workspace)
     }
     /// Read-only recovery may retain system-side evidence while the primary
     /// is physically absent. A present disk must still have its expected seal.
@@ -613,4 +575,48 @@ fn possible_commit_transition(before: &Workspace, after: &Workspace) -> bool {
     matches!(before.state, WorkspaceState::Open | WorkspaceState::Sealed)
         && after.state == WorkspaceState::Committed
         && before.fencing_token.checked_add(1) == Some(after.fencing_token)
+}
+
+impl crate::engine::PlanningContext<'_> {
+    pub(crate) fn require_saved_workspace_request(
+        &self,
+        workspace: &Workspace,
+        request: &CommitRequest,
+    ) -> Result<()> {
+        let expected = canonical_json(request)?;
+        let local = self
+            .root
+            .join("workspaces")
+            .join(&workspace.workspace_id)
+            .join("commit-request.json");
+        let matches = |path: &std::path::Path| -> Result<bool> {
+            match read_json::<CommitRequest>(path) {
+                Ok(saved) => Ok(canonical_json(&saved)? == expected),
+                Err(error) if error.code() == storage_contract::ErrorCode::UnsafePath => Err(error),
+                Err(_) => Ok(false),
+            }
+        };
+        if matches(&local)? {
+            return Ok(());
+        }
+        let data = self
+            .workspace_data_directory(workspace)?
+            .join("commit-request.json");
+        if matches(&data)? {
+            return Ok(());
+        }
+        Err(Error::new(
+            storage_contract::ErrorCode::RecoveryRequired,
+            "no exact saved workspace commit request is available",
+        ))
+    }
+}
+
+impl crate::engine::PlanningContext<'_> {
+    pub(crate) fn workspace_data_directory(&self, w: &Workspace) -> Result<PathBuf> {
+        let repo = self.repository_for_branch(&w.branch_id)?;
+        let disk = self.disk(&repo.primary_slot_id)?;
+        validate_seal(self.config, disk)?;
+        Ok(disk.root.join("staging/workspaces").join(&w.workspace_id))
+    }
 }

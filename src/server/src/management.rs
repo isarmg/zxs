@@ -601,6 +601,27 @@ impl Inner {
     }
 }
 impl Backend for ManagementBackend {
+    fn snapshot_at(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+    ) -> Result<Arc<storage_contract::Commit>, ApiError> {
+        self.inner.backend()?.snapshot_at(identity, branch, commit)
+    }
+
+    fn lookup_at(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        self.inner
+            .backend()?
+            .lookup_at(identity, branch, commit, path)
+    }
+
     fn setup_operation(
         &self,
         action: &'static str,
@@ -954,7 +975,7 @@ impl Backend for ManagementBackend {
         i: &Identity,
         w: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &crate::UploadSource,
     ) -> Result<Value, ApiError> {
         self.inner.backend()?.upload(i, w, item, path, source)
@@ -964,7 +985,7 @@ impl Backend for ManagementBackend {
         i: &Identity,
         w: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &crate::UploadSource,
         g: u64,
     ) -> Result<Value, ApiError> {

@@ -2,9 +2,7 @@ use super::*;
 fn entry(id: &str, path: &str) -> storage_contract::Entry {
     storage_contract::Entry {
         entry_id: id.into(),
-        path: path.into(),
-        name: path.rsplit('/').next().unwrap().into(),
-        lookup_key: name_policy::path_key(path),
+        path: name_policy::PortablePath::parse(path).unwrap(),
         kind: storage_contract::NamespaceEntryKind::File,
         file_id: "file".into(),
         version_id: "version".into(),

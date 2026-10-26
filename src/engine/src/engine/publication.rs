@@ -20,8 +20,8 @@ pub(super) struct PublishedStateBase {
     snapshot_basis: Option<SnapshotReuse>,
 }
 impl PublishedStateBase {
-    fn matches(&self, engine: &Engine, config_hash: &str) -> bool {
-        self.state.ptr_eq(&std::sync::Arc::downgrade(&engine.state))
+    fn matches(&self, engine: &crate::engine::PlanningContext<'_>, config_hash: &str) -> bool {
+        self.state.ptr_eq(&std::sync::Arc::downgrade(engine.state))
             && engine.snapshot.as_deref() == Some(self.snapshot.as_str())
             && engine.state.sequence == self.sequence
             && self.config_hash == config_hash
@@ -41,6 +41,14 @@ pub(crate) struct DetachedPublication {
     base_next_slot: u64,
     config_hash: String,
     snapshot_basis: Option<SnapshotReuse>,
+}
+
+enum Completion<'a> {
+    Prepared {
+        payloads: &'a VerifiedPayloadSet,
+        names: crate::container_storage::PreparedNames,
+    },
+    Recovery,
 }
 
 impl Engine {
@@ -69,158 +77,8 @@ impl Engine {
         result: OperationResult,
         maximum: usize,
     ) -> Result<DetachedPublication> {
-        self.prepare_publication_bounded(next, prepared, result, maximum, maximum)
-    }
-    fn prepare_publication_bounded(
-        &self,
-        next: State,
-        prepared: Vec<Prepared>,
-        result: OperationResult,
-        maximum: usize,
-        cache_maximum: usize,
-    ) -> Result<DetachedPublication> {
-        let members = self.members();
-        let mut required = BTreeMap::<String, u64>::new();
-        for p in &prepared {
-            for slot in &p.placement.route_slot_ids {
-                let disk = self.disk(slot)?;
-                if verify_payload(
-                    &version_dir(disk, &p.version.history_tree_id, &p.version.version_id),
-                    &p.version,
-                )
-                .is_ok()
-                {
-                    continue;
-                }
-                *required.entry(slot.clone()).or_default() = required
-                    .get(slot)
-                    .copied()
-                    .unwrap_or(0)
-                    .checked_add(p.version.logical_size)
-                    .ok_or_else(|| {
-                        Error::new(
-                            storage_contract::ErrorCode::ResourceLimit,
-                            "admission bytes overflow",
-                        )
-                    })?;
-            }
-        }
-        for (slot, bytes) in &required {
-            let d = self.disk(slot)?;
-            validate_seal(&self.config, d)?;
-            let free = available(&d.root)?;
-            let budget = d
-                .capacity_bytes
-                .map(|limit| limit.saturating_sub(self.used_bytes(slot)))
-                .unwrap_or(u64::MAX);
-            if bytes.saturating_add(self.config.metadata_reserve_bytes) > free || *bytes > budget {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::NoSpace,
-                    format!("fixed route slot {slot} cannot reserve the complete payload"),
-                ));
-            }
-        }
-        // Resolve real page hashes and enforce every metadata bound without
-        // publishing files or journal records. No estimate enters the decision.
-        let config_hash = object_hash("publication-config", &self.config)?;
-        let baseline = self
-            .published_state_base
-            .as_ref()
-            .filter(|base| base.matches(self, &config_hash));
-        let snapshot = match baseline.and_then(|base| {
-            base.snapshot_basis
-                .as_ref()
-                .filter(|basis| basis.matches_snapshot(&base.snapshot))
-        }) {
-            Some(basis) => prepare_snapshot_incremental(&self.state, &next, basis, maximum)?,
-            None => prepare_snapshot(&next, maximum)?,
-        };
-        let snapshot_hash = snapshot.hash.clone();
-        #[cfg(test)]
-        assert_eq!(
-            snapshot_hash,
-            prepare_snapshot(&next, maximum)?.hash,
-            "incremental snapshot differs from full encoding"
-        );
-        let (history_manifest_hashes, manifests) = match self
-            .published_state_base
-            .as_ref()
-            .filter(|base| base.matches(self, &config_hash))
-        {
-            Some(base) => crate::history_package::prepare_history_manifests_incremental(
-                &self.state,
-                &next,
-                &base.roots,
-                &members,
-                maximum,
-            )?,
-            None => crate::history_package::prepare_history_manifests(&next, maximum)?,
-        };
-        // The full implementation remains an independent oracle in every
-        // engine publication test, including merge/split/restore workflows.
-        #[cfg(test)]
-        assert_eq!(
-            history_manifest_hashes,
-            crate::history_package::prepare_history_manifests(&next, maximum)?.0,
-            "incremental history roots differ from complete projection",
-        );
-        let candidate = Candidate {
-            pool_id: self.config.pool_id.clone(),
-            sequence: next.sequence,
-            transaction_id: new_id("tx"),
-            operation_id: result.operation_id.clone(),
-            request_digest: result.request_digest.clone(),
-            previous_snapshot: self.snapshot.clone(),
-            snapshot_hash,
-            versions: prepared
-                .iter()
-                .map(|p| VersionEvidence {
-                    version: p.version.clone(),
-                    placement: p.placement.clone(),
-                })
-                .collect(),
-            metadata_disk_ids: members.iter().map(|d| d.disk_id.clone()).collect(),
-            history_manifest_hashes,
-        };
-        crate::metadata_budget::preflight_publication_prepared(
-            self,
-            &candidate,
-            &result,
-            &next,
-            None,
-            maximum,
-            Some(&snapshot),
-        )?;
-        crate::container_storage::validate_new_projection_paths(&self.state, &next)?;
-        let preparation = PayloadPreparation::new(&self.config, &candidate)?;
-        self.prepare_payloads(&prepared)?;
-        let verified = preparation.verify(&self.config, &candidate)?;
-        // Payload installation establishes the physical container, but no decision
-        // exists yet. Encode its complete projection before ACCEPT can be written.
-        let names = crate::container_storage::prepare_names(
-            &self.config,
-            &self.state,
-            &next,
-            cache_maximum,
-        )?;
-        snapshot.store(&members, &next)?;
-        let snapshot_basis = snapshot.reuse_basis();
-        for manifest in manifests {
-            manifest.store(&members)?;
-        }
-        Ok(DetachedPublication {
-            next,
-            candidate,
-            result,
-            verified,
-            names,
-            base_root: self.root.clone(),
-            base_snapshot: self.snapshot.clone(),
-            base_sequence: self.state.sequence,
-            base_next_slot: self.next_slot,
-            config_hash,
-            snapshot_basis,
-        })
+        self.planning_context()
+            .prepare_publication(next, prepared, result, maximum)
     }
     pub(crate) fn decide_publication(
         &mut self,
@@ -290,7 +148,7 @@ impl Engine {
         let mut prepared = 0;
         for d in &members {
             store_object(d, "candidate", &candidate)?;
-            append(
+            self.append_journal(
                 d,
                 RecordType::Prepare,
                 candidate.sequence,
@@ -310,8 +168,10 @@ impl Engine {
             &hash,
             &next,
             None,
-            Some(&verified),
-            Some(names),
+            Completion::Prepared {
+                payloads: &verified,
+                names,
+            },
         );
         if let Err(e) = finish {
             let message = format!("{e}; query operation {} and recover", result.operation_id);
@@ -334,102 +194,10 @@ impl Engine {
         self.blocked = false;
         Ok(result)
     }
-    fn prepare_payloads(&self, prepared: &[Prepared]) -> Result<()> {
-        // Versions of the same file can share a named container. Preserve their
-        // order, and each version's route chain, while independent files copy
-        // with bounded parallel workers. No decision is written until all join.
-        let mut by_file = BTreeMap::<&str, Vec<&Prepared>>::new();
-        for payload in prepared {
-            by_file
-                .entry(&payload.version.file_id)
-                .or_default()
-                .push(payload);
-        }
-        let groups: Vec<_> = by_file.into_values().collect();
-        run_payload_groups(&groups, |payload| self.prepare_payload(payload))
-    }
     pub(crate) fn prepare_payload(&self, p: &Prepared) -> Result<()> {
-        let mut source = p.source.clone();
-        for slot in &p.placement.route_slot_ids {
-            let disk = self.disk(slot)?;
-            validate_seal(&self.config, disk)?;
-            let directory = version_dir(disk, &p.version.history_tree_id, &p.version.version_id);
-            match read_json::<FileVersion>(&directory.join("version.json")) {
-                Ok(existing) => {
-                    if object_hash("version", &existing)? != object_hash("version", &p.version)? {
-                        return Err(Error::new(
-                            storage_contract::ErrorCode::ObjectCollision,
-                            "version identity already exists with different bytes",
-                        ));
-                    }
-                    verify_payload(&directory, &p.version)?;
-                }
-                Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
-                | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
-                    if error.kind() == std::io::ErrorKind::NotFound =>
-                {
-                    let staging = disk.root.join("staging").join(new_id("op"));
-                    private_dir(&staging.join("content"))?;
-                    let target = staging.join("content").join(&p.version.creation_name);
-                    let (size, hash, checks) = full_copy(
-                        &source,
-                        &target,
-                        self.config.checksum_chunk_bytes,
-                        self.config.max_file_bytes,
-                    )?;
-                    if size != p.version.logical_size
-                        || hash != p.version.content_hash
-                        || blake3::hash(&checks.encode()?).to_hex().as_str()
-                            != p.version.checksum_manifest_hash
-                    {
-                        return Err(Error::new(
-                            storage_contract::ErrorCode::SourceChanged,
-                            "prepared full file differs from the sealed input",
-                        ));
-                    }
-                    write_json(&staging.join("version.json"), &p.version, false)?;
-                    write_atomic(&staging.join("checksums.bin"), &checks.encode()?, false)?;
-                    write_json(
-                        &staging.join("payload.json"),
-                        &json!({"payload_id":format!("payload_{}",&p.version.version_id[4..]),"version_id":p.version.version_id,"kind":"FULL","size":size.to_string(),"content_hash":hash}),
-                        false,
-                    )?;
-                    sync_dir(&staging)?;
-                    private_dir(directory.parent().expect("version parent"))?;
-                    let staging_parent = platform_io::fs_safety::linux::OpenAt2Root::open(
-                        staging.parent().expect("staging parent"),
-                        platform_io::fs_safety::linux::MountPolicy::SameMount,
-                    )
-                    .map_err(|error| {
-                        let message = error.to_string();
-                        Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
-                    })?;
-                    let version_parent = platform_io::fs_safety::linux::OpenAt2Root::open(
-                        directory.parent().expect("version parent"),
-                        platform_io::fs_safety::linux::MountPolicy::SameMount,
-                    )
-                    .map_err(|error| {
-                        let message = error.to_string();
-                        Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
-                    })?;
-                    rustix::fs::renameat_with(
-                        staging_parent.directory(),
-                        staging.file_name().expect("staging name"),
-                        version_parent.directory(),
-                        directory.file_name().expect("version name"),
-                        rustix::fs::RenameFlags::NOREPLACE,
-                    )
-                    .map_err(std::io::Error::from)?;
-                    sync_dir(directory.parent().expect("version parent"))?;
-                }
-                Err(error) => return Err(error),
-            }
-            // Install a real version file in this file's named container before
-            // any protection receipt is issued. The next level reads this copy.
-            source = crate::container_storage::install_version_content(&directory, &p.version)?;
-        }
-        Ok(())
+        self.planning_context().prepare_payload(p)
     }
+
     pub(crate) fn complete_candidate(
         &mut self,
         c: &Candidate,
@@ -437,7 +205,7 @@ impl Engine {
         next: &State,
         existing: Option<Publication>,
     ) -> Result<()> {
-        self.complete_candidate_verified(c, hash, next, existing, None, None)
+        self.complete_candidate_verified(c, hash, next, existing, Completion::Recovery)
     }
     pub(super) fn complete_published_candidate(
         &mut self,
@@ -445,7 +213,7 @@ impl Engine {
         hash: &str,
         next: &State,
         publication: Publication,
-        mut append_receipt: impl FnMut(&DiskConfig, &str) -> Result<Receipt>,
+        mut append_receipt: impl FnMut(&mut Engine, &DiskConfig, &str) -> Result<Receipt>,
     ) -> Result<()> {
         self.verify_candidate_membership(c)?;
         if publication.candidate_hash != hash
@@ -464,7 +232,7 @@ impl Engine {
         let mut publication_receipts = Vec::new();
         for d in self.members() {
             store_object(&d, "publication", &publication)?;
-            publication_receipts.push(append_receipt(&d, &pub_hash)?);
+            publication_receipts.push(append_receipt(self, &d, &pub_hash)?);
             #[cfg(feature = "fault-injection")]
             if publication.recovery.is_some() {
                 self.failpoint(&format!(
@@ -558,13 +326,39 @@ impl Engine {
         hash: &str,
         next: &State,
         existing: Option<Publication>,
-        verified: Option<&VerifiedPayloadSet>,
-        names: Option<crate::container_storage::PreparedNames>,
+        completion: Completion<'_>,
     ) -> Result<()> {
+        let (verified, names, append) = match completion {
+            Completion::Prepared { payloads, names } => (
+                Some(payloads),
+                Some(names),
+                Engine::append_journal
+                    as fn(&mut Engine, &DiskConfig, RecordType, u64, &str, &str) -> Result<Receipt>,
+            ),
+            Completion::Recovery => (
+                None,
+                None,
+                Engine::append_recovered_journal
+                    as fn(&mut Engine, &DiskConfig, RecordType, u64, &str, &str) -> Result<Receipt>,
+            ),
+        };
         if let Some(publication) = existing {
-            return self.complete_published_candidate(c, hash, next, publication, |d, pub_hash| {
-                append(d, RecordType::Publication, c.sequence, hash, pub_hash)
-            });
+            return self.complete_published_candidate(
+                c,
+                hash,
+                next,
+                publication,
+                |engine, d, pub_hash| {
+                    append(
+                        engine,
+                        d,
+                        RecordType::Publication,
+                        c.sequence,
+                        hash,
+                        pub_hash,
+                    )
+                },
+            );
         }
         self.verify_candidate_membership(c)?;
         let names = match names {
@@ -580,7 +374,7 @@ impl Engine {
         let mut accepts = Vec::new();
         for d in &members {
             validate_seal(&self.config, d)?;
-            accepts.push(append(d, RecordType::Accept, c.sequence, hash, hash)?);
+            accepts.push(append(self, d, RecordType::Accept, c.sequence, hash, hash)?);
             #[cfg(feature = "fault-injection")]
             self.failpoint(&format!("after_accept_{}", accepts.len()))?;
         }
@@ -594,6 +388,7 @@ impl Engine {
         for d in &members {
             store_object(d, "finalize", &finalize)?;
             final_receipts.push(append(
+                self,
                 d,
                 RecordType::Finalize,
                 c.sequence,
@@ -668,6 +463,7 @@ impl Engine {
         for d in &members {
             store_object(d, "publication", &publication)?;
             publication_receipts.push(append(
+                self,
                 d,
                 RecordType::Publication,
                 c.sequence,
@@ -884,3 +680,267 @@ mod cache_budget_tests;
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/publication/history_baseline_tests.rs"]
 mod history_baseline_tests;
+
+impl crate::engine::PlanningContext<'_> {
+    pub(crate) fn prepare_publication(
+        &self,
+        next: State,
+        prepared: Vec<Prepared>,
+        result: OperationResult,
+        maximum: usize,
+    ) -> Result<DetachedPublication> {
+        self.prepare_publication_bounded(next, prepared, result, maximum, maximum)
+    }
+}
+
+impl crate::engine::PlanningContext<'_> {
+    fn prepare_publication_bounded(
+        &self,
+        next: State,
+        prepared: Vec<Prepared>,
+        result: OperationResult,
+        maximum: usize,
+        cache_maximum: usize,
+    ) -> Result<DetachedPublication> {
+        let members = self.members();
+        let mut required = BTreeMap::<String, u64>::new();
+        for p in &prepared {
+            for slot in &p.placement.route_slot_ids {
+                let disk = self.disk(slot)?;
+                if verify_payload(
+                    &version_dir(disk, &p.version.history_tree_id, &p.version.version_id),
+                    &p.version,
+                )
+                .is_ok()
+                {
+                    continue;
+                }
+                *required.entry(slot.clone()).or_default() = required
+                    .get(slot)
+                    .copied()
+                    .unwrap_or(0)
+                    .checked_add(p.version.logical_size)
+                    .ok_or_else(|| {
+                        Error::new(
+                            storage_contract::ErrorCode::ResourceLimit,
+                            "admission bytes overflow",
+                        )
+                    })?;
+            }
+        }
+        for (slot, bytes) in &required {
+            let d = self.disk(slot)?;
+            validate_seal(self.config, d)?;
+            let free = available(&d.root)?;
+            let budget = d
+                .capacity_bytes
+                .map(|limit| limit.saturating_sub(self.used_bytes(slot)))
+                .unwrap_or(u64::MAX);
+            if bytes.saturating_add(self.config.metadata_reserve_bytes) > free || *bytes > budget {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::NoSpace,
+                    format!("fixed route slot {slot} cannot reserve the complete payload"),
+                ));
+            }
+        }
+        // Resolve real page hashes and enforce every metadata bound without
+        // publishing files or journal records. No estimate enters the decision.
+        let config_hash = object_hash("publication-config", &self.config)?;
+        let baseline = self
+            .published_state_base
+            .as_ref()
+            .filter(|base| base.matches(self, &config_hash));
+        let snapshot = match baseline.and_then(|base| {
+            base.snapshot_basis
+                .as_ref()
+                .filter(|basis| basis.matches_snapshot(&base.snapshot))
+        }) {
+            Some(basis) => prepare_snapshot_incremental(self.state, &next, basis, maximum)?,
+            None => prepare_snapshot(&next, maximum)?,
+        };
+        let snapshot_hash = snapshot.hash.clone();
+        #[cfg(test)]
+        assert_eq!(
+            snapshot_hash,
+            prepare_snapshot(&next, maximum)?.hash,
+            "incremental snapshot differs from full encoding"
+        );
+        let (history_manifest_hashes, manifests) = match self
+            .published_state_base
+            .as_ref()
+            .filter(|base| base.matches(self, &config_hash))
+        {
+            Some(base) => crate::history_package::prepare_history_manifests_incremental(
+                self.state,
+                &next,
+                &base.roots,
+                &members,
+                maximum,
+            )?,
+            None => crate::history_package::prepare_history_manifests(&next, maximum)?,
+        };
+        // The full implementation remains an independent oracle in every
+        // engine publication test, including merge/split/restore workflows.
+        #[cfg(test)]
+        assert_eq!(
+            history_manifest_hashes,
+            crate::history_package::prepare_history_manifests(&next, maximum)?.0,
+            "incremental history roots differ from complete projection",
+        );
+        let candidate = Candidate {
+            pool_id: self.config.pool_id.clone(),
+            sequence: next.sequence,
+            transaction_id: new_id("tx"),
+            operation_id: result.operation_id.clone(),
+            request_digest: result.request_digest.clone(),
+            previous_snapshot: self.snapshot.clone(),
+            snapshot_hash,
+            versions: prepared
+                .iter()
+                .map(|p| VersionEvidence {
+                    version: p.version.clone(),
+                    placement: p.placement.clone(),
+                })
+                .collect(),
+            metadata_disk_ids: members.iter().map(|d| d.disk_id.clone()).collect(),
+            history_manifest_hashes,
+        };
+        crate::metadata_budget::preflight_publication_prepared(
+            self.config,
+            &candidate,
+            &result,
+            &next,
+            None,
+            maximum,
+            Some(&snapshot),
+        )?;
+        crate::container_storage::validate_new_projection_paths(self.state, &next)?;
+        let preparation = PayloadPreparation::new(self.config, &candidate)?;
+        self.prepare_payloads(&prepared)?;
+        let verified = preparation.verify(self.config, &candidate)?;
+        // Payload installation establishes the physical container, but no decision
+        // exists yet. Encode its complete projection before ACCEPT can be written.
+        let names =
+            crate::container_storage::prepare_names(self.config, self.state, &next, cache_maximum)?;
+        snapshot.store(&members, &next)?;
+        let snapshot_basis = snapshot.reuse_basis();
+        for manifest in manifests {
+            manifest.store(&members)?;
+        }
+        Ok(DetachedPublication {
+            next,
+            candidate,
+            result,
+            verified,
+            names,
+            base_root: self.root.to_path_buf(),
+            base_snapshot: self.snapshot.clone(),
+            base_sequence: self.state.sequence,
+            base_next_slot: self.next_slot,
+            config_hash,
+            snapshot_basis,
+        })
+    }
+}
+
+impl crate::engine::PlanningContext<'_> {
+    fn prepare_payloads(&self, prepared: &[Prepared]) -> Result<()> {
+        // Versions of the same file can share a named container. Preserve their
+        // order, and each version's route chain, while independent files copy
+        // with bounded parallel workers. No decision is written until all join.
+        let mut by_file = BTreeMap::<&str, Vec<&Prepared>>::new();
+        for payload in prepared {
+            by_file
+                .entry(&payload.version.file_id)
+                .or_default()
+                .push(payload);
+        }
+        let groups: Vec<_> = by_file.into_values().collect();
+        run_payload_groups(&groups, |payload| self.prepare_payload(payload))
+    }
+}
+
+impl crate::engine::PlanningContext<'_> {
+    pub(crate) fn prepare_payload(&self, p: &Prepared) -> Result<()> {
+        let mut source = p.source.clone();
+        for slot in &p.placement.route_slot_ids {
+            let disk = self.disk(slot)?;
+            validate_seal(self.config, disk)?;
+            let directory = version_dir(disk, &p.version.history_tree_id, &p.version.version_id);
+            match read_json::<FileVersion>(&directory.join("version.json")) {
+                Ok(existing) => {
+                    if object_hash("version", &existing)? != object_hash("version", &p.version)? {
+                        return Err(Error::new(
+                            storage_contract::ErrorCode::ObjectCollision,
+                            "version identity already exists with different bytes",
+                        ));
+                    }
+                    verify_payload(&directory, &p.version)?;
+                }
+                Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+                | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+                    if error.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    let staging = disk.root.join("staging").join(new_id("op"));
+                    private_dir(&staging.join("content"))?;
+                    let target = staging.join("content").join(&p.version.creation_name);
+                    let (size, hash, checks) = full_copy(
+                        &source,
+                        &target,
+                        self.config.checksum_chunk_bytes,
+                        self.config.max_file_bytes,
+                    )?;
+                    if size != p.version.logical_size
+                        || hash != p.version.content_hash
+                        || blake3::hash(&checks.encode()?).to_hex().as_str()
+                            != p.version.checksum_manifest_hash
+                    {
+                        return Err(Error::new(
+                            storage_contract::ErrorCode::SourceChanged,
+                            "prepared full file differs from the sealed input",
+                        ));
+                    }
+                    write_json(&staging.join("version.json"), &p.version, false)?;
+                    write_atomic(&staging.join("checksums.bin"), &checks.encode()?, false)?;
+                    write_json(
+                        &staging.join("payload.json"),
+                        &json!({"payload_id":format!("payload_{}",&p.version.version_id[4..]),"version_id":p.version.version_id,"kind":"FULL","size":size.to_string(),"content_hash":hash}),
+                        false,
+                    )?;
+                    sync_dir(&staging)?;
+                    private_dir(directory.parent().expect("version parent"))?;
+                    let staging_parent = platform_io::fs_safety::linux::OpenAt2Root::open(
+                        staging.parent().expect("staging parent"),
+                        platform_io::fs_safety::linux::MountPolicy::SameMount,
+                    )
+                    .map_err(|error| {
+                        let message = error.to_string();
+                        Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
+                    })?;
+                    let version_parent = platform_io::fs_safety::linux::OpenAt2Root::open(
+                        directory.parent().expect("version parent"),
+                        platform_io::fs_safety::linux::MountPolicy::SameMount,
+                    )
+                    .map_err(|error| {
+                        let message = error.to_string();
+                        Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
+                    })?;
+                    rustix::fs::renameat_with(
+                        staging_parent.directory(),
+                        staging.file_name().expect("staging name"),
+                        version_parent.directory(),
+                        directory.file_name().expect("version name"),
+                        rustix::fs::RenameFlags::NOREPLACE,
+                    )
+                    .map_err(std::io::Error::from)?;
+                    sync_dir(directory.parent().expect("version parent"))?;
+                }
+                Err(error) => return Err(error),
+            }
+            // Install a real version file in this file's named container before
+            // any protection receipt is issued. The next level reads this copy.
+            source = crate::container_storage::install_version_content(&directory, &p.version)?;
+        }
+        Ok(())
+    }
+}

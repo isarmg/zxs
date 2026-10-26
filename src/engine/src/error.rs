@@ -208,3 +208,9 @@ fn filesystem_code(source: &platform_io::fs_safety::Error) -> ErrorCode {
         | platform_io::fs_safety::Error::BudgetExceeded => ErrorCode::UnsafePath,
     }
 }
+
+impl From<name_policy::Error> for Error {
+    fn from(source: name_policy::Error) -> Self {
+        Self::Contract(source.into())
+    }
+}

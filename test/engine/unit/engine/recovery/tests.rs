@@ -1082,3 +1082,112 @@ fn missing_payload_only_replica_preserves_history_but_not_new_copy_admission() {
         }
     }
 }
+
+#[test]
+fn replay_receipts_survive_multiple_tail_slot_advances_for_checkpoint() {
+    let temp = tempfile::tempdir().unwrap();
+    let disk = Config::development([temp.path().join("disk")])
+        .disks
+        .remove(0);
+    private_dir(log_path(&disk).parent().unwrap()).unwrap();
+    let mut writer = JournalWriter::create(&disk).unwrap();
+    writer
+        .append(
+            &disk,
+            RecordType::Prepare,
+            1,
+            &"a".repeat(64),
+            &"b".repeat(64),
+        )
+        .unwrap();
+    drop(writer);
+    let opened = OpenJournal::scan(&disk).unwrap();
+    let mut replayed = opened.scan.records.clone();
+    let mut writer = opened.into_writer(&disk).unwrap();
+    for sequence in 1..=4 {
+        let candidate = if sequence == 1 {
+            "a".repeat(64)
+        } else {
+            format!("{sequence:064x}")
+        };
+        writer
+            .append(
+                &disk,
+                RecordType::Publication,
+                sequence,
+                &candidate,
+                &"b".repeat(64),
+            )
+            .unwrap();
+        retain_replayed_records(&mut replayed, writer.records());
+    }
+    let expected = scan(&disk).unwrap().records;
+    assert_eq!(
+        canonical_json(&replayed).unwrap(),
+        canonical_json(&expected).unwrap()
+    );
+    assert_eq!(
+        replayed
+            .iter()
+            .filter(|(r, _)| r.record_type == RecordType::Publication)
+            .count(),
+        4
+    );
+    assert_eq!(writer.records().len(), 1);
+}
+
+#[test]
+fn transient_seal_read_failure_requires_reopening_missing_journal_admission() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("system");
+    let config = Config::development((0..3).map(|i| temp.path().join(format!("disk-{i}"))));
+    let mut engine = Engine::initialize(&root, config.clone()).unwrap();
+    engine
+        .create_repository("published", "P01", 1, "admin", &new_id("op"))
+        .unwrap();
+    drop(engine);
+    let mut engine =
+        Engine::prepare_workspace_recovery(root.clone(), config.clone().try_into().unwrap())
+            .unwrap();
+    let seal = config.disks[0].root.join("disk.json");
+    let unavailable = seal.with_extension("unavailable");
+    std::fs::rename(&seal, &unavailable).unwrap();
+    engine.recover_mode(RecoveryMode::PreservePending).unwrap();
+    std::fs::rename(&unavailable, &seal).unwrap();
+    assert!(engine.is_read_only());
+    assert_eq!(
+        engine
+            .prepare_degraded_recovery(&new_id("op"), "admin", "retry after transient I/O")
+            .unwrap_err()
+            .code(),
+        ErrorCode::RecoveryRequired
+    );
+    drop(engine);
+    let reopened = Engine::open_for_recovery(&root).unwrap();
+    reopened.require_recovery_locks().unwrap();
+    assert_eq!(reopened.journals.len(), 3);
+}
+
+#[test]
+fn preservation_mode_keeps_partially_written_publication_bytes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("system");
+    let config = Config::development((0..3).map(|i| temp.path().join(format!("disk-{i}"))));
+    let mut engine = Engine::initialize(&root, config.clone()).unwrap();
+    engine
+        .create_repository("published", "P01", 1, "admin", &new_id("op"))
+        .unwrap();
+    drop(engine);
+    let path = log_path(&config.disks[0]);
+    let complete = std::fs::read(&path).unwrap();
+    std::fs::write(&path, &complete[..complete.len() - 5]).unwrap();
+    let torn = std::fs::read(&path).unwrap();
+    assert_eq!(
+        Engine::open_for_recovery(&root).err().unwrap().code(),
+        ErrorCode::RecoveryRequired
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), torn);
+    let recovered = Engine::open(&root).unwrap();
+    assert!(!recovered.is_read_only());
+    assert_eq!(std::fs::read(&path).unwrap(), complete);
+}

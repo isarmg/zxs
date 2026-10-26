@@ -35,7 +35,7 @@ impl NamespaceDraft {
             draft.record(|work| work.source_visits += 1);
             assert!(
                 draft
-                    .index_insert(entry.lookup_key.clone(), draft.slots.len())
+                    .index_insert(entry.lookup_key().to_owned(), draft.slots.len())
                     .is_none(),
                 "invariant: admitted namespace lookup keys are unique"
             );
@@ -44,13 +44,7 @@ impl NamespaceDraft {
         draft
     }
 
-    /// Lookup is intentionally not create-path validation: folded and NFD
-    /// query spellings can resolve an existing canonical display path.
-    pub(crate) fn get(&self, path: &str) -> Option<&Entry> {
-        self.get_key(&name_policy::path_key(path))
-    }
-
-    fn get_key(&self, key: &str) -> Option<&Entry> {
+    pub(crate) fn get_key(&self, key: &str) -> Option<&Entry> {
         #[cfg(test)]
         self.record(|work| work.map_operations += 1);
         self.by_path
@@ -65,7 +59,7 @@ impl NamespaceDraft {
     }
 
     pub(crate) fn replace(&mut self, entry: Entry) {
-        if let Some(previous) = self.index_insert(entry.lookup_key.clone(), self.slots.len()) {
+        if let Some(previous) = self.index_insert(entry.lookup_key().to_owned(), self.slots.len()) {
             self.slots[previous] = None;
         }
         self.slots.push(Some(entry));
@@ -73,15 +67,15 @@ impl NamespaceDraft {
         self.record(|work| work.appended_slots += 1);
     }
 
-    pub(crate) fn ensure_parents(&mut self, path: &str) -> Result<()> {
-        let parts = path.split('/').collect::<Vec<_>>();
-        let mut parent = String::new();
-        for component in parts.iter().take(parts.len().saturating_sub(1)) {
-            if !parent.is_empty() {
-                parent.push('/');
-            }
-            parent.push_str(component);
-            if let Some(existing) = self.get(&parent) {
+    pub(crate) fn ensure_parents(&mut self, path: &name_policy::PortablePath) -> Result<()> {
+        let mut parents = Vec::new();
+        let mut parent = path.parent();
+        while let Some(path) = parent {
+            parent = path.parent();
+            parents.push(path);
+        }
+        for path in parents.into_iter().rev() {
+            if let Some(existing) = self.get_key(path.key()) {
                 if existing.kind != NamespaceEntryKind::Directory {
                     return Err(Error::new(
                         storage_contract::ErrorCode::ParentNotDirectory,
@@ -91,9 +85,7 @@ impl NamespaceDraft {
             } else {
                 self.replace(Entry {
                     entry_id: new_id("entry"),
-                    path: parent.clone(),
-                    name: (*component).into(),
-                    lookup_key: name_policy::path_key(&parent),
+                    path,
                     kind: NamespaceEntryKind::Directory,
                     file_id: String::new(),
                     version_id: String::new(),

@@ -449,6 +449,25 @@ struct RetryProbe {
 }
 
 impl crate::Backend for RetryProbe {
+    fn snapshot_at(
+        &self,
+        _: &crate::auth::Identity,
+        _: &str,
+        _: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        unreachable!("this test backend does not serve snapshots")
+    }
+
+    fn lookup_at(
+        &self,
+        _: &crate::auth::Identity,
+        _: &str,
+        _: &str,
+        _: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        unreachable!("this test backend does not serve snapshot lookups")
+    }
+
     fn retry_storage(&self, _: &Identity) -> Result<Value, ApiError> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(json!({"retryable":true}))
@@ -461,7 +480,7 @@ impl crate::Backend for RetryProbe {
         _: &Identity,
         _: &str,
         _: &str,
-        _: &str,
+        _: &name_policy::PortablePath,
         _: &crate::UploadSource,
     ) -> Result<Value, ApiError> {
         Err(ApiError::unsupported())

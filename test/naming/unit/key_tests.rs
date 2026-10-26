@@ -61,8 +61,8 @@ fn canonical_equivalence_and_long_sequences_preserve_keys() {
 fn normalization_check_keeps_original_error_and_suggestion() {
     for input in ["e\u{301}", "A\u{30a}", "\u{1100}\u{1161}\u{11a8}"] {
         let error = validate_name(input).unwrap_err();
-        assert_eq!(error.code(), storage_contract::ErrorCode::NameNotNormalized);
-        assert!(error.message().contains(&input.nfc().collect::<String>()));
+        assert!(matches!(error, crate::Error::NotNormalized(_)));
+        assert!(error.to_string().contains(&input.nfc().collect::<String>()));
     }
 }
 

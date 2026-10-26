@@ -148,12 +148,16 @@ fn unsupported_legacy_containers_are_rejected_without_cleanup_or_migration() {
     for legacy_name in ["pending-branches", "legacy"] {
         for bytes in [b"".as_slice(), b"preserve old bytes".as_slice()] {
             let temporary = tempfile::tempdir().unwrap();
-            let config = Config::development([
+            let config = ValidatedConfig::try_from(Config::development([
                 temporary.path().join("p"),
                 temporary.path().join("b"),
                 temporary.path().join("c"),
-            ]);
-            drop(Engine::initialize(&temporary.path().join("system"), config.clone()).unwrap());
+            ]))
+            .unwrap();
+            drop(
+                Engine::initialize_validated(&temporary.path().join("system"), config.clone())
+                    .unwrap(),
+            );
             let history_id = new_id("history");
             let item = version(
                 &State::default(),
@@ -203,12 +207,13 @@ fn unsupported_legacy_containers_are_rejected_without_cleanup_or_migration() {
 #[test]
 fn inherited_references_update_cache_without_creating_files_and_follow_rename() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = Config::development([
+    let config = ValidatedConfig::try_from(Config::development([
         temporary.path().join("p"),
         temporary.path().join("b"),
         temporary.path().join("c"),
-    ]);
-    drop(Engine::initialize(&temporary.path().join("state"), config.clone()).unwrap());
+    ]))
+    .unwrap();
+    drop(Engine::initialize_validated(&temporary.path().join("state"), config.clone()).unwrap());
     let history_id = new_id("history");
     let file = new_id("file");
     let item = version(
@@ -274,12 +279,13 @@ fn inherited_references_update_cache_without_creating_files_and_follow_rename() 
 #[test]
 fn physical_move_preserves_one_body_and_old_version_identity_across_replay() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = Config::development([
+    let config = ValidatedConfig::try_from(Config::development([
         temporary.path().join("p"),
         temporary.path().join("b"),
         temporary.path().join("c"),
-    ]);
-    drop(Engine::initialize(&temporary.path().join("state"), config.clone()).unwrap());
+    ]))
+    .unwrap();
+    drop(Engine::initialize_validated(&temporary.path().join("state"), config.clone()).unwrap());
     let history_id = new_id("history");
     let file = new_id("file");
     let item = version(
@@ -334,12 +340,13 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
     for fault in ["after_finalize", "after_container_names"] {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("state");
-        let config = Config::development([
+        let config = ValidatedConfig::try_from(Config::development([
             temporary.path().join("p"),
             temporary.path().join("b"),
             temporary.path().join("c"),
-        ]);
-        let mut engine = Engine::initialize(&root, config.clone()).unwrap();
+        ]))
+        .unwrap();
+        let mut engine = Engine::initialize_validated(&root, config.clone()).unwrap();
         let repo = engine
             .create_repository("移动恢复", "P01", 3, "alice", &new_id("op"))
             .unwrap();
@@ -483,12 +490,13 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
 #[test]
 fn canonical_location_handles_reserved_looking_user_names_and_prefix_moves() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = Config::development([
+    let config = ValidatedConfig::try_from(Config::development([
         temporary.path().join("p"),
         temporary.path().join("b"),
         temporary.path().join("c"),
-    ]);
-    drop(Engine::initialize(&temporary.path().join("state"), config.clone()).unwrap());
+    ]))
+    .unwrap();
+    drop(Engine::initialize_validated(&temporary.path().join("state"), config.clone()).unwrap());
     let history_id = new_id("history");
     let file = new_id("file");
     let item = version(
@@ -524,12 +532,13 @@ fn canonical_location_handles_reserved_looking_user_names_and_prefix_moves() {
 #[test]
 fn new_name_admission_does_not_revalidate_published_projection_spelling() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = Config::development([
+    let config = ValidatedConfig::try_from(Config::development([
         temporary.path().join("p"),
         temporary.path().join("b"),
         temporary.path().join("c"),
-    ]);
-    drop(Engine::initialize(&temporary.path().join("state"), config.clone()).unwrap());
+    ]))
+    .unwrap();
+    drop(Engine::initialize_validated(&temporary.path().join("state"), config.clone()).unwrap());
     let history_id = new_id("history");
     let file = new_id("file");
     let item = version(&State::default(), &history_id, &file, "file.txt", b"body");
@@ -692,12 +701,14 @@ fn installation_moves_one_ordinary_inode_and_missing_paths_remain_classifiable()
 #[test]
 fn rename_and_note_projection_replays_without_changing_body_identity() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = Config::development([
+    let config = ValidatedConfig::try_from(Config::development([
         temporary.path().join("primary"),
         temporary.path().join("backup"),
         temporary.path().join("tertiary"),
-    ]);
-    let engine = Engine::initialize(&temporary.path().join("state"), config.clone()).unwrap();
+    ]))
+    .unwrap();
+    let engine =
+        Engine::initialize_validated(&temporary.path().join("state"), config.clone()).unwrap();
     drop(engine);
     let history_id = new_id("history");
     let file = new_id("file");
@@ -781,11 +792,12 @@ fn rename_and_note_projection_replays_without_changing_body_identity() {
 #[test]
 fn empty_name_projection_has_no_staging_file() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = Config::development([
+    let config = ValidatedConfig::try_from(Config::development([
         temporary.path().join("p"),
         temporary.path().join("b"),
         temporary.path().join("c"),
-    ]);
+    ]))
+    .unwrap();
     let previous = State::default();
     let mut metadata_only = previous.clone();
     metadata_only.sequence = 1;
@@ -824,9 +836,7 @@ fn capture_fixture() -> (State, String, String) {
         .into_iter()
         .map(|name| Entry {
             entry_id: new_id("entry"),
-            path: format!("folder/{name}"),
-            name: name.into(),
-            lookup_key: name_policy::path_key(&format!("folder/{name}")),
+            path: name_policy::PortablePath::parse(&(format!("folder/{name}"))).unwrap(),
             kind: NamespaceEntryKind::File,
             file_id: file.clone(),
             version_id: new_id("ver"),

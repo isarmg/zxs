@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn failed_publication_reconciliation_retries_without_restaging_or_second_version() {
-    for failure in [RECONCILIATION_TREE, RECONCILIATION_CONTENT] {
+    for failure in [RECONCILIATION_SNAPSHOT, RECONCILIATION_CONTENT] {
         for lost_reply in [false, true] {
             let (_temp, shared, backend, branch) = fixture();
             let mut one = session(shared, &branch);
@@ -57,7 +57,7 @@ fn failed_publication_reconciliation_retries_without_restaging_or_second_version
 
 #[test]
 fn failed_publication_reconciliation_preserves_later_bytes_for_authorized_rebase() {
-    for failure in [RECONCILIATION_TREE, RECONCILIATION_CONTENT] {
+    for failure in [RECONCILIATION_SNAPSHOT, RECONCILIATION_CONTENT] {
         let (_temp, shared, backend, branch) = fixture();
         let mut one = session(shared, &branch);
         let (opened, file) = open_file(&mut one, true);

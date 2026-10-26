@@ -27,17 +27,17 @@ fn history_baseline_requires_exact_state_allocation_snapshot_sequence_and_config
             .unwrap()
             .matches_snapshot(&base.snapshot)
     );
-    assert!(base.matches(&engine, &config_hash(&engine)));
-    assert!(!base.matches(&engine, "wrong config hash"));
+    assert!(base.matches(&engine.planning_context(), &config_hash(&engine)));
+    assert!(!base.matches(&engine.planning_context(), "wrong config hash"));
     let saved = engine.snapshot.take();
-    assert!(!base.matches(&engine, &config_hash(&engine)));
+    assert!(!base.matches(&engine.planning_context(), &config_hash(&engine)));
     engine.snapshot = saved;
     // Same values and sequence do not authorize another allocation. A Weak
     // baseline also forces Arc::make_mut to detach even with one strong owner.
     let bytes = canonical_json(engine.state()).unwrap();
     Arc::make_mut(&mut engine.state).plans.clear();
     assert_eq!(canonical_json(engine.state()).unwrap(), bytes);
-    assert!(!base.matches(&engine, &config_hash(&engine)));
+    assert!(!base.matches(&engine.planning_context(), &config_hash(&engine)));
     engine
         .persist_auth_state(json!({"auth":"next"}), "alice", &new_id("op"))
         .unwrap();
@@ -46,7 +46,7 @@ fn history_baseline_requires_exact_state_allocation_snapshot_sequence_and_config
             .published_state_base
             .as_ref()
             .unwrap()
-            .matches(&engine, &config_hash(&engine))
+            .matches(&engine.planning_context(), &config_hash(&engine))
     );
     let published = engine.published_state_base.as_ref().unwrap();
     assert!(
@@ -80,7 +80,7 @@ fn preparation_and_indeterminate_failure_never_advance_the_baseline() {
         &base,
         engine.published_state_base.as_ref().unwrap()
     ));
-    assert!(base.matches(&engine, &config_hash(&engine)));
+    assert!(base.matches(&engine.planning_context(), &config_hash(&engine)));
     engine.inject_fault_once("after_accept_1");
     let error = engine
         .persist_auth_state(json!({"auth":"accepted"}), "alice", &new_id("op"))
@@ -116,5 +116,5 @@ fn post_publication_index_failure_does_not_mint_a_new_reuse_receipt() {
         &base,
         engine.published_state_base.as_ref().unwrap()
     ));
-    assert!(!base.matches(&engine, &config_hash(&engine)));
+    assert!(!base.matches(&engine.planning_context(), &config_hash(&engine)));
 }

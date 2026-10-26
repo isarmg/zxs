@@ -179,7 +179,7 @@ fn copy_build_rejects_replacement_after_replica_verification_before_candidate_mu
                 crate::business::VersionBuild {
                     history: &original.history_tree_id,
                     file_id: &new_id("file"),
-                    path: "copy",
+                    path: &name_policy::PortablePath::parse("copy").unwrap(),
                     source: &source,
                     primary: &original.creation_primary_slot_id,
                     copies: 3,

@@ -15,10 +15,13 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
         let repo = engine
             .create_repository("Namespace preconditions", "P01", 3, "admin", &new_id("op"))
             .unwrap();
-        let change = |kind: &str| NamespaceOperation {
-            kind: kind.parse().unwrap(),
-            path: "Documents".into(),
-            destination: (kind == "rename").then(|| "Moved".into()),
+        let change = |kind: &str| {
+            NamespaceOperation::parse(
+                kind.parse().unwrap(),
+                "Documents",
+                (kind == "rename").then_some("Moved"),
+            )
+            .unwrap()
         };
         engine
             .file_namespace(&repo.repository_id, change("mkdir"), "admin", &new_id("op"))
@@ -92,10 +95,13 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
     let repo = engine
         .create_repository("Canonical queries", "P01", 1, "admin", &new_id("op"))
         .unwrap();
-    let change = |kind: &str, path: &str, destination: Option<&str>| NamespaceOperation {
-        kind: kind.parse().unwrap(),
-        path: path.into(),
-        destination: destination.map(str::to_owned),
+    let change = |kind: &str, path: &str, destination: Option<&str>| {
+        NamespaceOperation::parse(
+            kind.parse().unwrap(),
+            path,
+            (destination.map(str::to_owned)).as_deref(),
+        )
+        .unwrap()
     };
     engine
         .file_namespace(
@@ -107,14 +113,11 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
         .unwrap();
     let original = engine.list_tree(&repo.main_branch_id).unwrap();
     for operation in [
-        change("mkdir", "Cafe\u{301}/new", None),
-        change("rename", "Café/Å", Some("Café/e\u{301}")),
+        NamespaceOperation::parse("mkdir".parse().unwrap(), "Cafe\u{301}/new", None),
+        NamespaceOperation::parse("rename".parse().unwrap(), "Café/Å", Some("Café/e\u{301}")),
     ] {
         assert_eq!(
-            engine
-                .file_namespace(&repo.repository_id, operation, "admin", &new_id("op"))
-                .unwrap_err()
-                .code(),
+            operation.unwrap_err().code(),
             storage_contract::ErrorCode::NameNotNormalized
         );
         assert_eq!(
@@ -197,11 +200,12 @@ fn canonical_equivalent_workspace_source_survives_reopen_before_commit() {
     engine
         .namespace_operation(
             &workspace.workspace_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Rename,
-                path: "Cafe\u{301}/A\u{30a}.txt".into(),
-                destination: Some("Café/가.txt".into()),
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                "Cafe\u{301}/A\u{30a}.txt",
+                Some("Café/가.txt"),
+            )
+            .unwrap(),
         )
         .unwrap();
     drop(engine);
@@ -223,7 +227,7 @@ fn canonical_equivalent_workspace_source_survives_reopen_before_commit() {
         .iter()
         .find(|entry| entry.path == "Café/가.txt")
         .unwrap();
-    assert_eq!(renamed.name, "가.txt");
+    assert_eq!(renamed.name(), "가.txt");
     assert_eq!(renamed.entry_id, original.entry_id);
     assert_eq!(renamed.file_id, original.file_id);
     assert_eq!(renamed.version_id, original.version_id);

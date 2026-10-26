@@ -33,7 +33,7 @@ mod published_selection_tests;
 #[path = "reconciliation_tests.rs"]
 mod reconciliation_tests;
 
-const RECONCILIATION_TREE: usize = 1;
+const RECONCILIATION_SNAPSHOT: usize = 1;
 const RECONCILIATION_CONTENT: usize = 2;
 
 struct LostCommitReply {
@@ -51,6 +51,41 @@ impl LostCommitReply {
     }
 }
 impl Backend for LostCommitReply {
+    fn snapshot_at(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        commit: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        if self
+            .reconciliation_failure
+            .compare_exchange(
+                RECONCILIATION_SNAPSHOT,
+                0,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            return Err(ApiError::new(
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
+                storage_contract::ErrorCode::MetadataUnavailable,
+                "injected one-shot published snapshot read failure",
+            ));
+        }
+        self.inner.snapshot_at(identity, branch, commit)
+    }
+
+    fn lookup_at(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        commit: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        self.inner.lookup_at(identity, branch, commit, path)
+    }
+
     fn call(
         &self,
         action: crate::BackendAction,
@@ -58,18 +93,6 @@ impl Backend for LostCommitReply {
         input: Value,
     ) -> Result<Value, ApiError> {
         self.calls.lock().unwrap().push((action, input.clone()));
-        if action == crate::BackendAction::Tree
-            && self
-                .reconciliation_failure
-                .compare_exchange(RECONCILIATION_TREE, 0, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-        {
-            return Err(ApiError::new(
-                ::http::StatusCode::SERVICE_UNAVAILABLE,
-                storage_contract::ErrorCode::MetadataUnavailable,
-                "injected one-shot published tree read failure",
-            ));
-        }
         if action == crate::BackendAction::Version && self.revoked.load(Ordering::SeqCst) {
             return Err(ApiError::forbidden());
         }
@@ -84,7 +107,7 @@ impl Backend for LostCommitReply {
                 identity,
                 &workspace.workspace_id,
                 &new_id("entry"),
-                "report.txt",
+                &name_policy::PortablePath::parse("report.txt").unwrap(),
                 &crate::UploadSource::from_file(source.reopen().unwrap(), u64::MAX)?,
             )?;
             self.inner.call(crate::BackendAction::CommitWorkspaceInternal, identity, json!({
@@ -110,7 +133,7 @@ impl Backend for LostCommitReply {
         identity: &Identity,
         workspace: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &crate::UploadSource,
     ) -> Result<Value, ApiError> {
         self.uploads.fetch_add(1, Ordering::SeqCst);
@@ -1131,7 +1154,7 @@ fn external_same_file_change_rejects_rebase_and_preserves_work_bytes() {
             &one.identity,
             &workspace.workspace_id,
             &opened.entry_id,
-            "report.txt",
+            &name_policy::PortablePath::parse("report.txt").unwrap(),
             &crate::UploadSource::from_file(File::open(&source).unwrap(), u64::MAX).unwrap(),
         )
         .unwrap();
@@ -1683,10 +1706,15 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
     file.write_all_at(b"new", 0).unwrap();
     session.dirty(opened.handle).unwrap();
     session.flush(opened.handle).unwrap();
+    // A second dirty generation compares two published snapshots using the
+    // admitted path, even though the client originally opened an NFD spelling.
+    file.write_all_at(b"end", 0).unwrap();
+    session.dirty(opened.handle).unwrap();
+    session.flush(opened.handle).unwrap();
     session.close(opened.handle, false).unwrap();
     let published = session.find("e\u{301}.txt").unwrap().unwrap();
     assert_eq!(published.path, "é.txt");
-    assert_eq!(published.name, "é.txt");
+    assert_eq!(published.name(), "é.txt");
     assert_eq!(published.entry_id, original.entry_id);
     assert_eq!(published.file_id, original.file_id);
     assert_ne!(published.version_id, original.version_id);
@@ -1768,3 +1796,6 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
         .unwrap();
     assert!(session.entries().unwrap().is_empty());
 }
+
+#[path = "snapshot_semantics_tests.rs"]
+mod snapshot_semantics_tests;

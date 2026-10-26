@@ -50,21 +50,30 @@ impl Session {
     ) -> Result<Value, ApiError> {
         // Validate before this client-provided identifier can reach a path.
         storage_contract::validate_id(operation_id, "op").map_err(contract)?;
-        if kind == NamespaceOperation::Mkdir {
-            name_policy::validate_path(&path).map_err(contract)?;
+        let source_path = if kind == NamespaceOperation::Mkdir {
+            name_policy::LookupPath::from(
+                name_policy::PortablePath::parse(&path)
+                    .map_err(|source| contract(source.into()))?,
+            )
         } else {
-            name_policy::validate_lookup_path(&path).map_err(contract)?;
-        }
-        if kind == NamespaceOperation::Rename {
+            name_policy::LookupPath::parse(&path).map_err(|source| contract(source.into()))?
+        };
+        let destination_path = if kind == NamespaceOperation::Rename {
             let target = destination
                 .as_deref()
                 .ok_or_else(|| ApiError::invalid("rename needs a destination"))?;
-            name_policy::validate_path(target).map_err(contract)?;
-        } else if destination.is_some() || replace {
-            return Err(ApiError::invalid(
-                "only rename accepts a destination or replacement",
-            ));
-        }
+            Some(
+                name_policy::PortablePath::parse(target)
+                    .map_err(|source| contract(source.into()))?,
+            )
+        } else {
+            if destination.is_some() || replace {
+                return Err(ApiError::invalid(
+                    "only rename accepts a destination or replacement",
+                ));
+            }
+            None
+        };
         let _operation = OperationReservation::acquire(&self.shared, operation_id)?;
         // Namespace is not a replay API. An existing operation or recovery
         // record must be reconciled, not staged into a new workspace.
@@ -134,25 +143,27 @@ impl Session {
             record_durable = true;
             // Check exactly the immutable namespace used by this workspace.
             // A later HTTP mutation must not change the meaning of these checks.
-            let tree = self.call(
-                crate::BackendAction::Tree,
-                json!({"branch_id":self.branch,"query":{"commit_id":workspace.base_head}}),
+            let snapshot = self.shared.backend.snapshot_at(
+                &self.identity,
+                &self.branch,
+                &workspace.base_head,
             )?;
-            let entries: Vec<Entry> = json_codec::from_value(tree["entries"].clone())
-                .map_err(ApiError::invalid_source)?;
-            let find = |path: &str| {
-                let key = name_policy::path_key(path);
-                entries.iter().find(|entry| entry.lookup_key == key)
+            let entries = &snapshot.entries;
+            let find = |key: &str| {
+                entries
+                    .binary_search_by(|entry| entry.lookup_key().cmp(key))
+                    .ok()
+                    .map(|index| &entries[index])
             };
             let nonempty = |entry: &Entry| {
-                let prefix = format!("{}/", entry.lookup_key);
+                let prefix = format!("{}/", entry.lookup_key());
                 entry.kind == storage_contract::NamespaceEntryKind::Directory
                     && entries
                         .iter()
-                        .any(|child| child.lookup_key.starts_with(&prefix))
+                        .any(|child| child.lookup_key().starts_with(&prefix))
             };
             if kind == NamespaceOperation::Unlink || kind == NamespaceOperation::Rmdir {
-                let entry = find(&path).ok_or_else(|| {
+                let entry = find(source_path.key()).ok_or_else(|| {
                     ApiError::new(
                         ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::NotFound,
@@ -187,10 +198,10 @@ impl Session {
             }
             if kind == NamespaceOperation::Rename
                 && replace
-                && let Some(target) = destination.as_deref()
-                && let Some(target_entry) = find(target)
+                && let Some(target) = destination_path.as_ref()
+                && let Some(target_entry) = find(target.key())
             {
-                let source = find(&path).ok_or_else(|| {
+                let source = find(source_path.key()).ok_or_else(|| {
                     ApiError::new(
                         ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::NotFound,
@@ -212,7 +223,7 @@ impl Session {
                         ));
                     }
                     self.call(crate::BackendAction::Namespace, json!({
-                        "workspace_id":workspace.workspace_id,"kind":"delete","path":target,"destination":null
+                        "workspace_id":workspace.workspace_id,"kind":"delete","path":target.as_str(),"destination":null
                     }))?;
                 }
             }

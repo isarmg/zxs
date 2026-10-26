@@ -9,11 +9,12 @@ fn active_frozen_batch_deletion_records_live_rebased_path_exactly_once() {
     pool.engine
         .file_namespace(
             &pool.repo.repository_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Rename,
-                path: "STRASSE".into(),
-                destination: Some("renamed".into()),
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                "STRASSE",
+                Some("renamed"),
+            )
+            .unwrap(),
             "admin",
             &new_id("op"),
         )

@@ -1,7 +1,10 @@
 //! Authorization and wire adaptation for the storage engine.
 use crate::{ApiError, Backend, Content, auth::Identity};
 use json_codec::{Value, json};
-use std::{path::Path, sync::Mutex};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+};
 use storage_engine::{Engine, NamespaceOperation, Repository};
 mod admission;
 use admission::AdmissionEngine;
@@ -238,6 +241,39 @@ fn finish_authorized_upload(
 }
 
 impl Backend for EngineBackend {
+    fn snapshot_at(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+    ) -> Result<Arc<storage_contract::Commit>, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        let (commit, _) = read_projection::branch_snapshot(engine.state(), branch, Some(commit))?;
+        Ok(engine
+            .state()
+            .commits
+            .get_shared(commit)
+            .expect("invariant: admitted commit exists under the engine lock"))
+    }
+
+    fn lookup_at(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        let (_, snapshot) = read_projection::branch_snapshot(engine.state(), branch, Some(commit))?;
+        Ok(snapshot
+            .entries
+            .binary_search_by(|entry| entry.lookup_key().cmp(path.key()))
+            .ok()
+            .map(|index| snapshot.entries[index].clone()))
+    }
+
     fn call(
         &self,
         action: crate::BackendAction,
@@ -547,7 +583,7 @@ impl Backend for EngineBackend {
                     .map_err(error)?;
                 let entry = entries
                     .iter()
-                    .find(|entry| entry.lookup_key == key)
+                    .find(|entry| entry.lookup_key() == key)
                     .ok_or_else(|| {
                         ApiError::new(
                             ::http::StatusCode::NOT_FOUND,
@@ -782,16 +818,22 @@ impl Backend for EngineBackend {
             crate::BackendAction::Namespace => {
                 keys(&input, &["workspace_id", "kind", "path", "destination"])?;
                 let workspace = field(&input, "workspace_id")?;
-                let change = NamespaceOperation {
-                    kind: field(&input, "kind")?
+                let change = NamespaceOperation::parse(
+                    field(&input, "kind")?
                         .parse()
                         .map_err(ApiError::invalid_source)?,
-                    path: field(&input, "path")?.into(),
-                    destination: input
+                    field(&input, "path")?,
+                    input
                         .get("destination")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                };
+                        .filter(|value| !value.is_null())
+                        .map(|value| {
+                            value
+                                .as_str()
+                                .ok_or_else(|| ApiError::invalid("destination must be a string"))
+                        })
+                        .transpose()?,
+                )
+                .map_err(|source| error(source.into()))?;
                 sanitized(Application::new(&mut engine, identity).stage_namespace(
                     application::StageNamespace {
                         workspace_id: workspace.into(),
@@ -1175,7 +1217,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         workspace: &str,
         _item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &crate::UploadSource,
     ) -> Result<Value, ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
@@ -1212,7 +1254,7 @@ impl Backend for EngineBackend {
         identity: &Identity,
         workspace: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &crate::UploadSource,
         generation: u64,
     ) -> Result<Value, ApiError> {

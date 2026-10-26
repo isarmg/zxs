@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+name-policy.workspace = true
 data-serialization.workspace = true
 json-codec.workspace = true
 error-definition.workspace = true

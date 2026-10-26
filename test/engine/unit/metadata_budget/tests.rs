@@ -32,7 +32,7 @@ fn manifest_limit_rejects_before_any_new_payload_or_decision_and_keeps_published
             crate::business::VersionBuild {
                 history: &repo.history_tree_id,
                 file_id: &new_id("file"),
-                path: "pending.txt",
+                path: &name_policy::PortablePath::parse("pending.txt").unwrap(),
                 source: &source,
                 primary: "P01",
                 copies: 3,
@@ -46,9 +46,7 @@ fn manifest_limit_rejects_before_any_new_payload_or_decision_and_keeps_published
     commit.parent_commit_ids = vec![original.commit_id];
     commit.entries.push(Entry {
         entry_id: new_id("entry"),
-        path: "pending.txt".into(),
-        name: "pending.txt".into(),
-        lookup_key: "pending.txt".into(),
+        path: name_policy::PortablePath::parse("pending.txt").unwrap(),
         kind: NamespaceEntryKind::File,
         file_id: version.file_id.clone(),
         version_id: version.version_id.clone(),
@@ -550,7 +548,7 @@ fn reused_content_pages_have_identical_exact_tombstone_budget_without_installing
     candidate.snapshot_hash = reused.hash.clone();
     let budget = |snapshot: &PreparedSnapshot, maximum| {
         preflight_publication_prepared(
-            &engine,
+            &engine.config,
             &candidate,
             &result,
             &after,

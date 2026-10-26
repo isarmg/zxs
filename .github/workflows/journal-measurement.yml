@@ -1,0 +1,68 @@
+name: Owned journal syscall comparison
+
+on:
+  push:
+    branches: ['verify/owned-journal-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: '2'
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install tracer and repository toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y strace
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
+      - name: Build baseline and candidate with separate targets
+        run: |
+          set -euo pipefail
+          mkdir -p journal-measurement
+          git worktree add --detach "$RUNNER_TEMP/zxs-journal-baseline" f1d2f8c2d303ff47a4817acf3b46c45e0d2cda4b
+          for label in baseline candidate; do
+            source="$GITHUB_WORKSPACE"
+            if [ "$label" = baseline ]; then source="$RUNNER_TEMP/zxs-journal-baseline"; fi
+            (
+              cd "$source"
+              CARGO_TARGET_DIR="$RUNNER_TEMP/journal-target-$label" \
+                cargo test -p storage-engine --lib --no-run --locked --message-format=json
+            ) > "journal-measurement/$label-build.json" 2> "journal-measurement/$label-build.log"
+          done
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for label in ('baseline', 'candidate'):
+              artifacts = [json.loads(line) for line in Path(f'journal-measurement/{label}-build.json').read_text().splitlines()]
+              binaries = [a['executable'] for a in artifacts if a.get('executable') and a.get('target', {}).get('name') == 'storage_engine']
+              assert len(binaries) == 1, binaries
+              Path(f'journal-measurement/{label}-binary.txt').write_text(binaries[0])
+          PY
+      - name: Trace identical publication and recovery fixture
+        run: |
+          python3 tools/perf-check/journal-syscalls.py \
+            "$(cat journal-measurement/baseline-binary.txt)" \
+            "$(cat journal-measurement/candidate-binary.txt)" \
+            journal-measurement
+      - name: Preserve raw evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: owned-journal-syscalls-${{ github.sha }}
+          path: journal-measurement/
+          if-no-files-found: error

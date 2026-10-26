@@ -9,8 +9,8 @@ use std::{borrow::Borrow, collections::BTreeMap, ops::Index, sync::Arc};
 
 /// An ordered record map with isolated copy-on-write transaction values.
 ///
-/// Its serialized representation is the ordinary map of records. Backing
-/// handles are private so callers cannot bypass record-level isolation.
+/// Its serialized representation is the ordinary map of records. Shared record
+/// handles preserve copy-on-write isolation when a reader outlives the map borrow.
 #[derive(Debug, PartialEq)]
 pub struct SharedRecords<T> {
     records: Arc<BTreeMap<String, Arc<T>>>,
@@ -56,6 +56,15 @@ impl<T> SharedRecords<T> {
         String: Borrow<Q>,
     {
         self.records.get(key).map(Arc::as_ref)
+    }
+
+    /// Share one record across a lock or owner lifetime without copying its payload.
+    /// Later writes through this map or `Arc::make_mut` remain isolated.
+    pub fn get_shared<Q: Ord + ?Sized>(&self, key: &Q) -> Option<Arc<T>>
+    where
+        String: Borrow<Q>,
+    {
+        self.records.get(key).map(Arc::clone)
     }
 
     pub fn contains_key<Q: Ord + ?Sized>(&self, key: &Q) -> bool

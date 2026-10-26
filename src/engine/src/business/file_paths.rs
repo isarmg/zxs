@@ -78,8 +78,8 @@ pub(crate) fn rename_node(
             version_id: old.version_id.clone(),
             parent_node_ids: vec![parent],
             branch_id: context.branch_id.clone(),
-            path: new.path.clone(),
-            previous_path: old.path.clone(),
+            path: new.path().to_owned(),
+            previous_path: old.path().to_owned(),
             sequence: state.sequence,
             created_at: now(),
             operation_id: operation.into(),
@@ -182,7 +182,13 @@ impl Engine {
             |engine, state, _| {
                 source_node(state, file, version, node)?;
                 let mut result = file::create_file_branch_change(
-                    engine, state, file, version, name, principal, operation,
+                    &engine.planning_context(),
+                    state,
+                    file,
+                    version,
+                    name,
+                    principal,
+                    operation,
                 )?;
                 let branch = result["branch_id"].as_str().ok_or_else(|| {
                     Error::new(

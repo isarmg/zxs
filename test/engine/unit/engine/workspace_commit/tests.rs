@@ -58,20 +58,17 @@ fn detached_snapshot_keeps_only_target_and_preserves_live_retained_evidence() {
     let preparation = engine
         .prepare_workspace_commit(request.clone(), None)
         .unwrap();
-    let planning = &preparation.snapshot.engine;
+    let planning = &preparation.snapshot;
     assert!(Arc::ptr_eq(&planning.state, &engine.state));
-    assert_eq!(planning.retained_workspace_limits, Some(limits));
-    assert_eq!(planning.workspace_capacity("alice").global.records.limit, 4);
-    assert_eq!(planning.workspaces.len(), 1);
+    assert_eq!(planning.config.effective_workspace_limits(), limits);
     assert_eq!(
-        canonical_json(&planning.workspace(&target.workspace_id).unwrap()).unwrap(),
+        canonical_json(&planning.workspace).unwrap(),
         canonical_json(&engine.workspace(&target.workspace_id).unwrap()).unwrap()
     );
     for workspace_id in unrelated.keys() {
-        assert!(!planning.workspaces.contains_key(workspace_id));
+        assert_ne!(&planning.workspace.workspace_id, workspace_id);
     }
     for (principal, capacity) in &capacities {
-        assert_eq!(&planning.workspace_capacity(principal), capacity);
         assert_eq!(&engine.workspace_capacity(principal), capacity);
     }
     assert_eq!(engine.workspaces.len(), 4);
@@ -186,7 +183,7 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
     let preparation = engine
         .prepare_workspace_commit(request.clone(), None)
         .unwrap();
-    let frozen = Arc::clone(&preparation.snapshot.engine.state);
+    let frozen = Arc::clone(&preparation.snapshot.state);
     let frozen_bytes = canonical_json(frozen.as_ref()).unwrap();
     assert!(Arc::ptr_eq(&frozen, &engine.state));
     assert_eq!(
@@ -438,4 +435,63 @@ fn plan_successful_change_must_restore_main_head_before_returning() {
             },
         )
         .unwrap_or_else(|error| panic!("unexpected planning error: {error}"));
+}
+
+#[test]
+fn wire_envelope_errors_precede_missing_workspace_lookup() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("system");
+    let mut engine =
+        Engine::initialize(&root, Config::development([temp.path().join("disk")])).unwrap();
+    let mut request = CommitRequest {
+        workspace_id: new_id("ws"),
+        operation_id: new_id("op"),
+        principal: "alice".into(),
+        expected_head: new_id("commit"),
+        fencing_token: 1,
+        message: String::new(),
+        request_digest: None,
+    };
+    for body in [json_codec::Value::Null, json_codec::json!({})] {
+        assert_eq!(
+            engine
+                .commit_workspace_wire(request.clone(), body)
+                .unwrap_err()
+                .code(),
+            ErrorCode::InvalidRequest
+        );
+    }
+    let body = json_codec::json!({
+        "operation_id": request.operation_id,
+        "workspace_id": request.workspace_id,
+        "repository_id": "missing",
+        "branch_id": "missing",
+        "expected_head": request.expected_head,
+        "fencing_token": "1",
+        "message": "",
+        "requested_protection": "strict",
+        "file_placement": {},
+        "expected_topology_generation": "1",
+        "sealed_manifest_hash": "missing",
+        "request_digest": "missing",
+    });
+    assert_eq!(
+        engine
+            .commit_workspace_wire(request.clone(), body.clone())
+            .unwrap_err()
+            .code(),
+        ErrorCode::WorkspaceNotFound
+    );
+    let operation = new_id("op");
+    engine
+        .create_repository("repo", "P01", 1, "alice", &operation)
+        .unwrap();
+    request.operation_id = operation;
+    assert_eq!(
+        engine
+            .commit_workspace_wire(request, body)
+            .unwrap_err()
+            .code(),
+        ErrorCode::IdempotencyKeyReused
+    );
 }

@@ -33,6 +33,25 @@ fn real_host_sampler_starts_with_a_baseline_and_reads_memory() {
 
 struct MonitorBackend;
 impl Backend for MonitorBackend {
+    fn snapshot_at(
+        &self,
+        _: &crate::auth::Identity,
+        _: &str,
+        _: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        unreachable!("this test backend does not serve snapshots")
+    }
+
+    fn lookup_at(
+        &self,
+        _: &crate::auth::Identity,
+        _: &str,
+        _: &str,
+        _: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        unreachable!("this test backend does not serve snapshot lookups")
+    }
+
     fn call(
         &self,
         _: crate::BackendAction,
@@ -49,7 +68,7 @@ impl Backend for MonitorBackend {
         _: &Identity,
         _: &str,
         _: &str,
-        _: &str,
+        _: &name_policy::PortablePath,
         _: &crate::UploadSource,
     ) -> Result<Value, ApiError> {
         Err(ApiError::unsupported())

@@ -23,9 +23,7 @@ fn one_branch_summary_does_not_serialize_its_growing_entry_graph() {
                     let path = format!("docs/{name}");
                     Entry {
                         entry_id: format!("entry-{index:06}"),
-                        path: path.clone(),
-                        name,
-                        lookup_key: path,
+                        path: name_policy::PortablePath::parse(&path).unwrap(),
                         kind: storage_contract::NamespaceEntryKind::File,
                         file_id: format!("file-{index:06}"),
                         version_id: "version-fixture".into(),

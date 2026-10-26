@@ -173,7 +173,7 @@ fn templates_accept_one_or_many_disks_without_initializing_them() {
         let config: Config =
             storage_engine::decode_strict(&std::fs::read(output).unwrap()).unwrap();
         assert_eq!(config.disks.len(), count);
-        Engine::validate_configuration(&config).unwrap();
+        let config = ValidatedConfig::try_from(config).unwrap();
         assert!(config.disks.iter().all(|disk| !disk.root.exists()));
     }
 }

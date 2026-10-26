@@ -135,8 +135,9 @@ platform-io → 文件系统 / SQLite / 凭据算法依赖
 
 | 包或目录 | 运行/构建期第一方直接依赖 | 仅开发依赖 |
 | --- | --- | --- |
-| authentication、storage-contract、platform-io | 无 | 无 |
-| name-policy、storage-client、smb-protocol | storage-contract | 无 |
+| authentication、name-policy、platform-io | 无 | 无 |
+| storage-contract | name-policy | 无 |
+| storage-client、smb-protocol | storage-contract | 无 |
 | storage-engine | storage-contract、name-policy、platform-io | 无 |
 | storage-server | authentication、storage-engine、platform-io、storage-contract、name-policy、smb-protocol | 无 |
 | smb-vfs | smb-protocol | 无 |

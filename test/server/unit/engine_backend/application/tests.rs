@@ -204,11 +204,12 @@ fn public_commit_roundtrip_preserves_canonical_envelope_and_executes() {
     Application::new(&mut engine, &identity)
         .stage_namespace(StageNamespace {
             workspace_id: workspace.workspace_id.clone(),
-            change: NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Mkdir,
-                path: "Folder".into(),
-                destination: None,
-            },
+            change: NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Mkdir,
+                "Folder",
+                None,
+            )
+            .unwrap(),
         })
         .unwrap();
     let mut body = engine
@@ -248,11 +249,12 @@ fn workspace_ownership_and_session_admission_apply_to_typed_and_wire_paths() {
     };
     let result = Application::new(&mut engine, &intruder).stage_namespace(StageNamespace {
         workspace_id: workspace.workspace_id.clone(),
-        change: NamespaceOperation {
-            kind: storage_contract::NamespaceOperationKind::Mkdir,
-            path: "TypedDenied".into(),
-            destination: None,
-        },
+        change: NamespaceOperation::parse(
+            storage_contract::NamespaceOperationKind::Mkdir,
+            "TypedDenied",
+            None,
+        )
+        .unwrap(),
     });
     assert_eq!(
         result.unwrap_err().code,
@@ -721,4 +723,119 @@ fn commit_preparation_releases_engine_and_rechecks_completed_revocation() {
             assert!(engine.state().operations.contains_key(&operation));
         }
     }
+}
+
+#[test]
+fn namespace_wire_preserves_naming_error_codes_before_staging() {
+    use storage_contract::ErrorCode;
+    let (_root, mut engine, repo, identity) = fixture();
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, &identity.principal)
+        .unwrap();
+    let backend = EngineBackend::new(engine);
+    for (kind, path, destination, code) in [
+        ("mkdir", "CON", None, ErrorCode::NameReserved),
+        ("mkdir", "e\u{301}.txt", None, ErrorCode::NameNotNormalized),
+        ("mkdir", "/outside", None, ErrorCode::PathInvalid),
+        ("rename", "source", Some("CON"), ErrorCode::NameReserved),
+        (
+            "rename",
+            "source",
+            Some("e\u{301}.txt"),
+            ErrorCode::NameNotNormalized,
+        ),
+    ] {
+        let failure = backend
+            .call(
+                crate::BackendAction::Namespace,
+                &identity,
+                json!({"workspace_id":workspace.workspace_id,
+                    "kind":kind,"path":path,"destination":destination}),
+            )
+            .unwrap_err();
+        assert_eq!(failure.code, code, "{kind} {path} {destination:?}");
+        assert!(failure.source.is_some());
+    }
+    assert!(
+        backend
+            .engine
+            .lock()
+            .unwrap()
+            .workspace(&workspace.workspace_id)
+            .unwrap()
+            .namespace_operations
+            .is_empty()
+    );
+}
+
+#[test]
+fn namespace_wire_carries_lookup_spelling_and_creation_spelling_into_commit() {
+    let (_root, mut engine, repo, identity) = fixture();
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, &identity.principal)
+        .unwrap();
+    let backend = EngineBackend::new(engine);
+    for (kind, path, destination) in [
+        ("mkdir", "Café", None),
+        ("rename", "CAFE\u{301}", Some("Renamed")),
+    ] {
+        backend
+            .call(
+                crate::BackendAction::Namespace,
+                &identity,
+                json!({"workspace_id":workspace.workspace_id,
+                "kind":kind,"path":path,"destination":destination}),
+            )
+            .unwrap();
+    }
+    let mut engine = backend.engine.lock().unwrap();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: new_id("op"),
+            principal: identity.principal,
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: String::new(),
+            request_digest: None,
+        })
+        .unwrap();
+    let entries = engine.list_tree(&repo.main_branch_id).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].path(), "Renamed");
+    assert_eq!(entries[0].name(), "Renamed");
+    assert_eq!(entries[0].lookup_key(), "renamed");
+}
+
+#[test]
+fn namespace_wire_rejects_nonstring_destinations_without_staging() {
+    let (_root, mut engine, repo, identity) = fixture();
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, &identity.principal)
+        .unwrap();
+    let backend = EngineBackend::new(engine);
+    for kind in ["mkdir", "delete", "delete_tree", "rename"] {
+        for destination in [json!(123), json!(false), json!({}), json!([])] {
+            let failure = backend
+                .call(
+                    crate::BackendAction::Namespace,
+                    &identity,
+                    json!({"workspace_id":workspace.workspace_id,
+                    "kind":kind,"path":"source","destination":destination}),
+                )
+                .unwrap_err();
+            assert_eq!(failure.code, storage_contract::ErrorCode::InvalidRequest);
+            assert_eq!(failure.message, "destination must be a string");
+        }
+    }
+    assert!(
+        backend
+            .engine
+            .lock()
+            .unwrap()
+            .workspace(&workspace.workspace_id)
+            .unwrap()
+            .namespace_operations
+            .is_empty()
+    );
 }

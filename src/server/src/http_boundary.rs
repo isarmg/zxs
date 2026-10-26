@@ -68,6 +68,12 @@ pub(crate) enum ApiErrorSource {
     Admission(#[from] std::sync::Arc<ApiError>),
 }
 
+impl From<name_policy::Error> for ApiErrorSource {
+    fn from(source: name_policy::Error) -> Self {
+        Self::Contract(source.into())
+    }
+}
+
 #[derive(Debug, Serialize, error_definition::Error)]
 #[error("{code}: {message}")]
 pub struct ApiError {

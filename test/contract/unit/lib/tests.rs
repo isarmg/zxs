@@ -205,9 +205,7 @@ fn namespace_entry_kind_preserves_canonical_entries_and_hashes() {
         );
         let entry = Entry {
             entry_id: "entry".into(),
-            path: "a".into(),
-            name: "a".into(),
-            lookup_key: "a".into(),
+            path: name_policy::PortablePath::parse("a").unwrap(),
             kind,
             file_id: String::new(),
             version_id: String::new(),
@@ -271,4 +269,52 @@ fn namespace_entry_kind_rejects_invalid_raw_kinds_at_decode_boundary() {
             "{raw}"
         );
     }
+}
+
+#[test]
+fn namespace_operation_variants_parse_only_their_required_paths() {
+    for kind in [
+        NamespaceOperationKind::Mkdir,
+        NamespaceOperationKind::Delete,
+        NamespaceOperationKind::DeleteTree,
+    ] {
+        let operation = NamespaceOperation::parse(kind, "Café", None).unwrap();
+        let wire = json_codec::to_value(&operation).unwrap();
+        assert_eq!(wire["kind"], kind.as_str());
+        assert_eq!(wire["path"], "Café");
+        assert!(wire["destination"].is_null());
+        assert_eq!(
+            NamespaceOperation::parse(kind, "Café", Some("other"))
+                .unwrap_err()
+                .code(),
+            ErrorCode::InvalidRequest
+        );
+        assert!(
+            json_codec::from_value::<NamespaceOperation>(json_codec::json!({
+                "kind": kind.as_str(), "path": "Café", "destination": "other"
+            }))
+            .is_err()
+        );
+    }
+    assert_eq!(
+        NamespaceOperation::parse(NamespaceOperationKind::Rename, "Café", None)
+            .unwrap_err()
+            .code(),
+        ErrorCode::InvalidRequest
+    );
+    let rename =
+        NamespaceOperation::parse(NamespaceOperationKind::Rename, "Cafe\u{301}", Some("Moved"))
+            .unwrap();
+    assert!(
+        matches!(&rename, NamespaceOperation::Rename { source, destination }
+        if source.key() == "café" && destination.as_str() == "Moved")
+    );
+    let wire = json_codec::to_value(&rename).unwrap();
+    assert_eq!(
+        wire,
+        json_codec::json!({"kind":"rename", "path":"Cafe\u{301}", "destination":"Moved"})
+    );
+    let read = json_codec::from_value::<NamespaceOperation>(wire).unwrap();
+    assert_eq!(read.key(), rename.key());
+    assert_eq!(read.destination(), rename.destination());
 }

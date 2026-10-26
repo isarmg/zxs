@@ -21,7 +21,7 @@ fn copied_file_branch_root_records_the_copy_actor_and_operation() {
         )
         .unwrap();
     let copied = pool.entry(&target, "copy.txt");
-    let branch = pool.branch(&target).file_contexts[&copied.lookup_key]
+    let branch = pool.branch(&target).file_contexts[copied.lookup_key()]
         .branch_id
         .clone();
     let check = |engine: &Engine| {
@@ -43,11 +43,12 @@ fn renamed_targets(pool: &mut Pool) -> (String, String) {
     pool.engine
         .file_namespace(
             &pool.repo.repository_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Rename,
-                path: "folder".into(),
-                destination: Some("renamed".into()),
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                "folder",
+                Some("renamed"),
+            )
+            .unwrap(),
             "admin",
             &new_id("op"),
         )
@@ -92,13 +93,13 @@ fn copied_file_aliases_keep_each_frozen_parent_and_destination_spelling() {
         assert_eq!(left.file_id, right.file_id);
         assert_eq!(left.version_id, right.version_id);
         assert_ne!(left.file_id, source.file_id);
-        assert_eq!(left.name, "Copied.txt");
-        assert_eq!(right.name, "copied.txt");
-        assert_eq!(left.lookup_key, "folder/copied.txt");
-        assert_eq!(right.lookup_key, "renamed/copied.txt");
+        assert_eq!(left.name(), "Copied.txt");
+        assert_eq!(right.name(), "copied.txt");
+        assert_eq!(left.lookup_key(), "folder/copied.txt");
+        assert_eq!(right.lookup_key(), "renamed/copied.txt");
         assert_eq!(
-            pool.branch(&before).file_contexts[&left.lookup_key],
-            pool.branch(&after).file_contexts[&right.lookup_key]
+            pool.branch(&before).file_contexts[left.lookup_key()],
+            pool.branch(&after).file_contexts[right.lookup_key()]
         );
         assert_eq!(
             pool.engine.state().file_locations[&left.file_id],
@@ -134,8 +135,8 @@ fn copied_file_aliases_keep_each_frozen_parent_and_destination_spelling() {
         assert_eq!(pool.current_entry(&right.path), right);
         pool.reopen(|engine| {
             assert_eq!(
-                engine.state().directory_branches[&before].file_contexts[&left.lookup_key],
-                engine.state().directory_branches[&after].file_contexts[&right.lookup_key]
+                engine.state().directory_branches[&before].file_contexts[left.lookup_key()],
+                engine.state().directory_branches[&after].file_contexts[right.lookup_key()]
             );
             assert_eq!(engine.state().file_locations[&left.file_id], first_path);
         });
@@ -160,8 +161,8 @@ fn copied_folder_aliases_share_ids_without_reusing_another_targets_paths() {
         assert_eq!(left.entry_id, right.entry_id);
         assert_eq!(left.file_id, right.file_id);
         assert_eq!(left.version_id, right.version_id);
-        assert_eq!(left.lookup_key, name_policy::path_key(&left.path));
-        assert_eq!(right.lookup_key, name_policy::path_key(&right.path));
+        assert_eq!(left.lookup_key(), name_policy::path_key(&left.path));
+        assert_eq!(right.lookup_key(), name_policy::path_key(&right.path));
     }
     let copy = pool.entry(&after, "renamed/copied/nested/report.txt");
     assert_ne!(copy.file_id, source.file_id);
@@ -204,7 +205,7 @@ fn copied_file_case_only_targets_preserve_each_requested_alias_name() {
     let right = pool.entry(&after, "copy.txt");
     assert_eq!(left.file_id, right.file_id);
     assert_eq!(left.version_id, right.version_id);
-    assert_eq!(left.lookup_key, right.lookup_key);
+    assert_eq!(left.lookup_key(), right.lookup_key());
     assert_eq!(
         pool.engine.state().file_locations[&left.file_id],
         "Copy.TXT"

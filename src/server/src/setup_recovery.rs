@@ -10,7 +10,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
-use storage_engine::{Config, Engine, Mode, RetainedWorkspaceLimits};
+use storage_engine::{Config, Engine, Mode, RetainedWorkspaceLimits, ValidatedConfig};
 
 mod http;
 pub(crate) use http::{protected_routes, public_routes};
@@ -107,7 +107,7 @@ pub struct PresetSetupRequest {
 #[serialization(deny_unknown_fields)]
 struct SetupIntent {
     version: u32,
-    config: Config,
+    config: ValidatedConfig,
     disk_ids: Vec<String>,
     bootstrap_binding: String,
 }
@@ -506,7 +506,7 @@ impl SetupRecovery {
         }
         let mut config = Config::development(paths);
         config.mode = request.mode;
-        Engine::validate_configuration(&config).map_err(engine_error)?;
+        let config = ValidatedConfig::try_from(config).map_err(engine_error)?;
         self.initialize_config(
             permit,
             config,
@@ -520,7 +520,7 @@ impl SetupRecovery {
     fn initialize_config<F>(
         &self,
         permit: &LocalBootstrapPermit,
-        config: Config,
+        config: ValidatedConfig,
         disk_ids: Vec<String>,
         username: &str,
         password: &str,
@@ -532,9 +532,9 @@ impl SetupRecovery {
         self.verify_permit(permit)?;
         // A locally provisioned limit below the selected (including preset)
         // baseline must not publish an intent that strands a pristine setup.
-        if let Some(limits) = self.retained_workspace_limits {
-            limits.validate_for(&config).map_err(engine_error)?;
-        }
+        let config = config
+            .with_workspace_limits(self.retained_workspace_limits)
+            .map_err(engine_error)?;
         let intent = SetupIntent {
             version: 2,
             config: config.clone(),
@@ -542,12 +542,7 @@ impl SetupRecovery {
             bootstrap_binding: permit.binding.to_hex().to_string(),
         };
         self.write_control("setup-intent.json", &intent)?;
-        let engine = Engine::initialize_with_workspace_limits(
-            &self.data_root,
-            config,
-            self.retained_workspace_limits,
-        )
-        .map_err(engine_error)?;
+        let engine = Engine::initialize_validated(&self.data_root, config).map_err(engine_error)?;
         self.write_ready(&intent)?;
         // Disk I/O may outlive or revoke the original local authorization.
         // Never publish account authority after that authorization is gone.
@@ -558,26 +553,25 @@ impl SetupRecovery {
         Ok(())
     }
 
-    fn preset(&self, id: &str) -> Result<(Config, Vec<String>), ApiError> {
+    fn preset(&self, id: &str) -> Result<(ValidatedConfig, Vec<String>), ApiError> {
         let path = self
             .presets
             .get(id)
             .ok_or_else(|| ApiError::invalid("setup preset is not locally configured"))?;
-        let mut config = read_preset(path)?;
-        Engine::validate_configuration(&config).map_err(engine_error)?;
+        let config = read_preset(path)?;
         let mut ids = Vec::new();
-        for disk in &mut config.disks {
+        let mut roots = Vec::with_capacity(config.disks.len());
+        for disk in &config.disks {
             let canonical = checked_directory(&disk.root)?;
             let id = self
                 .disks
                 .iter()
                 .find_map(|(id, allowed)| (allowed == &canonical).then_some(id.clone()))
                 .ok_or_else(ApiError::forbidden)?;
-            disk.root = self.selected(std::slice::from_ref(&id))?.remove(0);
+            roots.push(self.selected(std::slice::from_ref(&id))?.remove(0));
             ids.push(id);
         }
-        // Reject canonical aliases/duplicates after rewriting paths, too.
-        Engine::validate_configuration(&config).map_err(engine_error)?;
+        let config = config.with_disk_roots(roots).map_err(engine_error)?;
         if config.mode == Mode::Development && !self.allow_development {
             return Err(ApiError::forbidden());
         }
@@ -1163,7 +1157,7 @@ fn tree_digest(root: &Path) -> Result<String, ApiError> {
     Ok(hash.finalize().to_hex().to_string())
 }
 
-fn read_preset(path: &Path) -> Result<Config, ApiError> {
+fn read_preset(path: &Path) -> Result<ValidatedConfig, ApiError> {
     use std::os::unix::fs::MetadataExt;
     if !path.is_absolute()
         || path
@@ -1205,9 +1199,10 @@ fn read_preset(path: &Path) -> Result<Config, ApiError> {
     if bytes.len() > MAX_LOCAL_CONFIG_BYTES {
         return Err(ApiError::invalid("setup preset exceeds limit"));
     }
-    storage_contract::decode_strict(&bytes).map_err(|source| {
+    let config: Config = storage_contract::decode_strict(&bytes).map_err(|source| {
         ApiError::invalid("local setup preset is not a valid configuration").with_source(source)
-    })
+    })?;
+    ValidatedConfig::try_from(config).map_err(engine_error)
 }
 
 /// Deterministic test-only interruption after durable disk recovery.

@@ -22,6 +22,27 @@ impl PausedBackend {
     }
 }
 impl Backend for PausedBackend {
+    fn snapshot_at(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        commit: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        self.enter();
+        self.inner.snapshot_at(identity, branch, commit)
+    }
+
+    fn lookup_at(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        commit: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        self.enter();
+        self.inner.lookup_at(identity, branch, commit, path)
+    }
+
     fn call(
         &self,
         action: BackendAction,
@@ -36,7 +57,7 @@ impl Backend for PausedBackend {
         identity: &Identity,
         workspace: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &crate::UploadSource,
     ) -> Result<Value, ApiError> {
         self.enter();
@@ -47,7 +68,7 @@ impl Backend for PausedBackend {
         identity: &Identity,
         workspace: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &crate::UploadSource,
         generation: u64,
     ) -> Result<Value, ApiError> {
@@ -180,6 +201,8 @@ enum Request {
     Administrator,
     Tree,
     SmbAuthorizeRead,
+    SnapshotLookup,
+    Snapshot,
     Version,
     Namespace,
     Content,
@@ -223,6 +246,13 @@ impl Request {
                     }),
                 )
                 .map(|_| ()),
+            Self::Snapshot => backend.snapshot_at(
+                identity, &fixture.repo.main_branch_id, &fixture.workspace.base_head,
+            ).map(|_| ()),
+            Self::SnapshotLookup => backend.lookup_at(
+                identity, &fixture.repo.main_branch_id, &fixture.workspace.base_head,
+                &name_policy::LookupPath::parse("file.txt").unwrap(),
+            ).map(|_| ()),
             // SMB directory/write handles need current admission, not a tree.
             Self::SmbAuthorizeRead => backend
                 .call(
@@ -263,7 +293,7 @@ impl Request {
                     identity,
                     workspace,
                     "new-item",
-                    "new.txt",
+                    &name_policy::PortablePath::parse("new.txt").unwrap(),
                     &crate::UploadSource::from_file(
                         std::fs::File::open(&fixture.source).unwrap(),
                         u64::MAX,
@@ -276,7 +306,7 @@ impl Request {
                     identity,
                     workspace,
                     "next-item",
-                    "next.txt",
+                    &name_policy::PortablePath::parse("next.txt").unwrap(),
                     &crate::UploadSource::from_file(
                         std::fs::File::open(&fixture.source).unwrap(),
                         u64::MAX,
@@ -304,6 +334,8 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
             Request::Administrator,
             Request::Tree,
             Request::SmbAuthorizeRead,
+            Request::SnapshotLookup,
+            Request::Snapshot,
             Request::Version,
             Request::Namespace,
             Request::Content,
@@ -438,6 +470,7 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::Administrator,
         Request::Tree,
         Request::SmbAuthorizeRead,
+        Request::Snapshot,
         Request::Version,
         Request::Namespace,
         Request::Content,
@@ -518,7 +551,7 @@ fn both_upload_adapters_bind_the_copied_snapshot_before_acceptance() {
                 &fixture.identity,
                 &fixture.workspace.workspace_id,
                 &item,
-                "bound.txt",
+                &name_policy::PortablePath::parse("bound.txt").unwrap(),
                 &source,
                 1,
             )
@@ -527,7 +560,7 @@ fn both_upload_adapters_bind_the_copied_snapshot_before_acceptance() {
                 &fixture.identity,
                 &fixture.workspace.workspace_id,
                 &item,
-                "bound.txt",
+                &name_policy::PortablePath::parse("bound.txt").unwrap(),
                 &source,
             )
         };

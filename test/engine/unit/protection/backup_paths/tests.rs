@@ -75,11 +75,12 @@ fn rename(engine: &mut Engine, repo: &Repository, path: &str, destination: &str)
     engine
         .file_namespace(
             &repo.repository_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Rename,
-                path: path.into(),
-                destination: Some(destination.into()),
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                path,
+                Some(destination),
+            )
+            .unwrap(),
             "admin",
             &new_id("op"),
         )
@@ -227,11 +228,12 @@ fn parent_configuration_keeps_explicit_children_and_empty_directories_inherit() 
     engine
         .file_namespace(
             &repo.repository_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Mkdir,
-                path: "empty".into(),
-                destination: None,
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Mkdir,
+                "empty",
+                None,
+            )
+            .unwrap(),
             "admin",
             &new_id("op"),
         )
@@ -560,11 +562,12 @@ fn top_level_backup_policy_overrides_root_regardless_of_policy_id_order() {
         engine
             .file_namespace(
                 &repo.repository_id,
-                NamespaceOperation {
-                    kind: storage_contract::NamespaceOperationKind::Mkdir,
-                    path: "docs".into(),
-                    destination: None,
-                },
+                NamespaceOperation::parse(
+                    storage_contract::NamespaceOperationKind::Mkdir,
+                    "docs",
+                    None,
+                )
+                .unwrap(),
                 "admin",
                 &new_id("op"),
             )
@@ -656,11 +659,12 @@ fn one_copy_scoped_policy_binds_new_files_and_survives_moves_and_reopen() {
     engine
         .file_namespace(
             &repo.repository_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Mkdir,
-                path: "destination".into(),
-                destination: None,
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Mkdir,
+                "destination",
+                None,
+            )
+            .unwrap(),
             "admin",
             &new_id("op"),
         )
@@ -709,7 +713,7 @@ fn one_copy_scoped_policy_binds_new_files_and_survives_moves_and_reopen() {
     );
     assert_eq!(canonical_json(&engine.state.versions).unwrap(), versions);
     for original in [&before, &after] {
-        let path = format!("destination/{}", original.name);
+        let path = format!("destination/{}", original.name());
         let updated = save(&mut engine, &repo, &path, b"updated after move");
         assert_eq!(updated.file_id, original.file_id);
         assert_eq!(

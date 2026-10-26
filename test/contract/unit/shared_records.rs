@@ -385,3 +385,47 @@ fn shared_projection_and_merge_support_non_clone_payloads_and_replace_values() {
     assert_eq!(previous["b"].0, 3);
     assert!(std::ptr::eq(&destination["b"], &source["b"]));
 }
+
+#[test]
+fn shared_record_handles_borrow_payloads_and_isolate_writes_in_both_directions() {
+    let clones = Arc::new(AtomicUsize::new(0));
+    let mut records: SharedRecords<_> = [
+        ("map-write".into(), counted("map original", &clones)),
+        ("handle-write".into(), counted("handle original", &clones)),
+    ]
+    .into_iter()
+    .collect();
+    let from_map = records.get_shared("map-write").unwrap();
+    let mut from_handle = records.get_shared("handle-write").unwrap();
+    assert!(std::ptr::eq(from_map.as_ref(), &records["map-write"]));
+    assert!(std::ptr::eq(from_handle.as_ref(), &records["handle-write"]));
+    assert!(records.get_shared("missing").is_none());
+    assert_eq!(clone_count(&clones), 0);
+    records.get_mut("map-write").unwrap().value.push('!');
+    assert_eq!(from_map.value, "map original");
+    assert_eq!(records["map-write"].value, "map original!");
+    assert_eq!(clone_count(&clones), 1);
+    Arc::make_mut(&mut from_handle).value.push('?');
+    assert_eq!(records["handle-write"].value, "handle original");
+    assert_eq!(from_handle.value, "handle original?");
+    assert_eq!(clone_count(&clones), 2);
+    drop(records);
+    assert_eq!(from_map.value, "map original");
+    assert_eq!(from_handle.value, "handle original?");
+    assert_eq!(clone_count(&clones), 2);
+}
+
+#[test]
+fn shared_record_handle_supports_non_clone_values_and_outlives_the_map() {
+    struct NonClone(String);
+    let records: SharedRecords<_> = [("key".into(), NonClone("retained".into()))]
+        .into_iter()
+        .collect();
+    let first = records.get_shared("key").unwrap();
+    let second = records.get_shared("key").unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
+    assert!(std::ptr::eq(first.as_ref(), &records["key"]));
+    drop(records);
+    drop(first);
+    assert_eq!(second.0, "retained");
+}

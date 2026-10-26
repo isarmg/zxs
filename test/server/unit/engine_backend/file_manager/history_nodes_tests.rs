@@ -102,11 +102,12 @@ fn file_history_matches_preprojection_graph_json() {
     engine
         .file_namespace(
             &repo.repository_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Rename,
-                path: "before.txt".into(),
-                destination: Some("after.txt".into()),
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                "before.txt",
+                Some("after.txt"),
+            )
+            .unwrap(),
             "owner",
             &new_id("op"),
         )

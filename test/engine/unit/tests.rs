@@ -92,11 +92,12 @@ fn normalized_directory_rename_and_file_branch_keep_parent_closure_after_restart
     engine
         .file_namespace(
             &repo.repository_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Rename,
-                path: "strasse".into(),
-                destination: Some("Moved".into()),
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                "strasse",
+                Some("Moved"),
+            )
+            .unwrap(),
             "admin",
             &new_id("op"),
         )
@@ -165,11 +166,12 @@ fn direct_namespace_cannot_write_an_inactive_directory_branch() {
     let error = engine
         .file_namespace(
             &repo.repository_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Mkdir,
-                path: "unpublished".into(),
-                destination: None,
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Mkdir,
+                "unpublished",
+                None,
+            )
+            .unwrap(),
             "admin",
             &new_id("op"),
         )
@@ -195,11 +197,12 @@ fn indexed_commit_comparison_preserves_normalized_identity_and_change_order() {
     engine
         .file_namespace(
             &repo.repository_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Delete,
-                path: "remove.txt".into(),
-                destination: None,
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Delete,
+                "remove.txt",
+                None,
+            )
+            .unwrap(),
             "admin",
             &new_id("op"),
         )
@@ -207,11 +210,12 @@ fn indexed_commit_comparison_preserves_normalized_identity_and_change_order() {
     engine
         .file_namespace(
             &repo.repository_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Rename,
-                path: "keep.txt".into(),
-                destination: Some("KEEP.txt".into()),
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                "keep.txt",
+                Some("KEEP.txt"),
+            )
+            .unwrap(),
             "admin",
             &new_id("op"),
         )
@@ -316,11 +320,12 @@ fn file_container_rename_replays_only_after_decision_and_keeps_all_version_bytes
             engine
                 .file_namespace(
                     &repo.repository_id,
-                    NamespaceOperation {
-                        kind: storage_contract::NamespaceOperationKind::Rename,
-                        path: "report.txt".into(),
-                        destination: Some("renamed.txt".into()),
-                    },
+                    NamespaceOperation::parse(
+                        storage_contract::NamespaceOperationKind::Rename,
+                        "report.txt",
+                        Some("renamed.txt")
+                    )
+                    .unwrap(),
                     "admin",
                     &operation
                 )
@@ -354,7 +359,7 @@ fn file_container_rename_replays_only_after_decision_and_keeps_all_version_bytes
             "report.txt"
         };
         assert_eq!(
-            engine.list_tree(&repo.main_branch_id).unwrap()[0].name,
+            engine.list_tree(&repo.main_branch_id).unwrap()[0].name(),
             expected
         );
         assert_eq!(engine.state().file_names[&entry.file_id], expected);
@@ -386,11 +391,12 @@ fn file_container_rename_replays_only_after_decision_and_keeps_all_version_bytes
             engine
                 .file_namespace(
                     &repo.repository_id,
-                    NamespaceOperation {
-                        kind: storage_contract::NamespaceOperationKind::Rename,
-                        path: "report.txt".into(),
-                        destination: Some("renamed.txt".into()),
-                    },
+                    NamespaceOperation::parse(
+                        storage_contract::NamespaceOperationKind::Rename,
+                        "report.txt",
+                        Some("renamed.txt"),
+                    )
+                    .unwrap(),
                     "admin",
                     &operation,
                 )
@@ -485,11 +491,12 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
         engine
             .namespace_operation(
                 &scope.workspace_id,
-                NamespaceOperation {
-                    kind: storage_contract::NamespaceOperationKind::Mkdir,
-                    path: "other".into(),
-                    destination: None
-                }
+                NamespaceOperation::parse(
+                    storage_contract::NamespaceOperationKind::Mkdir,
+                    "other",
+                    None
+                )
+                .unwrap()
             )
             .unwrap_err()
             .code(),
@@ -696,11 +703,12 @@ fn directory_writes_update_only_the_selected_file_branch() {
         bytes(&engine, &engine.list_tree(&main).unwrap()[0].version_id),
         b"current main"
     );
-    let change = NamespaceOperation {
-        kind: storage_contract::NamespaceOperationKind::Rename,
-        path: "file.txt".into(),
-        destination: Some("renamed.txt".into()),
-    };
+    let change = NamespaceOperation::parse(
+        storage_contract::NamespaceOperationKind::Rename,
+        "file.txt",
+        Some("renamed.txt"),
+    )
+    .unwrap();
     let operation = new_id("op");
     let result = engine
         .file_namespace(&repo.repository_id, change.clone(), "admin", &operation)
@@ -1566,11 +1574,12 @@ fn mkdir_and_child_upload_publish_together_and_cancellation_never_undoes_executi
     let w = e.create_workspace(&r.main_branch_id, "admin").unwrap();
     e.namespace_operation(
         &w.workspace_id,
-        NamespaceOperation {
-            kind: storage_contract::NamespaceOperationKind::Mkdir,
-            path: "文档".into(),
-            destination: None,
-        },
+        NamespaceOperation::parse(
+            storage_contract::NamespaceOperationKind::Mkdir,
+            "文档",
+            None,
+        )
+        .unwrap(),
     )
     .unwrap();
     e.stage_bytes(&w.workspace_id, "文档/说明.txt", b"first")
@@ -1808,11 +1817,12 @@ fn overlapping_namespace_and_upload_never_reports_a_successful_disappearing_file
         save(&mut e, &r.main_branch_id, "docs/original", b"original");
         let head = e.state().branches[&r.main_branch_id].head_commit_id.clone();
         let w = e.create_workspace(&r.main_branch_id, "admin").unwrap();
-        let delete = NamespaceOperation {
-            kind: storage_contract::NamespaceOperationKind::DeleteTree,
-            path: "docs".into(),
-            destination: None,
-        };
+        let delete = NamespaceOperation::parse(
+            storage_contract::NamespaceOperationKind::DeleteTree,
+            "docs",
+            None,
+        )
+        .unwrap();
         if delete_first {
             e.namespace_operation(&w.workspace_id, delete.clone())
                 .unwrap();
@@ -2418,7 +2428,7 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
         .unwrap()
         .into_iter()
         .filter(|entry| entry.kind == NamespaceEntryKind::File)
-        .map(|entry| (entry.path.clone(), entry))
+        .map(|entry| (entry.path().to_owned(), entry))
         .collect::<std::collections::BTreeMap<_, _>>();
     let before = engine.state().versions.len();
     let created = engine
@@ -2455,7 +2465,7 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
         .iter()
         .filter(|entry| entry.kind == NamespaceEntryKind::File)
     {
-        assert_eq!(entry.version_id, parents[&entry.path].version_id);
+        assert_eq!(entry.version_id, parents[entry.path()].version_id);
         assert_eq!(
             engine.pending_file_source(&repo.main_branch_id, &entry.file_id),
             None
@@ -2464,7 +2474,7 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
             bytes(&engine, &entry.version_id),
             format!(
                 "parent {}",
-                entry.name.chars().next().unwrap().to_ascii_uppercase()
+                entry.name().chars().next().unwrap().to_ascii_uppercase()
             )
             .as_bytes()
         );
@@ -2489,7 +2499,7 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
             .filter(|entry| entry.kind == NamespaceEntryKind::File)
         {
             if entry.path == "folder/a.txt" {
-                assert_ne!(entry.version_id, parents[&entry.path].version_id);
+                assert_ne!(entry.version_id, parents[entry.path()].version_id);
                 assert_eq!(bytes(engine, &entry.version_id), b"draft A only");
                 assert!(
                     engine
@@ -2502,7 +2512,7 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
                         .is_empty()
                 );
             } else {
-                assert_eq!(entry.version_id, parents[&entry.path].version_id);
+                assert_eq!(entry.version_id, parents[entry.path()].version_id);
                 assert!(
                     engine
                         .pending_file_source(&repo.main_branch_id, &entry.file_id)
@@ -3590,11 +3600,12 @@ fn detached_preparation_fences_physical_namespace_writes_but_not_reads() {
         request_digest: None,
     };
     let plan = engine.prepare_workspace_commit(request, None).unwrap();
-    let rename = NamespaceOperation {
-        kind: storage_contract::NamespaceOperationKind::Rename,
-        path: "original.txt".into(),
-        destination: Some("renamed.txt".into()),
-    };
+    let rename = NamespaceOperation::parse(
+        storage_contract::NamespaceOperationKind::Rename,
+        "original.txt",
+        Some("renamed.txt"),
+    )
+    .unwrap();
     let error = engine
         .file_namespace(&repo.repository_id, rename.clone(), "admin", &new_id("op"))
         .unwrap_err();
@@ -3629,11 +3640,11 @@ fn detached_preparation_fences_physical_namespace_writes_but_not_reads() {
 
 #[test]
 fn detached_commit_rechecks_lease_expiry_at_finish() {
-    let fixture = Fixture::new();
+    let mut fixture = Fixture::new();
+    fixture.config.workspace_ttl_seconds = 1;
     let mut engine = fixture.initialize();
     let repo = repository(&mut engine, 1);
     let (_, request) = detached_commit_fixture(&mut engine, &repo);
-    engine.config.workspace_ttl_seconds = 1;
     let prepared = engine
         .prepare_workspace_commit(request.clone(), None)
         .unwrap()
@@ -3861,7 +3872,7 @@ fn upload_preparation_reads_the_opened_inode_after_source_path_swap() {
         .prepare_upload_file(
             &workspace.workspace_id,
             &item,
-            "prepared",
+            &name_policy::PortablePath::parse("prepared").unwrap(),
             source.try_clone().unwrap(),
             1,
             Some((15, hash.clone())),
@@ -3892,7 +3903,7 @@ fn upload_preparation_rejects_copied_bytes_not_matching_verified_stream() {
             .prepare_upload_file(
                 &workspace.workspace_id,
                 &item,
-                "prepared",
+                &name_policy::PortablePath::parse("prepared").unwrap(),
                 fs::File::open(&input).unwrap(),
                 1,
                 Some((

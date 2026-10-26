@@ -36,7 +36,15 @@ pub(crate) fn preflight_publication(
     recovery: Option<RecoveryProof>,
     maximum: usize,
 ) -> Result<usize> {
-    preflight_publication_prepared(engine, candidate, result, state, recovery, maximum, None)
+    preflight_publication_prepared(
+        &engine.config,
+        candidate,
+        result,
+        state,
+        recovery,
+        maximum,
+        None,
+    )
 }
 /// Recovery sizes tombstones using the candidate's exact stored snapshot graph.
 pub(crate) fn preflight_bound_publication(
@@ -48,7 +56,7 @@ pub(crate) fn preflight_bound_publication(
     maximum: usize,
 ) -> Result<usize> {
     preflight_inner(
-        engine,
+        &engine.config,
         candidate,
         result,
         state,
@@ -61,7 +69,7 @@ pub(crate) fn preflight_bound_publication(
     )
 }
 pub(crate) fn preflight_publication_prepared(
-    engine: &Engine,
+    config: &ValidatedConfig,
     candidate: &Candidate,
     result: &OperationResult,
     state: &State,
@@ -70,7 +78,7 @@ pub(crate) fn preflight_publication_prepared(
     prepared_snapshot: Option<&PreparedSnapshot>,
 ) -> Result<usize> {
     preflight_inner(
-        engine,
+        config,
         candidate,
         result,
         state,
@@ -90,7 +98,7 @@ struct PreflightOptions<'a> {
 }
 
 fn preflight_inner(
-    engine: &Engine,
+    config: &ValidatedConfig,
     candidate: &Candidate,
     result: &OperationResult,
     state: &State,
@@ -108,7 +116,13 @@ fn preflight_inner(
     };
     check(encode_metadata(candidate, maximum)?);
     let hash = object_hash("candidate", candidate)?;
-    let members = engine.members();
+    let mut members = config
+        .disks
+        .iter()
+        .filter(|disk| disk.metadata_member)
+        .cloned()
+        .collect::<Vec<_>>();
+    members.sort_by(|a, b| a.disk_id.cmp(&b.disk_id));
     let accepts = if let Some(recovery) = &mut recovery {
         check(encode_metadata(&recovery.plan, maximum)?);
         let plan_hash = object_hash("recovery-plan", &recovery.plan)?;
@@ -154,7 +168,16 @@ fn preflight_inner(
                     continue;
                 }
             }
-            let disk = engine.disk(slot)?;
+            let disk = config
+                .disks
+                .iter()
+                .find(|disk| disk.slot_id.eq_ignore_ascii_case(slot))
+                .ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::SlotNotFound,
+                        "storage slot is not registered",
+                    )
+                })?;
             let proof = CommitProof {
                 candidate_hash: hash.clone(),
                 finalize: finalize.clone(),

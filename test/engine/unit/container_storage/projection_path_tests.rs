@@ -49,11 +49,12 @@ impl Fixture {
     fn rename(&mut self, path: &str, destination: &str) -> Result<OperationResult> {
         self.engine.file_namespace(
             &self.repo.repository_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Rename,
-                path: path.into(),
-                destination: Some(destination.into()),
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                path,
+                Some(destination),
+            )
+            .unwrap(),
             "admin",
             &new_id("op"),
         )

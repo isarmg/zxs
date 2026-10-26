@@ -269,6 +269,12 @@ impl std::fmt::Display for ErrorCode {
 
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
+    #[error("{}: {source}", ErrorCode::from(source))]
+    Name {
+        #[source]
+        source: name_policy::Error,
+        retryable: bool,
+    },
     #[error("{code}: {message}")]
     Message {
         code: ErrorCode,
@@ -311,7 +317,8 @@ impl Error {
     }
     pub fn retryable(mut self) -> Self {
         match &mut self {
-            Self::Message { retryable, .. }
+            Self::Name { retryable, .. }
+            | Self::Message { retryable, .. }
             | Self::Io { retryable, .. }
             | Self::Json { retryable, .. }
             | Self::Integer { retryable, .. } => *retryable = true,
@@ -320,7 +327,8 @@ impl Error {
     }
     pub fn is_retryable(&self) -> bool {
         match self {
-            Self::Message { retryable, .. }
+            Self::Name { retryable, .. }
+            | Self::Message { retryable, .. }
             | Self::Io { retryable, .. }
             | Self::Json { retryable, .. }
             | Self::Integer { retryable, .. } => *retryable,
@@ -329,6 +337,7 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Message { code, .. } => *code,
+            Self::Name { source, .. } => source.into(),
             Self::Io { source, .. } => io_code(source),
             Self::Json { .. } => ErrorCode::InvalidJson,
             Self::Integer { .. } => ErrorCode::InvalidInteger,
@@ -337,6 +346,7 @@ impl Error {
     pub fn message(&self) -> std::borrow::Cow<'_, str> {
         match self {
             Self::Message { message, .. } => message.as_str().into(),
+            Self::Name { source, .. } => source.to_string().into(),
             Self::Io { source, .. } => source.to_string().into(),
             Self::Json { source, .. } => source.to_string().into(),
             Self::Integer { .. } => "unsigned decimal exceeds u64".into(),
@@ -371,3 +381,27 @@ impl From<std::num::ParseIntError> for Error {
 #[cfg(test)]
 #[path = "../../../test/contract/unit/error/tests.rs"]
 mod tests;
+
+impl From<&name_policy::Error> for ErrorCode {
+    fn from(error: &name_policy::Error) -> Self {
+        match error {
+            name_policy::Error::EmptyOrDot
+            | name_policy::Error::NameEdge
+            | name_policy::Error::UnsupportedCharacter(_) => Self::NameInvalidCharacter,
+            name_policy::Error::NameTooLong => Self::NameTooLong,
+            name_policy::Error::ReservedName => Self::NameReserved,
+            name_policy::Error::NotNormalized(_) => Self::NameNotNormalized,
+            name_policy::Error::InvalidPath => Self::PathInvalid,
+            name_policy::Error::PathTooDeep => Self::PathTooDeep,
+            name_policy::Error::InvalidSlot => Self::InvalidSlotId,
+        }
+    }
+}
+impl From<name_policy::Error> for Error {
+    fn from(source: name_policy::Error) -> Self {
+        Self::Name {
+            source,
+            retryable: false,
+        }
+    }
+}

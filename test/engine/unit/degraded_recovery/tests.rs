@@ -654,3 +654,89 @@ fn unreadable_local_publication_is_not_absent_evidence() {
     let error = discover_publication(&engine, &candidate, &hash).unwrap_err();
     assert!(std::error::Error::source(&error).is_some());
 }
+
+#[test]
+fn failed_pending_preflight_preserves_torn_evidence_after_published_history() {
+    use std::io::Write;
+    let (temp, engine, operation, candidate) = fixture("after_accept_2");
+    lose(&engine, &candidate, true);
+    let disks = engine.members();
+    assert!(
+        scan(&disks[0])
+            .unwrap()
+            .records
+            .iter()
+            .any(|(record, _)| record.record_type == RecordType::Publication
+                && record.sequence < candidate.sequence)
+    );
+    drop(engine);
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(log_path(&disks[0]))
+        .unwrap();
+    file.write_all(b"ZXSL").unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    let before: Vec<_> = disks
+        .iter()
+        .map(|disk| fs::read(log_path(disk)).unwrap())
+        .collect();
+    assert!(Engine::open(&temp.path().join("state")).is_err());
+    for (disk, expected) in disks.iter().zip(before) {
+        assert_eq!(fs::read(log_path(disk)).unwrap(), expected);
+    }
+    let mut evidence = Engine::open_for_recovery(&temp.path().join("state")).unwrap();
+    assert_eq!(
+        evidence
+            .prepare_degraded_recovery(&operation, "alice", "loss")
+            .unwrap_err()
+            .code(),
+        ErrorCode::RecoveryRequired
+    );
+}
+
+#[test]
+fn recoverable_pending_torn_tail_completes_without_leaving_engine_blocked() {
+    use std::io::Write;
+    let (temp, engine, operation, _candidate) = fixture("after_accept_2");
+    let disk = engine.members()[0].clone();
+    drop(engine);
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(log_path(&disk))
+        .unwrap();
+    file.write_all(b"ZXSL").unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    let engine = Engine::open(&temp.path().join("state")).unwrap();
+    assert!(!engine.is_read_only());
+    assert_eq!(
+        engine.operation(&operation).unwrap().commit_state,
+        storage_contract::CommitState::Published
+    );
+    assert!(!scan(&disk).unwrap().torn_tail);
+}
+
+#[test]
+fn incomplete_quorum_only_recovery_preserves_pending_torn_evidence() {
+    use std::io::Write;
+    let (temp, engine, _operation, _candidate) = fixture("after_accept_2");
+    let disks = engine.members();
+    drop(engine);
+    let path = log_path(&disks[0]);
+    let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    file.write_all(b"ZXSL").unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    let torn = fs::read(&path).unwrap();
+    let missing = disks[2].root.with_extension("offline");
+    fs::rename(&disks[2].root, &missing).unwrap();
+    let incomplete = Engine::open(&temp.path().join("state")).unwrap();
+    assert!(incomplete.is_read_only());
+    assert_eq!(fs::read(&path).unwrap(), torn);
+    drop(incomplete);
+    fs::rename(missing, &disks[2].root).unwrap();
+    let recovered = Engine::open(&temp.path().join("state")).unwrap();
+    assert!(!recovered.is_read_only());
+    assert!(!scan(&disks[0]).unwrap().torn_tail);
+}

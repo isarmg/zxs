@@ -161,7 +161,7 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
                 continue;
             }
             let display = if repo.file_manager_root {
-                entry.path.clone()
+                entry.path().to_owned()
             } else {
                 format!("{}/{}", repo.name, entry.path)
             };
@@ -225,7 +225,7 @@ pub(super) fn read(engine: &Engine) -> Result<Value, ApiError> {
             .find(|entry| entry.file_id == file);
         let relative = path_node
             .map(|node| node.path.clone())
-            .or_else(|| current.map(|entry| entry.path))
+            .or_else(|| current.map(|entry| entry.path.into_string()))
             .or_else(|| {
                 engine
                     .state()

@@ -9,15 +9,15 @@
     },
     "storage-contract": {
       "path": "src/contract",
-      "runtime": [],
+      "runtime": [
+        "name-policy"
+      ],
       "build": [],
       "dev": []
     },
     "name-policy": {
       "path": "src/naming",
-      "runtime": [
-        "storage-contract"
-      ],
+      "runtime": [],
       "build": [],
       "dev": []
     },

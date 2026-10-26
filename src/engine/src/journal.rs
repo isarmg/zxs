@@ -3,15 +3,14 @@ use data_serialization::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::{BufReader, Read, Write},
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
 };
 pub(crate) const MAX_FRAME: usize = 16 * 1024 * 1024;
 const LOG_MAGIC: &[u8; 8] = b"ZXSLOG\0\0";
 const LOG_HEADER_BYTES: usize = 12;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serialization(rename_all = "UPPERCASE")]
 pub(crate) enum RecordType {
     Prepare,
     Accept,
@@ -19,54 +18,22 @@ pub(crate) enum RecordType {
     Publication,
     Reprotect,
 }
-impl RecordType {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Prepare => "PREPARE",
-            Self::Accept => "ACCEPT",
-            Self::Finalize => "FINALIZE",
-            Self::Publication => "PUBLICATION",
-            Self::Reprotect => "REPROTECT",
-        }
-    }
-}
-impl Serialize for RecordType {
-    fn serialize<S: data_serialization::Serializer>(
-        &self,
-        serializer: S,
-    ) -> std::result::Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
 impl<'de> Deserialize<'de> for RecordType {
     fn deserialize<D: data_serialization::Deserializer<'de>>(
         deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
-        // Journal phases are strings, never externally tagged unit objects.
-        struct PhaseVisitor;
-        impl data_serialization::de::Visitor<'_> for PhaseVisitor {
-            type Value = RecordType;
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("an uppercase journal phase string")
-            }
-            fn visit_str<E: data_serialization::de::Error>(
-                self,
-                token: &str,
-            ) -> std::result::Result<Self::Value, E> {
-                match token {
-                    "PREPARE" => Ok(RecordType::Prepare),
-                    "ACCEPT" => Ok(RecordType::Accept),
-                    "FINALIZE" => Ok(RecordType::Finalize),
-                    "PUBLICATION" => Ok(RecordType::Publication),
-                    "REPROTECT" => Ok(RecordType::Reprotect),
-                    _ => Err(E::unknown_variant(
-                        token,
-                        &["PREPARE", "ACCEPT", "FINALIZE", "PUBLICATION", "REPROTECT"],
-                    )),
-                }
-            }
+        let token = String::deserialize(deserializer)?;
+        match token.as_str() {
+            "PREPARE" => Ok(Self::Prepare),
+            "ACCEPT" => Ok(Self::Accept),
+            "FINALIZE" => Ok(Self::Finalize),
+            "PUBLICATION" => Ok(Self::Publication),
+            "REPROTECT" => Ok(Self::Reprotect),
+            token => Err(data_serialization::de::Error::unknown_variant(
+                token,
+                &["PREPARE", "ACCEPT", "FINALIZE", "PUBLICATION", "REPROTECT"],
+            )),
         }
-        deserializer.deserialize_str(PhaseVisitor)
     }
 }
 
@@ -119,38 +86,77 @@ pub(crate) struct Scan {
     pub records: Vec<(Record, String)>,
     pub valid_bytes: u64,
     pub torn_tail: bool,
-    pub stamp: Option<FileStamp>,
 }
 pub(crate) fn log_path(d: &DiskConfig) -> PathBuf {
     d.root.join("metadata/application-log/journal.bin")
 }
-#[cfg(test)]
-thread_local! {
-    static SCAN_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
 pub(crate) fn scan(d: &DiskConfig) -> Result<Scan> {
-    #[cfg(test)]
-    SCAN_COUNT.with(|count| count.set(count.get() + 1));
-    let path = log_path(d);
-    let Some(file) = open_optional_regular(&path)? else {
-        return Ok(Scan {
+    match open_optional_regular(&log_path(d))? {
+        Some(file) => scan_frames(BufReader::new(file)),
+        None => Ok(Scan {
             records: Vec::new(),
             valid_bytes: 0,
             torn_tail: false,
-            stamp: None,
-        });
-    };
-    let before = FileStamp::of(&file)?;
-    let mut out = scan_frames(BufReader::new(&file))?;
-    // Bind reuse to the exact descriptor whose bytes were verified, not a new
-    // fingerprint captured later. Torn or concurrently changed logs get no hint.
-    if !out.torn_tail
-        && FileStamp::of(&file)? == before
-        && FileStamp::of(&open_regular(&path)?)? == before
-    {
-        out.stamp = Some(before);
+        }),
     }
-    Ok(out)
+}
+
+/// Existing bytes stay untouched until recovery has accepted the publication prefix.
+pub(crate) struct OpenJournal {
+    file: Option<std::fs::File>,
+    pub scan: Scan,
+    #[cfg(feature = "fault-injection")]
+    opening_fault: Option<OpeningFault>,
+}
+impl OpenJournal {
+    pub(crate) fn scan(d: &DiskConfig) -> Result<Self> {
+        let file = open_existing_journal(&log_path(d))?;
+        let scan = match &file {
+            Some(file) => scan_frames(BufReader::new(file))?,
+            None => Scan {
+                records: Vec::new(),
+                valid_bytes: 0,
+                torn_tail: false,
+            },
+        };
+        Ok(Self {
+            file,
+            scan,
+            #[cfg(feature = "fault-injection")]
+            opening_fault: None,
+        })
+    }
+    pub(crate) fn into_writer(self, d: &DiskConfig) -> Result<JournalWriter> {
+        let file = match self.file {
+            Some(file) => {
+                // A surviving leaf may come from a failed creation before its directory fence.
+                sync_open_journal(
+                    &file,
+                    log_path(d).parent().expect("journal parent"),
+                    #[cfg(feature = "fault-injection")]
+                    self.opening_fault,
+                )?;
+                file
+            }
+            None => create_synced_journal(d)?,
+        };
+        let mut records = self.scan.records;
+        let start = records.last().map_or(0, |(last, _)| {
+            records.partition_point(|(record, _)| record.sequence < last.sequence)
+        });
+        let records = records.split_off(start);
+        Ok(JournalWriter {
+            file,
+            records,
+            state: if self.scan.torn_tail {
+                WriterState::TornTail(self.scan.valid_bytes)
+            } else {
+                WriterState::Ready
+            },
+            #[cfg(feature = "fault-injection")]
+            fault: None,
+        })
+    }
 }
 
 fn scan_frames(mut reader: impl Read) -> Result<Scan> {
@@ -158,7 +164,6 @@ fn scan_frames(mut reader: impl Read) -> Result<Scan> {
         records: Vec::new(),
         valid_bytes: 0,
         torn_tail: false,
-        stamp: None,
     };
     let mut previous = "0".repeat(64);
     let mut last_sequence = 0;
@@ -238,288 +243,231 @@ fn scan_frames(mut reader: impl Read) -> Result<Scan> {
     }
     Ok(out)
 }
-// A process-local optimization, never a recovery authority. Keep only the current
-// decision slot per journal; older receipt retries deliberately use a full scan.
-// Device/inode plus ctime detect replacement, truncation and same-size rewrites
-// (including writers that restore mtime). Restart always verifies from byte zero.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct FileStamp {
-    dev: u64,
-    ino: u64,
-    len: u64,
-    mtime: (i64, i64),
-    ctime: (i64, i64),
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AppendMode {
+    Live,
+    Recovery,
 }
-impl FileStamp {
-    fn of(file: &std::fs::File) -> Result<Self> {
-        let m = file.metadata()?;
-        Ok(Self {
-            dev: m.dev(),
-            ino: m.ino(),
-            len: m.len(),
-            mtime: (m.mtime(), m.mtime_nsec()),
-            ctime: (m.ctime(), m.ctime_nsec()),
-        })
-    }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WriterState {
+    Ready,
+    TornTail(u64),
+    RecoveryRequired,
 }
-struct VerifiedTail {
-    stamp: FileStamp,
+
+#[cfg(feature = "fault-injection")]
+#[derive(Clone, Copy)]
+pub enum JournalFault {
+    PartialWrite,
+    Sync,
+}
+
+/// The Engine owns this descriptor and its current decision-slot receipts.
+pub(crate) struct JournalWriter {
+    file: std::fs::File,
     records: Vec<(Record, String)>,
+    state: WriterState,
+    #[cfg(feature = "fault-injection")]
+    pub(crate) fault: Option<JournalFault>,
 }
-const MAX_CACHED_JOURNALS: usize = 64;
-fn tails() -> &'static Mutex<BTreeMap<PathBuf, VerifiedTail>> {
-    static TAILS: OnceLock<Mutex<BTreeMap<PathBuf, VerifiedTail>>> = OnceLock::new();
-    TAILS.get_or_init(|| Mutex::new(BTreeMap::new()))
-}
-
-// Append and replay run only in the owning &mut Engine's decision/recovery paths.
-pub(crate) fn append(
-    d: &DiskConfig,
-    kind: RecordType,
-    sequence: u64,
-    candidate: &str,
-    object: &str,
-) -> Result<Receipt> {
-    append_with_sync(d, kind, sequence, candidate, object, None, sync_journal)
+#[cfg(feature = "fault-injection")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OpeningFault {
+    FileSync,
+    DirectorySync,
 }
 
-// Borrow only the current record and the prefix hashes already held by recovery.
-// This is same-invocation evidence, not a persistent or all-history receipt cache.
-pub(crate) struct ScannedReceipt<'a> {
-    pub stamp: &'a FileStamp,
-    pub hashes: &'a BTreeSet<String>,
-    pub record: &'a Record,
-}
-pub(crate) fn replay_publication(
-    d: &DiskConfig,
-    sequence: u64,
-    candidate: &str,
-    object: &str,
-    scanned: Option<ScannedReceipt<'_>>,
-) -> Result<Receipt> {
-    append_with_sync(
-        d,
-        RecordType::Publication,
-        sequence,
-        candidate,
-        object,
-        scanned,
-        sync_journal,
-    )
-}
-fn sync_journal(file: &std::fs::File, parent: &Path) -> Result<()> {
-    file.sync_all()?;
+fn sync_open_journal(
+    file: &std::fs::File,
+    parent: &Path,
+    #[cfg(feature = "fault-injection")] fault: Option<OpeningFault>,
+) -> Result<()> {
+    #[cfg(feature = "fault-injection")]
+    if fault == Some(OpeningFault::FileSync) {
+        return Err(std::io::Error::from_raw_os_error(5).into());
+    }
+    file.sync_data()?;
+    #[cfg(feature = "fault-injection")]
+    if fault == Some(OpeningFault::DirectorySync) {
+        return Err(std::io::Error::from_raw_os_error(5).into());
+    }
     sync_dir(parent)
 }
-fn sync_existing(
-    file: &std::fs::File,
-    path: &Path,
-    before: &FileStamp,
-    synchronize: impl FnOnce(&std::fs::File, &Path) -> Result<()>,
-) -> Result<()> {
-    if FileStamp::of(file)? != *before || FileStamp::of(&open_regular(path)?)? != *before {
-        return Err(Error::new(
-            storage_contract::ErrorCode::RecoveryRequired,
-            "journal changed during verification",
-        ));
-    }
-    synchronize(file, path.parent().expect("log parent"))?;
-    if FileStamp::of(file)? != *before || FileStamp::of(&open_regular(path)?)? != *before {
-        return Err(Error::new(
-            storage_contract::ErrorCode::RecoveryRequired,
-            "journal changed during synchronization",
-        ));
-    }
-    Ok(())
-}
 
-fn append_with_sync(
-    d: &DiskConfig,
-    kind: RecordType,
-    sequence: u64,
-    candidate: &str,
-    object: &str,
-    scanned_receipt: Option<ScannedReceipt<'_>>,
-    synchronize: impl FnOnce(&std::fs::File, &Path) -> Result<()>,
-) -> Result<Receipt> {
+fn create_synced_journal(d: &DiskConfig) -> Result<std::fs::File> {
     let path = log_path(d);
-    private_dir(path.parent().expect("log parent"))?;
-    // Independent engines share only the cache map, never a lock across I/O.
-    // Remove before touching disk so failures force partial writes to be checked.
-    let cached = tails()
-        .lock()
-        .expect("invariant: journal cache lock poisoned")
-        .remove(&path);
-    let mut file = open_append_regular(&path)?;
-    let before = FileStamp::of(&file)?;
-    if let Some(scanned) = scanned_receipt.filter(|s| *s.stamp == before) {
-        let r = scanned.record;
-        if r.record_type == kind
-            && r.sequence == sequence
-            && r.candidate_hash == candidate
-            && r.object_hash == object
-            && let Some(hash) =
-                record_frame_hash(r)?.filter(|hash| scanned.hashes.contains(hash.to_hex().as_str()))
+    let file = create_journal(&path)?;
+    sync_open_journal(
+        &file,
+        path.parent().expect("journal parent"),
+        #[cfg(feature = "fault-injection")]
+        None,
+    )?;
+    Ok(file)
+}
+impl JournalWriter {
+    pub(crate) fn create(d: &DiskConfig) -> Result<Self> {
+        Ok(Self {
+            file: create_synced_journal(d)?,
+            records: Vec::new(),
+            state: WriterState::Ready,
+            #[cfg(feature = "fault-injection")]
+            fault: None,
+        })
+    }
+    pub(crate) fn records(&self) -> &[(Record, String)] {
+        &self.records
+    }
+    pub(crate) fn requires_reopen(&self) -> bool {
+        self.state == WriterState::RecoveryRequired
+    }
+    pub(crate) fn needs_recovery(&self) -> bool {
+        self.state != WriterState::Ready
+    }
+    fn check_slot(&self, sequence: u64, candidate: &str) -> Result<()> {
+        if self
+            .records
+            .last()
+            .is_some_and(|(last, _)| last.sequence > sequence)
+            || self.records.iter().any(|(record, _)| {
+                record.sequence == sequence && record.candidate_hash != candidate
+            })
         {
-            sync_existing(&file, &path, &before, synchronize)?;
-            // Never seed the latest-slot cache with a historical receipt.
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "journal decision slot conflicts with its tail",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn repair_torn_tail(&mut self) -> Result<()> {
+        match self.state {
+            WriterState::Ready => Ok(()),
+            WriterState::RecoveryRequired => Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "journal I/O failed; reopen for recovery",
+            )),
+            WriterState::TornTail(valid_bytes) => {
+                self.state = WriterState::RecoveryRequired;
+                self.file.set_len(valid_bytes)?;
+                self.file.sync_data()?;
+                self.state = WriterState::Ready;
+                Ok(())
+            }
+        }
+    }
+    pub(crate) fn append(
+        &mut self,
+        d: &DiskConfig,
+        kind: RecordType,
+        sequence: u64,
+        candidate: &str,
+        object: &str,
+    ) -> Result<Receipt> {
+        self.append_mode(d, kind, sequence, candidate, object, AppendMode::Live)
+    }
+    pub(crate) fn append_recovered(
+        &mut self,
+        d: &DiskConfig,
+        kind: RecordType,
+        sequence: u64,
+        candidate: &str,
+        object: &str,
+    ) -> Result<Receipt> {
+        self.append_mode(d, kind, sequence, candidate, object, AppendMode::Recovery)
+    }
+    fn append_mode(
+        &mut self,
+        d: &DiskConfig,
+        kind: RecordType,
+        sequence: u64,
+        candidate: &str,
+        object: &str,
+        mode: AppendMode,
+    ) -> Result<Receipt> {
+        if self.state == WriterState::RecoveryRequired
+            || (mode == AppendMode::Live && self.needs_recovery())
+        {
+            return Err(Error::new(
+                storage_contract::ErrorCode::RecoveryRequired,
+                "journal I/O failed; reopen for recovery",
+            ));
+        }
+        if let Some((record, hash)) = self.records.iter().find(|(record, _)| {
+            record.sequence == sequence
+                && record.record_type == kind
+                && record.candidate_hash == candidate
+                && record.object_hash == object
+        }) {
             return Ok(Receipt {
                 disk_id: d.disk_id.clone(),
                 slot_id: d.slot_id.clone(),
-                frame_hash: hash.to_hex().to_string(),
-                record: r.clone(),
+                frame_hash: hash.clone(),
+                record: record.clone(),
             });
         }
-    }
-    let scanned = match cached {
-        Some(tail)
-            if tail.stamp == before
-                && tail
-                    .records
-                    .last()
-                    .is_some_and(|(r, _)| sequence >= r.sequence) =>
-        {
-            Scan {
-                records: tail.records,
-                valid_bytes: before.len,
-                torn_tail: false,
-                stamp: None,
-            }
-        }
-        _ => scan(d)?,
-    };
-    if let Some((record, hash)) = scanned.records.iter().find(|(r, _)| {
-        r.sequence == sequence
-            && r.record_type == kind
-            && r.candidate_hash == candidate
-            && r.object_hash == object
-    }) {
-        // Visible bytes are not a durable receipt: the preceding attempt may
-        // have failed after writing the frame but before either sync completed.
-        sync_existing(&file, &path, &before, synchronize)?;
-        let receipt = Receipt {
-            disk_id: d.disk_id.clone(),
-            slot_id: d.slot_id.clone(),
-            frame_hash: hash.clone(),
-            record: record.clone(),
+        self.check_slot(sequence, candidate)?;
+        let record = Record {
+            record_type: kind,
+            sequence,
+            candidate_hash: candidate.into(),
+            object_hash: object.into(),
+            previous_frame_hash: self
+                .records
+                .last()
+                .map(|(_, hash)| hash.clone())
+                .unwrap_or_else(|| "0".repeat(64)),
         };
-        if !scanned.torn_tail {
-            cache_tail(path, before, scanned.records)?;
+        let payload = canonical_json(&record)?;
+        let mut bytes = Vec::with_capacity(LOG_HEADER_BYTES + payload.len() + 32);
+        bytes.extend(LOG_MAGIC);
+        bytes.extend((payload.len() as u32).to_le_bytes());
+        bytes.extend(payload);
+        let hash = blake3::hash(&bytes);
+        bytes.extend(hash.as_bytes());
+        if mode == AppendMode::Recovery {
+            self.repair_torn_tail()?;
         }
-        return Ok(receipt);
-    }
-    // Reject concurrent replacement/modification while scanning. Engine locks
-    // serialize supported writers; this also catches accidental outside writes.
-    if FileStamp::of(&file)? != before || FileStamp::of(&open_regular(&path)?)? != before {
-        return Err(Error::new(
-            storage_contract::ErrorCode::RecoveryRequired,
-            "journal changed during verification",
-        ));
-    }
-    if scanned
-        .records
-        .iter()
-        .any(|(r, _)| r.sequence == sequence && r.candidate_hash != candidate)
-    {
-        return Err(Error::new(
-            storage_contract::ErrorCode::LogFork,
-            "two candidates occupy one decision slot",
-        ));
-    }
-    if scanned
-        .records
-        .last()
-        .is_some_and(|(r, _)| r.sequence > sequence)
-    {
-        return Err(Error::new(
-            storage_contract::ErrorCode::LogFork,
-            "cannot append an older decision slot",
-        ));
-    }
-    let record = Record {
-        record_type: kind,
-        sequence,
-        candidate_hash: candidate.into(),
-        object_hash: object.into(),
-        previous_frame_hash: scanned
+        // A partial write, failed sync, or unwind leaves the writer unusable until recovery.
+        self.state = WriterState::RecoveryRequired;
+        #[cfg(feature = "fault-injection")]
+        let fault = self.fault.take();
+        #[cfg(feature = "fault-injection")]
+        if matches!(fault, Some(JournalFault::PartialWrite)) {
+            self.file.write_all(&bytes[..bytes.len() / 2])?;
+            return Err(std::io::Error::from_raw_os_error(28).into());
+        }
+        self.file.write_all(&bytes)?;
+        #[cfg(feature = "fault-injection")]
+        if matches!(fault, Some(JournalFault::Sync)) {
+            return Err(std::io::Error::from_raw_os_error(5).into());
+        }
+        self.file.sync_data()?;
+        if self
             .records
             .last()
-            .map(|(_, h)| h.clone())
-            .unwrap_or_else(|| "0".repeat(64)),
-    };
-    let bytes = canonical_json(&record)?;
-    if bytes.len() > MAX_FRAME {
-        return Err(Error::new(
-            storage_contract::ErrorCode::ResourceLimit,
-            "log record exceeds frame limit",
-        ));
-    }
-    let mut header = Vec::with_capacity(LOG_HEADER_BYTES);
-    header.extend(LOG_MAGIC);
-    header.extend((bytes.len() as u32).to_le_bytes());
-    let mut h = blake3::Hasher::new();
-    h.update(&header);
-    h.update(&bytes);
-    let digest = h.finalize();
-    if scanned.torn_tail {
-        file.set_len(scanned.valid_bytes)?;
-        file.sync_all()?;
-    }
-    file.write_all(&header)?;
-    file.write_all(&bytes)?;
-    file.write_all(digest.as_bytes())?;
-    synchronize(&file, path.parent().expect("log parent"))?;
-    let stamp = FileStamp::of(&file)?;
-    if stamp.len != scanned.valid_bytes + header.len() as u64 + bytes.len() as u64 + 32
-        || FileStamp::of(&open_regular(&path)?)? != stamp
-    {
-        return Err(Error::new(
-            storage_contract::ErrorCode::RecoveryRequired,
-            "journal changed during append",
-        ));
-    }
-    let mut records = scanned.records;
-    records.push((record.clone(), digest.to_hex().to_string()));
-    cache_tail(path, stamp, records)?;
-    Ok(Receipt {
-        disk_id: d.disk_id.clone(),
-        slot_id: d.slot_id.clone(),
-        frame_hash: digest.to_hex().to_string(),
-        record,
-    })
-}
-fn cache_tail(path: PathBuf, stamp: FileStamp, mut records: Vec<(Record, String)>) -> Result<()> {
-    if let Some((last, _)) = records.last() {
-        let sequence = last.sequence;
-        records.retain(|(r, _)| r.sequence == sequence);
-    }
-    // A malformed workload may place arbitrarily many records in one slot.
-    // Do not retain an unbounded receipt set in that case.
-    let retained_bytes = records
-        .iter()
-        .map(|(r, hash)| {
-            r.record_type.as_str().len()
-                + r.candidate_hash.len()
-                + r.object_hash.len()
-                + r.previous_frame_hash.len()
-                + hash.len()
+            .is_some_and(|(last, _)| last.sequence != sequence)
+        {
+            self.records.clear();
+        }
+        let hash = hash.to_hex().to_string();
+        self.records.push((record.clone(), hash.clone()));
+        self.state = WriterState::Ready;
+        Ok(Receipt {
+            disk_id: d.disk_id.clone(),
+            slot_id: d.slot_id.clone(),
+            frame_hash: hash,
+            record,
         })
-        .sum::<usize>();
-    if records.len() > 64 || retained_bytes > 64 * 1024 {
-        return Ok(());
     }
-    // Do not retain the allocation of a full historical scan.
-    records.shrink_to_fit();
-    let mut tails = tails()
-        .lock()
-        .expect("invariant: journal cache lock poisoned");
-    // Bound cache size across unrelated engines; eviction only costs a rescan.
-    if tails.len() >= MAX_CACHED_JOURNALS {
-        tails.pop_first();
-    }
-    tails.insert(path, VerifiedTail { stamp, records });
-    Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/journal/test_support.rs"]
+mod test_support;
+#[cfg(test)]
+pub(crate) use test_support::{append, store_object_replicas_bounded};
 
 mod object_storage;
 pub(crate) use object_storage::{existing_object_paths, list_object_hashes, object_path};
@@ -533,18 +481,6 @@ pub(crate) fn store_object<T: Serialize + ?Sized>(
     write_object_bytes(d, kind, &hash, &encode_metadata(value, MAX_METADATA)?)?;
     Ok(hash)
 }
-/// Encode an immutable object once for all replicas, retaining the same hash
-/// function, reader bounds, atomic publication and existing-byte checks.
-#[cfg(test)]
-pub(crate) fn store_object_replicas_bounded<T: Serialize + ?Sized>(
-    members: &[DiskConfig],
-    kind: &'static str,
-    value: &T,
-    maximum: usize,
-) -> Result<String> {
-    PreparedMetadataObject::new(kind, value, maximum)?.store(members)
-}
-
 /// Frozen canonical bytes shared by size preflight and every replica write.
 /// Construction performs all serialization and hashing; installation retains
 /// atomic writes, immutable-byte collision checks and reader-size limits.
@@ -1049,8 +985,9 @@ pub(crate) struct ContentTombstone {
 /// Offline receipts must bind the saved pool membership, not a smaller set
 /// declared by their own candidate. Verification never creates a missing anchor.
 fn verify_local_membership(root: &Path, candidate: &Candidate, seal: &DiskSeal) -> Result<()> {
-    let config: Config = read_json(&root.join("metadata/pool-membership/config.json"))?;
-    Engine::validate_configuration(&config)?;
+    let config = ValidatedConfig::try_from(read_json::<Config>(
+        &root.join("metadata/pool-membership/config.json"),
+    )?)?;
     let expected = config
         .disks
         .iter()
@@ -1276,8 +1213,8 @@ fn verify_local_version_publication(directory: &Path, version: &FileVersion) -> 
 mod replication_tests;
 
 #[cfg(test)]
-#[path = "../../../test/engine/unit/journal/tail_cache_tests.rs"]
-mod tail_cache_tests;
+#[path = "../../../test/engine/unit/journal/writer_lifecycle_tests.rs"]
+mod writer_lifecycle_tests;
 
 #[cfg(test)]
 #[path = "../../../test/engine/unit/journal/scanner_tests.rs"]

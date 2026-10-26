@@ -223,7 +223,8 @@ async fn upload_inner(
             key,
         },
     });
-    name_policy::validate_path(&query.path).map_err(ApiError::invalid_source)?;
+    let logical_path =
+        name_policy::PortablePath::parse(&query.path).map_err(ApiError::invalid_source)?;
     let headers = request.headers();
     let parse_header = |name: &'static str| -> Result<Option<u64>, ApiError> {
         if headers.get_all(name).iter().count() > 1 {
@@ -539,7 +540,6 @@ async fn upload_inner(
     let owner = identity.clone();
     let ws = workspace.clone();
     let item_id = item.clone();
-    let logical_path = query.path;
     // Once admitted, blocking publication can outlive the HTTP deadline, even
     // while still queued. A timeout can no longer promise a rejected mutation.
     deadline.publication_admitted.store(true, Ordering::Release);

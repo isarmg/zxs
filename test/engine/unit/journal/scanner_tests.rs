@@ -59,10 +59,6 @@ fn buffered_scan_preserves_bytes_and_hashes_across_short_reads() {
             let scanned = scan_frames(BufReader::with_capacity(capacity, reader)).unwrap();
             assert_eq!(scanned.valid_bytes, bytes.len() as u64);
             assert!(!scanned.torn_tail);
-            assert!(
-                scanned.stamp.is_none(),
-                "only the file wrapper binds identity"
-            );
             assert_eq!(scanned.records.len(), expected.len());
             for ((record, hash), expected) in scanned.records.iter().zip(&expected) {
                 assert_eq!(
@@ -309,5 +305,18 @@ fn typed_phases_survive_normal_publication_and_recovery() {
     assert_eq!(
         recovered.commit_state,
         storage_contract::CommitState::Published
+    );
+}
+
+#[test]
+fn valid_checksum_does_not_admit_noncanonical_receipt_payload() {
+    let canonical = canonical_json(&records()[0]).unwrap();
+    let mut noncanonical = b" \n".to_vec();
+    noncanonical.extend(canonical);
+    assert!(decode_strict::<Record>(&noncanonical).is_ok());
+    let frame = raw_frame(&noncanonical);
+    assert_eq!(
+        scan_frames(frame.as_slice()).err().unwrap().code(),
+        ErrorCode::LogCorrupt
     );
 }

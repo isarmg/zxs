@@ -6,23 +6,7 @@ use std::{io::Read, path::PathBuf, sync::Arc};
 
 impl Engine {
     pub(crate) fn used_bytes(&self, slot: &str) -> u64 {
-        self.state
-            .placements
-            .values()
-            .filter(|p| p.route_slot_ids.iter().any(|s| s == slot))
-            .filter(|p| {
-                self.state
-                    .content_states
-                    .get(&p.version_id)
-                    .is_none_or(|s| *s != ContentState::Purged && *s != ContentState::Migrated)
-            })
-            .map(|p| {
-                self.state
-                    .versions
-                    .get(&p.version_id)
-                    .expect("invariant: every placement references an existing version")
-            })
-            .fold(0u64, |sum, v| sum.saturating_add(v.logical_size))
+        self.planning_context().used_bytes(slot)
     }
     pub(crate) fn valid_replica(&self, version_id: &str) -> Result<(PathBuf, FileVersion)> {
         let (_, version, directory) = self.verified_replica(version_id)?;
@@ -197,7 +181,7 @@ impl Engine {
 /// The lease is acquired before releasing that lock, so purge cannot remove the
 /// selected version while publication evidence and payload handles are opened.
 pub struct ContentReadPlan {
-    config: Arc<Config>,
+    config: Arc<ValidatedConfig>,
     disks: Vec<DiskConfig>,
     version: FileVersion,
     lease: ReadLease,
@@ -221,7 +205,7 @@ impl Engine {
     pub(super) fn prepare_content_with_config(
         &self,
         version_id: &str,
-        config: Arc<Config>,
+        config: Arc<ValidatedConfig>,
     ) -> Result<ContentReadPlan> {
         if self
             .state

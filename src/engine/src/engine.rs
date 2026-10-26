@@ -8,6 +8,9 @@ use std::{
 };
 
 mod config;
+pub use config::ValidatedConfig;
+mod planning;
+pub(crate) use planning::PlanningContext;
 mod index;
 mod observations;
 mod operations;
@@ -20,12 +23,13 @@ pub use workspace_commit::{PreparedWorkspaceCommit, WorkspaceCommitPreparation};
 mod reads;
 pub use reads::{ContentReadPlan, RangeContent, WorkspaceReadPlan};
 mod recovery;
+use recovery::RecoveryMode;
 mod recovery_checkpoint;
 mod workspace_budget;
 mod workspace_limits;
 pub use workspace_limits::RetainedWorkspaceLimits;
 mod workspace_storage;
-use config::{acquire_locks, validate_config};
+use config::{DiskLockPolicy, acquire_locks};
 
 /// Nonfatal checkpoint failures from the latest recovery invocation.
 #[derive(Debug, Default)]
@@ -36,15 +40,15 @@ pub struct RecoveryWarnings {
 
 pub struct Engine {
     pub(crate) root: PathBuf,
-    pub(crate) config: Config,
+    pub(crate) config: ValidatedConfig,
     pub(crate) state: Arc<State>,
     pub(crate) workspaces: BTreeMap<String, Workspace>,
     workspace_budget: workspace_budget::WorkspaceBudget,
-    retained_workspace_limits: Option<RetainedWorkspaceLimits>,
     pub(crate) blocked: bool,
     pub(crate) snapshot: Option<String>,
     published_state_base: Option<Arc<publication::PublishedStateBase>>,
     pub(crate) next_slot: u64,
+    pub(crate) journals: BTreeMap<String, crate::journal::JournalWriter>,
     pub(crate) reads: Arc<Mutex<BTreeMap<String, usize>>>,
     pub(crate) upload_preparations: Arc<Mutex<BTreeSet<String>>>,
     commit_preparation: Arc<std::sync::atomic::AtomicBool>,
@@ -101,6 +105,64 @@ pub(crate) enum MutationPlan {
 }
 
 impl Engine {
+    /// Inject one failure at the journal I/O boundary for recovery testing.
+    #[cfg(feature = "fault-injection")]
+    pub fn inject_journal_fault_once(
+        &mut self,
+        slot: &str,
+        fault: crate::JournalFault,
+    ) -> Result<()> {
+        let disk = self.disk(slot)?.disk_id.clone();
+        self.journals
+            .get_mut(&disk)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "metadata journal is unavailable",
+                )
+            })?
+            .fault = Some(fault);
+        Ok(())
+    }
+
+    pub(crate) fn append_journal(
+        &mut self,
+        disk: &DiskConfig,
+        kind: crate::journal::RecordType,
+        sequence: u64,
+        candidate: &str,
+        object: &str,
+    ) -> Result<crate::journal::Receipt> {
+        let journal = self
+            .journals
+            .get_mut(&disk.disk_id)
+            .expect("invariant: writable metadata member owns a journal");
+        let result = journal.append(disk, kind, sequence, candidate, object);
+        if journal.requires_reopen() {
+            self.blocked = true;
+        }
+        result
+    }
+
+    pub(crate) fn append_recovered_journal(
+        &mut self,
+        disk: &DiskConfig,
+        kind: crate::journal::RecordType,
+        sequence: u64,
+        candidate: &str,
+        object: &str,
+    ) -> Result<crate::journal::Receipt> {
+        let journal = self
+            .journals
+            .get_mut(&disk.disk_id)
+            .expect("invariant: writable metadata member owns a journal");
+        let result = journal.append_recovered(disk, kind, sequence, candidate, object);
+        if journal.requires_reopen() {
+            self.blocked = true;
+        }
+        result
+    }
+
     /// Detached filesystem work must keep the same OS lock descriptions alive
     /// until completion or cancellation, even if its original Engine is dropped.
     pub(crate) fn retain_writer_locks(&self) -> Result<Vec<File>> {
@@ -109,12 +171,6 @@ impl Engine {
             .iter()
             .map(File::try_clone)
             .collect::<std::io::Result<Vec<_>>>()?)
-    }
-
-    /// Validate a candidate without creating directories, opening disks or
-    /// acquiring writer locks. Filesystem identity is checked when opening it.
-    pub fn validate_configuration(config: &Config) -> Result<()> {
-        validate_config(config)
     }
 
     /// Candidate membership is immutable and must never shrink with availability.
@@ -143,32 +199,39 @@ impl Engine {
     /// Set restart-only retained-evidence limits without changing disk configuration.
     pub fn initialize_with_workspace_limits(
         root: &Path,
-        mut config: Config,
+        config: Config,
         workspace_limits: Option<RetainedWorkspaceLimits>,
     ) -> Result<Self> {
+        let config = ValidatedConfig::try_from(config)?.with_workspace_limits(workspace_limits)?;
+        Self::initialize_validated(root, config)
+    }
+
+    /// Initialize an admitted configuration, retaining its restart-only policy.
+    ///
+    /// # Errors
+    /// Returns filesystem, disk identity, canonical root overlap or initialization errors.
+    pub fn initialize_validated(root: &Path, config: ValidatedConfig) -> Result<Self> {
         if root.join("config.json").try_exists()? {
             return Err(Error::new(
                 storage_contract::ErrorCode::AlreadyInitialized,
                 "configuration already exists; use open/recovery",
             ));
         }
-        validate_config(&config)?;
-        if let Some(limits) = workspace_limits {
-            limits.validate_for(&config)?;
-        }
         private_dir(root)?;
         let root = existing_private_dir(root)?.path().to_path_buf();
-        for d in &mut config.disks {
-            private_dir(&d.root)?;
-            d.root = d.root.canonicalize()?;
-            if d.root.join("disk.json").try_exists()? {
+        let mut roots = Vec::with_capacity(config.disks.len());
+        for disk in &config.disks {
+            private_dir(&disk.root)?;
+            let path = disk.root.canonicalize()?;
+            if path.join("disk.json").try_exists()? {
                 return Err(Error::new(
                     storage_contract::ErrorCode::DiskAlreadyEnrolled,
                     "disk already contains a managed identity",
                 ));
             }
+            roots.push(path);
         }
-        validate_config(&config)?;
+        let config = config.with_disk_roots(roots)?;
         let mut physical = BTreeSet::new();
         for d in &config.disks {
             let seal = identity(&config, d)?;
@@ -179,7 +242,7 @@ impl Engine {
                 ));
             }
         }
-        let locks = acquire_locks(&root, &config, false)?;
+        let locks = acquire_locks(&root, &config, DiskLockPolicy::NewPoolRoots)?;
         for d in &config.disks {
             let seal = identity(&config, d)?;
             write_json(&d.root.join("disk.json"), &seal, false)?;
@@ -209,17 +272,28 @@ impl Engine {
             topology_generation: 1,
             ..State::default()
         };
+        let journals = config
+            .disks
+            .iter()
+            .filter(|disk| disk.metadata_member)
+            .map(|disk| {
+                Ok((
+                    disk.disk_id.clone(),
+                    crate::journal::JournalWriter::create(disk)?,
+                ))
+            })
+            .collect::<Result<_>>()?;
         let engine = Self {
             root,
             config,
             state: Arc::new(state),
             workspaces: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
-            retained_workspace_limits: workspace_limits,
             blocked: false,
             snapshot: None,
             published_state_base: None,
             next_slot: 1,
+            journals,
             reads: Arc::new(Mutex::new(BTreeMap::new())),
             upload_preparations: Arc::new(Mutex::new(BTreeSet::new())),
             commit_preparation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -240,7 +314,7 @@ impl Engine {
         root: &Path,
         workspace_limits: Option<RetainedWorkspaceLimits>,
     ) -> Result<Self> {
-        Self::open_mode(root, true, workspace_limits)
+        Self::open_mode(root, RecoveryMode::CompletePending, workspace_limits)
     }
 
     /// Offline recovery entry. Unpublished candidates are never advanced here.
@@ -252,22 +326,19 @@ impl Engine {
         root: &Path,
         workspace_limits: Option<RetainedWorkspaceLimits>,
     ) -> Result<Self> {
-        Self::open_mode(root, false, workspace_limits)
+        Self::open_mode(root, RecoveryMode::PreservePending, workspace_limits)
     }
 
     fn open_mode(
         root: &Path,
-        complete_unpublished: bool,
+        mode: RecoveryMode,
         workspace_limits: Option<RetainedWorkspaceLimits>,
     ) -> Result<Self> {
         let root = existing_private_dir(root)?.path().to_path_buf();
-        let config: Config = read_json(&root.join("config.json"))?;
-        validate_config(&config)?;
-        if let Some(limits) = workspace_limits {
-            limits.validate_for(&config)?;
-        }
-        let mut engine = Self::prepare_workspace_recovery(root, config, workspace_limits)?;
-        engine.recover_mode(complete_unpublished)?;
+        let config = ValidatedConfig::try_from(read_json::<Config>(&root.join("config.json"))?)?
+            .with_workspace_limits(workspace_limits)?;
+        let mut engine = Self::prepare_workspace_recovery(root, config)?;
+        engine.recover_mode(mode)?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)
@@ -275,12 +346,8 @@ impl Engine {
 
     /// Admission preflight is read-only apart from writer lock files. Keep this
     /// same Engine and its locks through replay and authoritative reconciliation.
-    fn prepare_workspace_recovery(
-        root: PathBuf,
-        config: Config,
-        workspace_limits: Option<RetainedWorkspaceLimits>,
-    ) -> Result<Self> {
-        let locks = acquire_locks(&root, &config, true)?;
+    fn prepare_workspace_recovery(root: PathBuf, config: ValidatedConfig) -> Result<Self> {
+        let locks = acquire_locks(&root, &config, DiskLockPolicy::AvailableMembers)?;
         let mut engine = Self {
             root,
             config,
@@ -290,11 +357,11 @@ impl Engine {
             }),
             workspaces: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
-            retained_workspace_limits: workspace_limits,
             blocked: false,
             snapshot: None,
             published_state_base: None,
             next_slot: 1,
+            journals: BTreeMap::new(),
             reads: Arc::new(Mutex::new(BTreeMap::new())),
             upload_preparations: Arc::new(Mutex::new(BTreeSet::new())),
             commit_preparation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -329,12 +396,13 @@ impl Engine {
                 "restore requires trusted old metadata members",
             ));
         }
-        let mut configs = BTreeMap::<String, (Config, usize)>::new();
+        let mut configs = BTreeMap::<String, (ValidatedConfig, usize)>::new();
         let mut seals = BTreeMap::new();
         for path in disks {
             let seal: DiskSeal = read_json(&path.join("disk.json"))?;
-            let config: Config = read_json(&path.join("metadata/pool-membership/config.json"))?;
-            validate_config(&config)?;
+            let config = ValidatedConfig::try_from(read_json::<Config>(
+                &path.join("metadata/pool-membership/config.json"),
+            )?)?;
             let mut member = config
                 .disks
                 .iter()
@@ -346,14 +414,15 @@ impl Engine {
                         "recovery input is not a metadata member of its saved configuration",
                     )
                 })?;
-            member.root = path.canonicalize()?;
+            let path = path.canonicalize()?;
+            member.root = path.clone();
             validate_seal(&config, &member)?;
             let hash = object_hash("pool-config", &config)?;
             configs
                 .entry(hash)
                 .and_modify(|(_, n)| *n += 1)
                 .or_insert((config, 1));
-            if seals.insert(seal.disk_id, path.canonicalize()?).is_some() {
+            if seals.insert(seal.disk_id, path).is_some() {
                 return Err(Error::new(
                     storage_contract::ErrorCode::DiskNotIndependent,
                     "duplicate disk id in recovery input",
@@ -364,7 +433,7 @@ impl Engine {
             .into_values()
             .filter(|(c, n)| *n >= c.metadata_quorum())
             .map(|(c, _)| c);
-        let mut config = agreed.next().ok_or_else(|| {
+        let config = agreed.next().ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::ConfigConflict,
                 "a configured metadata majority does not agree on pool configuration",
@@ -383,12 +452,12 @@ impl Engine {
                 "recovery inputs identify more than one pool configuration or membership",
             ));
         }
-        for d in &mut config.disks {
-            if let Some(path) = seals.get(&d.disk_id) {
-                d.root = path.clone();
-            }
-        }
-        validate_config(&config)?;
+        let roots = config
+            .disks
+            .iter()
+            .map(|disk| seals.get(&disk.disk_id).unwrap_or(&disk.root).clone())
+            .collect();
+        let config = config.with_disk_roots(roots)?;
         for member in config
             .disks
             .iter()
@@ -396,16 +465,14 @@ impl Engine {
         {
             validate_seal(&config, member)?;
         }
-        if let Some(limits) = workspace_limits {
-            limits.validate_for(&config)?;
-        }
+        let config = config.with_workspace_limits(workspace_limits)?;
         private_dir(root)?;
         let root = existing_private_dir(root)?.path().to_path_buf();
-        let mut engine = Self::prepare_workspace_recovery(root, config, workspace_limits)?;
+        let mut engine = Self::prepare_workspace_recovery(root, config)?;
         // A quota failure must not publish a system configuration or replay any
         // journal repair. Preflight above retains the locks across publication.
         write_json(&engine.root.join("config.json"), &engine.config, false)?;
-        engine.recover_mode(true)?;
+        engine.recover_mode(RecoveryMode::CompletePending)?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)
@@ -415,6 +482,19 @@ impl Engine {
             return Err(Error::new(
                 storage_contract::ErrorCode::RecoveryRequired,
                 "recovery requires every original disk and its exclusive OS writer lock",
+            ));
+        }
+        if self.journals.len()
+            != self
+                .config
+                .disks
+                .iter()
+                .filter(|disk| disk.metadata_member)
+                .count()
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "reopen recovery to acquire every metadata journal",
             ));
         }
         for disk in &self.config.disks {
@@ -509,59 +589,13 @@ impl Engine {
             .collect()
     }
     pub(crate) fn members(&self) -> Vec<DiskConfig> {
-        let mut members = self
-            .config
-            .disks
-            .iter()
-            .filter(|d| d.metadata_member)
-            .cloned()
-            .collect::<Vec<_>>();
-        members.sort_by(|a, b| a.disk_id.cmp(&b.disk_id));
-        members
+        self.planning_context().members()
     }
     pub(crate) fn disk(&self, slot: &str) -> Result<&DiskConfig> {
-        self.config
-            .disks
-            .iter()
-            .find(|d| d.slot_id.eq_ignore_ascii_case(slot))
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::SlotNotFound,
-                    "storage slot is not registered",
-                )
-            })
+        self.planning_context().disk(slot)
     }
     pub(crate) fn route(&self, primary: &str, copies: u32) -> Result<Vec<String>> {
-        let first = self.disk(primary)?;
-        if first.level != 1 || copies == 0 {
-            return Err(Error::new(
-                storage_contract::ErrorCode::PlacementInvalid,
-                "placement requires a primary slot and at least one copy",
-            ));
-        }
-        let mut route = vec![first.slot_id.clone()];
-        let mut current = first;
-        while route.len() < copies as usize {
-            let next = self
-                .config
-                .disks
-                .iter()
-                .find(|d| {
-                    d.level == current.level + 1
-                        && d.upstream_slot_id
-                            .as_deref()
-                            .is_some_and(|s| s.eq_ignore_ascii_case(&current.slot_id))
-                })
-                .ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::RouteIncomplete,
-                        "requested copies exceed the configured fixed route",
-                    )
-                })?;
-            route.push(next.slot_id.clone());
-            current = next;
-        }
-        Ok(route)
+        self.planning_context().route(primary, copies)
     }
     pub(crate) fn require_no_commit_preparation(&self) -> Result<()> {
         if self
@@ -604,30 +638,10 @@ impl Engine {
     }
 
     pub(crate) fn repository_for_history(&self, history: &str) -> Result<&Repository> {
-        let h = self.state.histories.get(history).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::HistoryNotFound,
-                "history tree does not exist",
-            )
-        })?;
-        self.state
-            .repositories
-            .get(&h.repository_id)
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::StateInvalid,
-                    "history has no repository",
-                )
-            })
+        self.planning_context().repository_for_history(history)
     }
     pub(crate) fn repository_for_branch(&self, branch: &str) -> Result<&Repository> {
-        let b = self.state.branches.get(branch).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::BranchNotFound,
-                "branch does not exist",
-            )
-        })?;
-        self.repository_for_history(&b.history_tree_id)
+        self.planning_context().repository_for_branch(branch)
     }
     pub(crate) fn mutate<F>(
         &mut self,
@@ -705,88 +719,12 @@ impl Engine {
             ));
         }
         self.require_write()?;
-        // Published and planning views share only the immutable base. Every
-        // mutation still owns an independent next State until publication.
-        let mut next = self.state.as_ref().clone();
-        next.begin_tracking();
-        crate::container_storage::capture_names(&mut next);
-        next.sequence = self.next_slot;
-        if !kind.starts_with("auth.") {
-            next.business_generation =
-                next.business_generation.checked_add(1).ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::ResourceLimit,
-                        "business generation exhausted",
-                    )
-                })?;
-        }
-        let mut prepared = Vec::new();
-        let mut result = change(self, &mut next, &mut prepared)?;
-        crate::container_storage::capture_names(&mut next);
-        result["timestamp"] = json_codec::json!(crate::business::now().to_string());
-        if let Some(branch_id) = result
-            .get("branch_id")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            && let Some(branch) = next.branches.get(&branch_id)
-        {
-            result["branch_generation"] = json!(branch.generation.to_string());
-        }
-        result["membership_epoch"] = json!("1");
-        let mut protection = Vec::new();
-        for p in &prepared {
-            let mut slots = Vec::new();
-            for slot in &p.placement.route_slot_ids {
-                let disk = self.disk(slot)?;
-                slots.push(json!({"slot_id":slot,"copy_level":disk.level,"disk_id":disk.disk_id,"binding_generation":disk.binding_generation.to_string(),"state":"COMPLETE_VERIFIED"}));
-            }
-            protection.push(json!({"version_id":p.version.version_id,"primary_slot_id":p.placement.primary_slot_id,"target_copies":p.placement.target_copies,"required_slots":p.placement.route_slot_ids,"topology_generation":p.placement.topology_generation.to_string(),"slots":slots}));
-        }
-        result["version_protection"] = json!(protection);
-        let protection = if prepared.is_empty() {
-            ProtectionAtPublish::NotApplicable
-        } else {
-            ProtectionAtPublish::TargetMet
-        };
-        let op = OperationResult {
-            operation_id: operation_id.into(),
-            kind: kind.into(),
-            commit_id: result
-                .get("commit_id")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            history_tree_id: result
-                .get("history_tree_id")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            branch_id: result
-                .get("branch_id")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            commit_state: storage_contract::CommitState::Published,
-            protection_at_publish: protection,
-            current_health: storage_contract::CurrentHealth::Healthy,
-            request_digest: digest.clone(),
-            sequence: next.sequence,
-            result,
-        };
-        next.operations.insert(operation_id.into(), op.clone());
-        next.operation_principals
-            .insert(operation_id.into(), principal.into());
-        next.events.push(Event {
-            sequence: next.sequence,
-            operation_id: operation_id.into(),
-            kind: kind.into(),
-            object_id: op
-                .commit_id
-                .clone()
-                .or_else(|| op.history_tree_id.clone())
-                .unwrap_or_else(|| operation_id.into()),
-        });
-        Ok(MutationPlan::Prepared {
-            next: Box::new(next),
-            prepared,
-            result: op,
-        })
+        self.planning_context().plan_new_mutation(
+            kind,
+            principal,
+            operation_id,
+            digest,
+            |_, next, prepared| change(self, next, prepared),
+        )
     }
 }

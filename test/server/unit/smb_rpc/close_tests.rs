@@ -27,6 +27,25 @@ struct CloseFailure {
 }
 
 impl Backend for CloseFailure {
+    fn snapshot_at(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        commit: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        self.inner.snapshot_at(identity, branch, commit)
+    }
+
+    fn lookup_at(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        commit: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        self.inner.lookup_at(identity, branch, commit, path)
+    }
+
     fn call(
         &self,
         action: crate::BackendAction,
@@ -72,7 +91,7 @@ impl Backend for CloseFailure {
         identity: &Identity,
         workspace: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &crate::UploadSource,
     ) -> Result<Value, ApiError> {
         self.uploads.fetch_add(1, Ordering::SeqCst);

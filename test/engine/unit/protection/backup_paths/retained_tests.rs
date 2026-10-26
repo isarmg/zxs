@@ -68,7 +68,7 @@ fn source_reconfiguration_preserves_one_shared_snapshot_for_moved_files() {
         assert_eq!(engine.state.placements[&entry.version_id].target_copies, 2);
         assert_eq!(
             engine.state.file_backup_paths[&entry.file_id]["B01"],
-            format!("old/{}", entry.name)
+            format!("old/{}", entry.name())
         );
     }
     let added = save(&mut engine, &repo, "source/added.txt", b"new source file");
@@ -234,11 +234,12 @@ fn protection_policy_role_is_required_and_empty_current_rules_survive_pruning() 
     engine
         .file_namespace(
             &repo.repository_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::Mkdir,
-                path: "empty".into(),
-                destination: None,
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Mkdir,
+                "empty",
+                None,
+            )
+            .unwrap(),
             "admin",
             &new_id("op"),
         )

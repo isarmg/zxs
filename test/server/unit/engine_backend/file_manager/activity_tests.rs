@@ -144,11 +144,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
         engine
             .namespace_operation(
                 &workspace.workspace_id,
-                NamespaceOperation {
-                    kind: kind.parse().unwrap(),
-                    path: "transient".into(),
-                    destination: None,
-                },
+                NamespaceOperation::parse(kind.parse().unwrap(), "transient", None).unwrap(),
             )
             .unwrap();
     }

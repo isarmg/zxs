@@ -11,11 +11,12 @@ impl Session {
         exclusive: bool,
         write_through: bool,
     ) -> Result<(Value, Option<OwnedFd>), ApiError> {
-        if !path.is_empty() {
-            name_policy::validate_lookup_path(&path).map_err(contract)?;
-        } else {
+        let lookup = if path.is_empty() {
             self.authorize_binding()?;
-        }
+            None
+        } else {
+            Some(name_policy::LookupPath::parse(&path).map_err(|source| contract(source.into()))?)
+        };
         if self.handles.len() >= MAX_HANDLES {
             return Err(ApiError::limit("too many SMB handles"));
         }
@@ -37,16 +38,15 @@ impl Session {
                 "entry does not exist",
             ));
         }
-        // A lookup spelling is not a proposed new name. Existing writes keep
-        // the stored display path all the way through strict upload admission.
-        // Missing create targets must pass creation rules before any allocation.
-        let path = if let Some(entry) = &existing {
-            entry.path.clone()
-        } else {
-            if create && !path.is_empty() {
-                name_policy::validate_path(&path).map_err(contract)?;
-            }
-            path
+        // The share root has no creation path. Existing entries retain their
+        // display spelling; missing create targets are parsed before admission.
+        let path = match &existing {
+            Some(entry) => Some(entry.path.clone()),
+            None if path.is_empty() => None,
+            None => Some(
+                name_policy::PortablePath::parse(&path)
+                    .map_err(|source| contract(source.into()))?,
+            ),
         };
         let handle_id = self.next_handle;
         self.next_handle += 1;
@@ -61,7 +61,7 @@ impl Session {
             .as_ref()
             .map(|entry| entry.entry_id.clone())
             .unwrap_or_else(|| self.branch.clone());
-        if path.is_empty()
+        if path.is_none()
             || existing
                 .as_ref()
                 .is_some_and(|entry| entry.kind == storage_contract::NamespaceEntryKind::Directory)
@@ -73,10 +73,7 @@ impl Session {
                     "directory data is not writable",
                 ));
             }
-            let canonical_path = existing
-                .as_ref()
-                .map(|entry| entry.path.clone())
-                .unwrap_or_default();
+            let canonical_path = path.as_ref().map_or("", |path| path.as_str()).to_owned();
             // Freeze a directory's snapshot when its descriptor is opened,
             // not on the first read. Capture and identity validation share the
             // engine authorization lock and allocate no namespace copy.
@@ -94,7 +91,7 @@ impl Session {
                 Handle::Directory(DirectoryHandle {
                     file,
                     entry_id: entry_id.clone(),
-                    path: canonical_path,
+                    path: canonical_path.clone(),
                     cursor: Some(DirectoryCursor {
                         commit_id,
                         after: None,
@@ -104,7 +101,7 @@ impl Session {
             let result = OpenResult {
                 entry_id,
                 kind: storage_contract::NamespaceEntryKind::Directory,
-                path,
+                path: canonical_path,
                 handle: handle_id,
                 size: 0,
                 max_file_bytes: self.max_file_bytes,
@@ -117,6 +114,7 @@ impl Session {
                 Some(fd),
             ));
         }
+        let path = path.expect("invariant: a file handle has an admitted entry path");
         let (handle, fd, size, workspace_id) = if writable {
             self.reserve_paths(&[path.as_str()])?;
             let mut pending_workspace = None;
@@ -128,26 +126,23 @@ impl Session {
                 // Bind the observed file to the workspace's immutable baseline.
                 // An HTTP writer can commit between find() and workspace creation,
                 // even while this session owns the SMB-only path reservation.
-                let snapshot = self.call(
-                    crate::BackendAction::Tree,
-                    json!({
-                        "branch_id":self.branch,"query":{"commit_id":workspace.base_head}
-                    }),
+                let baseline = self.shared.backend.lookup_at(
+                    &self.identity,
+                    &self.branch,
+                    &workspace.base_head,
+                    lookup.as_ref().expect("file handles have a lookup path"),
                 )?;
-                let entries: Vec<Entry> = json_codec::from_value(snapshot["entries"].clone())
-                    .map_err(ApiError::invalid_source)?;
-                let baseline = entries
-                    .iter()
-                    .find(|entry| entry.lookup_key == name_policy::path_key(&path));
-                let identity = |entry: &Entry| {
-                    (
-                        entry.entry_id.clone(),
-                        entry.version_id.clone(),
-                        entry.path.clone(),
-                        entry.kind,
-                    )
+                let same_entry = match (&existing, &baseline) {
+                    (Some(existing), Some(baseline)) => {
+                        existing.entry_id == baseline.entry_id
+                            && existing.version_id == baseline.version_id
+                            && existing.path == baseline.path
+                            && existing.kind == baseline.kind
+                    }
+                    (None, None) => true,
+                    (Some(_), None) | (None, Some(_)) => false,
                 };
-                if existing.as_ref().map(identity) != baseline.map(identity) {
+                if !same_entry {
                     return Err(ApiError::conflict(
                         storage_contract::ErrorCode::FileVersionConflict,
                         "the file changed while its write handle was opening; reopen it",
@@ -261,7 +256,7 @@ impl Session {
                         }
                     }
                 }
-                self.release_paths(&[name_policy::path_key(&path)]);
+                self.release_paths(&[path.key().to_owned()]);
             }
             result?
         } else {
@@ -296,7 +291,7 @@ impl Session {
         let result = OpenResult {
             entry_id,
             kind: storage_contract::NamespaceEntryKind::File,
-            path,
+            path: path.into_string(),
             handle: handle_id,
             size,
             max_file_bytes: self.max_file_bytes,

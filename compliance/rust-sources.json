@@ -52061,7 +52061,7 @@
   },
   "external_test_mappings_sha256": {
     "compliance/external-tests/foundation.json": "c1090e521b6661ccdb1bb21833acfae20d74f09a639a1684ae971c874fc9a23b",
-    "compliance/external-tests/integrated.json": "f4f5a114102d9ca6af40c1072b4d67b6b90d119626bc951fa8b6358f7c83c4a9",
+    "compliance/external-tests/integrated.json": "af3640edaf47ff243305486d811ef96a46447e1dab854206b96814cc8ccc4389",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
   "external_tests": {
@@ -78464,19 +78464,19 @@
       ]
     },
     "src/naming": {
-      "bytes": 17915,
+      "bytes": 19999,
       "directory": "src/naming",
       "file_count": 7,
       "files": [
         {
           "path": "test/naming/unit/key_tests.rs",
-          "sha256": "e83109d09a5c1a3557a5a9d07cfb17b1a5814e97e628083bb68f3cedb30a5d5a",
+          "sha256": "bfee832d4cb59797a228b7cbcefcf16ee942846d9d9f4e5147e67e213ad33b96",
           "source": "src/naming/src/key_tests.rs",
           "source_sha256_before": "b7769845ea159b121934cd4e721d445177731fe90df5fd6ba8ae20c9093dd75d"
         },
         {
           "path": "test/naming/unit/lib/tests.rs",
-          "sha256": "afebf9194054bfd4a0cee6b5c31e3ed3ab6e2919c975cdd78ad6a52e35bf9ca8",
+          "sha256": "c2b742aa56217611812c36a9c0c62b8a8cf498ad068616e2bb6eb469103c58e2",
           "source": "src/naming/src/lib.rs",
           "source_sha256_before": "619a98004dc108746a51157455bbf031c0f2c7112946e04b535b7391f87d20ad"
         },
@@ -78556,13 +78556,13 @@
   "foundation_layout_receipt": "5f02def35b57751ea9e54a2f1f22fdfebdbd6dda1ed910de7f8fa805f55e281d",
   "initial_test_relocation_sha256": "791ad728a408677dd54ef98e3feaffe825c5fc5670e888440615933d9498ecc3",
   "lockfiles_sha256": {
-    "Cargo.lock": "7468c3ad9bb6f91ce529a354e42656d8139f381829c608e9d8b263fb7f086d68"
+    "Cargo.lock": "61f9854a990ae19b04210bc475acee50a95082bb0704711c38c35d5cfaf44b69"
   },
   "manifests_sha256": {
-    "Cargo.toml": "cf46884191c109e9c82e420f01da1f562b6a3255395352a876d9ca0c8cbdd34b",
+    "Cargo.toml": "fc4ae6b06dcf41b39717d94857e9b078e4857d69af0cb36d3cdccd81d31730e3",
     "src/auth/Cargo.toml": "e6986ad60c15d48e2b3d60a5157de60ac7318f1ecc80befc1adfd60059b5dab3",
     "src/client/Cargo.toml": "0dca81316feaf3caf87f0d244cb1d9f6a54232d97e836892f4fb196fbd8bcbb5",
-    "src/contract/Cargo.toml": "3cdb429c2617fb934312c73d89045b838d1329b4db8e317701fa4daa04c95d8f",
+    "src/contract/Cargo.toml": "3acfdea00c1014c819ed23cd723591db141177629502661fd4e088b7dcc0da8b",
     "src/engine/Cargo.toml": "339e0ff69d4b27142441bb658abcbc957b67f2d0cb3943acaf9ce9307a0832b2",
     "src/foundation/code-generation/derive-where/Cargo.toml": "dac6d156693a9ca4d661e41d456a17154836e90ca1d9be52e85b86b5264f1725",
     "src/foundation/code-generation/displaydoc/Cargo.toml": "bffb4f3a7d1b0aa79151f31872f40b7b7bcac575fbeea5e628b30a523a883d8e",
@@ -78785,7 +78785,7 @@
     "src/foundation/web-runtime/web-sys/Cargo.toml": "01d5648616483a1e463244828bbafec6d848942e1bf414e1069c69f3afc6b4c1",
     "src/interface/Cargo.toml": "048b2acb4508fded70f45a822085df4e804bde0041d01b78e8beec570be31587",
     "src/macros/Cargo.toml": "abdb767c05856f890b63b18f86b16f4487a30bd8d2832f5caeeeb6d668e44c0c",
-    "src/naming/Cargo.toml": "5dea667ea941dfde629bfc5e809ba6d6c12ca018507c4030ecdfdddcc2a01aff",
+    "src/naming/Cargo.toml": "14f34fa82d476daeac6d300225a028f92d589a3f117095ed025c3ae607af79e7",
     "src/platform/Cargo.toml": "8c9d90bd59ab28431c85ca137ccc19206f62fc07e91f25719b57189cee25b5f3",
     "src/rescue/Cargo.toml": "b1dbb74d35585df17d9e12fcb77d4397d142f61ffbb561b964b0447048db7e38",
     "src/server/Cargo.toml": "14cd6309e4c425f5021dc0624f7548fcf86dc312d35bf62e614b1b0c0dff53f5",
@@ -78806,12 +78806,14 @@
       "description": "This crate provides functions for normalization of\nUnicode strings, including Canonical and Compatible\nDecomposition and Recomposition, as described in\nUnicode Standard Annex #15.",
       "directory": "src/naming",
       "files_sha256": {
-        "Cargo.toml": "5dea667ea941dfde629bfc5e809ba6d6c12ca018507c4030ecdfdddcc2a01aff",
+        "Cargo.toml": "14f34fa82d476daeac6d300225a028f92d589a3f117095ed025c3ae607af79e7",
         "data/case-folding-16.0.0.txt": "6f1f9c588eb4a5c718d9e8f93b782685e5c7fec872cf05e8e6878053599e09bb",
         "data/derived-core-properties-16.0.0.txt": "39d35161f2954497f69e08bdb9e701493f476a3d30222de20028feda36c1dabd",
         "data/unicode-data-16.0.0.txt": "ff58e5823bd095166564a006e47d111130813dcf8bf234ef79fa51a870edb48f",
         "examples/key_profile.rs": "2418b463d24c2ebdeb9807601b410a12b5eeed4a6e5406042b60c73fe22fe229",
-        "src/lib.rs": "c46c18b363071b8da49f4c0243fa930feb6a2cf744ec91108fdadcd4e6dc3b02",
+        "examples/path_profile.rs": "58b8da3260f369df65a59657bdb50d8473770f0fbe37e33db6055c06c4514686",
+        "src/error.rs": "67beab8f4cbb818a43c82bb6167aa0172499d18da06f53c16e0b9236b89a2231",
+        "src/lib.rs": "ce323a79046d8885d3eb1b03cc8f1c340ff663b5bc06f7ea7888a89d777f0c5f",
         "src/profiling.rs": "25683c6f39ff13c1a49e834d6231e5eda41313196b30c78fa0d8ff3c42722f8f",
         "src/unicode/casefold.rs": "784e01851cbf138eb0ea419214432d213a2adda5d54e66421f33135b2b7d5be8",
         "src/unicode/decompose.rs": "115d2fcec0c0b660afdcea290ab0af099feb0c9af8280ed9fc3ef56cac98a2a8",
@@ -113701,6 +113703,15 @@
             "compile"
           ]
         },
+        "src/foundation/collections/tinyvec": {
+          "features": [
+            "alloc",
+            "default"
+          ],
+          "roles": [
+            "runtime"
+          ]
+        },
         "src/foundation/core-types/either": {
           "features": [
             "default",
@@ -113976,6 +113987,12 @@
           ],
           "roles": [
             "compile"
+          ]
+        },
+        "src/naming": {
+          "features": [],
+          "roles": [
+            "runtime"
           ]
         }
       },
@@ -116931,6 +116948,15 @@
             "compile"
           ]
         },
+        "src/foundation/collections/tinyvec": {
+          "features": [
+            "alloc",
+            "default"
+          ],
+          "roles": [
+            "compile"
+          ]
+        },
         "src/foundation/collections/yoke": {
           "features": [
             "derive",
@@ -117469,6 +117495,12 @@
             "default",
             "std"
           ],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/naming": {
+          "features": [],
           "roles": [
             "compile"
           ]

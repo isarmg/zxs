@@ -1,23 +1,123 @@
 //! Disk topology, resource admission configuration and OS writer locks.
 use crate::{disk::*, *};
-use std::{collections::BTreeSet, fs::File, path::Path};
+use data_serialization::{Deserialize, Serialize};
+use std::{
+    collections::BTreeSet,
+    fs::File,
+    ops::Deref,
+    path::{Path, PathBuf},
+};
+
+/// A pool configuration admitted at a file or public API boundary.
+/// Only root rebinding and restart-only limits can change after admission.
+///
+/// ```compile_fail
+/// use storage_engine::{Config, ValidatedConfig};
+/// let mut config = ValidatedConfig::try_from(Config::development(["/disk".into()])).unwrap();
+/// config.disks.clear();
+/// ```
+#[derive(Clone, Debug, Deserialize)]
+#[serialization(try_from = "Config")]
+pub struct ValidatedConfig {
+    config: Config,
+    workspace_limits: Option<super::RetainedWorkspaceLimits>,
+}
+
+impl TryFrom<Config> for ValidatedConfig {
+    type Error = Error;
+
+    fn try_from(config: Config) -> Result<Self> {
+        validate_config(&config)?;
+        Ok(Self {
+            config,
+            workspace_limits: None,
+        })
+    }
+}
+
+impl Serialize for ValidatedConfig {
+    fn serialize<S: data_serialization::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        self.config.serialize(serializer)
+    }
+}
+
+impl Deref for ValidatedConfig {
+    type Target = Config;
+
+    fn deref(&self) -> &Config {
+        &self.config
+    }
+}
+
+impl ValidatedConfig {
+    /// Rebind the existing disks in order, preserving membership and resource limits.
+    ///
+    /// # Errors
+    /// Rejects a different disk count, relative roots, traversal or overlapping roots.
+    pub fn with_disk_roots(mut self, roots: Vec<PathBuf>) -> Result<Self> {
+        if roots.len() != self.config.disks.len() {
+            return Err(Error::new(
+                ErrorCode::ConfigInvalid,
+                "disk root count differs from configured membership",
+            ));
+        }
+        validate_disk_roots(roots.iter().map(PathBuf::as_path))?;
+        for (disk, root) in self.config.disks.iter_mut().zip(roots) {
+            disk.root = root;
+        }
+        Ok(self)
+    }
+
+    /// Bind restart-only overrides before any initialization intent is published.
+    ///
+    /// # Errors
+    /// Rejects zero limits and overrides below the persisted pool baseline.
+    pub fn with_workspace_limits(
+        mut self,
+        limits: Option<super::RetainedWorkspaceLimits>,
+    ) -> Result<Self> {
+        if let Some(limits) = limits {
+            limits.validate_for(&self)?;
+        }
+        self.workspace_limits = limits;
+        Ok(self)
+    }
+
+    pub(super) fn effective_workspace_limits(&self) -> super::RetainedWorkspaceLimits {
+        self.workspace_limits
+            .unwrap_or_else(|| super::RetainedWorkspaceLimits::from_config(self))
+    }
+}
+
+pub(super) enum DiskLockPolicy {
+    NewPoolRoots,
+    AvailableMembers,
+}
 
 pub(super) fn acquire_locks(
     root: &Path,
-    config: &Config,
-    allow_missing: bool,
+    config: &ValidatedConfig,
+    policy: DiskLockPolicy,
 ) -> Result<Vec<File>> {
     let mut paths = vec![root.join("writer.lock")];
     for d in &config.disks {
-        if allow_missing {
-            if disk_unavailable(d)? {
-                continue;
+        match policy {
+            DiskLockPolicy::NewPoolRoots => {
+                if !d.root.try_exists()? {
+                    continue;
+                }
             }
-            validate_seal(config, d)?;
-            paths.push(d.root.join(".writer.lock"));
-        } else if d.root.try_exists()? {
-            paths.push(d.root.join(".writer.lock"));
+            DiskLockPolicy::AvailableMembers => {
+                if disk_unavailable(d)? {
+                    continue;
+                }
+                validate_seal(config, d)?;
+            }
         }
+        paths.push(d.root.join(".writer.lock"));
     }
     let mut locks = Vec::new();
     for path in paths {
@@ -49,7 +149,7 @@ pub(super) fn acquire_locks(
     }
     Ok(locks)
 }
-pub(super) fn validate_config(c: &Config) -> Result<()> {
+fn validate_config(c: &Config) -> Result<()> {
     validate_id(&c.pool_id, "pool")?;
     if !c.disks.iter().any(|d| d.metadata_member)
         || c.max_file_bytes == 0
@@ -77,24 +177,12 @@ pub(super) fn validate_config(c: &Config) -> Result<()> {
     }
     let mut slots = BTreeSet::new();
     let mut ids = BTreeSet::new();
-    let mut roots = BTreeSet::new();
     let mut successors = BTreeSet::new();
     for d in &c.disks {
         name_policy::validate_slot(&d.slot_id)?;
         validate_id(&d.disk_id, "disk")?;
-        if !d.root.is_absolute()
-            || d.root
-                .components()
-                .any(|part| part == std::path::Component::ParentDir)
-        {
-            return Err(Error::new(
-                storage_contract::ErrorCode::ConfigInvalid,
-                "disk roots must be absolute and contain no parent traversal",
-            ));
-        }
         if !slots.insert(d.slot_id.to_ascii_lowercase())
             || !ids.insert(&d.disk_id)
-            || !roots.insert(&d.root)
             || d.level == 0
             || d.binding_generation == 0
         {
@@ -136,17 +224,32 @@ pub(super) fn validate_config(c: &Config) -> Result<()> {
             }
         }
     }
-    for (i, disk) in c.disks.iter().enumerate() {
-        if c.disks
-            .iter()
-            .skip(i + 1)
-            .any(|other| disk.root.starts_with(&other.root) || other.root.starts_with(&disk.root))
+    validate_disk_roots(c.disks.iter().map(|disk| disk.root.as_path()))
+}
+
+fn validate_disk_roots<'a>(roots: impl IntoIterator<Item = &'a Path>) -> Result<()> {
+    let mut checked: Vec<&Path> = Vec::new();
+    for root in roots {
+        if !root.is_absolute()
+            || root
+                .components()
+                .any(|part| part == std::path::Component::ParentDir)
         {
             return Err(Error::new(
-                storage_contract::ErrorCode::ConfigInvalid,
+                ErrorCode::ConfigInvalid,
+                "disk roots must be absolute and contain no parent traversal",
+            ));
+        }
+        if checked
+            .iter()
+            .any(|other| root.starts_with(other) || other.starts_with(root))
+        {
+            return Err(Error::new(
+                ErrorCode::ConfigInvalid,
                 "disk roots must not overlap",
             ));
         }
+        checked.push(root);
     }
     Ok(())
 }

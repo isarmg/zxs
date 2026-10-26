@@ -1,11 +1,12 @@
+fn lookup<'a>(draft: &'a NamespaceDraft, raw: &str) -> Option<&'a Entry> {
+    draft.get_key(name_policy::LookupPath::parse(raw).unwrap().key())
+}
 use super::*;
 
 fn entry(path: &str, kind: NamespaceEntryKind) -> Entry {
     Entry {
         entry_id: format!("entry:{path}"),
-        path: path.into(),
-        name: path.rsplit('/').next().unwrap().into(),
-        lookup_key: name_policy::path_key(path),
+        path: name_policy::PortablePath::parse(path).unwrap(),
         kind,
         file_id: if kind == NamespaceEntryKind::File {
             format!("file:{path}")
@@ -36,17 +37,17 @@ fn unsorted_sources_and_replacements_preserve_legacy_order_and_aliases() {
     let mut legacy = original.clone();
     let mut draft = NamespaceDraft::new(original.clone());
     for path in ["STRASSE.TXT", "z.TXT", "straße.txt"] {
-        let mut replacement = draft.get(path).unwrap().clone();
+        let mut replacement = lookup(&draft, path).unwrap().clone();
         assert_eq!(
             Some(&replacement),
             super::super::find_unordered(&legacy, path)
         );
         replacement.version_id.push_str("-new");
-        legacy.retain(|entry| entry.lookup_key != replacement.lookup_key);
+        legacy.retain(|entry| entry.lookup_key() != replacement.lookup_key());
         legacy.push(replacement.clone());
         draft.replace(replacement);
     }
-    assert_eq!(draft.get("ALIAS.TXT"), Some(&original[2]));
+    assert_eq!(lookup(&draft, "ALIAS.TXT"), Some(&original[2]));
     assert_eq!(draft.into_entries(), legacy);
 }
 
@@ -57,8 +58,11 @@ fn lookup_accepts_equivalent_queries_over_admitted_sources() {
         entry("Café/Straße.txt", NamespaceEntryKind::File),
     ];
     let draft = NamespaceDraft::new(original.clone());
-    assert_eq!(draft.get("Cafe\u{301}/STRASSE.TXT"), Some(&original[1]));
-    assert!(draft.get("absent").is_none());
+    assert_eq!(
+        lookup(&draft, "Cafe\u{301}/STRASSE.TXT"),
+        Some(&original[1])
+    );
+    assert!(lookup(&draft, "absent").is_none());
     assert_eq!(draft.into_entries(), original);
 }
 
@@ -75,10 +79,16 @@ fn shared_parent_creation_matches_legacy_order_and_preserves_existing_identity()
         "New/Nested/b.txt",
         "existing/Child/c.txt",
     ] {
-        super::super::ensure_parents(&mut legacy, path).unwrap();
-        draft.ensure_parents(path).unwrap();
+        super::super::ensure_parents(
+            &mut legacy,
+            &name_policy::PortablePath::parse(path).unwrap(),
+        )
+        .unwrap();
+        draft
+            .ensure_parents(&name_policy::PortablePath::parse(path).unwrap())
+            .unwrap();
         let file = entry(path, NamespaceEntryKind::File);
-        legacy.retain(|previous| previous.lookup_key != file.lookup_key);
+        legacy.retain(|previous| previous.lookup_key() != file.lookup_key());
         legacy.push(file.clone());
         draft.replace(file);
     }
@@ -99,7 +109,10 @@ fn parent_file_errors_do_not_replace_or_drop_the_existing_entry() {
     let original = vec![entry("File", NamespaceEntryKind::File)];
     let mut draft = NamespaceDraft::new(original.clone());
     assert_eq!(
-        draft.ensure_parents("file/child").unwrap_err().code(),
+        draft
+            .ensure_parents(&name_policy::PortablePath::parse("file/child").unwrap())
+            .unwrap_err()
+            .code(),
         storage_contract::ErrorCode::ParentNotDirectory
     );
     assert_eq!(draft.into_entries(), original);
@@ -123,20 +136,13 @@ fn flattened_draft_keeps_namespace_operations_and_deletion_order_unchanged() {
     let mut draft = NamespaceDraft::new(source.clone());
     let mut replacement = source[1].clone();
     replacement.version_id = "changed".into();
-    legacy.retain(|entry| entry.lookup_key != replacement.lookup_key);
+    legacy.retain(|entry| entry.lookup_key() != replacement.lookup_key());
     legacy.push(replacement.clone());
     draft.replace(replacement);
     let operations = [
-        NamespaceOperation {
-            kind: NamespaceOperationKind::Rename,
-            path: "FOLDER".into(),
-            destination: Some("Renamed".into()),
-        },
-        NamespaceOperation {
-            kind: NamespaceOperationKind::DeleteTree,
-            path: "RENAMED".into(),
-            destination: None,
-        },
+        NamespaceOperation::parse(NamespaceOperationKind::Rename, "FOLDER", Some("Renamed"))
+            .unwrap(),
+        NamespaceOperation::parse(NamespaceOperationKind::DeleteTree, "RENAMED", None).unwrap(),
     ];
     let mut actual = draft.into_entries();
     let expected_deleted =
@@ -159,16 +165,18 @@ fn thousand_to_hundred_thousand_replacements_have_linear_draft_work() {
         let work = draft.work.clone();
         // Same two lookup passes and replace operations as workspace commit.
         for i in 0..count {
-            assert!(draft.get(&format!("FILE-{i:06}")).is_some());
+            assert!(lookup(&draft, &format!("FILE-{i:06}")).is_some());
         }
         for i in 0..count {
             let path = format!("file-{i:06}");
-            let mut replacement = draft.get(&path).unwrap().clone();
+            let mut replacement = lookup(&draft, &path).unwrap().clone();
             replacement.version_id.push_str("-updated");
-            draft.ensure_parents(&path).unwrap();
+            draft
+                .ensure_parents(&name_policy::PortablePath::parse(&path).unwrap())
+                .unwrap();
             draft.replace(replacement);
         }
-        assert!(draft.get("missing").is_none());
+        assert!(lookup(&draft, "missing").is_none());
         let entries = draft.into_entries();
         assert_eq!(entries.len(), count);
         assert_eq!(
@@ -194,8 +202,10 @@ fn hundred_thousand_shared_parent_writes_do_not_rescan_siblings() {
     let work = draft.work.clone();
     for i in 0..count {
         let path = format!("Parent/Shared/file-{i:06}");
-        assert!(draft.get(&path).is_none());
-        draft.ensure_parents(&path).unwrap();
+        assert!(lookup(&draft, &path).is_none());
+        draft
+            .ensure_parents(&name_policy::PortablePath::parse(&path).unwrap())
+            .unwrap();
         draft.replace(entry(&path, NamespaceEntryKind::File));
     }
     let entries = draft.into_entries();

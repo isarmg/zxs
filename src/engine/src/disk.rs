@@ -118,8 +118,21 @@ pub(crate) fn open_optional_regular(path: &Path) -> Result<Option<File>> {
         Err(error) => Err(fs_error(error)),
     }
 }
-/// Open a journal relative to its verified parent, without following a leaf symlink.
-pub(crate) fn open_append_regular(path: &Path) -> Result<File> {
+pub(crate) fn open_existing_journal(path: &Path) -> Result<Option<File>> {
+    match open_journal_file(path, rustix::fs::OFlags::empty()) {
+        Ok(file) => Ok(Some(file)),
+        Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+pub(crate) fn create_journal(path: &Path) -> Result<File> {
+    open_journal_file(path, rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL)
+}
+fn open_journal_file(path: &Path, flags: rustix::fs::OFlags) -> Result<File> {
     let path = absolute_path(path)?;
     let parent = path.parent().ok_or_else(|| {
         Error::new(
@@ -137,13 +150,17 @@ pub(crate) fn open_append_regular(path: &Path) -> Result<File> {
         rustix::fs::openat2(
             root.directory(),
             name.as_os_str(),
-            rustix::fs::OFlags::CREATE
-                | rustix::fs::OFlags::WRONLY
+            flags
+                | rustix::fs::OFlags::RDWR
                 | rustix::fs::OFlags::APPEND
                 | rustix::fs::OFlags::NOFOLLOW
                 | rustix::fs::OFlags::NONBLOCK
                 | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::from_raw_mode(0o600),
+            if flags.contains(rustix::fs::OFlags::CREATE) {
+                rustix::fs::Mode::from_raw_mode(0o600)
+            } else {
+                rustix::fs::Mode::empty()
+            },
             rustix::fs::ResolveFlags::BENEATH
                 | rustix::fs::ResolveFlags::NO_SYMLINKS
                 | rustix::fs::ResolveFlags::NO_XDEV,
@@ -498,7 +515,7 @@ pub(crate) fn version_dir(disk: &DiskConfig, history: &str, version: &str) -> Pa
         .join(version)
 }
 
-pub(crate) fn identity(config: &Config, disk: &DiskConfig) -> Result<DiskSeal> {
+pub(crate) fn identity(config: &ValidatedConfig, disk: &DiskConfig) -> Result<DiskSeal> {
     let m = fs::symlink_metadata(&disk.root)?;
     if !m.is_dir() || m.file_type().is_symlink() {
         return Err(Error::new(
@@ -650,7 +667,7 @@ pub(crate) fn disk_unavailable(disk: &DiskConfig) -> Result<bool> {
     }
 }
 
-pub(crate) fn validate_seal(config: &Config, disk: &DiskConfig) -> Result<DiskSeal> {
+pub(crate) fn validate_seal(config: &ValidatedConfig, disk: &DiskConfig) -> Result<DiskSeal> {
     let stored: DiskSeal = read_json(&disk.root.join("disk.json"))?;
     let live = identity(config, disk)?;
     if stored.pool_id != live.pool_id

@@ -42,7 +42,7 @@ impl<'a> NamespaceTree<'a> {
             .binary_search_by(|entry| {
                 #[cfg(test)]
                 tests::record_comparison();
-                entry.lookup_key.as_str().cmp(key)
+                entry.lookup_key().cmp(key)
             })
             .ok()
             .map(|index| &self.entries[index])

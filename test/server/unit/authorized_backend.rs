@@ -72,6 +72,48 @@ fn upload_arguments(workspace: &str, item: &str, path: &str, source: &UploadSour
 }
 
 impl Backend for RecordingBackend {
+    fn snapshot_at(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+    ) -> Result<Arc<storage_contract::Commit>, ApiError> {
+        self.record(
+            "snapshot_at",
+            Some(identity),
+            json!({"branch":branch,"commit":commit}),
+        )?;
+        Ok(Arc::new(storage_contract::Commit {
+            commit_id: commit.into(),
+            history_tree_id: "history".into(),
+            kind: "snapshot".into(),
+            parent_commit_ids: vec![],
+            tree_id: "tree".into(),
+            sequence: 1,
+            operation_id: "operation".into(),
+            author: "author".into(),
+            message: "snapshot fixture".into(),
+            entries: vec![],
+            namespace_deletions: None,
+            pending_file_versions: Default::default(),
+            provenance: None,
+        }))
+    }
+
+    fn lookup_at(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        self.record(
+            "lookup_at",
+            Some(identity),
+            json!({"branch":branch,"commit":commit,"path":path.as_str(),"key":path.key()}),
+        )?;
+        Ok(None)
+    }
     fn setup_operation(
         &self,
         action: &'static str,
@@ -118,7 +160,7 @@ impl Backend for RecordingBackend {
         identity: &Identity,
         workspace: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &UploadSource,
     ) -> Result<Value, ApiError> {
         self.record(
@@ -132,7 +174,7 @@ impl Backend for RecordingBackend {
         identity: &Identity,
         workspace: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &UploadSource,
         generation: u64,
     ) -> Result<Value, ApiError> {
@@ -228,16 +270,52 @@ impl Fixture {
             ),
             ("retry_storage", backend.retry_storage(identity)),
             (
+                "snapshot_at",
+                backend
+                    .snapshot_at(identity, "branch", "commit")
+                    .map(|snapshot| {
+                        assert_eq!(snapshot.commit_id, "commit");
+                        json!({"returned_by":"snapshot_at"})
+                    }),
+            ),
+            (
+                "lookup_at",
+                backend
+                    .lookup_at(
+                        identity,
+                        "branch",
+                        "commit",
+                        &name_policy::LookupPath::parse("File.txt").unwrap(),
+                    )
+                    .map(|entry| {
+                        assert!(entry.is_none());
+                        json!({"returned_by":"lookup_at"})
+                    }),
+            ),
+            (
                 "call",
                 backend.call(BackendAction::Repositories, identity, json!({"probe": 7})),
             ),
             (
                 "upload",
-                backend.upload(identity, "workspace", "item", "path", source),
+                backend.upload(
+                    identity,
+                    "workspace",
+                    "item",
+                    &name_policy::PortablePath::parse("path").unwrap(),
+                    source,
+                ),
             ),
             (
                 "upload_generation",
-                backend.upload_generation(identity, "workspace", "item", "path", source, 37),
+                backend.upload_generation(
+                    identity,
+                    "workspace",
+                    "item",
+                    &name_policy::PortablePath::parse("path").unwrap(),
+                    source,
+                    37,
+                ),
             ),
             (
                 "content",
@@ -299,6 +377,8 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
     let arguments = [
         json!({"action": "status", "input": {"probe": 3}, "bootstrap": "bootstrap-probe"}),
         Value::Null,
+        json!({"branch":"branch","commit":"commit"}),
+        json!({"branch":"branch","commit":"commit","path":"File.txt","key":"file.txt"}),
         json!({"action": BackendAction::Repositories.as_str(), "input": {"probe": 7}}),
         upload,
         generation,

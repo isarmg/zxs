@@ -133,9 +133,11 @@ fn purged_state_reopens_with_one_damaged_and_one_offline_metadata_member() {
 #[test]
 fn migrated_content_does_not_consume_live_payload_budget() {
     let (_temp, mut engine, repository) = fixture();
-    for disk in &mut engine.config.disks {
+    let mut config = engine.config().clone();
+    for disk in &mut config.disks {
         disk.capacity_bytes = Some(40);
     }
+    engine.config = ValidatedConfig::try_from(config).unwrap();
     let original = save(&mut engine, &repository.main_branch_id, b"firstold");
     let cut = engine.state.branches[&repository.main_branch_id]
         .head_commit_id

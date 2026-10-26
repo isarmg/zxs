@@ -73,7 +73,7 @@ pub(super) fn validate_location(
             .any(|entry| {
                 entry.kind == NamespaceEntryKind::File
                     && entry.file_id == file
-                    && entry.lookup_key == key
+                    && entry.lookup_key() == key
             })
     {
         return Err(Error::new(

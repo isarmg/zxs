@@ -20,6 +20,25 @@ struct TestBackend {
     path: PathBuf,
 }
 impl Backend for TestBackend {
+    fn snapshot_at(
+        &self,
+        _: &crate::auth::Identity,
+        _: &str,
+        _: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        unreachable!("this test backend does not serve snapshots")
+    }
+
+    fn lookup_at(
+        &self,
+        _: &crate::auth::Identity,
+        _: &str,
+        _: &str,
+        _: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        unreachable!("this test backend does not serve snapshot lookups")
+    }
+
     fn call(
         &self,
         action: crate::BackendAction,
@@ -42,7 +61,7 @@ impl Backend for TestBackend {
         _identity: &Identity,
         workspace: &str,
         item: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         source: &crate::UploadSource,
     ) -> Result<Value, ApiError> {
         let mut bytes = vec![0; source.size as usize];
@@ -630,6 +649,25 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         gate: Arc<(Mutex<bool>, std::sync::Condvar)>,
     }
     impl Backend for BlockingUpload {
+        fn snapshot_at(
+            &self,
+            _: &crate::auth::Identity,
+            _: &str,
+            _: &str,
+        ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+            unreachable!("this test backend does not serve snapshots")
+        }
+
+        fn lookup_at(
+            &self,
+            _: &crate::auth::Identity,
+            _: &str,
+            _: &str,
+            _: &name_policy::LookupPath,
+        ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+            unreachable!("this test backend does not serve snapshot lookups")
+        }
+
         fn call(
             &self,
             action: crate::BackendAction,
@@ -646,7 +684,7 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             identity: &Identity,
             workspace: &str,
             item: &str,
-            path: &str,
+            path: &name_policy::PortablePath,
             source: &crate::UploadSource,
         ) -> Result<Value, ApiError> {
             if let Some(started) = self.started.lock().unwrap().take() {
@@ -862,4 +900,57 @@ async fn directory_scope_routes_select_distinct_actions_and_preserve_csrf() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn upload_path_admission_rejects_nonportable_names_and_keeps_display_spelling() {
+    let root = private_tempdir();
+    let app = application(root.path());
+    let (token, _, _) = authenticated(&app).await;
+    for (index, path) in ["/outside", "CON", "e\u{301}.txt", "Café.txt"]
+        .iter()
+        .enumerate()
+    {
+        let item = format!("item-{index}");
+        let query = url_encoding::form::Serializer::new(String::new())
+            .append_pair("path", path)
+            .finish();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/workspaces/ws/files/{item}/content?{query}"))
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-length", "4")
+                    .header(
+                        "x-zxs-content-hash",
+                        blake3::hash(b"body").to_hex().to_string(),
+                    )
+                    .body(Body::from("body"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body: Value = json_codec::from_slice(
+            &http_routing::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        if *path == "Café.txt" {
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body["path"], *path);
+            assert_eq!(body["size"], "4");
+        } else {
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(body["error"]["code"], "INVALID_REQUEST");
+            assert!(
+                uploads::load(&root.path().join("api-spool"), "ws", &item)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
 }

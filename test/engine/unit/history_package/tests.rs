@@ -109,11 +109,7 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
             engine
                 .file_namespace(
                     &repo.repository_id,
-                    NamespaceOperation {
-                        kind: NamespaceOperationKind::Mkdir,
-                        path: path.into(),
-                        destination: None,
-                    },
+                    NamespaceOperation::parse(NamespaceOperationKind::Mkdir, path, None).unwrap(),
                     "alice",
                     &new_id("op"),
                 )
@@ -232,11 +228,7 @@ fn restore_backup_prefixes_preserve_evidenced_positions_and_reject_identity_coll
         engine
             .file_namespace(
                 &repo.repository_id,
-                NamespaceOperation {
-                    kind: NamespaceOperationKind::Mkdir,
-                    path: "empty".into(),
-                    destination: None,
-                },
+                NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "empty", None).unwrap(),
                 "alice",
                 &new_id("op"),
             )
@@ -598,11 +590,8 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
     engine
         .file_namespace(
             &repo.repository_id,
-            NamespaceOperation {
-                kind: NamespaceOperationKind::Rename,
-                path: "folder".into(),
-                destination: Some("renamed".into()),
-            },
+            NamespaceOperation::parse(NamespaceOperationKind::Rename, "folder", Some("renamed"))
+                .unwrap(),
             "alice",
             &new_id("op"),
         )
@@ -882,11 +871,12 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
         engine
             .file_namespace(
                 &repo.repository_id,
-                NamespaceOperation {
-                    kind: NamespaceOperationKind::Rename,
-                    path: source.into(),
-                    destination: Some(destination.into()),
-                },
+                NamespaceOperation::parse(
+                    NamespaceOperationKind::Rename,
+                    source,
+                    Some(destination),
+                )
+                .unwrap(),
                 "alice",
                 &new_id("op"),
             )
@@ -1071,7 +1061,7 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
                     entries: vec![original.clone()],
                     file_branches: BTreeMap::from([(original.file_id.clone(), shared.clone())]),
                     file_contexts: BTreeMap::from([(
-                        original.lookup_key.clone(),
+                        original.lookup_key().to_owned(),
                         FileContext {
                             node_id: None,
                             selection_generation: 0,
@@ -1437,7 +1427,7 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
             disk,
             &repo.history_tree_id,
             &file.file_id,
-            &file.name,
+            file.name(),
             &branch,
         );
         assert!(!stub.parent().unwrap().exists());
@@ -1463,7 +1453,7 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
             disk,
             &repo.history_tree_id,
             &file.file_id,
-            &file.name,
+            file.name(),
             &branch,
         );
         assert!(!stub.parent().unwrap().exists());
@@ -1511,7 +1501,7 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
                 disk,
                 &repo.history_tree_id,
                 &file.file_id,
-                &file.name,
+                file.name(),
                 &branch
             )
             .parent()
@@ -1554,7 +1544,7 @@ fn inherited_metadata_replays_after_decision_without_preparing_payloads_or_stubs
                 disk,
                 &repo.history_tree_id,
                 &file.file_id,
-                &file.name,
+                file.name(),
                 &branch.branch_id,
             );
             assert!(!stub.parent().unwrap().exists());
@@ -2238,9 +2228,7 @@ fn commit_namespace_envelope_rejects_malformed_entries() {
     for case in ["entry_id", "file_id", "version_id", "directory_payload"] {
         let mut entry = Entry {
             entry_id: new_id("entry"),
-            path: "ghost".into(),
-            name: "ghost".into(),
-            lookup_key: "ghost".into(),
+            path: name_policy::PortablePath::parse("ghost").unwrap(),
             kind: NamespaceEntryKind::Directory,
             file_id: String::new(),
             version_id: String::new(),
@@ -2407,11 +2395,7 @@ fn namespace_deletions_survive_export_restore_and_replay_without_operation_recor
     engine
         .namespace_operation(
             &workspace.workspace_id,
-            NamespaceOperation {
-                kind: NamespaceOperationKind::DeleteTree,
-                path: "folder".into(),
-                destination: None,
-            },
+            NamespaceOperation::parse(NamespaceOperationKind::DeleteTree, "folder", None).unwrap(),
         )
         .unwrap();
     let request = CommitRequest {
@@ -2486,11 +2470,7 @@ fn failed_workspace_namespace_sequence_does_not_publish_deletion_facts() {
         engine
             .namespace_operation(
                 &workspace.workspace_id,
-                NamespaceOperation {
-                    kind: NamespaceOperationKind::Delete,
-                    path: path.into(),
-                    destination: None,
-                },
+                NamespaceOperation::parse(NamespaceOperationKind::Delete, path, None).unwrap(),
             )
             .unwrap();
     }
@@ -2539,11 +2519,7 @@ fn net_zero_namespace_sequence_persists_deletion_once() {
         engine
             .namespace_operation(
                 &workspace.workspace_id,
-                NamespaceOperation {
-                    kind: kind.parse().unwrap(),
-                    path: "temporary".into(),
-                    destination: None,
-                },
+                NamespaceOperation::parse(kind.parse().unwrap(), "temporary", None).unwrap(),
             )
             .unwrap();
     }

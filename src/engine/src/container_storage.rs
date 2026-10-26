@@ -492,10 +492,10 @@ pub(crate) fn capture_names(state: &mut State) {
         .filter(|entry| entry.kind == NamespaceEntryKind::File);
     for entry in entries {
         if !file_names.contains_key(&entry.file_id) {
-            file_names.insert(entry.file_id.clone(), entry.name.clone());
+            file_names.insert(entry.file_id.clone(), entry.name().to_owned());
         }
         if !file_locations.contains_key(&entry.file_id) {
-            file_locations.insert(entry.file_id.clone(), entry.path.clone());
+            file_locations.insert(entry.file_id.clone(), entry.path().to_owned());
         }
     }
 }
@@ -867,7 +867,7 @@ struct PreparedName {
     length: usize,
 }
 impl PreparedNames {
-    pub(crate) fn apply(self, config: &Config) -> Result<()> {
+    pub(crate) fn apply(self, config: &ValidatedConfig) -> Result<()> {
         let Some(mut cache) = self.cache else {
             return Ok(());
         };
@@ -911,7 +911,11 @@ impl PreparedNames {
 }
 
 #[cfg(test)]
-pub(crate) fn synchronize_names(config: &Config, previous: &State, next: &State) -> Result<()> {
+pub(crate) fn synchronize_names(
+    config: &ValidatedConfig,
+    previous: &State,
+    next: &State,
+) -> Result<()> {
     prepare_names(config, previous, next, MAX_METADATA)?.apply(config)
 }
 
@@ -919,7 +923,7 @@ pub(crate) fn synchronize_names(config: &Config, previous: &State, next: &State)
 /// This includes historical replay and a newly validated degraded-recovery
 /// publication; present-but-invalid identities are never ignored.
 pub(crate) fn repair_historical_names(
-    config: &Config,
+    config: &ValidatedConfig,
     previous: &State,
     next: &State,
 ) -> Result<()> {
@@ -927,7 +931,7 @@ pub(crate) fn repair_historical_names(
 }
 
 pub(crate) fn prepare_names(
-    config: &Config,
+    config: &ValidatedConfig,
     previous: &State,
     next: &State,
     maximum: usize,
@@ -1004,7 +1008,7 @@ pub(crate) fn validate_new_projection_paths(previous: &State, next: &State) -> R
 }
 
 fn prepare_names_inner(
-    config: &Config,
+    config: &ValidatedConfig,
     previous: &State,
     next: &State,
     maximum: usize,

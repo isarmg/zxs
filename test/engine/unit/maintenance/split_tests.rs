@@ -98,11 +98,12 @@ fn split_closes_source_policy_scopes_without_dropping_valid_empty_rules() {
         engine
             .file_namespace(
                 &repo.repository_id,
-                NamespaceOperation {
-                    kind: storage_contract::NamespaceOperationKind::Mkdir,
-                    path: path.into(),
-                    destination: None,
-                },
+                NamespaceOperation::parse(
+                    storage_contract::NamespaceOperationKind::Mkdir,
+                    path,
+                    None,
+                )
+                .unwrap(),
                 "alice",
                 &new_id("op"),
             )
@@ -182,11 +183,12 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
             engine
                 .file_namespace(
                     &repo.repository_id,
-                    NamespaceOperation {
-                        kind: storage_contract::NamespaceOperationKind::Mkdir,
-                        path: path.into(),
-                        destination: None,
-                    },
+                    NamespaceOperation::parse(
+                        storage_contract::NamespaceOperationKind::Mkdir,
+                        path,
+                        None,
+                    )
+                    .unwrap(),
                     "alice",
                     &new_id("op"),
                 )
@@ -211,11 +213,12 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
             engine
                 .file_namespace(
                     &repo.repository_id,
-                    NamespaceOperation {
-                        kind: storage_contract::NamespaceOperationKind::Delete,
-                        path: path.into(),
-                        destination: None,
-                    },
+                    NamespaceOperation::parse(
+                        storage_contract::NamespaceOperationKind::Delete,
+                        path,
+                        None,
+                    )
+                    .unwrap(),
                     "alice",
                     &new_id("op"),
                 )
@@ -409,7 +412,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
                     entries: vec![source.clone()],
                     file_branches: BTreeMap::from([(source.file_id.clone(), shared.clone())]),
                     file_contexts: BTreeMap::from([(
-                        source.lookup_key.clone(),
+                        source.lookup_key().to_owned(),
                         FileContext {
                             node_id: None,
                             selection_generation: 0,
@@ -842,7 +845,7 @@ fn split_remaps_inherited_references_without_creating_placeholder_files() {
                 .join(&repo.history_tree_id)
                 .join("file-containers")
                 .join(&original.file_id)
-                .join(&original.name)
+                .join(original.name())
                 .join("pending-branches")
                 .join(format!("{}.pending", pending.branch_id))
                 .exists()
@@ -854,7 +857,7 @@ fn split_remaps_inherited_references_without_creating_placeholder_files() {
                 .join(&history)
                 .join("file-containers")
                 .join(file)
-                .join(&original.name)
+                .join(original.name())
                 .join("pending-branches")
                 .exists()
         );
@@ -1266,11 +1269,12 @@ fn split_at_deletion_preserves_facts_without_copying_deleted_content() {
     engine
         .namespace_operation(
             &workspace.workspace_id,
-            NamespaceOperation {
-                kind: storage_contract::NamespaceOperationKind::DeleteTree,
-                path: "资料".into(),
-                destination: None,
-            },
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::DeleteTree,
+                "资料",
+                None,
+            )
+            .unwrap(),
         )
         .unwrap();
     let cut = engine

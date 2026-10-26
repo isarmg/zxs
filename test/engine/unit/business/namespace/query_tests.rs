@@ -37,9 +37,7 @@ fn take_work() -> Work {
 fn entry(path: &str, kind: NamespaceEntryKind) -> Entry {
     Entry {
         entry_id: format!("entry:{path}"),
-        path: path.into(),
-        name: path.rsplit('/').next().unwrap().into(),
-        lookup_key: name_policy::path_key(path),
+        path: name_policy::PortablePath::parse(path).unwrap(),
         kind,
         file_id: format!("file:{path}"),
         version_id: format!("version:{path}"),
@@ -68,7 +66,10 @@ fn canonical_lookup_matches_legacy_unicode_case_aliases_and_absence() {
         entry("𐐀.txt", NamespaceEntryKind::File),
     ];
     let mut alias = entries[1].clone();
-    relocate_entry(&mut alias, "Alias.txt".into()).unwrap();
+    relocate_entry(
+        &mut alias,
+        name_policy::PortablePath::parse("Alias.txt").unwrap(),
+    );
     entries.push(alias);
     validate_entries(&mut entries, 100).unwrap();
     let tree = NamespaceTree::from_published_entries(&entries);
@@ -98,7 +99,7 @@ fn canonical_lookup_matches_legacy_unicode_case_aliases_and_absence() {
     assert_eq!(original.file_id, alias.file_id);
     assert_ne!(original.path, alias.path);
     assert_eq!(original.path, "Straße/Café.txt");
-    assert_eq!(original.name, "Café.txt");
+    assert_eq!(original.name(), "Café.txt");
 }
 
 #[test]
@@ -143,7 +144,11 @@ fn lookup_work_is_logarithmic_and_only_normalizes_the_query() {
 #[test]
 fn temporary_appends_and_renames_stay_unordered_until_validation() {
     let mut entries = vec![entry("Z", NamespaceEntryKind::Directory)];
-    ensure_parents(&mut entries, "A/B/file.txt").unwrap();
+    ensure_parents(
+        &mut entries,
+        &name_policy::PortablePath::parse("A/B/file.txt").unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         entries
             .iter()
@@ -152,35 +157,27 @@ fn temporary_appends_and_renames_stay_unordered_until_validation() {
         ["Z", "A", "A/B"]
     );
     let parent_id = find_unordered(&entries, "a/b").unwrap().entry_id.clone();
-    ensure_parents(&mut entries, "a/b/other.txt").unwrap();
+    ensure_parents(
+        &mut entries,
+        &name_policy::PortablePath::parse("a/b/other.txt").unwrap(),
+    )
+    .unwrap();
     assert_eq!(find_unordered(&entries, "A/B").unwrap().entry_id, parent_id);
     apply_namespace(
         &mut entries,
-        &NamespaceOperation {
-            kind: NamespaceOperationKind::Mkdir,
-            path: "a/B/C".into(),
-            destination: None,
-        },
+        &NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "a/B/C", None).unwrap(),
     )
     .unwrap();
     apply_namespace(
         &mut entries,
-        &NamespaceOperation {
-            kind: NamespaceOperationKind::Rename,
-            path: "A".into(),
-            destination: Some("0".into()),
-        },
+        &NamespaceOperation::parse(NamespaceOperationKind::Rename, "A", Some("0")).unwrap(),
     )
     .unwrap();
     assert_eq!(find_unordered(&entries, "0/b/c").unwrap().path, "0/B/C");
     assert_eq!(
         apply_namespace(
             &mut entries,
-            &NamespaceOperation {
-                kind: NamespaceOperationKind::Mkdir,
-                path: "0/b".into(),
-                destination: None,
-            }
+            &NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "0/b", None).unwrap()
         )
         .unwrap_err()
         .code(),
@@ -192,7 +189,13 @@ fn temporary_appends_and_renames_stay_unordered_until_validation() {
         .collect::<Vec<_>>();
     assert_eq!(mutation_order, ["Z", "0", "0/B", "0/B/C"]);
     let draft = NamespaceDraft::new(entries);
-    assert_eq!(draft.get("0/b").unwrap().entry_id, parent_id);
+    assert_eq!(
+        draft
+            .get_key(name_policy::LookupPath::parse("0/b").unwrap().key())
+            .unwrap()
+            .entry_id,
+        parent_id
+    );
     let mut entries = draft.into_entries();
     assert_eq!(
         entries
@@ -207,7 +210,7 @@ fn temporary_appends_and_renames_stay_unordered_until_validation() {
     assert!(
         entries
             .windows(2)
-            .all(|pair| pair[0].lookup_key < pair[1].lookup_key)
+            .all(|pair| pair[0].lookup_key() < pair[1].lookup_key())
     );
 }
 
@@ -250,12 +253,12 @@ fn assert_published_matches_legacy(engine: &Engine, branch: &str) {
     assert!(
         entries
             .windows(2)
-            .all(|pair| pair[0].lookup_key < pair[1].lookup_key)
+            .all(|pair| pair[0].lookup_key() < pair[1].lookup_key())
     );
     assert!(
         entries
             .iter()
-            .all(|entry| entry.lookup_key == name_policy::path_key(&entry.path))
+            .all(|entry| entry.lookup_key() == name_policy::path_key(&entry.path))
     );
     for query in [
         "STRASSE/CAFE\u{301}.TXT",
@@ -283,11 +286,8 @@ fn published_and_reopened_trees_preserve_unicode_identity_and_historical_lookup(
     engine
         .file_namespace(
             &repo.repository_id,
-            NamespaceOperation {
-                kind: NamespaceOperationKind::Rename,
-                path: "STRASSE".into(),
-                destination: Some("Moved".into()),
-            },
+            NamespaceOperation::parse(NamespaceOperationKind::Rename, "STRASSE", Some("Moved"))
+                .unwrap(),
             "admin",
             &new_id("op"),
         )
@@ -310,11 +310,7 @@ fn published_and_reopened_trees_preserve_unicode_identity_and_historical_lookup(
     let collision = engine
         .file_namespace(
             &repo.repository_id,
-            NamespaceOperation {
-                kind: NamespaceOperationKind::Mkdir,
-                path: "MOVED".into(),
-                destination: None,
-            },
+            NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "MOVED", None).unwrap(),
             "admin",
             &new_id("op"),
         )
@@ -352,14 +348,7 @@ fn publication_rejects_bad_keys_unsorted_entries_and_normalized_collisions() {
         .head_commit_id
         .clone();
     let before = canonical_json(engine.state()).unwrap();
-    for corruption in [
-        "key",
-        "name",
-        "order",
-        "duplicate",
-        "folded_duplicate",
-        "nfd_display",
-    ] {
+    for corruption in ["order", "duplicate", "folded_duplicate"] {
         let operation = new_id("op");
         let result = engine.mutate(
             "test.invalid.namespace",
@@ -369,8 +358,6 @@ fn publication_rejects_bad_keys_unsorted_entries_and_normalized_collisions() {
             |_, state, _| {
                 let entries = &mut state.commits.get_mut(&head).unwrap().entries;
                 match corruption {
-                    "key" => entries[0].lookup_key = "deliberately-unrelated-key".into(),
-                    "name" => entries[0].name = "wrong.txt".into(),
                     "order" => entries.reverse(),
                     "duplicate" => entries.push(entries[0].clone()),
                     "folded_duplicate" => {
@@ -380,16 +367,11 @@ fn publication_rejects_bad_keys_unsorted_entries_and_normalized_collisions() {
                             .unwrap()
                             .clone();
                         let path = duplicate.path.to_uppercase();
-                        relocate_entry(&mut duplicate, path).unwrap();
+                        relocate_entry(
+                            &mut duplicate,
+                            name_policy::PortablePath::parse(&path).unwrap(),
+                        );
                         entries.push(duplicate);
-                    }
-                    "nfd_display" => {
-                        let entry = entries
-                            .iter_mut()
-                            .find(|entry| entry.path == "Straße/Café.txt")
-                            .unwrap();
-                        entry.path = "Straße/Cafe\u{301}.txt".into();
-                        entry.name = "Cafe\u{301}.txt".into();
                     }
                     _ => unreachable!(),
                 }
@@ -398,8 +380,6 @@ fn publication_rejects_bad_keys_unsorted_entries_and_normalized_collisions() {
         );
         let expected = if corruption.contains("duplicate") {
             storage_contract::ErrorCode::NameCollision
-        } else if corruption == "nfd_display" {
-            storage_contract::ErrorCode::NameNotNormalized
         } else {
             storage_contract::ErrorCode::HistoryPackageInvalid
         };
@@ -448,4 +428,22 @@ fn query_views_keep_missing_foreign_and_migrated_branch_errors() {
     let new = engine.namespace_tree(&repo.main_branch_id).err().unwrap();
     assert_eq!(new.code(), storage_contract::ErrorCode::TreeMoved);
     assert_eq!(new.to_string(), old.to_string());
+}
+
+#[test]
+fn entry_wire_rejects_mismatched_keys_names_and_non_nfc_display_at_read_boundary() {
+    let original = entry("Straße/Café.txt", NamespaceEntryKind::File);
+    for (field, value) in [
+        ("lookup_key", "unrelated"),
+        ("name", "wrong.txt"),
+        ("path", "Straße/Cafe\u{301}.txt"),
+    ] {
+        let mut wire = json_codec::to_value(&original).unwrap();
+        wire[field] = value.into();
+        assert!(json_codec::from_value::<Entry>(wire).is_err(), "{field}");
+    }
+    assert_eq!(
+        json_codec::from_value::<Entry>(json_codec::to_value(&original).unwrap()).unwrap(),
+        original
+    );
 }

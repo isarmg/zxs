@@ -340,6 +340,25 @@ async fn stale_if_range_returns_complete_content_and_head_retains_length() {
 
 struct RetainedGenerationBackend;
 impl crate::Backend for RetainedGenerationBackend {
+    fn snapshot_at(
+        &self,
+        _: &crate::auth::Identity,
+        _: &str,
+        _: &str,
+    ) -> Result<std::sync::Arc<storage_contract::Commit>, crate::ApiError> {
+        unreachable!("this test backend does not serve snapshots")
+    }
+
+    fn lookup_at(
+        &self,
+        _: &crate::auth::Identity,
+        _: &str,
+        _: &str,
+        _: &name_policy::LookupPath,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        unreachable!("this test backend does not serve snapshot lookups")
+    }
+
     fn call(
         &self,
         action: crate::BackendAction,
@@ -357,7 +376,7 @@ impl crate::Backend for RetainedGenerationBackend {
         _identity: &Identity,
         _workspace: &str,
         _item: &str,
-        _path: &str,
+        _path: &name_policy::PortablePath,
         _source: &crate::UploadSource,
     ) -> Result<Value, ApiError> {
         Ok(json!({"accepted":true}))

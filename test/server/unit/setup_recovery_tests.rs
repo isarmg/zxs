@@ -714,6 +714,32 @@ fn preset_change_or_unapproved_roots_cannot_be_applied() {
     );
 }
 #[test]
+fn preset_parent_aliases_cannot_collapse_two_configured_roots() {
+    let (f, mut config, path) = preset_fixture();
+    let alias = f._temp.path().join("parent-alias");
+    std::os::unix::fs::symlink(f._temp.path(), &alias).unwrap();
+    config.disks[1].root = alias.join(config.disks[0].root.strip_prefix(f._temp.path()).unwrap());
+    ValidatedConfig::try_from(config.clone()).unwrap();
+    fs::write(&path, json_codec::to_vec(&config).unwrap()).unwrap();
+    let error = f
+        .service
+        .initialize_preset(
+            &permit(&f.service),
+            PresetSetupRequest {
+                preset_id: "custom".into(),
+                config_digest: "not-reached".into(),
+                username: "admin".into(),
+                password: "long-valid-password".into(),
+            },
+            |_, _, _| panic!("aliased roots cannot install authority"),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::ConfigInvalid);
+    assert!(!f.service.data_root.join("setup-intent.json").exists());
+    assert!(!f.service.data_root.join("config.json").exists());
+}
+
+#[test]
 fn unavailable_or_unsafe_presets_do_not_prevent_status() {
     let (mut f, _, path) = preset_fixture();
     f.service

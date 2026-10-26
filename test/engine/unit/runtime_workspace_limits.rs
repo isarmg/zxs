@@ -34,7 +34,8 @@ fn runtime_limits_validate_each_dimension_before_initialization_or_restore_write
             f.config.max_retained_workspace_metadata_bytes_per_principal = 2048;
             // Principal limits above global limits are valid, like Config itself.
             let baseline = limits(&f.config);
-            baseline.validate_for(&f.config).unwrap();
+            let admitted = ValidatedConfig::try_from(f.config.clone()).unwrap();
+            baseline.validate_for(&admitted).unwrap();
             let mut invalid = baseline;
             match dimension {
                 0 => invalid.max_retained_workspaces = if zero { 0 } else { 2 },
@@ -47,7 +48,7 @@ fn runtime_limits_validate_each_dimension_before_initialization_or_restore_write
             }
             assert_eq!(invalid.validate().is_err(), zero);
             assert_eq!(
-                invalid.validate_for(&f.config).unwrap_err().code(),
+                invalid.validate_for(&admitted).unwrap_err().code(),
                 storage_contract::ErrorCode::ConfigInvalid
             );
             assert_eq!(
@@ -94,37 +95,48 @@ fn runtime_limits_validate_each_dimension_before_initialization_or_restore_write
 }
 
 #[test]
-fn absent_runtime_override_uses_current_config_and_preserves_default_limits() {
-    let f = Fixture::new();
-    assert_eq!(f.config.max_retained_workspaces, 4096);
-    assert_eq!(f.config.max_retained_workspaces_per_principal, 1024);
-    assert_eq!(
-        f.config.max_retained_workspace_metadata_bytes,
-        128 * 1024 * 1024
-    );
-    assert_eq!(
-        f.config.max_retained_workspace_metadata_bytes_per_principal,
-        64 * 1024 * 1024
-    );
-    let mut engine =
-        Engine::initialize_with_workspace_limits(&f.root, f.config.clone(), None).unwrap();
-    engine.config.max_retained_workspaces = 7;
-    engine.config.max_retained_workspaces_per_principal = 5;
-    engine.config.max_retained_workspace_metadata_bytes = 9000;
-    engine
-        .config
-        .max_retained_workspace_metadata_bytes_per_principal = 8000;
-    let report = engine.workspace_capacity("admin");
-    assert_eq!(report.global.records.limit, 7);
-    assert_eq!(report.principal.records.limit, 5);
-    assert_eq!(report.global.metadata_bytes.limit, 9000);
-    assert_eq!(report.principal.metadata_bytes.limit, 8000);
-    drop(engine);
-    let engine = Engine::open_with_workspace_limits(&f.root, None).unwrap();
-    assert_eq!(
-        engine.workspace_capacity("admin").global.records.limit,
-        4096
-    );
+fn absent_runtime_override_uses_persisted_configuration_limits() {
+    for custom in [false, true] {
+        let mut f = Fixture::new();
+        assert_eq!(f.config.max_retained_workspaces, 4096);
+        assert_eq!(f.config.max_retained_workspaces_per_principal, 1024);
+        assert_eq!(
+            f.config.max_retained_workspace_metadata_bytes,
+            128 * 1024 * 1024
+        );
+        assert_eq!(
+            f.config.max_retained_workspace_metadata_bytes_per_principal,
+            64 * 1024 * 1024
+        );
+        if custom {
+            f.config.max_retained_workspaces = 7;
+            f.config.max_retained_workspaces_per_principal = 5;
+            f.config.max_retained_workspace_metadata_bytes = 9000;
+            f.config.max_retained_workspace_metadata_bytes_per_principal = 8000;
+        }
+        let engine =
+            Engine::initialize_with_workspace_limits(&f.root, f.config.clone(), None).unwrap();
+        let expected = engine.workspace_capacity("admin");
+        assert_eq!(
+            expected.global.records.limit,
+            f.config.max_retained_workspaces as u64
+        );
+        assert_eq!(
+            expected.principal.records.limit,
+            f.config.max_retained_workspaces_per_principal as u64
+        );
+        assert_eq!(
+            expected.global.metadata_bytes.limit,
+            f.config.max_retained_workspace_metadata_bytes
+        );
+        assert_eq!(
+            expected.principal.metadata_bytes.limit,
+            f.config.max_retained_workspace_metadata_bytes_per_principal
+        );
+        drop(engine);
+        let engine = Engine::open_with_workspace_limits(&f.root, None).unwrap();
+        assert_eq!(engine.workspace_capacity("admin"), expected);
+    }
 }
 
 #[test]
@@ -321,11 +333,12 @@ fn raised_runtime_metadata_limits_still_enforce_each_finite_dimension() {
         loop {
             let result = engine.namespace_operation(
                 &workspace.workspace_id,
-                NamespaceOperation {
-                    kind: storage_contract::NamespaceOperationKind::Mkdir,
-                    path: format!("directory-{accepted:04}"),
-                    destination: None,
-                },
+                NamespaceOperation::parse(
+                    storage_contract::NamespaceOperationKind::Mkdir,
+                    &(format!("directory-{accepted:04}")),
+                    None,
+                )
+                .unwrap(),
             );
             match result {
                 Ok(_) => {

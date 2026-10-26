@@ -38,7 +38,7 @@ fn published_new_file_context_fences_same_version_branch_switch() {
     for reopen in [false, true] {
         let (temporary, mut engine, repo) = fixture();
         let workspace = save(&mut engine, &repo.main_branch_id, b"old");
-        let key = directory::context_key(&repo.repository_id, "fresh.txt");
+        let key = directory::context_key_from_key(&repo.repository_id, "fresh.txt");
         assert!(
             find_unordered(
                 &engine.state().commits[&workspace.base_head].entries,
@@ -141,7 +141,10 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
         assert_eq!(
             completed
                 .selected_file_contexts
-                .get(&directory::context_key(&repo.repository_id, "fresh.txt")),
+                .get(&directory::context_key_from_key(
+                    &repo.repository_id,
+                    "fresh.txt"
+                )),
             engine
                 .file_context(&repo.repository_id, "fresh.txt")
                 .as_ref()
@@ -239,7 +242,7 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
                 .join("workspace.json"),
         ];
         let original_manifests = manifests.clone().map(|path| std::fs::read(path).unwrap());
-        let key = directory::context_key(&repo.repository_id, "fresh.txt");
+        let key = directory::context_key_from_key(&repo.repository_id, "fresh.txt");
         assert!(!before.selected_file_contexts.contains_key(&key));
         engine.inject_fault_once("after_local_publications");
         let result = if let Some(body) = body.clone() {

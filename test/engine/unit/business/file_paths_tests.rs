@@ -28,17 +28,13 @@ fn entries(e: &Engine, r: &Repository) -> BTreeMap<String, Entry> {
     e.list_tree(&r.main_branch_id)
         .unwrap()
         .into_iter()
-        .map(|x| (x.path.clone(), x))
+        .map(|x| (x.path().to_owned(), x))
         .collect()
 }
 fn rename(e: &mut Engine, r: &Repository, from: &str, to: &str) -> OperationResult {
     e.file_namespace(
         &r.repository_id,
-        NamespaceOperation {
-            kind: NamespaceOperationKind::Rename,
-            path: from.into(),
-            destination: Some(to.into()),
-        },
+        NamespaceOperation::parse(NamespaceOperationKind::Rename, from, Some(to)).unwrap(),
         "admin",
         &new_id("op"),
     )
@@ -51,11 +47,7 @@ fn folder_and_file_rename_append_path_nodes_reusing_bodies_then_write_follows_th
     save(&mut e, &r, "folder/nested/b.txt", b"B");
     e.file_namespace(
         &r.repository_id,
-        NamespaceOperation {
-            kind: NamespaceOperationKind::Mkdir,
-            path: "folder/empty".into(),
-            destination: None,
-        },
+        NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "folder/empty", None).unwrap(),
         "admin",
         &new_id("op"),
     )

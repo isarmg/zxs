@@ -36,11 +36,7 @@ impl Pool {
         self.engine
             .file_namespace(
                 &self.repo.repository_id,
-                NamespaceOperation {
-                    kind,
-                    path: path.into(),
-                    destination: None,
-                },
+                NamespaceOperation::parse(kind, path, None).unwrap(),
                 "admin",
                 &new_id("op"),
             )
@@ -83,7 +79,7 @@ impl Pool {
             .list_tree(&self.repo.main_branch_id)
             .unwrap()
             .into_iter()
-            .map(|entry| entry.path)
+            .map(|entry| entry.path.into_string())
             .collect()
     }
 
