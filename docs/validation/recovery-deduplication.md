@@ -45,9 +45,14 @@ fixed1024 的六次打开都选中 seq257，而不是当前 seq1025；每次 loa
 
 后续诊断改动将上述通用拒绝拆为 engine `CheckpointError`：coverage 字节／entry、目录 entry／名称字节、version ID／absent path 预算，非法路径／文件类型，以及成员、目录内容、文件元数据／正文、后缀候选／链不一致。仍映射 `CheckpointInvalid`，保留底层 I/O 和路径编码错误来源；load 的保守回退与 save 的非致命 warning 边界不变。没有增加校验、扩大预算、改动磁盘格式或永久收据语义。`save()` 不读取旧 checkpoint，构造失败发生于写入前时保留原文件；多成员写入阶段仍遵循原有逐成员原子写，不新增跨成员原子保证。
 
-小型拒绝路径测试直接覆盖预算边界、路径／链接、非 UTF-8 来源、成员／正文／缺文件、损坏旧 checkpoint 不影响新 save，以及新 inventory 拒绝时保留旧文件。此次不重跑 fixed1024 长基准，因此新错误分类尚未唯一诊断归档中的 fixed1024 原因；原始测量和其 warning 文本保持不变。
+小型拒绝路径测试直接覆盖预算边界、路径／链接、非 UTF-8 来源、成员／正文／缺文件、损坏旧 checkpoint 不影响新 save，以及新 inventory 拒绝时保留旧文件。原始测量和其通用 warning 文本保持不变；下述独立复现诊断新 fixture，不反推旧随机 fixture 的具体路径。
 
 诊断改动验证：`cargo test --locked --offline -p storage-engine --all-features` 共 632 项通过、6 项既有手动／容量测试忽略（新增 7 项；checkpoint 模块共 26 项）。`cargo clippy --locked --offline -p storage-engine --all-targets --all-features -- -D warnings`、`bash .github/scripts/check.sh static`、修改文件 rustfmt 与 `git diff --check` 通过。独占 target，`CARGO_INCREMENTAL=0`、jobs=2；未运行全仓 runtime/SDK/浏览器或物理掉电验收。
+
+
+独立诊断复现采用源码 `606b1c88b0a937f0ab880cb4e709b4f03b7175e8`、默认预算及未改动的 `recovery-startup fixed 1024`（release、jobs=2、`CARGO_INCREMENTAL=0`、独占 target）。工具没有单次 open 选项，因此保留 64/256/1024 各三次 open；这是一个新 Development fixture，无旧 baseline，且运行时有共享负载，不作速度改善结论。进程 exit 0；9 次 open 的 canonical State／永久最旧 receipt 重放不变断言、三个采样点的最旧正文／live namespace 断言及末尾完整 `Engine::check` 全部通过。64/256 无 load/save warning；1024 三次均先正常 load 并选中 seq257，然后新 checkpoint 构造报 `CheckpointError::CoverageBytes`：跨所有配置盘累计 canonical `CoverageEntry` 已有 **8,388,373 bytes**，加入 **236-byte entry** 后为 **8,388,609 bytes**，超过默认 **8,388,608-byte** 上限 1 byte。这不是单文件大小或 16 MiB envelope 超限，也不是旧 checkpoint coverage 不一致；没有改预算或恢复保证。
+
+本次首次越界路径为 `metadata/objects/history-index/93/93c6af5412af8b9c036ee6f856ddd66e074a40929716674d8ff3053c41ad6995.json`，三次一致；仅适用于本次随机 fixture。诊断二进制 SHA-256 为 `7e6f044d43d8f2d0558bb7e175facdf1d05083bc7a36794da4846ba709b4ac00`。[最小诊断证据](../../tools/perf-check/results/recovery-dedup-20261026/diagnostic/) 保存未改数值的原始 JSONL、`summary.json`、源码/tree/fixture/binary hash、构建／运行命令与 exit code，并以独立 `SHA256SUMS` 校验；这些共享负载诊断数据不属于上文正式历史基准样本，也不替代物理掉电验收。
 
 growing256 的后两次确实选中当前 seq257，仍需几十秒。该改动只消除已证明的重复认证、编码、语义准入和全日志查找；逐历史根展开、snapshot 重建及历史容器修复的剩余工作没有被全面增量化，**未消除全部历史规模二次方成本**。
 

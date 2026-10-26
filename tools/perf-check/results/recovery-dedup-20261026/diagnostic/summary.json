@@ -1,0 +1,55 @@
+{
+  "purpose": "diagnosis only; shared load, no baseline or performance comparison",
+  "source_commit": "606b1c88b0a937f0ab880cb4e709b4f03b7175e8",
+  "fixture": "unmodified recovery-startup fixed 1024; hardcoded three opens at 64/256/1024",
+  "exit_code": 0,
+  "opens": 9,
+  "checkpoint_coverage_budget_scope": "sum of canonical CoverageEntry bytes across configured disks; not file size or envelope size",
+  "fixed1024_failures": [
+    {
+      "restart": 1,
+      "selected_sequence": 257,
+      "load_warning": null,
+      "cause": "CheckpointError::CoverageBytes",
+      "current": 8388373,
+      "entry_bytes": 236,
+      "attempted": 8388609,
+      "limit": 8388608,
+      "relative_path": "metadata/objects/history-index/93/93c6af5412af8b9c036ee6f856ddd66e074a40929716674d8ff3053c41ad6995.json"
+    },
+    {
+      "restart": 2,
+      "selected_sequence": 257,
+      "load_warning": null,
+      "cause": "CheckpointError::CoverageBytes",
+      "current": 8388373,
+      "entry_bytes": 236,
+      "attempted": 8388609,
+      "limit": 8388608,
+      "relative_path": "metadata/objects/history-index/93/93c6af5412af8b9c036ee6f856ddd66e074a40929716674d8ff3053c41ad6995.json"
+    },
+    {
+      "restart": 3,
+      "selected_sequence": 257,
+      "load_warning": null,
+      "cause": "CheckpointError::CoverageBytes",
+      "current": 8388373,
+      "entry_bytes": 236,
+      "attempted": 8388609,
+      "limit": 8388608,
+      "relative_path": "metadata/objects/history-index/93/93c6af5412af8b9c036ee6f856ddd66e074a40929716674d8ff3053c41ad6995.json"
+    }
+  ],
+  "checks": [
+    "canonical state unchanged",
+    "oldest permanent receipt replay does not mutate",
+    "oldest content readable",
+    "live namespace correct",
+    "final Engine::check has no issues (assertion before successful fixture exit)"
+  ],
+  "limitations": [
+    "new random Development fixture; cannot reconstruct old archived fixture exact path",
+    "no budget/state/protocol changes",
+    "no physical disk power-loss test"
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "purpose": "diagnostic reproduction only; shared load, not a new performance baseline",
+  "source_commit": "606b1c88b0a937f0ab880cb4e709b4f03b7175e8",
+  "source_tree": "d8ddd2c131a66826234bd008b4ff1676dde5ecfd",
+  "source_worktree_clean": true,
+  "rustc": "1.99.0 (b940084d7 2026-09-28)",
+  "source_sha256": {
+    "tools/perf-check/src/bin/recovery-startup.rs": "922c2b7523cea77010c7209e7878341bdf94ac086c1f72c64f4f0f6748beb31e",
+    "src/engine/src/engine/recovery_checkpoint.rs": "854c1cbb5655f8df74a6bd342c774b9226757987c80132a5270caaefb6b29fa2"
+  },
+  "binary_sha256": "7e6f044d43d8f2d0558bb7e175facdf1d05083bc7a36794da4846ba709b4ac00",
+  "build_command": "cargo build --locked --offline --release -p perf-check --bin recovery-startup",
+  "build_environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "isolated target directory"
+  },
+  "build_exit_code": 0,
+  "run_command": "recovery-startup fixed 1024",
+  "fixture_modified": false,
+  "restart_count": "hardcoded three at each of 64, 256, 1024; no CLI override",
+  "run_exit_code": 0,
+  "run_started_utc": "2026-10-26T07:25:37Z",
+  "run_finished_utc": "2026-10-26T07:36:19Z",
+  "raw_jsonl": "copied byte-for-byte; recorded timing values retained but not compared"
+}
