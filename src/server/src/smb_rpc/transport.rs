@@ -118,31 +118,26 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
         }
         let mut identity = crate::lock(&shared.auth).sole_identity()?;
         let permit = SessionPermit::acquire(&shared)?;
-        let repo = shared.backend.call(
-            crate::BackendAction::Repository,
-            &identity,
-            json!({"repository_id":repository_id}),
-        )?;
-        if repo.get("smb_enabled").and_then(Value::as_bool) != Some(true) {
+        let repo = shared
+            .backend
+            .repository_snapshot(&identity, &repository_id)?;
+        if !repo.smb_enabled {
             return Err(ApiError::new(
                 ::http::StatusCode::CONFLICT,
                 storage_contract::ErrorCode::SmbRebindRequired,
                 "repository requires an explicit SMB binding after history migration",
             ));
         }
-        let branch = field(&repo, "main_branch_id")?.to_owned();
+        let branch = repo.main_branch_id;
         identity.smb_binding = Some(crate::auth::SmbBinding {
             repository_id,
             branch_id: branch.clone(),
-            generation: parse_u64_decimal(field(&repo, "smb_binding_generation")?)
-                .map_err(contract)?,
+            generation: repo.smb_binding_generation,
         });
-        let capabilities =
-            shared
-                .backend
-                .call(crate::BackendAction::Capabilities, &identity, json!({}))?;
-        let max_file_bytes = parse_u64_decimal(field(&capabilities, "max_upload_bytes")?)
-            .map_err(contract)?
+        let max_file_bytes = shared
+            .backend
+            .capabilities()?
+            .max_upload_bytes()
             .min(shared.max_file_bytes);
         Ok((
             Session {

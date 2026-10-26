@@ -65,14 +65,18 @@ fn create(path: &str) -> Request {
 }
 // Every check below inspects the entire dispatch log, so a fallback Tree or an
 // extra workspace-selection check cannot hide behind a successful response.
+#[derive(Clone, Copy)]
+enum ReadAuthorization {
+    Version,
+    CurrentBranch,
+}
 fn open_authorization_handles(
     wire: &mut FrameStream,
-) -> [(OpenResult, File, Option<crate::BackendAction>); 3] {
-    use crate::BackendAction::Version;
+) -> [(OpenResult, File, ReadAuthorization); 3] {
     [
-        ("report.txt", false, Some(Version)),
-        ("report.txt", true, None),
-        ("", false, None),
+        ("report.txt", false, ReadAuthorization::Version),
+        ("report.txt", true, ReadAuthorization::CurrentBranch),
+        ("", false, ReadAuthorization::CurrentBranch),
     ]
     .map(|(path, writable, action)| {
         let (reply, descriptor) = exchange(
@@ -100,12 +104,13 @@ fn check_read_authorization(
     wire: &mut FrameStream,
     backend: &LostCommitReply,
     branch: &str,
-    handles: &[(OpenResult, File, Option<crate::BackendAction>)],
+    handles: &[(OpenResult, File, ReadAuthorization)],
     error: Option<&str>,
 ) {
     for (opened, _, action) in handles {
         backend.take_calls();
         backend.take_authorizations();
+        backend.take_version_authorizations();
         let (reply, descriptor) = exchange(
             wire,
             Request::AuthorizeRead {
@@ -120,22 +125,26 @@ fn check_read_authorization(
                 panic!("unexpected authorization reply: {reply:?}, error={expected:?}")
             }
         }
-        let input = if *action == Some(crate::BackendAction::Version) {
-            json!({"version_id":opened.version_id.as_ref().unwrap()})
-        } else {
-            json!({"branch_id":branch})
-        };
-        if let Some(action) = action {
-            assert_eq!(backend.take_calls(), vec![(*action, input)]);
-            assert!(backend.take_authorizations().is_empty());
-        } else {
-            assert!(backend.take_calls().is_empty());
-            assert_eq!(backend.take_authorizations(), vec![branch.to_owned()]);
+        assert!(backend.take_calls().is_empty());
+        match action {
+            ReadAuthorization::Version => {
+                assert_eq!(
+                    backend.take_version_authorizations(),
+                    vec![opened.version_id.as_ref().unwrap().clone()]
+                );
+                assert!(backend.take_authorizations().is_empty());
+            }
+            ReadAuthorization::CurrentBranch => {
+                assert!(backend.take_version_authorizations().is_empty());
+                assert_eq!(backend.take_authorizations(), vec![branch.to_owned()]);
+            }
         }
     }
 }
 fn missing_read_handle(wire: &mut FrameStream, backend: &LostCommitReply, handle: u64) {
     backend.take_calls();
+    backend.take_authorizations();
+    backend.take_version_authorizations();
     let (reply, descriptor) = exchange(wire, Request::AuthorizeRead { handle });
     assert!(descriptor.is_none());
     assert!(matches!(
@@ -144,10 +153,12 @@ fn missing_read_handle(wire: &mut FrameStream, backend: &LostCommitReply, handle
             if code == storage_contract::ErrorCode::NotFound && message == "SMB handle missing"
     ));
     assert!(backend.take_calls().is_empty());
+    assert!(backend.take_authorizations().is_empty());
+    assert!(backend.take_version_authorizations().is_empty());
 }
 fn close_authorization_handles(
     wire: &mut FrameStream,
-    handles: &[(OpenResult, File, Option<crate::BackendAction>)],
+    handles: &[(OpenResult, File, ReadAuthorization)],
 ) {
     for (opened, _, _) in handles {
         let (reply, descriptor) = exchange(
@@ -550,5 +561,43 @@ fn live_writer_cannot_prepare_or_publish_after_disable_and_failed_close_retains_
     );
     drop(file);
     drop(wire);
+    worker.join().unwrap().unwrap();
+}
+
+#[test]
+fn hello_captures_typed_repository_but_each_synthetic_root_access_rechecks_binding() {
+    let (_temp, shared, backend, branch) = fixture();
+    let id = repository(&shared);
+    let (mut client, worker, hello) = wire(shared.clone());
+    assert!(matches!(hello, Response::Ok { .. }));
+    assert_eq!(
+        *backend.repository_snapshots.lock().unwrap(),
+        vec![id.clone()]
+    );
+    assert!(backend.repository_authorizations.lock().unwrap().is_empty());
+    backend.take_calls();
+    let (reply, fd) = exchange(
+        &mut client,
+        Request::Stat {
+            path: String::new(),
+        },
+    );
+    assert!(matches!(reply, Response::Ok { .. }));
+    assert!(fd.is_none());
+    assert_eq!(
+        *backend.repository_authorizations.lock().unwrap(),
+        vec![id.clone()]
+    );
+    assert!(backend.take_calls().is_empty());
+    rebind(&shared, &branch, false);
+    backend.take_calls();
+    refused(&mut client, Request::Stat { path: ".".into() });
+    assert_eq!(
+        *backend.repository_authorizations.lock().unwrap(),
+        vec![id.clone(), id.clone()]
+    );
+    assert_eq!(*backend.repository_snapshots.lock().unwrap(), vec![id]);
+    assert!(backend.take_calls().is_empty());
+    drop(client);
     worker.join().unwrap().unwrap();
 }

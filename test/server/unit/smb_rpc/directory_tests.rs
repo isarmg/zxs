@@ -85,15 +85,9 @@ fn directory_pages_recheck_current_binding_and_handle_ownership() {
     assert_eq!(page(&mut client, handle, false).entries.len(), 1);
     let branch = shared
         .backend
-        .call(
-            crate::BackendAction::Repository,
-            &identity(&shared),
-            json!({"repository_id":repository(&shared)}),
-        )
-        .unwrap()["main_branch_id"]
-        .as_str()
+        .repository_snapshot(&identity(&shared), &repository(&shared))
         .unwrap()
-        .to_owned();
+        .main_branch_id;
     binding_tests::rebind(&shared, &branch, false);
     assert!(
         matches!(exchange(&mut client,Request::ReadDirectory {handle,restart:false}).0,Response::Error {code,..} if code == storage_contract::ErrorCode::SmbRebindRequired)

@@ -155,6 +155,51 @@ impl Backend for CloseFailure {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.commit_workspace_public(identity, command)
     }
+    fn version_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        version: &str,
+    ) -> Result<crate::VersionSnapshot, crate::ApiError> {
+        self.inner.version_snapshot(identity, version)
+    }
+    fn authorize_version(
+        &self,
+        identity: &crate::auth::Identity,
+        version: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.inner.authorize_version(identity, version)
+    }
+    fn repository_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        self.inner.repository_snapshot(identity, id)
+    }
+    fn authorize_repository(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.inner.authorize_repository(identity, id)
+    }
+    fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
+        self.inner.capabilities()
+    }
+    fn create_write_session(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+    ) -> Result<crate::WorkspaceWriteSession, crate::ApiError> {
+        self.inner.create_write_session(identity, branch)
+    }
+    fn stage_namespace(
+        &self,
+        identity: &crate::auth::Identity,
+        command: crate::StageNamespace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        self.inner.stage_namespace(identity, command)
+    }
     fn authorize_upload(
         &self,
         identity: &crate::auth::Identity,

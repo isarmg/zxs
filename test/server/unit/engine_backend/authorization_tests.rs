@@ -63,11 +63,7 @@ fn missing_credentials_do_not_admit_even_a_named_administrator() {
             storage_contract::ErrorCode::Unauthorized
         );
     }
-    assert!(
-        backend
-            .call(crate::BackendAction::Capabilities, &caller, json!({}))
-            .is_ok()
-    );
+    assert!(backend.capabilities().is_ok());
     assert!(
         backend
             .call(crate::BackendAction::Ready, &caller, json!({}))

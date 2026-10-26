@@ -572,6 +572,56 @@ pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Re
     }
     Ok(file)
 }
+/// Byte verification held only until this preparation installs/syncs that inode.
+/// The separate decision proof still reads the installed bytes before ACCEPT.
+pub(crate) struct VerifiedExisting<'a> {
+    version: &'a FileVersion,
+    directory: PathBuf,
+    path: PathBuf,
+    file: File,
+}
+impl<'a> VerifiedExisting<'a> {
+    pub(crate) fn read(directory: &Path, version: &'a FileVersion) -> Result<Self> {
+        let path = crate::container_storage::content_path(directory, version)?;
+        let file = verify_payload_held(directory, version)?;
+        Ok(Self {
+            version,
+            directory: directory.to_path_buf(),
+            path,
+            file,
+        })
+    }
+    pub(crate) fn version(&self) -> &'a FileVersion {
+        self.version
+    }
+    pub(crate) fn assert_binding(&self, directory: &Path, version: &FileVersion) {
+        assert!(
+            std::ptr::eq(self.version, version) && self.directory == directory,
+            "invariant: existing proof belongs to its admitted version and directory"
+        );
+    }
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+    pub(crate) fn sync_at(&self, directory: &Path, path: &Path) -> Result<()> {
+        use platform_io::fs_safety::linux::FileIdentity;
+        assert_eq!(
+            directory, self.directory,
+            "invariant: install consumes its admitted directory"
+        );
+        if path != self.path
+            || FileIdentity::from_fd(open_regular(path)?)? != FileIdentity::from_fd(&self.file)?
+        {
+            return Err(Error::new(
+                ErrorCode::PreparationStale,
+                "existing payload identity changed before synchronization",
+            ));
+        }
+        self.file.sync_all()?;
+        Ok(())
+    }
+}
+
 pub(crate) fn version_dir(disk: &DiskConfig, history: &str, version: &str) -> PathBuf {
     disk.root
         .join("histories")

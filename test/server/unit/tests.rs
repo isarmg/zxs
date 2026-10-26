@@ -113,6 +113,51 @@ impl Backend for TestBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn version_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _version: &str,
+    ) -> Result<crate::VersionSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn authorize_version(
+        &self,
+        _identity: &crate::auth::Identity,
+        _version: &str,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn repository_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn authorize_repository(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
+        Ok(crate::Capabilities::for_engine(u64::MAX))
+    }
+    fn create_write_session(
+        &self,
+        _identity: &crate::auth::Identity,
+        _branch: &str,
+    ) -> Result<crate::WorkspaceWriteSession, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn stage_namespace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: crate::StageNamespace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn authorize_upload(
         &self,
         _identity: &crate::auth::Identity,
@@ -148,9 +193,7 @@ impl Backend for TestBackend {
         _input: Value,
     ) -> Result<Value, ApiError> {
         match action {
-            crate::BackendAction::Capabilities | crate::BackendAction::CreateRepository => {
-                Ok(json!({"accepted":true}))
-            }
+            crate::BackendAction::CreateRepository => Ok(json!({"accepted":true})),
             BackendAction::DirectoryBranchScopes | BackendAction::DirectoryBranchSelection => {
                 Ok(json!({"action":action.as_str()}))
             }
@@ -883,6 +926,51 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             command: storage_contract::PublicCommitEnvelope,
         ) -> Result<storage_contract::OperationResult, crate::ApiError> {
             self.delegate.commit_workspace_public(identity, command)
+        }
+        fn version_snapshot(
+            &self,
+            identity: &crate::auth::Identity,
+            version: &str,
+        ) -> Result<crate::VersionSnapshot, crate::ApiError> {
+            self.delegate.version_snapshot(identity, version)
+        }
+        fn authorize_version(
+            &self,
+            identity: &crate::auth::Identity,
+            version: &str,
+        ) -> Result<(), crate::ApiError> {
+            self.delegate.authorize_version(identity, version)
+        }
+        fn repository_snapshot(
+            &self,
+            identity: &crate::auth::Identity,
+            id: &str,
+        ) -> Result<storage_contract::Repository, crate::ApiError> {
+            self.delegate.repository_snapshot(identity, id)
+        }
+        fn authorize_repository(
+            &self,
+            identity: &crate::auth::Identity,
+            id: &str,
+        ) -> Result<(), crate::ApiError> {
+            self.delegate.authorize_repository(identity, id)
+        }
+        fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
+            self.delegate.capabilities()
+        }
+        fn create_write_session(
+            &self,
+            identity: &crate::auth::Identity,
+            branch: &str,
+        ) -> Result<crate::WorkspaceWriteSession, crate::ApiError> {
+            self.delegate.create_write_session(identity, branch)
+        }
+        fn stage_namespace(
+            &self,
+            identity: &crate::auth::Identity,
+            command: crate::StageNamespace,
+        ) -> Result<storage_contract::Workspace, crate::ApiError> {
+            self.delegate.stage_namespace(identity, command)
         }
         fn authorize_upload(
             &self,

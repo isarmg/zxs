@@ -6,7 +6,9 @@ use json_codec::json;
 use std::collections::BTreeMap;
 #[path = "verified_payloads.rs"]
 mod verified_payloads;
-use verified_payloads::{PayloadPreparation, VerifiedPayloadSet};
+use verified_payloads::{MAX_HELD_PAYLOAD_FILES, PayloadPreparation, VerifiedPayloadSet};
+
+type ExistingCopies<'a> = Vec<Option<VerifiedExisting<'a>>>;
 
 /// A publication receipt, not a hash cache. Only successful decide constructs
 /// this token, and reuse requires the exact current State allocation and config.
@@ -704,16 +706,35 @@ impl crate::engine::PlanningContext<'_> {
     ) -> Result<DetachedPublication> {
         let members = self.members();
         let mut required = BTreeMap::<String, u64>::new();
+        // One held descriptor per proof; release all before decision proofs.
+        let mut held = 0;
+        let mut existing = Vec::with_capacity(prepared.len());
         for p in &prepared {
+            let mut copies = Vec::with_capacity(p.placement.route_slot_ids.len());
             for slot in &p.placement.route_slot_ids {
                 let disk = self.disk(slot)?;
-                if verify_payload(
-                    &version_dir(disk, &p.version.history_tree_id, &p.version.version_id),
-                    &p.version,
-                )
-                .is_ok()
-                {
-                    continue;
+                let directory =
+                    version_dir(disk, &p.version.history_tree_id, &p.version.version_id);
+                match VerifiedExisting::read(&directory, &p.version) {
+                    Ok(proof) => {
+                        if held < MAX_HELD_PAYLOAD_FILES {
+                            held += 1;
+                            copies.push(Some(proof));
+                        } else {
+                            // Large requests retain the bounded-memory reread path.
+                            copies.push(None);
+                        }
+                        continue;
+                    }
+                    Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+                    | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+                        if error.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        copies.push(None);
+                    }
+                    // Existing corrupt/unreadable bodies were never repairable by
+                    // preparation. Preserve that cause instead of reporting NoSpace.
+                    Err(error) => return Err(error),
                 }
                 *required.entry(slot.clone()).or_default() = required
                     .get(slot)
@@ -727,6 +748,7 @@ impl crate::engine::PlanningContext<'_> {
                         )
                     })?;
             }
+            existing.push(std::sync::Mutex::new(Some(copies)));
         }
         for (slot, bytes) in &required {
             let d = self.disk(slot)?;
@@ -816,7 +838,7 @@ impl crate::engine::PlanningContext<'_> {
         )?;
         crate::container_storage::validate_new_projection_paths(self.state, &next)?;
         let preparation = PayloadPreparation::new(self.config, &candidate)?;
-        self.prepare_payloads(&prepared)?;
+        self.prepare_payloads(&prepared, existing)?;
         let verified = preparation.verify(self.config, &candidate)?;
         // Payload installation establishes the physical container, but no decision
         // exists yet. Encode its complete projection before ACCEPT can be written.
@@ -844,39 +866,63 @@ impl crate::engine::PlanningContext<'_> {
 }
 
 impl crate::engine::PlanningContext<'_> {
-    fn prepare_payloads(&self, prepared: &[Prepared]) -> Result<()> {
+    fn prepare_payloads<'a>(
+        &self,
+        prepared: &'a [Prepared],
+        existing: Vec<std::sync::Mutex<Option<ExistingCopies<'a>>>>,
+    ) -> Result<()> {
         // Versions of the same file can share a named container. Preserve their
         // order, and each version's route chain, while independent files copy
         // with bounded parallel workers. No decision is written until all join.
-        let mut by_file = BTreeMap::<&str, Vec<&Prepared>>::new();
-        for payload in prepared {
+        let jobs: Vec<_> = prepared.iter().zip(existing).collect();
+        let mut by_file = BTreeMap::new();
+        for job in &jobs {
             by_file
-                .entry(&payload.version.file_id)
-                .or_default()
-                .push(payload);
+                .entry(job.0.version.file_id.as_str())
+                .or_insert_with(Vec::new)
+                .push(job);
         }
         let groups: Vec<_> = by_file.into_values().collect();
-        run_payload_groups(&groups, |payload| self.prepare_payload(payload))
+        run_payload_groups(&groups, |(payload, copies)| {
+            let copies = copies
+                .lock()
+                .expect("invariant: payload admission ownership poisoned")
+                .take()
+                .expect("invariant: payload group is claimed once");
+            self.prepare_payload_with_existing(payload, copies)
+        })
     }
 }
 
 impl crate::engine::PlanningContext<'_> {
     pub(crate) fn prepare_payload(&self, p: &Prepared) -> Result<()> {
+        self.prepare_payload_with_existing(p, Vec::new())
+    }
+
+    fn prepare_payload_with_existing<'a>(
+        &self,
+        p: &'a Prepared,
+        mut existing: ExistingCopies<'a>,
+    ) -> Result<()> {
         let mut source = p.source.clone();
-        for slot in &p.placement.route_slot_ids {
+        for (index, slot) in p.placement.route_slot_ids.iter().enumerate() {
             let disk = self.disk(slot)?;
             validate_seal(self.config, disk)?;
             let directory = version_dir(disk, &p.version.history_tree_id, &p.version.version_id);
             let content = match read_json::<FileVersion>(&directory.join("version.json")) {
-                Ok(existing) => {
-                    if object_hash("version", &existing)? != object_hash("version", &p.version)? {
+                Ok(recorded) => {
+                    if object_hash("version", &recorded)? != object_hash("version", &p.version)? {
                         return Err(Error::new(
                             storage_contract::ErrorCode::ObjectCollision,
                             "version identity already exists with different bytes",
                         ));
                     }
-                    verify_payload(&directory, &p.version)?;
-                    crate::container_storage::PreparedContent::Existing(&p.version)
+                    let verified = match existing.get_mut(index).and_then(Option::take) {
+                        Some(verified) => verified,
+                        None => VerifiedExisting::read(&directory, &p.version)?,
+                    };
+                    verified.assert_binding(&directory, &p.version);
+                    crate::container_storage::PreparedContent::Verified(verified)
                 }
                 Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
                 | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))

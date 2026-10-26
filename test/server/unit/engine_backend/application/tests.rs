@@ -1,7 +1,7 @@
 use super::*;
 use crate::{Backend, engine_backend::EngineBackend};
 use json_codec::json;
-use storage_contract::{Config, new_id};
+use storage_contract::{Config, NamespaceOperation, new_id};
 
 fn fixture() -> (
     tempfile::TempDir,
@@ -310,8 +310,8 @@ fn workspace_ownership_and_session_admission_apply_to_typed_and_wire_paths() {
     );
     let backend = EngineBackend::new(engine);
     for identity in [&intruder, &unadmitted_owner] {
-        let result = backend.call(
-            crate::BackendAction::Namespace,
+        let result = stage_namespace_wire(
+            &backend,
             identity,
             json!({"workspace_id":workspace.workspace_id,
                 "kind":"mkdir", "path":"WireDenied"}),
@@ -806,14 +806,13 @@ fn namespace_wire_preserves_naming_error_codes_before_staging() {
             ErrorCode::NameNotNormalized,
         ),
     ] {
-        let failure = backend
-            .call(
-                crate::BackendAction::Namespace,
-                &identity,
-                json!({"workspace_id":workspace.workspace_id,
+        let failure = stage_namespace_wire(
+            &backend,
+            &identity,
+            json!({"workspace_id":workspace.workspace_id,
                     "kind":kind,"path":path,"destination":destination}),
-            )
-            .unwrap_err();
+        )
+        .unwrap_err();
         assert_eq!(failure.code, code, "{kind} {path} {destination:?}");
         assert!(failure.source.is_some());
     }
@@ -840,14 +839,13 @@ fn namespace_wire_carries_lookup_spelling_and_creation_spelling_into_commit() {
         ("mkdir", "Café", None),
         ("rename", "CAFE\u{301}", Some("Renamed")),
     ] {
-        backend
-            .call(
-                crate::BackendAction::Namespace,
-                &identity,
-                json!({"workspace_id":workspace.workspace_id,
+        stage_namespace_wire(
+            &backend,
+            &identity,
+            json!({"workspace_id":workspace.workspace_id,
                 "kind":kind,"path":path,"destination":destination}),
-            )
-            .unwrap();
+        )
+        .unwrap();
     }
     let mut engine = backend.engine.lock().unwrap();
     engine
@@ -877,14 +875,13 @@ fn namespace_wire_rejects_nonstring_destinations_without_staging() {
     let backend = EngineBackend::new(engine);
     for kind in ["mkdir", "delete", "delete_tree", "rename"] {
         for destination in [json!(123), json!(false), json!({}), json!([])] {
-            let failure = backend
-                .call(
-                    crate::BackendAction::Namespace,
-                    &identity,
-                    json!({"workspace_id":workspace.workspace_id,
+            let failure = stage_namespace_wire(
+                &backend,
+                &identity,
+                json!({"workspace_id":workspace.workspace_id,
                     "kind":kind,"path":"source","destination":destination}),
-                )
-                .unwrap_err();
+            )
+            .unwrap_err();
             assert_eq!(failure.code, storage_contract::ErrorCode::InvalidRequest);
             assert_eq!(failure.message, "destination must be a string");
         }
@@ -899,4 +896,13 @@ fn namespace_wire_rejects_nonstring_destinations_without_staging() {
             .namespace_operations
             .is_empty()
     );
+}
+
+// External HTTP wire parsing is tested explicitly; no JSON backend action remains.
+fn stage_namespace_wire(
+    backend: &dyn Backend,
+    identity: &Identity,
+    body: json_codec::Value,
+) -> Result<storage_contract::Workspace, ApiError> {
+    backend.stage_namespace(identity, crate::http_workspace::namespace_command(body)?)
 }

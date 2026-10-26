@@ -197,3 +197,102 @@ pub(crate) async fn seal(
     .map_err(ApiError::join)?
     .map(Json)
 }
+
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct NamespaceBody {
+    #[serialization(deserialize_with = "nonempty")]
+    workspace_id: String,
+    kind: storage_contract::NamespaceOperationKind,
+    #[serialization(deserialize_with = "nonempty")]
+    path: String,
+    #[serialization(default, deserialize_with = "namespace_destination")]
+    destination: Option<String>,
+}
+fn namespace_destination<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    match json_codec::Value::deserialize(deserializer)? {
+        json_codec::Value::Null => Ok(None),
+        json_codec::Value::String(value) => Ok(Some(value)),
+        _ => Err(D::Error::custom("destination must be a string")),
+    }
+}
+pub(crate) fn namespace_command(
+    value: json_codec::Value,
+) -> Result<crate::StageNamespace, ApiError> {
+    let body: NamespaceBody = json_codec::from_value(value).map_err(ApiError::invalid_source)?;
+    let change = storage_contract::NamespaceOperation::parse(
+        body.kind,
+        &body.path,
+        body.destination.as_deref(),
+    )
+    .map_err(|source| {
+        ApiError::new(
+            ::http::StatusCode::BAD_REQUEST,
+            source.code(),
+            source.message(),
+        )
+        .with_source(source)
+    })?;
+    Ok(crate::StageNamespace {
+        workspace_id: body.workspace_id,
+        change,
+    })
+}
+pub(crate) async fn namespace(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ApiPath(id): ApiPath<String>,
+    request: Request,
+) -> Result<Json<WorkspaceResponse>, ApiError> {
+    let body = crate::with_id(crate::json_body(request).await?, "workspace_id", id)?;
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let command = namespace_command(body)?;
+        state
+            .backend
+            .stage_namespace(&identity, command)
+            .map(WorkspaceResponse::from)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
+
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct WriteSessionBody {
+    #[serialization(deserialize_with = "nonempty")]
+    branch_id: String,
+}
+pub(crate) async fn write_session(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ApiPath(id): ApiPath<String>,
+    request: Request,
+) -> Result<Json<crate::backend_workspace::WriteSessionResponse>, ApiError> {
+    let body = crate::with_id(crate::json_body(request).await?, "branch_id", id)?;
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let body: WriteSessionBody =
+            json_codec::from_value(body).map_err(ApiError::invalid_source)?;
+        state
+            .backend
+            .create_write_session(&identity, &body.branch_id)
+            .map(crate::backend_workspace::WriteSessionResponse::from)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}

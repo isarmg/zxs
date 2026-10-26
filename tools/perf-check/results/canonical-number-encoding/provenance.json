@@ -1,0 +1,31 @@
+{
+  "baseline_commit": "23dd3639dffd3d32435aa5ed5e0dad73fd1e9599",
+  "implementation_commit": "15b67e66d5ff6bac9917edf9328f81984e4c3969",
+  "measurement_source": "Implementation commit plus measurement-harness.patch; production encoder unchanged; patch only restores benchmark function-pointer type spelling before clippy alias fix.",
+  "source_sha256": {
+    "src/contract/src/encoding.rs": "aa2251c49755c0c265b1bc3e81837d56178b7bc9c0564414e4cec1ce1d8802b1",
+    "test/contract/unit/encoding/baseline.rs": "8739d540cb9d25f97ab717aac0e670bf4c9886486d89324a3a75b12e64cffa54",
+    "test/contract/unit/encoding/number_emission.rs": "01db43640304cd732345b691c18c619660561601df663e8e2c8abbcb561bc819"
+  },
+  "test_binary_sha256": "25cbe5af659086a3756ce979c437b1b563f361d306bfc836ad8e258a18c4bb43",
+  "rustc": "1.99.0 (b940084d7 2026-09-28)",
+  "host": "x86_64-unknown-linux-gnu",
+  "profile": {
+    "release": true,
+    "lto": "thin",
+    "codegen_units": 1,
+    "debug": 0,
+    "incremental": false,
+    "jobs": 2
+  },
+  "measurement": {
+    "samples_per_fixture": 12,
+    "ordering": "alternating AB/BA",
+    "warmup_iterations_per_implementation": 100,
+    "iteration_rule": "500 if encoded bytes > 10000, otherwise 20000",
+    "total_test_seconds": 3.54,
+    "environment": "Shared executor, no CPU affinity. Other task Cargo-heavy builds paused by coordination; not system exclusive.",
+    "timed_scope": "Complete canonical_json_value including integer validation, allocation, UTF-16 sorting, escaping and output. Fixture construction excluded. Not storage end-to-end."
+  },
+  "summary_method": "Per fixture/implementation: median(elapsed_ns / iterations); reduction_pct = 100 * (baseline_median - direct_median) / baseline_median."
+}

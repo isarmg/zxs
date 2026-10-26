@@ -408,6 +408,54 @@ impl Backend for PanickingBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         panic!("private commit_workspace_public panic detail")
     }
+    fn version_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _version: &str,
+    ) -> Result<crate::VersionSnapshot, crate::ApiError> {
+        panic!("private version_snapshot panic detail")
+    }
+    fn authorize_version(
+        &self,
+        _identity: &crate::auth::Identity,
+        _version: &str,
+    ) -> Result<(), crate::ApiError> {
+        panic!("private authorize_version panic detail")
+    }
+    fn repository_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        panic!("private repository_snapshot panic detail")
+    }
+    fn authorize_repository(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<(), crate::ApiError> {
+        panic!("private authorize_repository panic detail")
+    }
+    fn retry_storage(&self, _identity: &Identity) -> Result<crate::StorageStatus, ApiError> {
+        panic!("private storage retry panic detail")
+    }
+    fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
+        panic!("private capabilities panic detail")
+    }
+    fn create_write_session(
+        &self,
+        _identity: &crate::auth::Identity,
+        _branch: &str,
+    ) -> Result<crate::WorkspaceWriteSession, crate::ApiError> {
+        panic!("private write session panic detail")
+    }
+    fn stage_namespace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: crate::StageNamespace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        panic!("private namespace panic detail")
+    }
     fn authorize_upload(
         &self,
         _identity: &crate::auth::Identity,
@@ -490,6 +538,7 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
     let (token, _, _) = authenticated(&app).await;
     for (method, path, body) in [
         ("GET", "/api/capabilities", None),
+        ("POST", "/api/system/storage/retry", Some(json!({}))),
         ("GET", "/api/repositories", None),
         ("GET", "/api/versions/version/content", None),
         ("GET", "/api/workspaces/ws/files/item/upload-status", None),
@@ -501,6 +550,18 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         ),
         ("POST", "/api/workspaces/ws/abort", Some(json!({}))),
         ("POST", "/api/workspaces/ws/seal", Some(json!({}))),
+        ("GET", "/api/versions/version", None),
+        ("GET", "/api/repositories/repository", None),
+        (
+            "POST",
+            "/api/branches/branch/write-sessions",
+            Some(json!({})),
+        ),
+        (
+            "POST",
+            "/api/workspaces/ws/namespace-operations",
+            Some(json!({"kind":"mkdir","path":"directory"})),
+        ),
         (
             "POST",
             "/api/workspaces/ws/commit",

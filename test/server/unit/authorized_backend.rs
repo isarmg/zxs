@@ -290,6 +290,105 @@ impl Backend for RecordingBackend {
         )?;
         Ok(recorded_operation(operation, "commit_workspace_public"))
     }
+    fn version_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        version: &str,
+    ) -> Result<crate::VersionSnapshot, crate::ApiError> {
+        self.record(
+            "version_snapshot",
+            Some(identity),
+            json!({"version_id":version}),
+        )?;
+        Ok(recorded_version(version))
+    }
+    fn authorize_version(
+        &self,
+        identity: &crate::auth::Identity,
+        version: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.record(
+            "authorize_version",
+            Some(identity),
+            json!({"version_id":version}),
+        )?;
+        Ok(())
+    }
+    fn repository_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        self.record(
+            "repository_snapshot",
+            Some(identity),
+            json!({"repository_id":id}),
+        )?;
+        Ok(recorded_repository(id))
+    }
+    fn authorize_repository(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.record(
+            "authorize_repository",
+            Some(identity),
+            json!({"repository_id":id}),
+        )?;
+        Ok(())
+    }
+    fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
+        self.record("capabilities", None, Value::Null)?;
+        Ok(crate::Capabilities::for_engine(42))
+    }
+    fn create_write_session(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+    ) -> Result<crate::WorkspaceWriteSession, crate::ApiError> {
+        self.record(
+            "create_write_session",
+            Some(identity),
+            json!({"branch_id":branch}),
+        )?;
+        Ok(crate::WorkspaceWriteSession {
+            workspace_id: "workspace".into(),
+            branch_id: branch.into(),
+            principal: identity.principal.clone(),
+            fencing_token: 11,
+            expires_at: 70,
+            state: storage_contract::WorkspaceState::Open,
+        })
+    }
+    fn stage_namespace(
+        &self,
+        identity: &Identity,
+        command: crate::StageNamespace,
+    ) -> Result<storage_contract::Workspace, ApiError> {
+        self.record(
+            "stage_namespace",
+            Some(identity),
+            json!({"workspace_id":command.workspace_id,"change":command.change}),
+        )?;
+        Ok(storage_contract::Workspace {
+            workspace_id: command.workspace_id,
+            purpose: storage_contract::WorkspacePurpose::Normal,
+            branch_id: "branch".into(),
+            principal: identity.principal.clone(),
+            base_head: "head".into(),
+            fencing_token: 11,
+            files: BTreeMap::new(),
+            selected_file_branches: BTreeMap::new(),
+            selected_file_contexts: BTreeMap::new(),
+            selected_directory_branches: BTreeMap::new(),
+            directory_selection_generations: BTreeMap::new(),
+            file_selection_generations: BTreeMap::new(),
+            namespace_operations: vec![command.change],
+            created_at: 10,
+            state: storage_contract::WorkspaceState::Open,
+        })
+    }
     fn authorize_upload(
         &self,
         identity: &crate::auth::Identity,
@@ -355,11 +454,19 @@ impl Backend for RecordingBackend {
         self.record("drain_management", None, Value::Null)
             .map(|_| ())
     }
-    fn management_status(&self) -> Value {
-        self.record("management_status", None, Value::Null).unwrap()
+    fn management_status(&self) -> crate::StorageStatus {
+        self.record("management_status", None, Value::Null).unwrap();
+        crate::StorageStatus::Managed {
+            state: crate::StorageState::ReadOnly,
+            recovering: true,
+        }
     }
-    fn retry_storage(&self, identity: &Identity) -> Result<Value, ApiError> {
-        self.record("retry_storage", Some(identity), Value::Null)
+    fn retry_storage(&self, identity: &Identity) -> Result<crate::StorageStatus, ApiError> {
+        self.record("retry_storage", Some(identity), Value::Null)?;
+        Ok(crate::StorageStatus::Managed {
+            state: crate::StorageState::RecoveryRequired,
+            recovering: true,
+        })
     }
     fn call(
         &self,
@@ -518,7 +625,19 @@ impl Fixture {
                     Some(identity),
                 ),
             ),
-            ("retry_storage", backend.retry_storage(identity)),
+            (
+                "retry_storage",
+                backend.retry_storage(identity).map(|status| {
+                    assert_eq!(
+                        status,
+                        crate::StorageStatus::Managed {
+                            state: crate::StorageState::RecoveryRequired,
+                            recovering: true
+                        }
+                    );
+                    json!({"returned_by":"retry_storage"})
+                }),
+            ),
             (
                 "snapshot_at",
                 backend
@@ -556,6 +675,65 @@ impl Fixture {
                 backend
                     .commit_workspace_public(identity, public_envelope())
                     .map(|result| result.result),
+            ),
+            (
+                "version_snapshot",
+                backend
+                    .version_snapshot(identity, "version")
+                    .map(|snapshot| {
+                        assert_eq!(snapshot.version.version_id, "version");
+                        assert_eq!(snapshot.version.logical_size, u64::MAX);
+                        json!({"returned_by":"version_snapshot"})
+                    }),
+            ),
+            (
+                "authorize_version",
+                backend
+                    .authorize_version(identity, "version")
+                    .map(|()| json!({"returned_by":"authorize_version"})),
+            ),
+            (
+                "repository_snapshot",
+                backend
+                    .repository_snapshot(identity, "repository")
+                    .map(|repository| {
+                        assert_eq!(repository.repository_id, "repository");
+                        assert_eq!(repository.smb_binding_generation, u64::MAX);
+                        json!({"returned_by":"repository_snapshot"})
+                    }),
+            ),
+            (
+                "authorize_repository",
+                backend
+                    .authorize_repository(identity, "repository")
+                    .map(|()| json!({"returned_by":"authorize_repository"})),
+            ),
+            (
+                "create_write_session",
+                backend
+                    .create_write_session(identity, "branch")
+                    .map(|session| {
+                        assert_eq!(session.branch_id, "branch");
+                        assert_eq!(session.expires_at, 70);
+                        json!({"returned_by":"create_write_session"})
+                    }),
+            ),
+            (
+                "stage_namespace",
+                backend
+                    .stage_namespace(
+                        identity,
+                        crate::StageNamespace {
+                            workspace_id: "workspace".into(),
+                            change: storage_contract::NamespaceOperation::Mkdir {
+                                path: name_policy::PortablePath::parse("File.txt").unwrap(),
+                            },
+                        },
+                    )
+                    .map(|workspace| {
+                        assert_eq!(workspace.namespace_operations[0].path(), "File.txt");
+                        json!({"returned_by":"stage_namespace"})
+                    }),
             ),
             (
                 "authorize_upload",
@@ -749,6 +927,12 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"workspace":"workspace","item":"item"}),
         json!({"workspace":"workspace"}),
         public_envelope().into_body(),
+        json!({"version_id":"version"}),
+        json!({"version_id":"version"}),
+        json!({"repository_id":"repository"}),
+        json!({"repository_id":"repository"}),
+        json!({"branch_id":"branch"}),
+        json!({"workspace_id":"workspace","change":{"kind":"mkdir","path":"File.txt","destination":null}}),
         json!({"workspace":"workspace","logical_size":42}),
         json!({"branch_id":"branch","source_commit_id":"source"}),
         json!({"workspace_id":"workspace"}),
@@ -800,15 +984,21 @@ fn revoked_sessions_never_reach_protected_backend_methods() {
 fn public_probes_and_bootstrap_setup_keep_their_explicit_exceptions() {
     let fixture = Fixture::new();
     fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
-    for action in [BackendAction::Capabilities, BackendAction::Ready] {
-        assert_eq!(
-            fixture
-                .backend
-                .call(action, &fixture.identity, json!({"probe": 11}))
-                .unwrap(),
-            json!({"returned_by": "call"})
-        );
-    }
+    assert_eq!(
+        fixture.backend.capabilities().unwrap().max_upload_bytes(),
+        42
+    );
+    assert_eq!(
+        fixture
+            .backend
+            .call(
+                BackendAction::Ready,
+                &fixture.identity,
+                json!({"probe": 11})
+            )
+            .unwrap(),
+        json!({"returned_by": "call"})
+    );
     assert_eq!(
         fixture
             .backend
@@ -818,17 +1008,15 @@ fn public_probes_and_bootstrap_setup_keep_their_explicit_exceptions() {
     );
     let calls = fixture.probe.calls.lock().unwrap();
     assert_eq!(calls.len(), 3);
-    for (call, action) in calls
-        .iter()
-        .zip([BackendAction::Capabilities, BackendAction::Ready])
-    {
-        assert_eq!(call.method, "call");
-        assert_identity(call.identity.as_ref(), &fixture.identity);
-        assert_eq!(
-            call.arguments,
-            json!({"action": action.as_str(), "input": {"probe": 11}})
-        );
-    }
+    assert_eq!(calls[0].method, "capabilities");
+    assert!(calls[0].identity.is_none());
+    assert_eq!(calls[0].arguments, Value::Null);
+    assert_eq!(calls[1].method, "call");
+    assert_identity(calls[1].identity.as_ref(), &fixture.identity);
+    assert_eq!(
+        calls[1].arguments,
+        json!({"action":"ready","input":{"probe":11}})
+    );
     assert_eq!(calls[2].method, "setup_operation");
     assert!(calls[2].identity.is_none());
     assert_eq!(
@@ -854,7 +1042,10 @@ fn lifecycle_delegation_preserves_errors_and_private_hook_boundaries() {
     fixture.backend.drain_management().unwrap();
     assert_eq!(
         fixture.backend.management_status(),
-        json!({"returned_by": "management_status"})
+        crate::StorageStatus::Managed {
+            state: crate::StorageState::ReadOnly,
+            recovering: true
+        }
     );
     fixture.probe.fail.store(true, Ordering::SeqCst);
     assert_error(
@@ -909,5 +1100,45 @@ fn staged_result(
         content_hash: source.hash,
         dirty_generation: generation,
         base_version_id: None,
+    }
+}
+
+fn recorded_version(version: &str) -> crate::VersionSnapshot {
+    crate::VersionSnapshot {
+        version: storage_contract::FileVersion {
+            history_tree_id: "history".into(),
+            version_id: version.into(),
+            file_id: "file".into(),
+            creation_primary_slot_id: "P01".into(),
+            logical_size: u64::MAX,
+            version_sequence: 42,
+            content_hash: storage_contract::ContentHash::from_digest(blake3::hash(
+                b"version fixture",
+            )),
+            checksum_chunk_bytes: 4096,
+            checksum_manifest_hash: "manifest".into(),
+            creation_name: "file.txt".into(),
+            storage_name: "body".into(),
+            created_at: "now".into(),
+            source_version_ids: vec![],
+            created_as_full_checkpoint: true,
+        },
+        content_state: storage_contract::ContentState::Available,
+    }
+}
+
+fn recorded_repository(id: &str) -> storage_contract::Repository {
+    storage_contract::Repository {
+        repository_id: id.into(),
+        name: "repository".into(),
+        history_tree_id: "history".into(),
+        main_branch_id: "branch".into(),
+        primary_slot_id: "P01".into(),
+        target_copies: 3,
+        name_policy: name_policy::NAME_POLICY.into(),
+        unicode_version: name_policy::UNICODE_VERSION.into(),
+        smb_enabled: true,
+        smb_binding_generation: u64::MAX,
+        file_manager_root: false,
     }
 }

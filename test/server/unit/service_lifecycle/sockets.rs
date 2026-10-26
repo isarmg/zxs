@@ -1,7 +1,7 @@
 use super::*;
 use crate::{ApiError, Backend, BackendAction, Content, auth::Identity};
 use http_routing::{Router, routing::get};
-use json_codec::{Value, json};
+use json_codec::Value;
 use smb_protocol::protocol::{FrameStream, PROTOCOL, REQUIRED_CAPABILITIES, Request, Response};
 use std::{
     io::Read,
@@ -109,6 +109,63 @@ impl Backend for BackendProbe {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn version_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _version: &str,
+    ) -> Result<crate::VersionSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn authorize_version(
+        &self,
+        _identity: &crate::auth::Identity,
+        _version: &str,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn repository_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        Ok(storage_contract::Repository {
+            repository_id: id.into(),
+            name: "test".into(),
+            history_tree_id: "test-history".into(),
+            main_branch_id: "test-branch".into(),
+            primary_slot_id: "P01".into(),
+            target_copies: 1,
+            name_policy: name_policy::NAME_POLICY.into(),
+            unicode_version: name_policy::UNICODE_VERSION.into(),
+            smb_enabled: true,
+            smb_binding_generation: 1,
+            file_manager_root: false,
+        })
+    }
+    fn authorize_repository(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<(), crate::ApiError> {
+        Ok(())
+    }
+    fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
+        Ok(crate::Capabilities::for_engine(4096))
+    }
+    fn create_write_session(
+        &self,
+        _identity: &crate::auth::Identity,
+        _branch: &str,
+    ) -> Result<crate::WorkspaceWriteSession, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn stage_namespace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: crate::StageNamespace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn authorize_upload(
         &self,
         _identity: &crate::auth::Identity,
@@ -137,14 +194,8 @@ impl Backend for BackendProbe {
         unreachable!("this test backend does not serve snapshot lookups")
     }
 
-    fn call(&self, action: BackendAction, _: &Identity, _: Value) -> Result<Value, ApiError> {
-        match action {
-            BackendAction::Repository => Ok(
-                json!({"main_branch_id":"test-branch","smb_enabled":true,"smb_binding_generation":"1"}),
-            ),
-            BackendAction::Capabilities => Ok(json!({"max_upload_bytes":"4096"})),
-            _ => Err(ApiError::unsupported()),
-        }
+    fn call(&self, _action: BackendAction, _: &Identity, _: Value) -> Result<Value, ApiError> {
+        Err(ApiError::unsupported())
     }
     fn upload(
         &self,

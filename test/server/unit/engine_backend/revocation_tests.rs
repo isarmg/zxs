@@ -129,6 +129,57 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.commit_workspace_public(identity, command)
     }
+    fn version_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        version: &str,
+    ) -> Result<crate::VersionSnapshot, crate::ApiError> {
+        self.enter();
+        self.inner.version_snapshot(identity, version)
+    }
+    fn authorize_version(
+        &self,
+        identity: &crate::auth::Identity,
+        version: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.enter();
+        self.inner.authorize_version(identity, version)
+    }
+    fn repository_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        self.enter();
+        self.inner.repository_snapshot(identity, id)
+    }
+    fn authorize_repository(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.enter();
+        self.inner.authorize_repository(identity, id)
+    }
+    fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
+        self.inner.capabilities()
+    }
+    fn create_write_session(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+    ) -> Result<crate::WorkspaceWriteSession, crate::ApiError> {
+        self.enter();
+        self.inner.create_write_session(identity, branch)
+    }
+    fn stage_namespace(
+        &self,
+        identity: &crate::auth::Identity,
+        command: crate::StageNamespace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        self.enter();
+        self.inner.stage_namespace(identity, command)
+    }
     fn authorize_upload(
         &self,
         identity: &crate::auth::Identity,
@@ -335,6 +386,7 @@ enum Request {
     DirectoryRead,
     WorkspaceSelection,
     WorkspaceCreate,
+    WriteSession,
     WorkspaceAbort,
     UploadAdmission,
     SealWorkspace,
@@ -343,6 +395,9 @@ enum Request {
     UploadStatus,
     Snapshot,
     Version,
+    VersionAuthorization,
+    RepositorySnapshot,
+    RepositoryAuthorization,
     Namespace,
     Content,
     RangeContent,
@@ -419,6 +474,7 @@ impl Request {
                 backend.commit_workspace_public(identity, envelope).map(|_| ())
             }
             Self::UploadAdmission => backend.authorize_upload(identity, &fixture.workspace.workspace_id, Some(42)),
+            Self::WriteSession => backend.create_write_session(identity, &fixture.repo.main_branch_id).map(|_| ()),
             Self::WorkspaceCreate => backend.create_workspace(identity, crate::CreateWorkspace {
                 branch_id: fixture.repo.main_branch_id.clone(), source_commit_id: None,
             }).map(|_| ()),
@@ -440,24 +496,11 @@ impl Request {
             // SMB directory/write handles need current admission, not a tree.
             Self::SmbAuthorizeRead => backend.authorize_current(identity, &fixture.repo.main_branch_id),
             // Immutable SMB file handles still authorize their pinned version.
-            Self::Version => backend
-                .call(
-                    BackendAction::Version,
-                    identity,
-                    json!({
-                        "version_id":fixture.version
-                    }),
-                )
-                .map(|_| ()),
-            Self::Namespace => backend
-                .call(
-                    BackendAction::Namespace,
-                    identity,
-                    json!({
-                        "workspace_id":workspace,"kind":"mkdir","path":"forbidden"
-                    }),
-                )
-                .map(|_| ()),
+            Self::Version => backend.version_snapshot(identity,&fixture.version).map(|_| ()),
+            Self::RepositorySnapshot => backend.repository_snapshot(identity,&fixture.repo.repository_id).map(|_| ()),
+            Self::RepositoryAuthorization => backend.authorize_repository(identity,&fixture.repo.repository_id),
+            Self::VersionAuthorization => backend.authorize_version(identity,&fixture.version),
+            Self::Namespace => backend.stage_namespace(identity,crate::StageNamespace {workspace_id:workspace.clone(),change:storage_contract::NamespaceOperation::Mkdir {path:name_policy::PortablePath::parse("forbidden").unwrap()}}).map(|_|()),
             Self::Content => backend.content(identity, &fixture.version).map(|_| ()),
             Self::RangeContent => backend
                 .range_content(identity, &fixture.version)
@@ -525,6 +568,7 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::DirectoryRead,
                 Request::WorkspaceSelection,
                 Request::WorkspaceCreate,
+                Request::WriteSession,
                 Request::WorkspaceAbort,
                 Request::UploadAdmission,
                 Request::SealWorkspace,
@@ -534,6 +578,9 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::SnapshotLookup,
                 Request::Snapshot,
                 Request::Version,
+                Request::VersionAuthorization,
+                Request::RepositorySnapshot,
+                Request::RepositoryAuthorization,
                 Request::Namespace,
                 Request::Content,
                 Request::RangeContent,
@@ -637,9 +684,13 @@ fn revoked_session_cannot_turn_public_probes_into_data_admission() {
         smb_binding: None,
         principal: String::new(),
     };
-    for action in [BackendAction::Capabilities, BackendAction::Ready] {
-        assert!(fixture.backend.call(action, &anonymous, json!({})).is_ok());
-    }
+    assert!(fixture.backend.capabilities().is_ok());
+    assert!(
+        fixture
+            .backend
+            .call(BackendAction::Ready, &anonymous, json!({}))
+            .is_ok()
+    );
     assert_eq!(
         fixture
             .backend
@@ -672,6 +723,7 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::DirectoryRead,
         Request::WorkspaceSelection,
         Request::WorkspaceCreate,
+        Request::WriteSession,
         Request::WorkspaceAbort,
         Request::UploadAdmission,
         Request::SealWorkspace,
@@ -680,6 +732,9 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::UploadStatus,
         Request::Snapshot,
         Request::Version,
+        Request::VersionAuthorization,
+        Request::RepositorySnapshot,
+        Request::RepositoryAuthorization,
         Request::Namespace,
         Request::Content,
         Request::RangeContent,

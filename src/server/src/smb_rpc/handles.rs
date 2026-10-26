@@ -307,7 +307,9 @@ impl Session {
     pub(super) fn authorize_read(&self, handle: u64) -> Result<Value, ApiError> {
         match self.handles.get(&handle) {
             Some(Handle::Read(_, version)) => {
-                self.call(crate::BackendAction::Version, json!({"version_id":version}))?;
+                self.shared
+                    .backend
+                    .authorize_version(&self.identity, version)?;
             }
             Some(Handle::Write(_)) | Some(Handle::Directory(_)) => {
                 self.shared

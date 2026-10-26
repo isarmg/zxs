@@ -48,30 +48,49 @@ impl Session {
         replace: bool,
         operation_id: OperationId,
     ) -> Result<Value, ApiError> {
-        let source_path = if kind == NamespaceOperation::Mkdir {
-            name_policy::LookupPath::from(
-                name_policy::PortablePath::parse(&path)
-                    .map_err(|source| contract(source.into()))?,
-            )
-        } else {
-            name_policy::LookupPath::parse(&path).map_err(|source| contract(source.into()))?
-        };
-        let destination_path = if kind == NamespaceOperation::Rename {
-            let target = destination
-                .as_deref()
-                .ok_or_else(|| ApiError::invalid("rename needs a destination"))?;
-            Some(
-                name_policy::PortablePath::parse(target)
-                    .map_err(|source| contract(source.into()))?,
-            )
-        } else {
-            if destination.is_some() || replace {
-                return Err(ApiError::invalid(
-                    "only rename accepts a destination or replacement",
-                ));
+        let (change, source_path, destination_path) = match kind {
+            NamespaceOperation::Mkdir => {
+                let path = name_policy::PortablePath::parse(&path)
+                    .map_err(|source| contract(source.into()))?;
+                let lookup = name_policy::LookupPath::from(&path);
+                (
+                    storage_contract::NamespaceOperation::Mkdir { path },
+                    lookup,
+                    None,
+                )
             }
-            None
+            NamespaceOperation::Unlink | NamespaceOperation::Rmdir => {
+                let path = name_policy::LookupPath::parse(&path)
+                    .map_err(|source| contract(source.into()))?;
+                (
+                    storage_contract::NamespaceOperation::Delete { path: path.clone() },
+                    path,
+                    None,
+                )
+            }
+            NamespaceOperation::Rename => {
+                let source = name_policy::LookupPath::parse(&path)
+                    .map_err(|source| contract(source.into()))?;
+                let target = destination
+                    .as_deref()
+                    .ok_or_else(|| ApiError::invalid("rename needs a destination"))?;
+                let target = name_policy::PortablePath::parse(target)
+                    .map_err(|source| contract(source.into()))?;
+                (
+                    storage_contract::NamespaceOperation::Rename {
+                        source: source.clone(),
+                        destination: target.clone(),
+                    },
+                    source,
+                    Some(target),
+                )
+            }
         };
+        if kind != NamespaceOperation::Rename && (destination.is_some() || replace) {
+            return Err(ApiError::invalid(
+                "only rename accepts a destination or replacement",
+            ));
+        }
         let _operation = OperationReservation::acquire(&self.shared, operation_id)?;
         // Namespace is not a replay API. An existing operation or recovery
         // record must be reconciled, not staged into a new workspace.
@@ -224,19 +243,24 @@ impl Session {
                             "rename replacement directory is not empty",
                         ));
                     }
-                    self.call(crate::BackendAction::Namespace, json!({
-                        "workspace_id":workspace.workspace_id,"kind":"delete","path":target.as_str(),"destination":null
-                    }))?;
+                    self.shared.backend.stage_namespace(
+                        &self.identity,
+                        crate::StageNamespace {
+                            workspace_id: workspace.workspace_id.clone(),
+                            change: storage_contract::NamespaceOperation::Delete {
+                                path: name_policy::LookupPath::from(target),
+                            },
+                        },
+                    )?;
                 }
             }
-            let core_kind = match kind {
-                NamespaceOperation::Unlink | NamespaceOperation::Rmdir => "delete",
-                NamespaceOperation::Mkdir => "mkdir",
-                NamespaceOperation::Rename => "rename",
-            };
-            self.call(crate::BackendAction::Namespace, json!({
-                "workspace_id":workspace.workspace_id,"kind":core_kind,"path":path,"destination":destination
-            }))?;
+            self.shared.backend.stage_namespace(
+                &self.identity,
+                crate::StageNamespace {
+                    workspace_id: workspace.workspace_id.clone(),
+                    change,
+                },
+            )?;
             submission_started = true;
             self.shared
                 .backend

@@ -7,14 +7,11 @@
 use super::{error, repo_for_branch, repo_for_history, repository, workspace_authorize};
 use crate::{ApiError, auth::Identity};
 use data_serialization::Deserialize;
-use storage_engine::{CommitRequest, Engine, FileLocation, NamespaceOperation};
+use storage_engine::{CommitRequest, Engine, FileLocation};
 
 use crate::CommitWorkspace;
 
-pub struct StageNamespace {
-    pub workspace_id: String,
-    pub change: NamespaceOperation,
-}
+pub use crate::StageNamespace;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serialization(deny_unknown_fields)]

@@ -378,3 +378,137 @@ fn large_preparation_rejects_disk_change_before_hashing() {
     );
     assert_eq!(cost, (0, 0));
 }
+
+fn existing_prepared(engine: &Engine, candidate: &Candidate) -> Vec<crate::engine::Prepared> {
+    candidate
+        .versions
+        .iter()
+        .map(|evidence| {
+            let disk = engine.disk(&evidence.placement.route_slot_ids[0]).unwrap();
+            let directory = version_dir(
+                disk,
+                &evidence.version.history_tree_id,
+                &evidence.version.version_id,
+            );
+            crate::engine::Prepared {
+                version: evidence.version.clone(),
+                placement: evidence.placement.clone(),
+                source: crate::container_storage::content_path(&directory, &evidence.version)
+                    .unwrap(),
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn existing_admission_preserves_capacity_and_corruption_causes() {
+    for damage in ["none", "body", "manifest", "unsafe", "missing"] {
+        let (_temp, mut engine, candidate) = fixture();
+        let prepared = existing_prepared(&engine, &candidate);
+        let evidence = &candidate.versions[0];
+        let disk = engine.disk(&evidence.placement.route_slot_ids[0]).unwrap();
+        let directory = version_dir(
+            disk,
+            &evidence.version.history_tree_id,
+            &evidence.version.version_id,
+        );
+        let body = crate::container_storage::content_path(&directory, &evidence.version).unwrap();
+        match damage {
+            "body" => {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&body, std::fs::Permissions::from_mode(0o600)).unwrap();
+                std::fs::write(&body, b"tampered").unwrap();
+            }
+            "manifest" => std::fs::write(directory.join("checksums.bin"), b"corrupt").unwrap(),
+            "unsafe" => {
+                let path = directory.join("checksums.bin");
+                std::fs::remove_file(&path).unwrap();
+                std::os::unix::fs::symlink("missing", path).unwrap();
+            }
+            "missing" => std::fs::remove_file(&body).unwrap(),
+            "none" => (),
+            _ => unreachable!(),
+        }
+        let mut config = engine.config().clone();
+        for disk in &mut config.disks {
+            disk.capacity_bytes = Some(0);
+        }
+        engine.config = ValidatedConfig::try_from(config).unwrap();
+        let mut next = engine.state().clone();
+        next.sequence = engine.next_slot;
+        let result = engine.state.operations[&candidate.operation_id].clone();
+        let outcome = engine.prepare_publication(next, prepared, result, MAX_METADATA);
+        match damage {
+            "none" => assert!(outcome.is_ok()),
+            "body" | "manifest" => assert_eq!(
+                outcome.err().unwrap().code(),
+                storage_contract::ErrorCode::ChecksumMismatch
+            ),
+            "missing" => assert_eq!(
+                outcome.err().unwrap().code(),
+                storage_contract::ErrorCode::NoSpace
+            ),
+            "unsafe" => assert_ne!(
+                outcome.err().unwrap().code(),
+                storage_contract::ErrorCode::NoSpace
+            ),
+            _ => unreachable!(),
+        }
+        assert!(!engine.blocked);
+    }
+}
+
+#[test]
+fn existing_install_token_does_not_replace_decision_byte_verification() {
+    let (_temp, engine, candidate) = fixture();
+    let evidence = &candidate.versions[0];
+    let disk = engine.disk(&evidence.placement.route_slot_ids[0]).unwrap();
+    let directory = version_dir(
+        disk,
+        &evidence.version.history_tree_id,
+        &evidence.version.version_id,
+    );
+    let proof = VerifiedExisting::read(&directory, &evidence.version).unwrap();
+    let body = crate::container_storage::content_path(&directory, &evidence.version).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&body, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(&body, b"tampered").unwrap();
+    // Same inode: this token guarantees the synchronization target, not a cache
+    // invalidation protocol. The actual next publication phase must read bytes.
+    crate::container_storage::install_version_content(
+        &directory,
+        crate::container_storage::PreparedContent::Verified(proof),
+    )
+    .unwrap();
+    assert_eq!(
+        PayloadPreparation::new(&engine.config, &candidate)
+            .unwrap()
+            .verify(&engine.config, &candidate)
+            .err()
+            .unwrap()
+            .code(),
+        storage_contract::ErrorCode::ChecksumMismatch
+    );
+    assert!(!engine.blocked);
+}
+
+#[test]
+fn existing_admission_above_descriptor_budget_uses_uncached_preparation() {
+    let (_temp, engine, candidate) = fixture_with_files(MAX_HELD_PAYLOAD_FILES / 3 + 1);
+    let prepared = existing_prepared(&engine, &candidate);
+    assert!(
+        prepared
+            .iter()
+            .map(|p| p.placement.route_slot_ids.len())
+            .sum::<usize>()
+            > MAX_HELD_PAYLOAD_FILES
+    );
+    let mut next = engine.state().clone();
+    next.sequence = engine.next_slot;
+    let result = engine.state.operations[&candidate.operation_id].clone();
+    let detached = engine
+        .prepare_publication(next, prepared, result, MAX_METADATA)
+        .unwrap();
+    assert!(detached.verified.full_revalidation);
+    assert!(detached.verified.entries.is_empty());
+}

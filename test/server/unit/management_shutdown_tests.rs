@@ -96,7 +96,10 @@ fn stop_drains_owned_recovery_and_fences_generation_reenqueue() {
     assert!(backend.inner.recovery_worker.lock().unwrap().is_none());
     backend.inner.set(None, StorageState::Ready);
     assert!(!backend.inner.state.lock().unwrap().admitted);
-    assert_eq!(backend.management_status()["state"], "unavailable");
+    assert_eq!(
+        backend.management_status().state(),
+        crate::StorageState::Unavailable
+    );
 }
 
 #[test]

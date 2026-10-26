@@ -1,0 +1,105 @@
+{
+  "baseline": {
+    "head": "7834d50e5436e6ff81948e2a68093afc373c45b9",
+    "source": "/workspace/scratch/08a6fde47383/zxs-existing-baseline",
+    "target": "/workspace/scratch/08a6fde47383/target-existing-baseline",
+    "binary": "/workspace/scratch/08a6fde47383/target-existing-baseline/debug/deps/storage_engine-b79c46d75a6999f3",
+    "binary_sha256": "92f4aef828de55b559f717a107e5cb0a2e14f90d3c7b2af582d0238af2e77937",
+    "source_sha256": {
+      "src/engine/src/disk.rs": "b67592f5158bc2d1f28ffbfa193da9cd412a513f871432986fad7e01ce6c0230",
+      "src/engine/src/container_storage.rs": "4e600b058c9362cec7f4120b8364662d1e603b6cd1e7c39d4e72cd2c09e5a368",
+      "src/engine/src/engine/publication.rs": "73fbc9f74210fd700551fff68923f198c6a3161432cb97290c5f43ecad481686",
+      "src/engine/src/engine/verified_payloads.rs": "8193a06639631d1cf13475a40556c2f929fae0daf6ec12c8aa0781b78a645d51",
+      "test/engine/unit/engine/payload_measurement.rs": "356d859413fdb41092d47984013e5608a781a5f44cb485f19ff1fddb52e20a50"
+    },
+    "patch_sha256": "35f83002a0a5be86e0ff6e4c5b83e1dd727b0affd81f38d2a8024a0283c4587c",
+    "patch_file": "baseline.patch.gz",
+    "compressed_patch_sha256": "5f43328d9e2dda5e1b8021d2ef53b5749195d11178222cb43d0ef0128a7cfaa0"
+  },
+  "candidate": {
+    "head": "7834d50e5436e6ff81948e2a68093afc373c45b9",
+    "source": "/workspace/scratch/08a6fde47383/zxs-existing",
+    "target": "/workspace/scratch/08a6fde47383/target-existing-proof",
+    "binary": "/workspace/scratch/08a6fde47383/target-existing-proof/debug/deps/storage_engine-b79c46d75a6999f3",
+    "binary_sha256": "5602b4de6744fb16062669733be20fdfa8f0aa0e70782a803620419deb0153ab",
+    "source_sha256": {
+      "src/engine/src/disk.rs": "b5da9ff17b90db0ed33bee3d2456c7de8b76a11c969118c3492a73a15fd68bdc",
+      "src/engine/src/container_storage.rs": "20d124790d543b08e9082c2d579759f38583cb8d225a451626b2ee028f440f64",
+      "src/engine/src/engine/publication.rs": "3545d124017e24b4dbe3a7ccd306cb132cca35ab5933f664770c1e19b6357e17",
+      "src/engine/src/engine/verified_payloads.rs": "ec441d1a5a2aa1af1722dbfeb63bd1e84d3d1bb2341014c303038bea9bc72763",
+      "test/engine/unit/engine/payload_measurement.rs": "356d859413fdb41092d47984013e5608a781a5f44cb485f19ff1fddb52e20a50"
+    },
+    "patch_sha256": "43b8dc6acfd6dc6748c00e94209846d0138e3b70efbeecb4dba0ba2a0216800b",
+    "patch_file": "candidate.patch.gz",
+    "compressed_patch_sha256": "6c43b1e4edbf0bed863484439664d003420d7c5346557a20e6435914a2ebfc95"
+  },
+  "fault_injection": {
+    "source": "test/engine/unit/container_storage/fsync_eio.c",
+    "source_sha256": "cb1dd1afc4dd2dcc4f2da77b0c84b5967a5e60cfffa92691cc8544ff5040c0fc",
+    "library_sha256": "8284dd257dd861bc45256bd084a3f8fcce79b0ce84475351e349ca8947161f6e",
+    "compiler": "cc (Debian 14.2.0-19) 14.2.0",
+    "command": "cc -Wall -Wextra -Werror -shared -fPIC test/engine/unit/container_storage/fsync_eio.c -ldl -o /tmp/existing-fsync-eio.so",
+    "scope": "only the named ignored test subprocess via LD_PRELOAD; no ptrace or elevation"
+  },
+  "build": {
+    "jobs": 2,
+    "debug": 0,
+    "incremental": 0,
+    "mode": "offline locked",
+    "target_isolation": "separate target directories for separate source worktrees"
+  },
+  "logs": {
+    "content-hash.log.gz": {
+      "raw_sha256": "8b20f06654714d58de5d4a8ae1d7ed9fa83f07a2620718d2a5e47914c19331ba",
+      "compressed_sha256": "17ae0c0641611eda7144899eda1b517bbd099ff76787cdef68ffc63cc9ff7d8f"
+    },
+    "candidate-2.log.gz": {
+      "raw_sha256": "390587f06b36cfaeef3e4635190962a1873a3b88b58719081e8ca159a5c9efb5",
+      "compressed_sha256": "98f38d721fbecb7079272a060205951492850b89542ab989b252d63e51e4bc67"
+    },
+    "candidate-3.log.gz": {
+      "raw_sha256": "c97af489f120ad3a9a92b3173001430f6c120f7fc1e436b926bd81e333403510",
+      "compressed_sha256": "f594bac36f35f1c9e15d71dc60b863ef853b5c7132b4090f289e9452747d9c91"
+    },
+    "baseline-build.log.gz": {
+      "raw_sha256": "a565350c807ac57b5b53c44e102fa322d83584caaa26cbfa8abae3ac1dae39ae",
+      "compressed_sha256": "000de2eb6c39fc3d323466241f2e37ca9361527a733efbd62b68c54fa32645e0"
+    },
+    "architecture.log.gz": {
+      "raw_sha256": "2512b3a716bcefa89fc8ca640edf41ca54eea03fce3a3da95d66beb4f463487c",
+      "compressed_sha256": "c088d77b5703f7db28acc2247fcd75ab4d2977443511705b6e46d3cf3d03f1da"
+    },
+    "existing-proof-eio.log.gz": {
+      "raw_sha256": "ac74224459a5a34409cd769ddd1de4095e184a830f517ca7882348b665057c03",
+      "compressed_sha256": "b87f1eb959a2d006efa03085ef1170e9e14f60010dda82fcf7d86d7b174e80d8"
+    },
+    "clippy.log.gz": {
+      "raw_sha256": "5953a7cc417b31503859cfb03907d8326d3d529997f17f4e3310fe6a771b97de",
+      "compressed_sha256": "501631ba1133529d7e44fd2a2dd6bf09b495e5073846689aa035c8aa51eb0697"
+    },
+    "tests.log.gz": {
+      "raw_sha256": "7a3acb904492e77dc9ce2df2aef6eac09293c584534b5102a7fc6efd5b3e263c",
+      "compressed_sha256": "36fc20c16a151cc41ab7b60868db586562e08a8da6bd17a21783a3119bead252"
+    },
+    "baseline-3.log.gz": {
+      "raw_sha256": "c55d935009b92b912e2f2b00eb685bdb613cf56eaa0c3664459e49df2cb27cba",
+      "compressed_sha256": "6f250e6c046bed0761f8e5c67afa1d2b15f1d50863e7182cbdec2ead35458385"
+    },
+    "candidate-1.log.gz": {
+      "raw_sha256": "516e004cfcde900a507d599eea2db76597c4b8856f0209bac9a1409d6dd3b3f5",
+      "compressed_sha256": "d5964f54f1a41f6c59ee32a0ff451ba9dcc4cf9754c96b3a2f212ffe20c3c0ce"
+    },
+    "no-default.log.gz": {
+      "raw_sha256": "a30cd53d2c8c8fe4e01fcfd6653a2345a7d65729c5a660ba7c06ecdf78de112d",
+      "compressed_sha256": "6263a2db453ca63730c8b55a1f58b929f2cd53896a935985d12e3b46e7f1f361"
+    },
+    "baseline-2.log.gz": {
+      "raw_sha256": "0c1dac0e5b41a47af4e4610b645ea2d3a3b497f26992db91b066058f81f78f52",
+      "compressed_sha256": "f1ee8d74e696bdeacb1ebfda25ed45a4afeec97f47fba8aded1e1296408b314d"
+    },
+    "baseline-1.log.gz": {
+      "raw_sha256": "97b8a90d83c144119116d1d1ca61103def617a8be86e86686ab04d1548444114",
+      "compressed_sha256": "8aaca8d876267106c0b468d4c66c1d74afc4b8c2f775c20aa8378772c67839bc"
+    }
+  }
+}

@@ -38,20 +38,20 @@ fn offline_fixture_preserves_real_management_authority_with_a_corrupt_pool() {
     backend.start_management(auth.clone());
     wait_for("corrupt fixture storage discovery", || {
         let status = backend.management_status();
-        if status["state"] == "unavailable" && status["recovering"] == false {
+        if status.state() == storage_server::StorageState::Unavailable && !status.recovering() {
             Ok(())
         } else {
-            Err(format!("unexpected storage state: {status}").into())
+            Err(format!("unexpected storage state: {status:?}").into())
         }
     })
     .unwrap();
     backend.retry_storage(&identity).unwrap();
     wait_for("corrupt fixture storage retry", || {
         let status = backend.management_status();
-        if status["state"] == "unavailable" && status["recovering"] == false {
+        if status.state() == storage_server::StorageState::Unavailable && !status.recovering() {
             Ok(())
         } else {
-            Err(format!("unexpected storage state: {status}").into())
+            Err(format!("unexpected storage state: {status:?}").into())
         }
     })
     .unwrap();

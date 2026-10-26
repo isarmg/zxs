@@ -1,0 +1,96 @@
+{
+  "samples": [
+    {
+      "elapsed_ns": 541027198,
+      "operation": "existing_publication",
+      "payload_bytes": 67108864,
+      "process_peak_after_kib": 20604,
+      "process_peak_before_kib": 19976,
+      "rchar": 805399569,
+      "rss_after_kib": 20604,
+      "rss_before_kib": 19976,
+      "wchar": 34793,
+      "label": "baseline",
+      "round": 1
+    },
+    {
+      "elapsed_ns": 274685916,
+      "operation": "existing_publication",
+      "payload_bytes": 67108864,
+      "process_peak_after_kib": 20368,
+      "process_peak_before_kib": 20060,
+      "rchar": 402721719,
+      "rss_after_kib": 20368,
+      "rss_before_kib": 20060,
+      "wchar": 34793,
+      "label": "candidate",
+      "round": 1
+    },
+    {
+      "elapsed_ns": 280019640,
+      "operation": "existing_publication",
+      "payload_bytes": 67108864,
+      "process_peak_after_kib": 20160,
+      "process_peak_before_kib": 19864,
+      "rchar": 402721719,
+      "rss_after_kib": 20160,
+      "rss_before_kib": 19864,
+      "wchar": 34793,
+      "label": "candidate",
+      "round": 2
+    },
+    {
+      "elapsed_ns": 513774511,
+      "operation": "existing_publication",
+      "payload_bytes": 67108864,
+      "process_peak_after_kib": 20916,
+      "process_peak_before_kib": 20392,
+      "rchar": 805399569,
+      "rss_after_kib": 20916,
+      "rss_before_kib": 20392,
+      "wchar": 34793,
+      "label": "baseline",
+      "round": 2
+    },
+    {
+      "elapsed_ns": 536281226,
+      "operation": "existing_publication",
+      "payload_bytes": 67108864,
+      "process_peak_after_kib": 20900,
+      "process_peak_before_kib": 20392,
+      "rchar": 805399569,
+      "rss_after_kib": 20900,
+      "rss_before_kib": 20392,
+      "wchar": 34793,
+      "label": "baseline",
+      "round": 3
+    },
+    {
+      "elapsed_ns": 292311371,
+      "operation": "existing_publication",
+      "payload_bytes": 67108864,
+      "process_peak_after_kib": 20564,
+      "process_peak_before_kib": 20260,
+      "rchar": 402721719,
+      "rss_after_kib": 20564,
+      "rss_before_kib": 20260,
+      "wchar": 34793,
+      "label": "candidate",
+      "round": 3
+    }
+  ],
+  "medians": {
+    "baseline": {
+      "rchar": 805399569,
+      "wchar": 34793,
+      "elapsed_ns": 536281226,
+      "process_peak_after_kib": 20900
+    },
+    "candidate": {
+      "rchar": 402721719,
+      "wchar": 34793,
+      "elapsed_ns": 280019640,
+      "process_peak_after_kib": 20368
+    }
+  }
+}

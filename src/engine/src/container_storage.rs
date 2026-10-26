@@ -400,7 +400,7 @@ fn verify_body(path: &Path, version: &FileVersion) -> Result<fs::File> {
 }
 
 pub(crate) enum PreparedContent<'a> {
-    Existing(&'a FileVersion),
+    Verified(VerifiedExisting<'a>),
     Copied(VerifiedCopy<'a>),
 }
 
@@ -410,11 +410,11 @@ pub(crate) fn install_version_content(
     directory: &Path,
     content: PreparedContent<'_>,
 ) -> Result<PathBuf> {
-    let (version, copied) = match content {
-        PreparedContent::Existing(version) => (version, None),
+    let (version, copied, verified) = match content {
+        PreparedContent::Verified(verified) => (verified.version(), None, Some(verified)),
         PreparedContent::Copied(copied) => {
             let (version, file) = copied.into_parts();
-            (version, Some(file))
+            (version, Some(file), None)
         }
     };
     validate_version(version)?;
@@ -437,11 +437,26 @@ pub(crate) fn install_version_content(
     private_dir(&versions)?;
     let target = versions.join(name);
     if file_exists(&target)? {
-        verify_body(&target, version)?;
+        if let Some(verified) = &verified
+            && verified.path() == target
+        {
+            verified.sync_at(directory, &target)?;
+        } else {
+            verify_body(&target, version)?;
+        }
         if file_exists(&source)? {
             let _source = match copied {
-                Some(file) => file,
-                None => verify_body(&source, version)?,
+                Some(file) => Some(file),
+                None => {
+                    if let Some(verified) = &verified
+                        && verified.path() == source
+                    {
+                        verified.sync_at(directory, &source)?;
+                        None
+                    } else {
+                        Some(verify_body(&source, version)?)
+                    }
+                }
             };
             let parent = held_directory(source.parent().expect("source parent"))?;
             rustix::fs::unlinkat(
@@ -463,8 +478,15 @@ pub(crate) fn install_version_content(
         return Ok(target);
     }
     let _source = match copied {
-        Some(file) => file,
-        None => verify_body(&source, version)?,
+        Some(file) => Some(file),
+        None => {
+            if let Some(verified) = &verified {
+                verified.sync_at(directory, &source)?;
+                None
+            } else {
+                Some(verify_body(&source, version)?)
+            }
+        }
     };
     let from = held_directory(source.parent().expect("source parent"))?;
     let to = held_directory(&versions)?;

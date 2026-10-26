@@ -543,6 +543,51 @@ impl crate::Backend for RetryProbe {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn version_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _version: &str,
+    ) -> Result<crate::VersionSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn authorize_version(
+        &self,
+        _identity: &crate::auth::Identity,
+        _version: &str,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn repository_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn authorize_repository(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn create_write_session(
+        &self,
+        _identity: &crate::auth::Identity,
+        _branch: &str,
+    ) -> Result<crate::WorkspaceWriteSession, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn stage_namespace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: crate::StageNamespace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn authorize_upload(
         &self,
         _identity: &crate::auth::Identity,
@@ -571,10 +616,13 @@ impl crate::Backend for RetryProbe {
         unreachable!("this test backend does not serve snapshot lookups")
     }
 
-    fn retry_storage(&self, _: &Identity) -> Result<Value, ApiError> {
+    fn retry_storage(&self, _: &Identity) -> Result<crate::StorageStatus, ApiError> {
         let _gate = self.gate.lock().unwrap();
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(json!({"retryable":true}))
+        Ok(crate::StorageStatus::Managed {
+            state: crate::StorageState::Unavailable,
+            recovering: true,
+        })
     }
     fn call(&self, _: crate::BackendAction, _: &Identity, _: Value) -> Result<Value, ApiError> {
         Err(ApiError::unsupported())

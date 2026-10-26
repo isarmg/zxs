@@ -99,12 +99,21 @@ async fn missing_data_disks_leave_login_diagnostics_and_health_usable() {
         StatusCode::UNAUTHORIZED
     );
     for _ in 0..200 {
-        if !backend.management_status()["recovering"].as_bool().unwrap() {
+        if !backend.management_status().recovering() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert_eq!(backend.management_status()["state"], "unavailable");
+    assert_eq!(
+        backend.management_status().state(),
+        crate::StorageState::Unavailable
+    );
+    let (status, capabilities) = request(&app, "/api/capabilities", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        capabilities,
+        json!({"features":[],"max_upload_bytes":"0","storage":{"state":"unavailable","retryable":true,"recovering":false}})
+    );
 }
 #[tokio::test]
 async fn stale_legacy_credentials_do_not_open_management_when_engine_fails() {
@@ -182,7 +191,7 @@ async fn blocked_replication_never_blocks_login_and_queued_sessions_revalidate()
     let app = router(backend.clone(), auth, ServerConfig::loopback(&management)).unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
-            if backend.management_status()["state"] == "ready" {
+            if backend.management_status().state() == crate::StorageState::Ready {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -295,7 +304,7 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
     .unwrap();
     assert_eq!(status["state"], "empty");
     for _ in 0..100 {
-        if !backend.management_status()["recovering"].as_bool().unwrap() {
+        if !backend.management_status().recovering() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -327,12 +336,15 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
     );
 
     for _ in 0..200 {
-        if !backend.management_status()["recovering"].as_bool().unwrap() {
+        if !backend.management_status().recovering() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert_eq!(backend.management_status()["state"], "ready");
+    assert_eq!(
+        backend.management_status().state(),
+        crate::StorageState::Ready
+    );
     let config: storage_contract::Config =
         json_codec::from_slice(&std::fs::read(data.join("config.json")).unwrap()).unwrap();
     assert_eq!(config.disks.len(), ids.len());
@@ -538,7 +550,10 @@ fn stale_readiness_retry_waits_for_existing_engine_holders() {
         state.admitted = true;
         state.observed_at = std::time::Instant::now() - std::time::Duration::from_secs(16);
     }
-    assert_eq!(backend.management_status()["state"], "unavailable");
+    assert_eq!(
+        backend.management_status().state(),
+        crate::StorageState::Unavailable
+    );
     let error = backend.inner.start_recovery(true).unwrap_err();
     assert_eq!(error.code, storage_contract::ErrorCode::StorageDraining);
     assert!(error.retryable);
@@ -587,7 +602,10 @@ fn completed_disk_observation_releases_engine_before_retry() {
     // periodic thread or relying on a five-second timing window.
     std::fs::rename(&disk, &detached).unwrap();
     backend.inner.observe_storage_once();
-    assert_eq!(backend.management_status()["state"], "read_only");
+    assert_eq!(
+        backend.management_status().state(),
+        crate::StorageState::ReadOnly
+    );
     let observation = backend
         .observe_disks(&crate::InternalDiskObservation(()))
         .unwrap();
@@ -611,7 +629,10 @@ fn completed_disk_observation_releases_engine_before_retry() {
         .unwrap();
     worker.join().unwrap();
     assert!(observed_engine.upgrade().is_none());
-    assert_eq!(backend.management_status()["state"], "ready");
+    assert_eq!(
+        backend.management_status().state(),
+        crate::StorageState::Ready
+    );
     backend.drain_management().unwrap();
 }
 
@@ -684,7 +705,7 @@ async fn web_completion_requires_bound_pristine_pre_authority_setup_proof() {
         );
         let app = router(backend.clone(), auth, ServerConfig::loopback(&management)).unwrap();
         for _ in 0..100 {
-            if !backend.management_status()["recovering"].as_bool().unwrap() {
+            if !backend.management_status().recovering() {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -881,7 +902,7 @@ async fn preset_web_setup_is_lazy_digest_bound_and_preserves_custom_configuratio
         StatusCode::OK
     );
     for _ in 0..100 {
-        if !backend.management_status()["recovering"].as_bool().unwrap() {
+        if !backend.management_status().recovering() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -937,7 +958,7 @@ async fn preset_web_setup_is_lazy_digest_bound_and_preserves_custom_configuratio
 async fn wait_for_ready(backend: &ManagementBackend) {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
-            if backend.management_status()["state"] == "ready" {
+            if backend.management_status().state() == crate::StorageState::Ready {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -1127,7 +1148,10 @@ fn below_baseline_runtime_limits_fail_in_background_without_blocking_management(
         .take()
         .unwrap();
     worker.join().unwrap();
-    assert_eq!(backend.management_status()["state"], "unavailable");
+    assert_eq!(
+        backend.management_status().state(),
+        crate::StorageState::Unavailable
+    );
     assert!(
         auth.lock()
             .unwrap()

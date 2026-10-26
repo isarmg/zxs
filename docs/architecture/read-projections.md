@@ -74,14 +74,58 @@ prepare 锁内所有者／代次检查、锁外完整副本验证、finish 回�
 
 独立 wire 测试覆盖本机路径脱敏与 u64::MAX；真实 HTTP 上传辅助函数逐次断言完整字段集和整数编码。现有 SMB 句柄身份稳定、重试／丢回复和上传后回锁撤权测试继续覆盖真实方法。
 
+## 工作区命名空间暂存
+
+`Backend::stage_namespace(StageNamespace)` 消费已经区分创建名／查找名的 `NamespaceOperation`，返回领域 Workspace；旧 `Namespace` action 与引擎 JSON 分派删除。HTTP bounded strict JSON／path-body 绑定后，在持有 backend_slots 的阻塞任务中解析 kind/path/可空 destination，再进入当前授权；未知字段、重复键、非字符串 destination 与命名错误仍拒绝并保留具体来源。格式错误在 Backend 当前准入前，工作区所有权、分支归属与业务检查顺序不变。HTTP 复用显式 WorkspaceResponse，不重新序列化领域记录再删本机字段。
+
+SMB RPC 入口一次解析路径并直接构造同一类型，替换目标删除也由已有 PortablePath 转 LookupPath，不再 JSON 编码后重新解析。原 source→destination 格式检查顺序、operation 保留／recovery record、预算／路径锁、冻结工作区基线、replace 先 delete 再 rename、提交标记及失败 abort 清理顺序不变；永久幂等提交仍走已有 typed commit_workspace，不把 namespace 暂存伪称为可重放操作。SMB 丢弃 Workspace 结果时不构造 JSON。
+
+故障代理在真实 stage_namespace 方法注入，不再拦截已经删除的 action。授权／撤权、取消预算、公开路由 panic 矩阵同步扩展到真实方法；HTTP 新回归验证非法 envelope 不暂存、重复键拒绝及 Unicode 创建／查找拼写，SMB 原 rename/replace/丢回复/预提交失败矩阵继续适用。
+
 ## 剩余 Value 调用清单
 
-此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 66 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
+此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 61 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
 
-- **工作区 seal／公开发布已接续迁移。** 见[公开提交边界](detached-workspace-commits.md#public-commit-envelope-and-seal)；HTTP 与 SMB 保留各自摘要契约。上传 publication 结果也已接续类型化；下一组 write-session 与 namespace 仍有 Value，不能据当前迁移宣称全部工作区接口已经分层。
-- **SMB 绑定／只读冻结版本。** transport/session 的 `Repository`、transport 的 `Capabilities`、只读句柄的 `Version` 仍经 Value；命名空间修改 `Namespace` 仍使用 JSON 请求。不是本次 typed 当前查询的后备路径。
-- **HTTP 通用读取。** repositories/repository/branches/branch/tree/resolve/history/commit/version/graph/events/compare、目录分支及选择、拓扑／放置／策略／磁盘／健康查询，仍由 HTTP 通用分派调用 `Backend::call`。
-- **HTTP 写入与计划。** 仓库／分支／目录分支创建和选择、SMB binding 配置、namespace、workspace/write-session/upload、policy/placement，以及 split/purge/historical-save/plan 的请求与结果仍需逐组迁移。已有 operation/commit_workspace typed 消费者保持不变，不能据此推定剩余 HTTP action 路径已经移除。
-- **文件管理与管理控制面。** `FileManager*` action、setup_operation、management_status 等仍有独立 Value 协议；需要核对每个 HTTP 消费者，不能以新增一个包裹枚举代替拆除旧 JSON 路径。
+- **工作区 seal／公开发布已接续迁移。** 见[公开提交边界](detached-workspace-commits.md#public-commit-envelope-and-seal)；HTTP 与 SMB 保留各自摘要契约。上传 publication 结果也已接续类型化；namespace 暂存也已接续迁移；write-session 已接续迁移，通用读取仍有 Value，不能据当前迁移宣称全部工作区接口已经分层。
+- **SMB 绑定／只读冻结版本。** Capabilities、Repository 与冻结版本已使用 typed snapshot/准入，生产 Session::call 已删除。不是本次 typed 当前查询的后备路径。
+- **HTTP 通用读取。** repositories/branches/branch/tree/resolve/history/commit/graph/events/compare、目录分支及选择、拓扑／放置／策略／磁盘／健康查询，仍由 HTTP 通用分派调用 `Backend::call`。
+- **HTTP 写入与计划。** 仓库／分支／目录分支创建和选择、SMB binding 配置、policy/placement，以及 split/purge/historical-save/plan 的请求与结果仍需逐组迁移。已有 operation/commit_workspace typed 消费者保持不变，不能据此推定剩余 HTTP action 路径已经移除。
+- **文件管理与管理控制面。** `FileManager*` action、setup_operation 等仍有独立 Value 协议；management_status/retry_storage 已接续类型化；需要核对每个 HTTP 消费者，不能以新增一个包裹枚举代替拆除旧 JSON 路径。
 
 这次不改领域 `OperationResult.result`、Plan 输入、持久化编码、canonical 哈希、永久幂等收据或公开 `Commit.kind`。当前 `core.schema.json` 的 `$defs.Commit.properties.kind` 是开放 string，不可仅按内部已见字面量将它收窄为封闭枚举。后续 model/persist/wire 分离应独立建立固定向量和公开消费者证据。
+
+
+## 分支写会话
+
+HTTP `/api/branches/{branch}/write-sessions` 在 bounded strict JSON/path-body 绑定后，持有 backend_slots 的阻塞任务解析只含 branch_id 的 DTO；Backend::create_write_session 接受已解析分支文本并返回 WorkspaceWriteSession，不保留 WriteSession action 或内部 JSON 路径。当前身份复核、分支仓库可用性、工作区创建和 expires_at 捕获均在同一引擎锁内；没有调用 create_workspace 后再次读取配置的准入窗口。格式错误在当前 Backend 准入前拒绝，撤权及领域创建/预算错误顺序不变。
+
+响应显式映射 write_session_id/workspace_id、scope 和字符串 u64；内部租期保持 u64，保留现有饱和到期时间规则，不返回任何本机路径。会话创建仍是非幂等工作区分配，不伪造永久操作收据；后续发布的永久幂等契约不变。FileManagerWriteSession 是不同入口，仍在剩余清单。
+
+
+## 冻结文件版本元数据与读句柄准入
+
+HTTP `GET /api/versions/{version}` 通过 required `Backend::version_snapshot` 获取同一锁内的 FileVersion 与 ContentState。响应字段由 VersionResponse 穷尽解构，保留原字符串 u64、所有公开版本字段与 AVAILABLE/PURGED/MIGRATED token；不把本机路径混入元数据。query 继续由 ApiQuery<BTreeMap<String,String>> 在入口解析并允许原有未使用参数。稀疏 content_states 中不存在的记录明确表示 Available（与核心读及原 wire 一致），不是授权失败或缺失版本的默认值。
+
+SMB 冻结只读句柄走 required `authorize_version`，同锁重新验证身份／绑定、版本存在与历史仓库归属后返回 unit；不复制 FileVersion，也不构造随后丢弃的 JSON。写句柄与目录仍走 authorize_current；不存在的 handle 不调用任一后台准入。Version action 删除，Placement 使用相同的借用版本归属解析，保持版本不存在→历史/仓库→placement不存在的错误顺序。版本元数据只捕获一次领域记录、HTTP 出口序列化一次，存储与永久幂等格式不变。
+
+公开路由 panic、取消预算、授权装饰器、引擎排队撤权及 SMB handle 三种类型的调度日志均覆盖真实 typed 方法；未把默认 unsupported 或 generic call 当作迁移后的验证。固定 wire 数值/状态向量和真实 HTTP 对照磁盘 version.json 验证当前字段契约。
+
+
+## 仓库快照与 SMB 绑定
+
+HTTP 单仓库读取通过 repository_snapshot 返回同锁捕获的领域 Repository，显式 RepositoryResponse 穷尽投影，保留 binding generation 字符串 u64 及 file_manager_root=false 省略规则。原 ApiPath/ApiQuery 行为、backend_slots 持有至阻塞任务完成、当前账户与绑定复核及仓库不存在错误不变；Repository action 删除。
+
+SMB hello 保留 sole_identity→SessionPermit→仓库快照→enabled检查→捕获 branch/generation→Capabilities 的顺序，直接消费 bool/u64/String，不再 Value.get 后解析内部响应。之后 synthetic root Stat/Open 使用 authorize_repository：同一引擎锁内复核当前身份/绑定 generation 与仓库存在，只返回 unit。hello 快照不授予后续永久访问；显式 disable/rebind 仍使已连接句柄在下次准入拒绝。生产 Session::call 已无调用者并删除，不留下旧 JSON 后备路径。
+
+Capabilities 的匿名例外、管理层未就绪缓存/运行状态及 max_upload_bytes 已在下一组接续类型化，见下节。SMB 的会话预算失败释放、绑定变更、冻结只读历史与当前写句柄矩阵继续执行；新增完整调度日志证明 hello 只取一次快照，后续根访问每次调用真实 typed 准入且不走 generic call。
+
+
+## 能力公告与管理状态
+
+required Backend::capabilities() 不接收 Identity，保留原匿名例外，不伪造 anonymous/management 用户。Capabilities 私有字段区分初始未取得引擎配置的 profile 与完整引擎 profile；max_upload_bytes 始终是 u64，冷态为明确的 0，不再依靠字段缺失、Value.get 或字符串解析回退到 HTTP 上限。Management 缓存 typed 快照，先释放 cache 锁再捕获管理状态，保留原观测时序；恢复后离线仍保留已取得的能力描述，不把状态降级误作能力格式重置。
+
+HTTP 在独立 management_slots 的阻塞任务中读取公告并计算 min(server,core)，最后才输出当前 wire；SMB hello 直接计算 min(core,SMB上限)。固定能力字段来自一个只读静态描述，响应借用它序列化；冷态精确保留 features:[]/max_upload_bytes:"0"，不偷渡完整 profile。Capabilities action 与最后的 SMB 内部 JSON field/decimal 辅助删除。
+
+StorageState 移到无 core 依赖的声明并由 management 重导出，原枚举与 15 秒 stale 观测规则不变。management_status 与 retry_storage 返回 StorageStatus：EmbeddedReady 保留省略 recovering 的 wire，Managed 保留真实 recovering bool；retryable 只在出口按状态派生。HTTP storage/status/retry 和外层 management JSON 均在实际 HTTP 边界投影，Management Ready 分派直接比较 typed state。重试仍在受预算阻塞任务中复核当前账号再启动恢复，没有改变后台恢复持有者、撤权或持久化顺序。
+
+回归覆盖完整固定能力字段、冷态、全部状态/可选字段、公开路由真实 panic、注销后的匿名能力例外、独立管理预算及取消后的 permit 持有；HTTP 实测管理未就绪与引擎直接托管两种 wire。此处不宣称 Ready、setup_operation 或所有 FileManager action 已迁移。

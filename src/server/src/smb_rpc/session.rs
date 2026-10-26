@@ -49,19 +49,11 @@ impl Session {
     // inside Backend, not just at this preliminary check.
     pub(super) fn authorize_binding(&self) -> Result<(), ApiError> {
         if let Some(binding) = &self.identity.smb_binding {
-            self.call(
-                crate::BackendAction::Repository,
-                json!({"repository_id":binding.repository_id}),
-            )?;
+            self.shared
+                .backend
+                .authorize_repository(&self.identity, &binding.repository_id)?;
         }
         Ok(())
-    }
-    pub(super) fn call(
-        &self,
-        action: crate::BackendAction,
-        input: Value,
-    ) -> Result<Value, ApiError> {
-        self.shared.backend.call(action, &self.identity, input)
     }
     pub(super) fn find(&self, path: &name_policy::LookupPath) -> Result<Option<Entry>, ApiError> {
         self.shared

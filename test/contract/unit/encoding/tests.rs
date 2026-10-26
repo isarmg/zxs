@@ -354,3 +354,6 @@ fn typed_operation_id_preserves_request_envelope_digest() {
     };
     assert_eq!(digest(&typed), digest(&legacy));
 }
+
+mod baseline;
+mod number_emission;

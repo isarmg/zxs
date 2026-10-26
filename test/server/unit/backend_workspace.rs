@@ -69,3 +69,23 @@ fn standalone_staged_file_response_omits_local_path_and_keeps_current_wire_shape
             .contains("never-on-wire")
     );
 }
+
+#[test]
+fn write_session_wire_preserves_full_width_lease_and_identity() {
+    let response = WriteSessionResponse::from(WorkspaceWriteSession {
+        workspace_id: "workspace".into(),
+        branch_id: "branch".into(),
+        principal: "actor".into(),
+        fencing_token: u64::MAX,
+        expires_at: u64::MAX,
+        state: WorkspaceState::Open,
+    });
+    assert_eq!(
+        json_codec::to_value(response).unwrap(),
+        json_codec::json!({
+            "write_session_id":"workspace","workspace_id":"workspace","branch_id":"branch",
+            "principal":"actor","fencing_token":"18446744073709551615","expires_at":"18446744073709551615",
+            "scope":"workspace","state":"open"
+        })
+    );
+}

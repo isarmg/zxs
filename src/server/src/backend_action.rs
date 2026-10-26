@@ -22,7 +22,6 @@ actions! {
     Archive => "archive",
     Branch => "branch",
     Branches => "branches",
-    Capabilities => "capabilities",
     Check => "check",
     Commit => "commit",
     Compare => "compare",
@@ -59,7 +58,6 @@ actions! {
     InitializeDirectoryScope => "initialize_directory_scope",
     MergeLink => "merge_link",
     MonitorDisks => "monitor_disks",
-    Namespace => "namespace",
     Operation => "operation",
     Placement => "placement",
     PlacementRule => "placement_rule",
@@ -72,7 +70,6 @@ actions! {
     RegisterDisk => "register_disk",
     RenameDirectoryBranch => "rename_directory_branch",
     Repositories => "repositories",
-    Repository => "repository",
     Resolve => "resolve",
     SmbBinding => "smb_binding",
     SplitPlan => "split_plan",
@@ -82,9 +79,7 @@ actions! {
     UpdatePlacementRule => "update_placement_rule",
     UpdatePolicy => "update_policy",
     UpdateSmbBinding => "update_smb_binding",
-    Version => "version",
     WorkspaceCapacity => "workspace_capacity",
-    WriteSession => "write_session",
 }
 
 #[cfg(test)]

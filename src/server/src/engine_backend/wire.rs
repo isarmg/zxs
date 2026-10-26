@@ -24,15 +24,14 @@ pub(crate) fn error(error: storage_engine::Error) -> ApiError {
 pub(super) fn encode(value: impl Serialize) -> Result<Value, ApiError> {
     Ok(json_codec::to_value(value).expect("invariant: internal response serialization succeeds"))
 }
-/// A missing stored disposition has the same available-content semantics as
-/// core reads. This is distinct from LIVE/PENDING branch presentation states.
+/// Sparse disposition absence means available, exactly as core reads; it does
+/// not represent a missing version or failed authorization.
 pub(super) fn stored_version_content_state(
     state: Option<&storage_contract::ContentState>,
-) -> &'static str {
+) -> storage_contract::ContentState {
     state
         .copied()
         .unwrap_or(storage_contract::ContentState::Available)
-        .as_str()
 }
 /// Response ownership is independent from the version currently visible in a
 /// branch. An unwritten branch reads its parent's immutable version.

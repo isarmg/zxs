@@ -197,6 +197,20 @@ fn repo_for_branch_in_state<'a>(
     }
     repo_for_history_in_state(state, &branch.history_tree_id)
 }
+fn authorized_version<'a>(
+    engine: &'a Engine,
+    id: &str,
+) -> Result<&'a storage_contract::FileVersion, ApiError> {
+    let version = engine.state().versions.get(id).ok_or_else(|| {
+        ApiError::new(
+            ::http::StatusCode::NOT_FOUND,
+            storage_contract::ErrorCode::NotFound,
+            "version not found",
+        )
+    })?;
+    repo_for_history(engine, &version.history_tree_id)?;
+    Ok(version)
+}
 fn workspace_authorize<'a>(
     engine: &'a Engine,
     identity: &Identity,
@@ -434,6 +448,90 @@ impl Backend for EngineBackend {
         Application::new(&mut engine, &current).finish_workspace_commit(&workspace_id, prepared)
     }
 
+    fn version_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        version: &str,
+    ) -> Result<crate::VersionSnapshot, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        let version = authorized_version(&engine, version)?.clone();
+        let content_state = wire::stored_version_content_state(
+            engine.state().content_states.get(&version.version_id),
+        );
+        Ok(crate::VersionSnapshot {
+            version,
+            content_state,
+        })
+    }
+    fn authorize_version(
+        &self,
+        identity: &crate::auth::Identity,
+        version: &str,
+    ) -> Result<(), crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        authorized_version(&engine, version)?;
+        Ok(())
+    }
+    fn repository_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        Ok(repository(&engine, id)?.clone())
+    }
+    fn authorize_repository(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<(), crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        repository(&engine, id)?;
+        Ok(())
+    }
+    fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        Ok(crate::Capabilities::for_engine(
+            engine.config().max_file_bytes,
+        ))
+    }
+    fn create_write_session(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+    ) -> Result<crate::WorkspaceWriteSession, crate::ApiError> {
+        let mut engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        repo_for_branch(&engine, branch)?;
+        let workspace = engine
+            .create_workspace(branch, &current.principal)
+            .map_err(error)?;
+        let expires_at = workspace
+            .created_at
+            .saturating_add(engine.config().workspace_ttl_seconds);
+        Ok(crate::WorkspaceWriteSession {
+            workspace_id: workspace.workspace_id,
+            branch_id: workspace.branch_id,
+            principal: workspace.principal,
+            fencing_token: workspace.fencing_token,
+            expires_at,
+            state: workspace.state,
+        })
+    }
+    fn stage_namespace(
+        &self,
+        identity: &Identity,
+        command: crate::StageNamespace,
+    ) -> Result<storage_contract::Workspace, ApiError> {
+        let mut engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        Application::new(&mut engine, &current).stage_namespace(command)
+    }
+
     fn authorize_upload(
         &self,
         identity: &Identity,
@@ -536,11 +634,8 @@ impl Backend for EngineBackend {
         input: Value,
     ) -> Result<Value, ApiError> {
         let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = if matches!(
-            action,
-            crate::BackendAction::Capabilities | crate::BackendAction::Ready
-        ) {
-            // These probes are intentionally available without an account.
+        let current = if action == crate::BackendAction::Ready {
+            // Readiness remains intentionally available without an account.
             identity.clone()
         } else {
             current_protected_identity(&engine, identity)?
@@ -589,9 +684,6 @@ impl Backend for EngineBackend {
                 drop(engine);
                 disk_monitor::observe(observation)
             }
-            crate::BackendAction::Capabilities => Ok(
-                json!({"name_policy":name_policy::NAME_POLICY,"path_policy":"PortablePath","unicode_data_version":name_policy::UNICODE_VERSION,"supported_save_modes":["full"],"full_only":true,"full_branches":false,"branch_creation":"record-until-write","branch_content":"inherit-parent-until-first-write","file_branches":true,"branch_scope":"file","directory_branches":true,"directory_branch_creation":"inherit-directory-tree","directory_subtrees":true,"namespace_batch":true,"smb_default_branch":"selected-root-directory","file_manager":true,"historical_save_creates_branch":true,"merge_behavior":"explicit-file-node-adoption","file_branch_merge":true,"directory_branch_merge":false,"directory_merge_status":"design-pending","file_node_tags":true,"backup_configuration":true,"range_upload":false,"complete_upload":true,"max_upload_bytes":engine.config().max_file_bytes.to_string(),"authentication":"session-bearer-or-cookie","platforms":{"web":true,"smb":true},"operations":["repositories","tree","workspace","commit","history","graph","branch","merge-link","file-branch-merge","file-node-tags","backup-configuration","purge-plan","split-plan","version-range-read","file-manager","file-branches","file-branch-rename","file-path-nodes","directory-branches","directory-subtrees","namespace-batch","default-branch","file-notes","system-status"]}),
-            ),
             crate::BackendAction::Ready => {
                 if engine.is_read_only() {
                     return Err(ApiError::new(
@@ -630,10 +722,6 @@ impl Backend for EngineBackend {
             crate::BackendAction::Repositories => {
                 let values = engine.state().repositories.values().collect::<Vec<_>>();
                 Ok(json!({"repositories":values}))
-            }
-            crate::BackendAction::Repository => {
-                let repo = repository(&engine, field(&input, "repository_id")?)?;
-                encode(repo)
             }
             crate::BackendAction::Branches => {
                 let repo = repository(&engine, field(&input, "repository_id")?)?;
@@ -878,17 +966,6 @@ impl Backend for EngineBackend {
                         .map_err(error)?,
                 )
             }
-            crate::BackendAction::WriteSession => {
-                keys(&input, &["branch_id"])?;
-                let branch = field(&input, "branch_id")?;
-                repo_for_branch(&engine, branch)?;
-                let workspace = engine
-                    .create_workspace(branch, &identity.principal)
-                    .map_err(error)?;
-                Ok(
-                    json!({"write_session_id":workspace.workspace_id,"workspace_id":workspace.workspace_id,"branch_id":workspace.branch_id,"principal":workspace.principal,"fencing_token":workspace.fencing_token.to_string(),"expires_at":workspace.created_at.saturating_add(engine.config().workspace_ttl_seconds).to_string(),"scope":"workspace","state":workspace.state}),
-                )
-            }
             crate::BackendAction::Compare => {
                 keys(&input, &["left_commit_id", "right_commit_id"])?;
                 let left = field(&input, "left_commit_id")?;
@@ -960,32 +1037,6 @@ impl Backend for EngineBackend {
                         .map_err(error)?,
                 )
             }
-            crate::BackendAction::Namespace => {
-                keys(&input, &["workspace_id", "kind", "path", "destination"])?;
-                let workspace = field(&input, "workspace_id")?;
-                let change = NamespaceOperation::parse(
-                    field(&input, "kind")?
-                        .parse()
-                        .map_err(ApiError::invalid_source)?,
-                    field(&input, "path")?,
-                    input
-                        .get("destination")
-                        .filter(|value| !value.is_null())
-                        .map(|value| {
-                            value
-                                .as_str()
-                                .ok_or_else(|| ApiError::invalid("destination must be a string"))
-                        })
-                        .transpose()?,
-                )
-                .map_err(|source| error(source.into()))?;
-                sanitized(Application::new(&mut engine, identity).stage_namespace(
-                    application::StageNamespace {
-                        workspace_id: workspace.into(),
-                        change,
-                    },
-                )?)
-            }
             crate::BackendAction::CreateBranch => {
                 for key in ["repository_id", "source_commit_id", "name", "operation_id"] {
                     field(&input, key)?;
@@ -1051,31 +1102,16 @@ impl Backend for EngineBackend {
                 repo_for_history(&engine, &commit.history_tree_id)?;
                 encode(commit)
             }
-            crate::BackendAction::Version | crate::BackendAction::Placement => {
+            crate::BackendAction::Placement => {
                 let id = field(&input, "version_id")?;
-                let version = engine.state().versions.get(id).ok_or_else(|| {
+                authorized_version(&engine, id)?;
+                encode(engine.state().placements.get(id).ok_or_else(|| {
                     ApiError::new(
                         ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::NotFound,
-                        "version not found",
+                        "placement not found",
                     )
-                })?;
-                repo_for_history(&engine, &version.history_tree_id)?;
-                if action == crate::BackendAction::Version {
-                    let mut value = encode(version)?;
-                    value["content_state"] =
-                        wire::stored_version_content_state(engine.state().content_states.get(id))
-                            .into();
-                    Ok(value)
-                } else {
-                    encode(engine.state().placements.get(id).ok_or_else(|| {
-                        ApiError::new(
-                            ::http::StatusCode::NOT_FOUND,
-                            storage_contract::ErrorCode::NotFound,
-                            "placement not found",
-                        )
-                    })?)
-                }
+                })?)
             }
             crate::BackendAction::Operation => {
                 let operation_id = field(&input, "operation_id")?.parse().map_err(

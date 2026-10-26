@@ -69,3 +69,6 @@ Rust 依赖源码已包含在仓库中，首次构建也使用唯一根锁文件
 `PagedHistoryRoot`、`HistoryIndex`、`HistoryGraphReference` 和 `HistoryLeaf` 描述实际实验存储图的字段形状；所有历史图结构均不带项目格式代际字段；根内仓库/历史身份使用 `HistoryRepository`、`HistoryIdentity`。原 `FileFeatureStateFields` 仍只是 State / 逻辑 HistoryManifest 的局部投影，未改成分页根。新增定义仅镜像进 OpenAPI 的离线组件，不新增网络端点或改变现有请求。
 
 新字段向量使用合成摘要，只检查 schema，不能证明引用对象存在或摘要正确。规范编码字节上限（128 项、64 KiB 软目标、不可分单实体页 64 MiB 上限）、逐位置前缀、图闭包、重复实体及完整历史语义由核心图读取器和测试验证；扁平投影误作根及未知字段拒绝、真实超过 64 MiB 的聚合图往返、正常/降级恢复、独立包和篡改检查亦属于核心测试，不冒充 JSON Schema 的能力。PackageProof 的完整候选/回执闭包尚未在本附件全部建模，发行格式仍未冻结；版本边界见[第 8.7 节](../08-full-storage-and-disk-format.md#s08-07)。
+
+规范 JSON 整数写出优化的边界、差分测试与完整编码测量方法见
+[规范 JSON 编码验证](../validation/canonical-number-encoding.md)。

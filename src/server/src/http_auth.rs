@@ -334,7 +334,7 @@ pub(crate) async fn storage_retry_job(
     backend: Arc<dyn crate::Backend>,
     slots: Arc<tokio::sync::Semaphore>,
     identity: Identity,
-) -> Result<Value, ApiError> {
+) -> Result<crate::StorageStatus, ApiError> {
     let permit = slots
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("management capacity reached").with_source(source))?;

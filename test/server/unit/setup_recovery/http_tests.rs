@@ -112,6 +112,51 @@ impl Backend for Probe {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn version_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _version: &str,
+    ) -> Result<crate::VersionSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn authorize_version(
+        &self,
+        _identity: &crate::auth::Identity,
+        _version: &str,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn repository_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn authorize_repository(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn create_write_session(
+        &self,
+        _identity: &crate::auth::Identity,
+        _branch: &str,
+    ) -> Result<crate::WorkspaceWriteSession, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn stage_namespace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: crate::StageNamespace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn authorize_upload(
         &self,
         _identity: &crate::auth::Identity,

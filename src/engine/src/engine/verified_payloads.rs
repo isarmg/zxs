@@ -73,7 +73,7 @@ pub(super) struct VerifiedPayloadSet {
     disks: Vec<HeldDisk>,
     full_revalidation: bool,
 }
-const MAX_HELD_PAYLOAD_FILES: usize = 128;
+pub(super) const MAX_HELD_PAYLOAD_FILES: usize = 128;
 // Thread-local counters isolate concurrently running tests. No release cost.
 #[cfg(test)]
 std::thread_local! {

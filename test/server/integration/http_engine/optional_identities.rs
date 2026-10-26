@@ -257,3 +257,237 @@ async fn typed_workspace_create_abort_preserve_strict_bodies_budget_and_wire() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn typed_namespace_boundary_rejects_bad_envelopes_before_staging() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let repo = success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Typed namespace","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    let workspace = success(
+        &app,
+        &token,
+        "POST",
+        "/api/workspaces",
+        Some(json!({"branch_id":repo["main_branch_id"]})),
+    )
+    .await;
+    let ws = workspace["workspace_id"].as_str().unwrap();
+    let route = format!("/api/workspaces/{ws}/namespace-operations");
+    for body in [
+        json!([]),
+        json!({"kind":null,"path":"folder"}),
+        json!({"kind":"mkdir","path":"folder","unknown":true}),
+        json!({"kind":"mkdir","path":"folder","destination":7}),
+        json!({"kind":"mkdir","path":"folder","workspace_id":"different"}),
+        json!({"kind":"rename","path":"folder"}),
+    ] {
+        let (status, value) = send(&app, Some(&token), "POST", &route, Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{value}");
+        assert_eq!(value["error"]["code"], "INVALID_REQUEST");
+    }
+    let duplicate = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&route)
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"kind":"mkdir","kind":"delete","path":"folder"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    let before = success(&app, &token, "GET", &format!("/api/workspaces/{ws}"), None).await;
+    assert!(
+        before["namespace_operations"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let staged = success(
+        &app,
+        &token,
+        "POST",
+        &route,
+        Some(json!({"kind":"mkdir","path":"Café","destination":null})),
+    )
+    .await;
+    assert_eq!(staged["workspace_id"], ws);
+    assert_eq!(
+        staged["namespace_operations"][0],
+        json!({"kind":"mkdir","path":"Café","destination":null})
+    );
+    let renamed = success(
+        &app,
+        &token,
+        "POST",
+        &route,
+        Some(json!({"kind":"rename","path":"CAFE\u{301}","destination":"Renamed"})),
+    )
+    .await;
+    assert_eq!(renamed["namespace_operations"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn typed_write_session_keeps_strict_admission_and_exact_lease_wire() {
+    let (root, app, branch, _, _) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let route = format!("/api/branches/{branch}/write-sessions");
+    let before = workspace_records(root.path());
+    for body in [
+        json!(null),
+        json!([]),
+        json!({"unknown":true}),
+        json!({"branch_id":null}),
+        json!({"branch_id":"other"}),
+    ] {
+        let (status, response) = send(&app, Some(&token), "POST", &route, Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+        assert_eq!(workspace_records(root.path()), before);
+    }
+    let duplicate = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&route)
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    r#"{{"branch_id":"{branch}","branch_id":"{branch}"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(workspace_records(root.path()), before);
+    let session = success(&app, &token, "POST", &route, Some(json!({}))).await;
+    let workspace = success(
+        &app,
+        &token,
+        "GET",
+        &format!(
+            "/api/workspaces/{}",
+            session["workspace_id"].as_str().unwrap()
+        ),
+        None,
+    )
+    .await;
+    let created = workspace["created_at"]
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    let ttl = Config::development([root.path().join("disk")]).workspace_ttl_seconds;
+    assert_eq!(
+        session,
+        json!({"write_session_id":workspace["workspace_id"],"workspace_id":workspace["workspace_id"],"branch_id":branch,"principal":"admin","fencing_token":workspace["fencing_token"],"expires_at":created.saturating_add(ttl).to_string(),"scope":"workspace","state":"open"})
+    );
+    let (status, error) = send(&app, Some(&token), "POST", &route, Some(json!({}))).await;
+    assert!(
+        !status.is_success(),
+        "write session must share the workspace budget"
+    );
+    assert_eq!(error["error"]["code"], "RESOURCE_LIMIT_EXCEEDED");
+}
+
+#[tokio::test]
+async fn typed_version_metadata_preserves_frozen_history_and_current_wire() {
+    let (root, app, branch, old_commit, _) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let resolved = success(
+        &app,
+        &token,
+        "POST",
+        &format!("/api/branches/{branch}/resolve"),
+        Some(json!({"path":"data.txt","commit_id":old_commit})),
+    )
+    .await;
+    let version = resolved["entry"]["version_id"].as_str().unwrap();
+    let metadata = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/versions/{version}?unused=accepted"),
+        None,
+    )
+    .await;
+    assert_eq!(metadata["logical_size"], "3");
+    assert_eq!(metadata["content_state"], "AVAILABLE");
+    assert_eq!(metadata["version_id"], version);
+    // The current public metadata is the stored version record plus disposition,
+    // not the latest branch version or a locally reconstructed request.
+    fn find_version(path: &std::path::Path, version: &str) -> Option<Value> {
+        for entry in std::fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                if let Some(found) = find_version(&entry.path(), version) {
+                    return Some(found);
+                }
+            } else if entry.file_name() == "version.json" {
+                let value: Value =
+                    json_codec::from_slice(&std::fs::read(entry.path()).unwrap()).unwrap();
+                if value["version_id"] == version {
+                    return Some(value);
+                }
+            }
+        }
+        None
+    }
+    let mut expected = find_version(&root.path().join("disk"), version).unwrap();
+    expected["content_state"] = json!("AVAILABLE");
+    assert_eq!(metadata, expected);
+    let (status, error) = send(&app, Some(&token), "GET", "/api/versions/missing", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error"]["code"], "NOT_FOUND");
+    assert_eq!(error["error"]["message"], "version not found");
+}
+
+#[tokio::test]
+async fn typed_repository_snapshot_preserves_public_projection_and_missing_errors() {
+    let (_root, app, _, _, _) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let listed = success(&app, &token, "GET", "/api/repositories", None).await;
+    let expected = &listed["repositories"][0];
+    let id = expected["repository_id"].as_str().unwrap();
+    let actual = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/repositories/{id}?unused=accepted"),
+        None,
+    )
+    .await;
+    assert_eq!(actual, *expected);
+    assert!(actual["smb_binding_generation"].is_string());
+    assert!(actual.get("file_manager_root").is_none());
+    let (status, error) = send(&app, Some(&token), "GET", "/api/repositories/missing", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error"]["code"], "NOT_FOUND");
+    assert_eq!(error["error"]["message"], "repository not found");
+}
+
+#[tokio::test]
+async fn typed_capabilities_are_public_and_keep_the_engine_upload_limit() {
+    let (root, app, _, _, _) = fixture();
+    let (status, capabilities) = send(&app, None, "GET", "/api/capabilities", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let core_limit = Config::development([root.path().join("disk")]).max_file_bytes;
+    let server_limit = ServerConfig::loopback(root.path()).max_upload_bytes;
+    assert_eq!(
+        capabilities["max_upload_bytes"],
+        core_limit.min(server_limit).to_string()
+    );
+    assert_eq!(capabilities["name_policy"], name_policy::NAME_POLICY);
+    assert_eq!(capabilities["platforms"], json!({"web":true,"smb":true}));
+    assert!(capabilities.get("storage").is_none());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let status = success(&app, &token, "GET", "/api/system/storage", None).await;
+    assert_eq!(status, json!({"state":"ready","retryable":false}));
+}

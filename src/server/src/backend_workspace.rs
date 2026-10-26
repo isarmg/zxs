@@ -9,6 +9,12 @@ pub struct CreateWorkspace {
     pub source_commit_id: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct StageNamespace {
+    pub workspace_id: String,
+    pub change: NamespaceOperation,
+}
+
 #[derive(Serialize)]
 pub(crate) struct WorkspaceResponse {
     workspace_id: String,
@@ -145,4 +151,51 @@ pub struct PublishedUploadStatus {
 pub enum PublishedUploadState {
     Complete,
     Sealed { manifest_hash: String },
+}
+
+/// Lease metadata captured in the same admission as workspace creation.
+#[derive(Clone, Debug)]
+pub struct WorkspaceWriteSession {
+    pub workspace_id: String,
+    pub branch_id: String,
+    pub principal: String,
+    pub fencing_token: u64,
+    pub expires_at: u64,
+    pub state: WorkspaceState,
+}
+
+#[derive(Serialize)]
+pub(crate) struct WriteSessionResponse {
+    write_session_id: String,
+    workspace_id: String,
+    branch_id: String,
+    principal: String,
+    #[serialization(with = "storage_contract::u64_string")]
+    fencing_token: u64,
+    #[serialization(with = "storage_contract::u64_string")]
+    expires_at: u64,
+    scope: &'static str,
+    state: WorkspaceState,
+}
+impl From<WorkspaceWriteSession> for WriteSessionResponse {
+    fn from(session: WorkspaceWriteSession) -> Self {
+        let WorkspaceWriteSession {
+            workspace_id,
+            branch_id,
+            principal,
+            fencing_token,
+            expires_at,
+            state,
+        } = session;
+        Self {
+            write_session_id: workspace_id.clone(),
+            workspace_id,
+            branch_id,
+            principal,
+            fencing_token,
+            expires_at,
+            scope: "workspace",
+            state,
+        }
+    }
 }

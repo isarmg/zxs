@@ -8,7 +8,11 @@ use storage_engine::{CommitRequest, Config, Engine};
 
 impl Session {
     pub(super) fn entries(&self) -> Result<Vec<Entry>, ApiError> {
-        let tree = self.call(crate::BackendAction::Tree, json!({"branch_id":self.branch}))?;
+        let tree = self.shared.backend.call(
+            crate::BackendAction::Tree,
+            &self.identity,
+            json!({"branch_id":self.branch}),
+        )?;
         json_codec::from_value(
             tree.get("entries")
                 .cloned()
@@ -40,6 +44,9 @@ struct LostCommitReply {
     inner: EngineBackend,
     calls: Mutex<Vec<(crate::BackendAction, Value)>>,
     authorizations: Mutex<Vec<String>>,
+    version_authorizations: Mutex<Vec<String>>,
+    repository_snapshots: Mutex<Vec<String>>,
+    repository_authorizations: Mutex<Vec<String>>,
     fail: AtomicBool,
     reconciliation_failure: AtomicUsize,
     uploads: AtomicUsize,
@@ -47,6 +54,10 @@ struct LostCommitReply {
     change_before_workspace: AtomicBool,
 }
 impl LostCommitReply {
+    fn take_version_authorizations(&self) -> Vec<String> {
+        std::mem::take(&mut *self.version_authorizations.lock().unwrap())
+    }
+
     fn take_authorizations(&self) -> Vec<String> {
         std::mem::take(&mut *self.authorizations.lock().unwrap())
     }
@@ -199,6 +210,66 @@ impl Backend for LostCommitReply {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.commit_workspace_public(identity, command)
     }
+    fn version_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        version: &str,
+    ) -> Result<crate::VersionSnapshot, crate::ApiError> {
+        self.inner.version_snapshot(identity, version)
+    }
+    fn authorize_version(
+        &self,
+        identity: &crate::auth::Identity,
+        version: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.version_authorizations
+            .lock()
+            .unwrap()
+            .push(version.to_owned());
+        if self.revoked.load(Ordering::SeqCst) {
+            return Err(ApiError::forbidden());
+        }
+        self.inner.authorize_version(identity, version)
+    }
+    fn repository_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        self.repository_snapshots
+            .lock()
+            .unwrap()
+            .push(id.to_owned());
+        self.inner.repository_snapshot(identity, id)
+    }
+    fn authorize_repository(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.repository_authorizations
+            .lock()
+            .unwrap()
+            .push(id.to_owned());
+        self.inner.authorize_repository(identity, id)
+    }
+    fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
+        self.inner.capabilities()
+    }
+    fn create_write_session(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+    ) -> Result<crate::WorkspaceWriteSession, crate::ApiError> {
+        self.inner.create_write_session(identity, branch)
+    }
+    fn stage_namespace(
+        &self,
+        identity: &crate::auth::Identity,
+        command: crate::StageNamespace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        self.inner.stage_namespace(identity, command)
+    }
     fn authorize_upload(
         &self,
         identity: &crate::auth::Identity,
@@ -235,9 +306,6 @@ impl Backend for LostCommitReply {
         input: Value,
     ) -> Result<Value, ApiError> {
         self.calls.lock().unwrap().push((action, input.clone()));
-        if action == crate::BackendAction::Version && self.revoked.load(Ordering::SeqCst) {
-            return Err(ApiError::forbidden());
-        }
         let value = self.inner.call(action, identity, input)?;
         Ok(value)
     }
@@ -331,6 +399,9 @@ fn fixture() -> (tempfile::TempDir, Arc<Shared>, Arc<LostCommitReply>, String) {
         inner: EngineBackend::new(engine),
         calls: Mutex::new(Vec::new()),
         authorizations: Mutex::new(Vec::new()),
+        version_authorizations: Mutex::new(Vec::new()),
+        repository_snapshots: Mutex::new(Vec::new()),
+        repository_authorizations: Mutex::new(Vec::new()),
         fail: AtomicBool::new(false),
         reconciliation_failure: AtomicUsize::new(0),
         uploads: AtomicUsize::new(0),

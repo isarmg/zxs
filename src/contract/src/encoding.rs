@@ -90,7 +90,7 @@ pub fn canonical_json_value(value: &Value) -> Result<Vec<u8>> {
 }
 
 fn emit_canonical_json(value: &Value) -> Result<Vec<u8>> {
-    fn number(n: &Number) -> Result<String> {
+    fn number(n: &Number, out: &mut Vec<u8>) -> Result<()> {
         const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
         let safe = n
             .as_i64()
@@ -102,7 +102,8 @@ fn emit_canonical_json(value: &Value) -> Result<Vec<u8>> {
                 "JSON numbers must be safe integers; encode u64 fields as decimal strings",
             ));
         }
-        Ok(n.to_string())
+        json_codec::to_writer(out, n)?;
+        Ok(())
     }
     fn emit(v: &Value, out: &mut Vec<u8>) -> Result<()> {
         match v {
@@ -110,7 +111,7 @@ fn emit_canonical_json(value: &Value) -> Result<Vec<u8>> {
             Value::Bool(true) => out.extend_from_slice(b"true"),
             Value::Bool(false) => out.extend_from_slice(b"false"),
             Value::String(s) => json_codec::to_writer(&mut *out, s)?,
-            Value::Number(n) => out.extend(number(n)?.as_bytes()),
+            Value::Number(n) => number(n, out)?,
             Value::Array(a) => {
                 out.push(b'[');
                 for (i, v) in a.iter().enumerate() {

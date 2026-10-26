@@ -19,7 +19,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
-use storage_contract::{Entry, OperationId, Workspace, new_id, parse_u64_decimal};
+use storage_contract::{Entry, OperationId, Workspace, new_id};
 
 const MAX_CONNECTIONS: usize = 64;
 const MAX_AUTHENTICATED_SESSIONS: usize = 8;
@@ -90,12 +90,6 @@ struct Writer {
     write_through: bool,
 }
 
-fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, ApiError> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::invalid(format!("missing {key}")))
-}
 fn contract(error: storage_contract::Error) -> ApiError {
     ApiError::invalid_source(error)
 }

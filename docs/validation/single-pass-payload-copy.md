@@ -111,3 +111,85 @@ in each source tree, Rust/Cargo verbose versions and both executable SHA256 hash
 its SHA256 is bound by the manifest. Raw traces, per-round logs, build logs and
 JSON results remain in the same artifact. Ordinary main pushes and manual
 dispatches on main do not rebuild the measurement baseline.
+
+## 已有副本准备阶段的单次验证
+
+本次后续优化以 `7834d50e5436e6ff81948e2a68093afc373c45b9` 为基线，
+不改变 `ContentHash` 或任何磁盘字节格式。实际调用链为：
+`prepare_publication_bounded` 容量准入 → `prepare_payloads` →
+`prepare_payload` → `install_version_content` → `PayloadPreparation::verify`。
+原先同一已有正文在前三个阶段分别进行完整校验；最后一次读取负责建立决定证明。
+
+现在容量准入的实际 manifest、逐块和完整 hash 验证产生私有 `VerifiedExisting`，
+只持正文 FD、精确版本借用及正文/版本目录路径。准备 worker 接收并消费这份证明；
+安装通过既有安全打开及 `FileIdentity` 比较，确认同步的是当前名字指向的同一 FD。
+内部错绑是断言揭示的程序错误，外部叶节点替换则返回错误。
+不建立 mtime/ctime、目录或设备状态缓存，不增加配置、通用 proof trait 或可写 FD 接口。
+
+最多保留现有 `MAX_HELD_PAYLOAD_FILES`（128）预算内的正文 FD；超过范围的副本
+在准备时重新实际验证并立刻安装，仍不再重复紧邻的安装 hash。
+四个既有 worker 各可短时持有当前副本，所有准入证明在建立决定证明前释放。
+仅明确 `NotFound` 才按待复制容量计费；损坏、权限、路径及 I/O 失败保留原原因拒绝，
+不再被 `is_ok()` 吞掉或被 `NoSpace` 遮蔽。
+
+已有正文必要的文件同步以及所有目录同步不变。两个实体同时存在时，验证过的 staged
+正文不能为另一个已有 target 背书；另一个实体仍实际读取校验。
+原 inode 原地改写不是这份短命证明的失效缓存协议：后续复制仍验证完整字节，
+`PayloadPreparation::verify` 也仍在 ACCEPT 前真实全读，因此安装 token 不能取代决定证明。
+生产中不存在独立的恢复 `Existing` 安装入口，已删除仅为旧分派保留的 variant；
+恢复、离线导出、分支选择/merge 前置读取和未知公开调用方的实际验证保持不变。
+独立完整副本和永久操作收据语义不变。
+
+测试增加正确旧目标/staged inode、叶/父路径/盘路径替换及缺失、内部错绑断言、
+另一个损坏 target、容量零余量下的有效旧副本、损坏 manifest/正文与 unsafe 路径的错误保留、
+129 副本超持有上限，以及安装后原地改写仍被实际决定校验拒绝。
+原容器测试改经真实 manifest/正文解析构造器，不保留测试专用生产 variant。
+
+### 安装文件同步的隔离故障验证
+
+`test/engine/unit/container_storage/fsync_eio.c` 仅用于隔离测试子进程，
+不链接产品或修改全局环境。它只对测试临时容器中匹配版本正文路径的普通文件
+`fsync` 返回 `EIO`，不拦截目录或无关文件。先用正常构建生成 engine 单元测试二进制，
+再显式运行（`ENGINE_TEST_BINARY` 为 Cargo 输出的该二进制绝对路径）：
+
+```sh
+tmp=$(mktemp -d)
+cc -Wall -Wextra -Werror -shared -fPIC \
+  test/engine/unit/container_storage/fsync_eio.c -ldl -o "$tmp/fsync-eio.so"
+env LD_PRELOAD="$tmp/fsync-eio.so" "$ENGINE_TEST_BINARY" \
+  existing_body_sync_io_failure_retains_its_cause --ignored --nocapture --test-threads=1
+```
+
+测试要求保留真实 errno/source、正文和无关文件原字节，并先成功同步父目录及无关文件。
+这是用户态 syscall 故障注入，不是物理盘故障或掉电证明；未使用 ptrace 或提权。
+
+### 本次验证与读量证据
+
+`cargo test --offline --locked -p storage-engine`：**643 passed，0 failed，8 ignored**；
+另行显式运行上述 EIO fixture：**1 passed**，记录一个目标正文 fsync 的真实 `EIO`，
+父目录及无关文件正常，原字节未变。完整测试包含恢复、离线、分支/merge 与固定字节回归；另行
+`cargo test --offline --locked -p storage-contract content_hash` 的3个固定摘要/磁盘字节与边界用例通过。
+`cargo clippy --offline --locked -p storage-engine --all-targets --all-features -- -D warnings`、
+`cargo check --offline --locked -p storage-engine --lib --no-default-features`、
+architecture、修改文件 rustfmt 及 `git diff --check` 均通过。
+
+两个独立 worktree/独立 Cargo target，Rust/Cargo 1.99.0、jobs=2、debug=0、incremental=0，
+同一 `existing_publication_operation` fixture：64 MiB、3 个已安装副本、3 轮交替执行，
+设置准备不计入测量；测量完整 `prepare_publication`，包括容量准入、安装与真实决定证明。
+
+| 中位数 | 基线 | 候选 |
+| --- | ---: | ---: |
+| `rchar` | 805,399,569 B | 402,721,719 B |
+| `wchar` | 34,793 B | 34,793 B |
+| 本次共享环境耗时 | 536.28 ms | 280.02 ms |
+| 进程生命周期 peak RSS | 20,900 KiB | 20,368 KiB |
+
+正文读取从 12 次降至 6 次：每个副本省下准备和安装两次重复读取，保留预算一次与
+决定证明一次；读计数差还包含少读的 checksum manifest。`rchar` 是返回给进程的读取字节，
+不是物理盘流量；RSS 不是独立操作峰值；并行共享环境耗时不作 HDD 或生产吞吐承诺。
+必要文件/目录同步与独立副本写入语义未改变；本次未取得 syscall trace 或物理掉电证据。
+
+[原始计数、源码/fixture/二进制哈希、独立 target 来源及测试日志](../../tools/perf-check/results/20261026-existing-payload/)
+保留在同一归档；`baseline.patch.gz` 仅覆盖共同测试 fixture，候选的生产文件哈希记录在
+`provenance.json`，`candidate.patch.gz` 保存测量时工作树差异。EIO shim 源码以根 `test/` 文件
+和归档 SHA256 绑定，未进入产品构建。

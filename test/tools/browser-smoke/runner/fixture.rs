@@ -43,7 +43,7 @@ pub(super) fn initialize_management(temporary: &tempfile::TempDir, password: &st
     let auth = Arc::new(Mutex::new(auth));
     backend.start_management(auth.clone());
     wait_for("fixture initial storage discovery", || {
-        if backend.management_status()["recovering"] == false {
+        if !backend.management_status().recovering() {
             Ok(())
         } else {
             Err("fixture discovery still running".into())
@@ -58,7 +58,7 @@ pub(super) fn initialize_management(temporary: &tempfile::TempDir, password: &st
     )?;
     wait_for("fixture explicit management initialization", || {
         let status = backend.management_status();
-        if status["state"] == "ready" && status["recovering"] == false {
+        if status.state() == storage_server::StorageState::Ready && !status.recovering() {
             Ok(())
         } else {
             Err("fixture management not ready".into())

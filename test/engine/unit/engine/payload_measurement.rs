@@ -147,3 +147,28 @@ fn export_operation() {
     assert_eq!(size, bytes);
     assert_eq!(hash, engine.state.versions[&entry.version_id].content_hash);
 }
+
+#[test]
+#[ignore = "same-fixture existing-payload admission and preparation I/O benchmark"]
+fn existing_publication_operation() {
+    let (_temp, engine, workspace, bytes) = fixture();
+    let plan = engine
+        .plan_workspace_commit_inner(request(&workspace), None)
+        .unwrap();
+    let MutationPlan::Prepared {
+        next,
+        prepared,
+        result,
+    } = plan.mutation
+    else {
+        panic!("fresh operation has a payload plan");
+    };
+    assert_eq!(prepared.len(), 1);
+    assert_eq!(prepared[0].placement.route_slot_ids.len(), 3);
+    engine.prepare_payload(&prepared[0]).unwrap();
+    measure("existing_publication", bytes, || {
+        engine
+            .prepare_publication(*next, prepared, result, MAX_METADATA)
+            .unwrap();
+    });
+}

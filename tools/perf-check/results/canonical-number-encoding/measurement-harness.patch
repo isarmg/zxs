@@ -1,0 +1,19 @@
+--- a/test/contract/unit/encoding/number_emission.rs
++++ b/test/contract/unit/encoding/number_emission.rs
+@@ -91,7 +91,6 @@
+ #[ignore = "manual complete canonical encoder comparison; run release, isolated, --nocapture"]
+ fn measure_complete_canonical_encoder() {
+     use std::{hint::black_box, time::Instant};
+-    type Encoder = fn(&Value) -> Result<Vec<u8>>;
+     let cases = fixtures();
+     if let Some(path) = std::env::var_os("ZXS_CANONICAL_FIXTURES") {
+         std::fs::write(path, json_codec::to_vec_pretty(&cases).unwrap()).unwrap();
+@@ -101,7 +100,7 @@
+         let bytes = canonical_json_value(&value).unwrap();
+         assert_eq!(baseline::canonical(&value).unwrap(), bytes);
+         let iterations = if bytes.len() > 10_000 { 500 } else { 20_000 };
+-        let implementations: [(&str, Encoder); 2] = [
++        let implementations: [(&str, fn(&Value) -> Result<Vec<u8>>); 2] = [
+             ("baseline", baseline::canonical),
+             ("direct", canonical_json_value),
+         ];

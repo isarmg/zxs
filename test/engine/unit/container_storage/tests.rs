@@ -13,7 +13,20 @@ fn version(state: &State, history: &str, file: &str, name: &str, bytes: &[u8]) -
         version_sequence: 900,
         content_hash: ContentHash::from_digest(hash),
         checksum_chunk_bytes: 262_144,
-        checksum_manifest_hash: "0".repeat(64),
+        checksum_manifest_hash: blake3::hash(
+            &ChecksumManifest {
+                logical_size: bytes.len() as u64,
+                chunk_bytes: 262_144,
+                chunks: bytes
+                    .chunks(262_144)
+                    .map(|chunk| *blake3::hash(chunk).as_bytes())
+                    .collect(),
+            }
+            .encode()
+            .unwrap(),
+        )
+        .to_hex()
+        .to_string(),
         creation_name: name.into(),
         storage_name,
         created_at,
@@ -30,7 +43,25 @@ fn prepare(history: &Path, version: &FileVersion, bytes: &[u8]) -> PathBuf {
         false,
     )
     .unwrap();
+    let checksums = ChecksumManifest {
+        logical_size: version.logical_size,
+        chunk_bytes: version.checksum_chunk_bytes,
+        chunks: bytes
+            .chunks(version.checksum_chunk_bytes as usize)
+            .map(|chunk| *blake3::hash(chunk).as_bytes())
+            .collect(),
+    }
+    .encode()
+    .unwrap();
+    write_atomic(&directory.join("checksums.bin"), &checksums, false).unwrap();
     directory
+}
+
+fn install_existing(directory: &Path, version: &FileVersion) -> Result<PathBuf> {
+    install_version_content(
+        directory,
+        PreparedContent::Verified(VerifiedExisting::read(directory, version)?),
+    )
 }
 
 fn reserve(state: &mut State, version: &FileVersion) -> String {
@@ -168,8 +199,7 @@ fn unsupported_legacy_containers_are_rejected_without_cleanup_or_migration() {
             );
             let history = config.disks[0].root.join("histories").join(history_id);
             let directory = prepare(&history, &item, b"body");
-            let body =
-                install_version_content(&directory, PreparedContent::Existing(&item)).unwrap();
+            let body = install_existing(&directory, &item).unwrap();
             let inode = fs::metadata(&body).unwrap().ino();
             let named = body.parent().unwrap().parent().unwrap();
             let legacy = named.join(legacy_name);
@@ -185,9 +215,7 @@ fn unsupported_legacy_containers_are_rejected_without_cleanup_or_migration() {
                 storage_contract::ErrorCode::FormatUnsupported
             );
             assert_eq!(
-                install_version_content(&directory, PreparedContent::Existing(&item))
-                    .unwrap_err()
-                    .code(),
+                install_existing(&directory, &item).unwrap_err().code(),
                 storage_contract::ErrorCode::FormatUnsupported
             );
             assert_eq!(
@@ -226,7 +254,7 @@ fn inherited_references_update_cache_without_creating_files_and_follow_rename() 
     );
     let history = config.disks[0].root.join("histories").join(&history_id);
     let directory = prepare(&history, &item, b"body");
-    let body = install_version_content(&directory, PreparedContent::Existing(&item)).unwrap();
+    let body = install_existing(&directory, &item).unwrap();
     let body_inode = fs::metadata(&body).unwrap().ino();
     let previous = with_version(&item);
     let mut pending = previous.clone();
@@ -298,7 +326,7 @@ fn physical_move_preserves_one_body_and_old_version_identity_across_replay() {
     );
     let history = config.disks[0].root.join("histories").join(&history_id);
     let directory = prepare(&history, &item, b"retained parent bytes");
-    let original = install_version_content(&directory, PreparedContent::Existing(&item)).unwrap();
+    let original = install_existing(&directory, &item).unwrap();
     let inode = fs::metadata(&original).unwrap().ino();
     let previous = with_version(&item);
     let mut in_a = previous.clone();
@@ -531,7 +559,7 @@ fn canonical_location_handles_reserved_looking_user_names_and_prefix_moves() {
     );
     let history = config.disks[0].root.join("histories").join(&history_id);
     let directory = prepare(&history, &item, b"single body");
-    let original = install_version_content(&directory, PreparedContent::Existing(&item)).unwrap();
+    let original = install_existing(&directory, &item).unwrap();
     let inode = fs::metadata(&original).unwrap().ino();
     let mut state = with_version(&item);
     for location in [
@@ -567,7 +595,7 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
     let item = version(&State::default(), &history_id, &file, "file.txt", b"body");
     let history = config.disks[0].root.join("histories").join(&history_id);
     let directory = prepare(&history, &item, b"body");
-    let original = install_version_content(&directory, PreparedContent::Existing(&item)).unwrap();
+    let original = install_existing(&directory, &item).unwrap();
     let inode = fs::metadata(&original).unwrap().ino();
     let previous = with_version(&item);
     let mut published = previous.clone();
@@ -700,16 +728,13 @@ fn installation_moves_one_ordinary_inode_and_missing_paths_remain_classifiable()
         "a prepared body remains readable before its atomic move"
     );
     let before = fs::metadata(&prepared).unwrap();
-    let target = install_version_content(&directory, PreparedContent::Existing(&item)).unwrap();
+    let target = install_existing(&directory, &item).unwrap();
     assert!(!prepared.exists());
     let after = fs::metadata(&target).unwrap();
     assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
     assert_eq!(after.nlink(), 1);
     assert_eq!(fs::read(&target).unwrap(), b"complete bytes");
-    assert_eq!(
-        install_version_content(&directory, PreparedContent::Existing(&item)).unwrap(),
-        target
-    );
+    assert_eq!(install_existing(&directory, &item).unwrap(), target);
     assert_eq!(content_path(&directory, &item).unwrap(), target);
     fs::remove_file(&target).unwrap();
     assert_eq!(
@@ -748,7 +773,7 @@ fn rename_and_note_projection_replays_without_changing_body_identity() {
         b"one unique full file",
     );
     let directory = prepare(&history, &item, b"one unique full file");
-    let original = install_version_content(&directory, PreparedContent::Existing(&item)).unwrap();
+    let original = install_existing(&directory, &item).unwrap();
     let inode = fs::metadata(&original).unwrap().ino();
     previous
         .versions
@@ -979,6 +1004,12 @@ fn copied_body_installs_owned_inode_but_existing_corrupt_target_is_rejected() {
         item.logical_size,
     )
     .unwrap();
+    write_atomic(
+        &directory.join("checksums.bin"),
+        &manifest.encode().unwrap(),
+        false,
+    )
+    .unwrap();
     let before = fs::metadata(&source).unwrap();
     let target = install_version_content(&directory, PreparedContent::Copied(copied)).unwrap();
     let installed = fs::metadata(&target).unwrap();
@@ -1009,10 +1040,8 @@ fn copied_body_installs_owned_inode_but_existing_corrupt_target_is_rejected() {
     assert_eq!(fs::read(&source).unwrap(), bytes);
     assert_eq!(fs::read(&target).unwrap(), b"a corrupted copy payload");
     assert_eq!(
-        install_version_content(&directory, PreparedContent::Existing(&item))
-            .unwrap_err()
-            .code(),
-        ErrorCode::ContentCorrupt
+        install_existing(&directory, &item).unwrap_err().code(),
+        ErrorCode::ChecksumMismatch
     );
 }
 
@@ -1030,13 +1059,134 @@ fn resumed_installation_verifies_external_prepared_body() {
     );
     let directory = prepare(&history, &item, b"modified");
     assert_eq!(
-        install_version_content(&directory, PreparedContent::Existing(&item))
-            .unwrap_err()
-            .code(),
-        ErrorCode::ContentCorrupt
+        install_existing(&directory, &item).unwrap_err().code(),
+        ErrorCode::ChecksumMismatch
     );
     assert_eq!(
         fs::read(directory.join("content/body")).unwrap(),
         b"modified"
     );
+}
+
+fn verified_existing_fixture() -> (tempfile::TempDir, DiskConfig, FileVersion, PathBuf) {
+    let temporary = tempfile::tempdir().unwrap();
+    let config =
+        ValidatedConfig::try_from(Config::development([temporary.path().join("disk")])).unwrap();
+    let disk = config.disks[0].clone();
+    let history = disk.root.join("histories").join(new_id("history"));
+    let bytes = b"verified existing body";
+    let mut item = version(
+        &State::default(),
+        history.file_name().unwrap().to_str().unwrap(),
+        &new_id("file"),
+        "body",
+        bytes,
+    );
+    let manifest = ChecksumManifest {
+        logical_size: bytes.len() as u64,
+        chunk_bytes: item.checksum_chunk_bytes,
+        chunks: vec![*blake3::hash(bytes).as_bytes()],
+    }
+    .encode()
+    .unwrap();
+    item.checksum_manifest_hash = blake3::hash(&manifest).to_hex().to_string();
+    let directory = prepare(&history, &item, bytes);
+    (temporary, disk, item, directory)
+}
+
+#[test]
+fn verified_existing_installs_staged_inode_and_reuses_installed_target() {
+    let (_temporary, _disk, item, directory) = verified_existing_fixture();
+    let source = directory.join("content/body");
+    let before = fs::metadata(&source).unwrap();
+    let proof = VerifiedExisting::read(&directory, &item).unwrap();
+    let target = install_version_content(&directory, PreparedContent::Verified(proof)).unwrap();
+    let after = fs::metadata(&target).unwrap();
+    assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
+    assert_eq!(after.nlink(), 1);
+    let proof = VerifiedExisting::read(&directory, &item).unwrap();
+    assert_eq!(
+        install_version_content(&directory, PreparedContent::Verified(proof)).unwrap(),
+        target
+    );
+    assert_eq!(fs::read(target).unwrap(), b"verified existing body");
+}
+
+#[test]
+fn verified_existing_rejects_replaced_or_missing_body() {
+    for change in ["leaf", "parent", "disk", "missing"] {
+        let (_temporary, disk, item, directory) = verified_existing_fixture();
+        let target = install_existing(&directory, &item).unwrap();
+        let proof = VerifiedExisting::read(&directory, &item).unwrap();
+        match change {
+            "leaf" => {
+                fs::rename(&target, target.with_extension("held")).unwrap();
+                write_atomic(&target, b"verified existing body", false).unwrap();
+            }
+            "parent" => {
+                let parent = target.parent().unwrap();
+                fs::rename(parent, parent.with_extension("held")).unwrap();
+                private_dir(parent).unwrap();
+                write_atomic(&target, b"verified existing body", false).unwrap();
+            }
+            "disk" => {
+                fs::rename(&disk.root, disk.root.with_extension("held")).unwrap();
+                private_dir(&disk.root).unwrap();
+            }
+            "missing" => fs::remove_file(&target).unwrap(),
+            _ => unreachable!(),
+        }
+        assert!(
+            install_version_content(&directory, PreparedContent::Verified(proof)).is_err(),
+            "{change}"
+        );
+    }
+}
+
+#[test]
+#[should_panic(
+    expected = "invariant: existing proof belongs to its admitted version and directory"
+)]
+fn existing_proof_exposes_internal_version_misbinding() {
+    let (_temporary, _disk, item, directory) = verified_existing_fixture();
+    let proof = VerifiedExisting::read(&directory, &item).unwrap();
+    proof.assert_binding(&directory, &item.clone());
+}
+
+#[test]
+fn verified_existing_staged_proof_does_not_authorize_new_corrupt_target() {
+    let (_temporary, _disk, item, directory) = verified_existing_fixture();
+    let proof = VerifiedExisting::read(&directory, &item).unwrap();
+    let target = install_existing(&directory, &item).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&target, b"modified existing body").unwrap();
+    assert_eq!(
+        install_version_content(&directory, PreparedContent::Verified(proof))
+            .unwrap_err()
+            .code(),
+        ErrorCode::ContentCorrupt
+    );
+}
+
+#[test]
+#[ignore = "requires test/engine/unit/container_storage/fsync_eio.c as LD_PRELOAD"]
+fn existing_body_sync_io_failure_retains_its_cause() {
+    let (_temporary, _disk, item, directory) = verified_existing_fixture();
+    // The interposer targets installed bodies only: staged-file and directory
+    // synchronization still execute normally before the retry under test.
+    let target = install_existing(&directory, &item).unwrap();
+    fs::File::open(target.parent().unwrap())
+        .unwrap()
+        .sync_all()
+        .unwrap();
+    write_atomic(&directory.join("unrelated"), b"unrelated", false).unwrap();
+    let proof = VerifiedExisting::read(&directory, &item).unwrap();
+    let error = install_version_content(&directory, PreparedContent::Verified(proof)).unwrap_err();
+    let Error::Contract(storage_contract::Error::Io { source, .. }) = error else {
+        panic!("file sync failure must retain its I/O source: {error}");
+    };
+    assert_eq!(source.raw_os_error(), Some(5));
+    assert_eq!(fs::read(target).unwrap(), b"verified existing body");
+    assert_eq!(fs::read(directory.join("unrelated")).unwrap(), b"unrelated");
 }

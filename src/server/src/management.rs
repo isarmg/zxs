@@ -19,25 +19,7 @@ use std::{
     },
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StorageState {
-    Ready,
-    ReadOnly,
-    Unavailable,
-    Unconfigured,
-    RecoveryRequired,
-}
-impl StorageState {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Ready => "ready",
-            Self::ReadOnly => "read_only",
-            Self::Unavailable => "unavailable",
-            Self::Unconfigured => "unconfigured",
-            Self::RecoveryRequired => "recovery_required",
-        }
-    }
-}
+pub use crate::StorageState;
 struct State {
     backend: Option<Arc<EngineBackend>>,
     status: StorageState,
@@ -65,7 +47,7 @@ struct Inner {
     recovery_worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     generation: AtomicU64,
     disk_observation: Mutex<Option<(std::time::Instant, Value)>>,
-    capabilities: Mutex<Value>,
+    capabilities: Mutex<crate::Capabilities>,
     setup_disks: BTreeMap<String, PathBuf>,
     setup_configs: BTreeMap<String, PathBuf>,
     allow_development_setup: bool,
@@ -215,7 +197,7 @@ pub fn open_service_with_options(
             recovery_worker: Mutex::new(None),
             generation: AtomicU64::new(0),
             disk_observation: Mutex::new(None),
-            capabilities: Mutex::new(json!({"features":[],"max_upload_bytes":"0"})),
+            capabilities: Mutex::new(crate::Capabilities::unavailable()),
             setup_disks,
             setup_configs,
             allow_development_setup,
@@ -542,15 +524,7 @@ impl Inner {
             let mut snapshot = crate::lock(&auth).snapshot()?;
             snapshot["sessions"] = json!({});
             backend.replicate_auth(snapshot.clone())?;
-            let capabilities = backend.call(
-                BackendAction::Capabilities,
-                &Identity {
-                    admission_session: None,
-                    smb_binding: None,
-                    principal: "management".into(),
-                },
-                json!({}),
-            )?;
+            let capabilities = backend.capabilities()?;
             *crate::lock(&self.capabilities) = capabilities;
             let ready = if backend.read_only()? {
                 StorageState::ReadOnly
@@ -707,6 +681,52 @@ impl Backend for ManagementBackend {
         self.inner
             .backend()?
             .commit_workspace_public(identity, command)
+    }
+    fn version_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        version: &str,
+    ) -> Result<crate::VersionSnapshot, crate::ApiError> {
+        self.inner.backend()?.version_snapshot(identity, version)
+    }
+    fn authorize_version(
+        &self,
+        identity: &crate::auth::Identity,
+        version: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.inner.backend()?.authorize_version(identity, version)
+    }
+    fn repository_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        self.inner.backend()?.repository_snapshot(identity, id)
+    }
+    fn authorize_repository(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.inner.backend()?.authorize_repository(identity, id)
+    }
+    fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
+        let capabilities = crate::lock(&self.inner.capabilities).clone();
+        Ok(capabilities.with_storage(self.management_status()))
+    }
+    fn create_write_session(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+    ) -> Result<crate::WorkspaceWriteSession, crate::ApiError> {
+        self.inner.backend()?.create_write_session(identity, branch)
+    }
+    fn stage_namespace(
+        &self,
+        identity: &crate::auth::Identity,
+        command: crate::StageNamespace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        self.inner.backend()?.stage_namespace(identity, command)
     }
     fn authorize_upload(
         &self,
@@ -1067,16 +1087,19 @@ impl Backend for ManagementBackend {
     fn drain_management(&self) -> Result<(), ApiError> {
         self.inner.drain()
     }
-    fn management_status(&self) -> Value {
+    fn management_status(&self) -> crate::StorageStatus {
         let state = self
             .inner
             .state
             .lock()
             .expect("service state lock poisoned")
             .effective_status();
-        json!({"state":state.as_str(),"retryable":state!=StorageState::Ready,"recovering":self.inner.recovering.load(Ordering::SeqCst)})
+        crate::StorageStatus::Managed {
+            state,
+            recovering: self.inner.recovering.load(Ordering::SeqCst),
+        }
     }
-    fn retry_storage(&self, identity: &Identity) -> Result<Value, ApiError> {
+    fn retry_storage(&self, identity: &Identity) -> Result<crate::StorageStatus, ApiError> {
         if identity.admission_session.is_none() {
             return Err(ApiError::unauthorized());
         }
@@ -1093,13 +1116,8 @@ impl Backend for ManagementBackend {
         identity: &Identity,
         input: Value,
     ) -> Result<Value, ApiError> {
-        if action == BackendAction::Capabilities {
-            let mut value = crate::lock(&self.inner.capabilities).clone();
-            value["storage"] = self.management_status();
-            return Ok(value);
-        }
         if action == BackendAction::Ready {
-            return if self.management_status()["state"] == "ready" {
+            return if self.management_status().state() == StorageState::Ready {
                 Ok(json!({"ready":true}))
             } else {
                 Err(ApiError::new(

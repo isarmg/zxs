@@ -24,6 +24,11 @@ fn every_action_round_trips_and_unknown_actions_are_rejected() {
         "upload_status",
         "seal_workspace",
         "commit_workspace",
+        "namespace",
+        "write_session",
+        "version",
+        "repository",
+        "capabilities",
     ] {
         assert!(BackendAction::try_from(unknown).is_err());
     }
