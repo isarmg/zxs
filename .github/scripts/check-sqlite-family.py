@@ -76,6 +76,10 @@ def consumer_manifest(root, work, features):
             '[workspace]\nresolver="2"\n[features]\nsqlite-pool=["sqlite-access/pool"]\n[dependencies]\n'
             f'sqlite-access={{path={json.dumps(str(root / "src/foundation/data-storage/sqlite-access"))},default-features=false,features={json.dumps(features)}}}\n'
             '[dev-dependencies]\n'
+            f'tempfile={{path={json.dumps(str(root / "src/foundation/platform/tempfile"))}}}\n'
+            f'log={{path={json.dumps(str(root / "src/foundation/diagnostics/log"))},default-features=false,features=["std"]}}\n'
+            f'futures={{path={json.dumps(str(root / "src/foundation/concurrency/futures"))},default-features=false,features=["std","utilities"]}}\n'
+            f'libsqlite3-sys={{path={json.dumps(str(root / "src/foundation/data-storage/libsqlite3-sys"))},default-features=false}}\n'
             f'tokio={{path={json.dumps(str(root / "src/foundation/concurrency/tokio"))},default-features=false,features=["macros","rt","time","sync"]}}\n'
             f'hash-table={{path={json.dumps(str(root / "src/foundation/collections/hash-table"))}}}\n'
             f'hashlink={{path={json.dumps(str(root / "src/foundation/collections/hashlink"))}}}\n')

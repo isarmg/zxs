@@ -69,6 +69,29 @@ class SqliteFamily(unittest.TestCase):
             self.assertEqual({row["path"] for row in manifest["test"]},
                              {str(ROOT / path) for path in module.INTEGRATION_TESTS.values()})
 
+    def test_consumer_declares_shared_regression_dependencies_only_for_tests(self):
+        for features in ([], ["sqlite-bundled"]):
+            with self.subTest(features=features), tempfile.TemporaryDirectory() as temporary:
+                path = module.consumer_manifest(ROOT, Path(temporary), features)
+                manifest = tomllib.loads(path.read_text())
+                self.assertEqual(set(manifest["dependencies"]), {"sqlite-access"})
+                self.assertEqual(manifest["dependencies"]["sqlite-access"]["features"], features)
+                development = manifest["dev-dependencies"]
+                for name in ("tempfile", "log", "futures", "libsqlite3-sys"):
+                    self.assertEqual(Path(development[name]["path"]), foundation_path(ROOT, name))
+                self.assertEqual(development["log"]["features"], ["std"])
+                self.assertFalse(development["futures"]["default-features"])
+                self.assertEqual(development["futures"]["features"], ["std", "utilities"])
+                self.assertFalse(development["libsqlite3-sys"]["default-features"])
+                self.assertNotIn("features", development["libsqlite3-sys"])
+
+    def test_direct_graph_excludes_test_dependency_edges(self):
+        direct = "consumer v0.0.0|\nsqlite-access v0.9.0|sqlite-bundled\nurl-encoding v2.5.8|alloc,form,std\n"
+        with patch.object(module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, direct, "")) as run:
+            module.check_direct_dependencies(Path("Cargo.toml"), ROOT)
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index("--edges") + 1], "normal,build")
+
     def test_disposable_package_keeps_tests_but_uses_real_dependency_providers(self):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
