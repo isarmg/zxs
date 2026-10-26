@@ -111,7 +111,7 @@ HTTP 监听地址必须是回环地址。对外部署由同机反向代理终止
 | `/api/history-trees/{history}/purge-plans`、`/split-plans`、`/historical-save-plans` | POST 预览，尚不执行变更 |
 | `/api/plans/{plan}`、`/commit`、`/cancel` | GET 已保存预览、POST 按摘要执行或取消 |
 | `/api/policies/{policy}`、`/api/primary-placement-rules/{rule}` | GET 保护策略／主盘规则；PUT 按 generation 更新，保护策略仅接受无稳定 scope 的现行路径规则 |
-| `/api/admin/disks`、`/api/backup-topologies/{topology}`、`/api/admin/check` | GET 盘状态、拓扑、完整性检查 |
+| `/api/admin/disks`、`/api/backup-topologies/default`、`/api/admin/check` | GET 盘状态、拓扑、完整性检查 |
 | `/api/operations/{operation}`、`/api/events`、`/api/compare` | GET 结果/分页事件、POST 两次提交比较 |
 
 表中同一行的缩写路径共享资源前缀，例如 `/api/branches/{branch}/tree` 和 `/api/branches/{branch}/resolve`。请求字段以代码及 [HTTP 契约](../15-api-and-errors.md) 为准；64 位整数使用规范十进制字符串。重复 JSON 键、浮点数、未声明的变更字段会被拒绝。失败响应包含 `error.code/message/retryable/request_id`，不会把未实现操作返回为成功。

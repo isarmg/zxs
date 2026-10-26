@@ -451,6 +451,47 @@ impl Backend for PanickingBackend {
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         panic!("private workspace capacity panic detail")
     }
+    fn smb_binding_status(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<crate::SmbBindingStatus, crate::ApiError> {
+        panic!("private SMB binding panic detail")
+    }
+    fn update_smb_binding(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdateSmbBinding<'_>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private SMB binding panic detail")
+    }
+    fn topology_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<crate::TopologySnapshot, crate::ApiError> {
+        panic!("private storage metadata panic detail")
+    }
+    fn placement_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::Placement, crate::ApiError> {
+        panic!("private storage metadata panic detail")
+    }
+    fn event_page(
+        &self,
+        _identity: &crate::auth::Identity,
+        _after: u64,
+    ) -> Result<crate::EventPage, crate::ApiError> {
+        panic!("private event page panic detail")
+    }
+    fn history_graph(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
+        panic!("private history graph panic detail")
+    }
     fn commit_snapshot(
         &self,
         _identity: &crate::auth::Identity,
@@ -601,6 +642,18 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         ("GET", "/api/repositories", None),
         ("GET", "/api/branches/branch", None),
         ("GET", "/api/commits/commit", None),
+        ("GET", "/api/history-trees/history/graph", None),
+        ("GET", "/api/events?after=17", None),
+        ("GET", "/api/backup-topologies/default", None),
+        ("GET", "/api/versions/version/placement", None),
+        ("GET", "/api/repositories/repository/smb-binding", None),
+        (
+            "PUT",
+            "/api/repositories/repository/smb-binding",
+            Some(
+                json!({"branch_id":"branch","enabled":false,"expected_history_generation":"1","operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
         (
             "POST",
             "/api/branches/branch/resolve",

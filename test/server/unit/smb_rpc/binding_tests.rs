@@ -35,16 +35,21 @@ pub(super) fn rebind(shared: &Shared, branch: &str, enabled: bool) {
     let repository = repository(shared);
     let binding = shared
         .backend
-        .call(
-            crate::BackendAction::SmbBinding,
+        .smb_binding_status(&administrator, &repository)
+        .unwrap();
+    shared
+        .backend
+        .update_smb_binding(
             &administrator,
-            json!({"repository_id":repository}),
+            crate::UpdateSmbBinding {
+                repository: &repository,
+                branch,
+                enabled,
+                expected_history_generation: binding.history_generation,
+                operation: storage_contract::OperationId::generate(),
+            },
         )
         .unwrap();
-    shared.backend.call(crate::BackendAction::UpdateSmbBinding, &administrator, json!({
-        "repository_id":repository,"branch_id":branch,"enabled":enabled,
-        "expected_history_generation":binding["history_generation"],"operation_id":new_id("op"),
-    })).unwrap();
 }
 fn refused(wire: &mut FrameStream, request: Request) {
     let (response, fd) = exchange(wire, request);
@@ -491,16 +496,25 @@ fn live_writer_cannot_prepare_or_publish_after_disable_and_failed_close_retains_
     let repository = repository(&shared);
     let binding = shared
         .backend
-        .call(
-            crate::BackendAction::SmbBinding,
-            &administrator,
-            json!({"repository_id":repository}),
-        )
+        .smb_binding_status(&administrator, &repository)
         .unwrap();
-    assert_eq!(shared.backend.call(crate::BackendAction::UpdateSmbBinding, &administrator, json!({
-        "repository_id":repository,"branch_id":branch,"enabled":false,
-        "expected_history_generation":binding["history_generation"],"operation_id":new_id("op"),
-    })).unwrap_err().code, storage_contract::ErrorCode::WorkspaceBusy);
+    assert_eq!(
+        shared
+            .backend
+            .update_smb_binding(
+                &administrator,
+                crate::UpdateSmbBinding {
+                    repository: &repository,
+                    branch: &branch,
+                    enabled: false,
+                    expected_history_generation: binding.history_generation,
+                    operation: storage_contract::OperationId::generate()
+                }
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::WorkspaceBusy
+    );
     assert!(matches!(
         exchange(
             &mut wire,

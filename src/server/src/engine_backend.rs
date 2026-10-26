@@ -15,6 +15,7 @@ mod content;
 mod disk_monitor;
 mod error_registry;
 mod file_manager;
+mod graph;
 mod operations;
 mod read_projection;
 mod wire;
@@ -158,6 +159,29 @@ fn repository_in_state<'a>(
 /// vector order. Seek directly to the unseen suffix for resumed event polls.
 fn events_after(events: &[storage_contract::Event], after: u64) -> &[storage_contract::Event] {
     &events[events.partition_point(|event| event.sequence <= after)..]
+}
+fn capture_event_page(
+    events: &[storage_contract::Event],
+    published: u64,
+    after: u64,
+) -> Result<crate::EventPage, ApiError> {
+    if after > published {
+        return Err(ApiError::new(
+            ::http::StatusCode::BAD_REQUEST,
+            storage_contract::ErrorCode::InvalidCursor,
+            "event cursor is ahead of the published sequence",
+        ));
+    }
+    let events: Vec<_> = events_after(events, after)
+        .iter()
+        .take(1000)
+        .cloned()
+        .collect();
+    let next_cursor = events.last().map_or(after, |event| event.sequence);
+    Ok(crate::EventPage {
+        events,
+        next_cursor,
+    })
 }
 fn repo_for_history<'a>(engine: &'a Engine, id: &str) -> Result<&'a Repository, ApiError> {
     repo_for_history_in_state(engine.state(), id)
@@ -539,6 +563,125 @@ impl Backend for EngineBackend {
         let current = current_protected_identity(&engine, identity)?;
         Ok(engine.workspace_capacity(&current.principal))
     }
+    fn smb_binding_status(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::SmbBindingStatus, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        let repo = repository(&engine, id)?;
+        let history = engine
+            .state()
+            .histories
+            .get(&repo.history_tree_id)
+            .ok_or_else(|| {
+                ApiError::new(
+                    ::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    storage_contract::ErrorCode::StateInvalid,
+                    "repository history is missing",
+                )
+            })?;
+        Ok(crate::SmbBindingStatus {
+            repository_id: repo.repository_id.clone(),
+            branch_id: repo.main_branch_id.clone(),
+            enabled: repo.smb_enabled,
+            history_generation: history.generation,
+        })
+    }
+    fn update_smb_binding(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateSmbBinding<'_>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        let mut engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        repository(&engine, request.repository)?;
+        engine
+            .set_smb_binding(
+                request.repository,
+                request.branch,
+                request.enabled,
+                request.expected_history_generation,
+                &current.principal,
+                request.operation,
+            )
+            .map_err(error)
+    }
+    fn topology_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<crate::TopologySnapshot, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        let slots = engine
+            .config()
+            .disks
+            .iter()
+            .map(|disk| {
+                let storage_contract::DiskConfig {
+                    slot_id,
+                    disk_id,
+                    root: _,
+                    level,
+                    upstream_slot_id,
+                    metadata_member,
+                    binding_generation,
+                    capacity_bytes: _,
+                } = disk;
+                crate::TopologySlot {
+                    slot_id: slot_id.clone(),
+                    disk_id: disk_id.clone(),
+                    level: *level,
+                    upstream_slot_id: upstream_slot_id.clone(),
+                    metadata_member: *metadata_member,
+                    binding_generation: *binding_generation,
+                }
+            })
+            .collect();
+        Ok(crate::TopologySnapshot {
+            generation: engine.state().topology_generation,
+            slots,
+        })
+    }
+    fn placement_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::Placement, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        authorized_version(&engine, id)?;
+        engine.state().placements.get(id).cloned().ok_or_else(|| {
+            ApiError::new(
+                ::http::StatusCode::NOT_FOUND,
+                storage_contract::ErrorCode::NotFound,
+                "placement not found",
+            )
+        })
+    }
+    fn event_page(
+        &self,
+        identity: &crate::auth::Identity,
+        after: u64,
+    ) -> Result<crate::EventPage, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        capture_event_page(&engine.state().events, engine.state().sequence, after)
+    }
+    fn history_graph(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        repo_for_history(&engine, id)?;
+        let mut snapshot = graph::capture(engine.state(), id);
+        drop(engine);
+        snapshot.commits.sort_by_key(|commit| commit.sequence);
+        Ok(snapshot)
+    }
     fn commit_snapshot(
         &self,
         identity: &crate::auth::Identity,
@@ -783,23 +926,6 @@ impl Backend for EngineBackend {
                 drop(engine);
                 disk_monitor::observe(observation)
             }
-            crate::BackendAction::SmbBinding => {
-                let repo = repository(&engine, field(&input, "repository_id")?)?;
-                let history = engine
-                    .state()
-                    .histories
-                    .get(&repo.history_tree_id)
-                    .ok_or_else(|| {
-                        ApiError::new(
-                            ::http::StatusCode::INTERNAL_SERVER_ERROR,
-                            storage_contract::ErrorCode::StateInvalid,
-                            "repository history is missing",
-                        )
-                    })?;
-                Ok(
-                    json!({"repository_id":repo.repository_id,"branch_id":repo.main_branch_id,"enabled":repo.smb_enabled,"history_generation":history.generation.to_string()}),
-                )
-            }
             crate::BackendAction::DefaultBranch => {
                 let repo = repository(&engine, field(&input, "repository_id")?)?;
                 let selected = engine.state().directory_selections.get(&repo.repository_id);
@@ -896,40 +1022,6 @@ impl Backend for EngineBackend {
                         repo,
                         field(&input, "directory_branch_id")?,
                         field(&input, "name")?,
-                        &identity.principal,
-                        operation(&input)?,
-                    )
-                    .map_err(error)?;
-                operation_wire(result)
-            }
-            crate::BackendAction::UpdateSmbBinding => {
-                keys(
-                    &input,
-                    &[
-                        "repository_id",
-                        "branch_id",
-                        "enabled",
-                        "expected_history_generation",
-                        "operation_id",
-                    ],
-                )?;
-                let repo = field(&input, "repository_id")?;
-                repository(&engine, repo)?;
-                let enabled = input
-                    .get("enabled")
-                    .and_then(Value::as_bool)
-                    .ok_or_else(|| ApiError::invalid("enabled must be a boolean"))?;
-                let generation = storage_contract::parse_u64_decimal(field(
-                    &input,
-                    "expected_history_generation",
-                )?)
-                .map_err(ApiError::invalid_source)?;
-                let result = engine
-                    .set_smb_binding(
-                        repo,
-                        field(&input, "branch_id")?,
-                        enabled,
-                        generation,
                         &identity.principal,
                         operation(&input)?,
                     )
@@ -1068,22 +1160,6 @@ impl Backend for EngineBackend {
                 }
                 Ok(json!({"file_id":file,"versions":visible}))
             }
-            crate::BackendAction::Graph => {
-                let history = field(&input, "history_tree_id")?;
-                repo_for_history(&engine, history)?;
-                encode(engine.graph(history).map_err(error)?)
-            }
-            crate::BackendAction::Placement => {
-                let id = field(&input, "version_id")?;
-                authorized_version(&engine, id)?;
-                encode(engine.state().placements.get(id).ok_or_else(|| {
-                    ApiError::new(
-                        ::http::StatusCode::NOT_FOUND,
-                        storage_contract::ErrorCode::NotFound,
-                        "placement not found",
-                    )
-                })?)
-            }
             crate::BackendAction::PurgePlan => {
                 keys(&input, &["history_tree_id", "version_ids"])?;
                 let history = field(&input, "history_tree_id")?;
@@ -1199,36 +1275,6 @@ impl Backend for EngineBackend {
                 let observation = engine.prepare_disk_observation();
                 drop(engine);
                 encode(json!({"disks":observation.status().map_err(error)?}))
-            }
-            crate::BackendAction::Topology => Ok(
-                json!({"topology_id":"default","generation":engine.state().topology_generation.to_string(),"slots":engine.config().disks.iter().map(|disk|json!({"slot_id":disk.slot_id,"disk_id":disk.disk_id,"level":disk.level,"upstream_slot_id":disk.upstream_slot_id,"metadata_member":disk.metadata_member,"binding_generation":disk.binding_generation.to_string()})).collect::<Vec<_>>()}),
-            ),
-            crate::BackendAction::Events => {
-                let after = storage_contract::parse_u64_decimal(
-                    input
-                        .get("query")
-                        .and_then(|query| query.get("after"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("0"),
-                )
-                .map_err(ApiError::invalid_source)?;
-                if after > engine.state().sequence {
-                    return Err(ApiError::new(
-                        ::http::StatusCode::BAD_REQUEST,
-                        storage_contract::ErrorCode::InvalidCursor,
-                        "event cursor is ahead of the published sequence",
-                    ));
-                }
-                let mut events = Vec::new();
-                let mut inspected = after;
-                for event in events_after(&engine.state().events, after) {
-                    inspected = event.sequence;
-                    events.push(event);
-                    if events.len() >= 1000 {
-                        break;
-                    }
-                }
-                Ok(json!({"events":events,"next_cursor":inspected.to_string()}))
             }
             crate::BackendAction::RegisterDisk => Err(ApiError::new(
                 ::http::StatusCode::CONFLICT,

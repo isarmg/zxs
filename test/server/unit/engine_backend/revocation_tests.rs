@@ -174,6 +174,53 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.workspace_capacity(identity)
     }
+    fn smb_binding_status(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::SmbBindingStatus, crate::ApiError> {
+        self.enter();
+        self.inner.smb_binding_status(identity, id)
+    }
+    fn update_smb_binding(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateSmbBinding<'_>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.update_smb_binding(identity, request)
+    }
+    fn topology_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<crate::TopologySnapshot, crate::ApiError> {
+        self.enter();
+        self.inner.topology_snapshot(identity)
+    }
+    fn placement_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::Placement, crate::ApiError> {
+        self.enter();
+        self.inner.placement_snapshot(identity, id)
+    }
+    fn event_page(
+        &self,
+        identity: &crate::auth::Identity,
+        after: u64,
+    ) -> Result<crate::EventPage, crate::ApiError> {
+        self.enter();
+        self.inner.event_page(identity, after)
+    }
+    fn history_graph(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
+        self.enter();
+        self.inner.history_graph(identity, id)
+    }
     fn commit_snapshot(
         &self,
         identity: &crate::auth::Identity,
@@ -463,6 +510,12 @@ enum Request {
     BranchSnapshot,
     Resolve,
     CommitSnapshot,
+    HistoryGraph,
+    EventPage,
+    TopologySnapshot,
+    PlacementSnapshot,
+    SmbBindingStatus,
+    UpdateSmbBinding,
     BranchesSnapshot,
     RepositoryAuthorization,
     Namespace,
@@ -560,6 +613,12 @@ impl Request {
             Self::SmbAuthorizeRead => backend.authorize_current(identity, &fixture.repo.main_branch_id),
             // Immutable SMB file handles still authorize their pinned version.
             Self::Version => backend.version_snapshot(identity,&fixture.version).map(|_| ()),
+            Self::SmbBindingStatus => backend.smb_binding_status(identity,&fixture.repo.repository_id).map(|_|()),
+            Self::UpdateSmbBinding => backend.update_smb_binding(identity,crate::UpdateSmbBinding {repository:&fixture.repo.repository_id,branch:&fixture.repo.main_branch_id,enabled:false,expected_history_generation:1,operation:storage_contract::OperationId::generate()}).map(|_|()),
+            Self::TopologySnapshot => backend.topology_snapshot(identity).map(|_|()),
+            Self::PlacementSnapshot => backend.placement_snapshot(identity,&fixture.version).map(|_|()),
+            Self::EventPage => backend.event_page(identity,u64::MAX).map(|_|()),
+            Self::HistoryGraph => backend.history_graph(identity,&fixture.repo.history_tree_id).map(|_|()),
             Self::CommitSnapshot => backend.commit_snapshot(identity,&fixture.workspace.base_head).map(|_|()),
             Self::Resolve => backend.resolve_entry(identity,crate::ResolveEntry {branch:&fixture.repo.main_branch_id,path:&name_policy::LookupPath::parse("file.txt").unwrap(),commit:None}).map(|_|()),
             Self::BranchSnapshot => backend.branch_snapshot(identity,&fixture.repo.main_branch_id).map(|_|()),
@@ -663,6 +722,12 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::BranchSnapshot,
                 Request::Resolve,
                 Request::CommitSnapshot,
+                Request::HistoryGraph,
+                Request::EventPage,
+                Request::TopologySnapshot,
+                Request::PlacementSnapshot,
+                Request::SmbBindingStatus,
+                Request::UpdateSmbBinding,
                 Request::BranchesSnapshot,
                 Request::RepositoryAuthorization,
                 Request::Namespace,
@@ -756,7 +821,7 @@ fn revoked_session_cannot_turn_public_probes_into_data_admission() {
             .code,
         storage_contract::ErrorCode::Unauthorized
     );
-    for action in [BackendAction::Events, BackendAction::MonitorDisks] {
+    for action in [BackendAction::Check, BackendAction::MonitorDisks] {
         assert_eq!(
             fixture
                 .backend
@@ -821,6 +886,12 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::BranchSnapshot,
         Request::Resolve,
         Request::CommitSnapshot,
+        Request::HistoryGraph,
+        Request::EventPage,
+        Request::TopologySnapshot,
+        Request::PlacementSnapshot,
+        Request::SmbBindingStatus,
+        Request::UpdateSmbBinding,
         Request::BranchesSnapshot,
         Request::RepositoryAuthorization,
         Request::Namespace,

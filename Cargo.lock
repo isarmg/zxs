@@ -244,6 +244,7 @@ dependencies = [
  "regex",
  "schema-validation",
  "storage-contract",
+ "tempfile",
  "toml",
  "url-encoding",
 ]

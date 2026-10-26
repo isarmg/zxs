@@ -84,6 +84,12 @@ impl<T> SharedRecords<T> {
         self.records.values().map(Arc::as_ref)
     }
 
+    /// Borrow handles in key order so callers can filter before sharing payloads.
+    /// Cloning a selected handle never clones T; ordinary copy-on-write isolation remains.
+    pub fn shared_values(&self) -> impl DoubleEndedIterator<Item = &Arc<T>> + ExactSizeIterator {
+        self.records.values()
+    }
+
     pub fn keys(&self) -> impl DoubleEndedIterator<Item = &String> + ExactSizeIterator {
         self.records.keys()
     }

@@ -152,6 +152,47 @@ impl Backend for Probe {
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn smb_binding_status(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<crate::SmbBindingStatus, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn update_smb_binding(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdateSmbBinding<'_>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn topology_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<crate::TopologySnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn placement_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::Placement, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn event_page(
+        &self,
+        _identity: &crate::auth::Identity,
+        _after: u64,
+    ) -> Result<crate::EventPage, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn history_graph(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn commit_snapshot(
         &self,
         _identity: &crate::auth::Identity,

@@ -10,7 +10,7 @@ Web 管理页使用 `src/web/src/admin/request.rs` 的 HTTP 请求构建器。�
 | 创建仓库 | POST /api/repositories | 仓库表单 |
 | 仓库列表 | GET /api/repositories | 查看仓库 |
 | 磁盘 | GET /api/admin/disks | 查看磁盘 / 现有文件管理器磁盘导航 |
-| 备份拓扑 | GET /api/backup-topologies/{id} | 查看拓扑 |
+| 备份拓扑 | GET /api/backup-topologies/default | 查看拓扑 |
 | 路径保护策略 | GET/PUT /api/policies/{id} | 查看当前值；策略表单仅创建／更新无稳定 scope 的现行路径规则，要求显式预期代数 |
 | 文件／目录备份配置 | GET/PUT /api/repositories/{id}/backup-configuration | 文件管理器备份设置，固定 scope 身份与自身代数；保留旧绑定并回填所覆盖的可用历史版本 |
 | 放置规则 | GET/PUT /api/primary-placement-rules/{id} | 放置规则表单，显式预期代数；查看当前值 |

@@ -38,6 +38,10 @@ fn exercise(browser: &Browser) -> Result<()> {
         json!({"width":390,"height":844,"deviceScaleFactor":1,"mobile":false}),
     )?;
     evaluate(browser, "window.__zxsTreeFrames.settle()")?;
+    println!(
+        "PASS tree incremental registration/output isolation (synthetic DOM fixture): {}",
+        evaluate(browser, "window.__zxsTreeFrames.registrationMatrix()")?
+    );
     evaluate(
         browser,
         r#"(async()=>{
@@ -130,7 +134,7 @@ fn exercise(browser: &Browser) -> Result<()> {
         const p=window.__zxsTreeFrames;await p.flush(p.scroll.root);
         p.check(Math.abs(p.scroll.root.parentElement.scrollLeft-p.scroll.left)<=1,'refresh preserves user scroll');
         p.hold=true;p.burst();p.old=p.current();
-        p.oldFrames=p.pending(p.old);p.oldMeasures=p.roots.get(p.old).measures;
+        p.oldFrames=p.pending(p.old);p.oldMeasures=p.roots.get(p.old).frameReads.canvas;
         return true;
     })()"#,
     )?;
@@ -147,11 +151,11 @@ fn exercise(browser: &Browser) -> Result<()> {
         r#"(async()=>{
         const p=window.__zxsTreeFrames;
         p.check(p.oldFrames.length===1&&p.oldFrames[0].canceled,'cleanup cancels pending RAF');
-        p.check(p.observers.filter(o=>o.root===p.old).every(o=>o.disconnected),'cleanup disconnects both observers');
+        p.check(p.observers.filter(o=>o.root===p.old).every(o=>o.disconnected&&o.targets.size===0),'cleanup disconnects both observers and releases targets');
         // Simulate a host delivering an already-canceled RAF, not a dropped
         // observer closure. The original WASM RAF closure must safely no-op.
         for(const frame of p.oldFrames)frame.callback(performance.now());
-        p.check(p.roots.get(p.old).measures===p.oldMeasures,'late RAF cannot measure detached tree');
+        p.check(p.roots.get(p.old).frameReads.canvas===p.oldMeasures,'late RAF cannot measure detached tree');
         p.hold=false;await p.settle();
         p.check(window.__zxsSmokeErrors.length===0,'late RAF cannot access disposed signals');
         return true;

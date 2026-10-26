@@ -14,8 +14,9 @@ use std::{
     rc::Rc,
 };
 use wasm_bindgen::{JsCast, closure::Closure};
-use web_interface::{html, i18n::t, prelude::*};
+use web_interface::{html, i18n::t, prelude::*, svg};
 
+mod observers;
 mod refresh;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -606,7 +607,12 @@ fn measure(root: &web_sys::Element, layout: &Layout) -> Geometry {
     }
 }
 
-fn observe(root: NodeRef<html::Div>, layout: Memo<Layout>, geometry: RwSignal<Geometry>) {
+fn observe(
+    root: NodeRef<html::Div>,
+    links: NodeRef<svg::Svg>,
+    layout: Memo<Layout>,
+    geometry: RwSignal<Geometry>,
+) {
     root.on_load(move |element| {
         let element: web_sys::Element = element.unchecked_into();
         let update_root = element.clone();
@@ -659,29 +665,19 @@ fn observe(root: NodeRef<html::Div>, layout: Memo<Layout>, geometry: RwSignal<Ge
         let resize = web_sys::ResizeObserver::new(callback.as_ref().unchecked_ref())
             .expect("invariant: admitted browser constructs a ResizeObserver");
         resize.observe(&element);
-        let observe_nodes = {
-            let resize = resize.clone();
-            let element = element.clone();
-            move || {
-                let nodes = element
-                    .query_selector_all(".zxs-version-node")
-                    .expect("invariant: version-node selector is valid");
-                for index in 0..nodes.length() {
-                    if let Some(node) = nodes
-                        .item(index)
-                        .and_then(|node| node.dyn_into::<web_sys::Element>().ok())
-                    {
-                        resize.observe(&node);
-                    }
-                }
-            }
-        };
-        observe_nodes();
+        let nodes = Rc::new(observers::Nodes::new(element.clone(), resize.clone()));
+        let mutation_nodes = Rc::clone(&nodes);
         let mutation_refresh = Rc::clone(&refresh);
+        // A NodeRef captures our actual SVG, never an author's lookalike class.
+        let links: web_sys::Element = links
+            .get_untracked()
+            .expect("invariant: mounted tree owns its connector SVG")
+            .unchecked_into();
         let mutation_callback = Closure::wrap(Box::new(
-            move |_: js_sys::Array, _: web_sys::MutationObserver| {
-                observe_nodes();
-                mutation_refresh.request();
+            move |records: js_sys::Array, _: web_sys::MutationObserver| {
+                if mutation_nodes.reconcile(records, &links) {
+                    mutation_refresh.request();
+                }
             },
         )
             as Box<dyn FnMut(js_sys::Array, web_sys::MutationObserver)>);
@@ -699,9 +695,11 @@ fn observe(root: NodeRef<html::Div>, layout: Memo<Layout>, geometry: RwSignal<Ge
             mutation,
             mutation_callback,
             refresh,
+            nodes,
         ));
         on_cleanup(move || {
             cleanup.4.close();
+            cleanup.5.close();
             cleanup.0.disconnect();
             cleanup.2.disconnect();
             drop(cleanup);
@@ -749,11 +747,12 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     let tree = Memo::new(move |_| layout(&versions.get()));
     let geometry = RwSignal::new(Geometry::default());
     let root = NodeRef::<html::Div>::new();
-    observe(root, tree, geometry);
+    let links = NodeRef::<svg::Svg>::new();
+    observe(root, links, tree, geometry);
     view! {
         <div class="zxs-version-tree-scroll" aria-label=t("文件版本树","File version tree")>
             <div class="zxs-version-tree-canvas" node_ref=root>
-                <svg class="zxs-version-tree-links" aria-hidden="true" focusable="false"
+                <svg node_ref=links class="zxs-version-tree-links" aria-hidden="true" focusable="false"
                     viewBox=move ||geometry.with(|g|format!("0 0 {} {}",g.width.max(1.),g.height.max(1.))) preserveAspectRatio="none">
                     <defs><marker id="zxs-version-arrow" class="zxs-version-tree-arrow" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L8,4 L0,8 Z"/></marker></defs>
                     <For each=move ||geometry.with(|g|g.paths.keys().cloned().collect::<Vec<_>>()) key=|edge|edge.clone() children=move |(parent,child)| {

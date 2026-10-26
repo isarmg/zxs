@@ -214,6 +214,53 @@ impl Backend for BackendProbe {
         self.wait()?;
         Ok(probe_capacity())
     }
+    fn smb_binding_status(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<crate::SmbBindingStatus, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn update_smb_binding(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdateSmbBinding<'_>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn topology_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<crate::TopologySnapshot, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn placement_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<storage_contract::Placement, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn event_page(
+        &self,
+        _identity: &crate::auth::Identity,
+        _after: u64,
+    ) -> Result<crate::EventPage, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn history_graph(
+        &self,
+        _identity: &crate::auth::Identity,
+        _id: &str,
+    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn commit_snapshot(
         &self,
         _identity: &crate::auth::Identity,
@@ -600,9 +647,11 @@ async fn upload_status_retains_read_admission_after_cancellation() {
     );
 }
 
-async fn workspace_request(app: Router, path: &str) -> Response {
+async fn workspace_request(app: Router, method: &str, path: &str) -> Response {
     let body = if path == "/api/workspaces" {
         json!({"branch_id":"branch"})
+    } else if method == "PUT" && path.ends_with("/smb-binding") {
+        json!({"branch_id":"branch","enabled":false,"expected_history_generation":"1","operation_id":"op_00000000000000000000000000000000"})
     } else if path.ends_with("/resolve") {
         json!({"path":"file.txt"})
     } else if path.ends_with("/namespace-operations") {
@@ -614,21 +663,7 @@ async fn workspace_request(app: Router, path: &str) -> Response {
     };
     app.oneshot(
         Request::builder()
-            .method(
-                if path == "/api/workspaces/workspace"
-                    || path == "/api/versions/version"
-                    || path.starts_with("/api/branches/branch/tree")
-                    || path == "/api/repositories/repository"
-                    || path == "/api/branches/branch"
-                    || path == "/api/commits/commit"
-                    || path == "/api/repositories/repository/branches"
-                    || path.starts_with("/api/operations/")
-                {
-                    "GET"
-                } else {
-                    "POST"
-                },
-            )
+            .method(method)
             .uri(path)
             .header("content-type", "application/json")
             .body(Body::from(json_codec::to_vec(&body).unwrap()))
@@ -640,46 +675,52 @@ async fn workspace_request(app: Router, path: &str) -> Response {
 
 #[tokio::test]
 async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation() {
-    for path in [
-        "/api/branches/branch/write-sessions",
-        "/api/branches/branch/resolve",
-        "/api/versions/version",
-        "/api/branches/branch/tree?commit_id=commit",
-        "/api/repositories/repository",
-        "/api/branches/branch",
-        "/api/commits/commit",
-        "/api/repositories/repository/branches",
-        "/api/operations/op_00000000000000000000000000000000",
-        "/api/workspaces",
-        "/api/workspaces/workspace/abort",
-        "/api/workspaces/workspace/seal",
-        "/api/workspaces/workspace/namespace-operations",
-        "/api/workspaces/workspace/commit",
-        "/api/workspaces/workspace",
+    for (method, path) in [
+        ("POST", "/api/branches/branch/write-sessions"),
+        ("POST", "/api/branches/branch/resolve"),
+        ("GET", "/api/versions/version"),
+        ("GET", "/api/branches/branch/tree?commit_id=commit"),
+        ("GET", "/api/repositories/repository"),
+        ("GET", "/api/branches/branch"),
+        ("GET", "/api/commits/commit"),
+        ("GET", "/api/history-trees/history/graph"),
+        ("GET", "/api/events?after=17"),
+        ("GET", "/api/backup-topologies/default"),
+        ("GET", "/api/versions/version/placement"),
+        ("GET", "/api/repositories/repository/smb-binding"),
+        ("PUT", "/api/repositories/repository/smb-binding"),
+        ("GET", "/api/repositories/repository/branches"),
+        ("GET", "/api/operations/op_00000000000000000000000000000000"),
+        ("POST", "/api/workspaces"),
+        ("POST", "/api/workspaces/workspace/abort"),
+        ("POST", "/api/workspaces/workspace/seal"),
+        ("POST", "/api/workspaces/workspace/namespace-operations"),
+        ("POST", "/api/workspaces/workspace/commit"),
+        ("GET", "/api/workspaces/workspace"),
     ] {
         let root = crate::tests::private_tempdir();
         let (app, gate, _release) = fixture(root.path(), 0, false);
         let mut jobs = Vec::new();
         for _ in 0..HTTP_BACKEND_SLOTS {
-            jobs.push(tokio::spawn(workspace_request(app.clone(), path)));
+            jobs.push(tokio::spawn(workspace_request(app.clone(), method, path)));
         }
         tokio::time::timeout(
             Duration::from_secs(5),
             gate.started.acquire_many(HTTP_BACKEND_SLOTS as u32),
         )
         .await
-        .unwrap()
+        .unwrap_or_else(|error| panic!("typed route {path} did not enter its backend: {error}"))
         .unwrap()
         .forget();
         assert_eq!(
-            workspace_request(app.clone(), path).await.status(),
+            workspace_request(app.clone(), method, path).await.status(),
             StatusCode::TOO_MANY_REQUESTS
         );
         let cancelled = jobs.pop().unwrap();
         cancelled.abort();
         assert!(cancelled.await.unwrap_err().is_cancelled());
         assert_eq!(
-            workspace_request(app.clone(), path).await.status(),
+            workspace_request(app.clone(), method, path).await.status(),
             StatusCode::TOO_MANY_REQUESTS
         );
         assert_eq!(gate.calls.load(Ordering::SeqCst), HTTP_BACKEND_SLOTS);
@@ -693,7 +734,7 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
             .unwrap()
             .forget();
         loop {
-            let response = workspace_request(app.clone(), path).await;
+            let response = workspace_request(app.clone(), method, path).await;
             if response.status() != StatusCode::TOO_MANY_REQUESTS {
                 break;
             }

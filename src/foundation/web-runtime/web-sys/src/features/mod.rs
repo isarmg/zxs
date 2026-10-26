@@ -676,3 +676,9 @@ mod gen_console;
 #[cfg(feature = "console")]
 #[allow(unused_imports)]
 pub use gen_console::*;
+
+#[cfg(feature = "MutationRecord")]
+#[allow(non_snake_case)]
+mod gen_MutationRecord;
+#[cfg(feature = "MutationRecord")]
+pub use gen_MutationRecord::*;

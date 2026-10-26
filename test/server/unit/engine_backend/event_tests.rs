@@ -1,5 +1,4 @@
 use super::*;
-use crate::BackendAction;
 use storage_contract::{Config, Event};
 
 fn event(sequence: u64) -> Event {
@@ -37,11 +36,9 @@ fn event_cursor_at_large_history_tail_returns_only_unseen_events() {
 }
 
 fn poll(backend: &EngineBackend, identity: &Identity, after: u64) -> Result<Value, ApiError> {
-    backend.call(
-        BackendAction::Events,
-        identity,
-        json!({"query":{"after":after.to_string()}}),
-    )
+    backend.event_page(identity, after).map(|page| {
+        json_codec::to_value(crate::backend_events::EventPageResponse::from(page)).unwrap()
+    })
 }
 
 #[test]
@@ -112,4 +109,95 @@ fn event_cursor_preserves_singleton_visibility_progress_and_recovery_order() {
         poll(&backend, &identity, first).unwrap()["events"][0]["sequence"],
         last.to_string()
     );
+}
+
+#[test]
+fn typed_event_page_copies_only_bounded_suffix_and_keeps_cursor_gaps() {
+    let events = (1..=100_000).map(event).collect::<Vec<_>>();
+    let page = capture_event_page(&events, 100_005, 98_500).unwrap();
+    assert_eq!(page.events.len(), 1000);
+    assert_eq!(page.next_cursor, 99_500);
+    assert_eq!(page.events, &events[98_500..99_500]);
+    assert_ne!(page.events[0].kind.as_ptr(), events[98_500].kind.as_ptr());
+    let last = capture_event_page(&events, 100_005, page.next_cursor).unwrap();
+    assert_eq!(last.events.len(), 500);
+    assert_eq!(last.next_cursor, 100_000);
+    let empty = capture_event_page(&events, 100_005, 100_004).unwrap();
+    assert!(empty.events.is_empty());
+    assert_eq!(empty.next_cursor, 100_004);
+    assert_eq!(
+        capture_event_page(&events, 100_005, 100_006)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::InvalidCursor
+    );
+    assert_eq!(
+        capture_event_page(&[], u64::MAX, u64::MAX)
+            .unwrap()
+            .next_cursor,
+        u64::MAX
+    );
+}
+
+#[test]
+fn typed_event_page_is_frozen_and_serializes_without_the_engine_lock() {
+    use data_serialization::{Serialize, Serializer, ser::Error as _};
+    let root = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([root.path().join("disk")]),
+    )
+    .unwrap();
+    let identity = install_test_administrator(&mut engine, "owner");
+    engine
+        .create_repository(
+            "first",
+            "P01",
+            1,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let expected = json!({"events":engine.state().events,"next_cursor":engine.state().events.last().unwrap().sequence.to_string()});
+    let backend = EngineBackend::new(engine);
+    let snapshot = backend.event_page(&identity, 0).unwrap();
+    backend
+        .engine
+        .lock()
+        .unwrap()
+        .create_repository(
+            "second",
+            "P01",
+            1,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    struct Probe<'a>(
+        &'a EngineBackend,
+        &'a crate::backend_events::EventPageResponse,
+    );
+    impl Serialize for Probe<'_> {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            let unlocked = std::thread::scope(|scope| {
+                scope
+                    .spawn(|| self.0.engine.try_lock().is_ok())
+                    .join()
+                    .unwrap()
+            });
+            if !unlocked {
+                return Err(S::Error::custom(
+                    "event serialization retained engine mutex",
+                ));
+            }
+            self.1.serialize(serializer)
+        }
+    }
+    let response = crate::backend_events::EventPageResponse::from(snapshot);
+    assert_eq!(
+        json_codec::to_value(Probe(&backend, &response)).unwrap(),
+        expected
+    );
+    drop(backend);
+    assert_eq!(json_codec::to_value(response).unwrap(), expected);
 }

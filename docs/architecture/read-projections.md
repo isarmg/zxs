@@ -84,12 +84,12 @@ SMB RPC 入口一次解析路径并直接构造同一类型，替换目标删除
 
 ## 剩余 Value 调用清单
 
-此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 51 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
+此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 45 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
 
 - **工作区 seal／公开发布已接续迁移。** 见[公开提交边界](detached-workspace-commits.md#public-commit-envelope-and-seal)；HTTP 与 SMB 保留各自摘要契约。上传 publication 结果也已接续类型化；namespace 暂存也已接续迁移；write-session 已接续迁移，通用读取仍有 Value，不能据当前迁移宣称全部工作区接口已经分层。
-- **SMB 绑定／只读冻结版本。** Capabilities、Repository 与冻结版本已使用 typed snapshot/准入，生产 Session::call 已删除。不是本次 typed 当前查询的后备路径。
-- **HTTP 通用读取。** history/graph/events/compare、目录分支及选择、拓扑／放置／策略／磁盘／健康查询，仍由 HTTP 通用分派调用 `Backend::call`。
-- **HTTP 写入与计划。** 仓库／分支／目录分支创建和选择、SMB binding 配置、policy/placement，以及 split/purge/historical-save/plan 的请求与结果仍需逐组迁移。operation HTTP 入口已接续到既有 typed 方法；其余 action 仍需逐项迁移。
+- **SMB 绑定／只读冻结版本。** 绑定 GET/PUT、Capabilities、Repository 与冻结版本已使用 typed 请求/快照/准入，生产 Session::call 已删除。不是本次 typed 当前查询的后备路径。
+- **HTTP 通用读取。** history/compare、目录分支及选择、放置规则／策略／磁盘／健康查询，仍由 HTTP 通用分派调用 `Backend::call`。
+- **HTTP 写入与计划。** 仓库／分支／目录分支创建和选择、policy/placement，以及 split/purge/historical-save/plan 的请求与结果仍需逐组迁移。operation HTTP 入口已接续到既有 typed 方法；其余 action 仍需逐项迁移。
 - **文件管理与管理控制面。** `FileManager*` action、setup_operation 等仍有独立 Value 协议；management_status/retry_storage 已接续类型化；需要核对每个 HTTP 消费者，不能以新增一个包裹枚举代替拆除旧 JSON 路径。
 
 这次不改领域 `OperationResult.result`、Plan 输入、持久化编码、canonical 哈希、永久幂等收据或公开 `Commit.kind`。当前 `core.schema.json` 的 `$defs.Commit.properties.kind` 是开放 string，不可仅按内部已见字面量将它收窄为封闭枚举。后续 model/persist/wire 分离应独立建立固定向量和公开消费者证据。
@@ -203,4 +203,40 @@ Resolve action 与内部 optional_identity Value 解析删除。HTTP 在原 boun
 
 CommitResponse拥有Arc，Serialize时仅穷尽借用CommitRecord字段：entries/parent_commit_ids是slice，pending map与可选namespace_deletions借用，不clone整个Commit或条目。序列化在引擎返回并解锁后；已准入响应可在撤权后完成，但下一次commit_snapshot必须重新准入。公开core.schema的Commit.kind仍为开放string，响应保留任意kind、字符串sequence、provenance=null和namespace_deletions/pending的原省略规则；未改持久化或canonical编码。
 
-回归同时核对真实state Arc/entries指针、DTO集合借用指针、序列化期间跨线程可取得实际引擎锁、撤权拒绝后续读取、u64::MAX与未知kind的固定字段/规范字节、完整HTTP当前/历史commit与独立Graph记录一致性。Graph仍是独立remaining action，不把本次Arc改造说成所有历史接口已去全量复制，也不改变History可见性过滤。
+回归同时核对真实state Arc/entries指针、DTO集合借用指针、序列化期间跨线程可取得实际引擎锁、撤权拒绝后续读取、u64::MAX与未知kind的固定字段/规范字节、完整HTTP当前/历史commit与独立Graph记录一致性。Graph已在下节接续迁移，不把本次Arc改造说成所有历史接口已去全量复制，也不改变History可见性过滤。
+
+
+## 历史图快照
+
+Graph action已删除。history_graph 先同锁复核当前身份与history→repository，再捕获该history的metadata及Vec<Arc<Commit>>；SharedRecords::shared_values借用按key排列的Arc，过滤后才clone选中handle，不再次get_shared查树、不clone Commit.entries。branch/link/boundary元数据仍是输出规模的owned复制；释放引擎锁后按原sequence稳定排序commits，再由HTTP显式HistoryGraphResponse输出。其它集合保持原map顺序，跨history仅保留原筛选条件，外部boundary标识只作为审计数据，不新增遍历或授权路径。
+
+Graph的commits复用CommitResponse/CommitRecord；history/raw branch/merge link/boundary使用穷尽wire转换。Graph中的Branch是原始记录，不混入普通BranchResponse的materialized/read_only等派生字段；namespace/pending省略、字符串generation/sequence、可空标识与boundary_marks始终为数组的形状保持。Engine::graph仍供其它现存核心调用方使用，本组不宣称其所有调用方已去全量复制，History可见性过滤也没有改变。
+
+SharedRecords回归覆盖过滤前后handle计数、零payload clone、NonClone类型、key顺序、COW隔离及owner释放；实际Graph回归比较旧Engine::graph完整wire/规范字节、selected commit/entries指针、排除history不增引用、后续发布/引擎释放后的冻结结果、锁外序列化与撤权首错。HTTP核对同history范围、sequence顺序、raw branch及公开commit字段一致性；panic和取消容量矩阵走真实history_graph方法。
+
+
+## SMB share 配置边界
+
+HTTP GET/PUT `/api/repositories/{repo}/smb-binding` 使用 required `smb_binding_status` / `update_smb_binding`，旧两 action 删除。GET同锁复核当前身份、repository和history，捕获四字段owned状态；wire中的history_generation明确取history.generation，不把auth::SmbBinding的repo.smb_binding_generation当作同一含义。PUT在严格JSON与path/body绑定后、持有backend_slots的阻塞任务中按unknown字段→enabled→generation→branch→operation顺序解析；非法非空operation保留INVALID_ID与来源，未供应字符串保留原具体错误。静态格式拒绝现在先于Backend repository准入（HTTP认证中间件仍在前）；不伪称跨层错误优先级完全未变。
+
+引擎同一锁内复核当前身份并使用current.principal，保留repository存在性前置检查，然后直接调用原set_smb_binding；其永久收据摘要仍由原kind/principal/typed参数构成相同canonical body，expected_generation内部键不改成public expected_history_generation。同operation重放先于变化后的generation/workspace条件；不同输入冲突不越过永久收据，missing repository仍先于core收据。核心递增history和SMB binding两个计数且重放不重复递增；SMB hello与现有会话仍校验原binding token，不把status快照当授权。OperationResult仅在HTTP最终operation_wire编码，未加内部JSONfallback。
+
+回归覆盖真实核心旧入口共享相同收据、相同/不同输入重放、陈旧generation、Open/Sealed workspace拒绝、缺失仓库首错、撤权、HTTP wire与静态错误来源；既有SMB rebind helper直接使用typed字段，panic/取消槽占用/排队撤权矩阵均走新方法。持久化、核心事务与共享生成计数实现未改。
+
+
+## 有界事件页
+
+GET `/api/events` 的after在HTTP边界解析一次为u64；缺失明确表示0，空串/非规范整数仍拒绝，未知query继续忽略。Backend::event_page是required typed方法，Events action删除。当前身份复核后同锁检查cursor不超过已发布sequence，再保留events_after二分定位与最多1000条限制，复制该页Event到请求独有Vec；next_cursor仍为最后返回事件sequence，没有事件时保持after，不能把没有事件的sequence间隙推进至全局published值。既有持久化Vec<Event>及排序/恢复契约不改，没有新增缓存或全历史复制。
+
+返回解锁后显式穷尽EventResponse字段编码，OperationId保持原typed值，kind/object_id移动为wire字符串，u64仅在wire转十进制文本。合法cursor的InvalidCursor判断仍在当前身份准入后；静态非法整数现在在Backend前拒绝，但HTTP认证中间件仍优先。没有逐event新增过滤，保留单管理员原可见性，不混入Graph/History范围策略。
+
+回归覆盖100k历史尾部二分与1000/500页、空页sequence间隙、u64::MAX、固定canonical字段字节、真实核心发布后冻结和锁外序列化/owner释放、原恢复顺序、HTTP未知query/坏cursor/匿名优先级，以及真实panic/取消容量/撤权排队矩阵。remaining动作清单继续保留尚未迁移项，不把有界页所有权当作整个历史存储优化。
+
+
+## 当前拓扑与版本冻结放置
+
+真实Web消费者只请求`/api/backup-topologies/default`，核心只有当前池的全局topology_generation与已验证config.disks，没有按ID查找多个拓扑的模型。旧动态路由忽略任意topology参数并返回default，不是已确认的别名契约。本组收敛为固定default路由；其它拓扑路径自然404，没有新增单值enum、字符串状态或兼容别名。三份活动接口文档同步，来源归档保持不可变。Backend::topology_snapshot不接受闲置ID参数；同锁当前身份准入后捕获generation及配置顺序的六字段slot元数据，穷尽解构DiskConfig时明确排除本机root和capacity_bytes。只有最终wire补充固定topology_id=default及十进制代际。
+
+Backend::placement_snapshot仍按当前身份→version→history/repository→placement存在性顺序，返回owned Placement而不是锁内Value。HTTP显式穷尽映射version_id/primary_slot_id/target_copies/route_slot_ids/topology_generation/binding_generations，保留冻结路由顺序、十进制字符串map及原缺失错误；query不能覆盖路由version。两项旧action删除，锁外编码；不更改磁盘配置、核心拓扑发布、物理盘检查、历史版本放置或持久化格式。
+
+回归涵盖旧完整wire/规范字节、MAX代际map、metadata_member=false/upstream=null保留、六字段白名单、本机路径不泄露、真实发布后快照/owner释放/锁外序列化、缺失与撤权首错。实际HTTP对default认证入口与其它拓扑名（包括匿名）404分开断言；panic/取消槽占用/排队撤权矩阵走required typed方法，不用默认unsupported冒充入口覆盖。保护策略及放置规则的写入仍在remaining清单，未将本组只读投影当作其完整迁移。

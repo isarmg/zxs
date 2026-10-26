@@ -102,7 +102,7 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `GET /api/history-trees/{history}/graph` | 分别包含版本演进父边、合并标记线、PURGED 节点及拆分来源的历史图 |
 | `PUT /api/policies/{policy}` | 条件创建／更新无稳定 scope 的现行路径保护规则，仅影响后续版本；稳定 scope 与保留设置须用 `backup-configuration` |
 | `GET /api/events?after={cursor}` | 可续读事件流或分页事件 |
-| `GET /api/backup-topologies/{topology}` | 已发布层级、各盘位直接来源和物理绑定；供已认证管理员查看 |
+| `GET /api/backup-topologies/default` | 当前池唯一拓扑的已发布代际、盘位直接来源和物理绑定；供已认证管理员查看，不接纳其它拓扑名别名 |
 | `POST /api/backup-topology-plans` | 用户指定一级/二级/后续来源映射，预检路由和数据迁移 |
 | `POST /api/storage-slots/{slot}/replacement-plans` | 用户为同一逻辑角色指定替换物理盘，保留来源映射 |
 | `PUT /api/primary-placement-rules/{rule}` | 条件设置仓库/目录的一级盘规则，只影响新版本；旧版另迁移 |

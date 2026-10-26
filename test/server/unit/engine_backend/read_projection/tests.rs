@@ -1055,3 +1055,12 @@ fn typed_resolve_preserves_directory_absence_and_missing_entry_errors() {
     assert_eq!(missing.code, storage_contract::ErrorCode::NotFound);
     assert_eq!(missing.message, "entry not found");
 }
+
+#[path = "graph_tests.rs"]
+mod graph_tests;
+
+#[path = "smb_binding_tests.rs"]
+mod smb_binding_tests;
+
+#[path = "storage_metadata_tests.rs"]
+mod storage_metadata_tests;

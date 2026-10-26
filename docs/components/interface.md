@@ -8,7 +8,7 @@
 
 `view_renderer::view::RenderHtml` 在本项目只负责把浏览器 `<template>` 克隆恢复为可交互视图，静态模板生成由 `ToTemplate` 负责。它保留节点游标、动态值、事件及重建状态，不再提供服务端 HTML 字符串、流、异步服务端解析或服务端 hydration 模式。`ssr`、`hydrate`、`islands`、`mark_branches`、`nightly` 特性已移除；模板恢复无需启用空特性。模板中的 void 元素不生成子占位或闭合标签，动态 style 在恢复时复用正常 DOM 构建路径。
 
-类型化 DOM 接口以 [web-scope.json](../../tools/rust-sources/web-scope.json) 为当前维护范围：42 个 HTML 构造器、17 个 SVG 构造器、55 个属性键及 10 个事件描述符。未使用的 typed MathML、SVG use 和字符串内联事件属性已撤销。自定义元素、Unicode 属性、Custom 事件及 inert HTML/SVG 继续使用真实 DOM 路径；该清单不限制浏览器能解析的标记。web-sys 保留所有当前 manifest（含休眠边）及父类所需的 99 个特性，继续覆盖字体、几何、网络和生命周期。新增接口应先迁移真实调用方并更新此策略及来源收据。
+类型化 DOM 接口以 [web-scope.json](../../tools/rust-sources/web-scope.json) 为当前维护范围：42 个 HTML 构造器、17 个 SVG 构造器、55 个属性键及 10 个事件描述符。未使用的 typed MathML、SVG use 和字符串内联事件属性已撤销。自定义元素、Unicode 属性、Custom 事件及 inert HTML/SVG 继续使用真实 DOM 路径；该清单不限制浏览器能解析的标记。web-sys 保留所有当前 manifest（含休眠边）及父类所需的 100 个特性，继续覆盖字体、几何、网络和生命周期。新增接口应先迁移真实调用方并更新此策略及来源收据。`MutationRecord` 为版本树增量观察注册提供本地编写的最小类型化 childList 字段（target、addedNodes、removedNodes），不恢复其它退役 DOM 能力。
 
 
 生产构建同时编译独立模板夹具，浏览器套件实际执行 class/style、文本与转义、微任务属性、事件、节点/焦点保留、重建和卸载清理。CI 保存夹具、精确输入身份与浏览器结果，用于将最终提交、来源收据和实际 WASM 对应起来。

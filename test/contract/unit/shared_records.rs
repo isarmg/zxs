@@ -429,3 +429,49 @@ fn shared_record_handle_supports_non_clone_values_and_outlives_the_map() {
     drop(first);
     assert_eq!(second.0, "retained");
 }
+
+#[test]
+fn shared_value_iteration_filters_before_cloning_and_retains_cow_isolation() {
+    let clones = Arc::new(AtomicUsize::new(0));
+    let mut records: SharedRecords<_> = [
+        ("a".into(), counted("selected", &clones)),
+        ("b".into(), counted("excluded", &clones)),
+    ]
+    .into_iter()
+    .collect();
+    let selected = records
+        .shared_values()
+        .filter(|value| value.value == "selected")
+        .map(Arc::clone)
+        .collect::<Vec<_>>();
+    assert_eq!(records.shared_values().len(), 2);
+    assert_eq!(
+        records.shared_values().next_back().unwrap().value,
+        "excluded"
+    );
+    assert!(std::ptr::eq(selected[0].as_ref(), &records["a"]));
+    assert_eq!(
+        Arc::strong_count(records.shared_values().next_back().unwrap()),
+        1
+    );
+    assert_eq!(clone_count(&clones), 0);
+    records.get_mut("a").unwrap().value.push('!');
+    assert_eq!(clone_count(&clones), 1);
+    assert_eq!(selected[0].value, "selected");
+    drop(records);
+    assert_eq!(selected[0].value, "selected");
+}
+
+#[test]
+fn shared_value_iteration_accepts_non_clone_payloads() {
+    struct NonClone(u64);
+    let records: SharedRecords<_> = [("b".into(), NonClone(2)), ("a".into(), NonClone(1))]
+        .into_iter()
+        .collect();
+    let handles = records.shared_values().map(Arc::clone).collect::<Vec<_>>();
+    drop(records);
+    assert_eq!(
+        handles.iter().map(|value| value.0).collect::<Vec<_>>(),
+        [1, 2]
+    );
+}

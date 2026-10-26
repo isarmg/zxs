@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import resource
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -17,7 +18,33 @@ def require(condition, message):
         raise ValueError(message)
 
 
+
+def tempfile_library(output):
+    """Resolve the current consumer's exact artifact, never a stale target glob."""
+    paths = []
+    for line in output.splitlines():
+        item = json.loads(line)
+        if item.get('reason') == 'compiler-message' and item['message']['level'] in {'warning', 'error'}:
+            raise ValueError(item['message'].get('rendered') or item['message']['message'])
+        if (item.get('reason') == 'compiler-artifact'
+                and item['target']['name'] == 'tempfile' and 'lib' in item['target']['kind']):
+            paths.extend(Path(path) for path in item['filenames'] if path.endswith('.rlib'))
+    require(len(paths) == 1, 'Cargo must report exactly one tempfile library artifact')
+    return paths[0]
+
+
 def main():
+    # The fixture now owns a real TempDir. Build its declared dev dependency
+    # through the existing locked consumer, then link the oracle to that artifact.
+    try:
+        built = subprocess.run(
+            ['cargo', 'test', '--locked', '--offline', '-p', 'contract-check',
+             '--test', 'document_scan', '--no-run', '--message-format=json'],
+            check=True, cwd=ROOT, text=True, stdout=subprocess.PIPE)
+    except subprocess.CalledProcessError as error:
+        print(error.stdout or '', file=sys.stderr)
+        raise
+    tempfile_path = tempfile_library(built.stdout)
     catalog = json.loads((ROOT / 'compliance/rust-sources.json').read_text())
     with tempfile.TemporaryDirectory(prefix='document-scanner-oracle-') as directory:
         temporary = Path(directory)
@@ -48,7 +75,9 @@ def main():
         binary = temporary / 'document-scan-test'
         subprocess.run(['rustc', '--edition=2024', '--test', '--cfg', 'walker_oracle',
                         str(ROOT / 'test/tools/contract-check/document_scan.rs'),
-                        '--extern', f'walkdir={temporary}/libwalkdir.rlib', '-L', str(temporary), '-o', str(binary)], check=True, cwd=ROOT)
+                        '--extern', f'walkdir={temporary}/libwalkdir.rlib',
+                        '--extern', f'tempfile={tempfile_path}', '-L', f'dependency={tempfile_path.parent}',
+                        '-L', str(temporary), '-o', str(binary)], check=True, cwd=ROOT)
         def limit_handles():
             _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
             limit = 32 if hard == resource.RLIM_INFINITY else min(32, hard)

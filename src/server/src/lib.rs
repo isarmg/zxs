@@ -26,6 +26,16 @@ mod uploads;
 mod web_assets;
 
 mod backend_action;
+mod backend_smb_binding;
+pub use backend_smb_binding::{SmbBindingStatus, UpdateSmbBinding};
+mod http_smb_binding;
+use http_smb_binding::{smb_binding, update_smb_binding};
+mod backend_storage_metadata;
+pub use backend_storage_metadata::{TopologySlot, TopologySnapshot};
+mod backend_events;
+pub use backend_events::EventPage;
+mod backend_graph;
+pub use backend_graph::HistoryGraphSnapshot;
 mod backend_branch;
 pub use backend_branch::{BranchSnapshot, ContentDispositionSnapshot, FileBranchSnapshot};
 mod backend_read;
@@ -297,6 +307,28 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
     ) -> Result<storage_contract::WorkspaceCapacity, ApiError>;
+    fn smb_binding_status(
+        &self,
+        identity: &Identity,
+        repository: &str,
+    ) -> Result<SmbBindingStatus, ApiError>;
+    fn update_smb_binding(
+        &self,
+        identity: &Identity,
+        request: UpdateSmbBinding<'_>,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn topology_snapshot(&self, identity: &Identity) -> Result<TopologySnapshot, ApiError>;
+    fn placement_snapshot(
+        &self,
+        identity: &Identity,
+        version: &str,
+    ) -> Result<storage_contract::Placement, ApiError>;
+    fn event_page(&self, identity: &Identity, after: u64) -> Result<EventPage, ApiError>;
+    fn history_graph(
+        &self,
+        identity: &Identity,
+        history: &str,
+    ) -> Result<HistoryGraphSnapshot, ApiError>;
     fn commit_snapshot(
         &self,
         identity: &Identity,
@@ -559,6 +591,50 @@ impl Backend for AuthorizedBackend {
         identity: &crate::auth::Identity,
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         self.backend.workspace_capacity(&self.current(identity)?)
+    }
+    fn smb_binding_status(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::SmbBindingStatus, crate::ApiError> {
+        self.backend
+            .smb_binding_status(&self.current(identity)?, id)
+    }
+    fn update_smb_binding(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateSmbBinding<'_>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .update_smb_binding(&self.current(identity)?, request)
+    }
+    fn topology_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<crate::TopologySnapshot, crate::ApiError> {
+        self.backend.topology_snapshot(&self.current(identity)?)
+    }
+    fn placement_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::Placement, crate::ApiError> {
+        self.backend
+            .placement_snapshot(&self.current(identity)?, id)
+    }
+    fn event_page(
+        &self,
+        identity: &crate::auth::Identity,
+        after: u64,
+    ) -> Result<crate::EventPage, crate::ApiError> {
+        self.backend.event_page(&self.current(identity)?, after)
+    }
+    fn history_graph(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
+        self.backend.history_graph(&self.current(identity)?, id)
     }
     fn commit_snapshot(
         &self,
@@ -1127,7 +1203,7 @@ fn router_shared(
         .route("/api/plans/{plan}/cancel", post(plan_cancel))
         .route("/api/admin/disks", get(disks).post(register_disk))
         .route("/api/admin/check", get(check))
-        .route("/api/backup-topologies/{topology}", get(topology))
+        .route("/api/backup-topologies/default", get(topology))
         .route("/api/policies/{policy}", get(policy).put(update_policy))
         .route(
             "/api/primary-placement-rules/{rule}",
@@ -1422,7 +1498,31 @@ async fn repositories(
     .map(Json)
 }
 list_handler!(disks, crate::BackendAction::Disks);
-list_handler!(events, crate::BackendAction::Events);
+async fn events(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiQuery(query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<backend_events::EventPageResponse>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let after = storage_contract::parse_u64_decimal(
+            query.get("after").map(String::as_str).unwrap_or("0"),
+        )
+        .map_err(ApiError::invalid_source)?;
+        state
+            .backend
+            .event_page(&identity, after)
+            .map(backend_events::EventPageResponse::from)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
 list_handler!(check, crate::BackendAction::Check);
 async fn repository(
     State(state): State<AppState>,
@@ -1446,11 +1546,7 @@ async fn repository(
     .map_err(ApiError::join)?
     .map(Json)
 }
-read_handler!(
-    smb_binding,
-    crate::BackendAction::SmbBinding,
-    "repository_id"
-);
+
 read_handler!(
     default_branch,
     crate::BackendAction::DefaultBranch,
@@ -1554,7 +1650,28 @@ async fn version(
     .map_err(ApiError::join)?
     .map(Json)
 }
-read_handler!(placement, crate::BackendAction::Placement, "version_id");
+async fn placement(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiPath(version): ApiPath<String>,
+    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<backend_storage_metadata::PlacementResponse>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state
+            .backend
+            .placement_snapshot(&identity, &version)
+            .map(backend_storage_metadata::PlacementResponse::from)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
 read_handler!(history, crate::BackendAction::History, "file_id");
 async fn commit_info(
     State(state): State<AppState>,
@@ -1578,8 +1695,49 @@ async fn commit_info(
     .map_err(ApiError::join)?
     .map(Json)
 }
-read_handler!(graph, crate::BackendAction::Graph, "history_tree_id");
-read_handler!(topology, crate::BackendAction::Topology, "topology_id");
+async fn graph(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiPath(history): ApiPath<String>,
+    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<backend_graph::HistoryGraphResponse>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state
+            .backend
+            .history_graph(&identity, &history)
+            .map(backend_graph::HistoryGraphResponse::from)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
+async fn topology(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<backend_storage_metadata::TopologyResponse>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state
+            .backend
+            .topology_snapshot(&identity)
+            .map(backend_storage_metadata::TopologyResponse::from)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
 
 read_handler!(plan_info, crate::BackendAction::Plan, "plan_id");
 read_handler!(policy, crate::BackendAction::Policy, "policy_id");
@@ -1607,11 +1765,6 @@ id_post_handler!(
     "repository_id"
 );
 
-id_post_handler!(
-    update_smb_binding,
-    crate::BackendAction::UpdateSmbBinding,
-    "repository_id"
-);
 id_post_handler!(
     initialize_directory_scope,
     crate::BackendAction::InitializeDirectoryScope,

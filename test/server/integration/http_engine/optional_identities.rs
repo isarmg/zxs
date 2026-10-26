@@ -899,3 +899,262 @@ async fn typed_commit_snapshot_matches_graph_records_and_keeps_missing_errors() 
     assert_eq!(error["error"]["code"], "NOT_FOUND");
     assert_eq!(error["error"]["message"], "commit not found");
 }
+
+#[tokio::test]
+async fn typed_history_graph_keeps_scope_sequence_order_and_raw_branch_shape() {
+    let (_root, app, branch, old_commit, _) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let repositories = success(&app, &token, "GET", "/api/repositories", None).await;
+    let repository = &repositories["repositories"][0];
+    let repo = repository["repository_id"].as_str().unwrap();
+    let history = repository["history_tree_id"].as_str().unwrap();
+    let fork = success(
+        &app,
+        &token,
+        "POST",
+        &format!("/api/repositories/{repo}/branches"),
+        Some(
+            json!({"source_commit_id":old_commit,"name":"Graph fork","operation_id":new_id("op")}),
+        ),
+    )
+    .await;
+    let other=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Other graph","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    let graph = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/history-trees/{history}/graph?history_tree_id=missing&unused=yes"),
+        None,
+    )
+    .await;
+    assert_eq!(graph.as_object().unwrap().len(), 5);
+    assert_eq!(graph["history"]["history_tree_id"], history);
+    assert_eq!(graph["boundary_marks"], json!([]));
+    let commits = graph["commits"].as_array().unwrap();
+    let sequences = commits
+        .iter()
+        .map(|commit| {
+            storage_contract::parse_u64_decimal(commit["sequence"].as_str().unwrap()).unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert!(sequences.windows(2).all(|pair| pair[0] <= pair[1]));
+    for commit in commits {
+        assert_eq!(commit["history_tree_id"], history);
+        let id = commit["commit_id"].as_str().unwrap();
+        assert_eq!(
+            *commit,
+            success(&app, &token, "GET", &format!("/api/commits/{id}"), None).await
+        );
+    }
+    let branches = graph["branches"].as_array().unwrap();
+    assert!(branches.iter().any(|item| item["branch_id"] == branch));
+    assert!(
+        branches
+            .iter()
+            .any(|item| item["branch_id"] == fork["branch_id"])
+    );
+    for item in branches {
+        assert_eq!(item["history_tree_id"], history);
+        assert!(item.get("materialized").is_none());
+        assert!(item.get("read_only").is_none());
+    }
+    let other_history = other["history_tree_id"].as_str().unwrap();
+    assert!(
+        commits
+            .iter()
+            .all(|commit| commit["history_tree_id"] != other_history)
+    );
+    let (status, error) = send(
+        &app,
+        Some(&token),
+        "GET",
+        "/api/history-trees/missing/graph",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error"]["message"], "history not found");
+}
+
+#[tokio::test]
+async fn typed_smb_binding_http_preserves_wire_replay_and_error_priority() {
+    let (_root, app, branch, _, _) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let repos = success(&app, &token, "GET", "/api/repositories", None).await;
+    let repository = repos["repositories"][0]["repository_id"].as_str().unwrap();
+    let path = format!("/api/repositories/{repository}/smb-binding");
+    let status = success(
+        &app,
+        &token,
+        "GET",
+        &format!("{path}?repository_id=missing&unused=yes"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        json!({"repository_id":repository,"branch_id":branch,"enabled":true,"history_generation":"1"})
+    );
+    let update = json!({"branch_id":branch,"enabled":false,"expected_history_generation":status["history_generation"],"operation_id":new_id("op")});
+    let published = success(&app, &token, "PUT", &path, Some(update.clone())).await;
+    let replay = success(&app, &token, "PUT", &path, Some(update.clone())).await;
+    assert_eq!(published["operation_id"], replay["operation_id"]);
+    assert_eq!(published["request_digest"], replay["request_digest"]);
+    let disabled = success(&app, &token, "GET", &path, None).await;
+    let mut expected = status.clone();
+    expected["enabled"] = json!(false);
+    expected["history_generation"] = json!("2");
+    assert_eq!(disabled, expected);
+    let mut conflict = update.clone();
+    conflict["enabled"] = json!(true);
+    conflict["expected_history_generation"] = json!("999");
+    let (status, error) = send(&app, Some(&token), "PUT", &path, Some(conflict)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
+    let mut invalid = update.clone();
+    invalid["operation_id"] = json!("invalid");
+    let (status, error) = send(&app, Some(&token), "PUT", &path, Some(invalid)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error"]["code"], "INVALID_ID");
+    let (status, error) = send(
+        &app,
+        Some(&token),
+        "PUT",
+        "/api/repositories/missing/smb-binding",
+        Some(json!({"enabled":"invalid"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error"]["message"], "enabled must be a boolean");
+    let (status, error) = send(
+        &app,
+        Some(&token),
+        "GET",
+        "/api/repositories/missing/smb-binding",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error"]["message"], "repository not found");
+    assert_eq!(success(&app, &token, "GET", &path, None).await, disabled);
+}
+
+#[tokio::test]
+async fn typed_event_page_http_preserves_cursor_and_unknown_query_policy() {
+    let (_root, app, _, _, _) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let first = success(&app, &token, "GET", "/api/events?unused=yes", None).await;
+    assert_eq!(first.as_object().unwrap().len(), 2);
+    assert!(!first["events"].as_array().unwrap().is_empty());
+    for event in first["events"].as_array().unwrap() {
+        assert_eq!(event.as_object().unwrap().len(), 4);
+        assert!(event["sequence"].is_string());
+        event["operation_id"]
+            .as_str()
+            .unwrap()
+            .parse::<storage_contract::OperationId>()
+            .unwrap();
+    }
+    let cursor = first["next_cursor"].as_str().unwrap();
+    assert_eq!(
+        success(
+            &app,
+            &token,
+            "GET",
+            &format!("/api/events?after={cursor}"),
+            None
+        )
+        .await,
+        json!({"events":[],"next_cursor":cursor})
+    );
+    for after in ["", "-1", "01", "18446744073709551616"] {
+        let (status, error) = send(
+            &app,
+            Some(&token),
+            "GET",
+            &format!("/api/events?after={after}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], "INVALID_REQUEST");
+    }
+    let (status, error) = send(
+        &app,
+        Some(&token),
+        "GET",
+        "/api/events?after=18446744073709551615",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error"]["code"], "INVALID_CURSOR");
+    let (status, error) = send(&app, None, "GET", "/api/events?after=invalid", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(error["error"]["code"], "UNAUTHORIZED");
+    assert_eq!(
+        success(&app, &token, "GET", "/api/events?after=0", None).await,
+        first
+    );
+}
+
+#[tokio::test]
+async fn typed_storage_metadata_http_has_one_topology_and_frozen_placement() {
+    let (_root, app, _, _, commit) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let topology = success(
+        &app,
+        &token,
+        "GET",
+        "/api/backup-topologies/default?unused=yes",
+        None,
+    )
+    .await;
+    assert_eq!(topology["topology_id"], "default");
+    assert_eq!(topology["generation"], "1");
+    assert_eq!(topology.as_object().unwrap().len(), 3);
+    let slots = topology["slots"].as_array().unwrap();
+    assert_eq!(slots.len(), 1);
+    assert_eq!(slots[0].as_object().unwrap().len(), 6);
+    assert_eq!(slots[0]["slot_id"], "P01");
+    assert!(slots[0]["upstream_slot_id"].is_null());
+    assert!(slots[0].get("root").is_none());
+    assert!(slots[0].get("capacity_bytes").is_none());
+    for path in [
+        "/api/backup-topologies/other",
+        "/api/backup-topologies/DEFAULT",
+        "/api/backup-topologies",
+    ] {
+        for bearer in [Some(token.as_str()), None] {
+            let (status, error) = send(&app, bearer, "GET", path, None).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+            assert_eq!(error["error"]["code"], "NOT_FOUND");
+        }
+    }
+    let (status, _) = send(&app, None, "GET", "/api/backup-topologies/default", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let commit = success(&app, &token, "GET", &format!("/api/commits/{commit}"), None).await;
+    let version = commit["entries"][0]["version_id"].as_str().unwrap();
+    let placement = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/versions/{version}/placement?version_id=missing"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        placement,
+        json!({"version_id":version,"primary_slot_id":"P01","target_copies":1,"route_slot_ids":["P01"],"topology_generation":"1","binding_generations":{"P01":"1"}})
+    );
+    let (status, error) = send(
+        &app,
+        Some(&token),
+        "GET",
+        "/api/versions/missing/placement",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error"]["message"], "version not found");
+}

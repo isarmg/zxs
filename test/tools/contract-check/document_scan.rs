@@ -3,30 +3,18 @@ mod document_scan;
 use std::{
     fs, io,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
-struct Fixture(PathBuf);
+struct Fixture(tempfile::TempDir);
 impl Fixture {
     fn new() -> Self {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("document-scan-{}-{nonce}", std::process::id()));
-        fs::create_dir(&path).unwrap();
-        Self(path)
+        Self(tempfile::tempdir().unwrap())
     }
+
     fn file(&self, name: &str) {
-        let path = self.0.join(name);
+        let path = self.0.path().join(name);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, "").unwrap();
-    }
-}
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
@@ -88,9 +76,9 @@ fn filters_extensions_archives_and_generated_basenames_and_sorts() {
         f.file(&format!("files/{name}"));
     }
     let expected = ["a/a.md", "a/b.md", "nested/upstream/kept.md", "z.md"]
-        .map(|name| f.0.join(name))
+        .map(|name| f.0.path().join(name))
         .to_vec();
-    check(&f.0, &f.0.join("upstream"), Ok(expected));
+    check(f.0.path(), &f.0.path().join("upstream"), Ok(expected));
     for name in [
         "dist",
         ".dist-staging",
@@ -101,9 +89,17 @@ fn filters_extensions_archives_and_generated_basenames_and_sorts() {
         "files/.dist-backup",
         "files/target",
     ] {
-        check(&f.0.join(name), &f.0.join("upstream"), Ok(vec![]));
+        check(
+            &f.0.path().join(name),
+            &f.0.path().join("upstream"),
+            Ok(vec![]),
+        );
     }
-    check(&f.0.join("upstream"), &f.0.join("upstream"), Ok(vec![]));
+    check(
+        &f.0.path().join("upstream"),
+        &f.0.path().join("upstream"),
+        Ok(vec![]),
+    );
 }
 
 #[test]
@@ -112,19 +108,23 @@ fn files_missing_roots_and_non_directory_paths() {
     f.file("file.md");
     f.file("file.txt");
     check(
-        &f.0.join("file.md"),
-        &f.0.join("upstream"),
-        Ok(vec![f.0.join("file.md")]),
+        &f.0.path().join("file.md"),
+        &f.0.path().join("upstream"),
+        Ok(vec![f.0.path().join("file.md")]),
     );
-    check(&f.0.join("file.txt"), &f.0.join("upstream"), Ok(vec![]));
     check(
-        &f.0.join("missing"),
-        &f.0.join("upstream"),
+        &f.0.path().join("file.txt"),
+        &f.0.path().join("upstream"),
+        Ok(vec![]),
+    );
+    check(
+        &f.0.path().join("missing"),
+        &f.0.path().join("upstream"),
         Err(io::ErrorKind::NotFound),
     );
     check(
-        &f.0.join("file.md/child"),
-        &f.0.join("upstream"),
+        &f.0.path().join("file.md/child"),
+        &f.0.path().join("upstream"),
         Err(io::ErrorKind::NotADirectory),
     );
 }
@@ -135,35 +135,43 @@ fn symlink_roots_descendants_broken_links_and_loops() {
     use std::os::unix::fs::symlink;
     let f = Fixture::new();
     f.file("docs/a.md");
-    symlink("docs", f.0.join("alias")).unwrap();
-    symlink("a.md", f.0.join("docs/link.md")).unwrap();
-    symlink("missing", f.0.join("docs/broken.md")).unwrap();
-    symlink(".", f.0.join("docs/loop")).unwrap();
-    symlink("docs/a.md", f.0.join("file.md")).unwrap();
-    symlink("missing", f.0.join("broken")).unwrap();
-    symlink("cycle", f.0.join("cycle")).unwrap();
+    symlink("docs", f.0.path().join("alias")).unwrap();
+    symlink("a.md", f.0.path().join("docs/link.md")).unwrap();
+    symlink("missing", f.0.path().join("docs/broken.md")).unwrap();
+    symlink(".", f.0.path().join("docs/loop")).unwrap();
+    symlink("docs/a.md", f.0.path().join("file.md")).unwrap();
+    symlink("missing", f.0.path().join("broken")).unwrap();
+    symlink("cycle", f.0.path().join("cycle")).unwrap();
     check(
-        &f.0.join("alias"),
-        &f.0.join("upstream"),
-        Ok(vec![f.0.join("alias/a.md")]),
+        &f.0.path().join("alias"),
+        &f.0.path().join("upstream"),
+        Ok(vec![f.0.path().join("alias/a.md")]),
     );
     check(
-        &f.0.join("docs"),
-        &f.0.join("upstream"),
-        Ok(vec![f.0.join("docs/a.md")]),
+        &f.0.path().join("docs"),
+        &f.0.path().join("upstream"),
+        Ok(vec![f.0.path().join("docs/a.md")]),
     );
-    check(&f.0.join("file.md"), &f.0.join("upstream"), Ok(vec![]));
     check(
-        &f.0.join("broken"),
-        &f.0.join("upstream"),
+        &f.0.path().join("file.md"),
+        &f.0.path().join("upstream"),
+        Ok(vec![]),
+    );
+    check(
+        &f.0.path().join("broken"),
+        &f.0.path().join("upstream"),
         Err(io::ErrorKind::NotFound),
     );
-    let error = fs::metadata(f.0.join("cycle")).unwrap_err().kind();
-    check(&f.0.join("cycle"), &f.0.join("upstream"), Err(error));
-    symlink("missing", f.0.join("target")).unwrap();
+    let error = fs::metadata(f.0.path().join("cycle")).unwrap_err().kind();
     check(
-        &f.0.join("target"),
-        &f.0.join("upstream"),
+        &f.0.path().join("cycle"),
+        &f.0.path().join("upstream"),
+        Err(error),
+    );
+    symlink("missing", f.0.path().join("target")).unwrap();
+    check(
+        &f.0.path().join("target"),
+        &f.0.path().join("upstream"),
         Err(io::ErrorKind::NotFound),
     );
 }
@@ -173,10 +181,12 @@ fn symlink_roots_descendants_broken_links_and_loops() {
 fn non_utf8_names_and_permission_errors() {
     use std::os::unix::{ffi::OsStringExt, fs::PermissionsExt};
     let f = Fixture::new();
-    let path = f.0.join(std::ffi::OsString::from_vec(b"\xff.md".to_vec()));
+    let path =
+        f.0.path()
+            .join(std::ffi::OsString::from_vec(b"\xff.md".to_vec()));
     fs::write(&path, "").unwrap();
-    check(&f.0, &f.0.join("upstream"), Ok(vec![path]));
-    let directory = f.0.join("private");
+    check(f.0.path(), &f.0.path().join("upstream"), Ok(vec![path]));
+    let directory = f.0.path().join("private");
     fs::create_dir(&directory).unwrap();
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o0)).unwrap();
     // Root can bypass mode bits. Run this test binary as an unprivileged user
@@ -184,12 +194,12 @@ fn non_utf8_names_and_permission_errors() {
     if fs::read_dir(&directory).is_err() {
         check(
             &directory,
-            &f.0.join("upstream"),
+            &f.0.path().join("upstream"),
             Err(io::ErrorKind::PermissionDenied),
         );
         check(
-            &f.0,
-            &f.0.join("upstream"),
+            f.0.path(),
+            &f.0.path().join("upstream"),
             Err(io::ErrorKind::PermissionDenied),
         );
     }
@@ -199,14 +209,14 @@ fn non_utf8_names_and_permission_errors() {
 #[test]
 fn deep_directories_do_not_retain_open_handles() {
     let f = Fixture::new();
-    let mut directory = f.0.clone();
+    let mut directory = f.0.path().to_path_buf();
     for _ in 0..150 {
         directory.push("d");
         fs::create_dir(&directory).unwrap();
     }
     let path = directory.join("deep.md");
     fs::write(&path, "").unwrap();
-    check(&f.0, &f.0.join("upstream"), Ok(vec![path]));
+    check(f.0.path(), &f.0.path().join("upstream"), Ok(vec![path]));
 }
 
 #[cfg(walker_oracle)]

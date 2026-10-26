@@ -195,6 +195,47 @@ impl Backend for CloseFailure {
     ) -> Result<storage_contract::WorkspaceCapacity, crate::ApiError> {
         self.inner.workspace_capacity(identity)
     }
+    fn smb_binding_status(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::SmbBindingStatus, crate::ApiError> {
+        self.inner.smb_binding_status(identity, id)
+    }
+    fn update_smb_binding(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateSmbBinding<'_>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.update_smb_binding(identity, request)
+    }
+    fn topology_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<crate::TopologySnapshot, crate::ApiError> {
+        self.inner.topology_snapshot(identity)
+    }
+    fn placement_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::Placement, crate::ApiError> {
+        self.inner.placement_snapshot(identity, id)
+    }
+    fn event_page(
+        &self,
+        identity: &crate::auth::Identity,
+        after: u64,
+    ) -> Result<crate::EventPage, crate::ApiError> {
+        self.inner.event_page(identity, after)
+    }
+    fn history_graph(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
+        self.inner.history_graph(identity, id)
+    }
     fn commit_snapshot(
         &self,
         identity: &crate::auth::Identity,

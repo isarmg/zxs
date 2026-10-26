@@ -34,3 +34,6 @@ path = "../../test/tools/contract-check/document_scan.rs"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(walker_oracle)'] }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -78566,7 +78566,7 @@
     "e37e4ee6074dabae4638f15f4926b9af9c67c0b100fd2d7db4e45d323be61509"
   ],
   "lockfiles_sha256": {
-    "Cargo.lock": "25d182029ac7735d182c5f877b8d36de33fb0b0a1864b24c0ae1e9cce8164ba2"
+    "Cargo.lock": "0409a219498bcc6217508739b7b1c6eaa440f5449fa9624e71748f53a6bcac7b"
   },
   "manifests_sha256": {
     "Cargo.toml": "fc4ae6b06dcf41b39717d94857e9b078e4857d69af0cb36d3cdccd81d31730e3",
@@ -78792,7 +78792,7 @@
     "src/foundation/web-runtime/wasm-binding-macros/Cargo.toml": "e07bec93c2d869bd882f3866ed36190cbb859a15fa8d821517eb8c67fd759e83",
     "src/foundation/web-runtime/wasm-encoder/Cargo.toml": "63f4fdeb12bc8dc6860ff36442cc2fdd71d8519f3a9dd79e105d7dcafe69f301",
     "src/foundation/web-runtime/wasmparser/Cargo.toml": "771207359c85d13aa247962a53b713da998d1bbc634fee7931dfb1c180e558f8",
-    "src/foundation/web-runtime/web-sys/Cargo.toml": "01d5648616483a1e463244828bbafec6d848942e1bf414e1069c69f3afc6b4c1",
+    "src/foundation/web-runtime/web-sys/Cargo.toml": "3ab4e3a313566167584cc6f711e6d84209f01be850ca1a18a88292704b267011",
     "src/interface/Cargo.toml": "048b2acb4508fded70f45a822085df4e804bde0041d01b78e8beec570be31587",
     "src/macros/Cargo.toml": "abdb767c05856f890b63b18f86b16f4487a30bd8d2832f5caeeeb6d668e44c0c",
     "src/naming/Cargo.toml": "14f34fa82d476daeac6d300225a028f92d589a3f117095ed025c3ae607af79e7",
@@ -78801,9 +78801,9 @@
     "src/server/Cargo.toml": "14cd6309e4c425f5021dc0624f7548fcf86dc312d35bf62e614b1b0c0dff53f5",
     "src/smb-vfs/Cargo.toml": "0106d55c98c1383db6d579eb9c7ed7ac0d91e069e6e6bd2722bc670b2cdef1cd",
     "src/smb/Cargo.toml": "66ca64b286cff2b2a6b2f551145e267b2eac6017affcd4c239605a9d080ecec4",
-    "src/web/Cargo.toml": "7c4df96d1394001afba4c79b03e4d91e2a1c785236b227188c55852cccc1631d",
+    "src/web/Cargo.toml": "3bd3b4c6364bcfd4fa0c4feff912727a6a25da0d0c236a43331e3361793c34b1",
     "tools/browser-smoke/Cargo.toml": "fe0db8d33c6a8143d67cfb4a4fbf2d528a113e078a51f88b31e7b5e70d85baa8",
-    "tools/contract-check/Cargo.toml": "db127e20e1e01f96ba91c6960aef31c3b1082a40f8695f01ef615c21e748bcda",
+    "tools/contract-check/Cargo.toml": "25ab62023c5fc48b88d7eff349ee634a3e474f523a05ebf76bdb962685d80567",
     "tools/perf-check/Cargo.toml": "0711cfa82680a487e214f0c125e181144bb8bb0944a60c11051a8b751a079694",
     "tools/release-tools/Cargo.toml": "2196ba19e6a40d4eaf9d0171d1215850f2da5c56a72d1fcf79ec7fdafa1daccd",
     "tools/unicode-build/Cargo.toml": "1aa18cf337bcda1013aa01086b84a443ea1237e15703aaae607bb9ddfcd27506",
@@ -101126,7 +101126,7 @@
       "description": "Browser API bindings maintained for this project; explicit DOM/network/font/geometry/lifecycle feature closure.",
       "directory": "src/foundation/web-runtime/web-sys",
       "files_sha256": {
-        "Cargo.toml": "01d5648616483a1e463244828bbafec6d848942e1bf414e1069c69f3afc6b4c1",
+        "Cargo.toml": "3ab4e3a313566167584cc6f711e6d84209f01be850ca1a18a88292704b267011",
         "src/features/gen_AbortController.rs": "b8f37dfdce5dbf243eef28ab678da55e70e4ad009f3b541452f23a9d1076a8b5",
         "src/features/gen_AbortSignal.rs": "b3855c7171e2469dd821726910ff82705c898c2ab94b3a3499baa48ca88501b1",
         "src/features/gen_AddEventListenerOptions.rs": "e9c8705342929abba9164aeffd015656828760303a5cc1d56e64b2e96849ab6e",
@@ -101193,6 +101193,7 @@
         "src/features/gen_MouseEvent.rs": "4d7e64aceb227954c82d26434aa6a671d515acda755c5066ad28908247b85a06",
         "src/features/gen_MutationObserver.rs": "77c0cac994fac27c98523d619f1ad0714df36705b51ceeac662820a482a6edf3",
         "src/features/gen_MutationObserverInit.rs": "f810504e72c53f41b13a93ab929c2a191f6af449b9c8e387f76c91744b424691",
+        "src/features/gen_MutationRecord.rs": "bf35bcdb4a64a4eddd4613bc0593806e9b8518ead2d3526af9ce598c59b3f774",
         "src/features/gen_Navigator.rs": "c8b97793d3a0136dad01aae195a99adac081796b499af30002b1c24f050a0b1d",
         "src/features/gen_Node.rs": "ee8c7c92fea3a57271d9f25cae7f68f0c110935d2066b400d346c40a7147a23a",
         "src/features/gen_NodeList.rs": "6c218e2d7f7f4c74011c8d8d2593a31100025ffae50c9ebb9f3612e3f95abc5b",
@@ -101224,7 +101225,7 @@
         "src/features/gen_UrlSearchParams.rs": "d5993a91f5bf37f540865e67a386f41ea971525375052afe716d751a69204bc2",
         "src/features/gen_Window.rs": "eea487d7f0f0d16abef9d4d9923e7721c110cf6281641580dc4628f4a95ab060",
         "src/features/gen_console.rs": "37f4ea8c5283ddb63a21810b8ae3f4e3f83a447baf85919c2988b3ddea5520ed",
-        "src/features/mod.rs": "a9afa83ecc3502fb9d014c23962c1ddf52f5df4120121a8e318bbe5e8b0b631b",
+        "src/features/mod.rs": "9c2f3a4e7a0e453ed13b4d3e4a01074ebce8ee608af203da6e2593c199a1bdf3",
         "src/lib.rs": "9917808dd684d2840a373ca6f9f60c0f2b0ac1b796dc0cd70919bb3bbe0ec644"
       },
       "license": "MIT OR Apache-2.0",
@@ -113592,6 +113593,7 @@
             "MouseEvent",
             "MutationObserver",
             "MutationObserverInit",
+            "MutationRecord",
             "Navigator",
             "Node",
             "NodeList",

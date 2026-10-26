@@ -4,17 +4,10 @@ use std::{
     collections::BTreeSet,
     fs,
     io::Write,
-    path::{Component, Path, PathBuf},
+    path::{Component, Path},
     process::{Command, Stdio},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
-struct Fixture(PathBuf);
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
 fn git(root: &Path) -> Command {
     let mut command = Command::new("git");
     command.args(["-c", "core.excludesFile=", "-C"]).arg(root);
@@ -26,14 +19,7 @@ fn source_export_checks_without_generated_evidence_and_still_rejects_broken_sour
         .join("../..")
         .canonicalize()
         .unwrap();
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let destination =
-        std::env::temp_dir().join(format!("zxs-source-export-{}-{nonce}", std::process::id()));
-    fs::create_dir(&destination).unwrap();
-    let fixture = Fixture(destination);
+    let fixture = tempfile::tempdir().unwrap();
     let files = git(&root)
         .args([
             "ls-files",
@@ -98,48 +84,53 @@ fn source_export_checks_without_generated_evidence_and_still_rejects_broken_sour
             metadata.file_type().is_file(),
             "export requires regular source files: {name}"
         );
-        let output = fixture.0.join(relative);
+        let output = fixture.path().join(relative);
         fs::create_dir_all(output.parent().unwrap()).unwrap();
         fs::copy(source, output).unwrap();
     }
-    assert!(fixture.0.join("docs/contracts/vectors.json").is_file());
+    assert!(fixture.path().join("docs/contracts/vectors.json").is_file());
     assert!(
         fixture
-            .0
+            .path()
             .join(
                 "test/tools/contract-check/fixtures/merge-tags-backup/file-merge-tag-history.json"
             )
             .is_file()
     );
-    assert!(fixture.0.join("docs/tools/contract-check.md").is_file());
     assert!(
         fixture
-            .0
+            .path()
+            .join("docs/tools/contract-check.md")
+            .is_file()
+    );
+    assert!(
+        fixture
+            .path()
             .join("test/evidence/lazy-branches/web-probe.mjs")
             .is_file()
     );
     assert!(
         !fixture
-            .0
+            .path()
             .join("test/evidence/merge-tags-backup/candidate-receipt.json")
             .exists()
     );
     assert!(
         !fixture
-            .0
+            .path()
             .join("test/evidence/lazy-branches/browser-result.json")
             .exists()
     );
     // Exercise optional local output with a self-contained fixture, rather
     // than requiring historical reports in maintained documentation.
     fs::write(
-        fixture.0.join("docs/generated-output-regression.md"),
+        fixture.path().join("docs/generated-output-regression.md"),
         "[Local output](../test/evidence/source-export/output.json)\n",
     )
     .unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_contract-check"))
         .arg("--root")
-        .arg(&fixture.0)
+        .arg(fixture.path())
         .output()
         .unwrap();
     assert!(
@@ -156,13 +147,13 @@ fn source_export_checks_without_generated_evidence_and_still_rejects_broken_sour
             > 0
     );
     fs::write(
-        fixture.0.join("docs/source-link-regression.md"),
+        fixture.path().join("docs/source-link-regression.md"),
         "[Required source](missing-required-source.rs)\n",
     )
     .unwrap();
     let failure = Command::new(env!("CARGO_BIN_EXE_contract-check"))
         .arg("--root")
-        .arg(&fixture.0)
+        .arg(fixture.path())
         .output()
         .unwrap();
     assert!(!failure.status.success());

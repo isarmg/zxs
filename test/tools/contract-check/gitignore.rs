@@ -1,19 +1,8 @@
 //! Policy regression: local data must stay out of Git while real sources and
 //! maintained documents remain visible. Use a disposable repository, never the
 //! user's index or global ignore configuration.
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{fs, path::Path, process::Command};
 
-struct Fixture(PathBuf);
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
 fn git(root: &Path) -> Command {
     let mut command = Command::new("git");
     command.args(["-c", "core.excludesFile=", "-C"]).arg(root);
@@ -22,14 +11,8 @@ fn git(root: &Path) -> Command {
 #[test]
 fn ignore_generated_data_without_hiding_sources_or_fixed_fixtures() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let directory = std::env::temp_dir().join(format!("zxs-ignore-{}-{nonce}", std::process::id()));
-    fs::create_dir(&directory).unwrap();
-    let fixture = Fixture(directory);
-    let init = git(&fixture.0)
+    let fixture = tempfile::tempdir().unwrap();
+    let init = git(fixture.path())
         .args(["init", "--quiet", "--template="])
         .output()
         .expect("Git is required for the ignore-policy test");
@@ -38,7 +21,7 @@ fn ignore_generated_data_without_hiding_sources_or_fixed_fixtures() {
         "{}",
         String::from_utf8_lossy(&init.stderr)
     );
-    fs::copy(root.join(".gitignore"), fixture.0.join(".gitignore")).unwrap();
+    fs::copy(root.join(".gitignore"), fixture.path().join(".gitignore")).unwrap();
     let excluded = [
         "target/native/debug/zxs",
         "src/web/target/release/app.wasm",
@@ -198,7 +181,7 @@ fn ignore_generated_data_without_hiding_sources_or_fixed_fixtures() {
     ];
     for (paths, expected) in [(&excluded[..], true), (&retained[..], false)] {
         for path in paths {
-            let result = git(&fixture.0)
+            let result = git(fixture.path())
                 .args(["check-ignore", "--no-index", "--quiet", path])
                 .output()
                 .unwrap();

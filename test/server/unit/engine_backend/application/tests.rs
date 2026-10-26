@@ -434,13 +434,15 @@ fn creation_replays_keep_public_response_shapes_after_archive_binding_change_and
         )
         .unwrap();
     backend
-        .call(
-            crate::BackendAction::UpdateSmbBinding,
+        .update_smb_binding(
             &owner,
-            json!({
-                "repository_id":created.repository_id, "branch_id":created.main_branch_id,
-                "enabled":false, "expected_history_generation":"1", "operation_id":new_id("op")
-            }),
+            crate::UpdateSmbBinding {
+                repository: &created.repository_id,
+                branch: &created.main_branch_id,
+                enabled: false,
+                expected_history_generation: 1,
+                operation: storage_contract::OperationId::generate(),
+            },
         )
         .unwrap();
     for reopened in [false, true] {

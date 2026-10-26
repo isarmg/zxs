@@ -38,6 +38,12 @@ fn every_action_round_trips_and_unknown_actions_are_rejected() {
         "branches",
         "resolve",
         "commit",
+        "graph",
+        "events",
+        "topology",
+        "placement",
+        "smb_binding",
+        "update_smb_binding",
         "file_manager_download_context",
     ] {
         assert!(BackendAction::try_from(unknown).is_err());

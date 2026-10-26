@@ -339,6 +339,87 @@ impl Backend for RecordingBackend {
         self.record("workspace_capacity", Some(identity), Value::Null)?;
         Ok(recorded_capacity())
     }
+    fn smb_binding_status(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::SmbBindingStatus, crate::ApiError> {
+        self.record(
+            "smb_binding_status",
+            Some(identity),
+            json!({"repository_id":id}),
+        )?;
+        Ok(crate::SmbBindingStatus {
+            repository_id: id.into(),
+            branch_id: "branch".into(),
+            enabled: true,
+            history_generation: 7,
+        })
+    }
+    fn update_smb_binding(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateSmbBinding<'_>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record("update_smb_binding",Some(identity),json!({"repository_id":request.repository,"branch_id":request.branch,"enabled":request.enabled,"expected_history_generation":request.expected_history_generation.to_string(),"operation_id":request.operation}))?;
+        Ok(recorded_operation(request.operation, "update_smb_binding"))
+    }
+    fn topology_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<crate::TopologySnapshot, crate::ApiError> {
+        self.record("topology_snapshot", Some(identity), Value::Null)?;
+        Ok(crate::TopologySnapshot {
+            generation: 17,
+            slots: vec![],
+        })
+    }
+    fn placement_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<storage_contract::Placement, crate::ApiError> {
+        self.record(
+            "placement_snapshot",
+            Some(identity),
+            json!({"version_id":id}),
+        )?;
+        Ok(storage_contract::Placement {
+            version_id: id.into(),
+            primary_slot_id: "P01".into(),
+            target_copies: 1,
+            route_slot_ids: vec!["P01".into()],
+            topology_generation: 17,
+            binding_generations: std::collections::BTreeMap::from([("P01".into(), 23)]),
+        })
+    }
+    fn event_page(
+        &self,
+        identity: &crate::auth::Identity,
+        after: u64,
+    ) -> Result<crate::EventPage, crate::ApiError> {
+        self.record(
+            "event_page",
+            Some(identity),
+            json!({"after":after.to_string()}),
+        )?;
+        Ok(crate::EventPage {
+            events: vec![],
+            next_cursor: after,
+        })
+    }
+    fn history_graph(
+        &self,
+        identity: &crate::auth::Identity,
+        id: &str,
+    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
+        self.record(
+            "history_graph",
+            Some(identity),
+            json!({"history_tree_id":id}),
+        )?;
+        Ok(recorded_graph(id))
+    }
     fn commit_snapshot(
         &self,
         identity: &crate::auth::Identity,
@@ -773,6 +854,68 @@ impl Fixture {
                 }),
             ),
             (
+                "smb_binding_status",
+                backend
+                    .smb_binding_status(identity, "repository")
+                    .map(|status| {
+                        assert_eq!(status.history_generation, 7);
+                        json!({"returned_by":"smb_binding_status"})
+                    }),
+            ),
+            (
+                "update_smb_binding",
+                backend
+                    .update_smb_binding(
+                        identity,
+                        crate::UpdateSmbBinding {
+                            repository: "repository",
+                            branch: "branch",
+                            enabled: false,
+                            expected_history_generation: 7,
+                            operation: operation_id,
+                        },
+                    )
+                    .map(|result| {
+                        assert_eq!(
+                            result,
+                            recorded_operation(operation_id, "update_smb_binding")
+                        );
+                        json!({"returned_by":"update_smb_binding"})
+                    }),
+            ),
+            (
+                "topology_snapshot",
+                backend.topology_snapshot(identity).map(|snapshot| {
+                    assert_eq!(snapshot.generation, 17);
+                    json!({"returned_by":"topology_snapshot"})
+                }),
+            ),
+            (
+                "placement_snapshot",
+                backend
+                    .placement_snapshot(identity, "version")
+                    .map(|placement| {
+                        assert_eq!(placement.binding_generations["P01"], 23);
+                        json!({"returned_by":"placement_snapshot"})
+                    }),
+            ),
+            (
+                "event_page",
+                backend.event_page(identity, 17).map(|page| {
+                    assert_eq!(page.next_cursor, 17);
+                    assert!(page.events.is_empty());
+                    json!({"returned_by":"event_page"})
+                }),
+            ),
+            (
+                "history_graph",
+                backend.history_graph(identity, "history").map(|graph| {
+                    assert_eq!(graph.history.generation, u64::MAX);
+                    assert_eq!(graph.commits[0].commit_id, "commit");
+                    json!({"returned_by":"history_graph"})
+                }),
+            ),
+            (
                 "commit_snapshot",
                 backend.commit_snapshot(identity, "commit").map(|commit| {
                     assert_eq!(commit.commit_id, "commit");
@@ -954,7 +1097,7 @@ impl Fixture {
             ),
             (
                 "call",
-                backend.call(BackendAction::Events, identity, json!({"probe": 7})),
+                backend.call(BackendAction::Check, identity, json!({"probe": 7})),
             ),
             (
                 "upload",
@@ -1081,6 +1224,12 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"repository_id":"repository"}),
         json!({"repository_id":"repository"}),
         Value::Null,
+        json!({"repository_id":"repository"}),
+        json!({"repository_id":"repository","branch_id":"branch","enabled":false,"expected_history_generation":"7","operation_id":"op_00000000000000000000000000000000"}),
+        Value::Null,
+        json!({"version_id":"version"}),
+        json!({"after":"17"}),
+        json!({"history_tree_id":"history"}),
         json!({"commit_id":"commit"}),
         json!({"branch_id":"branch","path":"File.txt","key":"file.txt","commit_id":"commit"}),
         json!({"id":"branch"}),
@@ -1097,7 +1246,7 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"branch":"branch","entry_id":"branch"}),
         json!({"branch":"branch","path":"File.txt","key":"file.txt"}),
         json!({"branch":"branch","commit":"commit","path":"File.txt","key":"file.txt"}),
-        json!({"action": BackendAction::Events.as_str(), "input": {"probe": 7}}),
+        json!({"action": BackendAction::Check.as_str(), "input": {"probe": 7}}),
         upload,
         generation,
         json!({"version": "version-content"}),
@@ -1371,4 +1520,22 @@ fn recorded_commit(commit: &str) -> Arc<storage_contract::Commit> {
         pending_file_versions: Default::default(),
         provenance: None,
     })
+}
+
+fn recorded_graph(id: &str) -> crate::HistoryGraphSnapshot {
+    crate::HistoryGraphSnapshot {
+        history: storage_contract::HistoryTree {
+            history_tree_id: id.into(),
+            repository_id: "repository".into(),
+            root_commit_id: "commit".into(),
+            main_branch_id: Some("branch".into()),
+            generation: u64::MAX,
+            state: storage_contract::HistoryState::Active,
+            provenance: None,
+        },
+        commits: vec![recorded_commit("commit")],
+        branches: vec![],
+        merge_links: vec![],
+        boundary_marks: vec![],
+    }
 }
