@@ -52061,7 +52061,7 @@
   },
   "external_test_mappings_sha256": {
     "compliance/external-tests/foundation.json": "c1090e521b6661ccdb1bb21833acfae20d74f09a639a1684ae971c874fc9a23b",
-    "compliance/external-tests/integrated.json": "af3640edaf47ff243305486d811ef96a46447e1dab854206b96814cc8ccc4389",
+    "compliance/external-tests/integrated.json": "077a67d9826aabb55364f588a84effed0a6dc5624ac64439b9aaa5e7f2e0ef30",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
   "external_tests": {
@@ -78303,7 +78303,7 @@
       ]
     },
     "src/interface": {
-      "bytes": 47798,
+      "bytes": 50127,
       "directory": "src/interface",
       "file_count": 16,
       "files": [
@@ -78345,7 +78345,7 @@
         },
         {
           "path": "test/interface/unit/components/select/tests.rs",
-          "sha256": "e3f123a18203545b677769326bdad5232091370ee5952ac654ec8abc3162d57e",
+          "sha256": "4add1606a7a7b2692f3250af3f2ebc8f81ec51ea8f78d5b0f877978f32f0d498",
           "source": "src/interface/src/components/select.rs",
           "source_sha256_before": "ce98cea42803fc3a36960d1743f30e6b675825d8b1ed11e03acd239e98da4e4f"
         },
@@ -78875,7 +78875,7 @@
         "src/components/login.rs": "3a3eeabde1b6e01cf19abc6b53012b819f07fd28aaefd153157abcbfc9bb2aa7",
         "src/components/mod.rs": "10cd01e58a8ae9a376fb13a9144de6034bd9194f79db61da0b2b8ca6e46d08ad",
         "src/components/notification.rs": "121a99dcc2522db1a0e6600ccfc74edc2a935d547f0d069ebcfc7a1c987f9ba0",
-        "src/components/select.rs": "377867b34acca0cb316b99d0dc52c58ca361a52b380a27805e65ae6598cfa6ed",
+        "src/components/select.rs": "4145ddf4328e117ebd977bcf76ff8da7855d374eff864a47e50b2638a271b4a6",
         "src/components/shell.rs": "c4a43e99798a17d58043ddb4762bb07cb6badf4a5580018637d6c1c98cdf4324",
         "src/components/state.rs": "fa0fb1063c77d3823f267acc184c0956897f5b685d173c0e789cc2649ae06012",
         "src/contours/controller.rs": "acd8ed368ab60db8c3b0924ded4dbc171445456ff7d176f2b8e8751c10e870bd",

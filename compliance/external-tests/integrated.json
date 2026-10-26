@@ -41,7 +41,7 @@
         },
         {
           "path": "test/interface/unit/components/select/tests.rs",
-          "sha256": "e3f123a18203545b677769326bdad5232091370ee5952ac654ec8abc3162d57e",
+          "sha256": "4add1606a7a7b2692f3250af3f2ebc8f81ec51ea8f78d5b0f877978f32f0d498",
           "source": "src/interface/src/components/select.rs",
           "source_sha256_before": "ce98cea42803fc3a36960d1743f30e6b675825d8b1ed11e03acd239e98da4e4f"
         },
