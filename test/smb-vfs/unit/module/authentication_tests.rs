@@ -107,10 +107,36 @@ fn incomplete_or_forced_host_identity_fails_closed() {
             6 => fixture.info.account_name = std::ptr::null_mut(),
             _ => unreachable!(),
         }
-        assert_eq!(
-            fixture.account().unwrap_err().raw_os_error(),
-            Some(libc::EACCES)
-        );
+        let error = fixture.account().unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(smb_protocol::client::error_errno(&error), libc::EACCES);
+    }
+}
+
+#[test]
+fn invalid_account_names_preserve_sources_and_map_to_access_denied() {
+    for bytes in [b"\xff\0".as_slice(), b"\0", b" alice\0", b"alice=bob\0"] {
+        let name = std::ffi::CStr::from_bytes_with_nul(bytes).unwrap();
+        let mut fixture = AuthenticatedSession::new();
+        fixture.info.account_name = name.as_ptr().cast_mut();
+        let error = fixture.account().unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(smb_protocol::client::error_errno(&error), libc::EACCES);
+        let source = error
+            .get_ref()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap();
+        assert_eq!(source.kind(), std::io::ErrorKind::InvalidInput);
+        if bytes == b"\xff\0" {
+            assert!(
+                source
+                    .get_ref()
+                    .unwrap()
+                    .downcast_ref::<std::str::Utf8Error>()
+                    .is_some()
+            );
+        }
     }
 }
 
