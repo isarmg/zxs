@@ -135,6 +135,9 @@
     probe.turn = () => new Promise(resolve => Reflect.apply(raf, window, [resolve]));
     probe.settle = async () => { await document.fonts.ready; await probe.turn(); await probe.turn(); await probe.turn(); };
     probe.check = (condition, message) => { if (!condition) throw Error('version-tree RAF: ' + message); };
+    // This snapshot proves discovery preceded observer registration, not BBox work.
+    probe.assertInitialDiscovery = root => probe.check(rootState(root).initialQueries > 0,
+        'initial node discovery synchronous before observer registration');
     probe.rejectScheduling = () => {
         const root = probe.current(), before = rootState(root).frameReads.canvas;
         probe.check(probe.pending(root).length === 0, 'no frame before scheduling rejection');

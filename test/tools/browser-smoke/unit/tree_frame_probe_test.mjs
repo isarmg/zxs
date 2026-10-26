@@ -85,7 +85,21 @@ const mutation = new context.MutationObserver(records => {
 });
 resize.observe(root);resize.observe(node);mutation.observe(root);
 const state = p.roots.get(root);
+p.assertInitialDiscovery(root);
 assert.equal(state.initialQueries, 1);
+// Execute the actual geometry consumer through the shared initialization check.
+// An observed root with no prior discovery must fail before geometry assertions.
+const undiscovered = new Element('canvas');
+const earlyObserver = new context.ResizeObserver(() => {});
+earlyObserver.observe(undiscovered);
+undiscovered.querySelectorAll('.zxs-version-node[data-version-id]');
+assert.throws(() => p.assertInitialDiscovery(undiscovered), /initial node discovery synchronous/);
+const settle = p.settle, current = p.current;
+p.settle = async () => {}; p.current = () => undiscovered;
+try {
+    const geometry = readFileSync(new URL('../runner/tree_geometry.js', import.meta.url), 'utf8');
+    await assert.rejects(runInNewContext(geometry, context), /initial node discovery synchronous/);
+} finally { p.settle = settle; p.current = current; earlyObserver.disconnect(); }
 assert.equal(state.queries, 1);
 assert.equal(state.frameReads.canvas, 0, 'initial synchronous read is not attributed to a tree RAF');
 assert.equal(state.frameReads.node, 0);

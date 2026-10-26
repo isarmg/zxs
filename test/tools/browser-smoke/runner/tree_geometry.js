@@ -1,12 +1,13 @@
 (async () => {
     const p = window.__zxsTreeFrames;
     await p.settle();
-    const root = p.current(), scroll = root.parentElement, rect = root.getBoundingClientRect();
+    const root = p.current();
+    p.assertInitialDiscovery(root);
+    const scroll = root.parentElement, rect = root.getBoundingClientRect();
     const nodes = [...root.querySelectorAll('.zxs-version-node')];
     const boxes = new Map(nodes.map(node => [node.dataset.versionId, node.getBoundingClientRect()]));
     const edges = [...root.querySelectorAll('.zxs-version-tree-edge')];
     p.check(nodes.length >= 2 && edges.length >= 1, 'real seeded nodes and connectors');
-    p.check(p.roots.get(root).initial > 0, 'first measure synchronous before observer registration');
     p.check(document.documentElement.scrollWidth <= innerWidth + 1, 'tree must not overflow page');
     for (const node of nodes) {
         const box = node.getBoundingClientRect(), style = getComputedStyle(node);
