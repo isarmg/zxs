@@ -20,19 +20,31 @@
         const Native = originals[kind];
         window[kind] = class extends Native {
             constructor(callback) {
-                const record = {kind, root: null, deliveries: 0, disconnected: false, observed: 0};
-                const invoke = (entries, observer) => {
+                const record = {kind, root: null, deliveries: 0, nativeDeliveries: 0, targets: new Set(), nativeTargets: new Map(), disconnected: false, observed: 0};
+                const invoke = (entries, observer, native = true) => {
+                    if (native) {
+                        record.nativeDeliveries++;
+                        for (const entry of record.root ? entries : []) {
+                            const prior = record.nativeTargets.get(entry.target);
+                            record.nativeTargets.set(entry.target, {
+                                count: (prior?.count ?? 0) + 1,
+                                width: entry.contentRect?.width, height: entry.contentRect?.height,
+                                type: entry.type,
+                            });
+                        }
+                    }
                     const previous = delivery;
                     delivery = record;
                     try { record.deliveries++; callback(entries, observer); }
                     finally { delivery = previous; }
                 };
                 super(invoke);
-                record.invoke = () => invoke([], this);
+                record.invoke = () => invoke([], this, false);
                 this.record = record;
                 observers.push(record);
             }
             observe(target, options) {
+                this.record.targets.add(target);
                 // The tree observes its own canvas first; global G4 observes
                 // many unrelated surfaces and must never own a tree frame.
                 if (this.record.observed++ === 0 && target.matches?.('.zxs-version-tree-canvas')) {
@@ -63,6 +75,29 @@
     };
     probe.pending = root => [...frames.values()].filter(f => f.root === root && !f.ran && !f.canceled);
     probe.current = () => document.querySelector('.zxs-version-tree-canvas');
+    const describe = target => {
+        const rect = target.getBoundingClientRect?.();
+        return {tag: target.nodeName, classes: target.getAttribute?.('class'),
+            version: target.getAttribute?.('data-version-id'), connected: target.isConnected,
+            width: rect?.width, height: rect?.height};
+    };
+    probe.nativeSnapshot = () => ({
+        viewport: {width: innerWidth, height: innerHeight},
+        root: describe(probe.current()), node: describe(probe.nativeNode),
+        before: probe.nativeBefore.map(({o, count, nodeCount}) => ({kind:o.kind, count, nodeCount})),
+        beforeNode: probe.beforeNode,
+        measures: rootState(probe.current()).measures,
+        pending: probe.pending(probe.current()).length,
+        observers: observers.filter(o => o.root === probe.current()).map(o => ({
+            kind: o.kind, nativeDeliveries: o.nativeDeliveries, deliveries: o.deliveries,
+            disconnected: o.disconnected, targets: [...o.targets].map(describe),
+            notifications: [...o.nativeTargets].map(([target, data]) => ({target:describe(target), ...data})),
+        })),
+    });
+    probe.nativeReady = () => probe.nativeBefore.length === 2
+        && probe.nativeNode.getBoundingClientRect().height > probe.beforeNode.height
+        && probe.nativeBefore.every(({o, count, nodeCount}) => o.nativeDeliveries > count
+            && (o.kind !== 'ResizeObserver' || (o.nativeTargets.get(probe.nativeNode)?.count ?? 0) > nodeCount));
     probe.turn = () => new Promise(resolve => Reflect.apply(raf, window, [resolve]));
     probe.settle = async () => { await document.fonts.ready; await probe.turn(); await probe.turn(); await probe.turn(); };
     probe.check = (condition, message) => { if (!condition) throw Error('version-tree RAF: ' + message); };

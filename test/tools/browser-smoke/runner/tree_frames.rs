@@ -33,30 +33,44 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
 }
 
 fn exercise(browser: &Browser) -> Result<()> {
-    evaluate(browser, "window.__zxsTreeFrames.settle()")?;
-    browser.script(
-        r#"
-        const p=window.__zxsTreeFrames,root=p.current();
-        p.hold=true;
-        p.nativeBefore=p.observers.filter(o=>o.root===root).map(o=>({o,count:o.deliveries}));
-        root.appendChild(document.createComment('browser-smoke native MO notification'));
-        return true;
-    "#,
-    )?;
     browser.cdp(
         "Emulation.setDeviceMetricsOverride",
         json!({"width":390,"height":844,"deviceScaleFactor":1,"mobile":false}),
     )?;
+    evaluate(browser, "window.__zxsTreeFrames.settle()")?;
+    browser.script(
+        r#"
+        const p=window.__zxsTreeFrames,root=p.current();
+        p.nativeNode=root.querySelector('.zxs-version-node');
+        const {width,height}=p.nativeNode.getBoundingClientRect();
+        p.beforeNode={width,height};
+        p.nativeBefore=p.observers.filter(o=>o.root===root).map(o=>({o,count:o.nativeDeliveries,
+            nodeCount:o.nativeTargets.get(p.nativeNode)?.count??0}));
+        p.check(p.nativeBefore.length===2,'exact mounted RO/MO pair before native stimulus');
+        p.hold=true;
+        return true;
+    "#,
+    )?;
+    // Viewport resize alone need not resize max-content canvas or capped nodes.
+    // Real note editing inserts the input and a second byte-count row, so both
+    // child-list mutation and observed node height must actually change.
+    browser.click(&browser.css(".zxs-version-node .zxs-version-note-action")?)?;
+    let editor = browser.css(".zxs-version-node .zxs-inline-input")?;
     wait_for("real tree resize and mutation notifications", || {
-        if browser.script(
-            "return window.__zxsTreeFrames.nativeBefore.every(({o,count})=>o.deliveries>count)",
-        )? == true
-        {
+        if browser.script("return window.__zxsTreeFrames.nativeReady()")? == true {
             Ok(())
         } else {
-            Err("native RO/MO delivery missing".into())
+            let snapshot = browser.script("return window.__zxsTreeFrames.nativeSnapshot()")?;
+            Err(
+                format!("native RO/MO delivery or edited-node height change missing: {snapshot}")
+                    .into(),
+            )
         }
     })?;
+    println!(
+        "PASS native tree note-edit stimulus: {}",
+        browser.script("return window.__zxsTreeFrames.nativeSnapshot()")?
+    );
     // Repeated delivery is explicit test stimulus, not a claim that Chrome
     // naturally emits eight observer batches in every frame.
     evaluate(
@@ -67,7 +81,29 @@ fn exercise(browser: &Browser) -> Result<()> {
         return true;
     })()"#,
     )?;
+    let editing = evaluate(browser, include_str!("tree_geometry.js"))?;
+    // Cancel the real editor without submitting a synthetic branch/version ID.
+    browser.keys(&editor, "\u{e00c}")?;
+    wait_for("version note editor canceled", || {
+        if browser
+            .script("return !document.querySelector('.zxs-version-node .zxs-inline-input')")?
+            == true
+        {
+            Ok(())
+        } else {
+            Err("version note editor still present".into())
+        }
+    })?;
     let narrow = evaluate(browser, include_str!("tree_geometry.js"))?;
+    evaluate(
+        browser,
+        r#"(()=>{
+        const p=window.__zxsTreeFrames;
+        p.check(Math.abs(p.nativeNode.getBoundingClientRect().height-p.beforeNode.height)<.1,
+            'cancel restores original node height');
+        return true;
+    })()"#,
+    )?;
     browser.script(
         r#"
         const p=window.__zxsTreeFrames,root=p.current();
@@ -140,7 +176,7 @@ fn exercise(browser: &Browser) -> Result<()> {
     browser.cdp("Emulation.clearDeviceMetricsOverride", json!({}))?;
     let desktop = evaluate(browser, include_str!("tree_geometry.js"))?;
     println!(
-        "PASS tree native RO/MO + repeated delivery coalescing, canceled/late RAF, remount/font-ready/resize geometry (wide history synthetic): narrow={narrow}, remount={remount}, desktop={desktop}"
+        "PASS tree native RO/MO + repeated delivery coalescing, canceled/late RAF, remount/font-ready/resize geometry (wide history synthetic): editing={editing}, narrow={narrow}, remount={remount}, desktop={desktop}"
     );
     Ok(())
 }

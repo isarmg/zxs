@@ -61,7 +61,7 @@ CI 通过 `ZXS_SMOKE_SCREENSHOT` 传递路径，浏览器验收成功后将图�
 `test/tools/browser-smoke/runner/tree_frames.rs` 在既有文件备注测试的宽树 fixture 中执行；文件选择、导航、备注保存、会话和请求仍走真实 UI。宽树沿用该测试明确标注的 12 个合成分支叶子，并非后端分支持久化证明。
 
 - `test/tools/browser-smoke/runner/tree_frames.js` 在 WASM 加载前包装宿主 RAF/RO/MO；只把**首个观察目标为版本树 canvas** 的 observer 关联到该组件。G4 的全局 observer 不属于该组件。measure 的证据是 canvas 上精确的 `.zxs-version-node[data-version-id]` 查询，不是全局 `getBoundingClientRect` 计数。
-- 在真实 DOM comment 插入及 CDP viewport resize 后等待实际 MO/RO 通知。显式暂停组件 RAF，然后对挂载中的两个真实 observer closure 重复 delivery；同一个 JS turn 的八次通知必须不测量、只保留一个 RAF。在原生 RAF turn 中释放它，必须恰好测量一次。重复 delivery 是测试刺激，不声称自然浏览器必然产生八批通知。
+- 先设置窄视口并稳定布局，再点击真实版本备注编辑按钮。输入框和字节计数第二行必须让被观察节点实际增高，且同时收到原生 MO 和该节点的 RO 通知；单纯 viewport resize 不能保证 max-content 画布或达到宽度上限的节点发生 resize。记录原生／人工 delivery 独立计数、目标尺寸、通知尺寸及 pending RAF，超时打印这些诊断。显式暂停组件 RAF，然后对挂载中的两个真实 observer closure 重复 delivery；同一个 JS turn 的八次通知必须不测量、只保留一个 RAF。在原生 RAF turn 中释放它，必须恰好测量一次；检查编辑状态连线后通过真实 Escape 取消，要求原节点高度恢复，再检查最终几何，不提交合成节点 ID。重复 delivery 是测试刺激，不声称自然浏览器必然产生八批通知。
 - 通过真实 Files 导航销毁 owner，断言 pending RAF 已取消、两个 observer 已断开。再人为递交已取消的**RAF** callback，断言没有树测量或未捕获错误；不调用已销毁的 observer closure。
 - 真实重挂载断言新 canvas、首次测量发生于 observer 注册前、初始 tip 居中；后续测量不得抢用户滚动位置。窄屏、重挂载和桌面恢复均等待实际 `document.fonts.ready` 与渲染帧，然后核对节点宽度/G4 extent/字体、页面溢出、箭头端点/线型及采样路径不穿节点。
 
