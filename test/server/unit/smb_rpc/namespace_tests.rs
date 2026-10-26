@@ -171,6 +171,48 @@ impl Backend for NamespaceFailure {
             .authorize_workspace_selection(identity, workspace, path)
     }
 
+    fn create_workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        command: crate::CreateWorkspace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        self.inner.create_workspace(identity, command)
+    }
+    fn abort_workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.aborts.fetch_add(1, Ordering::SeqCst);
+        self.inner.abort_workspace(identity, workspace)
+    }
+
+    fn workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        self.inner.workspace(identity, workspace)
+    }
+    fn published_upload_status(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        item: &str,
+    ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
+        self.inner
+            .published_upload_status(identity, workspace, item)
+    }
+    fn authorize_upload(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        logical_size: Option<u64>,
+    ) -> Result<(), crate::ApiError> {
+        self.inner
+            .authorize_upload(identity, workspace, logical_size)
+    }
+
     fn lookup_current(
         &self,
         identity: &crate::auth::Identity,
@@ -196,10 +238,6 @@ impl Backend for NamespaceFailure {
         identity: &Identity,
         input: Value,
     ) -> Result<Value, ApiError> {
-        if action == crate::BackendAction::AbortWorkspace {
-            self.aborts.fetch_add(1, Ordering::SeqCst);
-        }
-
         self.inner.call(action, identity, input)
     }
     fn upload(
@@ -659,6 +697,55 @@ impl Backend for PreparationFailure {
             .authorize_workspace_selection(identity, workspace, path)
     }
 
+    fn create_workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        command: crate::CreateWorkspace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        self.inner.create_workspace(identity, command)
+    }
+    fn abort_workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.aborts.fetch_add(1, Ordering::SeqCst);
+        if self.abort_fails {
+            return Err(ApiError::new(
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
+                storage_contract::ErrorCode::InjectedFailure,
+                "injected abort failure",
+            ));
+        }
+        self.inner.abort_workspace(identity, workspace)
+    }
+
+    fn workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        self.inner.workspace(identity, workspace)
+    }
+    fn published_upload_status(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        item: &str,
+    ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
+        self.inner
+            .published_upload_status(identity, workspace, item)
+    }
+    fn authorize_upload(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        logical_size: Option<u64>,
+    ) -> Result<(), crate::ApiError> {
+        self.inner
+            .authorize_upload(identity, workspace, logical_size)
+    }
+
     fn lookup_current(
         &self,
         identity: &crate::auth::Identity,
@@ -684,16 +771,6 @@ impl Backend for PreparationFailure {
         identity: &Identity,
         input: Value,
     ) -> Result<Value, ApiError> {
-        if action == crate::BackendAction::AbortWorkspace {
-            self.aborts.fetch_add(1, Ordering::SeqCst);
-            if self.abort_fails {
-                return Err(ApiError::new(
-                    ::http::StatusCode::SERVICE_UNAVAILABLE,
-                    storage_contract::ErrorCode::InjectedFailure,
-                    "injected abort failure",
-                ));
-            }
-        }
         if action == crate::BackendAction::Namespace
             && self.failure == Some(PreparationStage::Namespace)
         {

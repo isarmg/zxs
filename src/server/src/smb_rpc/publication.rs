@@ -208,10 +208,11 @@ impl Session {
                 Ok(())
             })();
             if let Err(error) = validate {
-                if let Err(abort_error) = self.call(
-                    crate::BackendAction::AbortWorkspace,
-                    json!({"workspace_id":workspace.workspace_id}),
-                ) {
+                if let Err(abort_error) = self
+                    .shared
+                    .backend
+                    .abort_workspace(&self.identity, &workspace.workspace_id)
+                {
                     tracing::warn!(error = ?abort_error, "SMB preparation abort failed; workspace retained for recovery");
                 }
                 return Err(error);
@@ -219,9 +220,10 @@ impl Session {
             Some(workspace)
         } else {
             if let Some(Handle::Write(writer)) = self.handles.get(&handle) {
-                self.call(
-                    crate::BackendAction::UploadAuthorize,
-                    json!({"workspace_id":writer.workspace.workspace_id,"item_id":writer.item_id}),
+                self.shared.backend.authorize_upload(
+                    &self.identity,
+                    &writer.workspace.workspace_id,
+                    None,
                 )?;
             }
             None
@@ -358,10 +360,9 @@ impl Session {
             if let Some(Handle::Write(writer)) = self.handles.get(&handle)
                 && !writer.committed
             {
-                self.call(
-                    crate::BackendAction::AbortWorkspace,
-                    json!({"workspace_id":writer.workspace.workspace_id}),
-                )?;
+                self.shared
+                    .backend
+                    .abort_workspace(&self.identity, &writer.workspace.workspace_id)?;
             }
             Ok(())
         })();

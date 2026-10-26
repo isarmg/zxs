@@ -32,6 +32,23 @@ struct BackendProbe {
     outcome: u8,
     auth: Mutex<Option<Arc<Mutex<AuthStore>>>>,
 }
+impl BackendProbe {
+    fn wait(&self) -> Result<(), ApiError> {
+        self.gate.calls.fetch_add(1, Ordering::SeqCst);
+        self.gate.started.add_permits(1);
+        let open = self.gate.open.lock().unwrap();
+        drop(self.gate.changed.wait_while(open, |open| !*open).unwrap());
+        self.gate.finished.add_permits(1);
+        match self.outcome {
+            1 => Err(ApiError::conflict(
+                storage_contract::ErrorCode::InjectedFailure,
+                "backend error",
+            )),
+            2 => panic!("test backend panic"),
+            _ => Ok(()),
+        }
+    }
+}
 impl Backend for BackendProbe {
     fn operation(
         &self,
@@ -82,6 +99,54 @@ impl Backend for BackendProbe {
         Err(crate::ApiError::unsupported())
     }
 
+    fn create_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: crate::CreateWorkspace,
+    ) -> Result<storage_contract::Workspace, ApiError> {
+        self.wait()?;
+        // This probe exercises queued error completion, not workspace storage.
+        Err(ApiError::unsupported())
+    }
+    fn abort_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<(), ApiError> {
+        self.wait()
+    }
+
+    fn workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn published_upload_status(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _item: &str,
+    ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
+        self.wait()?;
+        Ok(Some(crate::PublishedUploadStatus {
+            generation: 1,
+            logical_size: 0,
+            content_hash: blake3::hash(b"").to_hex().to_string(),
+            state: crate::PublishedUploadState::Complete,
+        }))
+    }
+    fn authorize_upload(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _logical_size: Option<u64>,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
     fn lookup_current(
         &self,
         _identity: &crate::auth::Identity,
@@ -108,20 +173,9 @@ impl Backend for BackendProbe {
         if matches!(action, BackendAction::Capabilities | BackendAction::Ready) {
             return Ok(json!({}));
         }
-        self.gate.calls.fetch_add(1, Ordering::SeqCst);
-        self.gate.started.add_permits(1);
-        let open = self.gate.open.lock().unwrap();
-        drop(self.gate.changed.wait_while(open, |open| !*open).unwrap());
-        self.gate.finished.add_permits(1);
-        match self.outcome {
-            1 => Err(ApiError::conflict(
-                storage_contract::ErrorCode::InjectedFailure,
-                "backend error",
-            )),
-            2 => panic!("test backend panic"),
-            _ => Ok(json!({})),
-        }
+        self.wait().map(|()| json!({}))
     }
+
     fn upload(
         &self,
         _: &Identity,
@@ -370,4 +424,84 @@ async fn upload_status_retains_read_admission_after_cancellation() {
     assert_eq!(request(app, "/healthz").await.status(), StatusCode::OK);
     gate.release();
     assert_eq!(jobs.pop().unwrap().await.unwrap().status(), StatusCode::OK);
+    gate.finished.acquire_many(2).await.unwrap().forget();
+    assert_eq!(
+        gate.calls.load(Ordering::SeqCst),
+        2,
+        "one typed snapshot per request"
+    );
+}
+
+async fn workspace_request(app: Router, path: &str) -> Response {
+    let body = if path == "/api/workspaces" {
+        json!({"branch_id":"branch"})
+    } else {
+        json!({})
+    };
+    app.oneshot(
+        Request::builder()
+            .method(if path == "/api/workspaces/workspace" {
+                "GET"
+            } else {
+                "POST"
+            })
+            .uri(path)
+            .header("content-type", "application/json")
+            .body(Body::from(json_codec::to_vec(&body).unwrap()))
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation() {
+    for path in [
+        "/api/workspaces",
+        "/api/workspaces/workspace/abort",
+        "/api/workspaces/workspace",
+    ] {
+        let root = crate::tests::private_tempdir();
+        let (app, gate, _release) = fixture(root.path(), 0, false);
+        let mut jobs = Vec::new();
+        for _ in 0..HTTP_BACKEND_SLOTS {
+            jobs.push(tokio::spawn(workspace_request(app.clone(), path)));
+        }
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            gate.started.acquire_many(HTTP_BACKEND_SLOTS as u32),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+        assert_eq!(
+            workspace_request(app.clone(), path).await.status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        let cancelled = jobs.pop().unwrap();
+        cancelled.abort();
+        assert!(cancelled.await.unwrap_err().is_cancelled());
+        assert_eq!(
+            workspace_request(app.clone(), path).await.status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(gate.calls.load(Ordering::SeqCst), HTTP_BACKEND_SLOTS);
+        gate.release();
+        for job in jobs {
+            assert_ne!(job.await.unwrap().status(), StatusCode::TOO_MANY_REQUESTS);
+        }
+        gate.finished
+            .acquire_many(HTTP_BACKEND_SLOTS as u32)
+            .await
+            .unwrap()
+            .forget();
+        loop {
+            let response = workspace_request(app.clone(), path).await;
+            if response.status() != StatusCode::TOO_MANY_REQUESTS {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
 }

@@ -163,3 +163,160 @@ fn workspace_authorization_borrows_records_and_preserves_owner_checks() {
         2
     );
 }
+
+#[test]
+fn typed_upload_admission_preserves_owner_state_expiry_and_size_precedence() {
+    let root = crate::tests::private_tempdir();
+    let system = root.path().join("system");
+    let disk = root.path().join("disk");
+    let mut engine =
+        Engine::initialize(&system, storage_engine::Config::development([disk.clone()])).unwrap();
+    let owner = install_test_administrator(&mut engine, "owner");
+    let repository = engine
+        .create_repository(
+            "Upload admission",
+            "P01",
+            1,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let mut expired = engine
+        .create_workspace(&repository.main_branch_id, "owner")
+        .unwrap();
+    let fresh = engine
+        .create_workspace(&repository.main_branch_id, "owner")
+        .unwrap();
+    let foreign = engine
+        .create_workspace(&repository.main_branch_id, "other")
+        .unwrap();
+    drop(engine);
+    // An expired, otherwise valid persisted workspace exercises the actual
+    // recovery boundary without a wall-clock sleep or production test hook.
+    expired.created_at = 0;
+    for parent in [system.join("workspaces"), disk.join("staging/workspaces")] {
+        std::fs::write(
+            parent.join(&expired.workspace_id).join("workspace.json"),
+            json_codec::to_vec(&expired).unwrap(),
+        )
+        .unwrap();
+    }
+    let backend = EngineBackend::new(Engine::open(&system).unwrap());
+    let maximum = Some(u64::MAX);
+    assert_eq!(
+        backend
+            .authorize_upload(&owner, "missing", maximum)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::WorkspaceNotFound
+    );
+    assert_eq!(
+        backend
+            .authorize_upload(&owner, &foreign.workspace_id, maximum)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Forbidden
+    );
+    assert_eq!(
+        backend
+            .authorize_upload(&owner, &expired.workspace_id, maximum)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::LeaseExpired
+    );
+    backend
+        .abort_workspace(&owner, &expired.workspace_id)
+        .unwrap();
+    assert_eq!(
+        backend
+            .authorize_upload(&owner, &expired.workspace_id, maximum)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::WorkspaceClosed
+    );
+    assert_eq!(
+        backend
+            .authorize_upload(&owner, &fresh.workspace_id, maximum)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::ResourceLimitExceeded
+    );
+    backend
+        .authorize_upload(&owner, &fresh.workspace_id, None)
+        .unwrap();
+    backend
+        .authorize_upload(&owner, &fresh.workspace_id, Some(0))
+        .unwrap();
+}
+
+#[test]
+fn typed_workspace_status_distinguishes_admission_errors_from_absent_items() {
+    let root = crate::tests::private_tempdir();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        storage_engine::Config::development([root.path().join("disk")]),
+    )
+    .unwrap();
+    let owner = install_test_administrator(&mut engine, "owner");
+    let repo = engine
+        .create_repository(
+            "Status",
+            "P01",
+            1,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let owned = engine
+        .create_workspace(&repo.main_branch_id, "owner")
+        .unwrap();
+    let foreign = engine
+        .create_workspace(&repo.main_branch_id, "other")
+        .unwrap();
+    let backend = EngineBackend::new(engine);
+    assert_eq!(
+        backend
+            .published_upload_status(&owner, "missing", "missing")
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::WorkspaceNotFound
+    );
+    assert_eq!(
+        backend
+            .published_upload_status(&owner, &foreign.workspace_id, "missing")
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Forbidden
+    );
+    assert!(
+        backend
+            .published_upload_status(&owner, &owned.workspace_id, "missing")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        backend
+            .workspace(&owner, &foreign.workspace_id)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Forbidden
+    );
+    let snapshot = backend.workspace(&owner, &owned.workspace_id).unwrap();
+    backend
+        .abort_workspace(&owner, &owned.workspace_id)
+        .unwrap();
+    assert_eq!(snapshot.state, storage_contract::WorkspaceState::Open);
+    assert_eq!(
+        backend
+            .workspace(&owner, &owned.workspace_id)
+            .unwrap()
+            .state,
+        storage_contract::WorkspaceState::Aborted
+    );
+    assert!(
+        backend
+            .published_upload_status(&owner, &owned.workspace_id, "missing")
+            .unwrap()
+            .is_none()
+    );
+}

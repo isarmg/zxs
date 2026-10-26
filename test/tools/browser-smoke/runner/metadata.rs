@@ -56,6 +56,7 @@ pub(super) fn metadata_edit(browser: &Browser) -> Result<()> {
                 if browser.script("const tree=document.querySelector('.zxs-version-tree-scroll');const note=Array.from(document.querySelectorAll('button')).find(e=>['Edit file note','编辑文件备注'].includes(e.getAttribute('aria-label')));return window.__zxsDetailRefresh.historyResponses>0&&document.querySelectorAll('.zxs-version-node').length>=14&&tree.scrollWidth-tree.clientWidth>100&&note&&!note.disabled")? == true { Ok(()) }
                 else { Err("wide detail history fixture not ready".into()) }
             })?;
+            tree_frames::run(browser)?;
             if browser.script(r#"
                 const probe=window.__zxsDetailRefresh,tree=document.querySelector('.zxs-version-tree-scroll');
                 tree.scrollLeft=tree.scrollWidth-tree.clientWidth;

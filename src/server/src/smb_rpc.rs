@@ -32,11 +32,14 @@ mod namespace;
 mod publication;
 mod session;
 mod transport;
+mod workers;
 use publication::recovery_record;
 use session::Session;
 #[cfg(all(test, feature = "core"))]
 use transport::run_connection;
 pub use transport::serve;
+pub(crate) use transport::serve_owned;
+pub(crate) use workers::{ConnectionRegistry, ConnectionShutdown};
 #[cfg(all(test, feature = "core"))]
 #[path = "../../../test/server/unit/smb_rpc/tests.rs"]
 mod tests;

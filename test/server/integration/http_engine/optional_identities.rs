@@ -164,3 +164,96 @@ async fn supplied_resolve_identity_rejects_bad_types_instead_of_returning_head()
         current["entry"]["version_id"]
     );
 }
+
+#[tokio::test]
+async fn typed_workspace_create_abort_preserve_strict_bodies_budget_and_wire() {
+    let (root, app, branch, _, _) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let before = workspace_records(root.path());
+    for invalid in [
+        json!([branch]),
+        json!(null),
+        json!({}),
+        json!({"branch_id":""}),
+        json!({"branch_id":branch,"extra":true}),
+    ] {
+        let (status, error) =
+            send(&app, Some(&token), "POST", "/api/workspaces", Some(invalid)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+        assert_eq!(workspace_records(root.path()), before);
+    }
+    let duplicate = format!(r#"{{"branch_id":"{branch}","branch_id":"{branch}"}}"#);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/workspaces")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(duplicate))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(workspace_records(root.path()), before);
+    let created = success(
+        &app,
+        &token,
+        "POST",
+        "/api/workspaces",
+        Some(json!({"branch_id":branch})),
+    )
+    .await;
+    assert_eq!(created["branch_id"], branch);
+    assert_eq!(created["principal"], "admin");
+    assert_eq!(created["files"], json!({}));
+    assert!(created["fencing_token"].is_string());
+    assert!(
+        !json_codec::to_string(&created)
+            .unwrap()
+            .contains("source_path")
+    );
+    let (status, error) = send(
+        &app,
+        Some(&token),
+        "POST",
+        "/api/workspaces",
+        Some(json!({"branch_id":branch})),
+    )
+    .await;
+    assert!(!status.is_success());
+    assert_eq!(error["error"]["code"], "RESOURCE_LIMIT_EXCEEDED");
+    let id = created["workspace_id"].as_str().unwrap();
+    let route = format!("/api/workspaces/{id}/abort");
+    for body in [
+        json!([]),
+        json!(null),
+        json!({"workspace_id":null}),
+        json!({"workspace_id":"other"}),
+        json!({"extra":true}),
+    ] {
+        let (status, error) = send(&app, Some(&token), "POST", &route, Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+        let current = success(&app, &token, "GET", &format!("/api/workspaces/{id}"), None).await;
+        assert_eq!(current["state"], "open");
+    }
+    let result = success(
+        &app,
+        &token,
+        "POST",
+        &route,
+        Some(json!({"workspace_id":id})),
+    )
+    .await;
+    assert_eq!(result, json!({"workspace_id":id,"state":"aborted"}));
+    success(
+        &app,
+        &token,
+        "POST",
+        "/api/workspaces",
+        Some(json!({"branch_id":branch})),
+    )
+    .await;
+}

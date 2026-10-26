@@ -246,10 +246,11 @@ impl Session {
         if result.is_ok() {
             cleanup_namespace_record(&record);
         } else if !submission_started && let Some(workspace) = pending_workspace {
-            match self.call(
-                crate::BackendAction::AbortWorkspace,
-                json!({"workspace_id":workspace}),
-            ) {
+            match self
+                .shared
+                .backend
+                .abort_workspace(&self.identity, &workspace)
+            {
                 Ok(_) if record_durable => cleanup_namespace_record(&record),
                 Ok(_) => {
                     tracing::warn!(%operation_id, workspace, path=%record.display(), "SMB namespace record durability failed; retaining available recovery evidence after abort")

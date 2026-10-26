@@ -179,39 +179,13 @@ impl StagedFile {
     }
 }
 pub(crate) fn persist_staged(record: &UploadRecord, staged: &StagedFile) -> Result<(), ApiError> {
-    persist_staged_with_sync(
-        record,
-        staged,
-        #[cfg(test)]
-        || staged.directory.sync().map_err(crate::upload_fs_error),
-    )
-}
-#[cfg(test)]
-fn sync_directory(root: &Path) -> Result<(), ApiError> {
-    fs::File::open(root)
-        .and_then(|file| file.sync_all())
-        .map_err(ApiError::io)
-}
-fn persist_staged_with_sync(
-    record: &UploadRecord,
-    staged: &StagedFile,
-    #[cfg(test)] sync: impl FnOnce() -> Result<(), ApiError>,
-) -> Result<(), ApiError> {
     let result = (|| {
         staged
             .directory
             .verify_identity()
             .map_err(crate::upload_fs_error)?;
         let name = format!("{}.json", key(&record.workspace_id, &record.item_id));
-        persist_held(
-            &staged.directory,
-            &name,
-            record,
-            #[cfg(test)]
-            || {},
-            #[cfg(test)]
-            sync,
-        )
+        persist_held(&staged.directory, &name, record)
     })();
     if result.is_err() {
         // A failed cleanup or directory sync can leave extra/uncertain metadata.
@@ -222,43 +196,18 @@ fn persist_staged_with_sync(
 }
 #[cfg(test)]
 pub(crate) fn persist(root: &Path, record: &UploadRecord) -> Result<(), ApiError> {
-    persist_inner(root, record, || {}, || sync_directory(root))
-}
-#[cfg(test)]
-fn persist_inner(
-    root: &Path,
-    record: &UploadRecord,
-    #[cfg(test)] published: impl FnOnce(),
-    #[cfg(test)] sync: impl FnOnce() -> Result<(), ApiError>,
-) -> Result<(), ApiError> {
     let name = format!("{}.json", key(&record.workspace_id, &record.item_id));
-    persist_at(root, &name, record, published, sync)
+    persist_at(root, &name, record)
 }
-fn persist_at(
-    root: &Path,
-    name: &str,
-    record: &UploadRecord,
-    #[cfg(test)] published: impl FnOnce(),
-    #[cfg(test)] sync: impl FnOnce() -> Result<(), ApiError>,
-) -> Result<(), ApiError> {
+fn persist_at(root: &Path, name: &str, record: &UploadRecord) -> Result<(), ApiError> {
     let directory = platform_io::fs_safety::PrivateDirectory::open_trusted(root)
         .map_err(crate::upload_fs_error)?;
-    persist_held(
-        &directory,
-        name,
-        record,
-        #[cfg(test)]
-        published,
-        #[cfg(test)]
-        sync,
-    )
+    persist_held(&directory, name, record)
 }
 fn persist_held(
     directory: &platform_io::fs_safety::PrivateDirectory,
     name: &str,
     record: &UploadRecord,
-    #[cfg(test)] published: impl FnOnce(),
-    #[cfg(test)] sync: impl FnOnce() -> Result<(), ApiError>,
 ) -> Result<(), ApiError> {
     use platform_io::fs_safety::{AtomicFile, RelativePath};
     let bytes =
@@ -271,16 +220,8 @@ fn persist_held(
         &RelativePath::new(name).map_err(crate::upload_fs_error)?,
         &bytes,
     )
-    .map_err(crate::upload_fs_error)?;
-    #[cfg(test)]
-    {
-        published();
-        sync()
-    }
-    #[cfg(not(test))]
-    {
-        directory.sync().map_err(crate::upload_fs_error)
-    }
+    // replace syncs the temporary file and this same held parent after rename.
+    .map_err(crate::upload_fs_error)
 }
 
 pub(crate) fn status(record: &UploadRecord) -> json_codec::Value {
@@ -302,29 +243,22 @@ pub(crate) fn retain_generation(root: &Path, record: &UploadRecord) -> Result<()
         record.generation,
         blake3::hash(record.data_file.as_bytes()).to_hex()
     );
-    persist_at(
-        root,
-        &name,
-        record,
-        #[cfg(test)]
-        || {
-            #[cfg(test)]
-            {
-                let hook = RETAIN_GENERATION_HOOK
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .filter(|hook| hook.root == root)
-                    .map(|hook| hook.after_publish.clone());
-                if let Some(hook) = hook {
-                    hook();
-                }
-            }
-        },
-        #[cfg(test)]
-        || sync_directory(root),
-    )
+    persist_at(root, &name, record)?;
+    #[cfg(test)]
+    {
+        let hook = RETAIN_GENERATION_HOOK
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|hook| hook.root == root)
+            .map(|hook| hook.after_publish.clone());
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+    Ok(())
 }
+
 pub(crate) struct ExistingPrefix {
     file: fs::File,
     remaining: u64,

@@ -398,6 +398,9 @@ fn verify_body(path: &Path, version: &FileVersion) -> Result<fs::File> {
             "version body content differs",
         ));
     }
+    // Existing/recovered bodies carry no VerifiedCopy durability receipt. This
+    // installation barrier is not a read-path flush: callers publish protection
+    // only after the body and its destination directory are durable.
     file.sync_all()?;
     Ok(file)
 }

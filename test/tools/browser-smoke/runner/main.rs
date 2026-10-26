@@ -34,6 +34,7 @@ use metadata::{assert_metadata_only, metadata_edit, open_fixture_directory};
 mod file_viewports;
 mod session_logout;
 mod single_account;
+mod tree_frames;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const ELEMENT: &str = "element-6066-11e4-a52e-4f735466cecf";
@@ -249,6 +250,7 @@ fn exercise(
     screenshot: Option<&Path>,
 ) -> Result<()> {
     diagnostics::install(browser)?;
+    tree_frames::install(browser)?;
     let viewport_previews = env::var_os("ZXS_VIEWPORT_PREVIEWS").map(PathBuf::from);
     let url = if screenshot.is_some() || viewport_previews.is_some() {
         format!("{origin}/?lang=zh-CN")

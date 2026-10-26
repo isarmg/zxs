@@ -389,6 +389,45 @@ impl crate::Backend for RetainedGenerationBackend {
         Err(crate::ApiError::unsupported())
     }
 
+    fn create_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: crate::CreateWorkspace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn abort_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
+    fn workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn published_upload_status(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _item: &str,
+    ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn authorize_upload(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _logical_size: Option<u64>,
+    ) -> Result<(), crate::ApiError> {
+        Ok(())
+    }
+
     fn lookup_current(
         &self,
         _identity: &crate::auth::Identity,
@@ -410,14 +449,11 @@ impl crate::Backend for RetainedGenerationBackend {
 
     fn call(
         &self,
-        action: crate::BackendAction,
+        _action: crate::BackendAction,
         _identity: &Identity,
         _input: Value,
     ) -> Result<Value, ApiError> {
-        match action {
-            crate::BackendAction::UploadAuthorize => Ok(json!({"authorized":true})),
-            _ => Err(ApiError::unsupported()),
-        }
+        Err(ApiError::unsupported())
     }
 
     fn upload(
@@ -488,11 +524,18 @@ fn cancelled_generation_retention_keeps_item_claim_and_upload_slot_until_worker_
         let app = crate::router(Arc::new(RetainedGenerationBackend), auth, config).unwrap();
         let first = app
             .clone()
-            .oneshot(request(&token, "item", 1, Body::from("old")))
+            .oneshot(request(
+                &token,
+                "entry_00000000000000000000000000000001",
+                1,
+                Body::from("old"),
+            ))
             .await
             .unwrap();
         assert_eq!(first.status(), StatusCode::OK);
-        let previous = uploads::load(&spool, "ws", "item").unwrap().unwrap();
+        let previous = uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
+            .unwrap()
+            .unwrap();
         let (started, started_rx) = tokio::sync::oneshot::channel();
         let started = Mutex::new(Some(started));
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
@@ -510,13 +553,14 @@ fn cancelled_generation_retention_keeps_item_claim_and_upload_slot_until_worker_
                 }
             }),
         });
-        let pending =
-            tokio::spawn(
-                app.clone()
-                    .oneshot(request(&token, "item", 2, Body::from("new"))),
-            );
+        let pending = tokio::spawn(app.clone().oneshot(request(
+            &token,
+            "entry_00000000000000000000000000000001",
+            2,
+            Body::from("new"),
+        )));
         // The old generation's retained record is already installed, but its
-        // blocking retention job has not completed its final sync or released owners.
+        // blocking retention job has not returned or released its owners.
         tokio::time::timeout(Duration::from_secs(5), started_rx)
             .await
             .unwrap()
@@ -525,7 +569,12 @@ fn cancelled_generation_retention_keeps_item_claim_and_upload_slot_until_worker_
         assert!(pending.await.unwrap_err().is_cancelled());
         let retry = app
             .clone()
-            .oneshot(request(&token, "item", 2, Body::from("new")))
+            .oneshot(request(
+                &token,
+                "entry_00000000000000000000000000000001",
+                2,
+                Body::from("new"),
+            ))
             .await
             .unwrap();
         assert_eq!(retry.status(), StatusCode::CONFLICT);
@@ -545,21 +594,31 @@ fn cancelled_generation_retention_keeps_item_claim_and_upload_slot_until_worker_
             }
             std::task::Poll::Pending::<Option<Result<bytes::Bytes, std::io::Error>>>
         }));
-        let other = tokio::spawn(app.clone().oneshot(request(&token, "other", 1, body)));
+        let other = tokio::spawn(app.clone().oneshot(request(
+            &token,
+            "entry_00000000000000000000000000000002",
+            1,
+            body,
+        )));
         tokio::time::timeout(Duration::from_secs(5), reading_rx)
             .await
             .unwrap()
             .unwrap();
         let overflow = app
             .clone()
-            .oneshot(request(&token, "third", 1, Body::from("old")))
+            .oneshot(request(
+                &token,
+                "entry_00000000000000000000000000000003",
+                1,
+                Body::from("old"),
+            ))
             .await
             .unwrap();
         assert_eq!(overflow.status(), StatusCode::TOO_MANY_REQUESTS);
         other.abort();
         assert!(other.await.unwrap_err().is_cancelled());
         assert_eq!(
-            uploads::load(&spool, "ws", "item")
+            uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
                 .unwrap()
                 .unwrap()
                 .generation,
@@ -574,12 +633,19 @@ fn cancelled_generation_retention_keeps_item_claim_and_upload_slot_until_worker_
 
     runtime().block_on(async {
         let retry = app
-            .oneshot(request(&token, "item", 2, Body::from("new")))
+            .oneshot(request(
+                &token,
+                "entry_00000000000000000000000000000001",
+                2,
+                Body::from("new"),
+            ))
             .await
             .unwrap();
         assert_eq!(retry.status(), StatusCode::OK);
     });
-    let current = uploads::load(&spool, "ws", "item").unwrap().unwrap();
+    let current = uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
+        .unwrap()
+        .unwrap();
     assert_eq!(current.generation, 2);
     assert_eq!(current.state, crate::uploads::UploadState::Complete);
     assert_eq!(fs::read(spool.join(&current.data_file)).unwrap(), b"new");
@@ -758,7 +824,9 @@ async fn fragmented_upload_checkpoints_before_pending_and_verifies_retry_tail() 
     let request = |body| {
         Request::builder()
             .method("PUT")
-            .uri("/api/workspaces/ws/files/batched/content?path=file")
+            .uri(
+                "/api/workspaces/ws/files/entry_00000000000000000000000000000009/content?path=file",
+            )
             .header("authorization", format!("Bearer {token}"))
             .header("x-zxs-logical-size", bytes.len().to_string())
             .header(
@@ -777,7 +845,8 @@ async fn fragmented_upload_checkpoints_before_pending_and_verifies_retry_tail() 
     let upload = tokio::spawn(app.clone().oneshot(request(body)));
     let record = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
-            if let Some(record) = uploads::load(&spool, "ws", "batched").unwrap()
+            if let Some(record) =
+                uploads::load(&spool, "ws", "entry_00000000000000000000000000000009").unwrap()
                 && std::fs::metadata(spool.join(&record.data_file))
                     .unwrap()
                     .len()
@@ -807,7 +876,9 @@ async fn fragmented_upload_checkpoints_before_pending_and_verifies_retry_tail() 
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let current = uploads::load(&spool, "ws", "batched").unwrap().unwrap();
+    let current = uploads::load(&spool, "ws", "entry_00000000000000000000000000000009")
+        .unwrap()
+        .unwrap();
     assert_eq!(current.generation, record.generation);
     assert_eq!(current.content_hash, record.content_hash);
     assert_eq!(current.data_file, record.data_file);
@@ -886,4 +957,34 @@ fn public_backend_content_hash_is_validated_at_the_header_boundary() {
             .is::<http::header::InvalidHeaderValue>()
     );
     assert_eq!(dropped.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn published_upload_wire_preserves_large_integers_empty_ranges_and_sealed_manifest() {
+    for (size, state, manifest) in [
+        (0, crate::PublishedUploadState::Complete, None),
+        (
+            u64::MAX,
+            crate::PublishedUploadState::Sealed {
+                manifest_hash: "manifest".into(),
+            },
+            Some("manifest"),
+        ),
+    ] {
+        let hash = blake3::hash(b"").to_hex().to_string();
+        let response = super::published_upload_response(
+            "workspace",
+            "item",
+            crate::PublishedUploadStatus {
+                generation: u64::MAX,
+                logical_size: size,
+                content_hash: hash.clone(),
+                state,
+            },
+        );
+        assert_eq!(
+            response,
+            json!({"workspace_id":"workspace","item_id":"item","upload_generation":u64::MAX.to_string(),"logical_size":size.to_string(),"content_hash":hash,"state":if manifest.is_some(){"SEALED"}else{"COMPLETE"},"durable_ranges":if size>0{vec![json!({"offset":"0","length":size.to_string(),"content_hash":hash})]}else{vec![]},"sealed_manifest_hash":manifest})
+        );
+    }
 }

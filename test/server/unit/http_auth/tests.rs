@@ -497,6 +497,45 @@ impl crate::Backend for RetryProbe {
         Err(crate::ApiError::unsupported())
     }
 
+    fn create_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: crate::CreateWorkspace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn abort_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
+    fn workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn published_upload_status(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _item: &str,
+    ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn authorize_upload(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _logical_size: Option<u64>,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
     fn lookup_current(
         &self,
         _identity: &crate::auth::Identity,

@@ -62,7 +62,7 @@ async fn completed_and_old_generations_use_quota_before_body_poll_and_survive_re
             .clone()
             .oneshot(request(
                 &token,
-                "item",
+                "entry_00000000000000000000000000000001",
                 generation,
                 4,
                 &hash,
@@ -100,7 +100,14 @@ async fn completed_and_old_generations_use_quota_before_body_poll_and_survive_re
     }));
     let response = app
         .clone()
-        .oneshot(request(&token, "item", 3, 4, &hash, body))
+        .oneshot(request(
+            &token,
+            "entry_00000000000000000000000000000001",
+            3,
+            4,
+            &hash,
+            body,
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -110,7 +117,14 @@ async fn completed_and_old_generations_use_quota_before_body_poll_and_survive_re
     );
     assert_eq!(data_count(root.path()), 2);
     let response = app
-        .oneshot(request(&token, "item", 2, 4, &hash, Body::from("data")))
+        .oneshot(request(
+            &token,
+            "entry_00000000000000000000000000000001",
+            2,
+            4,
+            &hash,
+            Body::from("data"),
+        ))
         .await
         .unwrap();
     assert_eq!(
@@ -132,7 +146,14 @@ async fn interrupted_and_checksum_failed_bytes_remain_charged_after_restart() {
     ]));
     let response = app
         .clone()
-        .oneshot(request(&token, "item", 1, 4, &"0".repeat(64), body))
+        .oneshot(request(
+            &token,
+            "entry_00000000000000000000000000000001",
+            1,
+            4,
+            &"0".repeat(64),
+            body,
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -140,7 +161,7 @@ async fn interrupted_and_checksum_failed_bytes_remain_charged_after_restart() {
         .clone()
         .oneshot(request(
             &token,
-            "item",
+            "entry_00000000000000000000000000000001",
             2,
             5,
             &"0".repeat(64),
@@ -149,16 +170,20 @@ async fn interrupted_and_checksum_failed_bytes_remain_charged_after_restart() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let record = uploads::load(&root.path().join("api-spool"), "ws", "item")
-        .unwrap()
-        .unwrap();
+    let record = uploads::load(
+        &root.path().join("api-spool"),
+        "ws",
+        "entry_00000000000000000000000000000001",
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(record.state, crate::uploads::UploadState::ChecksumMismatch);
     drop(app);
     let app = restart(root.path(), limit);
     let response = app
         .oneshot(request(
             &token,
-            "another",
+            "entry_0000000000000000000000000000000a",
             1,
             0,
             blake3::hash(b"").to_hex().as_str(),
@@ -187,12 +212,23 @@ async fn cancellation_settles_actual_unknown_tail_and_retry_never_overwrites_it(
         futures::stream::pending(),
     );
     let upload_app = app.clone();
-    let upload_request = request(&token, "item", 1, 10, &hash, Body::from_stream(stream));
+    let upload_request = request(
+        &token,
+        "entry_00000000000000000000000000000001",
+        1,
+        10,
+        &hash,
+        Body::from_stream(stream),
+    );
     let upload = tokio::spawn(async move { upload_app.oneshot(upload_request).await });
     let record = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let Some(record) =
-                uploads::load(&root.path().join("api-spool"), "ws", "item").unwrap()
+            if let Some(record) = uploads::load(
+                &root.path().join("api-spool"),
+                "ws",
+                "entry_00000000000000000000000000000001",
+            )
+            .unwrap()
                 && std::fs::metadata(root.path().join("api-spool").join(&record.data_file))
                     .unwrap()
                     .len()
@@ -213,7 +249,7 @@ async fn cancellation_settles_actual_unknown_tail_and_retry_never_overwrites_it(
         .clone()
         .oneshot(request(
             &token,
-            "other",
+            "entry_00000000000000000000000000000002",
             1,
             0,
             blake3::hash(b"").to_hex().as_str(),
@@ -231,7 +267,7 @@ async fn cancellation_settles_actual_unknown_tail_and_retry_never_overwrites_it(
                 .clone()
                 .oneshot(request(
                     &token,
-                    "item",
+                    "entry_00000000000000000000000000000001",
                     1,
                     10,
                     &hash,
@@ -264,7 +300,7 @@ async fn cancellation_settles_actual_unknown_tail_and_retry_never_overwrites_it(
     let response = app
         .oneshot(request(
             &token,
-            "item",
+            "entry_00000000000000000000000000000001",
             1,
             10,
             &hash,
@@ -296,7 +332,7 @@ async fn upload_idle_timeout_preserves_tail_and_allows_verified_retry() {
         .clone()
         .oneshot(request(
             &token,
-            "idle",
+            "entry_00000000000000000000000000000007",
             1,
             10,
             &hash,
@@ -312,9 +348,13 @@ async fn upload_idle_timeout_preserves_tail_and_allows_verified_retry() {
     )
     .unwrap();
     assert_eq!(body["error"]["code"], "TRANSFER_TIMEOUT");
-    let record = uploads::load(&root.path().join("api-spool"), "ws", "idle")
-        .unwrap()
-        .unwrap();
+    let record = uploads::load(
+        &root.path().join("api-spool"),
+        "ws",
+        "entry_00000000000000000000000000000007",
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(record.persisted_bytes, 3);
     assert_eq!(
         std::fs::read(root.path().join("api-spool").join(record.data_file)).unwrap(),
@@ -323,7 +363,7 @@ async fn upload_idle_timeout_preserves_tail_and_allows_verified_retry() {
     let response = app
         .oneshot(request(
             &token,
-            "idle",
+            "entry_00000000000000000000000000000007",
             1,
             10,
             &hash,
@@ -356,7 +396,7 @@ fn upload_total_timeout_retains_unfinished_evidence_despite_progress() {
         let response = app
             .oneshot(request(
                 &token,
-                "total",
+                "entry_00000000000000000000000000000008",
                 1,
                 100,
                 &hash,
@@ -370,9 +410,13 @@ fn upload_total_timeout_retains_unfinished_evidence_despite_progress() {
     // publication. Join those jobs before inspecting retained evidence; otherwise
     // load's identity check can race the legitimate atomic metadata replacement.
     drop(runtime);
-    let record = uploads::load(&root.path().join("api-spool"), "ws", "total")
-        .unwrap()
-        .unwrap();
+    let record = uploads::load(
+        &root.path().join("api-spool"),
+        "ws",
+        "entry_00000000000000000000000000000008",
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(record.state, crate::uploads::UploadState::Incomplete);
     let bytes = std::fs::read(root.path().join("api-spool").join(record.data_file)).unwrap();
     assert!(!bytes.is_empty());
@@ -388,7 +432,10 @@ async fn upload_slots_are_shared_across_sessions_and_items_and_released_on_cance
     let (other_token, _, _) = authenticated(&app).await;
     let hash = blake3::hash(b"").to_hex().to_string();
     let mut tasks = Vec::new();
-    for (item, session) in [("one", &token), ("two", &other_token)] {
+    for (item, session) in [
+        ("entry_00000000000000000000000000000004", &token),
+        ("entry_00000000000000000000000000000005", &other_token),
+    ] {
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         let mut ready = Some(ready_tx);
         let stream = futures::stream::poll_fn(move |_| {
@@ -407,7 +454,14 @@ async fn upload_slots_are_shared_across_sessions_and_items_and_released_on_cance
     }
     let response = app
         .clone()
-        .oneshot(request(&token, "three", 1, 0, &hash, Body::empty()))
+        .oneshot(request(
+            &token,
+            "entry_00000000000000000000000000000006",
+            1,
+            0,
+            &hash,
+            Body::empty(),
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -430,7 +484,14 @@ async fn upload_slots_are_shared_across_sessions_and_items_and_released_on_cance
         let _ = task.await;
     }
     let response = app
-        .oneshot(request(&token, "three", 1, 0, &hash, Body::empty()))
+        .oneshot(request(
+            &token,
+            "entry_00000000000000000000000000000006",
+            1,
+            0,
+            &hash,
+            Body::empty(),
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -514,4 +575,50 @@ async fn checksum_bodies_share_read_slots_and_expire_without_polling() {
             .as_ref(),
         &[7; 128 * 1024]
     );
+}
+
+#[tokio::test]
+async fn invalid_upload_item_ids_are_rejected_before_body_or_spool_publication() {
+    let root = crate::tests::private_tempdir();
+    let app = application(root.path());
+    let (token, _, _) = authenticated(&app).await;
+    let hash = blake3::hash(b"data").to_hex().to_string();
+    for item in [
+        "item",
+        "entry_",
+        "entry_0000000000000000000000000000000A",
+        "wrong_00000000000000000000000000000001",
+    ] {
+        let stream = futures::stream::poll_fn(
+            |_| -> std::task::Poll<Option<Result<Bytes, std::io::Error>>> {
+                panic!("invalid item must be rejected before polling its body")
+            },
+        );
+        let response = app
+            .clone()
+            .oneshot(request(
+                &token,
+                item,
+                1,
+                4,
+                &hash,
+                Body::from_stream(stream),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{item}");
+        assert_eq!(data_count(root.path()), 0);
+    }
+    let response = app
+        .oneshot(request(
+            &token,
+            "entry_00000000000000000000000000000001",
+            1,
+            4,
+            &hash,
+            Body::from("data"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }

@@ -332,6 +332,112 @@ impl Backend for EngineBackend {
             .expect("invariant: admitted commit exists under the engine lock"))
     }
 
+    fn create_workspace(
+        &self,
+        identity: &Identity,
+        command: crate::CreateWorkspace,
+    ) -> Result<storage_contract::Workspace, ApiError> {
+        let mut engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        let crate::CreateWorkspace {
+            branch_id,
+            source_commit_id,
+        } = command;
+        repo_for_branch(&engine, &branch_id)?;
+        match source_commit_id {
+            Some(source) => {
+                engine.create_historical_workspace(&branch_id, &source, &current.principal)
+            }
+            None => engine.create_workspace(&branch_id, &current.principal),
+        }
+        .map_err(error)
+    }
+    fn abort_workspace(&self, identity: &Identity, workspace: &str) -> Result<(), ApiError> {
+        let mut engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        workspace_authorize(&engine, &current, workspace)?;
+        engine
+            .abort_workspace(workspace, &current.principal)
+            .map_err(error)
+    }
+
+    fn workspace(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::Workspace, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        workspace_authorize(&engine, &current, workspace).cloned()
+    }
+
+    fn published_upload_status(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+        item: &str,
+    ) -> Result<Option<crate::PublishedUploadStatus>, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        let workspace = workspace_authorize(&engine, &current, workspace)?;
+        let Some(staged) = workspace.files.get(item) else {
+            return Ok(None);
+        };
+        let state = if matches!(
+            workspace.state,
+            storage_contract::WorkspaceState::Sealed | storage_contract::WorkspaceState::Committed
+        ) {
+            crate::PublishedUploadState::Sealed {
+                manifest_hash: storage_engine::workspace_manifest_hash(workspace).map_err(error)?,
+            }
+        } else {
+            crate::PublishedUploadState::Complete
+        };
+        Ok(Some(crate::PublishedUploadStatus {
+            generation: staged.dirty_generation,
+            logical_size: staged.size,
+            content_hash: staged.content_hash.clone(),
+            state,
+        }))
+    }
+
+    fn authorize_upload(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+        logical_size: Option<u64>,
+    ) -> Result<(), ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        let workspace = workspace_authorize(&engine, &current, workspace)?;
+        if workspace.state != storage_contract::WorkspaceState::Open {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::WorkspaceClosed,
+                "workspace is no longer open for upload",
+            ));
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(ApiError::invalid_source)?
+            .as_secs();
+        if now.saturating_sub(workspace.created_at) > engine.config().workspace_ttl_seconds {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::LeaseExpired,
+                "workspace lease expired; retained data remains available",
+            ));
+        }
+        if logical_size.is_some_and(|size| {
+            size > engine.config().max_file_bytes || size > engine.config().max_workspace_bytes
+        }) {
+            return Err(ApiError::new(
+                ::http::StatusCode::PAYLOAD_TOO_LARGE,
+                storage_contract::ErrorCode::ResourceLimitExceeded,
+                "declared upload exceeds the pool file or workspace limit",
+            ));
+        }
+        Ok(())
+    }
+
     fn read_directory(
         &self,
         identity: &Identity,
@@ -709,11 +815,6 @@ impl Backend for EngineBackend {
                 }
                 Ok(response)
             }
-            crate::BackendAction::Workspace => sanitized(workspace_authorize(
-                &engine,
-                identity,
-                field(&input, "workspace_id")?,
-            )?),
             crate::BackendAction::Plan => {
                 let plan = engine.plan(field(&input, "plan_id")?).map_err(error)?;
                 if plan.principal != identity.principal {
@@ -788,22 +889,6 @@ impl Backend for EngineBackend {
                         .map_err(error)?,
                 )
             }
-            crate::BackendAction::CreateWorkspace => {
-                keys(&input, &["branch_id", "source_commit_id"])?;
-                let branch = field(&input, "branch_id")?;
-                repo_for_branch(&engine, branch)?;
-                let workspace =
-                    if let Some(source) = wire::optional_identity(&input, "source_commit_id")? {
-                        engine
-                            .create_historical_workspace(branch, source, &identity.principal)
-                            .map_err(error)?
-                    } else {
-                        engine
-                            .create_workspace(branch, &identity.principal)
-                            .map_err(error)?
-                    };
-                sanitized(workspace)
-            }
             crate::BackendAction::Branch => {
                 let id = field(&input, "branch_id")?;
                 repo_for_branch(&engine, id)?;
@@ -840,73 +925,6 @@ impl Backend for EngineBackend {
                     engine
                         .create_historical_save_plan(history, options, &identity.principal)
                         .map_err(error)?,
-                )
-            }
-            crate::BackendAction::WorkspaceAuthorize => {
-                workspace_authorize(&engine, identity, field(&input, "workspace_id")?)?;
-                Ok(json!({"authorized":true}))
-            }
-            crate::BackendAction::UploadAuthorize => {
-                keys(&input, &["workspace_id", "item_id", "logical_size"])?;
-                let workspace =
-                    workspace_authorize(&engine, identity, field(&input, "workspace_id")?)?;
-                storage_contract::validate_id(field(&input, "item_id")?, "entry")
-                    .map_err(ApiError::invalid_source)?;
-                if workspace.state != storage_contract::WorkspaceState::Open {
-                    return Err(ApiError::conflict(
-                        storage_contract::ErrorCode::WorkspaceClosed,
-                        "workspace is no longer open for upload",
-                    ));
-                }
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(ApiError::invalid_source)?
-                    .as_secs();
-                if now.saturating_sub(workspace.created_at) > engine.config().workspace_ttl_seconds
-                {
-                    return Err(ApiError::conflict(
-                        storage_contract::ErrorCode::LeaseExpired,
-                        "workspace lease expired; retained data remains available",
-                    ));
-                }
-                if input.get("logical_size").is_some() {
-                    let size = storage_contract::parse_u64_decimal(field(&input, "logical_size")?)
-                        .map_err(ApiError::invalid_source)?;
-                    if size > engine.config().max_file_bytes
-                        || size > engine.config().max_workspace_bytes
-                    {
-                        return Err(ApiError::new(
-                            ::http::StatusCode::PAYLOAD_TOO_LARGE,
-                            storage_contract::ErrorCode::ResourceLimitExceeded,
-                            "declared upload exceeds the pool file or workspace limit",
-                        ));
-                    }
-                }
-                Ok(json!({"authorized":true}))
-            }
-            crate::BackendAction::UploadStatus => {
-                let workspace =
-                    workspace_authorize(&engine, identity, field(&input, "workspace_id")?)?;
-                let item = field(&input, "item_id")?;
-                let staged = workspace.files.get(item).ok_or_else(|| {
-                    ApiError::new(
-                        ::http::StatusCode::NOT_FOUND,
-                        storage_contract::ErrorCode::NotFound,
-                        "upload item not found",
-                    )
-                })?;
-                let sealed = matches!(
-                    workspace.state,
-                    storage_contract::WorkspaceState::Sealed
-                        | storage_contract::WorkspaceState::Committed
-                );
-                let manifest = if sealed {
-                    Some(storage_engine::workspace_manifest_hash(workspace).map_err(error)?)
-                } else {
-                    None
-                };
-                Ok(
-                    json!({"workspace_id":workspace.workspace_id,"item_id":item,"upload_generation":staged.dirty_generation.to_string(),"logical_size":staged.size.to_string(),"content_hash":staged.content_hash,"state":if sealed{"SEALED"}else{"COMPLETE"},"durable_ranges":if staged.size>0{vec![json!({"offset":"0","length":staged.size.to_string(),"content_hash":staged.content_hash})]}else{vec![]},"sealed_manifest_hash":manifest}),
                 )
             }
             crate::BackendAction::Namespace => {
@@ -969,15 +987,6 @@ impl Backend for EngineBackend {
                 let result = Application::new(&mut engine, &current)
                     .finish_workspace_commit(&workspace_id, prepared)?;
                 operation_wire(result)
-            }
-            crate::BackendAction::AbortWorkspace => {
-                keys(&input, &["workspace_id"])?;
-                let id = field(&input, "workspace_id")?;
-                workspace_authorize(&engine, identity, id)?;
-                engine
-                    .abort_workspace(id, &identity.principal)
-                    .map_err(error)?;
-                Ok(json!({"workspace_id":id,"state":"aborted"}))
             }
             crate::BackendAction::CreateBranch => {
                 for key in ["repository_id", "source_commit_id", "name", "operation_id"] {

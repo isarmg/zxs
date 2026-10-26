@@ -19,7 +19,6 @@ macro_rules! actions {
     };
 }
 actions! {
-    AbortWorkspace => "abort_workspace",
     Archive => "archive",
     Branch => "branch",
     Branches => "branches",
@@ -30,7 +29,6 @@ actions! {
     Compare => "compare",
     CreateBranch => "create_branch",
     CreateRepository => "create_repository",
-    CreateWorkspace => "create_workspace",
     DefaultBranch => "default_branch",
     DirectoryBranchScopes => "directory_branch_scopes",
     DirectoryBranchSelection => "directory_branch_selection",
@@ -86,12 +84,8 @@ actions! {
     UpdatePlacementRule => "update_placement_rule",
     UpdatePolicy => "update_policy",
     UpdateSmbBinding => "update_smb_binding",
-    UploadAuthorize => "upload_authorize",
-    UploadStatus => "upload_status",
     Version => "version",
-    Workspace => "workspace",
     WorkspaceCapacity => "workspace_capacity",
-    WorkspaceAuthorize => "workspace_authorize",
     WriteSession => "write_session",
 }
 

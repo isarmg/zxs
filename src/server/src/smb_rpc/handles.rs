@@ -244,10 +244,7 @@ impl Session {
             })();
             if result.is_err() {
                 if let Some(id) = pending_workspace
-                    && let Err(error) = self.call(
-                        crate::BackendAction::AbortWorkspace,
-                        json!({"workspace_id":id}),
-                    )
+                    && let Err(error) = self.shared.backend.abort_workspace(&self.identity, &id)
                 {
                     tracing::warn!(error = ?error, "SMB preparation abort failed; workspace retained for recovery");
                 }

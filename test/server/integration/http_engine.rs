@@ -1883,6 +1883,37 @@ async fn durable_http_save_seals_the_real_manifest_and_keeps_original_publicatio
     let item = new_id("entry");
     let bytes = b"a complete independent full file";
     upload(&app, &token, ws, &item, "documents/file.txt", bytes).await;
+    let captured = success(&app, &token, "GET", &format!("/api/workspaces/{ws}"), None).await;
+    assert_eq!(captured["workspace_id"], ws);
+    assert_eq!(captured["files"][&item]["size"], bytes.len().to_string());
+    assert!(captured["files"][&item].get("source_path").is_none());
+    let (missing_status, missing) = send(
+        &app,
+        Some(&token),
+        "GET",
+        &format!(
+            "/api/workspaces/{ws}/files/{}/upload-status",
+            new_id("entry")
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(missing_status, StatusCode::NOT_FOUND);
+    assert_eq!(missing["error"]["code"], "NOT_FOUND");
+    let (absent_status, absent) = send(
+        &app,
+        Some(&token),
+        "GET",
+        &format!(
+            "/api/workspaces/{}/files/{item}/upload-status",
+            new_id("workspace")
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(absent_status, StatusCode::NOT_FOUND);
+    assert_eq!(absent["error"]["code"], "WORKSPACE_NOT_FOUND");
+
     let status = success(
         &app,
         &token,

@@ -27,7 +27,7 @@ fn staging_guard_preserves_unpublished_bytes_until_and_after_last_job() {
 }
 
 #[test]
-fn uncertain_directory_sync_retains_bytes_and_blocks_fresh_admission_until_inventory() {
+fn failed_atomic_staged_progress_retains_bytes_and_blocks_admission_until_inventory() {
     let root = private_tempdir();
     let previous = root.path().join("previous.data");
     fs::write(&previous, b"previous").unwrap();
@@ -50,18 +50,23 @@ fn uncertain_directory_sync_retains_bytes_and_blocks_fresh_admission_until_inven
         state: crate::uploads::UploadState::Incomplete,
         data_file: "new.data".into(),
     };
-    assert!(
-        persist_staged_with_sync(&record, &guard, || {
-            Err(ApiError::io(std::io::Error::other(
-                "injected directory sync failure",
-            )))
-        })
-        .is_err()
-    );
-    assert_eq!(
-        load(root.path(), "ws", "item").unwrap().unwrap().data_file,
-        "new.data"
-    );
+    // Reject a real unsafe destination at the AtomicFile boundary. This tests
+    // error propagation/admission, not a simulated or physical fsync failure.
+    let metadata = root.path().join(format!("{}.json", key("ws", "item")));
+    fs::create_dir(&metadata).unwrap();
+    assert!(persist_staged(&record, &guard).is_err());
+    assert!(metadata.is_dir());
+    fs::remove_dir(&metadata).unwrap();
+    // Retrying the same held staging file publishes usable progress, but does
+    // not silently clear the inventory-required admission state.
+    persist_staged(&record, &guard).unwrap();
+    let loaded = load(root.path(), "ws", "item").unwrap().unwrap();
+    assert_eq!(loaded.data_file, "new.data");
+    assert_eq!(loaded.persisted_bytes, 9);
+    assert_eq!(loaded.persisted_hash, record.persisted_hash);
+    let mut prefix = ExistingPrefix::open(root.path(), &loaded).unwrap().unwrap();
+    prefix.check(b"new bytes").unwrap();
+    assert!(prefix.complete());
     drop(guard);
     assert_eq!(fs::read(&path).unwrap(), b"new bytes");
     assert_eq!(fs::read(&previous).unwrap(), b"previous");

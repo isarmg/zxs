@@ -9,9 +9,14 @@ use crate::{
     ui::{State, text},
 };
 use json_codec::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
 use wasm_bindgen::{JsCast, closure::Closure};
 use web_interface::{html, i18n::t, prelude::*};
+
+mod refresh;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Version {
@@ -641,9 +646,14 @@ fn observe(root: NodeRef<html::Div>, layout: Memo<Layout>, geometry: RwSignal<Ge
             }
             };
         update();
-        let resize_update = update.clone();
+        let window = element
+            .owner_document()
+            .and_then(|document| document.default_view())
+            .expect("invariant: mounted version tree belongs to a browser window");
+        let refresh = refresh::FrameRefresh::new(window, update);
+        let resize_refresh = Rc::clone(&refresh);
         let callback = Closure::wrap(Box::new(
-            move |_: js_sys::Array, _: web_sys::ResizeObserver| resize_update(),
+            move |_: js_sys::Array, _: web_sys::ResizeObserver| resize_refresh.request(),
         )
             as Box<dyn FnMut(js_sys::Array, web_sys::ResizeObserver)>);
         let resize = match web_sys::ResizeObserver::new(callback.as_ref().unchecked_ref()) {
@@ -672,10 +682,11 @@ fn observe(root: NodeRef<html::Div>, layout: Memo<Layout>, geometry: RwSignal<Ge
             }
         };
         observe_nodes();
+        let mutation_refresh = Rc::clone(&refresh);
         let mutation_callback = Closure::wrap(Box::new(
             move |_: js_sys::Array, _: web_sys::MutationObserver| {
                 observe_nodes();
-                update();
+                mutation_refresh.request();
             },
         )
             as Box<dyn FnMut(js_sys::Array, web_sys::MutationObserver)>);
@@ -701,9 +712,15 @@ fn observe(root: NodeRef<html::Div>, layout: Memo<Layout>, geometry: RwSignal<Ge
                 );
             }
         }
-        let cleanup =
-            send_wrapper::SendWrapper::new((resize, callback, mutation, mutation_callback));
+        let cleanup = send_wrapper::SendWrapper::new((
+            resize,
+            callback,
+            mutation,
+            mutation_callback,
+            refresh,
+        ));
         on_cleanup(move || {
+            cleanup.4.close();
             cleanup.0.disconnect();
             if let Some(observer) = &cleanup.2 {
                 observer.disconnect();

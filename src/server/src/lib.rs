@@ -27,7 +27,11 @@ mod web_assets;
 
 mod backend_action;
 mod backend_read;
+mod backend_workspace;
+pub use backend_workspace::{CreateWorkspace, PublishedUploadState, PublishedUploadStatus};
+mod http_workspace;
 pub use backend_read::{DirectorySelection, DirectorySnapshot, ReadDirectory};
+use http_workspace::{abort, workspace, workspace_info};
 mod operation_wire;
 pub use backend_action::BackendAction;
 
@@ -242,6 +246,33 @@ pub trait Backend: Send + Sync {
         branch: &str,
         commit: &str,
     ) -> Result<Arc<storage_contract::Commit>, ApiError>;
+    /// Create a workspace using the current authenticated actor and pool admission limits.
+    fn create_workspace(
+        &self,
+        identity: &Identity,
+        command: crate::CreateWorkspace,
+    ) -> Result<storage_contract::Workspace, ApiError>;
+    /// Abort only a currently owned workspace; retain existing pending-operation decisions.
+    fn abort_workspace(&self, identity: &Identity, workspace: &str) -> Result<(), ApiError>;
+    fn workspace(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::Workspace, ApiError>;
+    /// None means an absent item in an authorized workspace, never failed admission.
+    fn published_upload_status(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+        item: &str,
+    ) -> Result<Option<PublishedUploadStatus>, ApiError>;
+    /// Revalidate ownership, workspace lease and declared file/workspace size limits.
+    fn authorize_upload(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+        logical_size: Option<u64>,
+    ) -> Result<(), ApiError>;
     /// Capture or page a directory after current admission; enforce the page byte budget.
     fn read_directory(
         &self,
@@ -354,6 +385,45 @@ impl Backend for AuthorizedBackend {
     ) -> Result<Arc<storage_contract::Commit>, ApiError> {
         self.backend
             .snapshot_at(&self.current(identity)?, branch, commit)
+    }
+
+    fn create_workspace(
+        &self,
+        identity: &Identity,
+        command: crate::CreateWorkspace,
+    ) -> Result<storage_contract::Workspace, ApiError> {
+        self.backend
+            .create_workspace(&self.current(identity)?, command)
+    }
+    fn abort_workspace(&self, identity: &Identity, workspace: &str) -> Result<(), ApiError> {
+        self.backend
+            .abort_workspace(&self.current(identity)?, workspace)
+    }
+
+    fn workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        self.backend.workspace(&self.current(identity)?, workspace)
+    }
+    fn published_upload_status(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        item: &str,
+    ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
+        self.backend
+            .published_upload_status(&self.current(identity)?, workspace, item)
+    }
+    fn authorize_upload(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+        logical_size: Option<u64>,
+    ) -> Result<(), ApiError> {
+        self.backend
+            .authorize_upload(&self.current(identity)?, workspace, logical_size)
     }
 
     fn read_directory(
@@ -940,19 +1010,26 @@ pub async fn serve_with_shutdown(
     let spool_config = config.clone();
     let app = router_shared(backend.clone(), auth, config, telemetry, spool_budget)?;
     let http = |stopped| http_shutdown::serve(listener, app, stopped);
+    let smb_connections = management_shutdown.smb_connections();
     let bridge = async move {
         if let Some(smb) = smb {
             let run = async move {
-                smb_rpc::serve(smb, bridge_auth, backend, smb_max_file_bytes)
-                    .await
-                    .map_err(|source| {
-                        ApiError::new(
-                            ::http::StatusCode::SERVICE_UNAVAILABLE,
-                            storage_contract::ErrorCode::SmbUnavailable,
-                            "SMB bridge stopped",
-                        )
-                        .with_source(source)
-                    })
+                smb_rpc::serve_owned(
+                    smb,
+                    bridge_auth,
+                    backend,
+                    smb_max_file_bytes,
+                    smb_connections,
+                )
+                .await
+                .map_err(|source| {
+                    ApiError::new(
+                        ::http::StatusCode::SERVICE_UNAVAILABLE,
+                        storage_contract::ErrorCode::SmbUnavailable,
+                        "SMB bridge stopped",
+                    )
+                    .with_source(source)
+                })
             };
             if let Err(error) = run.await {
                 tracing::error!(error = ?error, "SMB bridge stopped; management HTTP remains available");
@@ -1140,11 +1217,7 @@ read_handler!(history, crate::BackendAction::History, "file_id");
 read_handler!(commit_info, crate::BackendAction::Commit, "commit_id");
 read_handler!(graph, crate::BackendAction::Graph, "history_tree_id");
 read_handler!(topology, crate::BackendAction::Topology, "topology_id");
-read_handler!(
-    workspace_info,
-    crate::BackendAction::Workspace,
-    "workspace_id"
-);
+
 read_handler!(plan_info, crate::BackendAction::Plan, "plan_id");
 read_handler!(policy, crate::BackendAction::Policy, "policy_id");
 read_handler!(
@@ -1163,7 +1236,6 @@ id_post_handler!(
     "repository_id"
 );
 post_handler!(create_repository, crate::BackendAction::CreateRepository);
-post_handler!(workspace, crate::BackendAction::CreateWorkspace);
 post_handler!(register_disk, crate::BackendAction::RegisterDisk);
 post_handler!(compare, crate::BackendAction::Compare);
 id_post_handler!(
@@ -1216,7 +1288,6 @@ id_post_handler!(
     "workspace_id"
 );
 id_post_handler!(seal, crate::BackendAction::SealWorkspace, "workspace_id");
-id_post_handler!(abort, crate::BackendAction::AbortWorkspace, "workspace_id");
 id_post_handler!(
     merge_link,
     crate::BackendAction::MergeLink,

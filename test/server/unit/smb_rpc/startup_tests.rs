@@ -211,3 +211,48 @@ fn oversized_success_is_a_business_error_and_the_connection_remains_usable() {
     );
     worker.join().unwrap();
 }
+
+#[test]
+fn socket_and_connection_cleanup_during_unwind_consume_only_owned_poisoned_fds() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    for whole_socket in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let (mut client, server) = std::os::unix::net::UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let connections = Arc::new(Mutex::new(BTreeMap::from([(1, server)])));
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _guard = connections.lock().unwrap();
+                panic!("poison the FD cleanup inventory");
+            }))
+            .is_err()
+        );
+        let cleanup_connections = Arc::clone(&connections);
+        assert!(
+            catch_unwind(AssertUnwindSafe(move || {
+                if whole_socket {
+                    // No AF_UNIX bind: the absent path also exercises idempotent
+                    // cleanup without touching any unrelated filesystem entry.
+                    let _guard = SocketGuard {
+                        path: root.path().join("absent.sock"),
+                        identity: (0, 0),
+                        connections: cleanup_connections,
+                    };
+                    panic!("drop socket owner during unwind");
+                } else {
+                    let _guard = ConnectionGuard {
+                        id: 1,
+                        connections: cleanup_connections,
+                    };
+                    panic!("drop connection owner during unwind");
+                }
+            }))
+            .is_err()
+        );
+        assert_eq!(client.read(&mut [0]).unwrap(), 0);
+        assert!(connections.is_poisoned());
+        assert!(connections.lock().unwrap_err().into_inner().is_empty());
+    }
+}

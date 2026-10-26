@@ -131,6 +131,70 @@ impl Backend for LostCommitReply {
             .authorize_workspace_selection(identity, workspace, path)
     }
 
+    fn create_workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        command: crate::CreateWorkspace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        if self.change_before_workspace.swap(false, Ordering::SeqCst) {
+            let workspace = self.inner.create_workspace(identity, command.clone())?;
+            let source = tempfile::NamedTempFile::new().unwrap();
+            fs::write(source.path(), b"new").unwrap();
+            self.inner.upload(
+                identity,
+                &workspace.workspace_id,
+                &new_id("entry"),
+                &name_policy::PortablePath::parse("report.txt").unwrap(),
+                &crate::UploadSource::from_file(source.reopen().unwrap(), u64::MAX)?,
+            )?;
+            self.inner.commit_workspace(
+                identity,
+                crate::CommitWorkspace {
+                    workspace_id: workspace.workspace_id,
+                    operation_id: OperationId::generate(),
+                    expected_head: workspace.base_head,
+                    fencing_token: workspace.fencing_token,
+                    message: "concurrent update during SMB open".into(),
+                    request_digest: None,
+                },
+            )?;
+        }
+        self.inner.create_workspace(identity, command)
+    }
+    fn abort_workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.inner.abort_workspace(identity, workspace)
+    }
+
+    fn workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        self.inner.workspace(identity, workspace)
+    }
+    fn published_upload_status(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        item: &str,
+    ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
+        self.inner
+            .published_upload_status(identity, workspace, item)
+    }
+    fn authorize_upload(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        logical_size: Option<u64>,
+    ) -> Result<(), crate::ApiError> {
+        self.inner
+            .authorize_upload(identity, workspace, logical_size)
+    }
+
     fn lookup_current(
         &self,
         identity: &crate::auth::Identity,
@@ -159,32 +223,6 @@ impl Backend for LostCommitReply {
         self.calls.lock().unwrap().push((action, input.clone()));
         if action == crate::BackendAction::Version && self.revoked.load(Ordering::SeqCst) {
             return Err(ApiError::forbidden());
-        }
-        if action == crate::BackendAction::CreateWorkspace
-            && self.change_before_workspace.swap(false, Ordering::SeqCst)
-        {
-            let workspace: Workspace =
-                json_codec::from_value(self.inner.call(action, identity, input.clone())?).unwrap();
-            let source = tempfile::NamedTempFile::new().unwrap();
-            fs::write(source.path(), b"new").unwrap();
-            self.inner.upload(
-                identity,
-                &workspace.workspace_id,
-                &new_id("entry"),
-                &name_policy::PortablePath::parse("report.txt").unwrap(),
-                &crate::UploadSource::from_file(source.reopen().unwrap(), u64::MAX)?,
-            )?;
-            self.inner.commit_workspace(
-                identity,
-                crate::CommitWorkspace {
-                    workspace_id: workspace.workspace_id,
-                    operation_id: OperationId::generate(),
-                    expected_head: workspace.base_head,
-                    fencing_token: workspace.fencing_token,
-                    message: "concurrent update during SMB open".into(),
-                    request_digest: None,
-                },
-            )?;
         }
         let value = self.inner.call(action, identity, input)?;
         Ok(value)
@@ -1256,16 +1294,15 @@ fn external_same_file_change_rejects_rebase_and_preserves_work_bytes() {
     file.write_all_at(b"one", 0).unwrap();
     one.dirty(opened.handle).unwrap();
     one.flush(opened.handle).unwrap();
-    let workspace: Workspace = json_codec::from_value(
-        backend
-            .call(
-                crate::BackendAction::CreateWorkspace,
-                &one.identity,
-                json!({"branch_id":branch}),
-            )
-            .unwrap(),
-    )
-    .unwrap();
+    let workspace = backend
+        .create_workspace(
+            &one.identity,
+            crate::CreateWorkspace {
+                branch_id: branch.clone(),
+                source_commit_id: None,
+            },
+        )
+        .unwrap();
     let source = temp.path().join("external.txt");
     fs::write(&source, b"api").unwrap();
     backend

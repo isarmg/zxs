@@ -69,11 +69,13 @@ impl Session {
             .lookup_current(&self.identity, &self.branch, path)
     }
     pub(super) fn workspace(&self) -> Result<Workspace, ApiError> {
-        json_codec::from_value(self.call(
-            crate::BackendAction::CreateWorkspace,
-            json!({"branch_id":self.branch}),
-        )?)
-        .map_err(ApiError::invalid_source)
+        self.shared.backend.create_workspace(
+            &self.identity,
+            crate::CreateWorkspace {
+                branch_id: self.branch.clone(),
+                source_commit_id: None,
+            },
+        )
     }
     pub(super) fn reserve_paths(&mut self, paths: &[&str]) -> Result<Vec<String>, ApiError> {
         let keys = paths

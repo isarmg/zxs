@@ -16,6 +16,12 @@ fn every_action_round_trips_and_unknown_actions_are_rejected() {
         "smb_authorize_read",
         "smb_read_directory",
         "workspace_selection_authorize",
+        "create_workspace",
+        "abort_workspace",
+        "upload_authorize",
+        "workspace",
+        "workspace_authorize",
+        "upload_status",
     ] {
         assert!(BackendAction::try_from(unknown).is_err());
     }

@@ -78,6 +78,52 @@ impl Backend for PausedBackend {
             .authorize_workspace_selection(identity, workspace, path)
     }
 
+    fn create_workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        command: crate::CreateWorkspace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        self.enter();
+        self.inner.create_workspace(identity, command)
+    }
+    fn abort_workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+    ) -> Result<(), crate::ApiError> {
+        self.enter();
+        self.inner.abort_workspace(identity, workspace)
+    }
+
+    fn workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        self.enter();
+        self.inner.workspace(identity, workspace)
+    }
+    fn published_upload_status(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        item: &str,
+    ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
+        self.enter();
+        self.inner
+            .published_upload_status(identity, workspace, item)
+    }
+    fn authorize_upload(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        logical_size: Option<u64>,
+    ) -> Result<(), crate::ApiError> {
+        self.enter();
+        self.inner
+            .authorize_upload(identity, workspace, logical_size)
+    }
+
     fn lookup_current(
         &self,
         identity: &crate::auth::Identity,
@@ -272,6 +318,11 @@ enum Request {
     CurrentLookup,
     DirectoryRead,
     WorkspaceSelection,
+    WorkspaceCreate,
+    WorkspaceAbort,
+    UploadAdmission,
+    WorkspaceRead,
+    UploadStatus,
     Snapshot,
     Version,
     Namespace,
@@ -328,6 +379,13 @@ impl Request {
             Self::Snapshot => backend.snapshot_at(
                 identity, &fixture.repo.main_branch_id, &fixture.workspace.base_head,
             ).map(|_| ()),
+            Self::WorkspaceRead => backend.workspace(identity, workspace).map(|_| ()),
+            Self::UploadStatus => backend.published_upload_status(identity, workspace, "missing-item").map(|_| ()),
+            Self::UploadAdmission => backend.authorize_upload(identity, &fixture.workspace.workspace_id, Some(42)),
+            Self::WorkspaceCreate => backend.create_workspace(identity, crate::CreateWorkspace {
+                branch_id: fixture.repo.main_branch_id.clone(), source_commit_id: None,
+            }).map(|_| ()),
+            Self::WorkspaceAbort => backend.abort_workspace(identity, &fixture.workspace.workspace_id),
             Self::WorkspaceSelection => backend.authorize_workspace_selection(identity,
                 &fixture.workspace.workspace_id, &name_policy::PortablePath::parse("file.txt").unwrap()),
             Self::DirectoryRead => backend.read_directory(identity, crate::ReadDirectory {
@@ -429,6 +487,11 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::CurrentLookup,
                 Request::DirectoryRead,
                 Request::WorkspaceSelection,
+                Request::WorkspaceCreate,
+                Request::WorkspaceAbort,
+                Request::UploadAdmission,
+                Request::WorkspaceRead,
+                Request::UploadStatus,
                 Request::SnapshotLookup,
                 Request::Snapshot,
                 Request::Version,
@@ -569,6 +632,11 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::CurrentLookup,
         Request::DirectoryRead,
         Request::WorkspaceSelection,
+        Request::WorkspaceCreate,
+        Request::WorkspaceAbort,
+        Request::UploadAdmission,
+        Request::WorkspaceRead,
+        Request::UploadStatus,
         Request::Snapshot,
         Request::Version,
         Request::Namespace,
@@ -708,4 +776,31 @@ fn managed_reads_use_committed_authority_without_waiting_for_the_writer_mutex() 
             401
         );
     }
+}
+
+#[test]
+fn typed_workspace_abort_checks_owner_before_changing_workspace_or_journal() {
+    let fixture = Fixture::new(true);
+    let foreign = fixture
+        .backend
+        .engine
+        .lock()
+        .unwrap()
+        .create_workspace(&fixture.repo.main_branch_id, "different-owner")
+        .unwrap();
+    let before = fixture.snapshot();
+    assert_eq!(
+        fixture
+            .backend
+            .abort_workspace(&fixture.identity, &foreign.workspace_id)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Forbidden
+    );
+    assert_eq!(fixture.snapshot(), before);
+    let engine = fixture.backend.engine.lock().unwrap();
+    assert_eq!(
+        json_codec::to_value(engine.workspace_ref(&foreign.workspace_id).unwrap()).unwrap(),
+        json_codec::to_value(&foreign).unwrap()
+    );
 }

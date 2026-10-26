@@ -36,11 +36,41 @@ SMB Stat/Open 的当前条目查询通过 `Backend::lookup_current(&Identity, br
 
 SMB PrepareWrite / Dirty 进一步使用 `Backend::authorize_workspace_selection`，直接借用写句柄已经验证的 `PortablePath`，返回 `Result<()>`；`WorkspaceSelectionAuthorize` 的 JSON action 已删除。引擎同一锁内仍刷新当前身份、绑定、工作区所有者和分支，再检查当前目录／文件选择是否与工作区捕获的目标一致，包括已成功发布的工作区收据。`Engine::validate_workspace_file_selection` 接收类型化路径并复用其 key，借用 `workspace_ref` 而非克隆整个工作区；不改变选择代次、首次发布后的目标判断、失败时保留脏数据或永久幂等行为。
 
+## HTTP / SMB 工作区创建与销毁
+
+创建通过 `Backend::create_workspace(CreateWorkspace)` 直接返回领域 Workspace，销毁通过 `abort_workspace(workspace_id)` 返回 `()`。HTTP 与 SMB 不再走 `CreateWorkspace` / `AbortWorkspace` actions，两个变体与引擎 JSON 分派已删除。SMB 的创建结果没有 Workspace → Value → Workspace 往返，准备失败、命名空间失败及 Close 的清理仍调用同一销毁语义，并保持原先“不覆盖首要错误、未决记录保留”的处理。
+
+[HTTP 入口](../../src/server/src/http_workspace.rs) 在认证中间件之后执行有界 strict JSON 解码，拒绝重复键、非对象、未知字段、空身份和显式 null 的可选 source；仅字段缺省才选当前 HEAD。Abort 的 path/body 身份必须一致。DTO 解析发生在预算槽和引擎准入之前；格式错误在此阶段拒绝，解析后请求才参与当前授权与业务错误判定。`backend_slots` permit 随阻塞任务持有，HTTP future 被取消不会提前释放预算；任务完成或错误后才归还。
+
+引擎同一锁内刷新账户／会话／绑定。创建继续先核对分支归属，再由原核心执行只读状态、工作区数量、分支状态、源提交归属和持久化；历史与当前创建使用原核心各自的预算及错误顺序。Abort 继续先核对当前主体和工作区所有者／分支，再进入原核心未决决定检查及落盘。两操作原本没有 operation_id，此迁移不新增幂等承诺，也不改重复 abort 的 fencing 行为、永久操作收据或不确定提交决策。
+
+[WorkspaceResponse / StagedFileResponse](../../src/server/src/backend_workspace.rs) 是显式 HTTP wire DTO：穷尽解构领域记录，直接移动公开字段，StagedFile 的本机 `source_path` 不存在于响应类型中；保留当前 u64 文本编码、空 map 省略规则和 state 字符串。响应不再先编码领域 Workspace 后递归删除路径字段。新增字段使穷尽解构报编译错误，需显式决定是否进入 wire。这里只拆开这些 HTTP 响应，未改持久化 Workspace 或宣称完整 model/persist/wire 分离。
+
+[wire 固定投影测试](../../test/server/unit/backend_workspace.rs) 对含本机暂存路径的完整工作区比较当前字段形状和大整数文本；[HTTP 回归](../../test/server/integration/http_engine/optional_identities.rs) 覆盖严格请求、历史源、预算释放及 abort 响应；[任务准入测试](../../test/server/unit/backend_admission.rs) 验证两个 typed handler 在取消后仍持有槽位。撤权矩阵与 SMB 故障代理已迁到真实 typed 方法，不通过旧 action 兼容层维持测试。
+
+## HTTP / SMB 上传准入
+
+HTTP 流式上传与 SMB Dirty 改为 `Backend::authorize_upload(identity, workspace, Option<u64>) -> Result<()>`；`UploadAuthorize` action 及 JSON 分派已删除。HTTP 直接传入已经解析的长度，不再格式化十进制字符串后在后端重解析；SMB 没有声明长度时传 `None`。授权包装器显式转发，引擎在原准入锁内刷新身份与绑定，再依次检查工作区存在／所有权、Open 状态、租期和声明大小，保留原有错误优先级。后续实际发布仍执行自己的当前准入与容量检查，这不是可长期复用的授权票据。
+
+原 `item_id` 在该 action 中只做格式验证，没有参与领域对象查找或授权，所以不保留为无消费者的 typed 参数。HTTP 在原路径、长度／generation／hash 头校验之后验证 entry ID，且在读取 body、创建 spool 或调用后端之前拒绝非法值。外层身份认证、上传预算槽和逐 item claim 仍在上述解析之前；因此资源忙错误仍先于格式错误，而非法 entry ID 现在先于工作区领域错误。SMB writer 的 item ID 来自核心创建的记录，不重复解析自己的值。`UploadAdmission` 仍随阻塞授权任务持有，取消 HTTP future 不提前释放槽位或 claim；上传重试、永久操作收据和 canonical 编码没有改变。
+
+[准入回归](../../test/server/unit/engine_backend/authorization_tests.rs) 用持久化重开后的过期工作区验证 owner/state/lease/size 错误顺序；[HTTP 流式回归](../../test/server/unit/tests/spool_budget.rs) 验证非法 entry ID 不读取 body、不发布 spool，且失败后预算可复用。已有上传重试、超时、HTTP 引擎、SMB 和撤权矩阵覆盖真实 typed 方法。
+
+## 工作区查询与上传状态快照
+
+HTTP Workspace GET 使用 `Backend::workspace` 捕获当前已授权领域快照，再复用 `WorkspaceResponse` 显式屏蔽本机路径；仍执行原 query 边界解析和 backend_slots 准入，取消 future 后阻塞任务保留槽位。捕获复制的 Workspace 不是共享可变授权状态。
+
+上传状态使用一次 `published_upload_status` 调用代替 `WorkspaceAuthorize` / `UploadStatus` 两次准入。引擎在同一锁内刷新身份／绑定、检查工作区所有者并捕获 `PublishedUploadStatus`：工作区不存在／拒绝访问返回原错误，只有已授权工作区缺少指定 item 返回 `Ok(None)`。generation/size 直接使用 u64，Complete 与携带 manifest 的 Sealed 是互斥内部状态；HTTP 不再对自己的 Value 做 get/as_str/parse/.ok，也不把解析失败伪装成缺失。HTTP 最后才构建原 wire 字段、大整数文本、durable_ranges 和可空 manifest。
+
+原两次相邻准入的第二次状态捕获合为一次锁内授权与捕获；撤权先完成时仍拒绝，不缓存权限，也不把锁扩到本机 spool I/O。HTTP 的 spool 可用性、read_slots、backend_slots、阻塞任务持有配额及本机 spool 所有者检查顺序不变。本机代次高于引擎或引擎 item 缺失时选择本机状态，否则选择引擎（相等也优先引擎）；两边都缺失才在 HTTP 返回原 item NotFound。不存在的工作区不得被本机文件掩盖，其他引擎错误不进入本机 fallback。
+
+三条旧 actions 已删除。授权／撤权矩阵覆盖新方法；预算取消测试覆盖 GET 与状态读取；现有真实 HTTP 回归覆盖新代次未完成、相等代次完成／sealed 以及无本机 spool 的跨入口上传。typed wire 测试覆盖 u64 最大值、零长度和 sealed manifest；这些测试不等于真实 AF_UNIX / SDK 验证。
+
 ## 剩余 Value 调用清单
 
-此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 74 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
+此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 68 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
 
-- **下一组：SMB 工作区生命周期及写选择。** `Session::workspace` 的 `CreateWorkspace` 仍为 Workspace → Value → Workspace；handles/publication/namespace 仍调用 `AbortWorkspace`、`UploadAuthorize`。应把创建、写选择准入和销毁串联迁移，保留工作区所有者、期限、基线、撤权和未决操作语义。
+- **下一组：工作区 seal 与发布入口。** `SealWorkspace` 仍通过 HTTP JSON action 返回 seal 数据；`CommitWorkspace` action 与已有 typed commit_workspace 的实际消费者和永久幂等错误顺序需要继续核对。上传 publication 的结果、write-session 与 namespace 仍有 Value，不能据当前查询迁移宣称全部工作区接口已经分层。
 - **SMB 绑定／只读冻结版本。** transport/session 的 `Repository`、transport 的 `Capabilities`、只读句柄的 `Version` 仍经 Value；命名空间修改 `Namespace` 仍使用 JSON 请求。不是本次 typed 当前查询的后备路径。
 - **HTTP 通用读取。** repositories/repository/branches/branch/tree/resolve/history/commit/version/graph/events/compare、目录分支及选择、拓扑／放置／策略／磁盘／健康查询，仍由 HTTP 通用分派调用 `Backend::call`。
 - **HTTP 写入与计划。** 仓库／分支／目录分支创建和选择、SMB binding 配置、namespace、workspace/write-session/upload、policy/placement，以及 split/purge/historical-save/plan 的请求与结果仍需逐组迁移。已有 operation/commit_workspace typed 消费者保持不变，不能据此推定剩余 HTTP action 路径已经移除。

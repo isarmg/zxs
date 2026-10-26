@@ -9,10 +9,7 @@ struct SocketGuard {
 impl Drop for SocketGuard {
     fn drop(&mut self) {
         {
-            let mut connections = self
-                .connections
-                .lock()
-                .expect("service state lock poisoned");
+            let mut connections = workers::closing_connections(&self.connections);
             for stream in connections.values() {
                 if let Err(error) = stream.shutdown(std::net::Shutdown::Both)
                     && error.kind() != io::ErrorKind::NotConnected
@@ -49,10 +46,7 @@ struct ConnectionGuard {
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
         {
-            let mut connections = self
-                .connections
-                .lock()
-                .expect("service state lock poisoned");
+            let mut connections = workers::closing_connections(&self.connections);
             connections.remove(&self.id);
         }
     }
@@ -331,6 +325,19 @@ pub async fn serve(
     backend: Arc<dyn Backend>,
     max_file_bytes: u64,
 ) -> io::Result<()> {
+    let mut shutdown = ConnectionShutdown::new();
+    let result = serve_owned(config, auth, backend, max_file_bytes, shutdown.registry()).await;
+    shutdown.finish().await?;
+    result
+}
+
+pub(crate) async fn serve_owned(
+    config: crate::SmbConfig,
+    auth: Arc<Mutex<AuthStore>>,
+    backend: Arc<dyn Backend>,
+    max_file_bytes: u64,
+    workers: ConnectionRegistry,
+) -> io::Result<()> {
     let crate::SmbConfig {
         socket,
         spool_dir,
@@ -360,6 +367,7 @@ pub async fn serve(
         file_writers: Mutex::new(BTreeSet::new()),
         namespace_operations: Mutex::new(BTreeSet::new()),
     });
+    workers.attach_connections(Arc::clone(&connections));
     let admission = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     let mut next_connection = 1u64;
     loop {
@@ -385,18 +393,13 @@ pub async fn serve(
             connections: connections.clone(),
         };
         let shared = shared.clone();
-        let session = tokio::task::spawn_blocking(move || {
+        if let Err(error) = workers.spawn(move || {
             let _permit = permit;
             let _connection_guard = connection_guard;
             FrameStream::new(stream).and_then(|stream| run_connection(stream, shared))
-        });
-        tokio::spawn(async move {
-            match session.await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => tracing::warn!(error = ?error, "SMB local RPC session ended"),
-                Err(error) => tracing::error!(error = ?error, "SMB local RPC worker failed"),
-            }
-        });
+        }) {
+            tracing::warn!(error = ?error, "SMB local RPC worker admission failed");
+        }
     }
 }
 

@@ -49,6 +49,28 @@ fn rejects_escape_and_atomically_publishes() {
     AtomicFile::replace(&root, &name, b"two").unwrap();
     assert_eq!(fs::read(root.resolve(&name)).unwrap(), b"two");
 }
+#[test]
+fn atomic_replace_keeps_the_held_parent_after_its_path_is_replaced() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("state");
+    let held = PrivateDirectory::create(&path).unwrap();
+    let name = RelativePath::new("progress.json").unwrap();
+    AtomicFile::replace(&held, &name, b"old").unwrap();
+    let moved = temp.path().join("moved");
+    fs::rename(&path, &moved).unwrap();
+    let replacement = PrivateDirectory::create(&path).unwrap();
+    AtomicFile::replace(&replacement, &name, b"replacement").unwrap();
+
+    AtomicFile::replace(&held, &name, b"updated").unwrap();
+    assert_eq!(fs::read(moved.join("progress.json")).unwrap(), b"updated");
+    assert_eq!(
+        fs::read(path.join("progress.json")).unwrap(),
+        b"replacement"
+    );
+    assert_eq!(fs::read_dir(&moved).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(&path).unwrap().count(), 1);
+}
+
 #[cfg(unix)]
 #[test]
 fn inventory_rejects_symlinks_and_budgets() {

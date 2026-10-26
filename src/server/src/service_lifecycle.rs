@@ -1,5 +1,9 @@
 //! Keep optional listeners owned by the HTTP service, including during drain.
-use std::{future::Future, io, sync::Arc};
+use std::{
+    future::Future,
+    io,
+    sync::{Arc, Mutex},
+};
 use tokio::sync::oneshot;
 
 /// Own native management writers even if serve setup fails or its future is
@@ -7,18 +11,27 @@ use tokio::sync::oneshot;
 /// runtime teardown waits for them instead of silently detaching a writer.
 pub(crate) struct ManagementShutdown {
     backend: Option<Arc<dyn crate::Backend>>,
-    drain: Option<tokio::task::JoinHandle<DrainCompletion>>,
+    smb: crate::smb_rpc::ConnectionShutdown,
+    drain: Option<tokio::task::JoinHandle<()>>,
+    completion: Option<Arc<Mutex<NativeDrain>>>,
 }
 /// Tokio may discard queued non-mandatory blocking jobs during runtime
 /// shutdown. The closure must own a drain-on-drop obligation, not just an Arc.
-struct NativeDrain(Option<Arc<dyn crate::Backend>>);
+struct NativeDrain {
+    backend: Option<Arc<dyn crate::Backend>>,
+    completion: Option<DrainCompletion>,
+}
 impl NativeDrain {
-    fn run(mut self) -> DrainCompletion {
-        let backend = self
-            .0
-            .take()
-            .expect("invariant: native drain owns its backend");
-        DrainCompletion(Some(backend.drain_management()))
+    fn new(backend: Arc<dyn crate::Backend>) -> Self {
+        Self {
+            backend: Some(backend),
+            completion: None,
+        }
+    }
+    fn run(&mut self) {
+        if let Some(backend) = self.backend.take() {
+            self.completion = Some(DrainCompletion(Some(backend.drain_management())));
+        }
     }
 }
 struct DrainCompletion(Option<Result<(), crate::ApiError>>);
@@ -32,46 +45,91 @@ impl Drop for DrainCompletion {
 
 impl Drop for NativeDrain {
     fn drop(&mut self) {
-        if let Some(backend) = self.0.take()
-            && let Err(error) = backend.drain_management()
-        {
-            tracing::error!(error = ?error, "management shutdown failed");
-        }
+        self.run();
+    }
+}
+
+// The queue and a failed-enqueue fallback share one drain/result owner. This
+// private handoff lock is never used by backend workers and stays held until
+// the actual drain and result publication finish.
+struct ManagementDrain(Arc<Mutex<NativeDrain>>);
+impl Drop for ManagementDrain {
+    fn drop(&mut self) {
+        let mut drain = match self.0.lock() {
+            Ok(drain) => drain,
+            Err(poisoned) => {
+                tracing::error!("closing poisoned management drain handoff");
+                poisoned.into_inner()
+            }
+        };
+        drain.run();
     }
 }
 impl ManagementShutdown {
     pub(crate) fn new(backend: Arc<dyn crate::Backend>) -> Self {
         Self {
             backend: Some(backend),
+            smb: crate::smb_rpc::ConnectionShutdown::new(),
             drain: None,
+            completion: None,
         }
     }
+    pub(crate) fn smb_connections(&self) -> crate::smb_rpc::ConnectionRegistry {
+        self.smb.registry()
+    }
     fn begin(&mut self) {
+        self.smb.begin();
         let Some(backend) = self.backend.take() else {
             return;
         };
         backend.stop_management();
-        let drain = NativeDrain(Some(backend));
+        let handoff = Arc::new(Mutex::new(NativeDrain::new(backend)));
+        self.completion = Some(Arc::clone(&handoff));
+        let drain = ManagementDrain(Arc::clone(&handoff));
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            self.drain = Some(runtime.spawn_blocking(move || drain.run()));
+            // Task creation can panic after enqueue. Both consumers hold the
+            // same handoff, so fallback waits for a concurrent drain or takes
+            // it once, preserving its concrete result for finish/Drop.
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                runtime.spawn_blocking(move || drop(drain))
+            })) {
+                Ok(task) => self.drain = Some(task),
+                Err(panic) => {
+                    drop(ManagementDrain(handoff));
+                    let message = panic
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| panic.downcast_ref::<&str>().copied());
+                    tracing::error!(
+                        message,
+                        "management shutdown enqueue panicked; writers drained synchronously"
+                    );
+                }
+            }
         } else {
-            // A guard may be dropped outside a runtime by an embedding caller.
-            // Never panic or detach its native writers in that fallback path.
             drop(drain);
         }
     }
     pub(crate) async fn finish(&mut self) -> io::Result<()> {
         self.begin();
-        if let Some(drain) = self.drain.take() {
-            drain
-                .await
-                .map_err(io::Error::other)?
-                .0
+        let smb_result = self.smb.finish().await;
+        if let Some(drain) = &mut self.drain {
+            drain.await.map_err(io::Error::other)?;
+        }
+        self.drain = None;
+        if let Some(completion) = self.completion.take() {
+            completion
+                .lock()
+                .expect("invariant: completed management drain is not poisoned")
+                .completion
                 .take()
                 .expect("invariant: completed drain owns its result")
+                .0
+                .take()
+                .expect("invariant: completed drain result is not consumed")
                 .map_err(io::Error::other)?;
         }
-        Ok(())
+        smb_result
     }
 }
 impl Drop for ManagementShutdown {
@@ -98,7 +156,9 @@ where
         shutdown,
         ManagementShutdown {
             backend: None,
+            smb: crate::smb_rpc::ConnectionShutdown::new(),
             drain: None,
+            completion: None,
         },
     )
     .await

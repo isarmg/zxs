@@ -234,6 +234,23 @@ fn create_private_directory(path: &Path) -> Result<(), ApiError> {
     }
     builder.create(path).map_err(ApiError::io)
 }
+#[derive(Debug, error_definition::Error)]
+#[error("storage recovery worker panicked: {message:?}")]
+struct RecoveryWorkerPanic {
+    message: Option<String>,
+}
+
+#[derive(Debug, error_definition::Error)]
+#[error(
+    "management shutdown failed (recovery worker poisoned: {recovery_worker_poisoned}, admission state poisoned: {admission_state_poisoned})"
+)]
+struct RecoveryShutdownError {
+    recovery_worker_poisoned: bool,
+    admission_state_poisoned: bool,
+    #[source]
+    worker_panic: Option<RecoveryWorkerPanic>,
+}
+
 struct RecoveryPermit<'a>(&'a AtomicBool);
 impl Drop for RecoveryPermit<'_> {
     fn drop(&mut self) {
@@ -354,28 +371,50 @@ impl Inner {
         }
     }
     fn stop(&self) {
-        // Serialize the shutdown fence with recovery enqueue.
-        let worker = self
-            .recovery_worker
-            .lock()
-            .expect("service state lock poisoned");
+        // Only shutdown consumes poisoned guards: fence admission while still
+        // serialized with enqueue, never clear poison or resume business use.
+        let worker = match self.recovery_worker.lock() {
+            Ok(worker) => worker,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         self.stopping.store(true, Ordering::SeqCst);
         drop(worker);
-        let mut state = self.state.lock().expect("service state lock poisoned");
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         state.admitted = false;
         state.status = StorageState::Unavailable;
     }
     fn drain(&self) -> Result<(), ApiError> {
         self.stop();
-        let worker = self
-            .recovery_worker
-            .lock()
-            .expect("service state lock poisoned")
-            .take();
-        if let Some(worker) = worker {
+        let worker = match self.recovery_worker.lock() {
+            Ok(mut worker) => worker.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        // No worker/admission lock is held while joining. A panicked recovery
+        // thread remains a concrete shutdown failure, not a second panic from
+        // an owner's destructor or a claim that recovery completed cleanly.
+        let worker_panic =
             worker
-                .join()
-                .expect("invariant: storage recovery worker does not panic");
+                .and_then(|worker| worker.join().err())
+                .map(|panic| RecoveryWorkerPanic {
+                    message: panic.downcast_ref::<String>().cloned().or_else(|| {
+                        panic
+                            .downcast_ref::<&str>()
+                            .map(|message| (*message).to_owned())
+                    }),
+                });
+        let failure = RecoveryShutdownError {
+            recovery_worker_poisoned: self.recovery_worker.is_poisoned(),
+            admission_state_poisoned: self.state.is_poisoned(),
+            worker_panic,
+        };
+        if failure.recovery_worker_poisoned
+            || failure.admission_state_poisoned
+            || failure.worker_panic.is_some()
+        {
+            return Err(ApiError::io(std::io::Error::other(failure)));
         }
         Ok(())
     }
@@ -623,6 +662,45 @@ impl Backend for ManagementBackend {
         commit: &str,
     ) -> Result<Arc<storage_contract::Commit>, ApiError> {
         self.inner.backend()?.snapshot_at(identity, branch, commit)
+    }
+
+    fn create_workspace(
+        &self,
+        identity: &Identity,
+        command: crate::CreateWorkspace,
+    ) -> Result<storage_contract::Workspace, ApiError> {
+        self.inner.backend()?.create_workspace(identity, command)
+    }
+    fn abort_workspace(&self, identity: &Identity, workspace: &str) -> Result<(), ApiError> {
+        self.inner.backend()?.abort_workspace(identity, workspace)
+    }
+
+    fn workspace(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        self.inner.backend()?.workspace(identity, workspace)
+    }
+    fn published_upload_status(
+        &self,
+        identity: &crate::auth::Identity,
+        workspace: &str,
+        item: &str,
+    ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
+        self.inner
+            .backend()?
+            .published_upload_status(identity, workspace, item)
+    }
+    fn authorize_upload(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+        logical_size: Option<u64>,
+    ) -> Result<(), ApiError> {
+        self.inner
+            .backend()?
+            .authorize_upload(identity, workspace, logical_size)
     }
 
     fn read_directory(

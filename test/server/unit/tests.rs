@@ -69,6 +69,45 @@ impl Backend for TestBackend {
         Err(crate::ApiError::unsupported())
     }
 
+    fn create_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: crate::CreateWorkspace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn abort_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
+    fn workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn published_upload_status(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _item: &str,
+    ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
+        Ok(None)
+    }
+    fn authorize_upload(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _logical_size: Option<u64>,
+    ) -> Result<(), crate::ApiError> {
+        Ok(())
+    }
+
     fn lookup_current(
         &self,
         _identity: &crate::auth::Identity,
@@ -95,10 +134,9 @@ impl Backend for TestBackend {
         _input: Value,
     ) -> Result<Value, ApiError> {
         match action {
-            crate::BackendAction::Capabilities
-            | crate::BackendAction::UploadAuthorize
-            | crate::BackendAction::WorkspaceAuthorize
-            | crate::BackendAction::CreateRepository => Ok(json!({"accepted":true})),
+            crate::BackendAction::Capabilities | crate::BackendAction::CreateRepository => {
+                Ok(json!({"accepted":true}))
+            }
             BackendAction::DirectoryBranchScopes | BackendAction::DirectoryBranchSelection => {
                 Ok(json!({"action":action.as_str()}))
             }
@@ -450,7 +488,7 @@ async fn interrupted_upload_retains_durable_bytes_and_rejects_different_retry() 
     ]);
     let request = Request::builder()
         .method("PUT")
-        .uri("/api/workspaces/ws/files/item/content?path=file")
+        .uri("/api/workspaces/ws/files/entry_00000000000000000000000000000001/content?path=file")
         .header("authorization", format!("Bearer {token}"))
         .header("x-zxs-logical-size", "20")
         .header("x-zxs-content-hash", "0".repeat(64))
@@ -458,9 +496,13 @@ async fn interrupted_upload_retains_durable_bytes_and_rejects_different_retry() 
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let record = uploads::load(&root.path().join("api-spool"), "ws", "item")
-        .unwrap()
-        .unwrap();
+    let record = uploads::load(
+        &root.path().join("api-spool"),
+        "ws",
+        "entry_00000000000000000000000000000001",
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(record.persisted_bytes, 8);
     assert_eq!(
         std::fs::read(root.path().join("api-spool").join(&record.data_file)).unwrap(),
@@ -470,7 +512,7 @@ async fn interrupted_upload_retains_durable_bytes_and_rejects_different_retry() 
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri("/api/workspaces/ws/files/item/content?path=file")
+                .uri("/api/workspaces/ws/files/entry_00000000000000000000000000000001/content?path=file")
                 .header("authorization", format!("Bearer {token}"))
                 .header("x-zxs-logical-size", "20")
                 .header("x-zxs-content-hash", "0".repeat(64))
@@ -481,10 +523,14 @@ async fn interrupted_upload_retains_durable_bytes_and_rejects_different_retry() 
         .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(
-        uploads::load(&root.path().join("api-spool"), "ws", "item")
-            .unwrap()
-            .unwrap()
-            .data_file,
+        uploads::load(
+            &root.path().join("api-spool"),
+            "ws",
+            "entry_00000000000000000000000000000001"
+        )
+        .unwrap()
+        .unwrap()
+        .data_file,
         record.data_file
     );
     let data_files = std::fs::read_dir(root.path().join("api-spool"))
@@ -517,7 +563,7 @@ async fn durable_retry_progress_appends_without_copying_the_same_generation() {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri("/api/workspaces/ws/files/item/content?path=file")
+                    .uri("/api/workspaces/ws/files/entry_00000000000000000000000000000001/content?path=file")
                     .header("authorization", format!("Bearer {token}"))
                     .header("x-zxs-logical-size", "30")
                     .header("x-zxs-content-hash", "0".repeat(64))
@@ -527,7 +573,9 @@ async fn durable_retry_progress_appends_without_copying_the_same_generation() {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let current = uploads::load(&spool, "ws", "item").unwrap().unwrap();
+        let current = uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
+            .unwrap()
+            .unwrap();
         assert_eq!(
             std::fs::read(spool.join(current.data_file)).unwrap(),
             content.as_bytes()
@@ -555,7 +603,9 @@ async fn unpublished_retry_cleanup_covers_short_long_and_cancelled_bodies() {
     let request = |body| {
         Request::builder()
             .method("PUT")
-            .uri("/api/workspaces/ws/files/item/content?path=file")
+            .uri(
+                "/api/workspaces/ws/files/entry_00000000000000000000000000000001/content?path=file",
+            )
             .header("authorization", format!("Bearer {token}"))
             .header("x-zxs-logical-size", bytes.len().to_string())
             .header("x-zxs-content-hash", &hash)
@@ -571,7 +621,9 @@ async fn unpublished_retry_cleanup_covers_short_long_and_cancelled_bodies() {
         StatusCode::OK
     );
     let spool = root.path().join("api-spool");
-    let original = uploads::load(&spool, "ws", "item").unwrap().unwrap();
+    let original = uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
+        .unwrap()
+        .unwrap();
     // A retry must not supersede old progress until it has checked all of it.
     for body in [
         Body::from(vec![42u8; 1024]),
@@ -621,7 +673,9 @@ async fn unpublished_retry_cleanup_covers_short_long_and_cancelled_bodies() {
     })
     .await
     .unwrap();
-    let current = uploads::load(&spool, "ws", "item").unwrap().unwrap();
+    let current = uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
+        .unwrap()
+        .unwrap();
     assert_eq!(current.data_file, original.data_file);
     assert_eq!(std::fs::read(spool.join(current.data_file)).unwrap(), bytes);
 }
@@ -639,7 +693,7 @@ async fn successful_new_generation_preserves_old_bytes_and_retry_reuses_its_file
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri("/api/workspaces/ws/files/item/content?path=file")
+                    .uri("/api/workspaces/ws/files/entry_00000000000000000000000000000001/content?path=file")
                     .header("authorization", format!("Bearer {token}"))
                     .header("x-zxs-logical-size", bytes.len().to_string())
                     .header(
@@ -653,7 +707,11 @@ async fn successful_new_generation_preserves_old_bytes_and_retry_reuses_its_file
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        records.push(uploads::load(&spool, "ws", "item").unwrap().unwrap());
+        records.push(
+            uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
+                .unwrap()
+                .unwrap(),
+        );
         assert_eq!(
             std::fs::read(spool.join(&records[0].data_file)).unwrap(),
             b"original"
@@ -747,6 +805,47 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             Err(crate::ApiError::unsupported())
         }
 
+        fn create_workspace(
+            &self,
+            _identity: &crate::auth::Identity,
+            _command: crate::CreateWorkspace,
+        ) -> Result<storage_contract::Workspace, crate::ApiError> {
+            Err(crate::ApiError::unsupported())
+        }
+        fn abort_workspace(
+            &self,
+            _identity: &crate::auth::Identity,
+            _workspace: &str,
+        ) -> Result<(), crate::ApiError> {
+            Err(crate::ApiError::unsupported())
+        }
+
+        fn workspace(
+            &self,
+            _identity: &crate::auth::Identity,
+            _workspace: &str,
+        ) -> Result<storage_contract::Workspace, crate::ApiError> {
+            Err(crate::ApiError::unsupported())
+        }
+        fn published_upload_status(
+            &self,
+            identity: &crate::auth::Identity,
+            workspace: &str,
+            item: &str,
+        ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
+            self.delegate
+                .published_upload_status(identity, workspace, item)
+        }
+        fn authorize_upload(
+            &self,
+            identity: &crate::auth::Identity,
+            workspace: &str,
+            logical_size: Option<u64>,
+        ) -> Result<(), crate::ApiError> {
+            self.delegate
+                .authorize_upload(identity, workspace, logical_size)
+        }
+
         fn lookup_current(
             &self,
             _identity: &crate::auth::Identity,
@@ -835,7 +934,7 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         let request = || {
             Request::builder()
                 .method("PUT")
-                .uri("/api/workspaces/ws/files/item/content?path=file")
+                .uri("/api/workspaces/ws/files/entry_00000000000000000000000000000001/content?path=file")
                 .header("authorization", format!("Bearer {token}"))
                 .header("x-zxs-logical-size", "4")
                 .header(
@@ -893,10 +992,14 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
     // replacement, before reading that status or removing the temporary root.
     drop(runtime);
     assert_eq!(
-        uploads::load(&root.path().join("api-spool"), "ws", "item")
-            .unwrap()
-            .unwrap()
-            .state,
+        uploads::load(
+            &root.path().join("api-spool"),
+            "ws",
+            "entry_00000000000000000000000000000001"
+        )
+        .unwrap()
+        .unwrap()
+        .state,
         crate::uploads::UploadState::Complete
     );
 }
@@ -1009,7 +1112,7 @@ async fn upload_path_admission_rejects_nonportable_names_and_keeps_display_spell
         .iter()
         .enumerate()
     {
-        let item = format!("item-{index}");
+        let item = format!("entry_{index:032x}");
         let query = url_encoding::form::Serializer::new(String::new())
             .append_pair("path", path)
             .finish();

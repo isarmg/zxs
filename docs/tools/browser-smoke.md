@@ -55,3 +55,23 @@ CI 通过 `ZXS_SMOKE_SCREENSHOT` 传递路径，浏览器验收成功后将图�
 ## 字体故障与非阻塞启动
 
 独立回环代理只暂缓原始字体 HTTP 字节或为字体返回 404，其余资源与 API 响应原样转发。真实生产 WASM 必须在两字体仍挂起时发布 ready，登录输入可用；释放原始字体后字体状态独立完成，并解码真实 border-image SVG，核验透明圆角、可见填充和九宫格物理尺寸；紧凑图块按百分比切片与实际圆角范围核对，不错误要求其图像尺寸等于控件尺寸，也不要求不存在的装饰子节点。缺失字体必须保留可用回退界面；挂起期间非缓存 pagehide 后的迟到字体完成不得再写状态或恢复节点。代理在失败和退出时释放等待并关闭，最长等待 90 秒。截图路径仍显式等待字体加载，故障验收在正常截图与业务验收之后执行。测试工具单测只证明代理转发/故障机制，不替代真实 Chrome 验收。
+
+## 版本树帧与生命周期
+
+`test/tools/browser-smoke/runner/tree_frames.rs` 在既有文件备注测试的宽树 fixture 中执行；文件选择、导航、备注保存、会话和请求仍走真实 UI。宽树沿用该测试明确标注的 12 个合成分支叶子，并非后端分支持久化证明。
+
+- `test/tools/browser-smoke/runner/tree_frames.js` 在 WASM 加载前包装宿主 RAF/RO/MO；只把**首个观察目标为版本树 canvas** 的 observer 关联到该组件。G4 的全局 observer 不属于该组件。measure 的证据是 canvas 上精确的 `.zxs-version-node[data-version-id]` 查询，不是全局 `getBoundingClientRect` 计数。
+- 在真实 DOM comment 插入及 CDP viewport resize 后等待实际 MO/RO 通知。显式暂停组件 RAF，然后对挂载中的两个真实 observer closure 重复 delivery；同一个 JS turn 的八次通知必须不测量、只保留一个 RAF。在原生 RAF turn 中释放它，必须恰好测量一次。重复 delivery 是测试刺激，不声称自然浏览器必然产生八批通知。
+- 通过真实 Files 导航销毁 owner，断言 pending RAF 已取消、两个 observer 已断开。再人为递交已取消的**RAF** callback，断言没有树测量或未捕获错误；不调用已销毁的 observer closure。
+- 真实重挂载断言新 canvas、首次测量发生于 observer 注册前、初始 tip 居中；后续测量不得抢用户滚动位置。窄屏、重挂载和桌面恢复均等待实际 `document.fonts.ready` 与渲染帧，然后核对节点宽度/G4 extent/字体、页面溢出、箭头端点/线型及采样路径不穿节点。
+
+边界：这些检查不是屏幕像素差分、全局 G4 算法证明、吞吐基准、延迟字体加载故障注入或全部树拓扑证明。首次同步测量使用唯一 DOM 查询作为代理证据，不能直接读取 Rust 私有 signal；迟到 callback 的失效访问通过抛错、浏览器全局错误及既有最终 console 检查检出。现有 contours/fonts 验收仍独立运行。
+
+## 无浏览器检查
+
+```sh
+python3 -m unittest discover -s test/ci -p test_tree_frame_probe.py -v
+cargo check --locked --offline -p browser-smoke
+```
+
+Node mock-host 自测仅核对探针隔离、暂停/释放和恢复，不运行 WASM，也不能代替 Chrome 验收。Python 用例已进入现有 static suite 的 `test_*.py` discovery。

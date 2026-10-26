@@ -45,21 +45,9 @@ pub(crate) async fn upload_status(
         // Keep them until actual work ends, even if the requester disconnects.
         let _read_permit = read_permit;
         let _backend_permit = backend_permit;
-        let input = json!({"workspace_id":workspace,"item_id":item});
-        state.backend.call(
-            crate::BackendAction::WorkspaceAuthorize,
-            &identity,
-            input.clone(),
-        )?;
-        let published =
-            match state
-                .backend
-                .call(crate::BackendAction::UploadStatus, &identity, input)
-            {
-                Ok(status) => Ok(status),
-                Err(error) if error.status == ::http::StatusCode::NOT_FOUND => Err(error),
-                Err(error) => return Err(error),
-            };
+        let published = state
+            .backend
+            .published_upload_status(&identity, &workspace, &item)?;
         if let Some(record) = uploads::load(&state.config.spool_dir, &workspace, &item)? {
             if record.principal != identity.principal {
                 return Err(ApiError::forbidden());
@@ -67,20 +55,37 @@ pub(crate) async fn upload_status(
             // A replacement can be durably receiving while the engine still owns
             // the previous completed generation. Equal/newer engine generations
             // remain authoritative, including their completed publication state.
-            let published_generation = published
+            if published
                 .as_ref()
-                .ok()
-                .and_then(|status| status.get("upload_generation"))
-                .and_then(Value::as_str)
-                .and_then(|generation| storage_contract::parse_u64_decimal(generation).ok());
-            if published_generation.is_none_or(|generation| record.generation > generation) {
+                .is_none_or(|status| record.generation > status.generation)
+            {
                 return Ok(Json(uploads::status(&record)));
             }
         }
-        published.map(Json)
+        published
+            .map(|status| Json(published_upload_response(&workspace, &item, status)))
+            .ok_or_else(|| {
+                ApiError::new(
+                    ::http::StatusCode::NOT_FOUND,
+                    storage_contract::ErrorCode::NotFound,
+                    "upload item not found",
+                )
+            })
     })
     .await
     .map_err(ApiError::join)?
+}
+
+fn published_upload_response(
+    workspace: &str,
+    item: &str,
+    status: crate::PublishedUploadStatus,
+) -> Value {
+    let (state, manifest) = match status.state {
+        crate::PublishedUploadState::Complete => ("COMPLETE", None),
+        crate::PublishedUploadState::Sealed { manifest_hash } => ("SEALED", Some(manifest_hash)),
+    };
+    json!({"workspace_id":workspace,"item_id":item,"upload_generation":status.generation.to_string(),"logical_size":status.logical_size.to_string(),"content_hash":status.content_hash,"state":state,"durable_ranges":if status.logical_size>0{vec![json!({"offset":"0","length":status.logical_size.to_string(),"content_hash":status.content_hash})]}else{vec![]},"sealed_manifest_hash":manifest})
 }
 
 #[derive(Deserialize)]
@@ -279,18 +284,14 @@ async fn upload_inner(
     }) {
         return Err(ApiError::invalid("invalid BLAKE3 upload hash"));
     }
+    storage_contract::validate_id(&item, "entry").map_err(ApiError::invalid_source)?;
     let backend = state.backend.clone();
     let owner = identity.clone();
     let ws = workspace.clone();
-    let item_id = item.clone();
     let ownership = admission.clone();
     tokio::task::spawn_blocking(move || {
         let _ownership = ownership;
-        backend.call(
-            crate::BackendAction::UploadAuthorize,
-            &owner,
-            json!({"workspace_id":ws,"item_id":item_id,"logical_size":expected_length.to_string()}),
-        )
+        backend.authorize_upload(&owner, &ws, Some(expected_length))
     })
     .await
     .map_err(ApiError::join)??;

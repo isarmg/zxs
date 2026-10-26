@@ -64,6 +64,45 @@ impl Backend for WriterProbe {
         Err(crate::ApiError::unsupported())
     }
 
+    fn create_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _command: crate::CreateWorkspace,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn abort_workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
+    fn workspace(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+    ) -> Result<storage_contract::Workspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn published_upload_status(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _item: &str,
+    ) -> Result<Option<crate::PublishedUploadStatus>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn authorize_upload(
+        &self,
+        _identity: &crate::auth::Identity,
+        _workspace: &str,
+        _logical_size: Option<u64>,
+    ) -> Result<(), crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+
     fn lookup_current(
         &self,
         _identity: &crate::auth::Identity,
@@ -220,7 +259,7 @@ fn discarded_queued_blocking_closure_still_owns_native_drain() {
     let (backend, mut started, release, mut finished) = writer();
     backend.stop_management();
     release.send(()).unwrap();
-    let drain = NativeDrain(Some(backend));
+    let mut drain = NativeDrain::new(backend);
     // Model cancellation before Tokio polls a queued blocking closure. Merely
     // capturing the backend Arc would detach its native writer at this point.
     let queued = move || drain.run();
@@ -288,6 +327,38 @@ fn failed_drain_is_returned_or_reported_once_after_cancellation() {
         drop(runtime);
     }
 
+    for (claim_result, marker) in [
+        (true, "lifecycle-fallback-returned-failure"),
+        (false, "lifecycle-fallback-unclaimed-failure"),
+    ] {
+        let (runtime, _) = failing_enqueue_runtime();
+        let (mut backend, mut started, release, mut finished) = writer();
+        Arc::get_mut(&mut backend).unwrap().failure = Some(marker);
+        let mut management = ManagementShutdown::new(backend);
+        management.smb.begin();
+        release.send(()).unwrap();
+        runtime.block_on(async {
+            if claim_result {
+                let error = management.finish().await.unwrap_err();
+                let source = error.get_ref().unwrap().downcast_ref::<ApiError>().unwrap();
+                assert!(format!("{source:?}").contains(marker));
+            } else {
+                use std::panic::{AssertUnwindSafe, catch_unwind};
+                assert!(
+                    catch_unwind(AssertUnwindSafe(move || {
+                        let _management = management;
+                        panic!("unclaimed fallback result during unwind");
+                    }))
+                    .is_err()
+                );
+            }
+            assert!(started.try_recv().is_ok());
+            assert!(finished.try_recv().is_ok());
+            tokio::task::spawn_blocking(|| ()).await.unwrap();
+        });
+        drop(runtime);
+    }
+
     let runtime = tokio::runtime::Builder::new_current_thread()
         .max_blocking_threads(1)
         .build()
@@ -315,6 +386,13 @@ fn failed_drain_is_returned_or_reported_once_after_cancellation() {
     assert!(started.try_recv().is_ok());
     assert!(finished.try_recv().is_ok());
 
+    let (mut backend, mut started, release, mut finished) = writer();
+    Arc::get_mut(&mut backend).unwrap().failure = Some("lifecycle-no-runtime-drain-failure");
+    release.send(()).unwrap();
+    drop(ManagementShutdown::new(backend));
+    assert!(started.try_recv().is_ok());
+    assert!(finished.try_recv().is_ok());
+
     capture.rewind().unwrap();
     let mut logged = String::new();
     capture.read_to_string(&mut logged).unwrap();
@@ -330,6 +408,25 @@ fn failed_drain_is_returned_or_reported_once_after_cancellation() {
     );
     assert_eq!(
         logged.matches("lifecycle-queued-drain-failure").count(),
+        1,
+        "{logged}"
+    );
+    assert_eq!(
+        logged
+            .matches("lifecycle-fallback-returned-failure")
+            .count(),
+        0,
+        "{logged}"
+    );
+    assert_eq!(
+        logged
+            .matches("lifecycle-fallback-unclaimed-failure")
+            .count(),
+        1,
+        "{logged}"
+    );
+    assert_eq!(
+        logged.matches("lifecycle-no-runtime-drain-failure").count(),
         1,
         "{logged}"
     );
@@ -356,4 +453,83 @@ fn simultaneous_http_and_management_failures_keep_both_concrete_causes() {
     assert_eq!(combined.http.kind(), io::ErrorKind::ConnectionReset);
     assert!(combined.management.get_ref().unwrap().is::<ApiError>());
     assert!(format!("{combined:?}").contains("management failure"));
+}
+
+fn failing_enqueue_runtime() -> (tokio::runtime::Runtime, Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::atomic::AtomicUsize;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let names = Arc::clone(&attempts);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .thread_name_fn(move || {
+            if names.fetch_add(1, Ordering::SeqCst) == 0 {
+                panic!("injected management enqueue failure after queue insertion");
+            }
+            "management-drain-test".into()
+        })
+        .build()
+        .unwrap();
+    (runtime, attempts)
+}
+
+#[test]
+fn enqueue_failure_during_owner_unwind_drains_once_and_preserves_outer_panic() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let (runtime, attempts) = failing_enqueue_runtime();
+    let (backend, mut started, release, mut finished) = writer();
+    let mut management = ManagementShutdown::new(backend.clone());
+    // Close the independent, unused SMB owner outside the runtime so the
+    // failing real enqueue below belongs specifically to management drain.
+    management.smb.begin();
+    release.send(()).unwrap();
+    runtime.block_on(async {
+        let outer = catch_unwind(AssertUnwindSafe(move || {
+            let _management = management;
+            panic!("outer management owner unwind");
+        }))
+        .unwrap_err();
+        assert_eq!(
+            outer.downcast_ref::<&str>(),
+            Some(&"outer management owner unwind")
+        );
+        assert!(started.try_recv().is_ok());
+        assert!(finished.try_recv().is_ok());
+        assert_eq!(Arc::strong_count(&backend), 1);
+        // A subsequent real blocking thread consumes the queued old guard;
+        // the probe would panic if it tried to drain a second time.
+        assert_eq!(tokio::task::spawn_blocking(|| 42).await.unwrap(), 42);
+    });
+    drop(runtime);
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn competing_management_guards_wait_for_drain_completion_before_returning() {
+    let (backend, started, release, mut finished) = writer();
+    backend.stop_management();
+    let state = Arc::new(Mutex::new(NativeDrain::new(backend)));
+    let first = ManagementDrain(Arc::clone(&state));
+    let worker = std::thread::spawn(move || drop(first));
+    started.blocking_recv().unwrap();
+    let second = ManagementDrain(Arc::clone(&state));
+    let (entered, entering) = mpsc::channel();
+    let (returned, completed) = mpsc::channel();
+    let fallback = std::thread::spawn(move || {
+        entered.send(()).unwrap();
+        drop(second);
+        returned.send(()).unwrap();
+    });
+    entering.recv_timeout(DEADLINE).unwrap();
+    assert_eq!(
+        completed.recv_timeout(Duration::from_millis(20)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    );
+    release.send(()).unwrap();
+    completed.recv_timeout(DEADLINE).unwrap();
+    worker.join().unwrap();
+    fallback.join().unwrap();
+    assert!(finished.try_recv().is_ok());
+    let mut state = state.lock().unwrap();
+    assert!(state.backend.is_none());
+    state.completion.take().unwrap().0.take().unwrap().unwrap();
 }
