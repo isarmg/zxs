@@ -1,4 +1,5 @@
 {
+  "binding_text_import_receipt": "66c5ee126c07c070103703a02df428eb58c4556abdad585b596f97664111b86b",
   "config_sha256": "95c97c0734c86015d5d33b4f3fa40a32d3c2218a08b8c25a4325d1127e671b23",
   "consolidation_records_sha256": {
     "0370cbc712e60a95abc07a7d2553132c2761e28b07bb16daad571e76126ac6d1": "0370cbc712e60a95abc07a7d2553132c2761e28b07bb16daad571e76126ac6d1",
@@ -52060,7 +52061,8 @@
     }
   },
   "external_test_mappings_sha256": {
-    "compliance/external-tests/foundation.json": "c1090e521b6661ccdb1bb21833acfae20d74f09a639a1684ae971c874fc9a23b",
+    "compliance/external-tests/binding-text-tools.json": "cf85f72fb40b8d9a90ac77d7a6df9a6d1c649a00bba9f6636901721e6d5c9d98",
+    "compliance/external-tests/foundation.json": "5154f42ad9e4dc40546fdd21a9159b3619b8a9a8a50258b0f69c412509d448d6",
     "compliance/external-tests/integrated.json": "4e5232add94a803e60b093deb88047d86d5f3d22156a5d530ebe783a3b003465",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
@@ -76055,6 +76057,35 @@
         "test/foundation/unicase"
       ]
     },
+    "src/foundation/text-unicode/unicode-display-width": {
+      "bytes": 2128311,
+      "directory": "src/foundation/text-unicode/unicode-display-width",
+      "file_count": 3,
+      "files": [
+        {
+          "path": "test/foundation/unicode-display-width/tests/emoji-test.txt",
+          "sha256": "1d8a944f88d7952f7ef7c5167fef3c67995bcae24543949710231b03a201acda",
+          "source": "src/foundation/text-unicode/unicode-display-width/tests/emoji-test.txt",
+          "source_sha256_before": "1d8a944f88d7952f7ef7c5167fef3c67995bcae24543949710231b03a201acda"
+        },
+        {
+          "path": "test/foundation/unicode-display-width/tests/tests.rs",
+          "sha256": "cbf0fc76b3185928ab6a32158481f923f8d959cd20b2955780e19b5984d2f57b",
+          "source": "src/foundation/text-unicode/unicode-display-width/tests/tests.rs",
+          "source_sha256_before": "10c40454f79c2b66ea99d2924df62c8afc3e13fb8cea835883d3c458b8076204"
+        },
+        {
+          "path": "test/foundation/unicode-display-width/unit/tables.rs",
+          "sha256": "5a798ef3252c30d1ea85a503a87225c875419d6dcc54444b5941691c3d4d91df",
+          "source": "src/foundation/text-unicode/unicode-display-width/src/tables.rs",
+          "source_sha256_before": "4c3e673da24634c269562ca4d3652b494542c78cafe56da69d23df9178adffd4"
+        }
+      ],
+      "origin_directory": "vendor/rust/unicode-width-0.2.2",
+      "roots": [
+        "test/foundation/unicode-display-width"
+      ]
+    },
     "src/foundation/text-unicode/unicode-general-category": {
       "bytes": 591,
       "directory": "src/foundation/text-unicode/unicode-general-category",
@@ -77927,7 +77958,7 @@
       ]
     },
     "src/foundation/web-runtime/wasm-bindgen-cli-support": {
-      "bytes": 119328,
+      "bytes": 122491,
       "directory": "src/foundation/web-runtime/wasm-bindgen-cli-support",
       "file_count": 31,
       "files": [
@@ -77957,7 +77988,7 @@
         },
         {
           "path": "test/foundation/wasm-bindgen-cli-support/modules/src/interpreter/smoke_tests.rs",
-          "sha256": "082b91e3e776891e0bd6f508af76ae3573a39d6192f21a642ab041f890e11544",
+          "sha256": "cb9f319e24316ba1b90d8f31cfa1963d3502de34555831619eb6e4842f5c7ff1",
           "source": "src/foundation/wasm-bindgen-cli-support/src/interpreter/smoke_tests.rs",
           "source_sha256_before": "082b91e3e776891e0bd6f508af76ae3573a39d6192f21a642ab041f890e11544"
         },
@@ -78017,7 +78048,7 @@
         },
         {
           "path": "test/foundation/wasm-bindgen-cli-support/modules/src/transforms/externref/tests/mod.rs",
-          "sha256": "3ccb732f12181831be1bbe5aa63fd83c0bc33b82baf0d5c81ca939f611731f60",
+          "sha256": "696d454dcf255ad6f92b52544fbd3045e2472d08ab3fed9ad8e57294500e3260",
           "source": "src/foundation/wasm-bindgen-cli-support/src/transforms/externref/tests/mod.rs",
           "source_sha256_before": "1352f9050738086a7cb23e4fc6860dd5f95f521f3e918c57901a88cace0863df"
         },
@@ -78059,7 +78090,7 @@
         },
         {
           "path": "test/foundation/wasm-bindgen-cli-support/modules/src/transforms/multi_value/tests/mod.rs",
-          "sha256": "c3decd9eaaa5c085c51eca6e166eddfccc8b9a87e0618c27f1cdd635e988405d",
+          "sha256": "45273c9c0af20469c91dfe9daa813199c3692630c873972f5da533445ce3a425",
           "source": "src/foundation/wasm-bindgen-cli-support/src/transforms/multi_value/tests/mod.rs",
           "source_sha256_before": "768a6db284d50c9ced01791e7adde7a20c99b373f9f0b5841b972f5d473aeaed"
         },
@@ -78077,7 +78108,7 @@
         },
         {
           "path": "test/foundation/wasm-bindgen-cli-support/modules/src/transforms/threads/tests/mod.rs",
-          "sha256": "a6971c883786a36f45fcb05a142dce3d75a197d17c65431b46917abe342900b7",
+          "sha256": "b5aa2132b984adf33cab107357d4a3592e947a908995c56708c21488af5a908f",
           "source": "src/foundation/wasm-bindgen-cli-support/src/transforms/threads/tests/mod.rs",
           "source_sha256_before": "3961aec6e11cf9dd34f16451a5be925959da929a238aa72e43bf3919b8756072"
         },
@@ -78089,7 +78120,7 @@
         },
         {
           "path": "test/foundation/wasm-bindgen-cli-support/unit/src/transforms/catch_handler/tests_619.rs",
-          "sha256": "2c2c00afbe89c856de91268e406d9d24b3862c89226c746a4c233969e52ff3bd",
+          "sha256": "767f092d2501def9b65bd99926b68b98d0a163719ffabf87d457b3beb591a16e",
           "source": "src/foundation/wasm-bindgen-cli-support/src/transforms/catch_handler.rs",
           "source_sha256_before": "241b4b9f995ab4ac020dcd7f4424fdf879b0f0202b5a1e6df4909720c4b48e42"
         },
@@ -78101,7 +78132,7 @@
         },
         {
           "path": "test/foundation/wasm-bindgen-cli-support/unit/src/transforms/mod/tests_110.rs",
-          "sha256": "075fbee145914f79a42b328aafaffc653c9dd8aa17fcf834799a9ef044c663c5",
+          "sha256": "fec58cd6a20e1416ae3078f55e931d1e41d54a9f158de60aba31bfa25f6be883",
           "source": "src/foundation/wasm-bindgen-cli-support/src/transforms/mod.rs",
           "source_sha256_before": "2b68c4b61309f2c91d5c0c32dfba1006a1411a0f05d05eb66c7703c143c8bccd"
         },
@@ -78217,6 +78248,758 @@
       "origin_directory": "vendor/rust/wasm-encoder-0.245.1",
       "roots": [
         "test/foundation/wasm-encoder"
+      ]
+    },
+    "src/foundation/web-runtime/wasm-text-parser": {
+      "bytes": 31601,
+      "directory": "src/foundation/web-runtime/wasm-text-parser",
+      "file_count": 118,
+      "files": [
+        {
+          "path": "test/foundation/wasm-text-parser/tests/.gitattributes",
+          "sha256": "727d37b55ce621ae60dd4fd2329cbce7e8a28c9ecd5c96f063be19e67db4cd53",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/.gitattributes",
+          "source_sha256_before": "727d37b55ce621ae60dd4fd2329cbce7e8a28c9ecd5c96f063be19e67db4cd53"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/.gitignore",
+          "sha256": "8e464dd44890d3c805a4b3ecc8ebf75bd8b75b18267f408d471bad5b75b1e175",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/.gitignore",
+          "source_sha256_before": "8e464dd44890d3c805a4b3ecc8ebf75bd8b75b18267f408d471bad5b75b1e175"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/annotations.rs",
+          "sha256": "8d532e38c8ef28fcddae843b8edc3ce7a4efc78b171bc5a40f1f31e37c77516a",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/annotations.rs",
+          "source_sha256_before": "de6ab2a4e15c0bc683482436bed27e37ab45bc374d99f2fcc031c7947506e581"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/comments.rs",
+          "sha256": "a47b27ec6b34028be5aca274c5e5cad747a0cb43a5f9df479fdd61c1fbc3f299",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/comments.rs",
+          "source_sha256_before": "c068034817774cc94aa06fa09de453132d063335775002aa694fc60889a4ee04"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/common/mod.rs",
+          "sha256": "d58d636aff5f735deeee9279576125de9035fd36e8a63dfaae6d4634f11b4527",
+          "source": "test/foundation/wasm-text-parser/tests/common/mod.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "d58d636aff5f735deeee9279576125de9035fd36e8a63dfaae6d4634f11b4527"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/diagnostics.rs",
+          "sha256": "73742533764178c873d18cfa6989dfd466e292cd742baf551b374c057d76198f",
+          "source": "test/foundation/wasm-text-parser/tests/diagnostics.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "73742533764178c873d18cfa6989dfd466e292cd742baf551b374c057d76198f"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail.rs",
+          "sha256": "2d697686664e59b4dd4c3750c3c2e676fc505dc0beac28a8b22ea6939940d661",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail.rs",
+          "source_sha256_before": "c13a3aa974429c84ed4423ef00daeb5312c681a1dd93aa6e5ec9c3452a4ea674"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/bad-index.wat",
+          "sha256": "d21489daeec3a35327dcc9e2ba2d0acdd05f4aeaff2272cca608fda4d2338497",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/bad-index.wat",
+          "source_sha256_before": "d21489daeec3a35327dcc9e2ba2d0acdd05f4aeaff2272cca608fda4d2338497"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/bad-index.wat.err",
+          "sha256": "dc11070de0c9160573006ea4e5fa3c4d28e71bc39b24b1938cf6ff3b03ea7154",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/bad-index.wat.err",
+          "source_sha256_before": "dc11070de0c9160573006ea4e5fa3c4d28e71bc39b24b1938cf6ff3b03ea7154"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/bad-name.wat",
+          "sha256": "e5ff5d410007779a0de6609ea4cc693f0e603d36a106b8f5098c1980dd9f8124",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/bad-name.wat",
+          "source_sha256_before": "e5ff5d410007779a0de6609ea4cc693f0e603d36a106b8f5098c1980dd9f8124"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/bad-name.wat.err",
+          "sha256": "fb5638476c1b85d9d1919e3dbcb0f16f82d088a4a22d4a0c186d7b8ba6e1902b",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/bad-name.wat.err",
+          "source_sha256_before": "fb5638476c1b85d9d1919e3dbcb0f16f82d088a4a22d4a0c186d7b8ba6e1902b"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/bad-name2.wat",
+          "sha256": "5a6a4d0c19e5f2e48d7cebf361aca9b9000b7ef0c652997b5bd0ffaadbd2ca8a",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/bad-name2.wat",
+          "source_sha256_before": "5a6a4d0c19e5f2e48d7cebf361aca9b9000b7ef0c652997b5bd0ffaadbd2ca8a"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/bad-name2.wat.err",
+          "sha256": "129707cce45f1e3cfb3e2ca5c702182e16ca5eeb2dbb2edd0710b004a8e194a5",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/bad-name2.wat.err",
+          "source_sha256_before": "129707cce45f1e3cfb3e2ca5c702182e16ca5eeb2dbb2edd0710b004a8e194a5"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/bad-name3.wat",
+          "sha256": "c19133d738cc84e9174301f27d4050c216bda81c7e9918d03ac792b088f24a05",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/bad-name3.wat",
+          "source_sha256_before": "c19133d738cc84e9174301f27d4050c216bda81c7e9918d03ac792b088f24a05"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/bad-name3.wat.err",
+          "sha256": "84ea63d40a619a0782ec6e94fce63921188ab87b1c3875eacae0a371144ed83a",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/bad-name3.wat.err",
+          "source_sha256_before": "84ea63d40a619a0782ec6e94fce63921188ab87b1c3875eacae0a371144ed83a"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/block1.wat",
+          "sha256": "91e74b5c3b43be692e7a6ae74fbfa674c4b6197299eb61338c4eccf282b18f17",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/block1.wat",
+          "source_sha256_before": "91e74b5c3b43be692e7a6ae74fbfa674c4b6197299eb61338c4eccf282b18f17"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/block1.wat.err",
+          "sha256": "40a083ae496b41dee7002cc6a664c5db0c5e4d904ae03b815773a769c4493fca",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/block1.wat.err",
+          "source_sha256_before": "40a083ae496b41dee7002cc6a664c5db0c5e4d904ae03b815773a769c4493fca"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/block2.wat",
+          "sha256": "a8c07b4c09d51f10a8ffdf19806586022552398701cd90eb6d09816d45df06e5",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/block2.wat",
+          "source_sha256_before": "a8c07b4c09d51f10a8ffdf19806586022552398701cd90eb6d09816d45df06e5"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/block2.wat.err",
+          "sha256": "33c842ec5dd0f2fdd3a9ce8187dd98b45ceee48c12810802af809d05b9cd25e9",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/block2.wat.err",
+          "source_sha256_before": "33c842ec5dd0f2fdd3a9ce8187dd98b45ceee48c12810802af809d05b9cd25e9"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/block3.wat",
+          "sha256": "29739abfbabd7c55f00ddfbbb9ebd818b4a114ef2336d50514f0842f7e075905",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/block3.wat",
+          "source_sha256_before": "29739abfbabd7c55f00ddfbbb9ebd818b4a114ef2336d50514f0842f7e075905"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/block3.wat.err",
+          "sha256": "fc667ae2e71a260f62a3c7393bc97272e7c0ff38b17594f4370847b8a5019060",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/block3.wat.err",
+          "source_sha256_before": "fc667ae2e71a260f62a3c7393bc97272e7c0ff38b17594f4370847b8a5019060"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment0.wat",
+          "sha256": "8f27c9d0d212bbb1862ea89ffd7cbeafde5dfd755d695c1ba696cd520aba1a1d",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment0.wat",
+          "source_sha256_before": "8f27c9d0d212bbb1862ea89ffd7cbeafde5dfd755d695c1ba696cd520aba1a1d"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment0.wat.err",
+          "sha256": "b53cbaef7bcec3862c64e09c084b92cd61bd29b954125482b2d083db250cd9e2",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment0.wat.err",
+          "source_sha256_before": "b53cbaef7bcec3862c64e09c084b92cd61bd29b954125482b2d083db250cd9e2"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment1.wat",
+          "sha256": "b1a0447c9a8eaab8938d15cd33bd4adbb8bb69c2d710209b604023991a4347cb",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment1.wat",
+          "source_sha256_before": "b1a0447c9a8eaab8938d15cd33bd4adbb8bb69c2d710209b604023991a4347cb"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment1.wat.err",
+          "sha256": "2fc3b3e4f98416326e1e5ec034026301069b6a98fa24451bc7573e16b8cb3811",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment1.wat.err",
+          "source_sha256_before": "2fc3b3e4f98416326e1e5ec034026301069b6a98fa24451bc7573e16b8cb3811"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment2.wat",
+          "sha256": "e3f49c7a388fba81081beb25d87bbd7db0acce5dd8e3eaa04574905ed7ec420c",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment2.wat",
+          "source_sha256_before": "e3f49c7a388fba81081beb25d87bbd7db0acce5dd8e3eaa04574905ed7ec420c"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment2.wat.err",
+          "sha256": "2183231d6acd0b5a117f9aea747c3d5c12e758450a6cd74027bb954a3134cf19",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment2.wat.err",
+          "source_sha256_before": "2183231d6acd0b5a117f9aea747c3d5c12e758450a6cd74027bb954a3134cf19"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment3.wat",
+          "sha256": "d83f89c582501eb8833e772b8462c8974984a2f7fbb80b1452dc399fac74e5ed",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment3.wat",
+          "source_sha256_before": "d83f89c582501eb8833e772b8462c8974984a2f7fbb80b1452dc399fac74e5ed"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment3.wat.err",
+          "sha256": "8b2096a4833627905c63f49cdabe44be24336646578dcfbdc67e9bfb35cbc601",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment3.wat.err",
+          "source_sha256_before": "8b2096a4833627905c63f49cdabe44be24336646578dcfbdc67e9bfb35cbc601"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment4.wat",
+          "sha256": "b7c6c68844d918e9ef6dd5ab9c40c7de7b38f04f94fadad630eda4e596f3e0f8",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment4.wat",
+          "source_sha256_before": "b7c6c68844d918e9ef6dd5ab9c40c7de7b38f04f94fadad630eda4e596f3e0f8"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment4.wat.err",
+          "sha256": "2f790cc511edfcd89a12c9207901be16039fc1a06a584d73095e77a52f861cd9",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment4.wat.err",
+          "source_sha256_before": "2f790cc511edfcd89a12c9207901be16039fc1a06a584d73095e77a52f861cd9"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment5.wat",
+          "sha256": "a159808032638cc914fa80ac4354a68b0af4f435a09cbe3e2d577582e183eb0a",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment5.wat",
+          "source_sha256_before": "a159808032638cc914fa80ac4354a68b0af4f435a09cbe3e2d577582e183eb0a"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment5.wat.err",
+          "sha256": "6fe0d99894307442f83fe93beaa5da706e06c9bdaf8e39d7cbae4c4fffafcb94",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment5.wat.err",
+          "source_sha256_before": "6fe0d99894307442f83fe93beaa5da706e06c9bdaf8e39d7cbae4c4fffafcb94"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment6.wat",
+          "sha256": "abe48bcba2587dca98bc80ddde4e813f94fbc8a3538704a0775ea85bca0f8466",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment6.wat",
+          "source_sha256_before": "abe48bcba2587dca98bc80ddde4e813f94fbc8a3538704a0775ea85bca0f8466"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment6.wat.err",
+          "sha256": "3c97b9bf1112bbb7335d7fe4be5befb6f91eea7bec7dd3e6b543792231003c56",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment6.wat.err",
+          "source_sha256_before": "3c97b9bf1112bbb7335d7fe4be5befb6f91eea7bec7dd3e6b543792231003c56"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment7.wat",
+          "sha256": "e125c416ea5fa0ac35a58295a83a6f345438e2d7ddc6a39bd76c8e89885b3f0e",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment7.wat",
+          "source_sha256_before": "e125c416ea5fa0ac35a58295a83a6f345438e2d7ddc6a39bd76c8e89885b3f0e"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment7.wat.err",
+          "sha256": "5c34528ff2019cd3f0b3df34fd42523c0b66120706321da2c88ec05793478d2e",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment7.wat.err",
+          "source_sha256_before": "5c34528ff2019cd3f0b3df34fd42523c0b66120706321da2c88ec05793478d2e"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment8.wat",
+          "sha256": "200cc4c0e5af21a25529d7a81633a03642cff807255d6cd72eb45cdccc605cec",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment8.wat",
+          "source_sha256_before": "200cc4c0e5af21a25529d7a81633a03642cff807255d6cd72eb45cdccc605cec"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-block-comment8.wat.err",
+          "sha256": "9b81237d150a784b71791eee88fb6264a8bd6412862660f7392945203809e517",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-block-comment8.wat.err",
+          "source_sha256_before": "9b81237d150a784b71791eee88fb6264a8bd6412862660f7392945203809e517"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment0.wat",
+          "sha256": "bcec4c5a1e52b3e392e07c6711c979aa8d7db8baaf2bcdf270ba16d1aa528d26",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment0.wat",
+          "source_sha256_before": "bcec4c5a1e52b3e392e07c6711c979aa8d7db8baaf2bcdf270ba16d1aa528d26"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment0.wat.err",
+          "sha256": "41ec5a075dc6b73afe1aec6b3198c5c4ae3a1a900e1610115879058ce034d6f6",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment0.wat.err",
+          "source_sha256_before": "41ec5a075dc6b73afe1aec6b3198c5c4ae3a1a900e1610115879058ce034d6f6"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment1.wat",
+          "sha256": "a2afbcab00ec957dfd9e9bf21fa4238852247b27f0b054f4a00f6b172dddf853",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment1.wat",
+          "source_sha256_before": "a2afbcab00ec957dfd9e9bf21fa4238852247b27f0b054f4a00f6b172dddf853"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment1.wat.err",
+          "sha256": "f19a645e6fb5cbd7a0dd2308732741edcf83dbae0ef62549972029856a9e7fc6",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment1.wat.err",
+          "source_sha256_before": "f19a645e6fb5cbd7a0dd2308732741edcf83dbae0ef62549972029856a9e7fc6"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment2.wat",
+          "sha256": "7f2a68229d02aac56ec4dfccf139bf2d617a0e89430357b30444dc4239d8aa89",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment2.wat",
+          "source_sha256_before": "7f2a68229d02aac56ec4dfccf139bf2d617a0e89430357b30444dc4239d8aa89"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment2.wat.err",
+          "sha256": "08add3d33e10e1ab6b4f3ae431f5db61d6f6c0a2b7d6828482a1e51b3a2d3851",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment2.wat.err",
+          "source_sha256_before": "08add3d33e10e1ab6b4f3ae431f5db61d6f6c0a2b7d6828482a1e51b3a2d3851"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment3.wat",
+          "sha256": "61173ae54782f6de86685f9555ffb94bbe2cf20b234daf660abb69ba3326f1ff",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment3.wat",
+          "source_sha256_before": "61173ae54782f6de86685f9555ffb94bbe2cf20b234daf660abb69ba3326f1ff"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment3.wat.err",
+          "sha256": "4a5333dc02efa3c1eeab9cafa7c707f78abe92defdb01a71d6fe20944e4785f0",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment3.wat.err",
+          "source_sha256_before": "4a5333dc02efa3c1eeab9cafa7c707f78abe92defdb01a71d6fe20944e4785f0"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment4.wat",
+          "sha256": "9ecbbbe82c750e6475af1bfb46fe7a06115e4446a437d19fc08ca3d002f2a1c9",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment4.wat",
+          "source_sha256_before": "9ecbbbe82c750e6475af1bfb46fe7a06115e4446a437d19fc08ca3d002f2a1c9"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment4.wat.err",
+          "sha256": "ddb8aee8006265253b09c313cf5eb5c2dc4da66f502b4f6d3e2e1de77b35aec9",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment4.wat.err",
+          "source_sha256_before": "ddb8aee8006265253b09c313cf5eb5c2dc4da66f502b4f6d3e2e1de77b35aec9"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment5.wat",
+          "sha256": "8a4c8d342111bc9d37c16dbdf67c52027e1a42632abc9f359b3e4f07a85748b5",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment5.wat",
+          "source_sha256_before": "8a4c8d342111bc9d37c16dbdf67c52027e1a42632abc9f359b3e4f07a85748b5"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment5.wat.err",
+          "sha256": "34e368719fc0eab2f1a43c9f8e6f1b31aa9be9f971085d72374e49bde39cbfe5",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment5.wat.err",
+          "source_sha256_before": "34e368719fc0eab2f1a43c9f8e6f1b31aa9be9f971085d72374e49bde39cbfe5"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment6.wat",
+          "sha256": "15f0dcdec23736ce92db84b3a7cdfe8689c97f2a7d0b9b0bfb0dcd2675163ed1",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment6.wat",
+          "source_sha256_before": "15f0dcdec23736ce92db84b3a7cdfe8689c97f2a7d0b9b0bfb0dcd2675163ed1"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment6.wat.err",
+          "sha256": "0570be2ede803f071925d249f3858d3a417b5a6d678c9da40fc851d788d12983",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment6.wat.err",
+          "source_sha256_before": "0570be2ede803f071925d249f3858d3a417b5a6d678c9da40fc851d788d12983"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment7.wat",
+          "sha256": "c7ee59301a701dd52d56cad02df78b0ad3584460bc18efa42ee137fe0c35aef6",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment7.wat",
+          "source_sha256_before": "c7ee59301a701dd52d56cad02df78b0ad3584460bc18efa42ee137fe0c35aef6"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment7.wat.err",
+          "sha256": "feebbeee8c85d8b3b85cec89435ae18f3ade9f754ca180d747a41406b64ca07a",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment7.wat.err",
+          "source_sha256_before": "feebbeee8c85d8b3b85cec89435ae18f3ade9f754ca180d747a41406b64ca07a"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment8.wat",
+          "sha256": "17632a8142154624de88b3cf93516147ed3419d785200bcd7049499eca8e8f04",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment8.wat",
+          "source_sha256_before": "17632a8142154624de88b3cf93516147ed3419d785200bcd7049499eca8e8f04"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-line-comment8.wat.err",
+          "sha256": "9c209285f2295cd2bc999aa7a9534a654932493308ab1f102839ed15a4d04d17",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-line-comment8.wat.err",
+          "source_sha256_before": "9c209285f2295cd2bc999aa7a9534a654932493308ab1f102839ed15a4d04d17"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string0.wat",
+          "sha256": "497b679b32baddcd6a158f4cadd3d9a9dea3457bac2a8c2c3d4e09b7c2d80842",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string0.wat",
+          "source_sha256_before": "497b679b32baddcd6a158f4cadd3d9a9dea3457bac2a8c2c3d4e09b7c2d80842"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string0.wat.err",
+          "sha256": "cb3d737f2319346675a038716694354cd3b272453daa8a96e32e9861a9277f7b",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string0.wat.err",
+          "source_sha256_before": "cb3d737f2319346675a038716694354cd3b272453daa8a96e32e9861a9277f7b"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string1.wat",
+          "sha256": "46654cbed1ea6aab5019aef3d20098a391e40dacafa1ad5e83bf4ec384109fce",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string1.wat",
+          "source_sha256_before": "46654cbed1ea6aab5019aef3d20098a391e40dacafa1ad5e83bf4ec384109fce"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string1.wat.err",
+          "sha256": "de7e7da516dc6c244bd0e4f012577b69f0cacbcc10f727fadb4b50bb04e0e2b4",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string1.wat.err",
+          "source_sha256_before": "de7e7da516dc6c244bd0e4f012577b69f0cacbcc10f727fadb4b50bb04e0e2b4"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string2.wat",
+          "sha256": "11938f217c14387c05312735130f00c91d9df2d3ff9df7f13395e0f2b81dad54",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string2.wat",
+          "source_sha256_before": "11938f217c14387c05312735130f00c91d9df2d3ff9df7f13395e0f2b81dad54"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string2.wat.err",
+          "sha256": "e7bd08b146a855d681fefaf9e0576a9c333a2d10044f8e268b916b22a54227c9",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string2.wat.err",
+          "source_sha256_before": "e7bd08b146a855d681fefaf9e0576a9c333a2d10044f8e268b916b22a54227c9"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string3.wat",
+          "sha256": "e0ca4903fcafb9a54a91cf99e5eac95d25c6d2eb67b076f88191ad396f839cb6",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string3.wat",
+          "source_sha256_before": "e0ca4903fcafb9a54a91cf99e5eac95d25c6d2eb67b076f88191ad396f839cb6"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string3.wat.err",
+          "sha256": "b88d5db9e445c798eb24f95b7661b9c0368934d27ee8208477cd1c99351b939a",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string3.wat.err",
+          "source_sha256_before": "b88d5db9e445c798eb24f95b7661b9c0368934d27ee8208477cd1c99351b939a"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string4.wat",
+          "sha256": "3ee2aee7f77604d051519c6f1795634469c12e98ae347a98f0c8445eecf1ff3d",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string4.wat",
+          "source_sha256_before": "3ee2aee7f77604d051519c6f1795634469c12e98ae347a98f0c8445eecf1ff3d"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string4.wat.err",
+          "sha256": "1edc65bb09d8d3eed6ff69e7d9a7a4b5941dc823fa3436fa375657510255f6f4",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string4.wat.err",
+          "source_sha256_before": "1edc65bb09d8d3eed6ff69e7d9a7a4b5941dc823fa3436fa375657510255f6f4"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string5.wat",
+          "sha256": "024e50943128840d53f17e31a9b9332ce4f0ee70a847a043015f435b1c3c6e76",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string5.wat",
+          "source_sha256_before": "024e50943128840d53f17e31a9b9332ce4f0ee70a847a043015f435b1c3c6e76"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string5.wat.err",
+          "sha256": "a0f13ec40d596ea2d8b0c4292b0d28775a5116ab7e11d7de88b295d25428c661",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string5.wat.err",
+          "source_sha256_before": "a0f13ec40d596ea2d8b0c4292b0d28775a5116ab7e11d7de88b295d25428c661"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string6.wat",
+          "sha256": "79cf157e29319800d2652c5a7f3dc90e07ebe2145c9904a70fc12027cdee84b7",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string6.wat",
+          "source_sha256_before": "79cf157e29319800d2652c5a7f3dc90e07ebe2145c9904a70fc12027cdee84b7"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string6.wat.err",
+          "sha256": "860555e7aa13e3de3639cc2a530d6a42b974b629c4659593e972cbb0f306abae",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string6.wat.err",
+          "source_sha256_before": "860555e7aa13e3de3639cc2a530d6a42b974b629c4659593e972cbb0f306abae"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string7.wat",
+          "sha256": "7d8e403766dfb4e569754160d31ed0f9a27f908ed6cff96be43ab3d37f5975d5",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string7.wat",
+          "source_sha256_before": "7d8e403766dfb4e569754160d31ed0f9a27f908ed6cff96be43ab3d37f5975d5"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string7.wat.err",
+          "sha256": "658b6a02ba6d769254485f35c20984e7135d914b4266929963d723f26a40be4a",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string7.wat.err",
+          "source_sha256_before": "658b6a02ba6d769254485f35c20984e7135d914b4266929963d723f26a40be4a"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string8.wat",
+          "sha256": "5a9b222e578655d57ee6e9f19bc1ea8e29aa52d652975fac685213444ed6458f",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string8.wat",
+          "source_sha256_before": "5a9b222e578655d57ee6e9f19bc1ea8e29aa52d652975fac685213444ed6458f"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/confusing-string8.wat.err",
+          "sha256": "9a4e1a510330c800a1df7966998ebc3cde931eda20b249e5360f5e9a905dce11",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/confusing-string8.wat.err",
+          "source_sha256_before": "9a4e1a510330c800a1df7966998ebc3cde931eda20b249e5360f5e9a905dce11"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/inline1.wat",
+          "sha256": "4e9767d67207aace2ac5e6f63a30e7510e4aa245ba35420539509e2254470272",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/inline1.wat",
+          "source_sha256_before": "4e9767d67207aace2ac5e6f63a30e7510e4aa245ba35420539509e2254470272"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/inline1.wat.err",
+          "sha256": "0143017a9825e518baa6009bae2c8d63520051dedd3437705bbe36b038a57f41",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/inline1.wat.err",
+          "source_sha256_before": "0143017a9825e518baa6009bae2c8d63520051dedd3437705bbe36b038a57f41"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/newline-in-string.wat",
+          "sha256": "5c01cf709544ade0a6cdfcc39a3836a3bc018b633dc42a6cd872b6defc763ea7",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/newline-in-string.wat",
+          "source_sha256_before": "5c01cf709544ade0a6cdfcc39a3836a3bc018b633dc42a6cd872b6defc763ea7"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/newline-in-string.wat.err",
+          "sha256": "1504209cc37a78b2aee778f23eacf78606daf964cf7bff251f5700efcd27ffd7",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/newline-in-string.wat.err",
+          "source_sha256_before": "1504209cc37a78b2aee778f23eacf78606daf964cf7bff251f5700efcd27ffd7"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string1.wat",
+          "sha256": "620d46d585ce94b382b5fde628c1399f3e562014b7a44af46e92f7bd045ca86e",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string1.wat",
+          "source_sha256_before": "620d46d585ce94b382b5fde628c1399f3e562014b7a44af46e92f7bd045ca86e"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string1.wat.err",
+          "sha256": "fc53f3a1c4a65d8f25e5af51dec7699f45cecba114ca9c7871781bc70f664320",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string1.wat.err",
+          "source_sha256_before": "fc53f3a1c4a65d8f25e5af51dec7699f45cecba114ca9c7871781bc70f664320"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string10.wat",
+          "sha256": "f7409dd45e153a1b11cb23e38f4ed87da12bedde38f8f0ccfe91037b0a4d97bd",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string10.wat",
+          "source_sha256_before": "f7409dd45e153a1b11cb23e38f4ed87da12bedde38f8f0ccfe91037b0a4d97bd"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string10.wat.err",
+          "sha256": "ce677db5e37e0ed81ca357ed6b5edb21d85c27303ee194855bea7a88457efb6a",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string10.wat.err",
+          "source_sha256_before": "ce677db5e37e0ed81ca357ed6b5edb21d85c27303ee194855bea7a88457efb6a"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string11.wat",
+          "sha256": "f6e0400b8c6a2014efa1ac676c567e140d8f86b5f4d5129773e6d67af537b615",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string11.wat",
+          "source_sha256_before": "f6e0400b8c6a2014efa1ac676c567e140d8f86b5f4d5129773e6d67af537b615"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string11.wat.err",
+          "sha256": "4c6a550d29eda38a4e1bf7a589596f11655dc779479d7b8d466cfc53f815a742",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string11.wat.err",
+          "source_sha256_before": "4c6a550d29eda38a4e1bf7a589596f11655dc779479d7b8d466cfc53f815a742"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string12.wat",
+          "sha256": "23e30070eef22271651cce096a801fc4f79f3c37343c88bb8d2fc99b32d3b8b9",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string12.wat",
+          "source_sha256_before": "23e30070eef22271651cce096a801fc4f79f3c37343c88bb8d2fc99b32d3b8b9"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string12.wat.err",
+          "sha256": "b5ec59f2996b88b2ee157e22d1774dc3e36fc08ed5bfc621aea830d30f66f586",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string12.wat.err",
+          "source_sha256_before": "b5ec59f2996b88b2ee157e22d1774dc3e36fc08ed5bfc621aea830d30f66f586"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string13.wat",
+          "sha256": "81a305b981159ee10e140749ea3220c9edaaff53605e63c21995de47382b5faf",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string13.wat",
+          "source_sha256_before": "81a305b981159ee10e140749ea3220c9edaaff53605e63c21995de47382b5faf"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string13.wat.err",
+          "sha256": "959f26c6b54e0d367b51d11d1addd8a53b5b8ff3caf70ebdd46bbea8ccfa2418",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string13.wat.err",
+          "source_sha256_before": "959f26c6b54e0d367b51d11d1addd8a53b5b8ff3caf70ebdd46bbea8ccfa2418"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string14.wat",
+          "sha256": "c45c2cc9f7afbfbd4be8e513106d22f7e5e817091448576c6bdf0701b81d95dd",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string14.wat",
+          "source_sha256_before": "c45c2cc9f7afbfbd4be8e513106d22f7e5e817091448576c6bdf0701b81d95dd"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string14.wat.err",
+          "sha256": "50b5bccba905ddbe275938edb7ed0b09a5ca53dcdad36a7ff736ce9bc8e7a338",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string14.wat.err",
+          "source_sha256_before": "50b5bccba905ddbe275938edb7ed0b09a5ca53dcdad36a7ff736ce9bc8e7a338"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string15.wat",
+          "sha256": "b5e0d5ade40de53b2d767a132e28376bb8c7a6f6238c4d8c248ae717c41d7f1f",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string15.wat",
+          "source_sha256_before": "b5e0d5ade40de53b2d767a132e28376bb8c7a6f6238c4d8c248ae717c41d7f1f"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string15.wat.err",
+          "sha256": "0e9fc502cc90f96d1f592a3f63369fd2a3574bc4a2345a70365dbb76804e870f",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string15.wat.err",
+          "source_sha256_before": "0e9fc502cc90f96d1f592a3f63369fd2a3574bc4a2345a70365dbb76804e870f"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string16.wat",
+          "sha256": "38c3688cee80a9d089d239aa06eb1d27c5364ad2bd270aca57d05997c20aa682",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string16.wat",
+          "source_sha256_before": "38c3688cee80a9d089d239aa06eb1d27c5364ad2bd270aca57d05997c20aa682"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string16.wat.err",
+          "sha256": "4274b3bbe4df4cf0373619b1fcd082d0c802990817d2aca26ed885168c80e489",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string16.wat.err",
+          "source_sha256_before": "4274b3bbe4df4cf0373619b1fcd082d0c802990817d2aca26ed885168c80e489"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string2.wat",
+          "sha256": "1172964aed31537b8c466d1f045f3e756926e7b221f80b2aff4a9a6721ea0beb",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string2.wat",
+          "source_sha256_before": "1172964aed31537b8c466d1f045f3e756926e7b221f80b2aff4a9a6721ea0beb"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string2.wat.err",
+          "sha256": "4618d3b20a78a077337eb5d6cae14ac39d9853762f011fbd23cff8921618dbde",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string2.wat.err",
+          "source_sha256_before": "4618d3b20a78a077337eb5d6cae14ac39d9853762f011fbd23cff8921618dbde"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string3.wat",
+          "sha256": "07e0fbcd6270c1db100917c151ee4ac3f935e4ee1b27bce3c453b22b4b74f4d6",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string3.wat",
+          "source_sha256_before": "07e0fbcd6270c1db100917c151ee4ac3f935e4ee1b27bce3c453b22b4b74f4d6"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string3.wat.err",
+          "sha256": "08ffc6158a9e030b2e211d53bdb8aeacfd879815c7b284d6a83b030566e35928",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string3.wat.err",
+          "source_sha256_before": "08ffc6158a9e030b2e211d53bdb8aeacfd879815c7b284d6a83b030566e35928"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string4.wat",
+          "sha256": "c970da2051b0613bdd1de4664f10424e14f2ebabe604175d4fb9b763b37af577",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string4.wat",
+          "source_sha256_before": "c970da2051b0613bdd1de4664f10424e14f2ebabe604175d4fb9b763b37af577"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string4.wat.err",
+          "sha256": "406706594d305c560fabd66417ad4fc276939990b5e701bd9d13fc223d207219",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string4.wat.err",
+          "source_sha256_before": "406706594d305c560fabd66417ad4fc276939990b5e701bd9d13fc223d207219"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string5.wat",
+          "sha256": "386cf314bb05acdaaabdf4da1caf140167271a26bd08bf34c3a7427d4bc4431f",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string5.wat",
+          "source_sha256_before": "386cf314bb05acdaaabdf4da1caf140167271a26bd08bf34c3a7427d4bc4431f"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string5.wat.err",
+          "sha256": "1e56b44a23a37b2b2ad05aa9dd7e1e18191b5cc22151f93bbcf9d618779a57bd",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string5.wat.err",
+          "source_sha256_before": "1e56b44a23a37b2b2ad05aa9dd7e1e18191b5cc22151f93bbcf9d618779a57bd"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string6.wat",
+          "sha256": "8f1fe2825ff96f2acee9130a7721f86fcc93c221baa9411bf1fb6f0870d38ccb",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string6.wat",
+          "source_sha256_before": "8f1fe2825ff96f2acee9130a7721f86fcc93c221baa9411bf1fb6f0870d38ccb"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string6.wat.err",
+          "sha256": "d55dfd84d94e893f167ae73b7a080aefb2bfb05cc8a1ec201c4d3066fb8549b4",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string6.wat.err",
+          "source_sha256_before": "d55dfd84d94e893f167ae73b7a080aefb2bfb05cc8a1ec201c4d3066fb8549b4"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string7.wat",
+          "sha256": "b12f8c75313d7f834489d3c353422f90bc945b37139586446eda82e334a97cde",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string7.wat",
+          "source_sha256_before": "b12f8c75313d7f834489d3c353422f90bc945b37139586446eda82e334a97cde"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string7.wat.err",
+          "sha256": "4cee0ca61992c249dd0faaf2529a073cf8deeb36111a3f69b43695e5682560a2",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string7.wat.err",
+          "source_sha256_before": "4cee0ca61992c249dd0faaf2529a073cf8deeb36111a3f69b43695e5682560a2"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string8.wat",
+          "sha256": "4c2e0e1f883bb4e8cba9313497ed792130e5848e62bde7716102788d7467be10",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string8.wat",
+          "source_sha256_before": "4c2e0e1f883bb4e8cba9313497ed792130e5848e62bde7716102788d7467be10"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string8.wat.err",
+          "sha256": "840c6def7c60dd7c2b7261549cab435ba78c9b3a937adf6d5d9595ff8af01c91",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string8.wat.err",
+          "source_sha256_before": "840c6def7c60dd7c2b7261549cab435ba78c9b3a937adf6d5d9595ff8af01c91"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string9.wat",
+          "sha256": "2b7670caed2b0688d535de6e4e416f35fa717cfbe096a6cc764a669085c8f52f",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string9.wat",
+          "source_sha256_before": "2b7670caed2b0688d535de6e4e416f35fa717cfbe096a6cc764a669085c8f52f"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/string9.wat.err",
+          "sha256": "37b5a9c3af9631500f31f9e5e3efa821b8d96063c57d60fd01df6be6a5c323e1",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/string9.wat.err",
+          "source_sha256_before": "37b5a9c3af9631500f31f9e5e3efa821b8d96063c57d60fd01df6be6a5c323e1"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/unbalanced.wat",
+          "sha256": "f664fbef53a0308f864ba496d38044eb90482636e32586512939d4930729f3fe",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/unbalanced.wat",
+          "source_sha256_before": "f664fbef53a0308f864ba496d38044eb90482636e32586512939d4930729f3fe"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/parse-fail/unbalanced.wat.err",
+          "sha256": "aba579f7b836856e69afe05da8328aabe0643d94e369898e686aa7bb0b07e9c9",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/parse-fail/unbalanced.wat.err",
+          "source_sha256_before": "aba579f7b836856e69afe05da8328aabe0643d94e369898e686aa7bb0b07e9c9"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/recursive.rs",
+          "sha256": "5c9dea9351663f2fdc0ebd5d946ffbd6d5da2a20a7add2002fe25b5cf5fab0b5",
+          "source": "src/foundation/web-runtime/wasm-text-parser/tests/recursive.rs",
+          "source_sha256_before": "ad8a2b07bf955121a7c9e326ed35f9b2bc56b440c8cc0bbde24d423a79945c1a"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/unit/assert_instruction_not_too_large.rs",
+          "sha256": "35bf020a49f93813af69700e7867afce550eff47c586857fa63a39750b5b4071",
+          "source": "src/foundation/web-runtime/wasm-text-parser/src/core/expr.rs",
+          "source_sha256_before": "a5c025622fc763a85e51c1cfebd8918ee1ff990985013a89516fd25a681061ec"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/unit/lexer.rs",
+          "sha256": "ba19008df990413fc1f9ae5eab95b70c8f4882a572f5dfdd0dd6fdc310de71e6",
+          "source": "src/foundation/web-runtime/wasm-text-parser/src/lexer.rs",
+          "source_sha256_before": "bcf8fb6320e21a34174104d610b9a95a39db100550cc4209c3ca77436456beaf"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/unit/token.rs",
+          "sha256": "0f8baa170f42715b432ca40929aabecd0f93ff2288bc42b2e13d3a0a157925c3",
+          "source": "src/foundation/web-runtime/wasm-text-parser/src/token.rs",
+          "source_sha256_before": "6c58e1098ece3967690d931799c2359761cc71f47b05ddeec005153092f9fd2c"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/unit/token_is_not_too_big.rs",
+          "sha256": "c7786ff7c799661ddca86abb3718b42676ca8e663631b50d5f523c80930e8040",
+          "source": "src/foundation/web-runtime/wasm-text-parser/src/lexer.rs",
+          "source_sha256_before": "bcf8fb6320e21a34174104d610b9a95a39db100550cc4209c3ca77436456beaf"
+        }
+      ],
+      "origin_directory": "vendor/rust/wast-245.0.1",
+      "roots": [
+        "test/foundation/wasm-text-parser"
+      ]
+    },
+    "src/foundation/web-runtime/wasm-text-printer": {
+      "bytes": 4538,
+      "directory": "src/foundation/web-runtime/wasm-text-printer",
+      "file_count": 3,
+      "files": [
+        {
+          "path": "test/foundation/wasm-text-printer/tests/all.rs",
+          "sha256": "29091a594ecc90eb936b317160829cb8499d4b51b3b97319464b4d238abd2fc9",
+          "source": "src/foundation/web-runtime/wasm-text-printer/tests/all.rs",
+          "source_sha256_before": "b6014d5eec2ce830555365016e6e331693174cbc5a137a8c77f13a6b1abf1d5f"
+        },
+        {
+          "path": "test/foundation/wasm-text-printer/tests/common/mod.rs",
+          "sha256": "d58d636aff5f735deeee9279576125de9035fd36e8a63dfaae6d4634f11b4527",
+          "source": "test/foundation/wasm-text-printer/tests/common/mod.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "d58d636aff5f735deeee9279576125de9035fd36e8a63dfaae6d4634f11b4527"
+        },
+        {
+          "path": "test/foundation/wasm-text-printer/tests/printing.rs",
+          "sha256": "79c9ac730094e7f0a9aee03166f86480cfcd553f586196df86c8cf262b1b2d53",
+          "source": "test/foundation/wasm-text-printer/tests/printing.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "6ad614dcf3a11cf488ac6f0f89724cecbab542b48997157d7a33f917348b591c"
+        }
+      ],
+      "origin_directory": "vendor/rust/wasmprinter-0.245.1",
+      "roots": [
+        "test/foundation/wasm-text-printer"
       ]
     },
     "src/foundation/web-runtime/wasmparser": {
@@ -78566,10 +79349,10 @@
     "e37e4ee6074dabae4638f15f4926b9af9c67c0b100fd2d7db4e45d323be61509"
   ],
   "lockfiles_sha256": {
-    "Cargo.lock": "0409a219498bcc6217508739b7b1c6eaa440f5449fa9624e71748f53a6bcac7b"
+    "Cargo.lock": "72fe48be0a9fa7f2184d896986ed7137100335da83472a8b0e8c2f26b885b572"
   },
   "manifests_sha256": {
-    "Cargo.toml": "fc4ae6b06dcf41b39717d94857e9b078e4857d69af0cb36d3cdccd81d31730e3",
+    "Cargo.toml": "d2d6dcf58778908a31654b6d7e6321f9ef7875fc112f019b37760ef8d1f068e7",
     "src/auth/Cargo.toml": "e6986ad60c15d48e2b3d60a5157de60ac7318f1ecc80befc1adfd60059b5dab3",
     "src/client/Cargo.toml": "0dca81316feaf3caf87f0d244cb1d9f6a54232d97e836892f4fb196fbd8bcbb5",
     "src/contract/Cargo.toml": "3acfdea00c1014c819ed23cd723591db141177629502661fd4e088b7dcc0da8b",
@@ -78755,6 +79538,7 @@
     "src/foundation/text-unicode/regex/Cargo.toml": "12858eaa800a5411aa64973b34f7a90e261a12873a13f2f9c2d1f6d4cbf919db",
     "src/foundation/text-unicode/tinystr/Cargo.toml": "fc7f2e8fb4ea1449e4a0d65e315139257ae65d3f7aa572da2bcc07111a51e96d",
     "src/foundation/text-unicode/unicase/Cargo.toml": "f28a9a1d3244ec027e7375d43a9fef1952f484c45254cfa60779b2b7ed4ed669",
+    "src/foundation/text-unicode/unicode-display-width/Cargo.toml": "b3e087d3a668a906d4ae6dd1f407518ce1de351a26bbf5eb09c0ad0509244029",
     "src/foundation/text-unicode/unicode-general-category/Cargo.toml": "4cb307252742c9fbf4b94c04ae368b7ac2fb17b5803ab2e7ccb6bc770fd2cc56",
     "src/foundation/text-unicode/unicode-ident/Cargo.toml": "a4f38086464b11f6867cf533a0f090660fdb859d2a35e8ac2e19dd5b2b0c5a59",
     "src/foundation/text-unicode/unicode-normalizer/Cargo.toml": "1d4fb8b0d69bb5bbce82ed476589f5d70f2f769a02be3c19134b8b5bc795353b",
@@ -78786,14 +79570,16 @@
     "src/foundation/web-runtime/view-renderer/Cargo.toml": "ffd58120fe55c1f96524a494c4fcf043470c7e469b9139ce187a4a0efbcdde67",
     "src/foundation/web-runtime/walrus-macro/Cargo.toml": "d24789a36b5fd69fe7cce3dbde01305b97d2126d27a6d35f447fa1cff1ecc305",
     "src/foundation/web-runtime/walrus/Cargo.toml": "6369b3f5ec45f76d5010d9a595f8a1c879a9ec1be388897ff88e59422bb9970c",
-    "src/foundation/web-runtime/wasm-bindgen-cli-support/Cargo.toml": "a8ff344df6558c9b1f6d00fb8c8238a072e1182902fd9422250bcb9bcf726c3f",
+    "src/foundation/web-runtime/wasm-bindgen-cli-support/Cargo.toml": "8d6d374f25821493441356a3083b03d74a150fc9c1f17f9eac28a8f34f979264",
     "src/foundation/web-runtime/wasm-bindgen-shared/Cargo.toml": "e97acff374e151697f7dfaa0bdf7338c3ecf7540dc5a6f147ee3903f551ac6bf",
     "src/foundation/web-runtime/wasm-bindgen/Cargo.toml": "b33de63aa298f48eb031c63fa2580756e9c12a840c5327eedbeb729cd5e3b3ca",
     "src/foundation/web-runtime/wasm-binding-macros/Cargo.toml": "e07bec93c2d869bd882f3866ed36190cbb859a15fa8d821517eb8c67fd759e83",
     "src/foundation/web-runtime/wasm-encoder/Cargo.toml": "63f4fdeb12bc8dc6860ff36442cc2fdd71d8519f3a9dd79e105d7dcafe69f301",
+    "src/foundation/web-runtime/wasm-text-parser/Cargo.toml": "4fd5db6895a89a1d3272c9c4df66c5a4af3a6897a1f94257397817c05e0e05e9",
+    "src/foundation/web-runtime/wasm-text-printer/Cargo.toml": "69ed0cdda84a13bfc928eda48dc1acd44d49e962f624f0e873f882d2651d9a65",
     "src/foundation/web-runtime/wasmparser/Cargo.toml": "771207359c85d13aa247962a53b713da998d1bbc634fee7931dfb1c180e558f8",
     "src/foundation/web-runtime/web-sys/Cargo.toml": "3ab4e3a313566167584cc6f711e6d84209f01be850ca1a18a88292704b267011",
-    "src/interface/Cargo.toml": "048b2acb4508fded70f45a822085df4e804bde0041d01b78e8beec570be31587",
+    "src/interface/Cargo.toml": "b6b88fa68e54f591a6a4893ab6f249af455ecb32422919ef8b00c305ee1e0839",
     "src/macros/Cargo.toml": "abdb767c05856f890b63b18f86b16f4487a30bd8d2832f5caeeeb6d668e44c0c",
     "src/naming/Cargo.toml": "14f34fa82d476daeac6d300225a028f92d589a3f117095ed025c3ae607af79e7",
     "src/platform/Cargo.toml": "def4ab4a06fb1a06321d60b8ddf7bf7d2892634de45cf4496bb938bf93615187",
@@ -78871,7 +79657,7 @@
       "description": "Project-specific browser CSR runtime",
       "directory": "src/interface",
       "files_sha256": {
-        "Cargo.toml": "048b2acb4508fded70f45a822085df4e804bde0041d01b78e8beec570be31587",
+        "Cargo.toml": "b6b88fa68e54f591a6a4893ab6f249af455ecb32422919ef8b00c305ee1e0839",
         "src/animated_show.rs": "7a1e5012b9d0edddbf131b0070eeb8d35bac64f8163b159acab9609fb1ef40eb",
         "src/attribute_interceptor.rs": "7b148fc2ba4b4a07a078ce2c9e063f8e8a9a02d0cac75dc2d1b78220747a1954",
         "src/browser_support.rs": "1dce46aaa674008ec4c7bb05818afc6264fe15519fc24ee5c4b662de00a0042e",
@@ -78886,9 +79672,11 @@
         "src/components/select.rs": "4145ddf4328e117ebd977bcf76ff8da7855d374eff864a47e50b2638a271b4a6",
         "src/components/shell.rs": "c4a43e99798a17d58043ddb4762bb07cb6badf4a5580018637d6c1c98cdf4324",
         "src/components/state.rs": "fa0fb1063c77d3823f267acc184c0956897f5b685d173c0e789cc2649ae06012",
-        "src/contours/controller.rs": "cf39b2618ed5c77831c9793f6c6246a7d733adfe183c5f2ae34abf323e7d6e40",
+        "src/contours/controller.rs": "90cac1e784d17577c4d0d5638bae412c44d1a9d23dc64e86f175ee780fcb71ba",
         "src/contours/geometry.rs": "88025d1e2cfc38aff75a80b5622d1e3568dac1bfd383d4e26a15bbd4c6d199d0",
-        "src/contours/mod.rs": "6888d8f0ccf5a84a8a96d493c5fbcfdcd3879d89a7abb1c9ef6f73283d036454",
+        "src/contours/membership.rs": "a9cac04ba34bc94e00e703c8cd07ad0a2195fb2a95c476297671e1b4f3cff0ee",
+        "src/contours/mod.rs": "a6b36d9afe2ba747a59900172dfca2c495d16e73581d18d2110651479a04c8c3",
+        "src/contours/mutations.rs": "567026ccbf3bd62880808bcfa97a5baab1302d83f1e991497a300c8021e07950",
         "src/contours/paint.rs": "948db7cbeb31dfbd4dc55ca1829e6116c018de07518b60ed00bb403b1fbf7b44",
         "src/contours/profile.rs": "ff5f8c063bd6e04bf3fd9442c8b9dae5f407799d77c93133010e38b2e3c5225a",
         "src/for_loop.rs": "5f51f418e79900f4ef45ffeb6dcced7cacb8855ec2beabfd7344ba58a17c65a1",
@@ -88267,6 +89055,7 @@
     "vendor/rust/unicode-general-category-1.1.0": "81491143680f178bb0aa2c378cf96927d1fc46ae80bc214f5af85134664e1fe7",
     "vendor/rust/unicode-ident-1.0.27": "f00038c8a392773c57e9878a1969b9354e8f0c0f955a71f487be8862e685152c",
     "vendor/rust/unicode-segmentation-1.13.3": "61a26ffc9cfcc8bdc985291f29d94a651f1abaa3779cad58edb24e1c5fd61045",
+    "vendor/rust/unicode-width-0.2.2": "ce196e7269f515bfbad24f2e231039245e1093bf7635a990b6efe5a8d6a6d717",
     "vendor/rust/untrusted-0.9.0": "10fdadd34619ca5d9146b4aaf6e692570374974aacfd3e9219fdfc9e58003736",
     "vendor/rust/url-2.5.8": "8f201bbcd011cfd94c69f33c00b07af44a4aa157acc7b0883a74bd4c4b356dbb",
     "vendor/rust/utf8_iter-1.0.4": "2634f93666e36aa3a00ad8db3b5f952e3819ead255f6bcd7a7537170b871236b",
@@ -88292,6 +89081,8 @@
     "vendor/rust/wasm-encoder-0.245.1": "32802aab3a85dd2724a8c6c99c8b0bb4e1861ddcda8306a7dfd87b6670ec4002",
     "vendor/rust/wasm-streams-0.4.2": "cd7d1f2c909a536d32b450842a5ef35f99e6e09d8bdf8a16b68e0a3dfa3c6ff3",
     "vendor/rust/wasmparser-0.245.1": "c2a981e8a0139ad0ec04a654b18338ddd93110f6c0a8c35366cf513ed424a9b8",
+    "vendor/rust/wasmprinter-0.245.1": "a1f1bc78f3bfb8b2d176f93bc5cade3d6b0c3328d31c6d7f5152a375bae6936c",
+    "vendor/rust/wast-245.0.1": "71acc4c56df1fa913914aa615c90a0bbfefb7dd83abf9996e3e784b05ae17ccd",
     "vendor/rust/web-sys-0.3.106": "0bc0e4655c16c1fbc28a4f1b1cf04ef2d55de5886384fcf4a33c63708c546adc",
     "vendor/rust/web-time-1.1.0": "e0f781a4234dffde78126e00ce21b94c034dafe189df7b352592edce1b6cffb9",
     "vendor/rust/webpki-roots-1.0.10": "735519b3cbf05e800de14728fb6f7628fef1d116042586f21c242aa52689e895",
@@ -88351,7 +89142,7 @@
     "vendor/web/zxs-web-core": "40a8fa17ccce7e3ac0f748ce5d76dedc3d8cd29cc8af9ca37ef19d5bd582df1c",
     "vendor/web/zxs-web-macro": "1f6b0ad8a9ac0ec3310cb65537b4d85032f15787bbd3d2a72133ee93462573c9"
   },
-  "origins_sha256": "08233023d1b0f093643267644d33f8bfc5c32771c1f7e7ffeb7e266f2dcf94f9",
+  "origins_sha256": "980016489c5cc34cc85d53ae6271dad5521e95e1b268ba780289e58635961775",
   "packages": {
     "src/foundation/code-generation/derive-where": {
       "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
@@ -98998,6 +99789,39 @@
       },
       "version": "2.10.0"
     },
+    "src/foundation/text-unicode/unicode-display-width": {
+      "changes": "精确来源与当前职责分离；测试外置；仅core WAT、普通打印、正常Unicode宽度；无DWARF/component-model/validate/folded/CJK歧义模式/终端颜色/编译器内部依赖；详见docs/validation/wasm-binding-test-tools.md。",
+      "description": "绑定转换测试的unicode-display-width职责组件",
+      "directory": "src/foundation/text-unicode/unicode-display-width",
+      "files_sha256": {
+        "Cargo.toml": "b3e087d3a668a906d4ae6dd1f407518ce1de351a26bbf5eb09c0ad0509244029",
+        "src/lib.rs": "cfb8e073aac7e1fb5803f903e8c993662f2173cf84c029faff04121a3e4f6fb5",
+        "src/tables.rs": "8d60416cda2ec3ae0dea81e8e19a7947918be33e233a9cb279d6ccfd647e4177"
+      },
+      "license": "MIT OR Apache-2.0",
+      "license_materials": [
+        "compliance/licenses/upstream/unicode-width-0.2.2/COPYRIGHT",
+        "compliance/licenses/upstream/unicode-width-0.2.2/LICENSE-APACHE",
+        "compliance/licenses/upstream/unicode-width-0.2.2/LICENSE-MIT"
+      ],
+      "name": "unicode-display-width",
+      "origin_directory": "vendor/rust/unicode-width-0.2.2",
+      "repository": "https://github.com/unicode-rs/unicode-width",
+      "status": "retained",
+      "upstream": {
+        "archive_sha256": "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254",
+        "archive_url": "https://static.crates.io/crates/unicode-width/unicode-width-0.2.2.crate",
+        "name": "unicode-width",
+        "version": "0.2.2"
+      },
+      "vcs": {
+        "git": {
+          "sha1": "9d98411769fe13c7c18cab0b3fbbab29ba8350ea"
+        },
+        "path_in_vcs": ""
+      },
+      "version": "0.2.2"
+    },
     "src/foundation/text-unicode/unicode-general-category": {
       "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
       "description": "Fast lookup of the Unicode General Category property for char",
@@ -100822,7 +101646,7 @@
       "description": "Shared support for the wasm-bindgen-cli package, an internal dependency",
       "directory": "src/foundation/web-runtime/wasm-bindgen-cli-support",
       "files_sha256": {
-        "Cargo.toml": "a8ff344df6558c9b1f6d00fb8c8238a072e1182902fd9422250bcb9bcf726c3f",
+        "Cargo.toml": "8d6d374f25821493441356a3083b03d74a150fc9c1f17f9eac28a8f34f979264",
         "src/decode.rs": "b53d8dd82bc541f14eb740130ee7d0e2209d2bf1983835f06e4e32645a7553ef",
         "src/descriptor.rs": "26dceea34c7710ee8305b5f0bcbd85cc6278756e427c84f293aa61cd08bc71e8",
         "src/descriptors.rs": "83b39ab75da5479e0bdf4c0def09ff5891c418bc3a8c23005438f747e71e37f5",
@@ -100838,7 +101662,7 @@
         "src/transforms/export_sp_restore.rs": "6514d9247dd51e6d88984e4bc2bf98a19d21d8312425c008a31d8b9a05e14b47",
         "src/transforms/externref/mod.rs": "96db534f71b2e8e81d0860a17133fccc47a0c031b92ea1eee5518fef597fb2f0",
         "src/transforms/jspi.rs": "4fe2e9dec149ea5d1d7a616ed8f5181b06adc1e25bfc8f5bb3c5c856b5081f02",
-        "src/transforms/mod.rs": "c23ab7fd00f45b5115b85f99789dd305ba83575823d5b26160648c158b4687c1",
+        "src/transforms/mod.rs": "108bd00adc9fb0c2280c8b178471a49434d8792ee593d4dc09d114643edff43b",
         "src/transforms/multi_value/mod.rs": "be601957702ca6d4fe565720b6f8d29220571e90232e2cb1ad8b8e19cb8e8001",
         "src/transforms/threads/mod.rs": "096c56c2e8f5be024f784ce29ca477fd05d7749279b393e090b52df2a19a5e03",
         "src/wasm_conventions.rs": "3eb49bd15f3327384d5879203f77271bddafedc6da960cf0b15c7656081449dc",
@@ -101019,6 +101843,97 @@
           "sha1": "76927bf4bdbddf4b15f835c5eddfffbdfe3bdbd5"
         },
         "path_in_vcs": "crates/wasm-encoder"
+      },
+      "version": "0.245.1"
+    },
+    "src/foundation/web-runtime/wasm-text-parser": {
+      "changes": "精确来源与当前职责分离；测试外置；仅core WAT、普通打印、正常Unicode宽度；无DWARF/component-model/validate/folded/CJK歧义模式/终端颜色/编译器内部依赖；详见docs/validation/wasm-binding-test-tools.md。",
+      "description": "绑定转换测试的wasm-text-parser职责组件",
+      "directory": "src/foundation/web-runtime/wasm-text-parser",
+      "files_sha256": {
+        "Cargo.toml": "4fd5db6895a89a1d3272c9c4df66c5a4af3a6897a1f94257397817c05e0e05e9",
+        "src/core.rs": "cd5349b371fdcfaa9377b0689edc6d9347e5b60ec46843c987585740ef5e1fdc",
+        "src/core/binary.rs": "b82a1cf5a0437cb2cd4843cbc0f2af37473b677afbe34af429378700a810d951",
+        "src/core/custom.rs": "dcb87915d98a336e58e3c5bcce8e3febe460685c8a710549a43faa0e5835b976",
+        "src/core/export.rs": "1322a120d9e1dd6f3aa1485ee0bbc4294961028ae8a7584a24170af5823b73b1",
+        "src/core/expr.rs": "677d0b5185ff36172dd90bf04258e841edcd9370913916684f6e1bcf6aa38250",
+        "src/core/func.rs": "79f66cd890d571aa276ead0a797a57c6ddfee34f10e6ae9a403923c5403c515f",
+        "src/core/global.rs": "dec0abecadd2fde9298acb729259deba1ef3c4733ae5afcb4fe8cd4a633f5349",
+        "src/core/import.rs": "1e51e9e64825b5c1ae593464b2377e4ebfce22f354f5d3462480a7c2edc6b4c3",
+        "src/core/memory.rs": "5ac66b712a713e06c37f6739285eba9dc701bd52c09f563efd3fe60fd22c864d",
+        "src/core/module.rs": "8a53b0a66d670d01d3ebb90303abbfc771bdc70142f0faff2821b964771acd88",
+        "src/core/resolve/deinline_import_export.rs": "dad1c754b730c4d5e16d029961f63e059d93f25eb9340f75aa549af77014ee12",
+        "src/core/resolve/mod.rs": "cd1ccf19a09b5dc5fd434cbbe942006866607464a40589ab2516b4352fa779c2",
+        "src/core/resolve/names.rs": "83ea117c53ca978f84b992f5c86e7c2a1c5c1aa3dedd8a02a6d0c01c464102f0",
+        "src/core/resolve/types.rs": "516e44f047fccd0b24fc0c34a34f16459afa8ce4f0a9272f11f83577ad5258b4",
+        "src/core/table.rs": "4e31c8e187062abece9fd07fe28de730f2b037fa7c25571e7321a30755e0f6ec",
+        "src/core/tag.rs": "8a3d4fcdb86dedd68cdaf25abd930ef52a461cf2a0e9393bb9cb6f425afaaf2e",
+        "src/core/types.rs": "c8446fa8e3cda3a502bd6126d8815af42bd44c028b3132e6a7c44930557e3143",
+        "src/encode.rs": "85b12abe08af1b09078f7662ff7fc5fbeecf4e5c699e27aad143ceceb0d9298a",
+        "src/error.rs": "0a07d39fc427d14b0176fead732b79a640417274bdefe0603845eb7f8a96d34d",
+        "src/gensym.rs": "06b02b19c1fb089620b8f0cf0881c2093e883a8705e30ea44d989b3c2ee999f1",
+        "src/lexer.rs": "2dbb78911e7ac3bcd029469f72d43136bbc19fe830f950b4ae634468226794d8",
+        "src/lib.rs": "a19419923af856ac323161f6dfc4e0ade2349b21dad46b7975c305115417acd1",
+        "src/names.rs": "dd8e05380316de31e9d2930547cd9d6cdbbce195f0c83233c70e74eedc0ecf4d",
+        "src/parser.rs": "97901c0d8b1d0cd982944b06f138bc30b201ab40da763c3981b811c1295e221e",
+        "src/token.rs": "5ef201d3e5cc32b1441ad2c0df07e5db62160b373724d7f61268c1bdda0d20f9",
+        "src/wat.rs": "9a5c751b25ee3b063a41157ade1fe7e09c67e57d20be617de80460cbbe062753"
+      },
+      "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "license_materials": [
+        "compliance/licenses/upstream/wast-245.0.1/LICENSE-MIT",
+        "compliance/licenses/upstream/wast-245.0.1/LICENSE-APACHE",
+        "compliance/licenses/upstream/wast-245.0.1/LICENSE-Apache-2.0_WITH_LLVM-exception"
+      ],
+      "name": "wasm-text-parser",
+      "origin_directory": "vendor/rust/wast-245.0.1",
+      "repository": "https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wast",
+      "status": "retained",
+      "upstream": {
+        "archive_sha256": "28cf1149285569120b8ce39db8b465e8a2b55c34cbb586bd977e43e2bc7300bf",
+        "archive_url": "https://static.crates.io/crates/wast/wast-245.0.1.crate",
+        "name": "wast",
+        "version": "245.0.1"
+      },
+      "vcs": {
+        "git": {
+          "sha1": "76927bf4bdbddf4b15f835c5eddfffbdfe3bdbd5"
+        },
+        "path_in_vcs": "crates/wast"
+      },
+      "version": "245.0.1"
+    },
+    "src/foundation/web-runtime/wasm-text-printer": {
+      "changes": "精确来源与当前职责分离；测试外置；仅core WAT、普通打印、正常Unicode宽度；无DWARF/component-model/validate/folded/CJK歧义模式/终端颜色/编译器内部依赖；详见docs/validation/wasm-binding-test-tools.md。",
+      "description": "绑定转换测试的wasm-text-printer职责组件",
+      "directory": "src/foundation/web-runtime/wasm-text-printer",
+      "files_sha256": {
+        "Cargo.toml": "69ed0cdda84a13bfc928eda48dc1acd44d49e962f624f0e873f882d2651d9a65",
+        "src/error.rs": "81ab7ea23efc9740f4016ebcb5112bf8be11317f19e66a6e83a54c020f6e3923",
+        "src/lib.rs": "d2ac913665c956cf06239ecb8c3452ae980cac1ac12b0ca96a71fcc407b612b0",
+        "src/operator.rs": "0d52871411c3ffe92697fcff1bc25b7e9a685fbfd1bbaa03792a060d1261f56b"
+      },
+      "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "license_materials": [
+        "compliance/licenses/upstream/wasmprinter-0.245.1/LICENSE-MIT",
+        "compliance/licenses/upstream/wasmprinter-0.245.1/LICENSE-APACHE",
+        "compliance/licenses/upstream/wasmprinter-0.245.1/LICENSE-Apache-2.0_WITH_LLVM-exception"
+      ],
+      "name": "wasm-text-printer",
+      "origin_directory": "vendor/rust/wasmprinter-0.245.1",
+      "repository": "https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasmprinter",
+      "status": "retained",
+      "upstream": {
+        "archive_sha256": "5f41517a3716fbb8ccf46daa9c1325f760fcbff5168e75c7392288e410b91ac8",
+        "archive_url": "https://static.crates.io/crates/wasmprinter/wasmprinter-0.245.1.crate",
+        "name": "wasmprinter",
+        "version": "0.245.1"
+      },
+      "vcs": {
+        "git": {
+          "sha1": "76927bf4bdbddf4b15f835c5eddfffbdfe3bdbd5"
+        },
+        "path_in_vcs": "crates/wasmprinter"
       },
       "version": "0.245.1"
     },
@@ -101320,7 +102235,7 @@
       "version": "0.2.129"
     }
   },
-  "policy_sha256": "191af577911e81783ffb7ff95246243217de38247e7a086cf4444593dc16169a",
+  "policy_sha256": "033a1e826257e1174106a46e21863e33177c64ab5a3839ce2d5db3483f38ac88",
   "post_consolidation_benchmark_relocation": "8a08cc5b47c335b9e6aa2b7361ab7259fdc394c8dad16c29efb3e90d330ffbbc",
   "proof_maintenance_receipts": [
     "f6b00af0dad58bb402937c193974d916d525a790decbe043e679954c03bcbd1e"
@@ -101931,6 +102846,9 @@
     "compliance/licenses/upstream/unicode-segmentation-1.13.3/COPYRIGHT": "23860c2a7b5d96b21569afedf033469bab9fe14a1b24a35068b8641c578ce24d",
     "compliance/licenses/upstream/unicode-segmentation-1.13.3/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
     "compliance/licenses/upstream/unicode-segmentation-1.13.3/LICENSE-MIT": "7b63ecd5f1902af1b63729947373683c32745c16a10e8e6292e2e2dcd7e90ae0",
+    "compliance/licenses/upstream/unicode-width-0.2.2/COPYRIGHT": "23860c2a7b5d96b21569afedf033469bab9fe14a1b24a35068b8641c578ce24d",
+    "compliance/licenses/upstream/unicode-width-0.2.2/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "compliance/licenses/upstream/unicode-width-0.2.2/LICENSE-MIT": "7b63ecd5f1902af1b63729947373683c32745c16a10e8e6292e2e2dcd7e90ae0",
     "compliance/licenses/upstream/untrusted-0.9.0/LICENSE.txt": "7abd9b6960dcf7d4d0a48606a5b71bfe37d472db68d70637f3a58a56785f1621",
     "compliance/licenses/upstream/url-2.5.8/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
     "compliance/licenses/upstream/url-2.5.8/LICENSE-MIT": "b38f11f6096706e6de553dabe2a7ed142d59b6fa8c97e290c67496154745cdd5",
@@ -101973,6 +102891,12 @@
     "compliance/licenses/upstream/wasm-bindgen-shared-0.2.129/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
     "compliance/licenses/upstream/wasm-streams-0.4.2/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
     "compliance/licenses/upstream/wasm-streams-0.4.2/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "compliance/licenses/upstream/wasmprinter-0.245.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "compliance/licenses/upstream/wasmprinter-0.245.1/LICENSE-Apache-2.0_WITH_LLVM-exception": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+    "compliance/licenses/upstream/wasmprinter-0.245.1/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "compliance/licenses/upstream/wast-245.0.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "compliance/licenses/upstream/wast-245.0.1/LICENSE-Apache-2.0_WITH_LLVM-exception": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+    "compliance/licenses/upstream/wast-245.0.1/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
     "compliance/licenses/upstream/web-sys-0.3.106/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
     "compliance/licenses/upstream/web-sys-0.3.106/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
     "compliance/licenses/upstream/web-time-1.1.0/LICENSE-APACHE": "54a744942eb3fa63a74d8d359989ed6962c04f3f10ff20cfa08ff8aa7efbe4e6",
@@ -102582,7 +103506,7 @@
     "compliance/provenance/merged-components/vendor/web/zxs-web-core/Cargo.toml.txt": "8d893574a8f08f87bddad5443bff82c7640f5dd34a74dbe1f919a76400181fa4",
     "compliance/provenance/merged-components/vendor/web/zxs-web-core/README.md": "5a22efb04cfa9cef41afb32626f8e9637f8284ce71397a6f06aac22bdb64d52e",
     "compliance/provenance/merged-components/vendor/web/zxs-web-core/src/lib.rs": "498acdebfbb39557a40cbb0b28c1dfbd3175ad939795a0421b0fa2dbe8ff609c",
-    "compliance/provenance/origins.json": "08233023d1b0f093643267644d33f8bfc5c32771c1f7e7ffeb7e266f2dcf94f9",
+    "compliance/provenance/origins.json": "980016489c5cc34cc85d53ae6271dad5521e95e1b268ba780289e58635961775",
     "compliance/provenance/packages/adler2-2.0.1/Cargo.lock.txt": "3e44ced212a9e7ddc0a5450bcebb48ec67f32a058529856458efa36415554e53",
     "compliance/provenance/packages/adler2-2.0.1/Cargo.toml.orig.txt": "077df9094ac86443a4d05305f74782bd237c1f15fa39640463e4c62e9e4a310a",
     "compliance/provenance/packages/adler2-2.0.1/cargo-checksum.json.txt": "1fea7b818407db360ba16278b91e5488d7b78c4e411dd29a2b35a85a6f08026e",
@@ -104119,6 +105043,19 @@
     "compliance/provenance/packages/unicode-segmentation-1.13.3/Cargo.toml.orig.txt": "af7b6699725f8ae6a3f4bed18b3dafd35e5f90c1851f09362b62f6354cb1d690",
     "compliance/provenance/packages/unicode-segmentation-1.13.3/cargo-checksum.json.txt": "506546a1803338e1379dc67ca3f6841a6c2f9bb1efe85634b30e4c5392bc806c",
     "compliance/provenance/packages/unicode-segmentation-1.13.3/cargo_vcs_info.json.txt": "b097b6f2be940cb52648843af7279db66a305750f0b30f342590f9a2c52fa62e",
+    "compliance/provenance/packages/unicode-width-0.2.2/original/.cargo_vcs_info.json.txt": "2b3ffdf5745bce739a2d8c7c277074ec5f1753df8323746cc012ca2c2fe2d0b0",
+    "compliance/provenance/packages/unicode-width-0.2.2/original/.gitignore.txt": "e9027beb32f3585907ae93f64fffc0c006a532ebacb3d1309986c22c17534468",
+    "compliance/provenance/packages/unicode-width-0.2.2/original/Cargo.lock.txt": "45226010138cfb5b7eae51e9557dcf91a2e7ad67d4edd4c771798c1100e82a13",
+    "compliance/provenance/packages/unicode-width-0.2.2/original/Cargo.toml.orig.txt": "89226314e939630cee63bbcaadb4710c9809e57a3117853fb8d443f0641563f1",
+    "compliance/provenance/packages/unicode-width-0.2.2/original/Cargo.toml.txt": "dbf0a72e293238d87afd46f58ba597408f40c86e372a1d0b271c89fb4c3639c4",
+    "compliance/provenance/packages/unicode-width-0.2.2/original/benches/benches.rs.txt": "066d361583f911883791fd313c02556a2faf2854470dbbae328a6513ae035bb6",
+    "compliance/provenance/packages/unicode-width-0.2.2/original/scripts/unicode.py.txt": "c0d9718de758d5729cef3def36cf9fa2c853b53cffd28fc2471ae694db04ba77",
+    "compliance/provenance/packages/unicode-width-0.2.2/original/src/lib.rs.txt": "be8917e1a821806c0ce7a392564c72731a5f7d02155429a37b08571ad246a0bf",
+    "compliance/provenance/packages/unicode-width-0.2.2/original/src/tables.rs.txt": "4c3e673da24634c269562ca4d3652b494542c78cafe56da69d23df9178adffd4",
+    "compliance/provenance/packages/unicode-width-0.2.2/original/tests/emoji-test.txt.txt": "1d8a944f88d7952f7ef7c5167fef3c67995bcae24543949710231b03a201acda",
+    "compliance/provenance/packages/unicode-width-0.2.2/original/tests/tests.rs.txt": "10c40454f79c2b66ea99d2924df62c8afc3e13fb8cea835883d3c458b8076204",
+    "compliance/provenance/packages/unicode-width-0.2.2/registry-index.json": "84b8d048c8086f705889c0e15083d5042caed1756493a26d958ff2c34b9ff1fd",
+    "compliance/provenance/packages/unicode-width-0.2.2/release.crate": "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254",
     "compliance/provenance/packages/untrusted-0.9.0/Cargo.toml.orig.txt": "6c0de4b4eb8c2aa14aa20cf57a72e518bf1a7e937f1954a78ec345936439344a",
     "compliance/provenance/packages/untrusted-0.9.0/cargo-checksum.json.txt": "a6e1eb71fd8c79fc447833b2f126952985508c85b332c8e04c504a520666af8e",
     "compliance/provenance/packages/untrusted-0.9.0/cargo_vcs_info.json.txt": "cd62304eec306f79e9aa5a11def1ed08ff9c3ed35a1077be72022d881f8d6a1f",
@@ -104225,6 +105162,187 @@
     "compliance/provenance/packages/wasmparser-0.245.1/Cargo.toml.orig.txt": "09d79bbfeb0e648ec3718a5e7ceb0d34c29c1f4fbc48f762f396c27ee70363dc",
     "compliance/provenance/packages/wasmparser-0.245.1/cargo-checksum.json.txt": "378c5b8adff473a797139555903684f02e704a2e639d490f1fcac5a02d8f5eea",
     "compliance/provenance/packages/wasmparser-0.245.1/cargo_vcs_info.json.txt": "452e2e2ac4dd94364654b0fb71b14fc9d673c028a238cf0e3eb2c27b7363e724",
+    "compliance/provenance/packages/wasmprinter-0.245.1/original/.cargo_vcs_info.json.txt": "bd292d3a0e1a54c7517c9f7fde85bf2338a21980b633000ffabcb0c05e51d661",
+    "compliance/provenance/packages/wasmprinter-0.245.1/original/Cargo.lock.txt": "3ff1ad818547e6e3a942d6e0acba31f2947191f36b4afbd8780079fcaa2bfb77",
+    "compliance/provenance/packages/wasmprinter-0.245.1/original/Cargo.toml.orig.txt": "221a7e3fa2e345d2cff5bbdc31130cc7d6e9a2d81e112cfc7f959ce2b8883e4d",
+    "compliance/provenance/packages/wasmprinter-0.245.1/original/Cargo.toml.txt": "152bc8792ad854236cb194bfc5883c614e0d0f576d9150933a00c7d52a84f84a",
+    "compliance/provenance/packages/wasmprinter-0.245.1/original/src/component.rs.txt": "7cdc1b9f86b58b869e3c4514099d5857140939244793df444266c18a3b62bdfe",
+    "compliance/provenance/packages/wasmprinter-0.245.1/original/src/lib.rs.txt": "a373baff78f3bd2002f059777517ecdc3079dbadc394e2072c3bef6f33165575",
+    "compliance/provenance/packages/wasmprinter-0.245.1/original/src/operand_stack.rs.txt": "f9ebb2fd474c053d7a03d2c41ddd1286107ee76fdac1179de346c636457e0366",
+    "compliance/provenance/packages/wasmprinter-0.245.1/original/src/operand_stack_disabled.rs.txt": "4b0faec69aa64a192408970016aed8f2dc4e62bf3b6a260f8c67c68db4b6819e",
+    "compliance/provenance/packages/wasmprinter-0.245.1/original/src/operator.rs.txt": "b986ea56e80cc761f67b3eb23a6544ff8182ea7b5f9b93c2d35a1a2bcbfd0d40",
+    "compliance/provenance/packages/wasmprinter-0.245.1/original/src/print.rs.txt": "491bc5aaf275a15d0bf7fc79581b31193728c35eaa769e9a8a78a0714bf39f64",
+    "compliance/provenance/packages/wasmprinter-0.245.1/original/tests/all.rs.txt": "b6014d5eec2ce830555365016e6e331693174cbc5a137a8c77f13a6b1abf1d5f",
+    "compliance/provenance/packages/wasmprinter-0.245.1/registry-index.json": "c092c730ebdd1b38dac3f8eefaaf402707b65819cd619d42f4c47d1453c3824d",
+    "compliance/provenance/packages/wasmprinter-0.245.1/release.crate": "5f41517a3716fbb8ccf46daa9c1325f760fcbff5168e75c7392288e410b91ac8",
+    "compliance/provenance/packages/wast-245.0.1/original/.cargo_vcs_info.json.txt": "a86c5bce67ad32388665ae385e3855c4d16874ffe9b64830d2ebd1c2f10fa753",
+    "compliance/provenance/packages/wast-245.0.1/original/Cargo.lock.txt": "df1e476438f10095e66b5c74ea7e75f68d958e8543c673fb98941f115ac4622b",
+    "compliance/provenance/packages/wast-245.0.1/original/Cargo.toml.orig.txt": "f50941d2675c5c925ee26f25ed1ac51a5cd120def6cdacf3ed00971b595ba36d",
+    "compliance/provenance/packages/wast-245.0.1/original/Cargo.toml.txt": "04ef63afefe6db5e4b70f7918b2411fdf13df37000594fdd55d909d2bd7f3050",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component.rs.txt": "154cdef2003b1607ab21a50a821b455da854b78d353d573586351c2593ed70a2",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component/alias.rs.txt": "e332dfa40bd8990c5b38de468e47a10a00390126ae87f713085ae1c126ee6ff9",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component/binary.rs.txt": "e2d7bf1e78a9744f02050c3690f497c0784ed4abdf88f724c103485dec47ed5e",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component/component.rs.txt": "8115ecb0b97d904eccc1e2dbbe09dbaec7068fb587e4f17d0eba3e15e29d9cf3",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component/custom.rs.txt": "f5b23c34b73a716a986fd999fc8d8c9e24c341e83292088fe83325cd82dab4f5",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component/expand.rs.txt": "912adffd1d0ca93c98e6c96208a305fcf83efa492e9df1ad3a12db2944dc68b1",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component/export.rs.txt": "f51e824c839d8bb0884eca509622f376c8cce3335be324b2b25033af6216fd2a",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component/func.rs.txt": "e2a24c3fc53a899cbe94fed7076b663bc258703b01c21a358481b3684947d2a5",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component/import.rs.txt": "add63978787f5bfad1faeb1ce6b121fa60bbcd9a736afd7ae81ddc9f5b031107",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component/instance.rs.txt": "e550a7ee9af092ae084dd41e2c0ae756b7dca8da4b91d672d90265a6a15dff83",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component/item_ref.rs.txt": "e9c426ccc0210dc0c37bb0448468f5f4d9e52656b72d4ff0f2dc65c89957fe60",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component/module.rs.txt": "d27a28199d1dea1c64294a514329a524432319288515b0a0e3091fa7d3a33f74",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component/resolve.rs.txt": "5aa0b2cf510177f2e58d4b43afbabd8bd249df8976a8f91fb801d374a4dfcf8e",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component/types.rs.txt": "087c9c6d19a3ca01c76b2a48254bc1e3753c2b4a8dcbf4a9db9e217096299b86",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component/wast.rs.txt": "aa39db0ea0acd38744dc3cbd35903c9b00b5de90a5bfc8b76e6b6a7581d7c4c0",
+    "compliance/provenance/packages/wast-245.0.1/original/src/component_disabled.rs.txt": "20e2d9c28efe2ecf14f96f8d8971eddc23d0df9494fb527e79ed64b449f2de72",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core.rs.txt": "c82d7356515f675f9173f9bf5d7c0f4e56ca7a3eebc92b5f95a2d04882ca470c",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/binary.rs.txt": "c22472176ff08a1d8b7f3a7755b6da82354ba5bc9d253e6efd9a292ab7fea4f7",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/binary/dwarf.rs.txt": "14da9bc6682effdefd079f9934f753e2412f8a5868f29552f50fa5fd30d46400",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/binary/dwarf_disabled.rs.txt": "67ad94dd4307fb6af9757f427267193b758b8ca34c3f69bed87a65be04b09c13",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/custom.rs.txt": "b3ff3aa5073826b04e0dc0eef80e34bb2c44223fc121e26267de411f45e140b2",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/export.rs.txt": "1322a120d9e1dd6f3aa1485ee0bbc4294961028ae8a7584a24170af5823b73b1",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/expr.rs.txt": "a5c025622fc763a85e51c1cfebd8918ee1ff990985013a89516fd25a681061ec",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/func.rs.txt": "79f66cd890d571aa276ead0a797a57c6ddfee34f10e6ae9a403923c5403c515f",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/global.rs.txt": "dec0abecadd2fde9298acb729259deba1ef3c4733ae5afcb4fe8cd4a633f5349",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/import.rs.txt": "1e51e9e64825b5c1ae593464b2377e4ebfce22f354f5d3462480a7c2edc6b4c3",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/memory.rs.txt": "90844358716f03bc9d7241bd9eaecc164834627548bb48c832fc329fa962e20e",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/module.rs.txt": "8ea3f9c4b1d35f84800e0ef385b8ac5fff184c32703b2c81650db8edf5b23c27",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/resolve/deinline_import_export.rs.txt": "22c818d461ea5899c47c4f50a2d836da2c7d8ff40d22424902f5cf763bc00180",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/resolve/mod.rs.txt": "4d248d3142f4c07021e4cb460ef9e07c77dc0666568a161fa654bb1d6e6c9755",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/resolve/names.rs.txt": "3e7ccbcacf40e53327383ca34de8d0c45dd927d0a44ff2a9d64c42868efff970",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/resolve/types.rs.txt": "64b46cf12b0ffe72cc8b00f8e371b7bd7e8993706c8c6a1e1c8f82048766987e",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/table.rs.txt": "4e31c8e187062abece9fd07fe28de730f2b037fa7c25571e7321a30755e0f6ec",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/tag.rs.txt": "8a3d4fcdb86dedd68cdaf25abd930ef52a461cf2a0e9393bb9cb6f425afaaf2e",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/types.rs.txt": "2becc668864259d5896a9b10ff7df520b6bd7bcb683a0db70416fa3e35fc5fc9",
+    "compliance/provenance/packages/wast-245.0.1/original/src/core/wast.rs.txt": "a2748b92bb9789cb0314ca973c30d4eb09125cc40a57de916c096124530b397b",
+    "compliance/provenance/packages/wast-245.0.1/original/src/encode.rs.txt": "610c9c4f0da9f6078c68a0164518869bfb6fe8e408b43db8718da0c01cdcf992",
+    "compliance/provenance/packages/wast-245.0.1/original/src/error.rs.txt": "d7670875d91283990c5bf596d655602fed8ae8ec276ca256952c64962299c4ac",
+    "compliance/provenance/packages/wast-245.0.1/original/src/gensym.rs.txt": "14a9b1d2c24a9d4ce5d99b50d01147de335ae6393292581014f7905d54ec4949",
+    "compliance/provenance/packages/wast-245.0.1/original/src/lexer.rs.txt": "bcf8fb6320e21a34174104d610b9a95a39db100550cc4209c3ca77436456beaf",
+    "compliance/provenance/packages/wast-245.0.1/original/src/lib.rs.txt": "8e9c8ba91d44b4800ad9977c9125f72d164713b1e7e1f275e1ba3735bf0acc3b",
+    "compliance/provenance/packages/wast-245.0.1/original/src/names.rs.txt": "1f1d1a256c9554bb64efb6e790993708360609f7a31ecf3af0ca5fd9d85471ca",
+    "compliance/provenance/packages/wast-245.0.1/original/src/parser.rs.txt": "13e480759daf2617cc34e656d084f6132c673d7b6e535109ec016f230b304d24",
+    "compliance/provenance/packages/wast-245.0.1/original/src/token.rs.txt": "6c58e1098ece3967690d931799c2359761cc71f47b05ddeec005153092f9fd2c",
+    "compliance/provenance/packages/wast-245.0.1/original/src/wast.rs.txt": "f28d4475086ac2abd013a541285a51ce6faf1314eea688343b6f483d841824aa",
+    "compliance/provenance/packages/wast-245.0.1/original/src/wat.rs.txt": "5a4e3f2ad49d6bdca6f2ad1ae2c7ac25dc649398e1c0320edc4419698d232cc6",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/.gitattributes.txt": "727d37b55ce621ae60dd4fd2329cbce7e8a28c9ecd5c96f063be19e67db4cd53",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/.gitignore.txt": "8e464dd44890d3c805a4b3ecc8ebf75bd8b75b18267f408d471bad5b75b1e175",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/annotations.rs.txt": "de6ab2a4e15c0bc683482436bed27e37ab45bc374d99f2fcc031c7947506e581",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/comments.rs.txt": "c068034817774cc94aa06fa09de453132d063335775002aa694fc60889a4ee04",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail.rs.txt": "c13a3aa974429c84ed4423ef00daeb5312c681a1dd93aa6e5ec9c3452a4ea674",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/bad-core-func-alias.wat.err.txt": "bb63274c26d3a21209bad794767f48372834bdc10cfbebf568a0c65d52803c90",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/bad-core-func-alias.wat.txt": "b71372064c3fce9d4a616418605040fe5e1356030a709b798b4769d3619cbbfb",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/bad-func-alias.wat.err.txt": "4a4bfc691b06d20fdf71e1dbac04649a52c76787048415599978987d761308fa",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/bad-func-alias.wat.txt": "237c07149e1e74afe3b991a1fee6acb63167c1ca8931341614c435000339b887",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/bad-index.wat.err.txt": "dc11070de0c9160573006ea4e5fa3c4d28e71bc39b24b1938cf6ff3b03ea7154",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/bad-index.wat.txt": "d21489daeec3a35327dcc9e2ba2d0acdd05f4aeaff2272cca608fda4d2338497",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/bad-name.wat.err.txt": "fb5638476c1b85d9d1919e3dbcb0f16f82d088a4a22d4a0c186d7b8ba6e1902b",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/bad-name.wat.txt": "e5ff5d410007779a0de6609ea4cc693f0e603d36a106b8f5098c1980dd9f8124",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/bad-name2.wat.err.txt": "129707cce45f1e3cfb3e2ca5c702182e16ca5eeb2dbb2edd0710b004a8e194a5",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/bad-name2.wat.txt": "5a6a4d0c19e5f2e48d7cebf361aca9b9000b7ef0c652997b5bd0ffaadbd2ca8a",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/bad-name3.wat.err.txt": "84ea63d40a619a0782ec6e94fce63921188ab87b1c3875eacae0a371144ed83a",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/bad-name3.wat.txt": "c19133d738cc84e9174301f27d4050c216bda81c7e9918d03ac792b088f24a05",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/block1.wat.err.txt": "40a083ae496b41dee7002cc6a664c5db0c5e4d904ae03b815773a769c4493fca",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/block1.wat.txt": "91e74b5c3b43be692e7a6ae74fbfa674c4b6197299eb61338c4eccf282b18f17",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/block2.wat.err.txt": "33c842ec5dd0f2fdd3a9ce8187dd98b45ceee48c12810802af809d05b9cd25e9",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/block2.wat.txt": "a8c07b4c09d51f10a8ffdf19806586022552398701cd90eb6d09816d45df06e5",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/block3.wat.err.txt": "fc667ae2e71a260f62a3c7393bc97272e7c0ff38b17594f4370847b8a5019060",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/block3.wat.txt": "29739abfbabd7c55f00ddfbbb9ebd818b4a114ef2336d50514f0842f7e075905",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment0.wat.err.txt": "b53cbaef7bcec3862c64e09c084b92cd61bd29b954125482b2d083db250cd9e2",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment0.wat.txt": "8f27c9d0d212bbb1862ea89ffd7cbeafde5dfd755d695c1ba696cd520aba1a1d",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment1.wat.err.txt": "2fc3b3e4f98416326e1e5ec034026301069b6a98fa24451bc7573e16b8cb3811",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment1.wat.txt": "b1a0447c9a8eaab8938d15cd33bd4adbb8bb69c2d710209b604023991a4347cb",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment2.wat.err.txt": "2183231d6acd0b5a117f9aea747c3d5c12e758450a6cd74027bb954a3134cf19",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment2.wat.txt": "e3f49c7a388fba81081beb25d87bbd7db0acce5dd8e3eaa04574905ed7ec420c",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment3.wat.err.txt": "8b2096a4833627905c63f49cdabe44be24336646578dcfbdc67e9bfb35cbc601",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment3.wat.txt": "d83f89c582501eb8833e772b8462c8974984a2f7fbb80b1452dc399fac74e5ed",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment4.wat.err.txt": "2f790cc511edfcd89a12c9207901be16039fc1a06a584d73095e77a52f861cd9",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment4.wat.txt": "b7c6c68844d918e9ef6dd5ab9c40c7de7b38f04f94fadad630eda4e596f3e0f8",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment5.wat.err.txt": "6fe0d99894307442f83fe93beaa5da706e06c9bdaf8e39d7cbae4c4fffafcb94",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment5.wat.txt": "a159808032638cc914fa80ac4354a68b0af4f435a09cbe3e2d577582e183eb0a",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment6.wat.err.txt": "3c97b9bf1112bbb7335d7fe4be5befb6f91eea7bec7dd3e6b543792231003c56",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment6.wat.txt": "abe48bcba2587dca98bc80ddde4e813f94fbc8a3538704a0775ea85bca0f8466",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment7.wat.err.txt": "5c34528ff2019cd3f0b3df34fd42523c0b66120706321da2c88ec05793478d2e",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment7.wat.txt": "e125c416ea5fa0ac35a58295a83a6f345438e2d7ddc6a39bd76c8e89885b3f0e",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment8.wat.err.txt": "9b81237d150a784b71791eee88fb6264a8bd6412862660f7392945203809e517",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-block-comment8.wat.txt": "200cc4c0e5af21a25529d7a81633a03642cff807255d6cd72eb45cdccc605cec",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment0.wat.err.txt": "41ec5a075dc6b73afe1aec6b3198c5c4ae3a1a900e1610115879058ce034d6f6",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment0.wat.txt": "bcec4c5a1e52b3e392e07c6711c979aa8d7db8baaf2bcdf270ba16d1aa528d26",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment1.wat.err.txt": "f19a645e6fb5cbd7a0dd2308732741edcf83dbae0ef62549972029856a9e7fc6",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment1.wat.txt": "a2afbcab00ec957dfd9e9bf21fa4238852247b27f0b054f4a00f6b172dddf853",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment2.wat.err.txt": "08add3d33e10e1ab6b4f3ae431f5db61d6f6c0a2b7d6828482a1e51b3a2d3851",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment2.wat.txt": "7f2a68229d02aac56ec4dfccf139bf2d617a0e89430357b30444dc4239d8aa89",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment3.wat.err.txt": "4a5333dc02efa3c1eeab9cafa7c707f78abe92defdb01a71d6fe20944e4785f0",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment3.wat.txt": "61173ae54782f6de86685f9555ffb94bbe2cf20b234daf660abb69ba3326f1ff",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment4.wat.err.txt": "ddb8aee8006265253b09c313cf5eb5c2dc4da66f502b4f6d3e2e1de77b35aec9",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment4.wat.txt": "9ecbbbe82c750e6475af1bfb46fe7a06115e4446a437d19fc08ca3d002f2a1c9",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment5.wat.err.txt": "34e368719fc0eab2f1a43c9f8e6f1b31aa9be9f971085d72374e49bde39cbfe5",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment5.wat.txt": "8a4c8d342111bc9d37c16dbdf67c52027e1a42632abc9f359b3e4f07a85748b5",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment6.wat.err.txt": "0570be2ede803f071925d249f3858d3a417b5a6d678c9da40fc851d788d12983",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment6.wat.txt": "15f0dcdec23736ce92db84b3a7cdfe8689c97f2a7d0b9b0bfb0dcd2675163ed1",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment7.wat.err.txt": "feebbeee8c85d8b3b85cec89435ae18f3ade9f754ca180d747a41406b64ca07a",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment7.wat.txt": "c7ee59301a701dd52d56cad02df78b0ad3584460bc18efa42ee137fe0c35aef6",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment8.wat.err.txt": "9c209285f2295cd2bc999aa7a9534a654932493308ab1f102839ed15a4d04d17",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-line-comment8.wat.txt": "17632a8142154624de88b3cf93516147ed3419d785200bcd7049499eca8e8f04",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string0.wat.err.txt": "cb3d737f2319346675a038716694354cd3b272453daa8a96e32e9861a9277f7b",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string0.wat.txt": "497b679b32baddcd6a158f4cadd3d9a9dea3457bac2a8c2c3d4e09b7c2d80842",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string1.wat.err.txt": "de7e7da516dc6c244bd0e4f012577b69f0cacbcc10f727fadb4b50bb04e0e2b4",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string1.wat.txt": "46654cbed1ea6aab5019aef3d20098a391e40dacafa1ad5e83bf4ec384109fce",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string2.wat.err.txt": "e7bd08b146a855d681fefaf9e0576a9c333a2d10044f8e268b916b22a54227c9",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string2.wat.txt": "11938f217c14387c05312735130f00c91d9df2d3ff9df7f13395e0f2b81dad54",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string3.wat.err.txt": "b88d5db9e445c798eb24f95b7661b9c0368934d27ee8208477cd1c99351b939a",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string3.wat.txt": "e0ca4903fcafb9a54a91cf99e5eac95d25c6d2eb67b076f88191ad396f839cb6",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string4.wat.err.txt": "1edc65bb09d8d3eed6ff69e7d9a7a4b5941dc823fa3436fa375657510255f6f4",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string4.wat.txt": "3ee2aee7f77604d051519c6f1795634469c12e98ae347a98f0c8445eecf1ff3d",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string5.wat.err.txt": "a0f13ec40d596ea2d8b0c4292b0d28775a5116ab7e11d7de88b295d25428c661",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string5.wat.txt": "024e50943128840d53f17e31a9b9332ce4f0ee70a847a043015f435b1c3c6e76",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string6.wat.err.txt": "860555e7aa13e3de3639cc2a530d6a42b974b629c4659593e972cbb0f306abae",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string6.wat.txt": "79cf157e29319800d2652c5a7f3dc90e07ebe2145c9904a70fc12027cdee84b7",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string7.wat.err.txt": "658b6a02ba6d769254485f35c20984e7135d914b4266929963d723f26a40be4a",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string7.wat.txt": "7d8e403766dfb4e569754160d31ed0f9a27f908ed6cff96be43ab3d37f5975d5",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string8.wat.err.txt": "9a4e1a510330c800a1df7966998ebc3cde931eda20b249e5360f5e9a905dce11",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/confusing-string8.wat.txt": "5a9b222e578655d57ee6e9f19bc1ea8e29aa52d652975fac685213444ed6458f",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/inline1.wat.err.txt": "0143017a9825e518baa6009bae2c8d63520051dedd3437705bbe36b038a57f41",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/inline1.wat.txt": "4e9767d67207aace2ac5e6f63a30e7510e4aa245ba35420539509e2254470272",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/newline-in-string.wat.err.txt": "1504209cc37a78b2aee778f23eacf78606daf964cf7bff251f5700efcd27ffd7",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/newline-in-string.wat.txt": "5c01cf709544ade0a6cdfcc39a3836a3bc018b633dc42a6cd872b6defc763ea7",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string1.wat.err.txt": "fc53f3a1c4a65d8f25e5af51dec7699f45cecba114ca9c7871781bc70f664320",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string1.wat.txt": "620d46d585ce94b382b5fde628c1399f3e562014b7a44af46e92f7bd045ca86e",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string10.wat.err.txt": "ce677db5e37e0ed81ca357ed6b5edb21d85c27303ee194855bea7a88457efb6a",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string10.wat.txt": "f7409dd45e153a1b11cb23e38f4ed87da12bedde38f8f0ccfe91037b0a4d97bd",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string11.wat.err.txt": "4c6a550d29eda38a4e1bf7a589596f11655dc779479d7b8d466cfc53f815a742",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string11.wat.txt": "f6e0400b8c6a2014efa1ac676c567e140d8f86b5f4d5129773e6d67af537b615",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string12.wat.err.txt": "b5ec59f2996b88b2ee157e22d1774dc3e36fc08ed5bfc621aea830d30f66f586",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string12.wat.txt": "23e30070eef22271651cce096a801fc4f79f3c37343c88bb8d2fc99b32d3b8b9",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string13.wat.err.txt": "959f26c6b54e0d367b51d11d1addd8a53b5b8ff3caf70ebdd46bbea8ccfa2418",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string13.wat.txt": "81a305b981159ee10e140749ea3220c9edaaff53605e63c21995de47382b5faf",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string14.wat.err.txt": "50b5bccba905ddbe275938edb7ed0b09a5ca53dcdad36a7ff736ce9bc8e7a338",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string14.wat.txt": "c45c2cc9f7afbfbd4be8e513106d22f7e5e817091448576c6bdf0701b81d95dd",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string15.wat.err.txt": "0e9fc502cc90f96d1f592a3f63369fd2a3574bc4a2345a70365dbb76804e870f",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string15.wat.txt": "b5e0d5ade40de53b2d767a132e28376bb8c7a6f6238c4d8c248ae717c41d7f1f",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string16.wat.err.txt": "4274b3bbe4df4cf0373619b1fcd082d0c802990817d2aca26ed885168c80e489",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string16.wat.txt": "38c3688cee80a9d089d239aa06eb1d27c5364ad2bd270aca57d05997c20aa682",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string2.wat.err.txt": "4618d3b20a78a077337eb5d6cae14ac39d9853762f011fbd23cff8921618dbde",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string2.wat.txt": "1172964aed31537b8c466d1f045f3e756926e7b221f80b2aff4a9a6721ea0beb",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string3.wat.err.txt": "08ffc6158a9e030b2e211d53bdb8aeacfd879815c7b284d6a83b030566e35928",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string3.wat.txt": "07e0fbcd6270c1db100917c151ee4ac3f935e4ee1b27bce3c453b22b4b74f4d6",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string4.wat.err.txt": "406706594d305c560fabd66417ad4fc276939990b5e701bd9d13fc223d207219",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string4.wat.txt": "c970da2051b0613bdd1de4664f10424e14f2ebabe604175d4fb9b763b37af577",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string5.wat.err.txt": "1e56b44a23a37b2b2ad05aa9dd7e1e18191b5cc22151f93bbcf9d618779a57bd",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string5.wat.txt": "386cf314bb05acdaaabdf4da1caf140167271a26bd08bf34c3a7427d4bc4431f",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string6.wat.err.txt": "d55dfd84d94e893f167ae73b7a080aefb2bfb05cc8a1ec201c4d3066fb8549b4",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string6.wat.txt": "8f1fe2825ff96f2acee9130a7721f86fcc93c221baa9411bf1fb6f0870d38ccb",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string7.wat.err.txt": "4cee0ca61992c249dd0faaf2529a073cf8deeb36111a3f69b43695e5682560a2",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string7.wat.txt": "b12f8c75313d7f834489d3c353422f90bc945b37139586446eda82e334a97cde",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string8.wat.err.txt": "840c6def7c60dd7c2b7261549cab435ba78c9b3a937adf6d5d9595ff8af01c91",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string8.wat.txt": "4c2e0e1f883bb4e8cba9313497ed792130e5848e62bde7716102788d7467be10",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string9.wat.err.txt": "37b5a9c3af9631500f31f9e5e3efa821b8d96063c57d60fd01df6be6a5c323e1",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/string9.wat.txt": "2b7670caed2b0688d535de6e4e416f35fa717cfbe096a6cc764a669085c8f52f",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/unbalanced.wat.err.txt": "aba579f7b836856e69afe05da8328aabe0643d94e369898e686aa7bb0b07e9c9",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/parse-fail/unbalanced.wat.txt": "f664fbef53a0308f864ba496d38044eb90482636e32586512939d4930729f3fe",
+    "compliance/provenance/packages/wast-245.0.1/original/tests/recursive.rs.txt": "ad8a2b07bf955121a7c9e326ed35f9b2bc56b440c8cc0bbde24d423a79945c1a",
+    "compliance/provenance/packages/wast-245.0.1/registry-index.json": "317021c8469c2ecaed540f75566f56fb0fcdb616f832c337f40ecca54d503aba",
+    "compliance/provenance/packages/wast-245.0.1/release.crate": "28cf1149285569120b8ce39db8b465e8a2b55c34cbb586bd977e43e2bc7300bf",
     "compliance/provenance/packages/web-sys-0.3.106/Cargo.lock.txt": "d461676c02016db7cc658b1d9c4622ed26d857d0cdb0d81ed5fead003d3a9d28",
     "compliance/provenance/packages/web-sys-0.3.106/Cargo.toml.orig.txt": "8da43915701f9021f0c72426f80bf837fb03d232555056c69cf2ed838ffb887f",
     "compliance/provenance/packages/web-sys-0.3.106/cargo-checksum.json.txt": "49210cac75b503945f154d3892559f5361bfaaf858725f9b22719915df0f033d",
@@ -105164,6 +106282,7 @@
     "docs/upstream/unicode-ident-1.0.27/README.md": "46d3b1dce1874b2f5dae6bc40d0133bc4e377eb682fffb6cee2a8a605ee93f6f",
     "docs/upstream/unicode-normalization-0.1.24/README.md": "49298d4d8668819f33f1e29724a2532f6f4b6a64c9eed0a2d9c3c6928051a2b5",
     "docs/upstream/unicode-segmentation-1.13.3/README.md": "07caaad76a308821eee35087521f9c6d980657aec374db8e3e231fa548825d81",
+    "docs/upstream/unicode-width-0.2.2/README.md": "dfa01289d67d1c12e44bb4d388501f2c58e386a3a34cac52b558957c7a25dae9",
     "docs/upstream/untrusted-0.9.0/README.md": "8ec7954c78b7bceecc1757f2af855045969c3197ad306c9a5d3a6e0c43a8a9cd",
     "docs/upstream/url-2.5.8/README.md": "141354cfa79fe3a7e739834bf6e001ff1293169e1809cf9eb6d5c8af0b7a191f",
     "docs/upstream/utf8_iter-1.0.4/README.md": "806ed7e6fad84cb440a763c03369af8a2dd01c60712bb19c635448c2a9d58b7e",
@@ -105195,6 +106314,8 @@
     "docs/upstream/wasm-streams-0.4.2/CONTRIBUTING.md": "340b300999190f958f6e6bfe3772ff16182ef17b4e33ae8a8b509987fee949d0",
     "docs/upstream/wasm-streams-0.4.2/README.md": "f61b1a83d1489125cc3372d1812bba0296bef38c1858e45fa419e6e087381870",
     "docs/upstream/wasmparser-0.245.1/README.md": "aabf3b5930893b2a89d0114d8cd97e9b980f3c6f758b960484e06b69a504b823",
+    "docs/upstream/wasmprinter-0.245.1/README.md": "48d1c591f6cd903f0cff20adecfd73f1822b3e5102afa38945a7f4309f78bf41",
+    "docs/upstream/wast-245.0.1/README.md": "5a0d2b894a3ac74ee2be74715a2f22c40a08520cb4ac59183f4e7356f34ac566",
     "docs/upstream/web-sys-0.3.106/README.md": "c888e287963554399d5dfccda4198adf7d2066378bf3a66911f54bc143d22164",
     "docs/upstream/web-time-1.1.0/CHANGELOG.md": "7f05140dd8c3a99a6a8f05a8a707038a424eb3e3e9c048b037e45a5fb03b4bdf",
     "docs/upstream/web-time-1.1.0/README.md": "a097c46f254121cb860554e83ea6b5b5f110890260c56feb44b2c870e774715e",
@@ -117535,6 +118656,210 @@
       "requested_features": [
         "contract-check/schema-async"
       ],
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "packages": {
+        "src/foundation/code-generation/proc-macro2": {
+          "features": [
+            "default",
+            "proc-macro",
+            "span-locations"
+          ],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/code-generation/quote": {
+          "features": [
+            "default",
+            "proc-macro"
+          ],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/code-generation/rust-syntax": {
+          "features": [
+            "clone-impls",
+            "default",
+            "derive",
+            "extra-traits",
+            "fold",
+            "full",
+            "parsing",
+            "printing",
+            "proc-macro",
+            "visit",
+            "visit-mut"
+          ],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/collections/allocator-api2": {
+          "features": [
+            "alloc"
+          ],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/collections/bumpalo": {
+          "features": [
+            "default"
+          ],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/collections/equivalent": {
+          "features": [],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/collections/hash-table": {
+          "features": [
+            "allocator-api2",
+            "default",
+            "default-hasher",
+            "equivalent",
+            "inline-more",
+            "raw-entry",
+            "serialization"
+          ],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/collections/indexmap": {
+          "features": [
+            "default",
+            "serialization",
+            "std"
+          ],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/core-types/flag-set": {
+          "features": [
+            "std"
+          ],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/core-types/foldhash": {
+          "features": [],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/core-types/itoa": {
+          "features": [],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/data-storage/data-serialization": {
+          "features": [
+            "alloc",
+            "default",
+            "derive",
+            "error-path",
+            "std"
+          ],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/data-storage/leb128fmt": {
+          "features": [],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/data-storage/serialization-derive": {
+          "features": [
+            "default"
+          ],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/text-unicode/memchr": {
+          "features": [
+            "alloc",
+            "default",
+            "std"
+          ],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/text-unicode/unicode-display-width": {
+          "features": [],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/text-unicode/unicode-ident": {
+          "features": [],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/tooling/semver": {
+          "features": [
+            "default",
+            "std"
+          ],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/web-runtime/wasm-encoder": {
+          "features": [
+            "component-model",
+            "default",
+            "std"
+          ],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/web-runtime/wasm-text-parser": {
+          "features": [],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/web-runtime/wasm-text-printer": {
+          "features": [],
+          "roles": [
+            "compile"
+          ]
+        },
+        "src/foundation/web-runtime/wasmparser": {
+          "features": [
+            "component-model",
+            "default",
+            "features",
+            "hash-collections",
+            "serialization",
+            "simd",
+            "std",
+            "validate"
+          ],
+          "roles": [
+            "compile"
+          ]
+        }
+      },
+      "profile": "binding-test-tools-validation",
       "target": "x86_64-unknown-linux-gnu"
     },
     {
@@ -139923,9 +141248,84 @@
     }
   },
   "source_trim_records_sha256": {
+    "451f6f5c3e3e28f1982ffdc89fd6b706f687e58dc6df3867ef00d8a8f52dfad5": "451f6f5c3e3e28f1982ffdc89fd6b706f687e58dc6df3867ef00d8a8f52dfad5",
     "70f77319b7bc5e360b48c9de6d82dd1ab095724b3c7a7ecbe551e189b08b662a": "70f77319b7bc5e360b48c9de6d82dd1ab095724b3c7a7ecbe551e189b08b662a"
   },
   "source_trims": {
+    "451f6f5c3e3e28f1982ffdc89fd6b706f687e58dc6df3867ef00d8a8f52dfad5": {
+      "directory": "src/foundation/web-runtime/wasm-text-parser",
+      "files": [
+        {
+          "path": "src/component_disabled.rs",
+          "reason": "Remove publicly constructible fake Component AST whose encoding panics; core Wat rejects component text directly.",
+          "sha256_before": "20e2d9c28efe2ecf14f96f8d8971eddc23d0df9494fb527e79ed64b449f2de72"
+        },
+        {
+          "path": "src/core/binary/dwarf_disabled.rs",
+          "reason": "Remove uninhabited DWARF placeholder and its permanently disabled call chain; no active consumer.",
+          "sha256_before": "182ee888617357835decd08c68fe8dfdef9fe0665ece9b1550794fea9dcb1486"
+        }
+      ],
+      "package": {
+        "changes": "精确来源与当前职责分离；测试外置；仅core WAT、普通打印、正常Unicode宽度；无DWARF/component-model/validate/folded/CJK歧义模式/终端颜色/编译器内部依赖；详见docs/validation/wasm-binding-test-tools.md。",
+        "description": "绑定转换测试的wasm-text-parser职责组件",
+        "directory": "src/foundation/web-runtime/wasm-text-parser",
+        "files_sha256": {
+          "Cargo.toml": "4fd5db6895a89a1d3272c9c4df66c5a4af3a6897a1f94257397817c05e0e05e9",
+          "src/component_disabled.rs": "20e2d9c28efe2ecf14f96f8d8971eddc23d0df9494fb527e79ed64b449f2de72",
+          "src/core.rs": "5d7e9e4263954f41a48ff68fcfa02886bfaf3c583ce703cf6e7ee29fc96c8de8",
+          "src/core/binary.rs": "cdec52df920639018bb19a0fb11dd2983cb7a91d85dfeb499652735cca8dc880",
+          "src/core/binary/dwarf_disabled.rs": "182ee888617357835decd08c68fe8dfdef9fe0665ece9b1550794fea9dcb1486",
+          "src/core/custom.rs": "dcb87915d98a336e58e3c5bcce8e3febe460685c8a710549a43faa0e5835b976",
+          "src/core/export.rs": "1322a120d9e1dd6f3aa1485ee0bbc4294961028ae8a7584a24170af5823b73b1",
+          "src/core/expr.rs": "ba01b84bd93f1ecc9c5084598c222726b750d2078793cbf6535b1216cb52e293",
+          "src/core/func.rs": "79f66cd890d571aa276ead0a797a57c6ddfee34f10e6ae9a403923c5403c515f",
+          "src/core/global.rs": "dec0abecadd2fde9298acb729259deba1ef3c4733ae5afcb4fe8cd4a633f5349",
+          "src/core/import.rs": "1e51e9e64825b5c1ae593464b2377e4ebfce22f354f5d3462480a7c2edc6b4c3",
+          "src/core/memory.rs": "5ac66b712a713e06c37f6739285eba9dc701bd52c09f563efd3fe60fd22c864d",
+          "src/core/module.rs": "8ea3f9c4b1d35f84800e0ef385b8ac5fff184c32703b2c81650db8edf5b23c27",
+          "src/core/resolve/deinline_import_export.rs": "dad1c754b730c4d5e16d029961f63e059d93f25eb9340f75aa549af77014ee12",
+          "src/core/resolve/mod.rs": "cd1ccf19a09b5dc5fd434cbbe942006866607464a40589ab2516b4352fa779c2",
+          "src/core/resolve/names.rs": "83ea117c53ca978f84b992f5c86e7c2a1c5c1aa3dedd8a02a6d0c01c464102f0",
+          "src/core/resolve/types.rs": "516e44f047fccd0b24fc0c34a34f16459afa8ce4f0a9272f11f83577ad5258b4",
+          "src/core/table.rs": "4e31c8e187062abece9fd07fe28de730f2b037fa7c25571e7321a30755e0f6ec",
+          "src/core/tag.rs": "8a3d4fcdb86dedd68cdaf25abd930ef52a461cf2a0e9393bb9cb6f425afaaf2e",
+          "src/core/types.rs": "c8446fa8e3cda3a502bd6126d8815af42bd44c028b3132e6a7c44930557e3143",
+          "src/encode.rs": "85b12abe08af1b09078f7662ff7fc5fbeecf4e5c699e27aad143ceceb0d9298a",
+          "src/error.rs": "0a07d39fc427d14b0176fead732b79a640417274bdefe0603845eb7f8a96d34d",
+          "src/gensym.rs": "06b02b19c1fb089620b8f0cf0881c2093e883a8705e30ea44d989b3c2ee999f1",
+          "src/lexer.rs": "2dbb78911e7ac3bcd029469f72d43136bbc19fe830f950b4ae634468226794d8",
+          "src/lib.rs": "23e7c2ccccd47a7a95c68577c91d6c83d89159929e5a3dc4813b208dc769e45d",
+          "src/names.rs": "dd8e05380316de31e9d2930547cd9d6cdbbce195f0c83233c70e74eedc0ecf4d",
+          "src/parser.rs": "7a0ab29840ef9939c8ac278343a497a87ce9ffccf76859d7ddc90631b361381c",
+          "src/token.rs": "5ef201d3e5cc32b1441ad2c0df07e5db62160b373724d7f61268c1bdda0d20f9",
+          "src/wat.rs": "5a4e3f2ad49d6bdca6f2ad1ae2c7ac25dc649398e1c0320edc4419698d232cc6"
+        },
+        "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+        "license_materials": [
+          "compliance/licenses/upstream/wast-245.0.1/LICENSE-MIT",
+          "compliance/licenses/upstream/wast-245.0.1/LICENSE-APACHE",
+          "compliance/licenses/upstream/wast-245.0.1/LICENSE-Apache-2.0_WITH_LLVM-exception"
+        ],
+        "name": "wasm-text-parser",
+        "origin_directory": "vendor/rust/wast-245.0.1",
+        "repository": "https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wast",
+        "status": "retained",
+        "upstream": {
+          "archive_sha256": "28cf1149285569120b8ce39db8b465e8a2b55c34cbb586bd977e43e2bc7300bf",
+          "archive_url": "https://static.crates.io/crates/wast/wast-245.0.1.crate",
+          "name": "wast",
+          "version": "245.0.1"
+        },
+        "vcs": {
+          "git": {
+            "sha1": "76927bf4bdbddf4b15f835c5eddfffbdfe3bdbd5"
+          },
+          "path_in_vcs": "crates/wast"
+        },
+        "version": "245.0.1"
+      }
+    },
     "70f77319b7bc5e360b48c9de6d82dd1ab095724b3c7a7ecbe551e189b08b662a": {
       "directory": "src/foundation/reactive-state",
       "files": [
@@ -142717,6 +144117,24 @@
       "archive_url": "https://static.crates.io/crates/ctutils/ctutils-0.4.4.crate",
       "name": "ctutils",
       "version": "0.4.4"
+    },
+    {
+      "archive_sha256": "28cf1149285569120b8ce39db8b465e8a2b55c34cbb586bd977e43e2bc7300bf",
+      "archive_url": "https://static.crates.io/crates/wast/wast-245.0.1.crate",
+      "name": "wast",
+      "version": "245.0.1"
+    },
+    {
+      "archive_sha256": "5f41517a3716fbb8ccf46daa9c1325f760fcbff5168e75c7392288e410b91ac8",
+      "archive_url": "https://static.crates.io/crates/wasmprinter/wasmprinter-0.245.1.crate",
+      "name": "wasmprinter",
+      "version": "0.245.1"
+    },
+    {
+      "archive_sha256": "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254",
+      "archive_url": "https://static.crates.io/crates/unicode-width/unicode-width-0.2.2.crate",
+      "name": "unicode-width",
+      "version": "0.2.2"
     }
   ]
 }

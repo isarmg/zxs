@@ -463,6 +463,21 @@ fn ordered_history_delta_matches_lookup_reference_across_all_small_maps() {
                 lookup_delta(before.map(|(map, _)| map), after),
                 "{before:?} -> {after:?}"
             );
+            if let Some((old, tracked)) = before {
+                let mut candidate = tracked.clone();
+                candidate.begin_tracking();
+                for id in old.keys().filter(|id| !after.contains_key(*id)) {
+                    candidate.remove(id);
+                }
+                for (id, value) in after {
+                    candidate.insert(id.clone(), value.clone());
+                }
+                assert_eq!(
+                    HistoryDelta::between(Some(tracked), &candidate),
+                    lookup_delta(Some(old), after),
+                    "tracked {old:?} -> {after:?}"
+                );
+            }
         }
     }
 }
@@ -470,7 +485,7 @@ fn ordered_history_delta_matches_lookup_reference_across_all_small_maps() {
 #[test]
 fn shared_versions_skip_comparison_but_distinct_equal_maps_do_not() {
     for count in [0, 1, 4096] {
-        let previous: SharedRecords<_> = (0..count)
+        let previous: TrackedRecords<_> = (0..count)
             .map(|n| {
                 let id = format!("version-{n:04}");
                 (id.clone(), version(&id, "file", n))
@@ -525,6 +540,7 @@ fn incremental_matches_full_history_projection_after_insert_update_and_delete() 
     project(&incremental, None, &state).unwrap();
     for sequence in 1..=4 {
         let previous = state.clone();
+        state.begin_tracking();
         state.sequence = sequence;
         match sequence {
             1 => {
@@ -575,6 +591,7 @@ fn per_change_writes_do_not_grow_with_unchanged_versions() {
         // Count actual SQLite writes, not just the delta planner's output.
         install_write_audit(&path);
         let mut next = previous.clone();
+        next.begin_tracking();
         next.sequence = 1;
         next.versions.get_mut("version_0").unwrap().history_tree_id = "changed".into();
         project(&path, Some(&previous), &next).unwrap();
@@ -582,6 +599,7 @@ fn per_change_writes_do_not_grow_with_unchanged_versions() {
         project(&path, Some(&next), &next).unwrap();
         assert_eq!(writes(&path), (0, 1, 0, 2));
         let mut removed = next.clone();
+        removed.begin_tracking();
         removed.sequence = 2;
         removed.versions.remove("version_0");
         project(&path, Some(&next), &removed).unwrap();
@@ -1271,4 +1289,86 @@ fn live_writer_rejects_corrupt_current_main_page() {
         );
         assert!(!engine.history_query_proof.lock().unwrap().healthy);
     }
+}
+
+#[test]
+fn tracked_history_delta_compares_only_touched_rows_and_preserves_net_noops() {
+    let previous: TrackedRecords<_> = (0..4096)
+        .map(|n| {
+            let id = format!("version-{n:04}");
+            (id.clone(), version(&id, "file", n))
+        })
+        .collect();
+    let mut next = previous.clone();
+    next.begin_tracking();
+    next.get_mut("version-0000").unwrap().history_tree_id = "moved".into();
+    next.get_mut("version-0001").unwrap().creation_name = "not projected".into();
+    next.remove("version-0002");
+    next.insert("new".into(), version("new", "new file", 7));
+    next.insert("transient".into(), version("transient", "file", 8));
+    next.remove("transient");
+    next.insert("version-0003".into(), previous["version-0003"].clone());
+    HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.set(0));
+    assert_eq!(
+        HistoryDelta::between(Some(&previous), &next),
+        HistoryDelta {
+            upserts: vec!["new", "version-0000"],
+            deletes: vec!["version-0002"],
+        }
+    );
+    assert_eq!(HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.get()), 4);
+}
+
+#[test]
+fn tracked_history_delta_uses_only_the_exact_parent_write_set() {
+    let base: TrackedRecords<_> = [
+        ("a".into(), version("a", "file", 0)),
+        ("b".into(), version("b", "file", 0)),
+    ]
+    .into_iter()
+    .collect();
+    let mut published = base.clone();
+    published.begin_tracking();
+    published.get_mut("a").unwrap().version_sequence = 1;
+    let mut next = published.clone();
+    next.begin_tracking();
+    next.get_mut("b").unwrap().version_sequence = 2;
+    assert_eq!(
+        HistoryDelta::between(Some(&published), &next).upserts,
+        ["b"]
+    );
+    assert!(matches!(next.changes_since(&base), MapChanges::All));
+    assert_eq!(
+        HistoryDelta::between(Some(&base), &next).upserts,
+        ["a", "b"]
+    );
+
+    let mut inherited = published.clone();
+    inherited.get_mut("b").unwrap().version_sequence = 3;
+    assert!(matches!(
+        inherited.changes_since(&published),
+        MapChanges::All
+    ));
+    assert_eq!(
+        HistoryDelta::between(Some(&published), &inherited).upserts,
+        ["b"]
+    );
+    assert_eq!(
+        HistoryDelta::between(Some(&base), &inherited).upserts,
+        ["a", "b"]
+    );
+}
+
+#[test]
+fn oversized_history_write_set_retains_full_delta_fallback() {
+    let previous: TrackedRecords<FileVersion> = TrackedRecords::default();
+    let mut next = previous.clone();
+    next.begin_tracking();
+    for n in 0..16_385 {
+        let id = format!("version-{n:05}");
+        next.insert(id.clone(), version(&id, "file", n));
+    }
+    assert!(matches!(next.changes_since(&previous), MapChanges::All));
+    let incremental = HistoryDelta::between(Some(&previous), &next);
+    assert_eq!(incremental, HistoryDelta::between(None, &next));
 }

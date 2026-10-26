@@ -59,5 +59,17 @@ python3 .github/scripts/check-rust-diagnostics.py -- \
 python3 .github/scripts/check-rust-diagnostics.py -- \
   cargo test --locked --offline -p smb-vfs --no-run --message-format=json
 cargo test --locked --offline -p smb-vfs
+# Exercise the actual release crate with the configured SDK, not the test
+# harness (which selects unwind independently). Reject only our expected gate.
+abort_log="$cache/vfs-panic-abort.log"
+if cargo rustc --locked --offline -p smb-vfs --release --lib -- -C panic=abort >"$abort_log" 2>&1; then
+  cat "$abort_log"
+  printf 'SMB VFS unexpectedly accepted panic=abort\n' >&2
+  exit 1
+fi
+cat "$abort_log"
+grep -Fq 'ZXS SMB VFS requires panic=unwind to isolate panics at the host boundary' "$abort_log"
+# Finish with the supported release build; an unrelated negative build failure
+# cannot pass the expected diagnostic gate or replace this positive check.
 python3 .github/scripts/check-rust-diagnostics.py -- \
   cargo build --locked --offline -p smb-vfs --release --message-format=json

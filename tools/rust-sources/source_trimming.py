@@ -32,12 +32,13 @@ def owners(catalog):
     return {row['directory'] for row in catalog.get(KEY, {}).values()}
 
 
-def _validate_record(root, row, packages, forbidden):
+def _validate_record(root, row, packages, forbidden, imported=()):
     if not isinstance(row, dict) or set(row) != {'directory', 'package', 'files'}:
         raise ValueError('invalid source trim receipt fields')
     directory = row['directory']
     if (not isinstance(directory, str) or not directory.startswith('src/foundation/')
-            or len(directory.split('/')) != 3 or directory not in packages or directory in forbidden):
+            or (len(directory.split('/')) != 3 and directory not in imported)
+            or directory not in packages or directory in forbidden):
         raise ValueError('source trimming requires an active standalone foundation owner')
     external_tests.safe(root, directory)
     before, current = row['package'], packages[directory]
@@ -58,7 +59,8 @@ def _validate_record(root, row, packages, forbidden):
         if (not isinstance(path, str) or path in seen
                 or not (path == 'build.rs' or (path.startswith('src/') and path.endswith('.rs')))):
             raise ValueError('duplicate or non-production source trim path')
-        target = source_layout.physical(root, directory + '/' + path)
+        target = (external_tests.safe(root, directory + '/' + path) if directory in imported
+                  else source_layout.physical(root, directory + '/' + path))
         if any(part in ('test', 'tests', 'benches', 'examples') for part in path.split('/')):
             raise ValueError('test material cannot use production source trimming')
         value = entry['sha256_before']
@@ -87,7 +89,8 @@ def validate(root, catalog):
     for key, row in records.items():
         if key != receipt_id(row):
             raise ValueError('source trim content-address identity drift')
-        paths = _validate_record(root, row, catalog['packages'], forbidden_owners(catalog))
+        paths = _validate_record(root, row, catalog['packages'], forbidden_owners(catalog),
+                                 source_layout.imported_directories(root))
         if seen & paths:
             raise ValueError('duplicate historical source trim')
         seen |= paths
@@ -110,7 +113,8 @@ def prepare(root, previous, plan=None):
     seen = set()
     old_paths = {(row['directory'], item['path']) for row in records.values() for item in row['files']}
     for row in plan['packages']:
-        paths = _validate_record(root, row, previous['packages'], forbidden_owners(previous))
+        paths = _validate_record(root, row, previous['packages'], forbidden_owners(previous),
+                                 source_layout.imported_directories(root))
         directory = row['directory']
         if directory in seen or old_paths & paths:
             raise ValueError('duplicate source trim owner/file')

@@ -270,6 +270,7 @@ class Layout:
         self.pending_upgrade = pending_upgrade
         self.appended_origins = {}
         self.upgraded_owners = {}
+        self.imported_owners = {}
         self.root = Path(root).resolve()
         self.receipt = receipt
         self.receipt_id = receipt_id
@@ -539,13 +540,18 @@ class Layout:
         if self.corrections is not None:
             self.corrections.validate_catalog(catalog)
         import source_layout_upgrades
-        additions, upgraded, used = source_layout_upgrades.chains(self, catalog)
+        import source_imports
+        self.imported_owners, imported_origins = source_imports.current(self, catalog)
+        additions, upgraded, used = source_layout_upgrades.chains(self, catalog, imported_origins)
         self.upgraded_owners = upgraded
         appended_moves = self._check_appended_moves(catalog)
+        appended_trims = self._check_imported_trims(catalog)
         for field, expected in self.receipt['history_hashes'].items():
             value = source_layout_upgrades.history_value(self, field, catalog.get(field), additions, used)
             if field == 'source_moves' and isinstance(value, dict):
                 value = {key: row for key, row in value.items() if key not in appended_moves}
+            if field in ('source_trims', 'source_trim_records_sha256') and isinstance(value, dict):
+                value = {key: row for key, row in value.items() if key not in appended_trims}
             if field in ('retired', 'retired_records_sha256') and isinstance(value, dict):
                 value = {key: row for key, row in value.items() if key not in self.reverse}
             if digest(canonical(value)) != expected:
@@ -616,7 +622,7 @@ class Layout:
                 or (set(catalog.get('retired_records_sha256', {})) & set(self.reverse)) != retired_roots):
             raise ValueError('duplicate or unmatched post-layout retirement identity')
         present = {p for p in current if p.startswith('src/foundation/')}
-        if present != set(self.reverse) - retired_roots:
+        if present != (set(self.reverse) - retired_roots) | set(self.imported_owners):
             raise ValueError('layout current foundation package inventory drift')
         descendants = {}
         for key in appended_moves:
@@ -676,9 +682,33 @@ class Layout:
             added.add(key)
         return added
 
-    def require_supported_plan(self, previous, retirement=None, moves=None, upgrade=None, **unsupported):
+    def _check_imported_trims(self, catalog):
+        import source_trimming
+        added, seen = set(), set()
+        for key, row in catalog.get('source_trims', {}).items():
+            if not isinstance(row, dict) or row.get('directory') not in self.imported_owners:
+                continue
+            paths = source_trimming._validate_record(
+                self.root, row, catalog['packages'], source_trimming.forbidden_owners(catalog),
+                self.imported_owners)
+            if (key != source_trimming.receipt_id(row)
+                    or catalog.get('source_trim_records_sha256', {}).get(key) != key
+                    or seen & paths
+                    or any(path in catalog['packages'][directory]['files_sha256']
+                           for directory, path in paths)):
+                raise ValueError('invalid imported source trim receipt or absence')
+            seen |= paths
+            added.add(key)
+        return added
+
+    def require_supported_plan(self, previous, retirement=None, moves=None, upgrade=None, trim=None, **unsupported):
         if any(value is not None for value in unsupported.values()):
             raise ValueError('grouped foundation rename, consolidation, upgrade or trim requires an explicit descendant-chain adapter; ordinary refresh, standalone retirement and internal source-file moves are supported')
+        if trim is not None:
+            if (not isinstance(trim, dict) or not isinstance(trim.get('packages'), list)
+                    or any(not isinstance(row, dict) or row.get('directory') not in self.imported_owners
+                           for row in trim['packages'])):
+                raise ValueError('post-layout trim requires an authenticated imported owner')
         for plan in (retirement, moves, upgrade):
             if plan is None:
                 continue
@@ -854,6 +884,12 @@ def _scoped_layout(root):
         active.check_disk_catalog()
         return active
     return load(root)
+
+
+def imported_directories(root):
+    """Current imported owners have no pre-layout descendant files to invert."""
+    layout = _scoped_layout(root)
+    return set(layout.imported_owners) if layout else set()
 
 
 def written_catalog(root, data):

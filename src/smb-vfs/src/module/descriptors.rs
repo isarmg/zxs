@@ -7,7 +7,7 @@ use smb_protocol::{
     protocol::{OpenResult, Request as RawRequest},
 };
 use std::{
-    os::fd::{FromRawFd, OwnedFd},
+    os::fd::OwnedFd,
     sync::{Arc, Mutex},
 };
 
@@ -29,18 +29,10 @@ pub(super) unsafe fn snapshot(
     // loop thread and does not escape the callback.
     let context = unsafe { context(handle) }?;
     let opened = context.files.get(&(fsp as usize)).ok_or_else(bad)?;
-    // SAFETY: Open owns a live descriptor; F_DUPFD_CLOEXEC returns a distinct owned descriptor or
-    // an error, checked below.
-    let descriptor = unsafe { libc::fcntl(opened.fd, libc::F_DUPFD_CLOEXEC, 0) };
-    if descriptor < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
     Ok(Snapshot {
         client: context.client.clone(),
         info: opened.info.clone(),
-        // SAFETY: fcntl succeeded above; this new descriptor has not been adopted by any other
-        // owner.
-        fd: unsafe { OwnedFd::from_raw_fd(descriptor) },
+        fd: opened.fd.try_clone()?,
         writable: opened.writable,
         io: opened.io.clone(),
     })
@@ -49,11 +41,7 @@ pub(super) fn close_opened(
     opened: Open,
     finish: impl FnOnce(Request) -> std::io::Result<()>,
 ) -> std::io::Result<i32> {
-    // SAFETY: removing Open from Context transfers its sole local descriptor
-    // ownership here. Guard it before any fallible lock/save operation, because
-    // it is no longer available to free_context on an early return or unwind.
-    let descriptor = unsafe { OwnedFd::from_raw_fd(opened.fd) };
-    close_descriptor(opened.info.handle, descriptor, &opened.io, finish)?;
+    close_descriptor(opened.info.handle, opened.fd, &opened.io, finish)?;
     Ok(0)
 }
 

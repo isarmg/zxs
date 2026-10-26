@@ -36,6 +36,10 @@ fn cloning_and_reads_do_not_clone_payloads_and_writes_clone_only_touched_records
     assert_eq!(candidate.len(), 128);
     assert!(candidate.contains_key("key-000"));
     assert_eq!(candidate.get("key-127").unwrap().value, "original");
+    let (key, record) = candidate.get_key_value("key-127").unwrap();
+    assert_eq!(key, "key-127");
+    assert!(std::ptr::eq(record, candidate.get("key-127").unwrap()));
+    assert!(candidate.get_key_value("missing").is_none());
     assert_eq!(candidate.iter().count(), 128);
     assert_eq!(candidate.values().count(), 128);
     assert_eq!(clone_count(&clones), 0);

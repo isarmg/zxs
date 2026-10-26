@@ -2,7 +2,7 @@
 
 [依赖文档入口](README.md)
 
-DOM、响应式界面、视图与 WASM 绑定。本页包含 16 个当前实现归属、17 个上游来源身份。
+DOM、响应式界面、视图与 WASM 绑定。本页包含 18 个当前实现归属、19 个上游来源身份。
 
 先读当前维护说明和本地 API/Rustdoc，再按需查阅与来源身份对应、随源码保留的说明。这些资料可能描述已移除的平台、特性、独立包名或开发流程，不代表 ZXS 当前支持范围；合并来源不再提供独立 crate。
 
@@ -120,6 +120,22 @@ DOM、响应式界面、视图与 WASM 绑定。本页包含 16 个当前实现�
 | 上游来源身份 | 使用文档 | 许可与来源 |
 | --- | --- | --- |
 | wasm-encoder@0.245.1 | [README.md](../../docs/upstream/wasm-encoder-0.245.1/README.md) | [许可与通知](../../compliance/licenses/supplemental)；[来源](../../compliance/provenance/packages/wasm-encoder-0.245.1/Cargo.toml.orig.txt) |
+
+## wasm-text-parser
+
+[当前源码 / API](../../src/foundation/web-runtime/wasm-text-parser/src/lib.rs) · [Cargo 清单](../../src/foundation/web-runtime/wasm-text-parser/Cargo.toml) · [当前维护说明](../../docs/components/wasm-text-parser.md)
+
+| 上游来源身份 | 使用文档 | 许可与来源 |
+| --- | --- | --- |
+| wast@245.0.1 | [README.md](../../docs/upstream/wast-245.0.1/README.md) | [许可与通知](../../compliance/licenses/upstream/wast-245.0.1)；[来源](../../compliance/provenance/packages/wast-245.0.1/original/Cargo.toml.orig.txt) |
+
+## wasm-text-printer
+
+[当前源码 / API](../../src/foundation/web-runtime/wasm-text-printer/src/lib.rs) · [Cargo 清单](../../src/foundation/web-runtime/wasm-text-printer/Cargo.toml) · [当前维护说明](../../docs/components/wasm-text-printer.md)
+
+| 上游来源身份 | 使用文档 | 许可与来源 |
+| --- | --- | --- |
+| wasmprinter@0.245.1 | [README.md](../../docs/upstream/wasmprinter-0.245.1/README.md) | [许可与通知](../../compliance/licenses/upstream/wasmprinter-0.245.1)；[来源](../../compliance/provenance/packages/wasmprinter-0.245.1/original/Cargo.toml.orig.txt) |
 
 ## wasmparser
 

@@ -53,6 +53,8 @@ case "${1:-}" in
     python3 .github/scripts/check-toml-consolidation.py
     python3 .github/scripts/check-pattern-matching.py
     python3 .github/scripts/check-schema-validation.py
+    cargo test --locked --offline -p wasm-bindgen-cli-support --lib
+    cargo test --locked --offline -p wasm-text-parser -p wasm-text-printer -p unicode-display-width
     python3 .github/scripts/check-web-bindgen-scope.py
     python3 .github/scripts/check-wasm-binding-macros.py
     python3 .github/scripts/check-unicode-data-family.py

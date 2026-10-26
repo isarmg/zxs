@@ -2,7 +2,7 @@
 
 [依赖文档入口](README.md)
 
-文本检索、正则、Unicode 与区域数据。本页包含 22 个当前实现归属、27 个上游来源身份。
+文本检索、正则、Unicode 与区域数据。本页包含 23 个当前实现归属、28 个上游来源身份。
 
 先读当前维护说明和本地 API/Rustdoc，再按需查阅与来源身份对应、随源码保留的说明。这些资料可能描述已移除的平台、特性、独立包名或开发流程，不代表 ZXS 当前支持范围；合并来源不再提供独立 crate。
 
@@ -122,6 +122,14 @@
 | 上游来源身份 | 使用文档 | 许可与来源 |
 | --- | --- | --- |
 | unicase@2.10.0 | [README.md](../../docs/upstream/unicase-2.10.0/README.md) | [许可与通知](../../compliance/licenses/upstream/unicase-2.10.0)；[来源](../../compliance/provenance/packages/unicase-2.10.0/Cargo.toml.orig.txt) |
+
+## unicode-display-width
+
+[当前源码 / API](../../src/foundation/text-unicode/unicode-display-width/src/lib.rs) · [Cargo 清单](../../src/foundation/text-unicode/unicode-display-width/Cargo.toml) · [当前维护说明](../../docs/components/unicode-display-width.md)
+
+| 上游来源身份 | 使用文档 | 许可与来源 |
+| --- | --- | --- |
+| unicode-width@0.2.2 | [README.md](../../docs/upstream/unicode-width-0.2.2/README.md) | [许可与通知](../../compliance/licenses/upstream/unicode-width-0.2.2)；[来源](../../compliance/provenance/packages/unicode-width-0.2.2/original/Cargo.toml.orig.txt) |
 
 ## unicode-general-category
 

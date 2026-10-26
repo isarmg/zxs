@@ -3,12 +3,14 @@
 //! Startup rebuilds from recovered durable evidence, replacing disposable
 //! full-snapshot and generic entity projections without reading their data. Only file-history candidate
 //! fields and the publication sequence are stored. Shared, untouched version
-//! maps need no comparison; changed maps still scan all versions. This is not
-//! an O(delta) CPU claim. Business objects come from State.
+//! maps need no comparison; exact transaction write sets compare only changed
+//! keys. Cold rebuilds and unknown lineage retain the complete ordered merge.
+//! Business objects come from State.
 use super::Engine;
 use crate::*;
 use sqlite_access::{Connection, Executor, Row};
 use std::{collections::BTreeMap, path::Path};
+use storage_contract::{MapChanges, TrackedRecords};
 
 const HISTORY_INDEX_MIN_VERSIONS: usize = 300_000;
 const HISTORY_INDEX_MAX_CANDIDATES: usize = 100;
@@ -43,8 +45,8 @@ thread_local! {
 
 impl<'a> HistoryDelta<'a> {
     fn between(
-        before: Option<&'a SharedRecords<FileVersion>>,
-        after: &'a SharedRecords<FileVersion>,
+        before: Option<&'a TrackedRecords<FileVersion>>,
+        after: &'a TrackedRecords<FileVersion>,
     ) -> Self {
         let mut delta = Self::default();
         let Some(before) = before else {
@@ -56,6 +58,24 @@ impl<'a> HistoryDelta<'a> {
         // Only comparison is skipped: the caller still validates and advances
         // the projection marker and trusted query proof.
         if before.shares_storage_with(after) {
+            return delta;
+        }
+        if let MapChanges::Keys(keys) = after.changes_since(before) {
+            for key in keys.iter() {
+                if let Some((id, value)) = after.get_key_value(key) {
+                    #[cfg(test)]
+                    HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.set(rows.get() + 1));
+                    if before.get(key).is_none_or(|old| {
+                        old.file_id != value.file_id
+                            || old.history_tree_id != value.history_tree_id
+                            || old.version_sequence != value.version_sequence
+                    }) {
+                        delta.upserts.push(id);
+                    }
+                } else if let Some((id, _)) = before.get_key_value(key) {
+                    delta.deletes.push(id);
+                }
+            }
             return delta;
         }
         // Merge the ordered maps once, preserving each output vector's key
@@ -85,7 +105,7 @@ impl<'a> HistoryDelta<'a> {
 
 #[cfg(test)]
 fn project(path: &Path, before: Option<&State>, after: &State) -> Result<()> {
-    let delta = HistoryDelta::between(before.map(|state| &*state.versions), &after.versions);
+    let delta = HistoryDelta::between(before.map(|state| &state.versions), &after.versions);
     project_delta(path, before, after, &delta)
 }
 

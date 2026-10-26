@@ -1617,6 +1617,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "unicode-display-width"
+version = "0.2.2"
+
+[[package]]
 name = "unicode-general-category"
 version = "1.1.0"
 
@@ -1778,6 +1782,8 @@ dependencies = [
  "rustc-demangle",
  "walrus",
  "wasm-bindgen-shared",
+ "wasm-text-parser",
+ "wasm-text-printer",
  "wasmparser",
 ]
 
@@ -1804,6 +1810,27 @@ name = "wasm-encoder"
 version = "0.245.1"
 dependencies = [
  "leb128fmt",
+ "wasmparser",
+]
+
+[[package]]
+name = "wasm-text-parser"
+version = "245.0.1"
+dependencies = [
+ "anyhow",
+ "bumpalo",
+ "leb128fmt",
+ "memchr",
+ "unicode-display-width",
+ "wasm-encoder",
+ "wasmparser",
+]
+
+[[package]]
+name = "wasm-text-printer"
+version = "0.245.1"
+dependencies = [
+ "wasm-text-parser",
  "wasmparser",
 ]
 

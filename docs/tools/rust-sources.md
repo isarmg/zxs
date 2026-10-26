@@ -10,7 +10,7 @@
 
 ```sh
 python3 tools/rust-sources/manage.py verify --metadata
-python3 -m unittest discover -s tools/rust-sources -p 'test_*.py'
+python3 -m unittest discover -s test/tools/rust-sources -p 'test_*.py'
 ```
 
 `verify` 检查源码、原始来源及中央法律材料的摘要，拒绝源码链接/特殊文件、仓库外依赖、registry/Git 依赖、独立工作区、独立锁文件、嵌套 Git 和散落的仓库脚手架。它同时检查所有活动 manifest 中的特性边，包括尚未启用的可选特性、`dep:alias`、`alias/feature`、`alias?/feature` 和依赖声明的 `features`；目标包或特性不存在时立即失败，不能靠默认编译没有触及来掩盖残留声明。
@@ -65,3 +65,18 @@ python3 tools/rust-sources/collect_notices.py --output /tmp/rust-notice-review
 ## 依赖文档导航
 
 [依赖文档](../dependencies/README.md)按当前职责聚合本地原文、维护说明及源码 API；不把退役来源或上游已删除能力列为可用接口。`python3 tools/rust-sources/documentation.py refresh` 更新索引，`verify` 检查内容与覆盖是否过期；静态及来源门禁都执行验证。上游原件与其来源收据继续受原有完整性规则保护。
+
+## 显式追加来源
+
+新增职责组件不借普通 refresh 吞入。`refresh --import-plan <receipt-sha256>`
+只接受 `source_imports.py` 已审阅登记的内容寻址计划；当前用途是绑定转换测试的文本工具。
+计划绑定完整前序 catalog 摘要、原布局收据、精确新增身份/目录、官方发布包摘要、
+全部原文件到中央原件的映射、许可、当前文件初始摘要、根测试归属及未保留能力说明。
+新增来源复用既有 append-only origins 快照和布局历史投影；旧原件、旧历史字段及
+布局安装收据不被重写。当前目录全集仍精确比较，仅增加计划列出的所有者。
+
+原档 tar 只作为只读来源证据：拒绝链接、特殊文件、重复项、路径越界及摘要不符，
+不在原档执行构建。导入前先验证现有原始记录、物理目录全集和全部声明特性边；
+普通 refresh 继续负责已有文件修改、外置测试守恒和真实可达闭包。失败且 catalog
+未推进时恢复原 origins 字节；origins 与 catalog 各自先写同目录临时文件再原子替换，写入失败不截断原收据。已提交的 catalog 不做隐式回退（包括随后文档写入失败）。导入收据证明来源与
+布局，不证明组件、golden 或产品行为已通过测试。

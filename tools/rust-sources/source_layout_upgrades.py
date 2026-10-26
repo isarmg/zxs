@@ -29,11 +29,11 @@ def frozen_origins(layout, expected):
     layout.appended_origins = {p['origin_directory']:p for p in added}
 
 
-def chains(layout, catalog):
+def chains(layout, catalog, imported_origins=frozenset()):
     from source_layout import _stable, digest, canonical
     additions = {}
     upgraded = {}
-    used = set()
+    used = set(imported_origins)
     for old, row in layout.rows.items():
         directory = row['destination_directory']
         current = catalog.get('packages', {}).get(directory)

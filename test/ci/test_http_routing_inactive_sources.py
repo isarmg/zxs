@@ -25,6 +25,15 @@ class InactiveHttpSources(unittest.TestCase):
             # never strip the upgrade chain or relax the fixture's proof checks.
             origins_hash = layout.receipt['frozen_evidence']['compliance/provenance/origins.json']
             cls.upgrade_evidence.add('compliance/source-layout/origins-' + origins_hash + '.json')
+        cls.import_evidence = set()
+        if layout.imported_owners:
+            import source_imports
+            catalog = json.loads((ROOT / 'compliance/rust-sources.json').read_text())
+            cls.import_evidence.add('compliance/source-imports/' + catalog[source_imports.KEY] + '.json')
+            for row in layout.imported_owners.values():
+                cls.import_evidence.add(row['archive'])
+                cls.import_evidence.update(row['original_paths'].values())
+                cls.import_evidence.update(row['materials'])
         cls.correction_evidence = set()
         if layout.corrections is not None:
             from source_layout_corrections import receipt_path
@@ -87,7 +96,7 @@ class InactiveHttpSources(unittest.TestCase):
         receipt = GATE.source_layout.receipt_path(catalog[GATE.source_layout.KEY])
         files = ['compliance/rust-sources.json', receipt, *self.frozen_evidence,
                  *sorted(self.correction_evidence), *sorted(self.upgrade_evidence),
-                 *sorted(self.maintenance_evidence)]
+                 *sorted(self.maintenance_evidence), *sorted(self.import_evidence)]
         owner = 'src/foundation/networking/http-routing'
         files += [owner + '/' + relative for relative in
                   (*GATE.INACTIVE_SOURCES, 'Cargo.toml', 'src/lib.rs', 'src/extract/mod.rs')]

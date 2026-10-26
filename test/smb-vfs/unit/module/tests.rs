@@ -94,7 +94,7 @@ fn removed_open_descriptor_is_closed_on_poisoned_lock_and_remote_save_failure() 
                 version_id: None,
                 workspace_id: None,
             }),
-            fd: descriptor.into_raw_fd(),
+            fd: descriptor.into(),
             writable: true,
             io: lock,
         };
@@ -237,7 +237,7 @@ fn readdir_keeps_one_page_and_rewind_requests_a_fresh_snapshot() {
     let client = Client::connect(&socket, "alice", "repository").unwrap();
     let mut fsp: sdk::files_struct = Default::default();
     let key = &mut fsp as *mut sdk::files_struct as usize;
-    let descriptor = std::fs::File::open("/dev/null").unwrap().into_raw_fd();
+    let descriptor = std::fs::File::open("/dev/null").unwrap().into();
     let opened = Open {
         info: Arc::new(OpenResult {
             entry_id: "directory".into(),
@@ -413,7 +413,8 @@ fn directory_cleanup_preserves_admission_failure_and_is_terminal_after_errors() 
                 version_id: None,
                 workspace_id: None,
             }),
-            fd: descriptors[1],
+            // SAFETY: Successful pipe2 returned this unique write endpoint.
+            fd: unsafe { OwnedFd::from_raw_fd(descriptors[1]) },
             writable: false,
             io: Arc::new(Mutex::new(())),
         };
@@ -528,7 +529,7 @@ fn revoked_close_detaches_without_publishing_and_releases_descriptor() {
             version_id: None,
             workspace_id: None,
         }),
-        fd: descriptor.into_raw_fd(),
+        fd: descriptor.into(),
         writable: true,
         io: Arc::new(Mutex::new(())),
     };
@@ -550,6 +551,140 @@ fn revoked_close_detaches_without_publishing_and_releases_descriptor() {
         free_context(&mut host.data);
     }
     assert_eq!(peer.read(&mut [0u8; 1]).unwrap(), 0);
+    worker.join().unwrap();
+    std::fs::remove_file(socket).unwrap();
+}
+
+#[test]
+fn removed_open_owns_descriptor_through_success_and_unwind() {
+    use std::{io::Read, os::unix::net::UnixStream};
+    for panic_during_finish in [false, true] {
+        let (descriptor, mut peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+        let opened = Open {
+            info: Arc::new(OpenResult {
+                entry_id: "entry".into(),
+                kind: NamespaceEntryKind::File,
+                path: "file".into(),
+                handle: 7,
+                size: 0,
+                max_file_bytes: 1,
+                version_id: None,
+                workspace_id: None,
+            }),
+            fd: descriptor.into(),
+            writable: true,
+            io: Arc::new(Mutex::new(())),
+        };
+        let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            close_opened(opened, |request| {
+                assert!(matches!(request, Request::Close { handle: 7 }));
+                assert!(!panic_during_finish, "simulate finish unwinding");
+                Ok(())
+            })
+        }));
+        if panic_during_finish {
+            assert!(finished.is_err());
+        } else {
+            assert_eq!(finished.unwrap().unwrap(), 0);
+        }
+        assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+    }
+}
+
+#[test]
+fn context_cleanup_closes_owned_records_without_publishing_and_snapshot_outlives_it() {
+    use smb_protocol::protocol::{FrameStream, PROTOCOL, REQUIRED_CAPABILITIES, Response};
+    use std::{
+        io::{ErrorKind, Read},
+        os::unix::net::{UnixListener, UnixStream},
+    };
+    let socket = std::env::temp_dir().join(format!(
+        "zxs-vfs-owned-context-{}-{}.sock",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+    ));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let worker = std::thread::spawn(move || {
+        let mut wire = FrameStream::new(listener.accept().unwrap().0).unwrap();
+        assert!(matches!(
+            wire.receive::<Request>().unwrap().0,
+            Request::Hello { .. }
+        ));
+        wire.send(
+            &Response::Ok {
+                result: json_codec::json!({
+                    "protocol": PROTOCOL, "capabilities": REQUIRED_CAPABILITIES,
+                }),
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            wire.receive::<Request>().unwrap_err().kind(),
+            ErrorKind::UnexpectedEof,
+            "terminal context cleanup must not publish or abort a remote handle"
+        );
+    });
+    let client = Client::connect(&socket, "alice", "repository").unwrap();
+    let mut files = BTreeMap::new();
+    let mut peers = Vec::new();
+    for key in 0..2 {
+        let (descriptor, peer) = UnixStream::pair().unwrap();
+        peer.set_nonblocking(true).unwrap();
+        peers.push(peer);
+        files.insert(
+            key,
+            Open {
+                info: Arc::new(OpenResult {
+                    entry_id: format!("entry-{key}"),
+                    kind: NamespaceEntryKind::File,
+                    path: format!("file-{key}"),
+                    handle: key as u64,
+                    size: 0,
+                    max_file_bytes: 1,
+                    version_id: None,
+                    workspace_id: None,
+                }),
+                fd: descriptor.into(),
+                writable: true,
+                io: Arc::new(Mutex::new(())),
+            },
+        );
+    }
+    let context = Box::new(Context {
+        samba_username: "alice".into(),
+        client,
+        files,
+    });
+    let mut authenticated = authentication::tests::AuthenticatedSession::new();
+    let mut host = authenticated.handle();
+    host.data = Box::into_raw(context).cast();
+    // SAFETY: The real SDK handle and authenticated nested objects remain live;
+    // null fsp is only the opaque map key 0, not dereferenced by snapshot.
+    let held = unsafe { snapshot(&mut host, std::ptr::null_mut()) }.unwrap();
+    // SAFETY: held owns the live descriptor; F_GETFD borrows it.
+    let flags = unsafe { libc::fcntl(held.fd.as_raw_fd(), libc::F_GETFD) };
+    assert!(flags >= 0);
+    assert_ne!(flags & libc::FD_CLOEXEC, 0);
+    // SAFETY: The data slot contains the unique Context installed above; after
+    // its first consumption the same live slot is null and has nothing to free.
+    unsafe {
+        free_context(&mut host.data);
+        assert!(host.data.is_null());
+        free_context(&mut host.data);
+    }
+    assert_eq!(peers[1].read(&mut [0]).unwrap(), 0);
+    assert_eq!(
+        peers[0].read(&mut [0]).unwrap_err().kind(),
+        ErrorKind::WouldBlock
+    );
+    drop(held);
+    assert_eq!(peers[0].read(&mut [0]).unwrap(), 0);
     worker.join().unwrap();
     std::fs::remove_file(socket).unwrap();
 }

@@ -99,13 +99,7 @@ pub(crate) fn unstart_start_function(module: &mut walrus::Module) -> bool {
 }
 
 #[cfg(test)]
-pub(crate) fn parse_wat(wat: &str) -> walrus::Module {
-    let wasm = wat::parse_str(wat).unwrap();
-    walrus::ModuleConfig::new()
-        .generate_producers_section(false)
-        .parse(&wasm)
-        .unwrap()
-}
-
-#[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/wasm-bindgen-cli-support/unit/src/transforms/mod/tests_110.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/wasm-bindgen-cli-support/unit/src/transforms/mod/tests_110.rs"
+));

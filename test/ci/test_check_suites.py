@@ -416,6 +416,14 @@ if args[0] == 'metadata':
                                    ('local-dependency', 'src/foundation/local')]]
     print(json.dumps({{'workspace_root': root, 'packages': packages,
                       'workspace_members': [p['id'] for p in packages]}}))
+elif args[0] == 'rustc':
+    mode = os.environ.get('SUITE_ABORT', 'rejected')
+    if mode == 'accepted':
+        sys.exit(0)
+    message = ('ZXS SMB VFS requires panic=unwind to isolate panics at the host boundary'
+               if mode == 'rejected' else 'unrelated compilation failure')
+    print(message, file=sys.stderr)
+    sys.exit(1)
 elif '--message-format=json' in args:
     stage = ('wasm' if '--target' in args else 'host') if args[0] == 'check' else args[0]
     if os.environ.get('SUITE_WARNING') == stage:
@@ -498,15 +506,33 @@ else:
         self.prepare_sdk()
         result, calls = self.run_script("smb-sdk.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
-        clippy, compile_tests, tests, release = calls
+        clippy, compile_tests, tests, abort, release = calls
         self.assertEqual(clippy[0], "clippy")
         self.assertIn("--all-targets", clippy)
         self.assertIn("--no-run", compile_tests)
         self.assertEqual(tests, ["test", "--locked", "--offline", "-p", "smb-vfs"])
+        self.assertEqual(abort, ["rustc", "--locked", "--offline", "-p", "smb-vfs",
+                                 "--release", "--lib", "--", "-C", "panic=abort"])
         self.assertEqual(release[0], "build")
         self.assertIn("--release", release)
         for call in (clippy, compile_tests, release):
             self.assertTrue({"--locked", "--offline", "--message-format=json"}.issubset(call))
+
+    def test_sdk_abort_gate_rejects_unexpected_success(self):
+        self.prepare_sdk()
+        result, calls = self.run_script("smb-sdk.sh", SUITE_ABORT="accepted")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("SMB VFS unexpectedly accepted panic=abort", result.stderr)
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(calls[-1][0], "rustc")
+
+    def test_sdk_abort_gate_rejects_unrelated_compile_failure(self):
+        self.prepare_sdk()
+        result, calls = self.run_script("smb-sdk.sh", SUITE_ABORT="unrelated")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unrelated compilation failure", result.stdout)
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(calls[-1][0], "rustc")
 
     def test_sdk_rejects_warnings_before_running_test_bodies(self):
         self.prepare_sdk()

@@ -16,12 +16,14 @@ class ManifestRuntimePaths(unittest.TestCase):
     def test_declared_target_static_references_match_reviewed_inventory(self):
         expected = json.loads((ROOT / 'test/ci/fixtures/manifest-runtime-paths.json').read_text())
         self.assertEqual(PATHS['inventory'](ROOT), expected)
-        self.assertEqual(len(expected), 9)
+        self.assertEqual(len(expected), 11)
         self.assertEqual({row['source'] for row in expected}, {
             'test/foundation/compression/streams/tests/gunzip.rs',
             'test/schema-validation/canonical.rs',
             'test/tools/contract-check/gitignore.rs',
             'test/tools/contract-check/source_export.rs',
+            'test/foundation/unicode-display-width/tests/tests.rs',
+            'test/foundation/wasm-text-parser/tests/parse-fail.rs',
         })
 
     def test_recognized_forms_ignore_comments_and_quoted_examples(self):

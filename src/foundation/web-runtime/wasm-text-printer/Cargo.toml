@@ -1,0 +1,31 @@
+# Maintained source component; original identity is recorded in compliance/provenance.
+[package]
+name = "wasm-text-printer"
+version = "0.245.1"
+edition = "2021"
+rust-version = "1.82.0"
+authors = ["Alex Crichton <alex@alexcrichton.com>"]
+license = "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
+description = "Wasm text printer for local binding transform validation"
+readme = "../../../../docs/components/wasm-text-printer.md"
+autotests = false
+autobenches = false
+autoexamples = false
+
+[lib]
+name = "wasm_text_printer"
+path = "src/lib.rs"
+
+[dependencies]
+wasmparser = { workspace = true, default-features = false, features = ["std", "simd"] }
+
+[dev-dependencies]
+wasm-text-parser = { workspace = true }
+
+[[test]]
+name = "all"
+path = "../../../../test/foundation/wasm-text-printer/tests/all.rs"
+
+[[test]]
+name = "printing"
+path = "../../../../test/foundation/wasm-text-printer/tests/printing.rs"

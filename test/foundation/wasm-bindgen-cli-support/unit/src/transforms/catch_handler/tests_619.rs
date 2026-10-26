@@ -4,7 +4,7 @@ mod tests {
     use walrus::ModuleConfig;
 
     fn parse_wat(wat: &str) -> walrus::Module {
-        let wasm = wat::parse_str(wat).unwrap();
+        let wasm = crate::transforms::parse_wat_text(wat, None).unwrap();
         ModuleConfig::new()
             .generate_producers_section(false)
             .parse(&wasm)
@@ -648,7 +648,7 @@ mod tests {
         );
 
         let wasm = module.emit_wasm();
-        wasmprinter::print_bytes(&wasm).unwrap()
+        wasm_text_printer::print_bytes(&wasm).unwrap()
     }
 
     #[test]

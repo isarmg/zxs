@@ -21,8 +21,20 @@ class PlatformScope(unittest.TestCase):
              ("smb", manager.NATIVE_TARGET), ("build-tools", manager.NATIVE_TARGET),
              ("validation-tools", manager.NATIVE_TARGET), ("sqlite-pool-validation", manager.NATIVE_TARGET),
              ("schema-async-validation", manager.NATIVE_TARGET),
-             ("optional-macro-validation", manager.NATIVE_TARGET)},
+             ("optional-macro-validation", manager.NATIVE_TARGET),
+             ("binding-test-tools-validation", manager.NATIVE_TARGET)},
         )
+
+    def test_binding_text_tools_have_a_nonproduction_validation_root(self):
+        policy = manager.read_json(ROOT / manager.POLICY)
+        profile = next(p for p in policy['profiles'] if p['id'] == 'binding-test-tools-validation')
+        self.assertEqual(profile['manifests'], [
+            'src/foundation/web-runtime/wasm-text-parser/Cargo.toml',
+            'src/foundation/web-runtime/wasm-text-printer/Cargo.toml',
+        ])
+        self.assertEqual(profile['role'], 'compile')
+        self.assertIs(profile['production'], False)
+        self.assertEqual(profile['targets'], [manager.NATIVE_TARGET])
 
     def test_sqlite_pool_validation_matches_the_real_retained_capability(self):
         policy = manager.read_json(ROOT / manager.POLICY)

@@ -1,0 +1,48 @@
+# Maintained source component; original identity is recorded in compliance/provenance.
+[package]
+name = "wasm-text-parser"
+version = "245.0.1"
+edition = "2021"
+rust-version = "1.82.0"
+authors = ["Alex Crichton <alex@alexcrichton.com>"]
+license = "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
+description = "Wasm text parser for local binding transform validation"
+readme = "../../../../docs/components/wasm-text-parser.md"
+autotests = false
+autobenches = false
+autoexamples = false
+
+[lib]
+name = "wasm_text_parser"
+path = "src/lib.rs"
+
+[dependencies]
+bumpalo.workspace = true
+leb128fmt = { workspace = true, default-features = false }
+memchr.workspace = true
+unicode-display-width.workspace = true
+wasm-encoder = { workspace = true, default-features = false, features = ["std"] }
+
+[dev-dependencies]
+anyhow.workspace = true
+wasmparser = { workspace = true, default-features = false, features = ["std"] }
+
+[[test]]
+name = "annotations"
+path = "../../../../test/foundation/wasm-text-parser/tests/annotations.rs"
+
+[[test]]
+name = "comments"
+path = "../../../../test/foundation/wasm-text-parser/tests/comments.rs"
+
+[[test]]
+name = "recursive"
+path = "../../../../test/foundation/wasm-text-parser/tests/recursive.rs"
+
+[[test]]
+name = "parse-fail"
+path = "../../../../test/foundation/wasm-text-parser/tests/parse-fail.rs"
+
+[[test]]
+name = "diagnostics"
+path = "../../../../test/foundation/wasm-text-parser/tests/diagnostics.rs"

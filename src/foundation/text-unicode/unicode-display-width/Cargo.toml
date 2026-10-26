@@ -1,0 +1,24 @@
+# Maintained source component; original identity is recorded in compliance/provenance.
+[package]
+name = "unicode-display-width"
+version = "0.2.2"
+edition = "2021"
+rust-version = "1.82.0"
+authors = [
+    "kwantam <kwantam@gmail.com>",
+    "Manish Goregaokar <manishsmail@gmail.com>",
+]
+license = "MIT OR Apache-2.0"
+description = "Unicode display width for local binding transform validation"
+readme = "../../../../docs/components/unicode-display-width.md"
+autotests = false
+autobenches = false
+autoexamples = false
+
+[lib]
+name = "unicode_display_width"
+path = "src/lib.rs"
+
+[[test]]
+name = "tests"
+path = "../../../../test/foundation/unicode-display-width/tests/tests.rs"

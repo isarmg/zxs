@@ -54,3 +54,7 @@ Release verification 依赖屏障。新增命令应同时更新脚本和库存�
 再执行该家族自己的门禁和完整 static。
 
 当前完整命令以脚本和库存为准，不另维护候选清单。增加耗时后依据 CI 实测调整分组，不删除必要门禁来规避超时。
+
+绑定工具的 language 接线现在包含 `wasm-bindgen-cli-support --lib` 全测试及三个实际
+文本工具的默认测试。工具已收为单一当前能力，不保留无人消费的 feature 矩阵。原逻辑
+库存、19份固定WAT/golden及Emscripten退役替代见[专项说明](../validation/wasm-binding-test-tools.md)。

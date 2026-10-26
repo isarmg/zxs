@@ -2,7 +2,7 @@ use super::Interpreter;
 use walrus::ModuleConfig;
 
 fn interpret(wat: &str, name: &str, result: &[u32]) {
-    let wasm = wat::parse_str(wat).unwrap();
+    let wasm = crate::transforms::parse_wat_text(wat, None).unwrap();
     let module = ModuleConfig::new()
         .generate_producers_section(false)
         .parse(&wasm)
@@ -702,12 +702,10 @@ fn multiple_globals_with_named_stack_pointer_not_exported() {
     interpret(wat, "foo", &[5, 7]);
 }
 
-// Emscripten rewrites calls that may unwind/longjmp into indirect calls through
-// the function table, wrapped in imported `invoke_*(fnptr, ..args)` helpers. The
-// interpreter must redirect such a call to the real table-indexed target and
-// forward the trailing arguments.
+// Emscripten descriptor trampolines are retired. Keep the original WAT input,
+// but exercise the real generator boundary rather than the removed redirect.
 #[test]
-fn invoke_redirect() {
+fn emscripten_markers_reject_before_invoke_redirect() {
     let wat = r#"
         (module
             (import "__wbindgen_placeholder__" "__wbindgen_describe"
@@ -731,7 +729,37 @@ fn invoke_redirect() {
             (export "foo" (func $foo))
         )
     "#;
-    interpret(wat, "foo", &[5]);
+    let original = crate::transforms::parse_wat_text(wat, None).unwrap();
+    for marker in [
+        None,
+        Some("__wasm_bindgen_emscripten_marker"),
+        Some("__wasm_bindgen_emscripten_jspi_marker"),
+    ] {
+        let mut wasm = original.clone();
+        if let Some(name) = marker {
+            // Both fixed names and their section lengths fit a single LEB128 byte.
+            wasm.extend([0, (name.len() + 1) as u8, name.len() as u8]);
+            wasm.extend(name.as_bytes());
+        }
+        let mut generator = crate::Bindgen::new();
+        generator.input_bytes("retired-invoke-fixture", wasm);
+        let error = match generator.generate_output() {
+            Err(error) => error,
+            Ok(_) => panic!("the retired invoke fixture must not generate bindings"),
+        };
+        if marker.is_some() {
+            assert_eq!(
+                error.to_string(),
+                "only browser Web bindings are supported; unsupported Emscripten module marker"
+            );
+        } else {
+            // A bare import name is not backend detection. This original fixture
+            // has a describe shim but no required binding metadata.
+            let message = error.to_string();
+            assert!(message.contains("the `__wasm_bindgen_unstable` custom section is missing"));
+            assert!(!message.contains("Emscripten"));
+        }
+    }
 }
 
 #[test]

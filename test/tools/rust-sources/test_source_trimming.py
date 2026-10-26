@@ -140,5 +140,70 @@ class SourceTrimming(unittest.TestCase):
             external_tests.check_previous({self.directory: owner}, {})
 
 
+
+class ImportedSourceTrimming(SourceTrimming):
+    def setUp(self):
+        super().setUp()
+        self.directory = 'src/foundation/web-runtime/wasm-text-parser'
+        self.package['directory'] = self.directory
+        self.previous['packages'] = {self.directory: self.package}
+        self.plan['packages'][0]['directory'] = self.directory
+        self.plan['packages'][0]['package'] = copy.deepcopy(self.package)
+        (self.root / self.directory / 'src').mkdir(parents=True)
+        from unittest.mock import patch
+        self.authenticated = patch.object(trim.source_layout, 'imported_directories',
+                                          return_value={self.directory})
+        self.authenticated.start()
+        self.addCleanup(self.authenticated.stop)
+
+    def test_grouped_owner_without_authenticated_import_is_rejected(self):
+        from unittest.mock import patch
+        with patch.object(trim.source_layout, 'imported_directories', return_value=set()):
+            with self.assertRaisesRegex(ValueError, 'standalone foundation owner'):
+                trim.prepare(self.root, self.previous, self.plan)
+
+    def test_layout_keeps_old_grouped_trim_closed(self):
+        from types import SimpleNamespace
+        layout = SimpleNamespace(imported_owners={self.directory})
+        trim.source_layout.Layout.require_supported_plan(layout, self.previous, trim=self.plan)
+        bad = copy.deepcopy(self.plan)
+        bad['packages'][0]['directory'] = 'src/foundation/core-types/old-owner'
+        with self.assertRaisesRegex(ValueError, 'authenticated imported owner'):
+            trim.source_layout.Layout.require_supported_plan(layout, self.previous, trim=bad)
+
+    def test_layout_checks_current_trim_hash_absence_and_nonoverlap(self):
+        from types import SimpleNamespace
+        catalog, _ = self.applied()
+        layout = SimpleNamespace(root=self.root, imported_owners={self.directory})
+        check = trim.source_layout.Layout._check_imported_trims
+        self.assertEqual(check(layout, catalog), set(catalog[trim.KEY]))
+        key = next(iter(catalog[trim.KEY]))
+        bad = copy.deepcopy(catalog)
+        bad[trim.HASHES][key] = '0' * 64
+        with self.assertRaisesRegex(ValueError, 'invalid imported source trim'):
+            check(layout, bad)
+        bad = copy.deepcopy(catalog)
+        bad['packages'][self.directory]['files_sha256']['build.rs'] = self.sha
+        with self.assertRaisesRegex(ValueError, 'invalid imported source trim'):
+            check(layout, bad)
+        duplicate = copy.deepcopy(catalog[trim.KEY][key])
+        duplicate['files'][0]['reason'] = 'duplicate grant'
+        key2 = trim.receipt_id(duplicate)
+        bad = copy.deepcopy(catalog)
+        bad[trim.KEY][key2] = duplicate
+        bad[trim.HASHES][key2] = key2
+        with self.assertRaisesRegex(ValueError, 'invalid imported source trim'):
+            check(layout, bad)
+
+    def test_imported_trim_does_not_reenter_predecessor_layout(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        with patch.object(trim.source_layout, 'physical', side_effect=AssertionError('historical reentry')):
+            catalog, _ = self.applied()
+            layout = SimpleNamespace(root=self.root, imported_owners={self.directory})
+            self.assertEqual(trim.source_layout.Layout._check_imported_trims(layout, catalog),
+                             set(catalog[trim.KEY]))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -29,7 +29,7 @@ class GroupedFoundationPaths(unittest.TestCase):
         catalog = json.loads((ROOT / 'compliance/rust-sources.json').read_text())
         packages = {name: row for name, row in catalog['packages'].items()
                     if name.startswith('src/foundation/')}
-        self.assertEqual(len(packages), 219)
+        self.assertEqual(len(packages), 222)
         for directory, row in packages.items():
             with self.subTest(package=directory):
                 path = Path(directory)

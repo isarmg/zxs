@@ -1,3 +1,38 @@
+use std::path::Path;
+
+pub(crate) fn parse_wat_text(
+    text: &str,
+    path: Option<&Path>,
+) -> Result<Vec<u8>, wasm_text_parser::Error> {
+    let result = (|| {
+        let buffer = wasm_text_parser::parser::ParseBuffer::new(text)?;
+        let mut wat = wasm_text_parser::parser::parse::<wasm_text_parser::Wat>(&buffer)?;
+        wat.encode()
+    })();
+    result.map_err(|mut error| {
+        error.set_text(text);
+        if let Some(path) = path {
+            error.set_path(path);
+        }
+        error
+    })
+}
+
+pub(crate) fn parse_wat_file(path: &Path) -> anyhow::Result<Vec<u8>> {
+    use anyhow::Context;
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read WAT fixture {}", path.display()))?;
+    Ok(parse_wat_text(&text, Some(path))?)
+}
+
+pub(crate) fn parse_wat(wat: &str) -> walrus::Module {
+    let wasm = parse_wat_text(wat, None).unwrap();
+    walrus::ModuleConfig::new()
+        .generate_producers_section(false)
+        .parse(&wasm)
+        .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

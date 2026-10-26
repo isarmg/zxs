@@ -90,3 +90,7 @@ check-cfg = [
     "cfg(wasm_bindgen_unstable_tokio)",
     "cfg(wasm_bindgen_unstable_jspi)",
 ]
+
+[dev-dependencies]
+wasm-text-parser.workspace = true
+wasm-text-printer.workspace = true

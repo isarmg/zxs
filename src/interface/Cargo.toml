@@ -33,7 +33,7 @@ web-sys = { version = "=0.3.106", features = [
   "HtmlDialogElement", "HtmlInputElement", "HtmlButtonElement", "HtmlFormElement", "HtmlTextAreaElement", "HtmlTemplateElement",
   "KeyboardEvent", "MouseEvent", "PointerEvent", "FocusEvent", "SubmitEvent", "CustomEvent", "CustomEventInit", "Text",
   "CssStyleDeclaration", "FontFace", "FontFaceSet", "DomException", "DomMatrix", "DomMatrixReadOnly", "DomRect", "DomRectList",
-  "MutationObserver", "MutationObserverInit", "ResizeObserver", "SvgsvgElement", "SvgElement", "SvgGraphicsElement", "SvgAnimatedRect", "SvgRect", "SvgMatrix",
+  "MutationObserver", "MutationObserverInit", "MutationRecord", "ResizeObserver", "SvgsvgElement", "SvgElement", "SvgGraphicsElement", "SvgAnimatedRect", "SvgRect", "SvgMatrix",
   "PageTransitionEvent", "TransitionEvent", "Blob", "BlobPropertyBag", "Performance", "console",
 ], path = "../foundation/web-runtime/web-sys"}
 

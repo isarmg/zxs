@@ -12,10 +12,11 @@
     {"id": "validation-tools", "manifests": ["tools/contract-check/Cargo.toml", "tools/browser-smoke/Cargo.toml", "tools/unicode-build/Cargo.toml", "tools/perf-check/Cargo.toml"], "targets": ["x86_64-unknown-linux-gnu"], "role": "compile", "purpose": "契约、浏览器、命名表及性能验证工具", "production": false},
     {"id": "sqlite-pool-validation", "manifests": ["src/platform/Cargo.toml"], "targets": ["x86_64-unknown-linux-gnu"], "role": "compile", "purpose": "SQLite 可选连接池与快照适配器回归验证", "production": false, "features": ["platform-io/sqlite-pool"]},
     {"id": "schema-async-validation", "manifests": ["tools/contract-check/Cargo.toml"], "targets": ["x86_64-unknown-linux-gnu"], "role": "compile", "purpose": "Schema 可选异步引用解析器的现有隔离回归验证", "production": false, "features": ["contract-check/schema-async"]},
+    {"id": "binding-test-tools-validation", "manifests": ["src/foundation/web-runtime/wasm-text-parser/Cargo.toml", "src/foundation/web-runtime/wasm-text-printer/Cargo.toml"], "targets": ["x86_64-unknown-linux-gnu"], "role": "compile", "purpose": "绑定转换单元测试的文本输入与独立无色golden工具；不进入正式生成器运行依赖", "production": false},
     {"id": "optional-macro-validation", "manifests": ["src/foundation/diagnostics/tracing-attributes/Cargo.toml", "src/foundation/networking/axum-macros/Cargo.toml"], "targets": ["x86_64-unknown-linux-gnu"], "role": "compile", "purpose": "追踪与 HTTP 路由可选宏的独立消费者验证；不进入原生产品依赖图", "production": false}
   ],
   "integrated_sources": ["src/macros", "tools/web-bindings"],
-  "verification_members": ["src/foundation/cryptography/ring", "src/foundation/diagnostics/tracing-attributes", "src/foundation/networking/axum-macros"],
+  "verification_members": ["src/foundation/cryptography/ring", "src/foundation/diagnostics/tracing-attributes", "src/foundation/networking/axum-macros", "src/foundation/web-runtime/wasm-bindgen-cli-support", "src/foundation/web-runtime/wasm-text-parser", "src/foundation/web-runtime/wasm-text-printer", "src/foundation/text-unicode/unicode-display-width"],
   "excluded": ["rustc", "cargo", "std", "core", "alloc", "LLVM", "rustup", "rustfmt", "clippy", "rustdoc", "Rust target components"],
   "native_policy": "原生产品及构建宿主仅支持 Linux amd64；当前登记及验收目标为 x86_64-unknown-linux-gnu，其他 Linux amd64 ABI 的共享源码保留为未验收预留。wasm32-unknown-unknown 仅用于浏览器 Web，不是额外原生平台。原生组件沿用既有系统/SDK/原生构建管理；必要的 crate 内 C/ABI 构建材料保留。"
 }

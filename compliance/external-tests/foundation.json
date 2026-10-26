@@ -23191,7 +23191,7 @@
         },
         {
           "path": "test/foundation/wasm-bindgen-cli-support/modules/src/interpreter/smoke_tests.rs",
-          "sha256": "082b91e3e776891e0bd6f508af76ae3573a39d6192f21a642ab041f890e11544",
+          "sha256": "cb9f319e24316ba1b90d8f31cfa1963d3502de34555831619eb6e4842f5c7ff1",
           "source": "src/foundation/wasm-bindgen-cli-support/src/interpreter/smoke_tests.rs",
           "source_sha256_before": "082b91e3e776891e0bd6f508af76ae3573a39d6192f21a642ab041f890e11544"
         },
@@ -23251,7 +23251,7 @@
         },
         {
           "path": "test/foundation/wasm-bindgen-cli-support/modules/src/transforms/externref/tests/mod.rs",
-          "sha256": "3ccb732f12181831be1bbe5aa63fd83c0bc33b82baf0d5c81ca939f611731f60",
+          "sha256": "696d454dcf255ad6f92b52544fbd3045e2472d08ab3fed9ad8e57294500e3260",
           "source": "src/foundation/wasm-bindgen-cli-support/src/transforms/externref/tests/mod.rs",
           "source_sha256_before": "1352f9050738086a7cb23e4fc6860dd5f95f521f3e918c57901a88cace0863df"
         },
@@ -23293,7 +23293,7 @@
         },
         {
           "path": "test/foundation/wasm-bindgen-cli-support/modules/src/transforms/multi_value/tests/mod.rs",
-          "sha256": "c3decd9eaaa5c085c51eca6e166eddfccc8b9a87e0618c27f1cdd635e988405d",
+          "sha256": "45273c9c0af20469c91dfe9daa813199c3692630c873972f5da533445ce3a425",
           "source": "src/foundation/wasm-bindgen-cli-support/src/transforms/multi_value/tests/mod.rs",
           "source_sha256_before": "768a6db284d50c9ced01791e7adde7a20c99b373f9f0b5841b972f5d473aeaed"
         },
@@ -23311,7 +23311,7 @@
         },
         {
           "path": "test/foundation/wasm-bindgen-cli-support/modules/src/transforms/threads/tests/mod.rs",
-          "sha256": "a6971c883786a36f45fcb05a142dce3d75a197d17c65431b46917abe342900b7",
+          "sha256": "b5aa2132b984adf33cab107357d4a3592e947a908995c56708c21488af5a908f",
           "source": "src/foundation/wasm-bindgen-cli-support/src/transforms/threads/tests/mod.rs",
           "source_sha256_before": "3961aec6e11cf9dd34f16451a5be925959da929a238aa72e43bf3919b8756072"
         },
@@ -23323,7 +23323,7 @@
         },
         {
           "path": "test/foundation/wasm-bindgen-cli-support/unit/src/transforms/catch_handler/tests_619.rs",
-          "sha256": "2c2c00afbe89c856de91268e406d9d24b3862c89226c746a4c233969e52ff3bd",
+          "sha256": "767f092d2501def9b65bd99926b68b98d0a163719ffabf87d457b3beb591a16e",
           "source": "src/foundation/wasm-bindgen-cli-support/src/transforms/catch_handler.rs",
           "source_sha256_before": "241b4b9f995ab4ac020dcd7f4424fdf879b0f0202b5a1e6df4909720c4b48e42"
         },
@@ -23335,7 +23335,7 @@
         },
         {
           "path": "test/foundation/wasm-bindgen-cli-support/unit/src/transforms/mod/tests_110.rs",
-          "sha256": "075fbee145914f79a42b328aafaffc653c9dd8aa17fcf834799a9ef044c663c5",
+          "sha256": "fec58cd6a20e1416ae3078f55e931d1e41d54a9f158de60aba31bfa25f6be883",
           "source": "src/foundation/wasm-bindgen-cli-support/src/transforms/mod.rs",
           "source_sha256_before": "2b68c4b61309f2c91d5c0c32dfba1006a1411a0f05d05eb66c7703c143c8bccd"
         },

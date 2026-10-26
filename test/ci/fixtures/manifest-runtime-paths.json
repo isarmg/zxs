@@ -70,6 +70,26 @@
     "destination_kind": "directory"
   },
   {
+    "manifest": "src/foundation/text-unicode/unicode-display-width/Cargo.toml",
+    "kind": "test",
+    "name": "tests",
+    "source": "test/foundation/unicode-display-width/tests/tests.rs",
+    "form": "concat",
+    "literal": "/../../../../test/foundation/unicode-display-width/tests/emoji-test.txt",
+    "destination": "test/foundation/unicode-display-width/tests/emoji-test.txt",
+    "destination_kind": "file"
+  },
+  {
+    "manifest": "src/foundation/web-runtime/wasm-text-parser/Cargo.toml",
+    "kind": "test",
+    "name": "parse-fail",
+    "source": "test/foundation/wasm-text-parser/tests/parse-fail.rs",
+    "form": "concat",
+    "literal": "/../../../../test/foundation/wasm-text-parser/tests/parse-fail",
+    "destination": "test/foundation/wasm-text-parser/tests/parse-fail",
+    "destination_kind": "directory"
+  },
+  {
     "manifest": "tools/contract-check/Cargo.toml",
     "kind": "test",
     "name": "gitignore",

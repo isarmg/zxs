@@ -175,10 +175,7 @@ fn sync_and_async_reads_bound_immutable_extents_but_allow_workspace_growth() {
     };
     use std::{
         fs::File,
-        os::{
-            fd::IntoRawFd,
-            unix::{fs::FileExt, net::UnixListener},
-        },
+        os::unix::{fs::FileExt, net::UnixListener},
         time::{SystemTime, UNIX_EPOCH},
     };
     let socket = std::env::temp_dir().join(format!(
@@ -221,7 +218,7 @@ fn sync_and_async_reads_bound_immutable_extents_but_allow_workspace_growth() {
             version_id: Some("version".into()),
             workspace_id: None,
         }),
-        fd: file.try_clone().unwrap().into_raw_fd(),
+        fd: file.try_clone().unwrap().into(),
         writable: false,
         io: Arc::new(Mutex::new(())),
     };

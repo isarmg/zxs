@@ -22,7 +22,7 @@ type Request = RawRequest<storage_contract::OperationId>;
 use std::{
     collections::BTreeMap,
     ffi::c_void,
-    os::fd::{AsRawFd, IntoRawFd},
+    os::fd::{AsFd, AsRawFd, BorrowedFd, IntoRawFd, OwnedFd},
     path::PathBuf,
     sync::{Arc, Mutex, OnceLock},
 };
@@ -58,7 +58,7 @@ use paths::{at_name, name, text};
 struct Open {
     // Metadata is fixed at open; workers share it instead of copying names and IDs per I/O.
     info: Arc<OpenResult>,
-    fd: i32,
+    fd: OwnedFd,
     writable: bool,
     io: Arc<Mutex<()>>,
 }
@@ -160,16 +160,16 @@ unsafe extern "C" fn free_context(data: *mut *mut c_void) {
     if !pointer.is_null() {
         // SAFETY: connect created this exact Context with Box::into_raw; free_context consumes it
         // once and clears the host slot.
-        let context = unsafe { Box::from_raw(pointer.cast::<Context>()) };
+        let mut context = unsafe { Box::from_raw(pointer.cast::<Context>()) };
         // SAFETY: Clear the host slot before any diagnostic can panic; ownership is local now.
         unsafe {
             *data = std::ptr::null_mut();
         }
         let _ = guarded(|| {
             let mut errors = Vec::new();
-            for opened in context.files.values() {
-                // SAFETY: Context owns each descriptor; this terminal callback closes it once.
-                if unsafe { libc::close(opened.fd) } < 0 {
+            for (_, opened) in std::mem::take(&mut context.files) {
+                // SAFETY: Transfer sole ownership to close; never retry a failed close.
+                if unsafe { libc::close(opened.fd.into_raw_fd()) } < 0 {
                     errors.push(std::io::Error::last_os_error());
                 }
             }
@@ -277,7 +277,7 @@ unsafe extern "C" fn openat(
             exclusive: flags & libc::O_EXCL != 0,
             write_through: flags & (libc::O_SYNC | libc::O_DSYNC) != 0,
         })?;
-        let fd = fd.into_raw_fd();
+        let raw_fd = fd.as_raw_fd();
         context.files.insert(
             fsp as usize,
             Open {
@@ -287,7 +287,7 @@ unsafe extern "C" fn openat(
                 io: Arc::new(Mutex::new(())),
             },
         );
-        Ok(fd)
+        Ok(raw_fd)
     })
 }
 unsafe extern "C" fn pread(
@@ -315,7 +315,7 @@ unsafe extern "C" fn pread(
                 .read_count(opened.writable, offset as u64, count);
             // SAFETY: The host guarantees data is writable for count bytes for this synchronous
             // call; the descriptor remains owned and the I/O lock is held.
-            let result = unsafe { libc::pread(opened.fd, data, count, offset) };
+            let result = unsafe { libc::pread(opened.fd.as_raw_fd(), data, count, offset) };
             if result < 0 {
                 return Err(std::io::Error::last_os_error());
             }
@@ -351,7 +351,7 @@ unsafe extern "C" fn pwrite(
             write_data(
                 &context.client,
                 &opened.info,
-                opened.fd,
+                opened.fd.as_fd(),
                 opened.writable,
                 // SAFETY: the host provides count readable bytes for this callback;
                 // the helper checks null/length and the slice is not retained.
@@ -376,7 +376,7 @@ unsafe extern "C" fn pwrite(
 fn write_data(
     client: &Client,
     info: &OpenResult,
-    fd: i32,
+    fd: BorrowedFd<'_>,
     writable: bool,
     data: &[u8],
     offset: sdk::off_t,
@@ -391,7 +391,7 @@ fn write_data(
         let mut stat: libc::stat = unsafe { std::mem::zeroed() };
         // SAFETY: The descriptor is owned and the output points to a live, exclusively borrowed
         // stat structure.
-        if unsafe { libc::fstat(fd, &mut stat) } < 0 {
+        if unsafe { libc::fstat(fd.as_raw_fd(), &mut stat) } < 0 {
             return Err(std::io::Error::last_os_error());
         }
         stat.st_size
@@ -412,7 +412,7 @@ fn write_data(
     })?;
     // SAFETY: The borrowed slice supplies count initialized bytes and remains live throughout
     // pwrite; the caller serializes descriptor I/O.
-    let result = unsafe { libc::pwrite(fd, data.as_ptr().cast(), count, offset) };
+    let result = unsafe { libc::pwrite(fd.as_raw_fd(), data.as_ptr().cast(), count, offset) };
     if result < 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -444,7 +444,7 @@ unsafe extern "C" fn truncate(
         })?;
         // SAFETY: The descriptor remains owned while the I/O lock is held; length has been
         // validated.
-        if unsafe { libc::ftruncate(opened.fd, length) } < 0 {
+        if unsafe { libc::ftruncate(opened.fd.as_raw_fd(), length) } < 0 {
             return Err(std::io::Error::last_os_error());
         }
         context.client.call(Request::Dirty {
@@ -546,7 +546,7 @@ unsafe extern "C" fn pwrite_send(
                 write_data(
                     &opened.client,
                     &opened.info,
-                    opened.fd.as_raw_fd(),
+                    opened.fd.as_fd(),
                     opened.writable,
                     &bytes,
                     offset,
@@ -730,7 +730,7 @@ unsafe extern "C" fn fstat(
         let mut metadata: libc::stat = unsafe { std::mem::zeroed() };
         // SAFETY: The descriptor is owned and the output points to a live, exclusively borrowed
         // stat structure.
-        if unsafe { libc::fstat(opened.fd, &mut metadata) } < 0 {
+        if unsafe { libc::fstat(opened.fd.as_raw_fd(), &mut metadata) } < 0 {
             return Err(std::io::Error::last_os_error());
         }
         let size = if opened.info.kind == NamespaceEntryKind::Directory {
@@ -1302,9 +1302,15 @@ pub unsafe extern "C" fn samba_init_module() -> sdk::NTSTATUS {
         offload_write_send_fn: Some(deny_offload_write),
         ..Default::default()
     });
-    // SAFETY: The SDK version matches build.rs; the name and OnceLock callback table have static
-    // lifetime and match the generated function signatures.
-    unsafe { sdk::smb_register_vfs(51, c"zxs".as_ptr(), functions) }
+    // SAFETY: build.rs pins the SDK ABI to 51, which fits the C int argument.
+    // The name and callback table have static lifetime and generated signatures.
+    unsafe {
+        sdk::smb_register_vfs(
+            sdk::SMB_VFS_INTERFACE_VERSION as i32,
+            c"zxs".as_ptr(),
+            functions,
+        )
+    }
 }
 
 #[cfg(test)]

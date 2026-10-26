@@ -58,6 +58,16 @@ impl<T> SharedRecords<T> {
         self.records.get(key).map(Arc::as_ref)
     }
 
+    /// Borrow the stored key and record together without cloning either.
+    pub fn get_key_value<Q: Ord + ?Sized>(&self, key: &Q) -> Option<(&String, &T)>
+    where
+        String: Borrow<Q>,
+    {
+        self.records
+            .get_key_value(key)
+            .map(|(key, value)| (key, value.as_ref()))
+    }
+
     /// Share one record across a lock or owner lifetime without copying its payload.
     /// Later writes through this map or `Arc::make_mut` remain isolated.
     pub fn get_shared<Q: Ord + ?Sized>(&self, key: &Q) -> Option<Arc<T>>

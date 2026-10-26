@@ -1,19 +1,13 @@
-//! A small test framework to execute a test function over all files in a
-//! directory.
-//!
-//! Each file in the directory has its own `CHECK-ALL` annotation indicating the
-//! expected output of the test. That can be automatically updated with
-//! `BLESS=1` in the environment. Otherwise the test are checked against the
-//! listed expectation.
+//! Explicit fixture tests compare independent, immutable `CHECK-ALL` expectations.
 
 use anyhow::{bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use walrus::ModuleConfig;
-use wast::parser::{Parse, Parser};
+use wasm_text_parser::parser::{Parse, Parser};
 
 fn runtest(test: &Test) -> Result<String> {
-    let wasm = wat::parse_file(&test.file)?;
+    let wasm = crate::transforms::parse_wat_file(&test.file)?;
     let mut walrus = ModuleConfig::new()
         .generate_producers_section(false)
         .parse(&wasm)?;
@@ -39,19 +33,38 @@ fn runtest(test: &Test) -> Result<String> {
         walrus.exports.get_mut(export).item = walrus::ExportItem::Function(id);
     }
     walrus::passes::gc::run(&mut walrus);
-    let printed = wasmprinter::print_bytes(walrus.emit_wasm())?;
+    let printed = wasm_text_printer::print_bytes(&walrus.emit_wasm())?;
     Ok(printed)
 }
 
-#[rstest::rstest]
-fn run_test(
-    #[base_dir = "../../../test/foundation/wasm-bindgen-cli-support/modules/src/transforms/multi_value/tests"]
-    #[files("*.wat")]
-    test: PathBuf,
-) -> Result<()> {
-    let expected = Test::from_file(&test)?;
+fn run_test(test: &Path) -> Result<()> {
+    let expected = Test::from_file(test)?;
     let actual = runtest(&expected)?;
     expected.check(&actual)
+}
+
+#[test]
+fn align() -> Result<()> {
+    run_test(Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../../test/foundation/wasm-bindgen-cli-support/modules/src/transforms/multi_value/tests/align.wat"
+    )))
+}
+
+#[test]
+fn many() -> Result<()> {
+    run_test(Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../../test/foundation/wasm-bindgen-cli-support/modules/src/transforms/multi_value/tests/many.wat"
+    )))
+}
+
+#[test]
+fn simple() -> Result<()> {
+    run_test(Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../../test/foundation/wasm-bindgen-cli-support/modules/src/transforms/multi_value/tests/simple.wat"
+    )))
 }
 
 struct Test {
@@ -92,8 +105,8 @@ impl Test {
                 continue;
             }
             let directive = &line[9..];
-            let buf = wast::parser::ParseBuffer::new(directive)?;
-            directives.push(wast::parser::parse::<Directive>(&buf)?);
+            let buf = wasm_text_parser::parser::ParseBuffer::new(directive)?;
+            directives.push(wasm_text_parser::parser::parse::<Directive>(&buf)?);
         }
         Ok(Test {
             file: path.to_path_buf(),
@@ -103,9 +116,7 @@ impl Test {
     }
 
     fn check(&self, output: &str) -> Result<()> {
-        if option_env!("BLESS").is_some() {
-            update_output(&self.file, output)
-        } else if let Some(pattern) = &self.assertion {
+        if let Some(pattern) = &self.assertion {
             if output == pattern {
                 return Ok(());
             }
@@ -115,36 +126,14 @@ impl Test {
                 output.replace('\n', "\n    ")
             );
         } else {
-            bail!(
-                "no test assertions were found in this file, but you can \
-                 rerun tests with `BLESS=1` to automatically add assertions \
-                 to this file"
-            );
+            bail!("no CHECK-ALL assertion in fixture");
         }
     }
 }
 
-fn update_output(path: &Path, output: &str) -> Result<()> {
-    let contents = fs::read_to_string(path)?;
-    let start = contents.find("(; CHECK-ALL:").unwrap_or(contents.len());
-
-    let mut new_output = String::new();
-    for line in output.lines() {
-        new_output.push_str(line);
-        new_output.push('\n');
-    }
-    let new = format!(
-        "{}\n\n(; CHECK-ALL:\n{}\n;)\n",
-        contents[..start].trim(),
-        new_output.trim_end()
-    );
-    fs::write(path, new)?;
-    Ok(())
-}
-
 impl<'a> Parse<'a> for Directive {
-    fn parse(parser: Parser<'a>) -> wast::parser::Result<Self> {
-        use wast::{core::ValType, kw};
+    fn parse(parser: Parser<'a>) -> wasm_text_parser::parser::Result<Self> {
+        use wasm_text_parser::{core::ValType, kw};
 
         parser.parse::<kw::export>()?;
         let name = parser.parse()?;

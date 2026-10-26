@@ -25,6 +25,10 @@ members = [
     "src/foundation/cryptography/ring",
     "src/foundation/diagnostics/tracing-attributes",
     "src/foundation/networking/axum-macros",
+    "src/foundation/web-runtime/wasm-bindgen-cli-support",
+    "src/foundation/web-runtime/wasm-text-parser",
+    "src/foundation/web-runtime/wasm-text-printer",
+    "src/foundation/text-unicode/unicode-display-width",
 ]
 exclude = ["src/foundation"]
 default-members = [
@@ -63,6 +67,16 @@ tokio = { version = "1.53.2", features = ["fs", "io-util", "macros", "net", "rt-
 rustix = { version = "1.1.5", features = ["fs", "process"], path = "src/foundation/platform/rustix"}
 tempfile = {version = "3", path = "src/foundation/platform/tempfile"}
 command-line = { version = "4.6.7", features = ["derive"], path = "src/foundation/tooling/command-line"}
+
+bumpalo = { version = "=3.20.3", path = "src/foundation/collections/bumpalo" }
+leb128fmt = { version = "=0.1.0", path = "src/foundation/data-storage/leb128fmt", default-features = false }
+memchr = { version = "=2.8.3", path = "src/foundation/text-unicode/memchr" }
+anyhow = { version = "=1.0.104", path = "src/foundation/diagnostics/anyhow", default-features = false }
+wasm-encoder = { version = "=0.245.1", path = "src/foundation/web-runtime/wasm-encoder", default-features = false }
+wasmparser = { version = "=0.245.1", path = "src/foundation/web-runtime/wasmparser", default-features = false }
+wasm-text-parser = { version = "=245.0.1", path = "src/foundation/web-runtime/wasm-text-parser" }
+wasm-text-printer = { version = "=0.245.1", path = "src/foundation/web-runtime/wasm-text-printer" }
+unicode-display-width = { version = "=0.2.2", path = "src/foundation/text-unicode/unicode-display-width" }
 
 [profile.release]
 lto = "thin"

@@ -13,7 +13,7 @@
 | `src/smb-vfs/build.rs` | 校验固定 SDK 版本，使用 bindgen 生成 C ABI 绑定 |
 | `src/server/src/smb_rpc.rs` | 唯一身份绑定、句柄、私有工作文件、核心提交和读租约 |
 
-客户端的同一连接在全部 clone 之间串行使用。请求发送、响应接收或帧解析失败后，立即关闭并移除共享连接；后续调用明确返回 `NotConnected`，不会把残留响应当作另一请求的结果。完整远端业务错误保留连接。VFS 从句柄表移除文件后立即建立 FD 所有权守卫，锁失败或保存失败也会关闭本地描述符；本机关闭策略与协议回归共用 `client::close_descriptor`，不依赖手写 Samba ABI 测试替身。
+客户端的同一连接在全部 clone 之间串行使用。请求发送、响应接收或帧解析失败后，立即关闭并移除共享连接；后续调用明确返回 `NotConnected`，不会把残留响应当作另一请求的结果。完整远端业务错误保留连接。VFS 打开记录始终持有 `OwnedFd`，宿主只取得借用的描述符编号；从句柄表移除文件会转移所有权，锁失败、保存失败或展开也会关闭本地描述符。异步快照通过 `OwnedFd::try_clone` 持有独立描述符，最终上下文清理消费未关闭记录，显式关闭一次并保留关闭错误诊断；本机关闭策略与协议回归共用 `client::close_descriptor`，不依赖手写 Samba ABI 测试替身。
 
 目录枚举期间仍保留其打开记录，供属性查询和相对子项操作使用；`CLOSEDIR` 按宿主槽位与远端句柄身份共同匹配并消费这份记录，复用文件关闭的 Close／Detach 与本地 FD 释放流程。不能等待后续普通 `CLOSE`，因为 [Samba 4.23 的目录析构](https://github.com/samba-team/samba/blob/samba-4.23.0/source3/smbd/dir.c#L986-L1010)会使原 fsp FD 失效。首次目录页失败时仍由普通关闭负责；成功打开后，即使翻页、远端关闭或身份检查失败，本地资源也必须终结，旧游标不得释放复用宿主槽位的新句柄。
 
@@ -102,6 +102,8 @@ CARGO_INCREMENTAL=0 cargo build --locked --offline \
 ```
 
 构建需要 libclang。`build.rs` 检查源码 `VERSION` 和 `source3/include/vfs.h` 的接口版本，然后从 `includes.h`、`smbd/smbd.h`、`smbd/globals.h` 生成实际 ABI。不同 configure 的额外 include/define 参数必须来自对应 SDK；缺失时构建失败，不能换成猜测的类型定义。
+
+VFS 回调和工作线程依赖 `catch_unwind` 隔离 panic，因此模块以编译期 `cfg(panic = "abort")` 拒绝 abort 构建，包括环境变量或 rustc 参数覆盖。SDK CI 在真实配置的 SDK 下先要求 release 的 `-C panic=abort` 构建出现该专用拒绝诊断，再验证正常 release 构建；测试 harness 默认 unwind 不能代替这个证明。此约束只属于 VFS，不更改浏览器 WASM 的 panic 策略。注册时使用同一份生成绑定中的 `SMB_VFS_INTERFACE_VERSION`，仍由构建边界核对固定 4.23.0／51。
 
 模块文件生成在 `target/native/release/libsmb_vfs.so`，按目标 SDK 的模块路径提供 `zxs.so`。SDK 测试还需要链接该配置对应的 tevent/talloc 库。
 

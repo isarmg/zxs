@@ -1,4 +1,5 @@
-use super::{geometry, paint};
+use super::{geometry, membership, mutations, paint};
+use mutations::OutputWrites;
 use paint::{CssSnapshot, Separator, fmt, number, owned_paint_property, split};
 use std::{
     cell::{Cell, OnceCell, RefCell},
@@ -8,7 +9,7 @@ use std::{
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{
     CssStyleDeclaration, Document, Element, Event, EventTarget, HtmlElement, MediaQueryList,
-    MutationObserver, MutationObserverInit, ResizeObserver, SvgsvgElement, Window,
+    MutationObserver, MutationObserverInit, Node, ResizeObserver, SvgsvgElement, Window,
 };
 
 const SIDES: [&str; 4] = ["top", "right", "bottom", "left"];
@@ -96,6 +97,7 @@ pub fn start(document: &Document) -> Result<ContourController, JsValue> {
         all_properties,
         color_scheme,
         state: RefCell::new(State::default()),
+        membership: RefCell::new(membership::Membership::new(document)?),
         stopped: Cell::new(false),
         updating: Cell::new(false),
         deferred_dirty: Cell::new(false),
@@ -179,6 +181,7 @@ struct Inner {
     all_properties: Vec<String>,
     color_scheme: MediaQueryList,
     state: RefCell<State>,
+    membership: RefCell<membership::Membership>,
     stopped: Cell<bool>,
     // Custom-element attribute callbacks can synchronously reenter public APIs
     // or dispatch events while paint owns the state borrow.
@@ -191,6 +194,8 @@ struct Inner {
 }
 struct Setup {
     observer: MutationObserver,
+    discovery: MutationObserver,
+    _discovery: Closure<dyn FnMut(js_sys::Array, MutationObserver)>,
     resize: ResizeObserver,
     _mutation: Closure<dyn FnMut(js_sys::Array, MutationObserver)>,
     _resize: Closure<dyn FnMut(js_sys::Array, ResizeObserver)>,
@@ -233,14 +238,31 @@ impl Inner {
         let weak = Rc::downgrade(self);
         let mutation = Closure::wrap(Box::new(move |_: js_sys::Array, _: MutationObserver| {
             if let Some(inner) = weak.upgrade() {
-                for record in &mut inner.state.borrow_mut().records {
-                    record.transition_dirty = true;
-                }
+                inner.invalidate_transitions();
                 inner.schedule();
             }
         })
             as Box<dyn FnMut(js_sys::Array, MutationObserver)>);
         let observer = MutationObserver::new(mutation.as_ref().unchecked_ref())?;
+        let weak = Rc::downgrade(self);
+        let discovery_callback = Closure::wrap(Box::new(
+            move |records: js_sys::Array, _: MutationObserver| {
+                if let Some(inner) = weak.upgrade()
+                    && !inner.stopped.get()
+                    && records.length() > 0
+                {
+                    inner
+                        .membership
+                        .borrow_mut()
+                        .reconcile(&inner.document, &mutations::records(records));
+                    inner.invalidate_transitions();
+                    inner.schedule();
+                }
+            },
+        )
+            as Box<dyn FnMut(js_sys::Array, MutationObserver)>);
+        let discovery = MutationObserver::new(discovery_callback.as_ref().unchecked_ref())?;
+
         let weak = Rc::downgrade(self);
         let resize_callback = Closure::wrap(Box::new(move |_: js_sys::Array, _: ResizeObserver| {
             if let Some(inner) = weak.upgrade() {
@@ -308,6 +330,8 @@ impl Inner {
             self.setup
                 .set(Setup {
                     observer,
+                    discovery,
+                    _discovery: discovery_callback,
                     resize,
                     _mutation: mutation,
                     _resize: resize_callback,
@@ -317,6 +341,16 @@ impl Inner {
                 .is_ok(),
             "invariant: contour setup is installed once"
         );
+        // Store ownership before observing: later installation failure then
+        // disconnects the native observer through Inner::drop, not a dead closure.
+        let discovery_options = MutationObserverInit::new();
+        discovery_options.set_child_list(true);
+        discovery_options.set_subtree(true);
+        self.setup
+            .get()
+            .expect("invariant: contour setup was installed")
+            .discovery
+            .observe_with_options(&self.document, &discovery_options)?;
         Ok(())
     }
     fn listen(
@@ -363,10 +397,21 @@ impl Inner {
             self.deferred_refresh.set(true);
             return;
         }
-        let target = event
-            .target()
-            .filter(|target| owner_instance(&self.view, target.as_ref(), "Element"))
-            .map(|target| target.unchecked_into::<Element>());
+        let target = match kind {
+            EventKind::Interaction | EventKind::AnimationStart | EventKind::AnimationEnd => {
+                // These listeners belong to Document, so the dispatch target is
+                // a Node; adopted elements can retain a foreign realm prototype.
+                let node = event
+                    .target()
+                    .expect("invariant: document listener receives a dispatched event")
+                    .unchecked_into::<Node>();
+                (node.node_type() == Node::ELEMENT_NODE).then(|| node.unchecked_into::<Element>())
+            }
+            EventKind::Schedule => None,
+            EventKind::PageHide => {
+                unreachable!("invariant: pagehide is handled before target lookup")
+            }
+        };
         {
             let mut state = self.state.borrow_mut();
             match kind {
@@ -440,6 +485,11 @@ impl Inner {
             }
         }
     }
+    fn invalidate_transitions(&self) {
+        for record in &mut self.state.borrow_mut().records {
+            record.transition_dirty = true;
+        }
+    }
     fn refresh_now(&self) -> Result<(), JsValue> {
         if self.updating.get() {
             self.deferred_refresh.set(true);
@@ -457,7 +507,6 @@ impl Inner {
         if let Some(setup) = self.setup.get() {
             let options = MutationObserverInit::new();
             options.set_subtree(true);
-            options.set_child_list(true);
             options.set_attributes(true);
             options.set_character_data(true);
             setup
@@ -474,22 +523,40 @@ impl Inner {
             self.deferred_refresh.set(true);
             return Ok(());
         }
-        if let Some(setup) = self.setup.get() {
-            setup.observer.disconnect();
+        let setup = self
+            .setup
+            .get()
+            .expect("invariant: active contour controller was installed");
+        // refresh_now may run before native delivery; structural changes retain
+        // both membership and transition-policy invalidation.
+        let records = mutations::records(setup.discovery.take_records());
+        self.membership
+            .borrow_mut()
+            .reconcile(&self.document, &records);
+        if !records.is_empty() {
+            self.invalidate_transitions();
         }
-        let result = self.state.borrow_mut().update(self);
+        setup.observer.disconnect();
+        let mut writes = OutputWrites::new(Some(&setup.discovery));
+        let result = self.state.borrow_mut().update(self, &mut writes);
+        let batch = writes.finish();
+        self.membership
+            .borrow_mut()
+            .reconcile(&self.document, &batch.records);
+        let author_changes = batch.author_changes;
         self.updating.set(false);
         if self.deferred_stop.replace(false) {
             self.stop();
             return result;
         }
-        if self.deferred_dirty.replace(false) {
-            for record in &mut self.state.borrow_mut().records {
-                record.transition_dirty = true;
-            }
+        if self.deferred_dirty.replace(false) || author_changes {
+            self.invalidate_transitions();
         }
         let observed = self.observe();
-        if self.deferred_refresh.replace(false) || !self.state.borrow().active.is_empty() {
+        if self.deferred_refresh.replace(false)
+            || author_changes
+            || !self.state.borrow().active.is_empty()
+        {
             self.schedule();
         }
         result.and(observed)
@@ -512,15 +579,18 @@ impl Inner {
         }
         if let Some(setup) = self.setup.get() {
             setup.observer.disconnect();
+            setup.discovery.disconnect();
             setup.resize.disconnect();
             for listener in &setup.listeners {
                 listener.detach();
             }
         }
+        self.membership.borrow_mut().clear();
         let mut state = self.state.borrow_mut();
         state.active.clear();
+        let mut writes = OutputWrites::new(None);
         for record in &mut state.records {
-            if let Err(error) = restore(record, &self.draft, true) {
+            if let Err(error) = restore(record, &self.draft, true, &mut writes) {
                 web_sys::console::warn_2(&"Could not restore contour-owned styles".into(), &error);
             }
         }
@@ -642,6 +712,7 @@ fn restore(
     record: &mut Record,
     draft: &CssStyleDeclaration,
     final_restore: bool,
+    writes: &mut OutputWrites<'_>,
 ) -> Result<(), JsValue> {
     let style = record.node.style();
     if !final_restore
@@ -688,10 +759,10 @@ fn restore(
     }
     if final_restore {
         if let Some(child) = record.decoration.take() {
-            child.remove();
+            writes.remove(&child)?;
         }
         if let Some(child) = record.foreground.take() {
-            child.remove();
+            writes.remove(&child)?;
         }
         for (name, value) in [
             ("data-zxs-contour-state", &record.original_state),
@@ -889,7 +960,7 @@ impl State {
         self.images.push((source, url.clone()));
         Ok(format!("url(\"{url}\")"))
     }
-    fn update(&mut self, inner: &Inner) -> Result<(), JsValue> {
+    fn update(&mut self, inner: &Inner, writes: &mut OutputWrites<'_>) -> Result<(), JsValue> {
         self.used_images.clear();
         let connected: Vec<_> = self
             .records
@@ -906,29 +977,20 @@ impl State {
             if detached && let Some(setup) = inner.setup.get() {
                 setup.resize.unobserve(&record.node);
             }
-            restore(&mut record, &inner.draft, detached)?;
+            restore(&mut record, &inner.draft, detached, writes)?;
             if !detached {
                 keep.push(record);
             }
         }
         self.records = keep;
         self.reindex();
-        let nodes = inner.document.query_selector_all("*")?;
+        let members = inner.membership.borrow();
         let mut candidates = Vec::new();
-        for index in 0..nodes.length() {
-            let Some(node) = nodes.item(index) else {
-                continue;
-            };
-            // querySelectorAll returns Elements; HTML namespace elements expose
-            // HTMLElement even when their constructor belongs to another realm.
-            let node = node.unchecked_into::<Element>();
-            if node.namespace_uri().as_deref() != Some("http://www.w3.org/1999/xhtml")
-                || node.has_attribute("data-zxs-contour-decoration")
-            {
+        for node in members.nodes() {
+            if node.has_attribute("data-zxs-contour-decoration") {
                 continue;
             }
-            let node = node.unchecked_into::<HtmlElement>();
-            let Some(live) = inner.view.get_computed_style(&node)? else {
+            let Some(live) = inner.view.get_computed_style(node)? else {
                 continue;
             };
             if number(
@@ -939,15 +1001,15 @@ impl State {
             {
                 continue;
             }
-            if self.index(&node).is_none() {
-                self.prepare_transitions(inner, &node, Some(&live))?;
+            if self.index(node).is_none() {
+                self.prepare_transitions(inner, node, Some(&live))?;
             }
             let css = paint::snapshot(&live)?;
-            let width = measured_dimension(&node, &css, "width");
-            let height = measured_dimension(&node, &css, "height");
+            let width = measured_dimension(node, &css, "width");
+            let height = measured_dimension(node, &css, "height");
             let fragments = node.get_client_rects().length();
             candidates.push(Candidate {
-                node,
+                node: node.clone(),
                 css,
                 width,
                 height,
@@ -955,9 +1017,10 @@ impl State {
                 visible: fragments > 0,
             });
         }
+        drop(members);
         let selected = js_sys::Set::default();
         for candidate in candidates {
-            self.paint_candidate(inner, candidate, &selected)?;
+            self.paint_candidate(inner, candidate, &selected, writes)?;
         }
         let mut keep = Vec::new();
         for mut record in self.records.drain(..) {
@@ -965,7 +1028,7 @@ impl State {
                 record.commit_pending(&inner.draft)?;
                 keep.push(record);
             } else {
-                restore(&mut record, &inner.draft, true)?;
+                restore(&mut record, &inner.draft, true, writes)?;
                 if let Some(setup) = inner.setup.get() {
                     setup.resize.unobserve(&record.node);
                 }
@@ -1006,6 +1069,7 @@ impl State {
         inner: &Inner,
         candidate: Candidate,
         selected: &js_sys::Set,
+        writes: &mut OutputWrites<'_>,
     ) -> Result<(), JsValue> {
         let Candidate {
             node,
@@ -1162,7 +1226,7 @@ impl State {
             if child.parent_element().as_ref() != Some(node.as_ref())
                 || node.last_element_child().as_ref() != Some(child.as_ref())
             {
-                node.append_child(child)?;
+                writes.append(&node, child)?;
             }
             child.set_attribute("viewBox", &format!("0 0 {} {}", fmt(width), fmt(height)))?;
             child.style().set_css_text(&format!("all:initial!important;display:block!important;position:fixed!important;left:0!important;top:0!important;width:{}px!important;height:{}px!important;max-width:none!important;max-height:none!important;pointer-events:none!important;visibility:inherit!important;z-index:2147483647!important;overflow:visible!important;", fmt(width), fmt(height)));
@@ -1194,7 +1258,7 @@ impl State {
             }
             let child = record.decoration.as_ref().unwrap();
             if child.parent_element().as_ref() != Some(node.as_ref()) {
-                node.insert_before(child, node.first_child().as_ref())?;
+                writes.insert_before(&node, child, node.first_child().as_ref())?;
             }
             let style = child.style();
             style.set_css_text("position:absolute;pointer-events:none;z-index:-1;margin:0;padding:0;border:0;display:block;");

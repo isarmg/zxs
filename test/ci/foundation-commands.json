@@ -265,6 +265,31 @@
       ]
     },
     {
+      "tool": "cargo",
+      "args": [
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "wasm-bindgen-cli-support",
+        "--lib"
+      ]
+    },
+    {
+      "tool": "cargo",
+      "args": [
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "wasm-text-parser",
+        "-p",
+        "wasm-text-printer",
+        "-p",
+        "unicode-display-width"
+      ]
+    },
+    {
       "tool": "python3",
       "args": [
         ".github/scripts/check-web-bindgen-scope.py"

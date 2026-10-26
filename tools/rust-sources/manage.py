@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import stat
 import sys
 import tempfile
 import tomllib
@@ -27,6 +28,7 @@ import dependency_edges
 import source_trimming
 import source_layout
 import source_layout_corrections
+import source_imports
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = "compliance/rust-sources.json"
@@ -54,6 +56,19 @@ DESCRIPTION_PATHS = (
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def atomic_write(path, data):
+    """Replace one receipt only after its complete bytes have been written."""
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix='.' + path.name + '.', delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            os.fchmod(stream.fileno(), stat.S_IMODE(path.stat().st_mode))
+            stream.write(data)
+            stream.close()
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def read_json(path):
@@ -404,7 +419,7 @@ def source_directories(root, policy):
                 if path.is_symlink() or not path.is_dir() or not (path / "Cargo.toml").is_file():
                     raise ValueError(f"invalid foundation source directory: {path}")
                 result.add(path.relative_to(root).as_posix())
-        if layout and not {p for p in result if p.startswith('src/foundation/')} <= set(layout.reverse):
+        if layout and not {p for p in result if p.startswith('src/foundation/')} <= set(layout.reverse) | set(layout.imported_owners):
             raise ValueError('foundation grouped source inventory drift')
     return result
 
@@ -715,26 +730,47 @@ def upgrade_plan(root, previous, plan, records):
     return packages, superseded
 
 
-def refresh(root, retire_plan=None, upgrade_plan_data=None, rename_plan_data=None, move_plan_data=None, consolidate_plan_data=None, relocate_benchmarks=False, trim_plan_data=None, layout_plan_data=None, external_path_plan_data=None):
-    previous_raw = (root / CATALOG).read_bytes()
-    previous = json.loads(previous_raw)
-    if external_path_plan_data is not None:
-        if any(p is not None for p in (retire_plan, upgrade_plan_data, rename_plan_data, move_plan_data, consolidate_plan_data, trim_plan_data, layout_plan_data)) or relocate_benchmarks:
-            raise ValueError('external path correction requires a separate reviewed transition')
-        layout, previous = source_layout_corrections.prepare(root, previous, external_path_plan_data, digest(previous_raw))
-    elif layout_plan_data is not None:
-        if any(p is not None for p in (retire_plan, upgrade_plan_data, rename_plan_data, move_plan_data, consolidate_plan_data, trim_plan_data)) or relocate_benchmarks:
-            raise ValueError('layout requires a separate reviewed transition')
-        layout, previous = source_layout.prepare(root, previous, layout_plan_data, digest(previous_raw))
-    else:
-        layout = source_layout.load(root, previous, pending_upgrade=upgrade_plan_data, prospective_maintenance=True)
-    if layout is not None and layout_plan_data is None:
-        layout.require_supported_plan(previous, retirement=retire_plan, moves=move_plan_data,
-                                      rename=rename_plan_data, upgrade=upgrade_plan_data,
-                                      consolidation=consolidate_plan_data, trim=trim_plan_data)
-    with source_layout.activate(layout):
-        return _refresh(root, retire_plan, upgrade_plan_data, rename_plan_data, move_plan_data,
-                        consolidate_plan_data, relocate_benchmarks, trim_plan_data, previous)
+def refresh(root, retire_plan=None, upgrade_plan_data=None, rename_plan_data=None, move_plan_data=None, consolidate_plan_data=None, relocate_benchmarks=False, trim_plan_data=None, layout_plan_data=None, external_path_plan_data=None, import_plan_id=None):
+    original_origins = (root / ORIGINS).read_bytes() if import_plan_id is not None else None
+    original_catalog = (root / CATALOG).read_bytes() if import_plan_id is not None else None
+    try:
+        previous_raw = (root / CATALOG).read_bytes()
+        previous = json.loads(previous_raw)
+        if import_plan_id is not None:
+            if any(p is not None for p in (retire_plan, upgrade_plan_data, rename_plan_data, move_plan_data, consolidate_plan_data, trim_plan_data, layout_plan_data, external_path_plan_data)) or relocate_benchmarks:
+                raise ValueError('binding text import requires a separate reviewed transition')
+            previous = source_imports.prepare(root, previous, import_plan_id, previous_raw)
+        if external_path_plan_data is not None:
+            if any(p is not None for p in (retire_plan, upgrade_plan_data, rename_plan_data, move_plan_data, consolidate_plan_data, trim_plan_data, layout_plan_data)) or relocate_benchmarks:
+                raise ValueError('external path correction requires a separate reviewed transition')
+            layout, previous = source_layout_corrections.prepare(root, previous, external_path_plan_data, digest(previous_raw))
+        elif layout_plan_data is not None:
+            if any(p is not None for p in (retire_plan, upgrade_plan_data, rename_plan_data, move_plan_data, consolidate_plan_data, trim_plan_data)) or relocate_benchmarks:
+                raise ValueError('layout requires a separate reviewed transition')
+            layout, previous = source_layout.prepare(root, previous, layout_plan_data, digest(previous_raw))
+        else:
+            layout = source_layout.load(root, previous, pending_upgrade=upgrade_plan_data, prospective_maintenance=True)
+        if layout is not None and layout_plan_data is None:
+            layout.require_supported_plan(previous, retirement=retire_plan, moves=move_plan_data,
+                                          rename=rename_plan_data, upgrade=upgrade_plan_data,
+                                          consolidation=consolidate_plan_data, trim=trim_plan_data)
+        with source_layout.activate(layout):
+            return _refresh(root, retire_plan, upgrade_plan_data, rename_plan_data, move_plan_data,
+                            consolidate_plan_data, relocate_benchmarks, trim_plan_data, previous)
+    finally:
+        # Failed import leaves the previous catalog and origins as one consistent
+        # pair. Once the catalog advances, never roll back its committed origins.
+        if original_origins is not None and (root / CATALOG).read_bytes() == original_catalog:
+            original_failure = sys.exception()
+            try:
+                if (root / ORIGINS).read_bytes() != original_origins:
+                    atomic_write(root / ORIGINS, original_origins)
+            except OSError as recovery:
+                raise OSError(
+                    f"import failed ({original_failure}); restoring {ORIGINS} also failed: {recovery}; "
+                    f"predecessor {CATALOG} is unchanged, but origins recovery is incomplete; "
+                    "retain both records and inspect them before retrying"
+                ) from recovery
 
 
 def _refresh(root, retire_plan=None, upgrade_plan_data=None, rename_plan_data=None, move_plan_data=None, consolidate_plan_data=None, relocate_benchmarks=False, trim_plan_data=None, previous=None):
@@ -877,6 +913,8 @@ def _refresh(root, retire_plan=None, upgrade_plan_data=None, rename_plan_data=No
         catalog[proof_legacy_maintenance.KEY] = list(proof_legacy_maintenance.RECEIPTS)
     if proof_maintenance.RECEIPTS:
         catalog[proof_maintenance.KEY] = list(proof_maintenance.RECEIPTS)
+    if source_imports.KEY in previous:
+        catalog[source_imports.KEY] = previous[source_imports.KEY]
     if source_layout.KEY in previous:
         catalog[source_layout.KEY] = previous[source_layout.KEY]
     if source_layout_corrections.KEY in previous:
@@ -902,7 +940,7 @@ def _refresh(root, retire_plan=None, upgrade_plan_data=None, rename_plan_data=No
     external_tests.check_removed(source_moves.remap_previous(source_naming.remap_previous(source_consolidation.remap_previous_packages(previous_owners, consolidated_now), renames), moved_now), source_owners(packages, merges), external, renames, trim_grants, root=root)
     verify_retained_closure(catalog, policy)
     catalog_bytes = (json.dumps(catalog, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    (root / CATALOG).write_bytes(catalog_bytes)
+    atomic_write(root / CATALOG, catalog_bytes)
     source_layout.written_catalog(root, catalog_bytes)
     (root / DOC).write_text(document(catalog, policy), encoding="utf-8", newline="\n")
     print(f"Recorded {len(packages)} active source trees, {len(retired)} retired and {len(superseded)} superseded sources and {len(catalog['resolutions'])} root-workspace closure profiles.")
@@ -1061,6 +1099,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("refresh", "verify"))
     parser.add_argument("--metadata", action="store_true")
+    parser.add_argument("--import-plan", help="pinned binding-test text import receipt ID; refresh only")
     parser.add_argument("--external-path-plan", type=Path, help="explicit owner-resolved external test path correction; refresh only")
     parser.add_argument("--layout-plan", type=Path, help="explicit identity-preserving foundation root layout; refresh only")
     parser.add_argument("--trim-plan", type=Path, help="explicit reviewed per-file production source removal; refresh only")
@@ -1072,7 +1111,7 @@ def main():
     parser.add_argument("--relocate-benchmarks", action="store_true", help="install the pinned 32-file post-consolidation benchmark relocation; refresh only")
     arguments = parser.parse_args()
     try:
-        if (arguments.external_path_plan or arguments.layout_plan or arguments.trim_plan or arguments.retire_plan or arguments.upgrade_plan or arguments.rename_plan or arguments.move_plan or arguments.consolidate_plan or arguments.relocate_benchmarks) and arguments.command != "refresh":
+        if (arguments.import_plan or arguments.external_path_plan or arguments.layout_plan or arguments.trim_plan or arguments.retire_plan or arguments.upgrade_plan or arguments.rename_plan or arguments.move_plan or arguments.consolidate_plan or arguments.relocate_benchmarks) and arguments.command != "refresh":
             raise ValueError("--trim-plan, --retire-plan, --upgrade-plan, --rename-plan, --move-plan, --consolidate-plan and --relocate-benchmarks are only accepted by refresh")
         (refresh(ROOT, read_json(arguments.retire_plan) if arguments.retire_plan else None,
                  read_json(arguments.upgrade_plan) if arguments.upgrade_plan else None,
@@ -1082,6 +1121,7 @@ def main():
                  trim_plan_data=read_json(arguments.trim_plan) if arguments.trim_plan else None,
                  layout_plan_data=read_json(arguments.layout_plan) if arguments.layout_plan else None,
                  external_path_plan_data=read_json(arguments.external_path_plan) if arguments.external_path_plan else None,
+                 import_plan_id=arguments.import_plan,
                  **({'relocate_benchmarks': True} if arguments.relocate_benchmarks else {}))
          if arguments.command == "refresh" else verify(ROOT, arguments.metadata))
     except (ValueError, OSError, KeyError, TypeError) as error:
