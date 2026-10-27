@@ -1,5 +1,6 @@
 use super::*;
 use crate::engine_backend::EngineBackend;
+use crate::projection_failure;
 use std::{
     os::unix::fs::FileExt,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -31,8 +32,6 @@ mod close_tests;
 mod directory_tests;
 #[path = "namespace_tests.rs"]
 mod namespace_tests;
-#[path = "../projection_failure.rs"]
-mod projection_failure;
 #[path = "published_selection_tests.rs"]
 mod published_selection_tests;
 #[path = "reconciliation_tests.rs"]

@@ -784,7 +784,7 @@ fn publication_survives_disabled_marker_view_and_reopen_recovers() {
     assert!(engine.indexed_file_history("absent").is_none());
     assert!(!index_ready(&engine));
     let operation = storage_contract::OperationId::generate();
-    let result = engine
+    let repository = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("published").unwrap(),
             "P01",
@@ -793,6 +793,11 @@ fn publication_survives_disabled_marker_view_and_reopen_recovers() {
             operation,
         )
         .unwrap();
+    assert_eq!(
+        engine.state.repositories[&repository.repository_id],
+        repository
+    );
+    let result = engine.operation(operation).unwrap();
     assert_eq!(result.commit_state, CommitState::Published);
     let failure = index_failure(&engine);
     assert_eq!(failure.stage(), IndexFailureStage::Read);
@@ -841,7 +846,7 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
         "CREATE TRIGGER fail_write BEFORE INSERT ON current_state BEGIN SELECT RAISE(ABORT,'injected projection failure');END;",
     );
     let operation = storage_contract::OperationId::generate();
-    let result = engine
+    let repository = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("second").unwrap(),
             "P01",
@@ -850,8 +855,12 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
             operation,
         )
         .unwrap();
+    assert_eq!(
+        engine.state.repositories[&repository.repository_id],
+        repository
+    );
+    let result = engine.operation(operation).unwrap();
     assert_eq!(result.commit_state, CommitState::Published);
-    assert_eq!(engine.operation(operation).unwrap(), result);
     let failure = index_failure(&engine);
     assert_eq!(failure.stage(), IndexFailureStage::Update);
     assert_eq!(failure.sequence(), result.sequence);
@@ -874,7 +883,8 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
             operation,
         )
         .unwrap();
-    assert_eq!(replay, result);
+    assert_eq!(replay, repository);
+    assert_eq!(engine.operation(operation).unwrap(), result);
     assert_eq!(engine.state(), &published);
     assert!(Arc::ptr_eq(&failure, &index_failure(&engine)));
     let error = engine
@@ -1079,15 +1089,21 @@ fn runtime_linked_cache_falls_back_and_preserves_publication_without_touching_ta
             assert!(engine.indexed_file_history("file").is_none());
             assert_eq!(engine.file_history("file").unwrap(), scan(&engine, "file"));
             assert!(!index_ready(&engine));
-            let result = engine
+            let operation = storage_contract::OperationId::generate();
+            let repository = engine
                 .create_repository(
                     &storage_contract::RepositoryName::parse("published").unwrap(),
                     "P01",
                     1,
                     "admin",
-                    storage_contract::OperationId::generate(),
+                    operation,
                 )
                 .unwrap();
+            assert_eq!(
+                engine.state.repositories[&repository.repository_id],
+                repository
+            );
+            let result = engine.operation(operation).unwrap();
             assert_eq!(result.commit_state, CommitState::Published);
             assert_eq!(index_failure(&engine).cause().code(), ErrorCode::UnsafePath);
             assert!(!engine.is_read_only());
@@ -1258,7 +1274,7 @@ fn replaced_database_identity_disables_index_and_preserves_publication() {
     project(&replacement, None, engine.state()).unwrap();
     std::fs::rename(&replacement, &path).unwrap();
     let operation = storage_contract::OperationId::generate();
-    let result = engine
+    let repository = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("published").unwrap(),
             "P01",
@@ -1267,6 +1283,11 @@ fn replaced_database_identity_disables_index_and_preserves_publication() {
             operation,
         )
         .unwrap();
+    assert_eq!(
+        engine.state.repositories[&repository.repository_id],
+        repository
+    );
+    let result = engine.operation(operation).unwrap();
     assert_eq!(result.commit_state, CommitState::Published);
     let failure = index_failure(&engine);
     assert_eq!(failure.cause().code(), ErrorCode::UnsafePath);

@@ -2491,6 +2491,10 @@ async fn capabilities(
 #[path = "../../../test/server/unit/tests.rs"]
 mod tests;
 
+#[cfg(all(test, feature = "core"))]
+#[path = "../../../test/server/unit/projection_failure.rs"]
+mod projection_failure;
+
 #[cfg(test)]
 #[path = "../../../test/server/unit/backend_admission.rs"]
 mod backend_admission_tests;

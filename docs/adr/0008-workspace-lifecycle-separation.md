@@ -4,7 +4,7 @@
 
 ## 问题与当前依据
 
-当前 `max_workspaces` 只限制 Open/Sealed；另设的 retained 工作区记录和逻辑元数据预算则覆盖所有状态。默认每主体 1024 条是累计生命周期上限，不是并发上限；Committed、Aborted 和过期记录重启后仍计费。该限制已在[容量规范](../19-capacity-and-performance.md#持久工作区证据准入)说明，并由 `aborted_records_consume_global_and_principal_budgets_after_restart` 和 `capacity_reports_retained_lifecycle_counts_and_only_selected_principal` 固定为当前行为，不能把现有测试描述成退休功能的验证。
+当前 `max_workspaces` 只限制 Open/Sealed；另设的 retained 工作区记录和逻辑元数据预算则覆盖所有状态。默认每主体 1024 条是累计生命周期上限，不是并发上限；Committed、Aborted 和过期记录重启后仍计费。该限制已在[容量规范](../19-capacity-and-performance.md#retained-workspace-admission)说明，并由 `aborted_records_consume_global_and_principal_budgets_after_restart` 和 `capacity_reports_retained_lifecycle_counts_and_only_selected_principal` 固定为当前行为，不能把现有测试描述成退休功能的验证。
 
 普通 SMB 可写打开已有文件立即创建核心工作区，同时把原正文复制到独立 SMB spool。未修改时 Flush 返回 unchanged，Close 随后中止核心工作区；成功清理 spool 并不会释放核心 retained 记录额度。因此顺序执行正常打开/关闭也可能耗尽额度，不需要并发持有大量句柄。
 

@@ -1,4 +1,4 @@
-use crate::Backend;
+use crate::{Backend, projection_failure};
 use crate::{ServerConfig, auth::AuthStore, management::*, router};
 use http_routing::{
     Router,
@@ -7,8 +7,6 @@ use http_routing::{
 };
 use json_codec::{Value, json};
 use service_stack::ServiceExt;
-#[path = "projection_failure.rs"]
-mod projection_failure;
 
 #[test]
 fn managed_readiness_exposes_real_index_failure_without_rejecting_published_operation() {
