@@ -24,7 +24,7 @@
 
 `storage-server` 的 HTTP / Backend 契约库支持不启用 core 的构建；这些库代码及其可用单元测试不因集成测试依赖核心而被排除。四个实际核心集成目标 `http_engine`、`login_admission`、`telemetry_status`、`service_startup` 分别调用 EngineBackend 或启动需要 core 的守护进程，统一在 Cargo 的 `required-features = ["core"]` 声明准入。默认 core 模式继续运行这些目标；不用测试文件级 cfg 把不满足条件的目标伪装成零测试通过。
 
-仅 core 测试调用的 BackendAction 全变体清单、树请求夹具和 SMB 记录同步故障注入按同一 core 条件接线；不把无 core 仍可运行的命名空间记录、HTTP parser 或授权 mock 测试一起屏蔽，也不用 allow 隐藏空目标中的未使用项。
+旧 BackendAction 全变体清单随最后生产动作退役而删除；仅 core 测试调用的树请求夹具和 SMB 记录同步故障注入仍按同一 core 条件接线；不把无 core 仍可运行的命名空间记录、HTTP parser 或授权 mock 测试一起屏蔽，也不用 allow 隐藏空目标中的未使用项。
 
 workspace 门禁同时检查无默认特性的 all-targets 图，然后执行默认原生测试。前者验证可用目标的类型与接线，不代表核心集成测试或无 core 单元测试已经执行；运行结果仍需单列。
 

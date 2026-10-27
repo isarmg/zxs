@@ -1,5 +1,5 @@
 use super::*;
-use crate::engine_backend::{encode, field};
+use crate::engine_backend::field;
 use crate::{
     Backend,
     auth::{AuthStore, Identity},
@@ -83,7 +83,10 @@ fn rendering_releases_engine_before_serializer_runs() {
         )
         .unwrap();
     let expected = json!({"branch_id":repo.main_branch_id,"commit_id":snapshot.commit_id,"entries":[],"pending_file_versions":{}});
-    assert_eq!(encode(Probe(&backend, snapshot)).unwrap(), expected);
+    assert_eq!(
+        json_codec::to_value(Probe(&backend, snapshot)).unwrap(),
+        expected
+    );
 }
 
 fn authenticated_backend(
@@ -132,7 +135,7 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
         .code,
         storage_contract::ErrorCode::NotFound
     );
-    assert_eq!(encode(projection).unwrap(), expected);
+    assert_eq!(json_codec::to_value(&projection).unwrap(), expected);
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
     assert_eq!(
         backend
@@ -169,7 +172,7 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
     auth.logout(&token).unwrap();
     // An admitted projection keeps its owned snapshot across live data changes
     // and revocation, but can never admit the session to a subsequent request.
-    assert_eq!(encode(frozen).unwrap(), expected);
+    assert_eq!(json_codec::to_value(&frozen).unwrap(), expected);
     assert_eq!(
         backend
             .tree_snapshot(&identity, crate::tests::tree_request(&input))
@@ -396,7 +399,7 @@ fn real_current_and_historical_tree_sources_match_previous_wire_output() {
         assert_eq!(projection.pending_file_versions, expected);
         assert_eq!(projection.entries, commit.entries);
         assert_eq!(
-            encode(projection).unwrap(),
+            json_codec::to_value(&projection).unwrap(),
             json!({
                 "branch_id": repo.main_branch_id,
                 "commit_id": commit_id,
@@ -475,7 +478,7 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
         assert_eq!(tree.pending_file_versions, legacy);
         assert_eq!(tree.entries, commit.entries);
         assert_eq!(
-            encode(tree).unwrap(),
+            json_codec::to_value(&tree).unwrap(),
             json!({
                 "branch_id": branch,
                 "commit_id": commit_id,
@@ -743,7 +746,7 @@ fn smb_lookup_matches_legacy_on_published_and_reopened_unicode_trees() {
             .unwrap();
             assert_eq!(projected, legacy);
         }
-        let projected = encode(
+        let projected = json_codec::to_value(
             lookup_current(
                 &engine,
                 &repo.main_branch_id,
@@ -816,7 +819,7 @@ fn smb_lookup_rechecks_admission_and_returns_only_current_entry() {
     );
     auth.logout(&token).unwrap();
     assert_eq!(
-        encode(frozen).unwrap(),
+        json_codec::to_value(&frozen).unwrap(),
         json_codec::to_value(expected).unwrap()
     );
     assert_eq!(

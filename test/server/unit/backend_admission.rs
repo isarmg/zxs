@@ -364,6 +364,13 @@ impl Backend for BackendProbe {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
+    fn register_disk(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<std::convert::Infallible, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn commit_plan(
         &self,
         _identity: &crate::auth::Identity,
@@ -393,6 +400,30 @@ impl Backend for BackendProbe {
         _identity: &crate::auth::Identity,
         _request: crate::CreateDiskWriteSession,
     ) -> Result<crate::DiskWriteSession, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_historical_save(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_purge(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PreparePurge, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_split(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PrepareSplit, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
@@ -639,9 +670,6 @@ impl Backend for BackendProbe {
 
     fn start_management(&self, auth: Arc<Mutex<AuthStore>>) {
         *self.auth.lock().unwrap() = Some(auth);
-    }
-    fn call(&self, _action: BackendAction, _: &Identity, _: Value) -> Result<Value, ApiError> {
-        self.wait().map(|()| json!({}))
     }
 
     fn upload(
@@ -967,6 +995,12 @@ fn workspace_body(method: &str, path: &str) -> Value {
         json!({"kind":"mkdir","path":"folder","operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST" && path == "/api/file-manager/disks/P01/write-sessions" {
         json!({"path":"file.txt"})
+    } else if method == "POST" && path == "/api/history-trees/history/historical-save-plans" {
+        json!({"source_commit_id":"commit","name":"Saved branch"})
+    } else if method == "POST" && path == "/api/history-trees/history/purge-plans" {
+        json!({"version_ids":["version"]})
+    } else if method == "POST" && path == "/api/history-trees/history/split-plans" {
+        json!({"cut_commit_id":"cut"})
     } else if method == "POST" && path == "/api/repositories" {
         json!({"name":"Repository","primary_slot_id":"P01","target_copies":3,"operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST"
@@ -1040,6 +1074,10 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
         ("GET", "/api/plans/plan"),
         ("POST", "/api/plans/plan/cancel"),
         ("POST", "/api/plans/plan/commit"),
+        ("POST", "/api/history-trees/history/historical-save-plans"),
+        ("POST", "/api/history-trees/history/purge-plans"),
+        ("POST", "/api/history-trees/history/split-plans"),
+        ("POST", "/api/admin/disks"),
         ("POST", "/api/file-manager/disks/P01/namespace-batch"),
         ("POST", "/api/file-manager/files/file/select"),
         ("POST", "/api/file-manager/files/file/branches"),
@@ -1210,6 +1248,10 @@ async fn typed_jobs_hold_auth_owner_until_cancelled_worker_finishes() {
         ("GET", "/api/plans/plan"),
         ("POST", "/api/plans/plan/cancel"),
         ("POST", "/api/plans/plan/commit"),
+        ("POST", "/api/history-trees/history/historical-save-plans"),
+        ("POST", "/api/history-trees/history/purge-plans"),
+        ("POST", "/api/history-trees/history/split-plans"),
+        ("POST", "/api/admin/disks"),
     ] {
         let root = crate::tests::private_tempdir();
         let gate = Arc::new(Gate {
@@ -1252,10 +1294,7 @@ async fn typed_jobs_hold_auth_owner_until_cancelled_worker_finishes() {
             .forget();
         job.abort();
         assert!(job.await.unwrap_err().is_cancelled());
-        assert!(
-            weak.upgrade().is_some(),
-            "{path}: worker must retain authentication owner"
-        );
+        let retained_during_cancel = weak.upgrade().is_some();
         gate.release();
         tokio::time::timeout(Duration::from_secs(5), async {
             while weak.upgrade().is_some() {
@@ -1264,5 +1303,39 @@ async fn typed_jobs_hold_auth_owner_until_cancelled_worker_finishes() {
         })
         .await
         .unwrap();
+        assert!(
+            retained_during_cancel,
+            "{path}: worker must retain authentication owner"
+        );
+    }
+}
+
+#[tokio::test]
+async fn prepare_unknown_fields_reach_backend_before_its_admission_error() {
+    for path in [
+        "/api/history-trees/missing/historical-save-plans",
+        "/api/history-trees/missing/purge-plans",
+        "/api/history-trees/missing/split-plans",
+    ] {
+        let root = crate::tests::private_tempdir();
+        let (app, gate, _release) = fixture(root.path(), 1, true);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"unknown":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{path}");
+        let bytes = http_routing::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let error: Value = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(error["error"]["code"], "INJECTED_FAILURE", "{path}");
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 1, "{path}");
     }
 }

@@ -1,6 +1,6 @@
 //! Deterministic account-publication races at the auth -> engine boundary.
 use super::*;
-use crate::{AuthorizedBackend, BackendAction, auth::AuthStore};
+use crate::{AuthorizedBackend, auth::AuthStore};
 use std::{
     path::PathBuf,
     sync::{Arc, Barrier},
@@ -348,6 +348,13 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.cancel_plan(identity, request)
     }
+    fn register_disk(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<std::convert::Infallible, crate::ApiError> {
+        self.enter();
+        self.inner.register_disk(identity)
+    }
     fn commit_plan(
         &self,
         identity: &crate::auth::Identity,
@@ -355,6 +362,30 @@ impl Backend for PausedBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.enter();
         self.inner.commit_plan(identity, request)
+    }
+    fn prepare_historical_save(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.enter();
+        self.inner.prepare_historical_save(identity, request)
+    }
+    fn prepare_purge(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PreparePurge, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.enter();
+        self.inner.prepare_purge(identity, request)
+    }
+    fn prepare_split(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PrepareSplit, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.enter();
+        self.inner.prepare_split(identity, request)
     }
     fn namespace_batch(
         &self,
@@ -602,15 +633,6 @@ impl Backend for PausedBackend {
         self.inner.lookup_at(identity, branch, commit, path)
     }
 
-    fn call(
-        &self,
-        action: BackendAction,
-        identity: &Identity,
-        input: Value,
-    ) -> Result<Value, ApiError> {
-        self.enter();
-        self.inner.call(action, identity, input)
-    }
     fn upload(
         &self,
         identity: &Identity,
@@ -825,6 +847,10 @@ enum Request {
     Plan,
     PlanCancel,
     PlanCommit,
+    PrepareHistoricalSave,
+    PreparePurge,
+    PrepareSplit,
+    RegisterDisk,
     NamespaceBatch,
     SelectFileBranch,
     SelectFileBranchAt,
@@ -883,6 +909,7 @@ impl Request {
                     },
                 )
                 .map(|_| ()),
+            Self::RegisterDisk => backend.register_disk(identity).map(|never| match never {}),
             Self::Plan => backend.plan(identity, "missing").map(|_| ()),
             Self::PlanCancel => backend
                 .cancel_plan(
@@ -1116,6 +1143,39 @@ impl Request {
                                 .unwrap(),
                         ),
                     },
+                )
+                .map(|_| ()),
+            Self::PrepareHistoricalSave => backend
+                .prepare_historical_save(
+                    identity,
+                    Ok(crate::PrepareHistoricalSave {
+                        history_tree_id: "history".into(),
+                        options: Ok(storage_contract::HistoricalSaveOptions {
+                            source_commit_id: "commit".into(),
+                            name: "Saved branch".into(),
+                            workspace_id: None,
+                            primary_slot_id: None,
+                            target_copies: None,
+                        }),
+                    }),
+                )
+                .map(|_| ()),
+            Self::PreparePurge => backend
+                .prepare_purge(
+                    identity,
+                    Ok(crate::PreparePurge {
+                        history_tree_id: "history".into(),
+                        version_ids: Ok(vec!["second".into(), "first".into(), "second".into()]),
+                    }),
+                )
+                .map(|_| ()),
+            Self::PrepareSplit => backend
+                .prepare_split(
+                    identity,
+                    Ok(crate::PrepareSplit {
+                        history_tree_id: "history".into(),
+                        cut_commit_id: Ok("cut".into()),
+                    }),
                 )
                 .map(|_| ()),
             Self::Operation => backend.operation(identity, fixture.operation).map(|_| ()),
@@ -1524,6 +1584,17 @@ impl Request {
     }
 }
 
+fn prepare_unknown_fields(
+    backend: &dyn Backend,
+    identity: &Identity,
+) -> [Result<storage_contract::Plan, ApiError>; 3] {
+    [
+        backend.prepare_historical_save(identity, Err(ApiError::invalid("unknown field surprise"))),
+        backend.prepare_purge(identity, Err(ApiError::invalid("unknown field surprise"))),
+        backend.prepare_split(identity, Err(ApiError::invalid("unknown field surprise"))),
+    ]
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Revocation {
     Logout,
@@ -1541,12 +1612,21 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                     .set_management_auth(crate::lock(&fixture.auth).reader())
                     .unwrap();
             }
+            for result in prepare_unknown_fields(fixture.backend.as_ref(), &fixture.identity) {
+                let error = result.unwrap_err();
+                assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
+                assert_eq!(error.status, 400);
+            }
             let requests = vec![
+                Request::PrepareSplit,
+                Request::PreparePurge,
+                Request::PrepareHistoricalSave,
                 Request::BackupConfiguration,
                 Request::ConfigureBackups,
                 Request::Plan,
                 Request::PlanCancel,
                 Request::PlanCommit,
+                Request::RegisterDisk,
                 Request::NamespaceBatch,
                 Request::SelectFileBranch,
                 Request::SelectFileBranchAt,
@@ -1671,6 +1751,11 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                     storage_contract::ErrorCode::Unauthorized,
                     "{revocation:?}: {request:?}"
                 );
+            }
+            for result in prepare_unknown_fields(fixture.backend.as_ref(), &fixture.identity) {
+                let error = result.unwrap_err();
+                assert_eq!(error.code, storage_contract::ErrorCode::Unauthorized);
+                assert_eq!(error.status, 401);
             }
             for request in [
                 Err(ApiError::invalid("unknown cancellation field")),
@@ -1843,6 +1928,10 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::Plan,
         Request::PlanCancel,
         Request::PlanCommit,
+        Request::PrepareHistoricalSave,
+        Request::PreparePurge,
+        Request::PrepareSplit,
+        Request::RegisterDisk,
         Request::NamespaceBatch,
         Request::SelectFileBranch,
         Request::SelectFileBranchAt,

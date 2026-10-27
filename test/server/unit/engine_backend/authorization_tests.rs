@@ -53,15 +53,44 @@ fn missing_credentials_do_not_admit_even_a_named_administrator() {
         admission_session: None,
         smb_binding: None,
     };
-    // Anonymous probes have separate typed entrances; every remaining generic
-    // action must reject before inspecting its fields or doing storage work.
-    for &action in crate::BackendAction::ALL {
-        assert_eq!(
-            backend.call(action, &caller, json!({})).unwrap_err().code,
-            storage_contract::ErrorCode::Unauthorized
-        );
-    }
     for result in [
+        backend
+            .prepare_historical_save(&caller, Err(ApiError::invalid("unknown field surprise")))
+            .map(|_| ()),
+        backend
+            .prepare_purge(&caller, Err(ApiError::invalid("unknown field surprise")))
+            .map(|_| ()),
+        backend
+            .prepare_split(&caller, Err(ApiError::invalid("unknown field surprise")))
+            .map(|_| ()),
+        backend
+            .prepare_historical_save(
+                &caller,
+                Ok(crate::PrepareHistoricalSave {
+                    history_tree_id: "missing".into(),
+                    options: Err(ApiError::invalid("missing options")),
+                }),
+            )
+            .map(|_| ()),
+        backend
+            .prepare_purge(
+                &caller,
+                Ok(crate::PreparePurge {
+                    history_tree_id: "missing".into(),
+                    version_ids: Err(ApiError::invalid("missing versions")),
+                }),
+            )
+            .map(|_| ()),
+        backend
+            .prepare_split(
+                &caller,
+                Ok(crate::PrepareSplit {
+                    history_tree_id: "missing".into(),
+                    cut_commit_id: Err(ApiError::invalid("missing cut")),
+                }),
+            )
+            .map(|_| ()),
+        backend.register_disk(&caller).map(|never| match never {}),
         backend.plan(&caller, "missing").map(|_| ()),
         backend
             .commit_plan(&caller, Err(ApiError::invalid("missing fields")))

@@ -30,7 +30,6 @@ pub use backend_file_history::{
     ContentNodeKind, FileHistorySnapshot, HistoryBranch, HistoryNode, HistoryRevision,
     HistoryVersion, HistoryVersionData, ReadFileHistory, RenameNodeKind, RevisionKind,
 };
-mod backend_action;
 mod backend_backup_configuration;
 mod http_backup_configuration;
 pub use backend_backup_configuration::{ConfigureBackups, ReadBackupConfiguration};
@@ -60,6 +59,15 @@ pub use backend_disk_write_session::{
 mod backend_plan;
 mod http_plan;
 pub use backend_plan::{CancelPlan, CommitPlan};
+mod backend_historical_save_plan;
+mod http_historical_save_plan;
+pub use backend_historical_save_plan::PrepareHistoricalSave;
+mod backend_purge_plan;
+mod http_purge_plan;
+pub use backend_purge_plan::PreparePurge;
+mod backend_split_plan;
+mod http_split_plan;
+pub use backend_split_plan::PrepareSplit;
 mod backend_namespace_batch;
 mod http_namespace_batch;
 pub use backend_namespace_batch::NamespaceBatch;
@@ -156,7 +164,6 @@ use http_read::resolve;
 mod commit_wire;
 mod http_operation;
 mod operation_wire;
-pub use backend_action::BackendAction;
 use http_operation::operation;
 
 use auth::{AuthStore, Identity};
@@ -356,12 +363,6 @@ pub trait Backend: Send + Sync {
         Err(ApiError::unsupported())
     }
 
-    fn call(
-        &self,
-        action: crate::BackendAction,
-        identity: &Identity,
-        input: Value,
-    ) -> Result<Value, ApiError>;
     /// Share a frozen published commit after current branch and identity admission.
     /// The returned snapshot owns no authorization for later reads or writes.
     fn snapshot_at(
@@ -513,12 +514,32 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         request: Result<CancelPlan, crate::ApiError>,
     ) -> Result<storage_contract::OperationResult, ApiError>;
+    /// Online registration is refused after current admission; it has no successful outcome.
+    fn register_disk(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<std::convert::Infallible, crate::ApiError>;
     /// Required text/key errors follow current identity; operation format errors follow plan admission.
     fn commit_plan(
         &self,
         identity: &Identity,
         request: Result<CommitPlan, ApiError>,
     ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn prepare_historical_save(
+        &self,
+        identity: &Identity,
+        request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, ApiError>;
+    fn prepare_purge(
+        &self,
+        identity: &Identity,
+        request: Result<crate::PreparePurge, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, ApiError>;
+    fn prepare_split(
+        &self,
+        identity: &Identity,
+        request: Result<crate::PrepareSplit, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, ApiError>;
     fn namespace_batch(
         &self,
         identity: &Identity,
@@ -1031,12 +1052,42 @@ impl Backend for AuthorizedBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.backend.cancel_plan(&self.current(identity)?, request)
     }
+    fn register_disk(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<std::convert::Infallible, crate::ApiError> {
+        self.backend.register_disk(&self.current(identity)?)
+    }
     fn commit_plan(
         &self,
         identity: &Identity,
         request: Result<CommitPlan, ApiError>,
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.backend.commit_plan(&self.current(identity)?, request)
+    }
+    fn prepare_historical_save(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.backend
+            .prepare_historical_save(&self.current(identity)?, request)
+    }
+    fn prepare_purge(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PreparePurge, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.backend
+            .prepare_purge(&self.current(identity)?, request)
+    }
+    fn prepare_split(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PrepareSplit, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.backend
+            .prepare_split(&self.current(identity)?, request)
     }
     fn namespace_batch(
         &self,
@@ -1326,14 +1377,6 @@ impl Backend for AuthorizedBackend {
         self.backend.retry_storage(&self.current(identity)?)
     }
 
-    fn call(
-        &self,
-        action: crate::BackendAction,
-        identity: &Identity,
-        input: Value,
-    ) -> Result<Value, ApiError> {
-        self.backend.call(action, &self.current(identity)?, input)
-    }
     fn upload(
         &self,
         identity: &Identity,
@@ -1744,11 +1787,17 @@ fn router_shared(
             "/api/history-trees/{history}/merge-links",
             post(http_merge_link::create),
         )
-        .route("/api/history-trees/{history}/purge-plans", post(purge_plan))
-        .route("/api/history-trees/{history}/split-plans", post(split_plan))
+        .route(
+            "/api/history-trees/{history}/purge-plans",
+            post(http_purge_plan::prepare),
+        )
+        .route(
+            "/api/history-trees/{history}/split-plans",
+            post(http_split_plan::prepare),
+        )
         .route(
             "/api/history-trees/{history}/historical-save-plans",
-            post(historical_save_plan),
+            post(http_historical_save_plan::prepare),
         )
         .route("/api/plans/{plan}/commit", post(http_plan::commit))
         .route("/api/plans/{plan}", get(http_plan::info))
@@ -1926,27 +1975,6 @@ async fn security_headers(request: Request, next: Next) -> Response {
     response
 }
 
-async fn call(
-    state: AppState,
-    identity: Identity,
-    action: crate::BackendAction,
-    input: Value,
-) -> Result<Json<Value>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        // The job, including time queued in Tokio, owns admission. Dropping the
-        // HTTP future must not release capacity while blocking work continues.
-        let _permit = permit;
-        state.backend.call(action, &identity, input)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
-}
 async fn json_body(request: Request) -> Result<Value, ApiError> {
     let bytes = http_boundary::read_body(request, 1024 * 1024).await?;
     if bytes.is_empty() {
@@ -1969,35 +1997,6 @@ fn with_id(mut body: Value, key: &str, id: String) -> Result<Value, ApiError> {
     Ok(body)
 }
 
-macro_rules! post_handler {
-    ($name:ident, $action:expr) => {
-        async fn $name(
-            State(state): State<AppState>,
-            http_routing::Extension(identity): http_routing::Extension<Identity>,
-            request: Request,
-        ) -> Result<Json<Value>, ApiError> {
-            call(state, identity, $action, json_body(request).await?).await
-        }
-    };
-}
-macro_rules! id_post_handler {
-    ($name:ident, $action:expr, $id:literal) => {
-        async fn $name(
-            State(state): State<AppState>,
-            http_routing::Extension(identity): http_routing::Extension<Identity>,
-            ApiPath(id): ApiPath<String>,
-            request: Request,
-        ) -> Result<Json<Value>, ApiError> {
-            call(
-                state,
-                identity,
-                $action,
-                with_id(json_body(request).await?, $id, id)?,
-            )
-            .await
-        }
-    };
-}
 async fn repositories(
     State(state): State<AppState>,
     http_routing::Extension(identity): http_routing::Extension<Identity>,
@@ -2344,23 +2343,30 @@ async fn topology(
     .map(Json)
 }
 
-post_handler!(register_disk, crate::BackendAction::RegisterDisk);
-
-id_post_handler!(
-    purge_plan,
-    crate::BackendAction::PurgePlan,
-    "history_tree_id"
-);
-id_post_handler!(
-    split_plan,
-    crate::BackendAction::SplitPlan,
-    "history_tree_id"
-);
-id_post_handler!(
-    historical_save_plan,
-    crate::BackendAction::HistoricalSavePlan,
-    "history_tree_id"
-);
+async fn register_disk(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    // Even this offline-only endpoint retains the HTTP JSON syntax and size boundary.
+    json_body(request).await?;
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let _auth_owner = state.auth;
+        state.backend.register_disk(&identity)
+    })
+    .await
+    .map_err(ApiError::join)?
+    {
+        Ok(impossible) => match impossible {},
+        Err(error) => Err(error),
+    }
+}
 
 async fn management_status(State(state): State<AppState>) -> Json<Value> {
     // Never wait on password verification or credential publication on a Tokio

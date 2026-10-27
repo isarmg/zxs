@@ -317,11 +317,38 @@ impl Backend for TestBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn register_disk(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<std::convert::Infallible, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn commit_plan(
         &self,
         _identity: &crate::auth::Identity,
         _request: Result<crate::CommitPlan, crate::ApiError>,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_historical_save(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_purge(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PreparePurge, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_split(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PrepareSplit, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
     fn namespace_batch(
@@ -569,14 +596,6 @@ impl Backend for TestBackend {
         unreachable!("this test backend does not serve snapshot lookups")
     }
 
-    fn call(
-        &self,
-        _action: crate::BackendAction,
-        _identity: &Identity,
-        _input: Value,
-    ) -> Result<Value, ApiError> {
-        Err(ApiError::unsupported())
-    }
     fn upload(
         &self,
         _identity: &Identity,
@@ -1506,12 +1525,39 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         ) -> Result<storage_contract::OperationResult, crate::ApiError> {
             self.delegate.cancel_plan(identity, request)
         }
+        fn register_disk(
+            &self,
+            identity: &crate::auth::Identity,
+        ) -> Result<std::convert::Infallible, crate::ApiError> {
+            self.delegate.register_disk(identity)
+        }
         fn commit_plan(
             &self,
             identity: &crate::auth::Identity,
             request: Result<crate::CommitPlan, crate::ApiError>,
         ) -> Result<storage_contract::OperationResult, crate::ApiError> {
             self.delegate.commit_plan(identity, request)
+        }
+        fn prepare_historical_save(
+            &self,
+            identity: &crate::auth::Identity,
+            request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+        ) -> Result<storage_contract::Plan, crate::ApiError> {
+            self.delegate.prepare_historical_save(identity, request)
+        }
+        fn prepare_purge(
+            &self,
+            identity: &crate::auth::Identity,
+            request: Result<crate::PreparePurge, crate::ApiError>,
+        ) -> Result<storage_contract::Plan, crate::ApiError> {
+            self.delegate.prepare_purge(identity, request)
+        }
+        fn prepare_split(
+            &self,
+            identity: &crate::auth::Identity,
+            request: Result<crate::PrepareSplit, crate::ApiError>,
+        ) -> Result<storage_contract::Plan, crate::ApiError> {
+            self.delegate.prepare_split(identity, request)
         }
         fn namespace_batch(
             &self,
@@ -1730,14 +1776,6 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             unreachable!("this test backend does not serve snapshot lookups")
         }
 
-        fn call(
-            &self,
-            action: crate::BackendAction,
-            identity: &Identity,
-            input: Value,
-        ) -> Result<Value, ApiError> {
-            self.delegate.call(action, identity, input)
-        }
         fn range_content(
             &self,
             identity: &crate::auth::Identity,

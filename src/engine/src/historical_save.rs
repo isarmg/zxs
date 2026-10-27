@@ -7,19 +7,8 @@ use crate::{
     disk::*,
     *,
 };
-use data_serialization::{Deserialize, Serialize};
 use json_codec::{Value, json};
 use std::collections::BTreeMap;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub struct HistoricalSaveOptions {
-    pub source_commit_id: String,
-    pub name: String,
-    pub workspace_id: Option<String>,
-    pub primary_slot_id: Option<String>,
-    pub target_copies: Option<u32>,
-}
 
 fn text<'a>(input: &'a Value, key: &str) -> Result<&'a str> {
     input.get(key).and_then(Value::as_str).ok_or_else(|| {

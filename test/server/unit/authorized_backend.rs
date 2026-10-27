@@ -645,6 +645,16 @@ impl Backend for RecordingBackend {
         )?;
         Ok(recorded_operation(operation_id, "cancel_plan"))
     }
+    fn register_disk(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<std::convert::Infallible, crate::ApiError> {
+        self.record("register_disk", Some(identity), Value::Null)?;
+        Err(crate::ApiError::conflict(
+            storage_contract::ErrorCode::OfflineConfigurationRequired,
+            "offline registration",
+        ))
+    }
     fn commit_plan(
         &self,
         identity: &crate::auth::Identity,
@@ -658,6 +668,65 @@ impl Backend for RecordingBackend {
             json!({"plan_id":request.plan_id,"plan_digest":request.plan_digest,"operation_id":operation_id}),
         )?;
         Ok(recorded_operation(operation_id, "commit_plan"))
+    }
+    fn prepare_historical_save(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        let request = request?;
+        self.record(
+            "prepare_historical_save",
+            Some(identity),
+            json!({"history_tree_id":request.history_tree_id,"options":request.options?}),
+        )?;
+        Ok(storage_contract::Plan {
+            plan_id: "plan".into(),
+            kind: "historical_save".into(),
+            principal: identity.principal.clone(),
+            expected_sequence: 7,
+            digest: "digest".into(),
+            input: json!({}),
+            state: storage_contract::PlanState::Ready,
+        })
+    }
+    fn prepare_purge(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PreparePurge, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        let request = request?;
+        self.record(
+            "prepare_purge",
+            Some(identity),
+            json!({"history_tree_id":request.history_tree_id,"version_ids":request.version_ids?}),
+        )?;
+        Ok(storage_contract::Plan {
+            plan_id: "purge-plan".into(),
+            kind: "purge".into(),
+            principal: identity.principal.clone(),
+            expected_sequence: 7,
+            digest: "digest".into(),
+            input: json!({}),
+            state: storage_contract::PlanState::Ready,
+        })
+    }
+    fn prepare_split(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PrepareSplit, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        let request = request?;
+        self.record("prepare_split",Some(identity),json!({"history_tree_id":request.history_tree_id,"cut_commit_id":request.cut_commit_id?}))?;
+        Ok(storage_contract::Plan {
+            plan_id: "split-plan".into(),
+            kind: "split".into(),
+            principal: identity.principal.clone(),
+            expected_sequence: 7,
+            digest: "digest".into(),
+            input: json!({}),
+            state: storage_contract::PlanState::Ready,
+        })
     }
     fn namespace_batch(
         &self,
@@ -1108,18 +1177,6 @@ impl Backend for RecordingBackend {
             recovering: true,
         })
     }
-    fn call(
-        &self,
-        action: BackendAction,
-        identity: &Identity,
-        input: Value,
-    ) -> Result<Value, ApiError> {
-        self.record(
-            "call",
-            Some(identity),
-            json!({"action": format!("{action:?}"), "input": input}),
-        )
-    }
     fn upload(
         &self,
         identity: &Identity,
@@ -1531,7 +1588,11 @@ impl Fixture {
             }),
             ("plan", backend.plan(identity,"plan").map(|plan| { assert_eq!(plan,recorded_plan("plan")); json!({"returned_by":"plan"}) })),
             ("cancel_plan", backend.cancel_plan(identity,Ok(crate::CancelPlan {plan_id:"plan".into(),operation_id:Ok(operation_id)})).map(|operation| { assert_eq!(operation,recorded_operation(operation_id,"cancel_plan")); json!({"returned_by":"cancel_plan"}) })),
+            ("register_disk", backend.register_disk(identity).map(|never| match never {})),
             ("commit_plan", backend.commit_plan(identity,Ok(crate::CommitPlan {plan_id:"plan".into(),plan_digest:"digest".into(),operation_id:Ok(operation_id)})).map(|operation| { assert_eq!(operation,recorded_operation(operation_id,"commit_plan")); json!({"returned_by":"commit_plan"}) })),
+            ("prepare_historical_save", {backend.prepare_historical_save(identity,Ok(crate::PrepareHistoricalSave {history_tree_id:"history".into(),options:Ok(storage_contract::HistoricalSaveOptions {source_commit_id:"commit".into(),name:"Saved branch".into(),workspace_id:None,primary_slot_id:None,target_copies:None})})).map(|plan|{assert_eq!(plan.plan_id,"plan");assert_eq!(plan.expected_sequence,7);json!({"returned_by":"prepare_historical_save"})})}),
+            ("prepare_purge", {backend.prepare_purge(identity,Ok(crate::PreparePurge {history_tree_id:"history".into(),version_ids:Ok(vec!["second".into(),"first".into(),"second".into()])})).map(|plan|{assert_eq!(plan.plan_id,"purge-plan");assert_eq!(plan.expected_sequence,7);json!({"returned_by":"prepare_purge"})})}),
+            ("prepare_split", {backend.prepare_split(identity,Ok(crate::PrepareSplit {history_tree_id:"history".into(),cut_commit_id:Ok("cut".into())})).map(|plan|{assert_eq!(plan.plan_id,"split-plan");assert_eq!(plan.expected_sequence,7);json!({"returned_by":"prepare_split"})})}),
             ("namespace_batch", {
                 backend.namespace_batch(identity,crate::NamespaceBatch {slot_id:"P01".into(),request:storage_contract::DirectoryNamespaceBatch {kind:storage_contract::DirectoryBatchKind::Delete,items:vec![]},operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"namespace_batch"));json!({"returned_by":"namespace_batch"})})
             }),
@@ -1869,10 +1930,6 @@ impl Fixture {
                     }),
             ),
             (
-                "call",
-                backend.call(BackendAction::PurgePlan, identity, json!({"probe": 7})),
-            ),
-            (
                 "upload",
                 backend
                     .upload(
@@ -1972,6 +2029,16 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
     let fixture = Fixture::new();
     let results = fixture.protected_calls();
     for (method, result) in &results {
+        if *method == "register_disk" {
+            let error = result.as_ref().unwrap_err();
+            assert_eq!(error.status, 409);
+            assert_eq!(
+                error.code,
+                storage_contract::ErrorCode::OfflineConfigurationRequired
+            );
+            assert_eq!(error.message, "offline registration");
+            continue;
+        }
         let expected = if *method == "checksums" {
             json!([19, 23])
         } else {
@@ -2025,7 +2092,11 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"repository_id":"repository","path":"docs","target_copies":2,"backup_prefixes":{"B01":"backup"},"expected_generation":7,"expected_scope_id":"scope","operation_id":"op_00000000000000000000000000000000"}),
         json!({"plan_id":"plan"}),
         json!({"plan_id":"plan","operation_id":"op_00000000000000000000000000000000"}),
+        Value::Null,
         json!({"plan_id":"plan","plan_digest":"digest","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"history_tree_id":"history","options":{"source_commit_id":"commit","name":"Saved branch","workspace_id":null,"primary_slot_id":null,"target_copies":null}}),
+        json!({"history_tree_id":"history","version_ids":["second","first","second"]}),
+        json!({"history_tree_id":"history","cut_commit_id":"cut"}),
         json!({"slot_id":"P01","request":{"kind":"delete","items":[]},"operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","branch_id":"branch","location":null,"operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","branch_id":"branch","location":{"repository_id":"repository","path":"Café/file.txt","key":"café/file.txt"},"operation_id":"op_00000000000000000000000000000000"}),
@@ -2063,7 +2134,6 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"branch":"branch","entry_id":"branch"}),
         json!({"branch":"branch","path":"File.txt","key":"file.txt"}),
         json!({"branch":"branch","commit":"commit","path":"File.txt","key":"file.txt"}),
-        json!({"action": format!("{:?}", BackendAction::PurgePlan), "input": {"probe": 7}}),
         upload,
         generation,
         json!({"version": "version-content"}),

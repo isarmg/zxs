@@ -41,7 +41,6 @@ const RECONCILIATION_CONTENT: usize = 2;
 
 pub(super) struct LostCommitReply {
     inner: EngineBackend,
-    calls: Mutex<Vec<(crate::BackendAction, Value)>>,
     authorizations: Mutex<Vec<String>>,
     version_authorizations: Mutex<Vec<String>>,
     repository_snapshots: Mutex<Vec<String>>,
@@ -60,10 +59,6 @@ impl LostCommitReply {
 
     fn take_authorizations(&self) -> Vec<String> {
         std::mem::take(&mut *self.authorizations.lock().unwrap())
-    }
-
-    fn take_calls(&self) -> Vec<(crate::BackendAction, Value)> {
-        std::mem::take(&mut *self.calls.lock().unwrap())
     }
 }
 impl Backend for LostCommitReply {
@@ -425,12 +420,39 @@ impl Backend for LostCommitReply {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.cancel_plan(identity, request)
     }
+    fn register_disk(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<std::convert::Infallible, crate::ApiError> {
+        self.inner.register_disk(identity)
+    }
     fn commit_plan(
         &self,
         identity: &crate::auth::Identity,
         request: Result<crate::CommitPlan, crate::ApiError>,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.commit_plan(identity, request)
+    }
+    fn prepare_historical_save(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.inner.prepare_historical_save(identity, request)
+    }
+    fn prepare_purge(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PreparePurge, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.inner.prepare_purge(identity, request)
+    }
+    fn prepare_split(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PrepareSplit, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.inner.prepare_split(identity, request)
     }
     fn namespace_batch(
         &self,
@@ -648,16 +670,6 @@ impl Backend for LostCommitReply {
         self.inner.lookup_at(identity, branch, commit, path)
     }
 
-    fn call(
-        &self,
-        action: crate::BackendAction,
-        identity: &Identity,
-        input: Value,
-    ) -> Result<Value, ApiError> {
-        self.calls.lock().unwrap().push((action, input.clone()));
-        let value = self.inner.call(action, identity, input)?;
-        Ok(value)
-    }
     fn upload(
         &self,
         identity: &Identity,
@@ -763,7 +775,6 @@ pub(super) fn fixture() -> (Fixture, Arc<Shared>, Arc<LostCommitReply>, String) 
     fs::create_dir(spool.join("empty-directory")).unwrap();
     let backend = Arc::new(LostCommitReply {
         inner: EngineBackend::new(engine),
-        calls: Mutex::new(Vec::new()),
         authorizations: Mutex::new(Vec::new()),
         version_authorizations: Mutex::new(Vec::new()),
         repository_snapshots: Mutex::new(Vec::new()),

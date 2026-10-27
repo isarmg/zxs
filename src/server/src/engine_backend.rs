@@ -22,7 +22,7 @@ mod operations;
 mod read_projection;
 mod wire;
 pub(crate) use wire::error;
-use wire::{current_entry_source, encode, field, keys};
+use wire::{current_entry_source, field};
 
 pub(crate) fn report_recovery_warnings(engine: &mut Engine) {
     let warnings = engine.take_recovery_warnings();
@@ -914,6 +914,66 @@ impl Backend for EngineBackend {
         let current = current_protected_identity(&engine, identity)?;
         file_manager::write_session(&mut engine, &current, request)
     }
+    fn prepare_historical_save(
+        &self,
+        identity: &Identity,
+        request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        let request = request?;
+        repo_for_history(&engine, &request.history_tree_id)?;
+        engine
+            .create_historical_save_plan(
+                &request.history_tree_id,
+                request.options?,
+                &current.principal,
+            )
+            .map_err(error)
+    }
+    fn prepare_purge(
+        &self,
+        identity: &Identity,
+        request: Result<crate::PreparePurge, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        let request = request?;
+        repo_for_history(&engine, &request.history_tree_id)?;
+        engine
+            .create_purge_plan(
+                &request.history_tree_id,
+                request.version_ids?,
+                &current.principal,
+            )
+            .map_err(error)
+    }
+    fn prepare_split(
+        &self,
+        identity: &Identity,
+        request: Result<crate::PrepareSplit, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        let request = request?;
+        repo_for_history(&engine, &request.history_tree_id)?;
+        engine
+            .create_split_plan(
+                &request.history_tree_id,
+                &request.cut_commit_id?,
+                &current.principal,
+            )
+            .map_err(error)
+    }
     fn backup_configuration(
         &self,
         identity: &Identity,
@@ -1526,6 +1586,21 @@ impl Backend for EngineBackend {
             .map_err(error)
     }
 
+    fn register_disk(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<std::convert::Infallible, crate::ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        Err(ApiError::new(
+            ::http::StatusCode::CONFLICT,
+            storage_contract::ErrorCode::OfflineConfigurationRequired,
+            "disk registration requires an explicit offline configuration and topology migration",
+        ))
+    }
     fn commit_plan(
         &self,
         identity: &Identity,
@@ -1539,78 +1614,6 @@ impl Backend for EngineBackend {
         Application::new(&mut engine, &identity).commit_plan(request?)
     }
 
-    fn call(
-        &self,
-        action: crate::BackendAction,
-        identity: &Identity,
-        input: Value,
-    ) -> Result<Value, ApiError> {
-        let mut engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
-        let identity = &current;
-        match action {
-            crate::BackendAction::HistoricalSavePlan => {
-                keys(
-                    &input,
-                    &[
-                        "history_tree_id",
-                        "source_commit_id",
-                        "name",
-                        "workspace_id",
-                        "primary_slot_id",
-                        "target_copies",
-                    ],
-                )?;
-                let history = field(&input, "history_tree_id")?;
-                repo_for_history(&engine, history)?;
-                let mut options = input.clone();
-                options.as_object_mut().unwrap().remove("history_tree_id");
-                let options: storage_engine::HistoricalSaveOptions =
-                    json_codec::from_value(options).map_err(ApiError::invalid_source)?;
-                encode(
-                    engine
-                        .create_historical_save_plan(history, options, &identity.principal)
-                        .map_err(error)?,
-                )
-            }
-            crate::BackendAction::PurgePlan => {
-                keys(&input, &["history_tree_id", "version_ids"])?;
-                let history = field(&input, "history_tree_id")?;
-                repo_for_history(&engine, history)?;
-                let versions: Vec<String> = json_codec::from_value(
-                    input
-                        .get("version_ids")
-                        .cloned()
-                        .ok_or_else(|| ApiError::invalid("version_ids required"))?,
-                )
-                .map_err(ApiError::invalid_source)?;
-                encode(
-                    engine
-                        .create_purge_plan(history, versions, &identity.principal)
-                        .map_err(error)?,
-                )
-            }
-            crate::BackendAction::SplitPlan => {
-                keys(&input, &["history_tree_id", "cut_commit_id"])?;
-                let history = field(&input, "history_tree_id")?;
-                repo_for_history(&engine, history)?;
-                encode(
-                    engine
-                        .create_split_plan(
-                            history,
-                            field(&input, "cut_commit_id")?,
-                            &identity.principal,
-                        )
-                        .map_err(error)?,
-                )
-            }
-            crate::BackendAction::RegisterDisk => Err(ApiError::new(
-                ::http::StatusCode::CONFLICT,
-                storage_contract::ErrorCode::OfflineConfigurationRequired,
-                "disk registration requires an explicit offline configuration and topology migration",
-            )),
-        }
-    }
     fn upload(
         &self,
         identity: &Identity,

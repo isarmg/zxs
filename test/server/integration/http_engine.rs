@@ -18,6 +18,8 @@ use storage_server::{
 mod backup_namespace;
 #[path = "http_engine/daily_management.rs"]
 mod daily_management;
+#[path = "http_engine/disk_registration.rs"]
+mod disk_registration;
 #[path = "http_engine/file_metadata_operations.rs"]
 mod file_metadata_operations;
 #[path = "http_engine/history_alias_operations.rs"]
@@ -5209,5 +5211,499 @@ async fn disk_write_session_tracks_inherited_selection_and_merged_aliases() {
     assert_eq!(
         survivor["selected_file_contexts"][format!("{repo}/file.txt")]["branch_id"],
         left
+    );
+}
+
+#[tokio::test]
+async fn historical_prepare_preserves_history_admission_and_fresh_plan_contract() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Prepare","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    let history = repo["history_tree_id"].as_str().unwrap();
+    let branch = repo["main_branch_id"].as_str().unwrap();
+    let head = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/branches/{branch}"),
+        None,
+    )
+    .await;
+    let source = head["head_commit_id"].as_str().unwrap();
+    let route = format!("/api/history-trees/{history}/historical-save-plans");
+    let missing = "/api/history-trees/missing/historical-save-plans";
+    let invalid = [
+        json!({}),
+        json!({"source_commit_id":null,"name":"saved"}),
+        json!({"source_commit_id":source,"name":5}),
+        json!({"source_commit_id":source,"name":"saved","workspace_id":5}),
+        json!({"source_commit_id":source,"name":"saved","primary_slot_id":true}),
+        json!({"source_commit_id":source,"name":"saved","target_copies":-1}),
+        json!({"source_commit_id":source,"name":"saved","target_copies":4294967296u64}),
+    ];
+    let before = success(&app, &token, "GET", "/api/events", None).await;
+    let bytes = manager_disk_files(root.path());
+    for body in invalid {
+        let (status, error) = send(&app, Some(&token), "POST", missing, Some(body.clone())).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(error["error"]["code"], "NOT_FOUND");
+        let (status, error) = send(&app, Some(&token), "POST", &route, Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], "INVALID_REQUEST");
+    }
+    for body in [json!({"operation_id":new_id("op")}), json!({"unknown":1})] {
+        assert_eq!(
+            send(&app, Some(&token), "POST", missing, Some(body))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        success(&app, &token, "GET", "/api/events", None).await,
+        before
+    );
+    assert!(
+        manager_disk_files(root.path()) == bytes,
+        "invalid plan preparation changed disk data"
+    );
+    let body = json!({"source_commit_id":source,"name":"saved"});
+    let first = success(&app, &token, "POST", &route, Some(body.clone())).await;
+    let second = success(&app, &token, "POST", &route, Some(body)).await;
+    assert_ne!(first["plan_id"], second["plan_id"]);
+    assert_eq!(first["input"], second["input"]);
+    assert_eq!(first["digest"], second["digest"]);
+    assert_eq!(first["kind"], "historical_save");
+    assert_eq!(first["state"], "ready");
+    assert!(first["expected_sequence"].is_string());
+    assert!(first.get("operation_id").is_none());
+    assert_eq!(first["input"]["history_tree_id"], history);
+    assert_eq!(first["input"]["source_commit_id"], source);
+    assert_eq!(first["input"]["workspace_id"], Value::Null);
+    assert_eq!(first["input"]["sealed_manifest_hash"], Value::Null);
+    assert_eq!(first["input"]["full_copy_bytes"], "0");
+    let explicit=success(&app,&token,"POST",&route,Some(json!({"source_commit_id":source,"name":"saved","workspace_id":null,"primary_slot_id":null,"target_copies":null}))).await;
+    assert_eq!(first["input"], explicit["input"]);
+    assert_eq!(first["digest"], explicit["digest"]);
+    let revoked = login(&app, "admin", "integration-test-password").await;
+    success(&app, &revoked, "POST", "/api/auth/logout", None).await;
+    assert_eq!(
+        send(
+            &app,
+            Some(&revoked),
+            "POST",
+            missing,
+            Some(json!({"name":null}))
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    drop(app);
+    let system = root.path().join("system");
+    let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
+    let auth = backend.open_auth(&system).unwrap();
+    let reopened = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let token = login(&reopened, "admin", "integration-test-password").await;
+    assert_eq!(
+        success(
+            &reopened,
+            &token,
+            "GET",
+            &format!("/api/plans/{}", first["plan_id"].as_str().unwrap()),
+            None
+        )
+        .await,
+        first
+    );
+}
+
+#[tokio::test]
+async fn purge_prepare_preserves_history_priority_pins_and_sorted_fresh_plans() {
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let mut engine = Engine::initialize(
+        &system,
+        Config::development([
+            root.path().join("d1"),
+            root.path().join("d2"),
+            root.path().join("d3"),
+        ]),
+    )
+    .unwrap();
+    let repo = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Purge preparation").unwrap(),
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let mut versions = Vec::new();
+    for bytes in [
+        b"old".as_slice(),
+        b"middle".as_slice(),
+        b"current".as_slice(),
+    ] {
+        let workspace = engine
+            .create_workspace(&repo.main_branch_id, "admin")
+            .unwrap();
+        engine
+            .stage_bytes(&workspace.workspace_id, "file.txt", bytes)
+            .unwrap();
+        engine
+            .commit_workspace(CommitRequest {
+                workspace_id: workspace.workspace_id,
+                operation_id: storage_contract::OperationId::generate(),
+                principal: "admin".into(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: String::new(),
+                request_digest: None,
+            })
+            .unwrap();
+        versions.push(
+            engine
+                .list_tree(&repo.main_branch_id)
+                .unwrap()
+                .into_iter()
+                .find(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
+                .unwrap()
+                .version_id,
+        );
+    }
+    let backend = Arc::new(EngineBackend::new(engine));
+    let auth = backend
+        .protect_auth(AuthStore::initialize(&system, "admin", "integration-test-password").unwrap())
+        .unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let route = format!("/api/history-trees/{}/purge-plans", repo.history_tree_id);
+    let missing = "/api/history-trees/missing/purge-plans";
+    let baseline = success(&app, &token, "GET", "/api/events", None).await;
+    let bytes = manager_disk_files(root.path());
+    for path in [route.as_str(), missing] {
+        let (status, error) =
+            send(&app, Some(&token), "POST", path, Some(json!({"unknown":1}))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], "INVALID_REQUEST");
+    }
+
+    for body in [
+        json!({}),
+        json!({"version_ids":null}),
+        json!({"version_ids":{}}),
+        json!({"version_ids":"version"}),
+        json!({"version_ids":[null]}),
+        json!({"version_ids":[3]}),
+    ] {
+        let (status, error) = send(&app, Some(&token), "POST", missing, Some(body.clone())).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(error["error"]["code"], "NOT_FOUND");
+        let (status, error) = send(&app, Some(&token), "POST", &route, Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], "INVALID_REQUEST");
+    }
+    for (ids, code) in [
+        (json!([]), "INVALID_REQUEST"),
+        (json!([""]), "VERSION_NOT_FOUND"),
+        (json!([versions[2]]), "CONTENT_PINNED"),
+    ] {
+        let (_, error) = send(
+            &app,
+            Some(&token),
+            "POST",
+            &route,
+            Some(json!({"version_ids":ids})),
+        )
+        .await;
+        assert_eq!(error["error"]["code"], code);
+    }
+    assert_eq!(
+        success(&app, &token, "GET", "/api/events", None).await,
+        baseline
+    );
+    assert!(
+        manager_disk_files(root.path()) == bytes,
+        "rejected purge preparation changed disk data"
+    );
+    let first = success(
+        &app,
+        &token,
+        "POST",
+        &route,
+        Some(json!({"version_ids":[versions[1],versions[0],versions[1]]})),
+    )
+    .await;
+    let second = success(
+        &app,
+        &token,
+        "POST",
+        &route,
+        Some(json!({"version_ids":[versions[0],versions[1]]})),
+    )
+    .await;
+    let mut sorted = versions[..2].to_vec();
+    sorted.sort();
+    assert_eq!(
+        first["input"],
+        json!({"history_tree_id":repo.history_tree_id,"version_ids":sorted})
+    );
+    assert_eq!(
+        first["digest"],
+        storage_contract::object_hash("plan", &first["input"]).unwrap()
+    );
+    assert_eq!(first["input"], second["input"]);
+    assert_eq!(first["digest"], second["digest"]);
+    assert_ne!(first["plan_id"], second["plan_id"]);
+    assert_eq!(first["kind"], "purge");
+    assert_eq!(first["state"], "ready");
+    assert!(first["expected_sequence"].is_string());
+    assert!(first.get("operation_id").is_none());
+    assert_eq!(
+        send(
+            &app,
+            Some(&token),
+            "POST",
+            missing,
+            Some(json!({"operation_id":new_id("op")}))
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let revoked = login(&app, "admin", "integration-test-password").await;
+    success(&app, &revoked, "POST", "/api/auth/logout", None).await;
+    assert_eq!(
+        send(
+            &app,
+            Some(&revoked),
+            "POST",
+            missing,
+            Some(json!({"version_ids":null}))
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    drop(app);
+    let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
+    let auth = backend.open_auth(&system).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let token = login(&app, "admin", "integration-test-password").await;
+    assert_eq!(
+        success(
+            &app,
+            &token,
+            "GET",
+            &format!("/api/plans/{}", first["plan_id"].as_str().unwrap()),
+            None
+        )
+        .await,
+        first
+    );
+    assert_eq!(version_bytes(&app, &token, &versions[0]).await, b"old");
+}
+
+#[tokio::test]
+async fn split_prepare_preserves_admission_cut_rules_workspace_pins_and_plan_wire() {
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let mut engine = Engine::initialize(
+        &system,
+        Config::development([
+            root.path().join("d1"),
+            root.path().join("d2"),
+            root.path().join("d3"),
+        ]),
+    )
+    .unwrap();
+    let repo = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Split preparation").unwrap(),
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let root_commit = engine.state().branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "file.txt", b"cut contents")
+        .unwrap();
+    let cut = engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: storage_contract::OperationId::generate(),
+            principal: "admin".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: String::new(),
+            request_digest: None,
+        })
+        .unwrap()
+        .commit_id
+        .unwrap();
+    let backend = Arc::new(EngineBackend::new(engine));
+    let auth = backend
+        .protect_auth(AuthStore::initialize(&system, "admin", "integration-test-password").unwrap())
+        .unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let route = format!("/api/history-trees/{}/split-plans", repo.history_tree_id);
+    let missing = "/api/history-trees/missing/split-plans";
+    let baseline = success(&app, &token, "GET", "/api/events", None).await;
+    let bytes = manager_disk_files(root.path());
+    for path in [route.as_str(), missing] {
+        let (status, error) =
+            send(&app, Some(&token), "POST", path, Some(json!({"unknown":1}))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], "INVALID_REQUEST");
+    }
+
+    for body in [
+        json!({}),
+        json!({"cut_commit_id":null}),
+        json!({"cut_commit_id":{}}),
+        json!({"cut_commit_id":[]}),
+        json!({"cut_commit_id":3}),
+        json!({"cut_commit_id":""}),
+    ] {
+        let (status, error) = send(&app, Some(&token), "POST", missing, Some(body.clone())).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(error["error"]["code"], "NOT_FOUND");
+        let (status, error) = send(&app, Some(&token), "POST", &route, Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], "INVALID_REQUEST");
+    }
+    for (cut, code) in [
+        ("missing", "COMMIT_NOT_FOUND"),
+        (root_commit.as_str(), "SPLIT_ROOT_FORBIDDEN"),
+    ] {
+        let (_, error) = send(
+            &app,
+            Some(&token),
+            "POST",
+            &route,
+            Some(json!({"cut_commit_id":cut})),
+        )
+        .await;
+        assert_eq!(error["error"]["code"], code);
+    }
+    assert_eq!(
+        success(&app, &token, "GET", "/api/events", None).await,
+        baseline
+    );
+    assert!(
+        manager_disk_files(root.path()) == bytes,
+        "rejected split preparation changed disk data"
+    );
+    let workspace = success(
+        &app,
+        &token,
+        "POST",
+        "/api/workspaces",
+        Some(json!({"branch_id":repo.main_branch_id})),
+    )
+    .await;
+    let (_, busy) = send(
+        &app,
+        Some(&token),
+        "POST",
+        &route,
+        Some(json!({"cut_commit_id":cut})),
+    )
+    .await;
+    assert_eq!(busy["error"]["code"], "WORKSPACE_BUSY");
+    success(
+        &app,
+        &token,
+        "POST",
+        &format!(
+            "/api/workspaces/{}/abort",
+            workspace["workspace_id"].as_str().unwrap()
+        ),
+        Some(json!({})),
+    )
+    .await;
+    let first = success(
+        &app,
+        &token,
+        "POST",
+        &route,
+        Some(json!({"cut_commit_id":cut})),
+    )
+    .await;
+    let second = success(
+        &app,
+        &token,
+        "POST",
+        &route,
+        Some(json!({"cut_commit_id":cut})),
+    )
+    .await;
+    assert_eq!(
+        first["input"],
+        json!({"history_tree_id":repo.history_tree_id,"cut_commit_id":cut})
+    );
+    assert_eq!(
+        first["digest"],
+        storage_contract::object_hash("plan", &first["input"]).unwrap()
+    );
+    assert_eq!(first["input"], second["input"]);
+    assert_eq!(first["digest"], second["digest"]);
+    assert_ne!(first["plan_id"], second["plan_id"]);
+    assert_eq!(first["kind"], "split");
+    assert_eq!(first["state"], "ready");
+    assert!(first["expected_sequence"].is_string());
+    assert!(first.get("operation_id").is_none());
+    assert_eq!(
+        send(
+            &app,
+            Some(&token),
+            "POST",
+            missing,
+            Some(json!({"operation_id":new_id("op")}))
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let revoked = login(&app, "admin", "integration-test-password").await;
+    success(&app, &revoked, "POST", "/api/auth/logout", None).await;
+    assert_eq!(
+        send(
+            &app,
+            Some(&revoked),
+            "POST",
+            missing,
+            Some(json!({"cut_commit_id":null}))
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    drop(app);
+    let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
+    let auth = backend.open_auth(&system).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let token = login(&app, "admin", "integration-test-password").await;
+    assert_eq!(
+        success(
+            &app,
+            &token,
+            "GET",
+            &format!("/api/plans/{}", first["plan_id"].as_str().unwrap()),
+            None
+        )
+        .await,
+        first
     );
 }

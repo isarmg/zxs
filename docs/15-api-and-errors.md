@@ -108,6 +108,7 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `PUT /api/primary-placement-rules/{rule}` | 条件设置仓库/目录的一级盘规则，只影响新版本；旧版另迁移 |
 | `GET /api/versions/{version}/placement` | 该版本一级归属、冻结路由、每级健康和迁移残留 |
 | `GET /api/admin/disks` | 磁盘状态，仅授权管理员 |
+| `POST /api/admin/disks` | 当前身份准入后以 `409 OFFLINE_CONFIGURATION_REQUIRED` 拒绝在线登记；登记需要显式离线配置和拓扑迁移 |
 | `POST /api/admin/disks/{disk}/drain` | 排空前检查和迁移任务 |
 | `POST /api/admin/disks/{disk}/eject` | 检查后安全卸载 |
 

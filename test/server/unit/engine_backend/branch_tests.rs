@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ApiError, backend_branch::BranchResponse, engine_backend::wire::encode};
+use crate::backend_branch::BranchResponse;
 use json_codec::{Value, json};
 
 // Frozen pre-migration wire oracle; independent from the new typed projection.
@@ -15,15 +15,18 @@ fn old_content_wire(state: &State, visible: Option<&str>, source: Option<&str>) 
         "source_version_id":source,"content_state":if inherited { "PENDING" } else { state },
         "visible_content_state":state})
 }
-fn old_branch_wire(state: &State, branch: &storage_contract::Branch) -> Result<Value, ApiError> {
-    let mut result = encode(branch)?;
+fn old_branch_wire(
+    state: &State,
+    branch: &storage_contract::Branch,
+) -> Result<Value, json_codec::Error> {
+    let mut result = json_codec::to_value(branch)?;
     let snapshot = state
         .commits
         .get(&branch.head_commit_id)
         .expect("invariant: admitted branch head references an existing commit");
     let mut pending = snapshot.pending_file_versions.clone();
     pending.extend(branch.pending_file_versions.clone());
-    result["pending_file_versions"] = encode(&pending)?;
+    result["pending_file_versions"] = json_codec::to_value(&pending)?;
     result["materialized"] = pending.is_empty().into();
     result["inherited"] = (!pending.is_empty()).into();
     result["content_state"] = if pending.is_empty() {
@@ -135,7 +138,7 @@ fn branch_projection_matches_fixed_legacy_shapes_and_pending_precedence() {
                         }
                         let expected = old_branch_wire(&state, &branch).unwrap();
                         let snapshot = capture(&state, &branch);
-                        let actual = encode(BranchResponse::from(snapshot)).unwrap();
+                        let actual = json_codec::to_value(BranchResponse::from(snapshot)).unwrap();
                         assert_eq!(
                             actual, expected,
                             "file={file} source={source:?} visible={visible:?} state={disposition:?} alias={alias}"

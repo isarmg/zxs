@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    Backend, BackendAction, Content,
+    Backend, Content,
     auth::{AuthStore, Identity},
 };
 use http_routing::{
@@ -305,11 +305,38 @@ impl Backend for Probe {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn register_disk(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<std::convert::Infallible, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn commit_plan(
         &self,
         _identity: &crate::auth::Identity,
         _request: Result<crate::CommitPlan, crate::ApiError>,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_historical_save(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_purge(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PreparePurge, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_split(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PrepareSplit, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
     fn namespace_batch(
@@ -526,10 +553,6 @@ impl Backend for Probe {
         unreachable!("this test backend does not serve snapshot lookups")
     }
 
-    fn call(&self, _: BackendAction, _: &Identity, _: Value) -> Result<Value, ApiError> {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        Err(ApiError::unsupported())
-    }
     fn observe_disks(
         &self,
         _: &crate::InternalDiskObservation,

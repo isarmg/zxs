@@ -35,7 +35,6 @@ pub use engine::{
     OpenedContent, OperationReadPlan, OperationRecord, RangeContent, ReadLease, RecoveryWarnings,
     RetainedWorkspaceLimits, ValidatedConfig, WorkspaceReadPlan,
 };
-pub use historical_save::HistoricalSaveOptions;
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
 pub use protection::{
     BackupConfigurationRequest, PlacementRuleUpdate, ProtectionPolicyUpdate,

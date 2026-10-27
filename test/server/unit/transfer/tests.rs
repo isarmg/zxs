@@ -625,11 +625,38 @@ impl crate::Backend for RetainedGenerationBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn register_disk(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<std::convert::Infallible, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn commit_plan(
         &self,
         _identity: &crate::auth::Identity,
         _request: Result<crate::CommitPlan, crate::ApiError>,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_historical_save(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_purge(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PreparePurge, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_split(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PrepareSplit, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
     fn namespace_batch(
@@ -844,15 +871,6 @@ impl crate::Backend for RetainedGenerationBackend {
         _: &name_policy::LookupPath,
     ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
         unreachable!("this test backend does not serve snapshot lookups")
-    }
-
-    fn call(
-        &self,
-        _action: crate::BackendAction,
-        _identity: &Identity,
-        _input: Value,
-    ) -> Result<Value, ApiError> {
-        Err(ApiError::unsupported())
     }
 
     fn upload(

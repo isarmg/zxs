@@ -82,15 +82,16 @@ SMB RPC 入口一次解析路径并直接构造同一类型，替换目标删除
 
 故障代理在真实 stage_namespace 方法注入，不再拦截已经删除的 action。授权／撤权、取消预算、公开路由 panic 矩阵同步扩展到真实方法；HTTP 新回归验证非法 envelope 不暂存、重复键拒绝及 Unicode 创建／查找拼写，SMB 原 rename/replace/丢回复/预提交失败矩阵继续适用。
 
-## 剩余 Value 调用清单
+## Value 调用与最后动作退役
 
-此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 26 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
+三类计划 prepare 和磁盘在线登记已接续迁移为具名 Backend 方法，最后四个动作不再
+拥有生产调用方。`BackendAction`、`Backend::call`、HTTP 通用 call 与 handler 宏、
+Engine JSON action dispatcher 及其测试转发／空调用记录均已删除，不保留空枚举。
+源码集成与验证限制见[最后动作集成](../validation/final-typed-actions-integration.md)。
 
-- **工作区 seal／公开发布已接续迁移。** 见[公开提交边界](detached-workspace-commits.md#public-commit-envelope-and-seal)；HTTP 与 SMB 保留各自摘要契约。上传 publication 结果也已接续类型化；namespace 暂存也已接续迁移；write-session 已接续迁移，通用读取仍有 Value，不能据当前迁移宣称全部工作区接口已经分层。
-- **SMB 绑定／只读冻结版本。** 绑定 GET/PUT、Capabilities、Repository 与冻结版本已使用 typed 请求/快照/准入，生产 Session::call 已删除。不是本次 typed 当前查询的后备路径。
-- **HTTP 通用读取。** 目录分支 GET full/summary 与 POST 有界目录选择已接续迁移；Plan 等其余查询仍由 HTTP 通用分派调用 `Backend::call`。
-- **HTTP 写入与计划。** 目录范围创建、split/purge/historical-save/plan 的请求与结果仍需逐组迁移；仓库和完整分支创建及目录默认选择、重命名已接续迁移。operation HTTP 入口已接续到既有 typed 方法；其余 action 仍需逐项迁移。
-- **文件管理与管理控制面。** `FileManager*` action、setup_operation 等仍有独立 Value 协议；management_status/retry_storage 已接续类型化；需要核对每个 HTTP 消费者，不能以新增一个包裹枚举代替拆除旧 JSON 路径。
+仍存在的 `setup_operation` 是独立管理初始化协议；`management_status`、Plan.input、
+OperationResult.result 和持久化 Value 具有各自消费者，不能因 dispatcher 退役机械删除。
+这不等于所有领域／持久化／wire 模型分离完成，也不代表全仓已经符合规范。
 
 这次不改领域 `OperationResult.result`、Plan 输入、持久化编码、canonical 哈希、永久幂等收据或公开 `Commit.kind`。当前 `core.schema.json` 的 `$defs.Commit.properties.kind` 是开放 string，不可仅按内部已见字面量将它收窄为封闭枚举。后续 model/persist/wire 分离应独立建立固定向量和公开消费者证据。
 
@@ -99,7 +100,7 @@ SMB RPC 入口一次解析路径并直接构造同一类型，替换目标删除
 
 HTTP `/api/branches/{branch}/write-sessions` 在 bounded strict JSON/path-body 绑定后，持有 backend_slots 的阻塞任务解析只含 branch_id 的 DTO；Backend::create_write_session 接受已解析分支文本并返回 WorkspaceWriteSession，不保留 WriteSession action 或内部 JSON 路径。当前身份复核、分支仓库可用性、工作区创建和 expires_at 捕获均在同一引擎锁内；没有调用 create_workspace 后再次读取配置的准入窗口。格式错误在当前 Backend 准入前拒绝，撤权及领域创建/预算错误顺序不变。
 
-响应显式映射 write_session_id/workspace_id、scope 和字符串 u64；内部租期保持 u64，保留现有饱和到期时间规则，不返回任何本机路径。会话创建仍是非幂等工作区分配，不伪造永久操作收据；后续发布的永久幂等契约不变。FileManagerWriteSession 是不同入口，仍在剩余清单。
+响应显式映射 write_session_id/workspace_id、scope 和字符串 u64；内部租期保持 u64，保留现有饱和到期时间规则，不返回任何本机路径。会话创建仍是非幂等工作区分配，不伪造永久操作收据；后续发布的永久幂等契约不变。磁盘路径写会话是不同入口，现已接续为 `create_disk_write_session`，仍不伪造永久收据。
 
 
 ## 冻结文件版本元数据与读句柄准入
@@ -146,7 +147,7 @@ Backend::ready() 不接收身份；HTTP /readyz 与后台 observe_storage_once �
 
 引擎保留 read-only拒绝→同锁捕获固定成员/配置/sequence与磁盘观察计划→解锁真实观察→全部配置元数据成员在线校验的顺序。返回值只是一次观察，不授予未来写入或缓存磁盘健康。后台仍持有同一 engine lease完成一次样本、更新时核对当前 backend Arc身份与 admitted状态、保留错误分类/observed_at/15秒过期逻辑；无成员多数表决或刷新间隔变更。
 
-原1–4成员及掉盘拒绝测试改为真实typed调用，固定wire/匿名HTTP/真实panic/管理槽取消矩阵同步，另以全部 BackendAction::ALL 验证缺凭据时每个generic action在读字段前拒绝。management_slots仍独立于工作区backend_slots，取消请求不提前释放阻塞观察持有的许可。
+原1–4成员及掉盘拒绝测试改为真实typed调用，固定wire/匿名HTTP/真实panic/管理槽取消矩阵同步，缺凭据矩阵现已接续为全部具名入口，继续验证字段／存储工作前的身份拒绝。management_slots仍独立于工作区backend_slots，取消请求不提前释放阻塞观察持有的许可。
 
 
 ## 保留工作区容量投影
@@ -273,9 +274,12 @@ HTTP `/api/files/{file}/history` 与实际 SMB 测试消费者直接调用 requi
 保留外部按 history 查找的两条 NotFound 和未知 file 的 file history not found，不添加 active/content-state/跨仓库筛选。原手造损坏 State 的服务器“不可见”测试已删除；真实磁盘 store/load/verified_snapshot 负例覆盖 MissingHistory、MissingRepository，并新增仅版本孤儿触发 versions coverage 拒绝的断言。合法状态回归覆盖真实核心查询与原 wire 规范字节一致、后续发布/撤权与已准入快照生命周期、锁外序列化、HTTP 路径不可被 query 覆盖、原始版本 wire 对齐，以及真实 typed 方法的授权、撤权、panic 和取消预算矩阵。领域/持久化 FileVersion 分离并未因这次 wire 投影而全面完成。
 
 
-## 内部动作枚举不承担字符串协议
+## 内部动作枚举的退役
 
-剩余 BackendAction 只由生产 Rust 调用方传递，不是 HTTP/RPC 字符串协议。其无生产消费者的 as_str/TryFrom 与旧 roundtrip/retired 字符串列表已删除；同一宏声明生成 enum 和仅 cfg(test) 可见的 ALL，真实未认证全动作授权矩阵仍遍历全部剩余动作，不维护第二份动作清单。两个测试记录器用 Debug 标记验证 typed 路由/装饰器转发，不把 fake 响应误当公开协议。此清理不减少剩余 Value payload 数量，也不替代后续逐组迁移。
+原 BackendAction 不是 HTTP/RPC 字符串协议；随着最后四个实际消费者完成类型化，
+枚举及其仅测试 ALL 清单、generic call 记录器均已退役。当前撤权与无凭据验证使用
+具名 Request 的完整集合，不为历史测试保留不可调用分派路径。真实 RPC、准备任务
+execute、持久化 Value 和独立初始化协议没有因此删除。
 
 
 ## 管理员磁盘状态与完整性检查

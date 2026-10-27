@@ -603,12 +603,39 @@ impl Backend for PanickingBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         panic!("private plan backend panic detail")
     }
+    fn register_disk(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<std::convert::Infallible, crate::ApiError> {
+        panic!("private register disk panic detail")
+    }
     fn commit_plan(
         &self,
         _identity: &crate::auth::Identity,
         _request: Result<crate::CommitPlan, crate::ApiError>,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         panic!("private plan backend panic detail")
+    }
+    fn prepare_historical_save(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn prepare_purge(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PreparePurge, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn prepare_split(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PrepareSplit, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        panic!("private directory scope panic detail")
     }
     fn namespace_batch(
         &self,
@@ -827,15 +854,6 @@ impl Backend for PanickingBackend {
         unreachable!("this test backend does not serve snapshot lookups")
     }
 
-    fn call(
-        &self,
-        _action: BackendAction,
-        _identity: &Identity,
-        _input: Value,
-    ) -> Result<Value, ApiError> {
-        panic!("private backend panic detail");
-    }
-
     fn upload(
         &self,
         _identity: &Identity,
@@ -986,6 +1004,21 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         ),
         (
             "POST",
+            "/api/history-trees/history/historical-save-plans",
+            Some(json!({"source_commit_id":"commit","name":"Saved branch"})),
+        ),
+        (
+            "POST",
+            "/api/history-trees/history/purge-plans",
+            Some(json!({"version_ids":["version"]})),
+        ),
+        (
+            "POST",
+            "/api/history-trees/history/split-plans",
+            Some(json!({"cut_commit_id":"cut"})),
+        ),
+        (
+            "POST",
             "/api/file-manager/disks/P01/namespace-batch",
             Some(
                 json!({"kind":"delete","items":[],"operation_id":"op_00000000000000000000000000000000"}),
@@ -1069,6 +1102,7 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
             ),
         ),
         ("GET", "/api/admin/disks", None),
+        ("POST", "/api/admin/disks", Some(json!({}))),
         ("GET", "/api/file-manager/disks", None),
         ("GET", "/api/file-manager/disks/P01/entries", None),
         ("GET", "/api/admin/check", None),
@@ -1544,5 +1578,30 @@ async fn typed_upload_admission_and_publication_panics_are_internal_errors() {
         .await;
         assert_eq!(body["error"]["message"], "request task failed");
         assert!(!body.to_string().contains("panic"));
+    }
+}
+
+#[tokio::test]
+async fn disk_registration_keeps_build_specific_refusal_after_body_parsing() {
+    let root = crate::tests::private_tempdir();
+    let app = application(root.path());
+    let (token, _, _) = authenticated(&app).await;
+    for (body, status, code) in [
+        ("null", StatusCode::NOT_IMPLEMENTED, "UNSUPPORTED_OPERATION"),
+        ("{", StatusCode::BAD_REQUEST, "INVALID_REQUEST"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/disks")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_error(response, status, code, false).await;
     }
 }

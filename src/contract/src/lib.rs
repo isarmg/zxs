@@ -12,6 +12,8 @@ pub use operation_id::OperationId;
 pub use public_commit::{
     FilePlacement, PublicCommitEnvelope, PublicCommitParseError, SealedWorkspace,
 };
+mod historical_save;
+pub use historical_save::HistoricalSaveOptions;
 mod file_location;
 pub use file_location::FileLocation;
 mod backup_configuration;

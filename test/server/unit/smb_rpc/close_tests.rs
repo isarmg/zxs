@@ -347,12 +347,39 @@ impl Backend for CloseFailure {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.cancel_plan(identity, request)
     }
+    fn register_disk(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<std::convert::Infallible, crate::ApiError> {
+        self.inner.register_disk(identity)
+    }
     fn commit_plan(
         &self,
         identity: &crate::auth::Identity,
         request: Result<crate::CommitPlan, crate::ApiError>,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.commit_plan(identity, request)
+    }
+    fn prepare_historical_save(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.inner.prepare_historical_save(identity, request)
+    }
+    fn prepare_purge(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PreparePurge, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.inner.prepare_purge(identity, request)
+    }
+    fn prepare_split(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PrepareSplit, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.inner.prepare_split(identity, request)
     }
     fn namespace_batch(
         &self,
@@ -568,15 +595,6 @@ impl Backend for CloseFailure {
         path: &name_policy::LookupPath,
     ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
         self.inner.lookup_at(identity, branch, commit, path)
-    }
-
-    fn call(
-        &self,
-        action: crate::BackendAction,
-        identity: &Identity,
-        input: Value,
-    ) -> Result<Value, ApiError> {
-        self.inner.call(action, identity, input)
     }
 
     fn upload(

@@ -89,6 +89,15 @@ async fn missing_data_disks_leave_login_diagnostics_and_health_usable() {
             .0,
         StatusCode::OK
     );
+    let (status, error) = request(&app, "/api/admin/disks", Some(token), Some(json!(null))).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error["error"]["code"], "STORAGE_UNAVAILABLE");
+    assert_eq!(
+        request(&app, "/api/admin/disks", None, Some(json!({})))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
     let invalid = request(&app, "/api/repositories", Some(token), Some(json!({}))).await;
     assert_eq!(invalid.0, StatusCode::BAD_REQUEST);
     let (status, error) = request(

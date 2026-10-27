@@ -113,7 +113,6 @@ fn check_read_authorization(
     error: Option<&str>,
 ) {
     for (opened, _, action) in handles {
-        backend.take_calls();
         backend.take_authorizations();
         backend.take_version_authorizations();
         let (reply, descriptor) = exchange(
@@ -130,7 +129,6 @@ fn check_read_authorization(
                 panic!("unexpected authorization reply: {reply:?}, error={expected:?}")
             }
         }
-        assert!(backend.take_calls().is_empty());
         match action {
             ReadAuthorization::Version => {
                 assert_eq!(
@@ -147,7 +145,6 @@ fn check_read_authorization(
     }
 }
 fn missing_read_handle(wire: &mut FrameStream, backend: &LostCommitReply, handle: u64) {
-    backend.take_calls();
     backend.take_authorizations();
     backend.take_version_authorizations();
     let (reply, descriptor) = exchange(wire, Request::AuthorizeRead { handle });
@@ -157,7 +154,6 @@ fn missing_read_handle(wire: &mut FrameStream, backend: &LostCommitReply, handle
         Response::Error { code, message, retryable: false, operation_id: None }
             if code == storage_contract::ErrorCode::NotFound && message == "SMB handle missing"
     ));
-    assert!(backend.take_calls().is_empty());
     assert!(backend.take_authorizations().is_empty());
     assert!(backend.take_version_authorizations().is_empty());
 }
@@ -589,7 +585,6 @@ fn hello_captures_typed_repository_but_each_synthetic_root_access_rechecks_bindi
         vec![id.clone()]
     );
     assert!(backend.repository_authorizations.lock().unwrap().is_empty());
-    backend.take_calls();
     let (reply, fd) = exchange(
         &mut client,
         Request::Stat {
@@ -602,16 +597,13 @@ fn hello_captures_typed_repository_but_each_synthetic_root_access_rechecks_bindi
         *backend.repository_authorizations.lock().unwrap(),
         vec![id.clone()]
     );
-    assert!(backend.take_calls().is_empty());
     rebind(&shared, &branch, false);
-    backend.take_calls();
     refused(&mut client, Request::Stat { path: ".".into() });
     assert_eq!(
         *backend.repository_authorizations.lock().unwrap(),
         vec![id.clone(), id.clone()]
     );
     assert_eq!(*backend.repository_snapshots.lock().unwrap(), vec![id]);
-    assert!(backend.take_calls().is_empty());
     drop(client);
     worker.join().unwrap().unwrap();
 }

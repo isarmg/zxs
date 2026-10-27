@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Backend, BackendAction, Content, ServerConfig, auth::AuthStore};
+use crate::{Backend, Content, ServerConfig, auth::AuthStore};
 use http_routing::{
     body::{Body, to_bytes},
     http::{Request as HttpRequest, StatusCode},
@@ -304,11 +304,38 @@ impl Backend for Probe {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn register_disk(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<std::convert::Infallible, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn commit_plan(
         &self,
         _identity: &crate::auth::Identity,
         _request: Result<crate::CommitPlan, crate::ApiError>,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_historical_save(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_purge(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PreparePurge, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_split(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PrepareSplit, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
     fn namespace_batch(
@@ -542,9 +569,6 @@ impl Backend for Probe {
         }
         self.mutations.fetch_add(1, Ordering::SeqCst);
         Ok(json!({"accepted":true,"restart_required":false,"recovering":true}))
-    }
-    fn call(&self, _: BackendAction, _: &Identity, _: Value) -> Result<Value, ApiError> {
-        Err(ApiError::unsupported())
     }
     fn upload(
         &self,

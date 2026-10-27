@@ -3,7 +3,7 @@
 //! copies. Only explicit authorized recovery can install them; background
 //! recovery and restarts never replace missing or damaged system credentials.
 use crate::{
-    ApiError, Backend, BackendAction, Content, InternalDiskObservation,
+    ApiError, Backend, Content, InternalDiskObservation,
     auth::{AuthStore, Identity},
     engine_backend::EngineBackend,
 };
@@ -887,12 +887,41 @@ impl Backend for ManagementBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.backend()?.cancel_plan(identity, request)
     }
+    fn register_disk(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<std::convert::Infallible, crate::ApiError> {
+        self.inner.backend()?.register_disk(identity)
+    }
     fn commit_plan(
         &self,
         identity: &crate::auth::Identity,
         request: Result<crate::CommitPlan, crate::ApiError>,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.backend()?.commit_plan(identity, request)
+    }
+    fn prepare_historical_save(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.inner
+            .backend()?
+            .prepare_historical_save(identity, request)
+    }
+    fn prepare_purge(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PreparePurge, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.inner.backend()?.prepare_purge(identity, request)
+    }
+    fn prepare_split(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::PrepareSplit, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.inner.backend()?.prepare_split(identity, request)
     }
     fn namespace_batch(
         &self,
@@ -1473,14 +1502,6 @@ impl Backend for ManagementBackend {
         crate::lock(&auth).revalidate_identity(identity)?;
         self.inner.start_recovery(true)?;
         Ok(self.management_status())
-    }
-    fn call(
-        &self,
-        action: BackendAction,
-        identity: &Identity,
-        input: Value,
-    ) -> Result<Value, ApiError> {
-        self.inner.backend()?.call(action, identity, input)
     }
     fn upload(
         &self,

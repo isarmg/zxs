@@ -1,6 +1,5 @@
 //! Engine errors, request fields, and public response projections.
 use crate::ApiError;
-use data_serialization::Serialize;
 use json_codec::Value;
 use storage_engine::Engine;
 
@@ -21,9 +20,6 @@ pub(crate) fn error(error: storage_engine::Error) -> ApiError {
     }
 }
 
-pub(super) fn encode(value: impl Serialize) -> Result<Value, ApiError> {
-    Ok(json_codec::to_value(value).expect("invariant: internal response serialization succeeds"))
-}
 /// Sparse disposition absence means available, exactly as core reads; it does
 /// not represent a missing version or failed authorization.
 pub(super) fn stored_version_content_state(
@@ -250,15 +246,6 @@ pub(super) fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, ApiError
         .and_then(Value::as_str)
         .filter(|v| !v.is_empty())
         .ok_or_else(|| ApiError::invalid(format!("missing string field {key}")))
-}
-pub(super) fn keys(input: &Value, allowed: &[&str]) -> Result<(), ApiError> {
-    let object = input
-        .as_object()
-        .ok_or_else(|| ApiError::invalid("expected object"))?;
-    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
-        return Err(ApiError::invalid(format!("unknown field {key}")));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
