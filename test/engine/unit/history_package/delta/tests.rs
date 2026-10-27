@@ -1,5 +1,5 @@
 use super::{HistoryManifest, graph, history_changes_oracle_tests::dependency_fixture};
-use crate::state_projection::{DerivedOwners, Field, ProjectionDelta};
+use crate::state_projection::{DerivedOwners, Field, HistoryEdits, ProjectionDelta};
 use crate::{State, canonical_json, disk::MAX_METADATA, journal::AuthenticatedMetadataObject};
 use json_codec::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -121,7 +121,7 @@ fn compare(before: &State, after: &State, index: &DerivedOwners) -> DerivedOwner
                 objects.extend(update.created);
                 (
                     update.hash,
-                    super::super::unique_prepared_objects(objects).unwrap(),
+                    crate::history_package::unique_prepared_objects(objects).unwrap(),
                 )
             } else {
                 (hash, objects)
