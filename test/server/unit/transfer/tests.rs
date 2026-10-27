@@ -7,9 +7,11 @@ use std::sync::{
 struct CountingReader {
     inner: std::io::Cursor<Vec<u8>>,
     bytes: Arc<AtomicUsize>,
+    last_buffer: Option<usize>,
 }
 impl std::io::Read for CountingReader {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.last_buffer = Some(buffer.as_ptr() as usize);
         let n = std::io::Read::read(&mut self.inner, buffer)?;
         self.bytes.fetch_add(n, Ordering::SeqCst);
         Ok(n)
@@ -24,6 +26,7 @@ fn counted(bytes: Vec<u8>, count: Arc<AtomicUsize>) -> CountingReader {
     CountingReader {
         inner: std::io::Cursor::new(bytes),
         bytes: count,
+        last_buffer: None,
     }
 }
 fn manifest(bytes: &[u8]) -> storage_contract::ChecksumManifest {
@@ -48,8 +51,8 @@ fn verified_ranges_read_only_touched_chunks_and_fallback_without_exposing_corrup
         2,
     )
     .unwrap();
-    assert_eq!(reader.next_chunk().unwrap().unwrap(), [42]);
-    assert_eq!(reader.next_chunk().unwrap().unwrap(), [42]);
+    assert_eq!(reader.next_chunk().unwrap().unwrap().as_ref(), &[42]);
+    assert_eq!(reader.next_chunk().unwrap().unwrap().as_ref(), &[42]);
     assert!(reader.next_chunk().unwrap().is_none());
     assert_eq!(count.load(Ordering::SeqCst), 2 * 65536);
     let mut corrupt = bytes.clone();
@@ -64,7 +67,7 @@ fn verified_ranges_read_only_touched_chunks_and_fallback_without_exposing_corrup
         1,
     )
     .unwrap();
-    assert_eq!(reader.next_chunk().unwrap().unwrap(), [42]);
+    assert_eq!(reader.next_chunk().unwrap().unwrap().as_ref(), &[42]);
     assert_eq!(bad_count.load(Ordering::SeqCst), 65536);
     assert_eq!(good_count.load(Ordering::SeqCst), 65536);
     let mut reader = VerifiedRange::new(
@@ -89,7 +92,7 @@ fn verified_ranges_read_only_touched_chunks_and_fallback_without_exposing_corrup
         1,
     )
     .unwrap();
-    assert_eq!(reader.next_chunk().unwrap().unwrap(), [42]);
+    assert_eq!(reader.next_chunk().unwrap().unwrap().as_ref(), &[42]);
     assert_eq!(tail_count.load(Ordering::SeqCst), 7);
 }
 
@@ -148,6 +151,207 @@ fn verified_ranges_promote_later_fallback_after_corrupt_and_short_replicas() {
     assert_eq!(bad_reads.load(Ordering::SeqCst), 65536);
     assert_eq!(short_reads.load(Ordering::SeqCst), 7);
     assert_eq!(good_reads.load(Ordering::SeqCst), bytes.len());
+}
+
+#[test]
+fn verified_range_reuses_the_authenticated_allocation() {
+    let bytes: Vec<_> = (0..65536).map(|i| (i % 251) as u8).collect();
+    for (start, length) in [(0, 65536), (17, 65519), (17, 23), (0, 23)] {
+        let mut reader = VerifiedRange::new(
+            counted(bytes.clone(), Arc::default()),
+            vec![],
+            manifest(&bytes),
+            start,
+            length,
+        )
+        .unwrap();
+        let chunk = reader.next_chunk().unwrap().unwrap();
+        assert_eq!(
+            chunk.as_ptr() as usize,
+            reader.file.last_buffer.unwrap() + start as usize
+        );
+        assert_eq!(
+            chunk.as_ref(),
+            &bytes[start as usize..(start + length) as usize]
+        );
+    }
+}
+
+#[test]
+fn verified_range_chunks_remain_independent_after_further_reads_and_drop() {
+    let bytes: Vec<_> = (0..65536 * 2).map(|i| (i % 251) as u8).collect();
+    let mut reader = VerifiedRange::new(
+        counted(bytes.clone(), Arc::default()),
+        vec![],
+        manifest(&bytes),
+        17,
+        bytes.len() as u64 - 17,
+    )
+    .unwrap();
+    let first = reader.next_chunk().unwrap().unwrap();
+    let second = reader.next_chunk().unwrap().unwrap();
+    assert!(reader.next_chunk().unwrap().is_none());
+    drop(reader);
+    assert_eq!(first.as_ref(), &bytes[17..65536]);
+    assert_eq!(second.as_ref(), &bytes[65536..]);
+}
+
+#[test]
+fn verified_ranges_return_exact_bytes_for_all_supported_chunk_widths() {
+    for width in storage_contract::SUPPORTED_CHECKSUM_CHUNK_BYTES {
+        let width = width as usize;
+        let bytes: Vec<_> = (0..width + 17).map(|i| (i % 251) as u8).collect();
+        let manifest = storage_contract::ChecksumManifest {
+            chunk_bytes: width as u32,
+            logical_size: bytes.len() as u64,
+            chunks: bytes
+                .chunks(width)
+                .map(|chunk| *blake3::hash(chunk).as_bytes())
+                .collect(),
+        };
+        for range in [
+            "bytes=0-0".to_owned(),
+            "bytes=17-23".to_owned(),
+            "bytes=0-".to_owned(),
+            "bytes=-1".to_owned(),
+            "bytes=-999999999".to_owned(),
+            format!("bytes={}-{}", width - 1, width),
+            format!("bytes={width}-"),
+            format!("bytes={}-999999999", bytes.len() - 1),
+        ] {
+            let (start, end) = parse_range(&range, bytes.len() as u64).unwrap();
+            let count = Arc::new(AtomicUsize::new(0));
+            let mut reader = VerifiedRange::new(
+                counted(bytes.clone(), count.clone()),
+                vec![],
+                manifest.clone(),
+                start,
+                end - start + 1,
+            )
+            .unwrap();
+            let mut actual = Vec::new();
+            while let Some(chunk) = reader.next_chunk().unwrap() {
+                actual.extend_from_slice(&chunk);
+            }
+            assert_eq!(
+                actual,
+                bytes[start as usize..=end as usize],
+                "{width}: {range}"
+            );
+            let first_base = start as usize / width * width;
+            let last_end = ((end as usize / width + 1) * width).min(bytes.len());
+            assert_eq!(count.load(Ordering::SeqCst), last_end - first_base);
+        }
+    }
+    // An empty full response has no Range header; HTTP byte ranges remain invalid.
+    let mut empty = VerifiedRange::new(
+        counted(Vec::new(), Arc::default()),
+        vec![],
+        manifest(&[]),
+        0,
+        0,
+    )
+    .unwrap();
+    assert!(empty.next_chunk().unwrap().is_none());
+}
+
+enum ReplicaInput {
+    Bytes(std::io::Cursor<Vec<u8>>),
+    SeekFailure(i32),
+    ReadFailure(i32),
+}
+impl Read for ReplicaInput {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Bytes(bytes) => bytes.read(buffer),
+            Self::SeekFailure(_) => unreachable!("failed seek prevents reading"),
+            Self::ReadFailure(code) => Err(std::io::Error::from_raw_os_error(*code)),
+        }
+    }
+}
+impl Seek for ReplicaInput {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        match self {
+            Self::Bytes(bytes) => bytes.seek(position),
+            Self::SeekFailure(code) => Err(std::io::Error::from_raw_os_error(*code)),
+            Self::ReadFailure(_) => Ok(0),
+        }
+    }
+}
+
+#[test]
+fn verified_range_failure_preserves_first_io_source_and_checksum_contract() {
+    use ReplicaInput::{Bytes, ReadFailure, SeekFailure};
+    use std::error::Error;
+
+    for (sources, expected_code) in [
+        (
+            vec![
+                Bytes(std::io::Cursor::new(vec![0])),
+                Bytes(std::io::Cursor::new(vec![1])),
+            ],
+            None,
+        ),
+        (vec![SeekFailure(5), ReadFailure(13)], Some(5)),
+        (vec![ReadFailure(13), SeekFailure(5)], Some(13)),
+        (
+            vec![
+                Bytes(std::io::Cursor::new(vec![0])),
+                ReadFailure(13),
+                SeekFailure(5),
+            ],
+            Some(13),
+        ),
+        (
+            vec![ReadFailure(13), Bytes(std::io::Cursor::new(vec![0]))],
+            Some(13),
+        ),
+    ] {
+        let mut sources = sources.into_iter();
+        let mut reader = VerifiedRange::new(
+            sources.next().unwrap(),
+            sources.collect(),
+            manifest(&[42]),
+            0,
+            1,
+        )
+        .unwrap();
+        let error = reader.next_chunk().unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(
+            error.to_string(),
+            "CHECKSUM_MISMATCH: no replica has a verified payload chunk"
+        );
+        let failure = error
+            .get_ref()
+            .unwrap()
+            .downcast_ref::<VerifiedChunkUnavailable>()
+            .unwrap();
+        assert_eq!(
+            failure.source().map(|source| source
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .raw_os_error()
+                .unwrap()),
+            expected_code,
+        );
+    }
+}
+
+#[test]
+fn verified_range_io_failures_still_allow_a_verified_fallback() {
+    for failed in [ReplicaInput::SeekFailure(5), ReplicaInput::ReadFailure(13)] {
+        let mut reader = VerifiedRange::new(
+            failed,
+            vec![ReplicaInput::Bytes(std::io::Cursor::new(vec![42]))],
+            manifest(&[42]),
+            0,
+            1,
+        )
+        .unwrap();
+        assert_eq!(reader.next_chunk().unwrap().unwrap().as_ref(), &[42]);
+        assert!(reader.next_chunk().unwrap().is_none());
+    }
 }
 
 struct ReadLease(Arc<AtomicUsize>);

@@ -830,9 +830,9 @@ fn content_response_with_limits(
         let stream =
             futures::stream::try_unfold((reader, lease), |(mut reader, lease)| async move {
                 tokio::task::spawn_blocking(move || {
-                    reader.next_chunk().map(|chunk| {
-                        chunk.map(|chunk| (bytes::Bytes::from(chunk), (reader, lease)))
-                    })
+                    reader
+                        .next_chunk()
+                        .map(|chunk| chunk.map(|chunk| (chunk, (reader, lease))))
                 })
                 .await
                 .map_err(std::io::Error::other)?
@@ -923,6 +923,13 @@ struct VerifiedRange<R> {
     position: u64,
     end: u64,
 }
+#[derive(Debug, error_definition::Error)]
+#[error("CHECKSUM_MISMATCH: no replica has a verified payload chunk")]
+struct VerifiedChunkUnavailable {
+    #[source]
+    io: Option<std::io::Error>,
+}
+
 impl<R: std::io::Read + Seek> VerifiedRange<R> {
     fn new(
         file: R,
@@ -949,7 +956,7 @@ impl<R: std::io::Read + Seek> VerifiedRange<R> {
             end,
         })
     }
-    fn next_chunk(&mut self) -> std::io::Result<Option<Vec<u8>>> {
+    fn next_chunk(&mut self) -> std::io::Result<Option<bytes::Bytes>> {
         if self.position == self.end {
             return Ok(None);
         }
@@ -960,22 +967,30 @@ impl<R: std::io::Read + Seek> VerifiedRange<R> {
         let mut buffer = vec![0; count];
         let expected = &self.manifest.chunks[index as usize];
         let mut verified_source = None;
+        let mut first_io_error = None;
         for (source, file) in std::iter::once(&mut self.file)
             .chain(self.fallbacks.iter_mut())
             .enumerate()
         {
-            if file.seek(SeekFrom::Start(base)).is_ok()
-                && file.read_exact(&mut buffer).is_ok()
-                && blake3::hash(&buffer).as_bytes() == expected
+            match file
+                .seek(SeekFrom::Start(base))
+                .and_then(|_| file.read_exact(&mut buffer))
             {
-                verified_source = Some(source);
-                break;
+                Ok(()) => {
+                    if blake3::hash(&buffer).as_bytes() == expected {
+                        verified_source = Some(source);
+                        break;
+                    }
+                }
+                Err(error) => {
+                    first_io_error.get_or_insert(error);
+                }
             }
         }
         let Some(source) = verified_source else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "CHECKSUM_MISMATCH: no replica has a verified payload chunk",
+                VerifiedChunkUnavailable { io: first_io_error },
             ));
         };
         if source != 0 {
@@ -988,8 +1003,9 @@ impl<R: std::io::Read + Seek> VerifiedRange<R> {
         let to = (self.end - base).min(count as u64) as usize;
         self.position = base + to as u64;
         buffer.truncate(to);
-        buffer.drain(..from);
-        Ok(Some(buffer))
+        let mut chunk = bytes::Bytes::from(buffer);
+        bytes::Buf::advance(&mut chunk, from);
+        Ok(Some(chunk))
     }
 }
 

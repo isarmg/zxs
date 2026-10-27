@@ -1,5 +1,6 @@
 //! History queries, lazy branches and metadata-only relations.
 use super::*;
+use crate::engine::MutationPlan;
 use json_codec::json;
 fn branch_contains_commit(state: &State, branch: &Branch, target: &str) -> Result<bool> {
     if branch.state == BranchState::Migrated {
@@ -148,11 +149,12 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<Branch> {
-        let op = self.mutate(
+        let plan = self.plan_mutation_digest(
             "branch.create",
             principal,
             operation,
             json!({"source_commit_id":source_commit,"name":name.as_str()}),
+            None,
             |engine, state, _| {
                 let source = state.commits.get(source_commit).cloned().ok_or_else(|| {
                     Error::new(
@@ -233,13 +235,30 @@ impl Engine {
                 }))
             },
         )?;
-        // Creation returns the published record, not the branch's later head,
-        // name or lifecycle state. Exact replay has already matched its owner
-        // and request before decoding this immutable receipt.
-        json_codec::from_value(op.result["created_branch"].clone()).map_err(|source| {
-            Error::from(source)
-                .context(ErrorCode::StateInvalid, "created branch receipt is invalid")
-        })
+        match plan {
+            MutationPlan::Existing(op) => {
+                // Exact replay returns the frozen record, not the branch's later state.
+                json_codec::from_value(op.result["created_branch"].clone()).map_err(|source| {
+                    Error::from(source)
+                        .context(ErrorCode::StateInvalid, "created branch receipt is invalid")
+                })
+            }
+            MutationPlan::Prepared {
+                next,
+                prepared,
+                result,
+            } => {
+                // The closure stores this same record in the candidate and receipt.
+                let created = result
+                    .branch_id
+                    .as_deref()
+                    .and_then(|id| next.branches.get(id))
+                    .expect("invariant: branch creation candidate contains its created branch")
+                    .clone();
+                self.persist(*next, prepared, result)?;
+                Ok(created)
+            }
+        }
     }
     pub fn add_merge_link(
         &mut self,

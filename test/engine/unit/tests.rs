@@ -4308,6 +4308,7 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
     }
 }
 
+mod branch_creation_tests;
 mod state_read_tests;
 
 fn public_envelope(body: json_codec::Value) -> storage_contract::PublicCommitEnvelope {

@@ -17,9 +17,30 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
             storage_contract::OperationId::generate(),
         )
         .unwrap();
-    let source = engine.state().histories[&repo.history_tree_id]
-        .root_commit_id
-        .clone();
+    let source_workspace = engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    for (path, bytes) in [
+        ("file.txt", b"parent".as_slice()),
+        ("folder/其他.txt", b"other".as_slice()),
+    ] {
+        engine
+            .stage_bytes(&source_workspace.workspace_id, path, bytes)
+            .unwrap();
+    }
+    let source = engine
+        .commit_workspace(CommitRequest {
+            workspace_id: source_workspace.workspace_id,
+            operation_id: storage_contract::OperationId::generate(),
+            principal: "admin".into(),
+            expected_head: source_workspace.base_head,
+            fencing_token: source_workspace.fencing_token,
+            message: "Frozen parent sources".into(),
+            request_digest: None,
+        })
+        .unwrap()
+        .commit_id
+        .unwrap();
     let operation = storage_contract::OperationId::generate();
     let original = engine
         .create_branch(
@@ -29,6 +50,8 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
             operation,
         )
         .unwrap();
+    assert_eq!(original.pending_file_versions.len(), 2);
+    let original_bytes = canonical_json(&original).unwrap();
     let workspace = engine
         .create_workspace(&original.branch_id, "admin")
         .unwrap();
@@ -60,6 +83,11 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
             engine = Engine::open(&root.path().join("system")).unwrap();
         }
         let before = canonical_json(engine.state()).unwrap();
+        assert_eq!(
+            canonical_json(&engine.state().operations[&operation].result["created_branch"])
+                .unwrap(),
+            original_bytes
+        );
         assert_eq!(
             engine
                 .create_branch(

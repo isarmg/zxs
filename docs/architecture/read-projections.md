@@ -369,9 +369,9 @@ HTTP保留精确静态优先级：缺失/空name字段先拒绝；非空name先�
 
 POST repositories/{repository}/branches 绑定路径身份后，在 bounded strict JSON 与 backend_slots 阻塞任务中一次解析 CreateBranch：repository/source/name/operation 非空字段次序、未知字段、OperationId、BranchName。BranchName 沿原 128 UTF-8 字节/NFC/PortableName 规则并缓存碰撞 key；非法 operation 仍先于名称政策失败。静态解析现在早于 Backend 排队后的 current/repository/source 动态检查；认证中间件仍先于 body。required create_branch 不再经 CreateBranch action、Deserialize 或 encode→Value；Application 保留实际 repository/source-history 归属判断，但接收 typed 命令且不重复解析 operation。
 
-同锁 current→repository→source 属于 repository→核心 mutate/永久 receipt 的顺序保持；未知或跨仓库 source 仍 HistoryNodeNotFound，先于已存在 operation 的摘要冲突。核心公开 create_branch 接受 &BranchName，所有真实直接调用方已迁移；canonical branch.create 的 source_commit_id/name 仍使用原展示字符串，碰撞循环不再为每个现有分支重复 fold 同一新名称。旧记录名称仍是 String，按各自已有边界准入，并非全模型名称重构。
+同锁 current→repository→source 属于 repository→核心 mutation planner/永久 receipt 的顺序保持；未知或跨仓库 source 仍 HistoryNodeNotFound，先于已存在 operation 的摘要冲突。核心公开 create_branch 接受 &BranchName，所有真实直接调用方已迁移；canonical branch.create 的 source_commit_id/name 仍使用原展示字符串，碰撞循环不再为每个现有分支重复 fold 同一新名称。旧记录名称仍是 String，按各自已有边界准入，并非全模型名称重构。
 
-创建结果来自不可变永久 receipt 的 created_branch，不读取后来修改的当前分支代替重放；原核心 receipt 解码仍是既有 OperationResult.result 持久化契约，本批不宣称消除全部动态 receipt 载荷。捕获函数支持 owned 创建记录 move 字段/map，借用 GET 仍仅 clone 一次所需记录；同锁捕获原 head 的 pending facts，HTTP 复用 BranchResponse 在锁外编码。归档、后续写入、共享绑定变化、重新打开后的响应保持原创建 state/generation/head；没有新增缓存、锁、发布阶段、fsync 或格式迁移。
+首次创建从同一未发布候选 next 捕获已构造的 Branch，原 persist 成功后才返回，不为取得返回值复制并反序列化 created_branch JSON；原 change 闭包、摘要、receipt 内容与发布顺序保持。既有 operation 仍只从不可变永久 receipt 的 created_branch 解码，不读取后来修改的当前分支代替重放，缺失或损坏仍保留 StateInvalid 与具体来源。OperationResult.result 持久化契约未改，本批不宣称消除全部动态 receipt 载荷。捕获函数支持 owned 创建记录 move 字段/map，借用 GET 仍仅 clone 一次所需记录；同锁捕获原 head 的 pending facts，HTTP 复用 BranchResponse 在锁外编码。归档、后续写入、共享绑定变化、重新打开后的响应保持原创建 state/generation/head；没有新增缓存、锁、发布阶段、fsync 或格式迁移。
 
 回归覆盖静态错误优先级、独立 canonical digest、核心直接重放、折叠名称冲突、跨仓库/缺 source 在 receipt 前拒绝、归档后冻结响应、核心重启重放、真实 HTTP wire/path 绑定/匿名拒绝，以及实际 required 方法的授权、排队撤权、panic 和取消许可矩阵。剩余其他创建和文件管理动作继续列于动作库存，不以通用 Backend 方法包装旧 JSON 冒充完成。
 
