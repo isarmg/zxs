@@ -21,6 +21,38 @@ import source_layout
 import source_layout_corrections
 
 
+def write_receipt(root, row):
+    raw = gzip.compress(json.dumps(row, sort_keys=True).encode(), mtime=0)
+    sha = routing.digest(raw)
+    path = root / 'compliance/proof-maintenance' / (sha + '.json.gz')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+    return sha
+
+
+def successor(root, catalog, parent, relative, old, new):
+    """Synthetic source edit for proof mechanics, not an upstream/security fix."""
+    before = maintenance.state(deepcopy(catalog), legacy.OWNER)
+    path = legacy.OWNER + '/' + relative
+    original = (root / path).read_bytes()
+    if original.count(old) != 1:
+        raise AssertionError('fixture replacement must identify exactly one source span')
+    changed = original.replace(old, new)
+    (root / path).write_bytes(changed)
+    for package in [catalog['packages'][legacy.OWNER],
+                    *[row for row in catalog['merges'] if row['directory'] == legacy.OWNER]]:
+        package['files_sha256'][relative] = routing.digest(changed)
+    return dict(schema=1, reason='Synthetic successor proof regression; not a product fix.',
+                terminal=legacy.TERMINAL, parent=parent,
+                layout={key: catalog.get(key) for key in
+                        (source_layout.KEY, source_layout_corrections.KEY)},
+                before=before, after=maintenance.state(deepcopy(catalog), legacy.OWNER),
+                files=[dict(before=path, after=path, before_sha256=routing.digest(original),
+                            after_sha256=routing.digest(changed),
+                            replacements=[dict(old=base64.b64encode(old).decode(),
+                                               new=base64.b64encode(new).decode())])])
+
+
 class LegacyHttpMaintenance(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -100,16 +132,23 @@ class LegacyHttpMaintenance(unittest.TestCase):
         self.pin = patch.object(legacy, 'RECEIPTS', ())
         self.pin.start()
         self.addCleanup(self.pin.stop)
+        self.rows = [self.row]
         self.register()
 
     def register(self):
-        raw = gzip.compress(json.dumps(self.row, sort_keys=True).encode(), mtime=0)
-        self.sha = routing.digest(raw)
+        ids = tuple(write_receipt(self.root, row) for row in self.rows)
+        self.sha = ids[-1]
         self.receipt_path = self.root / 'compliance/proof-maintenance' / (self.sha + '.json.gz')
-        self.receipt_path.parent.mkdir(parents=True, exist_ok=True)
-        self.receipt_path.write_bytes(raw)
-        legacy.RECEIPTS = (self.sha,)
-        self.current[legacy.KEY] = [self.sha]
+        legacy.RECEIPTS = ids
+        self.current[legacy.KEY] = list(ids)
+
+    def append_successor(self, relative=legacy.FILE,
+                         old=b'/// Check if the `Taker` has called `want()` without parking a task.',
+                         new=b'/// Check whether the `Taker` has called `want()` without parking a task.'):
+        row = successor(self.root, self.current, self.sha, relative, old, new)
+        self.rows.append(row)
+        self.register()
+        return row
 
     def adapter(self):
         return legacy.load(self.layout, self.current)
@@ -230,6 +269,187 @@ class LegacyHttpMaintenance(unittest.TestCase):
         self.previous['packages'][legacy.OWNER]['files_sha256'][legacy.FILE] = '0' * 64
         with self.assertRaises(ValueError):
             adapter.validate_refresh(self.previous, self.current)
+
+    def test_two_successors_restore_real_first_step_and_preserve_old_receipts(self):
+        first = self.receipt_path
+        first_bytes = first.read_bytes()
+        original_lib = (self.root / legacy.OWNER / 'src/lib.rs').read_bytes()
+        previous = deepcopy(self.current)
+        self.append_successor()
+        second = self.receipt_path
+        second_bytes = second.read_bytes()
+        self.adapter().validate_refresh(previous, self.current)
+        previous = deepcopy(self.current)
+        self.append_successor('src/lib.rs', b'//! # HTTP transport', b'//! # HTTP transport fixture')
+        adapter = self.adapter()
+        adapter.validate_refresh(previous, self.current)
+        adapter.validate_refresh(self.current, self.current)
+        self.assertEqual(adapter.receipt_ids, legacy.RECEIPTS)
+        self.assertEqual(adapter.sha, legacy.RECEIPTS[-1])
+        self.assertEqual(adapter.row, self.rows[-1])
+        logical = legacy.LOGICAL + '/' + legacy.FILE
+        restored = adapter.read(logical, self.path.read_bytes())
+        self.assertEqual(restored, self.original)
+        self.assertEqual(adapter.project_hash(logical, routing.digest(self.path.read_bytes())),
+                         routing.digest(self.original))
+        library = (self.root / legacy.OWNER / 'src/lib.rs').read_bytes()
+        self.assertEqual(adapter.read(legacy.LOGICAL + '/src/lib.rs', library), original_lib)
+        self.assertEqual(adapter.project_hash(legacy.LOGICAL + '/src/lib.rs', routing.digest(library)),
+                         routing.digest(original_lib))
+        edit = self.layout.edits[logical]
+        historical = source_layout.inverse(logical, restored, edit, self.layout.moves)
+        self.assertEqual(routing.digest(historical), edit['before_sha256'])
+        self.assertEqual(first.read_bytes(), first_bytes)
+        self.assertEqual(second.read_bytes(), second_bytes)
+
+    def test_successor_live_bytes_are_rechecked_after_authentication(self):
+        self.append_successor()
+        adapter = self.adapter()
+        self.path.write_bytes(self.path.read_bytes() + b'// drift\n')
+        with self.assertRaisesRegex(ValueError, 'live owner'):
+            adapter.read(legacy.LOGICAL + '/' + legacy.FILE, self.path.read_bytes())
+
+    def test_successor_cannot_skip_registration_or_multiple_refresh_steps(self):
+        before_second = deepcopy(self.current)
+        self.append_successor()
+        with self.assertRaises(ValueError):
+            legacy.load(self.layout, before_second)
+        adapter = legacy.load(self.layout, before_second, prospective=True)
+        adapter.validate_refresh(before_second, self.current)
+        self.append_successor('src/lib.rs', b'//! # HTTP transport', b'//! # HTTP transport fixture')
+        with self.assertRaisesRegex(ValueError, 'immediate predecessor'):
+            legacy.load(self.layout, before_second, prospective=True)
+
+    def test_successor_reordered_omitted_or_duplicate_receipts_fail(self):
+        self.append_successor()
+        ids = legacy.RECEIPTS
+        for wrong in (ids[::-1], ids[1:], ids + ids[:1]):
+            with self.subTest(ids=wrong), patch.object(legacy, 'RECEIPTS', wrong):
+                self.current[legacy.KEY] = list(wrong)
+                with self.assertRaises(ValueError):
+                    self.adapter()
+
+    def test_successor_requires_exact_parent_and_full_before_snapshot(self):
+        row = self.append_successor()
+        original = deepcopy(row)
+        def forge_ancestry(value):
+            for state in ('before', 'after'):
+                value[state]['package']['description'] = 'forged'
+        for mutate in (lambda value: value.update(parent='0' * 64),
+                       forge_ancestry):
+            with self.subTest(mutate=mutate):
+                row.clear(); row.update(deepcopy(original)); mutate(row)
+                self.register()
+                with self.assertRaises(ValueError):
+                    self.adapter()
+
+    def test_successor_requires_every_merged_source_snapshot(self):
+        row = self.append_successor()
+        row['after']['merges'][0]['files_sha256'][legacy.FILE] = '0' * 64
+        self.register()
+        with self.assertRaisesRegex(ValueError, 'owner identity'):
+            self.adapter()
+
+    def test_successor_cannot_change_identity_license_or_upstream(self):
+        row = self.append_successor()
+        original = deepcopy(row)
+        for field in ('name', 'version', 'origin_directory', 'license', 'license_materials', 'upstream'):
+            with self.subTest(field=field):
+                row.clear(); row.update(deepcopy(original))
+                row['after']['package'][field] = 'forged'
+                self.register()
+                with self.assertRaises(ValueError):
+                    self.adapter()
+
+    def test_successor_cannot_omit_duplicate_or_forge_changed_files(self):
+        row = self.append_successor()
+        original = deepcopy(row)
+        for files in ([], [original['files'][0]] * 2,
+                      [dict(original['files'][0], after_sha256='0' * 64)]):
+            with self.subTest(files=files):
+                row['files'] = deepcopy(files)
+                self.register()
+                with self.assertRaises(ValueError):
+                    self.adapter()
+
+    def test_one_successor_must_cover_both_changed_sources(self):
+        first = successor(self.root, self.current, self.sha, legacy.FILE,
+                          b'/// Check if the `Taker` has called `want()` without parking a task.',
+                          b'/// Check whether the `Taker` has called `want()` without parking a task.')
+        second = successor(self.root, self.current, self.sha, 'src/lib.rs',
+                           b'//! # HTTP transport', b'//! # HTTP transport fixture')
+        first['after'] = second['after']
+        first['files'].extend(second['files'])
+        self.rows.append(first)
+        self.register()
+        self.adapter()
+        first['files'].pop()
+        self.register()
+        with self.assertRaisesRegex(ValueError, 'coverage'):
+            self.adapter()
+
+    def test_third_step_requires_middle_receipt_file_and_registered_identity(self):
+        self.append_successor()
+        middle = self.receipt_path
+        self.append_successor('src/lib.rs', b'//! # HTTP transport', b'//! # HTTP transport fixture')
+        ids = legacy.RECEIPTS
+        with patch.object(legacy, 'RECEIPTS', (ids[0], ids[2])):
+            self.current[legacy.KEY] = [ids[0], ids[2]]
+            with self.assertRaisesRegex(ValueError, 'ancestry'):
+                self.adapter()
+        self.current[legacy.KEY] = list(ids)
+        middle.unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.adapter()
+
+    def test_successor_replacement_budget_and_inverse_are_enforced(self):
+        row = self.append_successor()
+        with patch.object(routing, 'MAX_PATCH_BYTES', 1), self.assertRaises(ValueError):
+            self.adapter()
+        row['files'][0]['replacements'][0]['old'] = base64.b64encode(b'not the historical span').decode()
+        self.register()
+        with self.assertRaisesRegex(ValueError, 'historical content'):
+            self.adapter()
+
+    def test_successor_cannot_change_manifest_or_add_source(self):
+        self.append_successor('Cargo.toml', b'name = "http-transport"', b'name = "forged"')
+        with self.assertRaisesRegex(ValueError, 'Rust source content'):
+            self.adapter()
+
+    def test_successor_cannot_change_source_file_set(self):
+        row = self.append_successor()
+        for package in [row['after']['package'], *row['after']['merges']]:
+            package['files_sha256']['src/new.rs'] = routing.digest(b'// new\n')
+        self.register()
+        with self.assertRaisesRegex(ValueError, 'inventory changed|file sets'):
+            self.adapter()
+
+    def test_successor_cannot_change_corrected_external_test_even_with_new_hashes(self):
+        row = self.append_successor()
+        path = 'test/foundation/http-transport/adapters/unit/src/server/conn/auto/mod/guarded_tests_1135.rs'
+        self.assertIn(path, self.layout.corrections.rows)
+        external = row['after']['external']
+        entry = next(entry for entry in external['files'] if entry['path'] == path)
+        data = (self.root / path).read_bytes() + b'// synthetic external drift\n'
+        (self.root / path).write_bytes(data)
+        external['bytes'] += len(b'// synthetic external drift\n')
+        entry['sha256'] = routing.digest(data)
+        self.current['external_tests'][legacy.OWNER] = deepcopy(external)
+        self.register()
+        with self.assertRaisesRegex(ValueError, 'external tests'):
+            self.adapter()
+
+    def test_successor_missing_live_file_and_changed_first_receipt_fail(self):
+        first = self.receipt_path
+        first_bytes = first.read_bytes()
+        self.append_successor()
+        first.write_bytes(first_bytes + b'\n')
+        with self.assertRaisesRegex(ValueError, 'immutable maintenance'):
+            self.adapter()
+        first.write_bytes(first_bytes)
+        self.path.unlink()
+        with self.assertRaises((ValueError, FileNotFoundError)):
+            self.adapter()
 
 
 if __name__ == '__main__':
