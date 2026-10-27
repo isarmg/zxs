@@ -49,11 +49,13 @@ dispatcher 或分散 auth 捕获；未改公共 API、model、schema、通用 pl
 fresh／receipt 全字段与规范形状、损坏 receipt、错误优先级和五个真实 fault 点，
 并强化后续写入／归档／重开后的原始记录重放。
 
-本轮仅执行钉定工具链的六文件定向 rustfmt、diff whitespace、Python 架构检查及
-fixture、来源／manifest／锁文件收据和消费者索引静态核对。不执行 Cargo（包括
-`metadata`）、编译、Rust 测试、Clippy、负载或性能测试，不建立 target，不联网或推送。
-中央须在最终提交执行新增及既有 engine／server、默认／no-core、HTTP、撤权／取消／
-许可释放、fallback／传输限制和发布／恢复回归，并单列其它契约、来源与发行验收。
+源码组装阶段仅执行钉定工具链的六文件定向 rustfmt、diff whitespace、Python 架构
+检查及 fixture、来源／manifest／锁文件收据和消费者索引静态核对。该阶段未执行
+Cargo（包括 `metadata`）、编译、Rust 测试、Clippy、负载或性能测试，未建立 target，
+未联网或推送。这只记录源码组装范围，不代表后续集成验证状态。
+完整验收须绑定最终提交及 tree，执行新增及既有 engine／server、默认／no-core、HTTP、
+撤权／取消／许可释放、fallback／传输限制和发布／恢复回归，并单列其它契约、来源与
+发行验收。
 
 结构上减少一次非对齐首块 memmove 及首次创建返回路径的 JSON 往返；没有新增
 锁、I/O、fsync、依赖、配置、生产 trait 或 hook，也不声称实测吞吐、分配或峰值内存收益。
