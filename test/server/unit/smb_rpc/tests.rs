@@ -708,7 +708,7 @@ pub(super) fn fixture() -> (Fixture, Arc<Shared>, Arc<LostCommitReply>, String) 
     let shared = Arc::new(Shared {
         budget,
         max_file_bytes: 4096,
-        authenticated_sessions: Mutex::new(0),
+        authenticated_sessions: tokio::sync::Semaphore::new(MAX_AUTHENTICATED_SESSIONS),
         backend: backend.clone(),
         username: "alice".into(),
         auth: crate::lock(&auth).reader(),

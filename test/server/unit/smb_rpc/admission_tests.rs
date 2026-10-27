@@ -88,10 +88,7 @@ fn session_cap_is_shared_across_repositories_and_rejects_other_samba_names() {
         );
         disconnect(rejected, false);
     }
-    assert_eq!(
-        *shared.authenticated_sessions.lock().unwrap(),
-        MAX_AUTHENTICATED_SESSIONS
-    );
+    assert_eq!(shared.authenticated_sessions.available_permits(), 0);
     disconnect(idle.pop().unwrap(), false);
     let (replacement, response) = connect(shared.clone(), "alice", &other_repository);
     assert!(matches!(response, Response::Ok { .. }));
@@ -99,7 +96,10 @@ fn session_cap_is_shared_across_repositories_and_rejects_other_samba_names() {
     for connection in idle {
         disconnect(connection, true);
     }
-    assert_eq!(*shared.authenticated_sessions.lock().unwrap(), 0);
+    assert_eq!(
+        shared.authenticated_sessions.available_permits(),
+        MAX_AUTHENTICATED_SESSIONS
+    );
 }
 
 #[test]
@@ -111,7 +111,10 @@ fn failed_repository_admission_does_not_leak_session_slots() {
             matches!(response, Response::Error { code, .. } if code != storage_contract::ErrorCode::ResourceLimitExceeded)
         );
         disconnect(rejected, false);
-        assert_eq!(*shared.authenticated_sessions.lock().unwrap(), 0);
+        assert_eq!(
+            shared.authenticated_sessions.available_permits(),
+            MAX_AUTHENTICATED_SESSIONS
+        );
     }
 }
 
@@ -149,7 +152,10 @@ fn configured_samba_account_binds_the_current_single_authority_and_fails_closed_
     );
     disconnect(rejected, false);
     disconnect(live, false);
-    assert_eq!(*shared.authenticated_sessions.lock().unwrap(), 0);
+    assert_eq!(
+        shared.authenticated_sessions.available_permits(),
+        MAX_AUTHENTICATED_SESSIONS
+    );
 
     temp.auth.lock().unwrap().replace_authority(
         AuthStore::initialize(

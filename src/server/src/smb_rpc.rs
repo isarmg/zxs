@@ -51,7 +51,7 @@ struct Shared {
     spool: PathBuf,
     budget: Arc<budget::Budget>,
     max_file_bytes: u64,
-    authenticated_sessions: Mutex<usize>,
+    authenticated_sessions: tokio::sync::Semaphore,
     file_writers: Mutex<BTreeSet<(String, String)>>,
     namespace_operations: Mutex<BTreeSet<OperationId>>,
 }

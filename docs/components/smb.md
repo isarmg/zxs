@@ -208,8 +208,11 @@ accept 错误立即退出，listener 本身不执行无限重建或重试。
 只丢弃本连接，决策层保留 I/O 原因；错误 UID 和容量拒绝用 debug 诊断。
 复制成功之后才插入关闭库存；worker 入队闭包同时拥有连接 guard 和资源 permit，
 入队失败由闭包析构释放，成功则由 worker 结束释放。原有 managed worker 保留
-JoinHandle、错误报告和关闭/join 所有权。会话计数锁中毒时 Drop 仅记录错误，
-不修复业务计数、不清除 poison；后续业务准入仍按统一 fail-closed 策略处理。
+JoinHandle、错误报告和关闭/join 所有权。认证会话使用同一 `Shared` 内的有界
+Semaphore，跨分享共用八个槽位；满额立即返回原资源上限错误。连接持有的
+借用 permit 在失败握手、正常断连和展开时自动归还，无手写计数锁或析构恢复。
+`run_connection` 的强 `Shared` 参数覆盖 permit 生命周期，不延长认证 owner
+或凭据 OS 锁的生命期；会话准入不执行 close，意外关闭属于内部不变量错误。
 
 `startup_tests` 包含无 socket 的有限 accept 分类、停止后入队资源释放测试；
 实际 peer UID 拒绝需 AF_UNIX。`admission_tests` 的真实 listener 回归先断开坏

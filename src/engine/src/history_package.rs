@@ -79,7 +79,7 @@ pub(crate) fn prepare_history_manifests(
         hashes.insert(id.clone(), hash);
         objects.extend(graph);
     }
-    Ok((hashes, objects))
+    Ok((hashes, unique_prepared_objects(objects)?))
 }
 
 /// Reuse is offered only by the engine's same-process published baseline.
@@ -140,7 +140,30 @@ pub(crate) fn prepare_history_manifests_incremental(
             hashes.insert(id.clone(), hash.clone());
         }
     }
-    Ok((hashes, objects))
+    Ok((hashes, unique_prepared_objects(objects)?))
+}
+
+// First occurrence retains dependency order across the frozen history graphs.
+fn unique_prepared_objects(
+    objects: Vec<PreparedMetadataObject>,
+) -> Result<Vec<PreparedMetadataObject>> {
+    let mut seen = BTreeMap::<(_, _), usize>::new();
+    let mut unique: Vec<PreparedMetadataObject> = Vec::new();
+    for object in objects {
+        let address = (object.kind(), object.hash.clone());
+        if let Some(&index) = seen.get(&address) {
+            if unique[index].bytes() != object.bytes() {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::ObjectCollision,
+                    "prepared immutable objects have different bytes at the same address",
+                ));
+            }
+        } else {
+            seen.insert(address, unique.len());
+            unique.push(object);
+        }
+    }
+    Ok(unique)
 }
 
 type HistoryGraphObjects = Vec<AuthenticatedMetadataObject>;
@@ -672,3 +695,7 @@ mod incremental_tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/history_package/history_changes_oracle_tests.rs"]
 mod history_changes_oracle_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/history_package/prepared_dedup_tests.rs"]
+mod prepared_dedup_tests;

@@ -605,7 +605,7 @@ fn namespace_submission_errors_retain_original_operation_without_abort() {
             spool: original.spool.clone(),
             budget: original.budget.clone(),
             max_file_bytes: original.max_file_bytes,
-            authenticated_sessions: Mutex::new(0),
+            authenticated_sessions: tokio::sync::Semaphore::new(MAX_AUTHENTICATED_SESSIONS),
             file_writers: Mutex::new(BTreeSet::new()),
             namespace_operations: Mutex::new(BTreeSet::new()),
         });
@@ -701,7 +701,7 @@ fn uncertain_namespace_dispatch_never_aborts_its_workspace() {
             spool: original.spool.clone(),
             budget: original.budget.clone(),
             max_file_bytes: original.max_file_bytes,
-            authenticated_sessions: Mutex::new(0),
+            authenticated_sessions: tokio::sync::Semaphore::new(MAX_AUTHENTICATED_SESSIONS),
             file_writers: Mutex::new(BTreeSet::new()),
             namespace_operations: Mutex::new(BTreeSet::new()),
         });
@@ -1485,7 +1485,7 @@ fn preparation_and_record_sync_failures_keep_unresolved_recovery_evidence() {
                 spool: original.spool.clone(),
                 budget: original.budget.clone(),
                 max_file_bytes: original.max_file_bytes,
-                authenticated_sessions: Mutex::new(0),
+                authenticated_sessions: tokio::sync::Semaphore::new(MAX_AUTHENTICATED_SESSIONS),
                 file_writers: Mutex::new(BTreeSet::new()),
                 namespace_operations: Mutex::new(BTreeSet::new()),
             });

@@ -75,6 +75,38 @@ class SuiteCoverageTests(unittest.TestCase):
             "--no-default-features", "--all-targets",
         ]})
         self.assertEqual(calls[3], {"tool": "cargo", "args": ["test", "--locked", "--offline"]})
+        self.assertEqual(calls[4], {
+            "tool": "python3", "args": [".github/scripts/check-history-object-io.py"],
+        })
+
+    def test_history_io_rejects_successful_children_without_completion(self):
+        root = Path(__file__).resolve().parents[2]
+        runner = root / "test/engine/unit/history_package/immutable_io/run.sh"
+        receipt = self.root / "fake-libtest-invoked"
+        binary = self.root / "fake-libtest"
+        for output in ("running 0 tests", ""):
+            with self.subTest(output=output):
+                receipt.unlink(missing_ok=True)
+                binary.write_text(
+                    "#!/bin/sh\n"
+                    f"printf '%s\\n' invoked > '{receipt}'\n"
+                    f"printf '%s\\n' '{output}'\n"
+                    "exit 0\n"
+                )
+                binary.chmod(0o700)
+                result = subprocess.run(
+                    ["bash", str(runner), str(binary)],
+                    env=os.environ.copy(), text=True, capture_output=True,
+                )
+                self.assertEqual(receipt.read_text(), "invoked\n")
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(
+                    result.stderr,
+                    "Missing history I/O completion marker for success:0\n",
+                )
+                self.assertIn("Existing history object stage=success member=0", result.stdout)
+                if output:
+                    self.assertIn(output, result.stdout)
 
     def test_server_engine_integration_targets_declare_core_admission(self):
         root = Path(__file__).resolve().parents[2]

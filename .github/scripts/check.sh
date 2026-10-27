@@ -45,6 +45,7 @@ case "${1:-}" in
     cargo check --locked --offline -p storage-engine -p storage-server -p storage-rescue
     cargo check --locked --offline -p storage-server --no-default-features --all-targets
     cargo test --locked --offline
+    python3 .github/scripts/check-history-object-io.py
     cargo test --locked --offline -p storage-engine --lib \
       history_package::graph::tests::distributed_history_larger_than_real_reader_limit_roundtrips \
       -- --ignored --exact --test-threads=1

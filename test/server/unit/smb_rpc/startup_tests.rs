@@ -327,27 +327,56 @@ async fn connection_preparation_rejects_wrong_peer_without_retaining_a_descripto
 
 #[cfg(feature = "core")]
 #[test]
-fn session_permit_drop_during_unwind_does_not_recover_a_poisoned_counter() {
+fn session_permit_limit_and_normal_release() {
+    let (_root, shared, _backend, _branch) = super::super::tests::fixture();
+    let mut permits = (0..MAX_AUTHENTICATED_SESSIONS)
+        .map(|_| acquire_session_permit(&shared).unwrap())
+        .collect::<Vec<_>>();
+    let error = acquire_session_permit(&shared).unwrap_err();
+    assert_eq!(error.status, ::http::StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        error.code,
+        storage_contract::ErrorCode::ResourceLimitExceeded
+    );
+    assert_eq!(error.message, "too many authenticated SMB sessions");
+    drop(permits.pop().unwrap());
+    permits.push(acquire_session_permit(&shared).unwrap());
+    assert_eq!(shared.authenticated_sessions.available_permits(), 0);
+    drop(permits);
+    assert_eq!(
+        shared.authenticated_sessions.available_permits(),
+        MAX_AUTHENTICATED_SESSIONS
+    );
+}
+
+#[cfg(feature = "core")]
+#[test]
+fn session_permit_returns_capacity_during_unwind() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     let (_root, shared, _backend, _branch) = super::super::tests::fixture();
-    let permit = SessionPermit::acquire(&shared).unwrap();
     assert!(
         catch_unwind(AssertUnwindSafe(|| {
-            let _counter = shared.authenticated_sessions.lock().unwrap();
-            panic!("poison business state");
-        }))
-        .is_err()
-    );
-    assert!(
-        catch_unwind(AssertUnwindSafe(move || {
-            let _permit = permit;
+            let _permit = acquire_session_permit(&shared).unwrap();
+            assert_eq!(
+                shared.authenticated_sessions.available_permits(),
+                MAX_AUTHENTICATED_SESSIONS - 1
+            );
             panic!("release during an existing unwind");
         }))
         .is_err()
     );
-    assert!(shared.authenticated_sessions.is_poisoned());
     assert_eq!(
-        **shared.authenticated_sessions.lock().unwrap_err().get_ref(),
-        1
+        shared.authenticated_sessions.available_permits(),
+        MAX_AUTHENTICATED_SESSIONS
     );
+    let _replacement = acquire_session_permit(&shared).unwrap();
+}
+
+#[cfg(feature = "core")]
+#[test]
+#[should_panic(expected = "invariant: authenticated session admission is never closed")]
+fn closed_session_admission_is_not_reported_as_capacity_exhaustion() {
+    let (_root, shared, _backend, _branch) = super::super::tests::fixture();
+    shared.authenticated_sessions.close();
+    let _permit = acquire_session_permit(&shared).unwrap();
 }

@@ -504,6 +504,12 @@ impl PreparedMetadataObject {
         }
         Ok(Self { kind, hash, bytes })
     }
+    pub(crate) fn kind(&self) -> &'static str {
+        self.kind
+    }
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
     pub(crate) fn store(&self, members: &[DiskConfig]) -> Result<String> {
         if !members.is_empty() && self.bytes.len() > MAX_METADATA {
             return Err(Error::new(

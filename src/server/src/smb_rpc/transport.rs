@@ -53,29 +53,14 @@ impl Drop for ConnectionGuard {
 }
 
 /// Multiple shares must not bypass the sole account's authenticated session cap.
-struct SessionPermit {
-    shared: Arc<Shared>,
-}
-impl SessionPermit {
-    fn acquire(shared: &Arc<Shared>) -> Result<Self, ApiError> {
-        let mut sessions = shared
-            .authenticated_sessions
-            .lock()
-            .expect("service state lock poisoned");
-        if *sessions >= MAX_AUTHENTICATED_SESSIONS {
-            return Err(ApiError::limit("too many authenticated SMB sessions"));
+fn acquire_session_permit(shared: &Shared) -> Result<tokio::sync::SemaphorePermit<'_>, ApiError> {
+    match shared.authenticated_sessions.try_acquire() {
+        Ok(permit) => Ok(permit),
+        Err(tokio::sync::TryAcquireError::NoPermits) => {
+            Err(ApiError::limit("too many authenticated SMB sessions"))
         }
-        *sessions += 1;
-        Ok(Self {
-            shared: shared.clone(),
-        })
-    }
-}
-impl Drop for SessionPermit {
-    fn drop(&mut self) {
-        match self.shared.authenticated_sessions.lock() {
-            Ok(mut sessions) => *sessions -= 1,
-            Err(_) => tracing::error!("SMB session counter poisoned during release"),
+        Err(tokio::sync::TryAcquireError::Closed) => {
+            unreachable!("invariant: authenticated session admission is never closed")
         }
     }
 }
@@ -113,7 +98,7 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
             return Err(ApiError::forbidden());
         }
         let mut identity = shared.auth.sole_identity()?;
-        let permit = SessionPermit::acquire(&shared)?;
+        let permit = acquire_session_permit(&shared)?;
         let repo = shared
             .backend
             .repository_snapshot(&identity, &repository_id)?;
@@ -382,7 +367,7 @@ pub(crate) async fn serve_owned(
     let shared = Arc::new(Shared {
         budget,
         max_file_bytes,
-        authenticated_sessions: Mutex::new(0),
+        authenticated_sessions: tokio::sync::Semaphore::new(MAX_AUTHENTICATED_SESSIONS),
         backend,
         username,
         auth: crate::lock(&auth_owner).reader(),

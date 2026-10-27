@@ -599,7 +599,7 @@ fn namespace_preconditions_use_workspace_base_after_concurrent_head_changes() {
             spool: original.spool.clone(),
             budget: Arc::clone(&original.budget),
             max_file_bytes: original.max_file_bytes,
-            authenticated_sessions: Mutex::new(0),
+            authenticated_sessions: tokio::sync::Semaphore::new(MAX_AUTHENTICATED_SESSIONS),
             file_writers: Mutex::new(BTreeSet::new()),
             namespace_operations: Mutex::new(BTreeSet::new()),
         });
