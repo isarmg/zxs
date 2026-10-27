@@ -477,3 +477,54 @@ fn validate_id_matches_formatted_prefix_oracle() {
         }
     }
 }
+
+#[test]
+fn entry_value_equality_matches_canonical_bytes_for_every_field() {
+    let base = Entry {
+        entry_id: "entry".into(),
+        path: name_policy::PortablePath::parse("Folder/A.txt").unwrap(),
+        kind: NamespaceEntryKind::File,
+        file_id: "file".into(),
+        version_id: "version".into(),
+        size: 0,
+    };
+    let mut cases = vec![base.clone()];
+    for text in ["", "quote\"\n", "中文😀"] {
+        let mut entry = base.clone();
+        entry.entry_id = text.into();
+        cases.push(entry);
+        let mut entry = base.clone();
+        entry.file_id = text.into();
+        cases.push(entry);
+        let mut entry = base.clone();
+        entry.version_id = text.into();
+        cases.push(entry);
+    }
+    for path in ["folder/a.txt", "Folder/B.txt", "另一目录/文件.txt"] {
+        let mut entry = base.clone();
+        entry.path = name_policy::PortablePath::parse(path).unwrap();
+        cases.push(entry);
+    }
+    let mut directory = base.clone();
+    directory.kind = NamespaceEntryKind::Directory;
+    cases.push(directory);
+    for size in [1, (1 << 53) - 1, 1 << 53, u64::MAX] {
+        let mut entry = base.clone();
+        entry.size = size;
+        cases.push(entry);
+    }
+    for left in &cases {
+        let left_bytes = canonical_json(left).unwrap();
+        assert_eq!(decode_strict::<Entry>(&left_bytes).unwrap(), *left);
+        for right in &cases {
+            assert_eq!(left == right, left_bytes == canonical_json(right).unwrap());
+        }
+    }
+    let ordered = vec![cases[0].clone(), cases[1].clone()];
+    let reversed = vec![cases[1].clone(), cases[0].clone()];
+    assert_ne!(ordered, reversed);
+    assert_ne!(
+        canonical_json(&ordered).unwrap(),
+        canonical_json(&reversed).unwrap()
+    );
+}

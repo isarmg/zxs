@@ -350,3 +350,176 @@ fn reconstruction_never_overwrites_corruption_unsafe_targets_or_changes_bound_ro
     );
     assert_eq!(fs::read(outside).unwrap(), b"untouched");
 }
+
+#[test]
+fn single_history_projection_shares_complete_maps_with_identical_graph() {
+    let state = fixture();
+    assert_eq!(state.histories.len(), 1);
+    assert!(!state.commits.is_empty());
+    assert!(!state.directory_trees.is_empty());
+    let id = state.histories.keys().next().unwrap();
+    let projected = HistoryManifest::from_state(&state, id).unwrap();
+    assert!(projected.commits.shares_storage_with(&state.commits));
+    assert!(
+        projected
+            .directory_trees
+            .shares_storage_with(&state.directory_trees)
+    );
+    // Independent materialization uses ordinary map collection, not subset.
+    let mut materialized = projected.clone();
+    materialized.commits = state
+        .commits
+        .iter()
+        .filter(|(_, commit)| commit.history_tree_id == *id)
+        .map(|(key, commit)| (key.clone(), commit.clone()))
+        .collect();
+    materialized.directory_trees = state
+        .directory_trees
+        .iter()
+        .filter(|(_, tree)| {
+            state.directory_branches[&tree.directory_branch_id].repository_id
+                == projected.repository.repository_id
+        })
+        .map(|(key, tree)| (key.clone(), tree.clone()))
+        .collect();
+    assert!(!materialized.commits.shares_storage_with(&projected.commits));
+    assert!(
+        !materialized
+            .directory_trees
+            .shares_storage_with(&projected.directory_trees)
+    );
+    materialized.validate().unwrap();
+    assert_eq!(
+        canonical_json(&projected).unwrap(),
+        canonical_json(&materialized).unwrap()
+    );
+    assert_eq!(
+        graph::prepare(&projected, MAX_METADATA).unwrap().0,
+        graph::prepare(&materialized, MAX_METADATA).unwrap().0
+    );
+}
+
+#[test]
+fn commit_entry_order_admission_matches_canonical_byte_oracle() {
+    let state = fixture();
+    let history = state.histories.keys().next().unwrap();
+    let manifest = HistoryManifest::from_state(&state, history).unwrap();
+    let commit = state
+        .commits
+        .values()
+        .find(|commit| commit.entries.len() == 3)
+        .unwrap();
+    for permutation in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        let entries: Vec<_> = permutation
+            .into_iter()
+            .map(|index| commit.entries[index].clone())
+            .collect();
+        let mut normalized = entries.clone();
+        crate::business::validate_entries(&mut normalized, 1_000_000).unwrap();
+        let expected = canonical_json(&normalized).unwrap() == canonical_json(&entries).unwrap();
+        let mut changed_manifest = manifest.clone();
+        changed_manifest
+            .commits
+            .get_mut(&commit.commit_id)
+            .unwrap()
+            .entries = entries.clone();
+        assert_eq!(changed_manifest.validate().is_ok(), expected);
+        let mut changed_state = state.clone();
+        changed_state
+            .commits
+            .get_mut(&commit.commit_id)
+            .unwrap()
+            .entries = entries;
+        let raw: RawState =
+            json_codec::from_slice(&canonical_json(&changed_state).unwrap()).unwrap();
+        assert_eq!(AdmittedState::try_from(raw).is_ok(), expected);
+    }
+}
+
+#[test]
+fn directory_branch_head_entry_comparison_preserves_boundary_rejections() {
+    let state = fixture();
+    let history = state.histories.keys().next().unwrap();
+    let manifest = HistoryManifest::from_state(&state, history).unwrap();
+    let branch = manifest
+        .directory_branches
+        .values()
+        .find(|branch| branch.entries.len() == 2 && branch.materialized)
+        .unwrap();
+    let head = &manifest.directory_trees[&branch.head_tree_id];
+    assert_eq!(branch.entries, head.entries);
+    let mut cases = vec![branch.entries.clone()];
+    let mut reordered = branch.entries.clone();
+    reordered.reverse();
+    cases.push(reordered);
+    let mut entry_id = branch.entries.clone();
+    entry_id[0].entry_id.push('x');
+    cases.push(entry_id);
+    let mut path = branch.entries.clone();
+    path[0].path = name_policy::PortablePath::parse("folder/A.txt").unwrap();
+    assert_eq!(path[0].lookup_key(), branch.entries[0].lookup_key());
+    assert_ne!(path[0].path(), branch.entries[0].path());
+    cases.push(path);
+    let mut kind = branch.entries.clone();
+    kind[0].kind = NamespaceEntryKind::Directory;
+    cases.push(kind);
+    let mut file_id = branch.entries.clone();
+    file_id[0].file_id.push('x');
+    cases.push(file_id);
+    let mut version_id = branch.entries.clone();
+    version_id[0].version_id.push('x');
+    cases.push(version_id);
+    let mut size = branch.entries.clone();
+    size[0].size = u64::MAX;
+    cases.push(size);
+    for entries in cases {
+        let expected = canonical_json(&entries).unwrap() == canonical_json(&head.entries).unwrap();
+        let mut changed = manifest.clone();
+        changed
+            .directory_branches
+            .get_mut(&branch.directory_branch_id)
+            .unwrap()
+            .entries = entries.clone();
+        match changed.validate() {
+            Ok(()) => assert!(expected),
+            Err(error) => {
+                assert!(!expected);
+                assert_eq!(error.code(), ErrorCode::HistoryPackageInvalid);
+                assert_eq!(
+                    error.message(),
+                    "directory branch projection differs from its HEAD tree"
+                );
+            }
+        }
+        let mut changed_state = state.clone();
+        changed_state
+            .directory_branches
+            .get_mut(&branch.directory_branch_id)
+            .unwrap()
+            .entries = entries;
+        let raw: RawState =
+            json_codec::from_slice(&canonical_json(&changed_state).unwrap()).unwrap();
+        assert_eq!(AdmittedState::try_from(raw).is_ok(), expected);
+    }
+    // A reordered persisted HEAD is independently valid but disagrees with the branch.
+    let mut changed = manifest.clone();
+    changed
+        .directory_trees
+        .get_mut(&branch.head_tree_id)
+        .unwrap()
+        .entries
+        .reverse();
+    let error = changed.validate().unwrap_err();
+    assert_eq!(error.code(), ErrorCode::HistoryPackageInvalid);
+    assert_eq!(
+        error.message(),
+        "directory branch projection differs from its HEAD tree"
+    );
+}

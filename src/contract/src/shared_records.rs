@@ -105,13 +105,20 @@ impl<T> SharedRecords<T> {
     }
 
     /// Select an independent logical subset, sharing immutable record payloads.
-    /// Scans all records and copies only selected keys and handles, never T.
+    /// Calls the predicate once per record in key order. Full selection shares the backing map;
+    /// partial selection copies only selected keys and handles, never T.
     pub fn subset(&self, mut predicate: impl FnMut(&str, &T) -> bool) -> Self {
+        let mut remaining = self.records.iter();
+        let Some(prefix_len) = remaining.position(|(key, value)| !predicate(key, value.as_ref()))
+        else {
+            return self.clone();
+        };
         Self {
             records: Arc::new(
                 self.records
                     .iter()
-                    .filter(|(key, value)| predicate(key, value.as_ref()))
+                    .take(prefix_len)
+                    .chain(remaining.filter(|(key, value)| predicate(key, value.as_ref())))
                     .map(|(key, value)| (key.clone(), Arc::clone(value)))
                     .collect(),
             ),

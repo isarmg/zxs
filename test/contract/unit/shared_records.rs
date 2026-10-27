@@ -479,3 +479,83 @@ fn shared_value_iteration_accepts_non_clone_payloads() {
         [1, 2]
     );
 }
+
+#[test]
+fn subset_calls_predicate_once_in_order_for_every_selection() {
+    let source: SharedRecords<_> = ["a", "b", "c", "d"]
+        .into_iter()
+        .enumerate()
+        .map(|(value, key)| (key.to_owned(), value))
+        .collect();
+    for mask in 0u8..16 {
+        let mut visits = Vec::new();
+        let selected = source.subset(|key, value| {
+            visits.push((key.to_owned(), *value));
+            mask & (1 << *value) != 0
+        });
+        assert_eq!(
+            visits,
+            source
+                .iter()
+                .map(|(k, v)| (k.clone(), *v))
+                .collect::<Vec<_>>()
+        );
+        let expected: BTreeMap<_, _> = source
+            .iter()
+            .filter(|(_, value)| mask & (1 << **value) != 0)
+            .map(|(key, value)| (key.clone(), *value))
+            .collect();
+        assert_eq!(
+            selected
+                .iter()
+                .map(|(k, v)| (k.clone(), *v))
+                .collect::<BTreeMap<_, _>>(),
+            expected
+        );
+        assert_eq!(selected.shares_storage_with(&source), mask == 15);
+    }
+}
+
+#[test]
+fn full_subset_shares_storage_and_isolates_writes_in_both_directions() {
+    let clones = Arc::new(AtomicUsize::new(0));
+    let mut source: SharedRecords<_> = [
+        ("a".into(), counted("a", &clones)),
+        ("b".into(), counted("b", &clones)),
+    ]
+    .into_iter()
+    .collect();
+    let mut selected = source.subset(|_, _| true);
+    assert!(selected.shares_storage_with(&source));
+    assert_eq!(clone_count(&clones), 0);
+    source.get_mut("a").unwrap().value.push('!');
+    selected.get_mut("b").unwrap().value.push('?');
+    assert!(!selected.shares_storage_with(&source));
+    assert_eq!(source["a"].value, "a!");
+    assert_eq!(selected["a"].value, "a");
+    assert_eq!(source["b"].value, "b");
+    assert_eq!(selected["b"].value, "b?");
+    assert_eq!(clone_count(&clones), 2);
+}
+
+#[test]
+fn empty_subset_does_not_call_predicate_and_shares_empty_storage() {
+    let source = SharedRecords::<String>::new();
+    let selected = source.subset(|_, _| panic!("empty source has no records"));
+    assert!(selected.is_empty());
+    assert!(selected.shares_storage_with(&source));
+}
+
+#[test]
+fn full_subset_supports_non_clone_and_preserves_interior_mutability_contract() {
+    use std::cell::Cell;
+    struct NonClone(Cell<u32>);
+    let source: SharedRecords<_> = [("a".into(), NonClone(Cell::new(1)))].into_iter().collect();
+    let selected = source.subset(|_, value| {
+        value.0.set(2);
+        true
+    });
+    assert!(selected.shares_storage_with(&source));
+    selected["a"].0.set(3);
+    assert_eq!(source["a"].0.get(), 3);
+}

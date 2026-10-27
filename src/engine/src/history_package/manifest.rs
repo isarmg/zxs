@@ -8,7 +8,7 @@ use storage_contract::{
     Branch, Commit, ContentState, DirectoryBranch, DirectoryTree, Entry, FileBranchMerge,
     FileContext, FileMetadataNode, FilePathNode, FileVersion, HistoryBoundary, HistoryTree,
     MergeLink, Placement, PlacementRule, ProtectionPolicy, Repository,
-    SUPPORTED_CHECKSUM_CHUNK_BYTES, SharedRecords, State, canonical_json, validate_id,
+    SUPPORTED_CHECKSUM_CHUNK_BYTES, SharedRecords, State, validate_id,
 };
 use storage_contract::{BranchKind, BranchState, FileMetadataKind};
 
@@ -901,7 +901,7 @@ impl HistoryManifest {
             }
             let mut entries = commit.entries.clone();
             validate_entries(&mut entries, 1_000_000)?;
-            if canonical_json(&entries)? != canonical_json(&commit.entries)? {
+            if entries != commit.entries {
                 return Err(invalid(
                     "commit entries are not in canonical namespace form",
                 ));
@@ -1126,7 +1126,7 @@ impl HistoryManifest {
                 || branch.path != head.path
                 || branch.file_branches != head.file_branches
                 || branch.directory_refs != head.directory_refs
-                || canonical_json(&branch.entries)? != canonical_json(&head.entries)?
+                || branch.entries != head.entries
             {
                 return Err(invalid(
                     "directory branch projection differs from its HEAD tree",
