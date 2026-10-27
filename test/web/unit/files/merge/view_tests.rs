@@ -1,4 +1,5 @@
 use super::*;
+use crate::files::model::FileOperation;
 
 fn editing() -> State {
     let mut state = State {
@@ -56,7 +57,7 @@ fn merge_cancel_preserves_pending_and_unknown_operation_drafts() {
     state
         .files
         .operations
-        .push(json!({"operation_id":"original", "state":"in_doubt"}));
+        .push(FileOperation::unknown("original"));
     cancel(&mut state);
     assert!(state.files.merge.is_some());
     assert!(state.files.publications.contains_key(&review::Kind::Merge));

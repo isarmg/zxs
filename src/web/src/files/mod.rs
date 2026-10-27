@@ -15,5 +15,5 @@ mod version_tree;
 mod view;
 pub(crate) use actions::{load_disks, load_entries, pending, poll};
 pub(crate) use detail::page as details;
-pub(crate) use model::Model;
+pub(crate) use model::{FileOperation, Model};
 pub(crate) use view::view;

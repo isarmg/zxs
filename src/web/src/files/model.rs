@@ -80,7 +80,7 @@ pub(crate) struct Model {
     pub tag_edit: Option<super::tags::Draft>,
     pub checked_nodes: BTreeSet<String>,
     pub publications: super::review::Publications,
-    pub operations: Vec<Value>,
+    pub operations: Vec<FileOperation>,
     pub polling_operations: Vec<String>,
     pub mutation_pending: bool,
     pub query: String,
@@ -155,18 +155,49 @@ pub(crate) enum NamespaceAction {
     CreateDirectory,
 }
 pub(crate) use storage_contract::client_protocol::OperationStatus as SaveStatus;
-pub(crate) fn operation_status(value: &Value) -> SaveStatus {
-    // Only local HTTP-outcome records use this two-field marker. Network
-    // receipts must pass the shared wire validator before entering the model.
-    if value.as_object().is_some_and(|fields| fields.len() == 2)
-        && value["operation_id"]
-            .as_str()
-            .is_some_and(|id| !id.is_empty())
-        && value["state"] == "REJECTED"
-    {
-        return SaveStatus::Rejected;
+
+/// An operation observation, not a receipt or an authorization grant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FileOperation {
+    id: String,
+    status: SaveStatus,
+}
+impl FileOperation {
+    pub(crate) fn from_receipt(id: &str, value: &Value) -> Self {
+        if value["operation_id"].as_str() == Some(id)
+            && let Some(status) = storage_contract::client_protocol::operation_status(value)
+        {
+            Self {
+                id: id.into(),
+                status,
+            }
+        } else {
+            // A malformed or unrelated response cannot settle the original write.
+            Self::unknown(id)
+        }
     }
-    storage_contract::client_protocol::operation_status(value).unwrap_or(SaveStatus::Unknown)
+
+    pub(crate) fn unknown(id: &str) -> Self {
+        Self {
+            id: id.into(),
+            status: SaveStatus::Unknown,
+        }
+    }
+
+    pub(crate) fn rejected(id: &str) -> Self {
+        Self {
+            id: id.into(),
+            status: SaveStatus::Rejected,
+        }
+    }
+
+    pub(crate) fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub(crate) fn status(&self) -> SaveStatus {
+        self.status
+    }
 }
 pub(crate) fn publication_notice(status: SaveStatus) -> String {
     match status {

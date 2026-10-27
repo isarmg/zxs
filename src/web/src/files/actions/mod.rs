@@ -13,7 +13,7 @@ pub(crate) use mutation::{
 };
 pub(crate) use operation::{poll, record_operation, record_receipt};
 
-use super::model::{SaveStatus, operation_status};
+use super::model::SaveStatus;
 use crate::{api, ui::State};
 
 fn disk_path(slot: &str) -> String {
@@ -35,7 +35,7 @@ pub(crate) fn pending(state: &State) -> bool {
             .files
             .operations
             .iter()
-            .any(|op| operation_status(op) == SaveStatus::Unknown)
+            .any(|op| op.status() == SaveStatus::Unknown)
 }
 
 #[cfg(test)]

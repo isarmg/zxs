@@ -2,44 +2,33 @@
 use super::browse::reload_entries;
 use crate::{
     api,
-    files::model::{SaveStatus, operation_status, publication_notice},
-    ui::{State, current_session, fail, text},
+    files::{
+        FileOperation,
+        model::{SaveStatus, publication_notice},
+    },
+    ui::{State, current_session, fail},
 };
-use json_codec::{Value, json};
+use json_codec::Value;
 use web_interface::prelude::*;
 use web_interface::tasks::spawn_local;
 
 /// Only a complete current receipt can settle its matching operation. Malformed
 /// success responses retain the original ID, draft and write fence for polling.
 pub(crate) fn record_receipt(state: RwSignal<State>, id: &str, value: Value) -> SaveStatus {
-    let value = receipt(id, value);
-    let status = operation_status(&value);
-    record_operation(state, value);
+    let operation = FileOperation::from_receipt(id, &value);
+    let status = operation.status();
+    record_operation(state, operation);
     status
 }
-pub(super) fn receipt(id: &str, value: Value) -> Value {
-    if !id.is_empty()
-        && value["operation_id"].as_str() == Some(id)
-        && storage_contract::client_protocol::operation_status(&value).is_some()
-    {
-        value
-    } else {
-        json!({"operation_id":id,"state":"in_doubt"})
-    }
-}
 
-pub(crate) fn record_operation(state: RwSignal<State>, value: Value) {
-    let id = text(&value, &["operation_id"]);
-    let status = operation_status(&value);
+pub(crate) fn record_operation(state: RwSignal<State>, operation: FileOperation) {
+    let id = operation.id().to_owned();
+    let status = operation.status();
     let mut reload_scope = false;
     state.update(|s| {
-        if !id.is_empty() {
-            s.files
-                .operations
-                .retain(|operation| text(operation, &["operation_id"]) != id);
-            s.files.operations.insert(0, value);
-            s.files.operations.truncate(100);
-        }
+        s.files.operations.retain(|operation| operation.id() != id);
+        s.files.operations.insert(0, operation);
+        s.files.operations.truncate(100);
         reload_scope = crate::files::batch::settle_operation(&mut s.files, &id, status);
         crate::files::review::settle(&mut s.files, &id, status);
         s.notice = publication_notice(status);
@@ -60,11 +49,9 @@ fn poll_work(state: &State) -> Option<(u64, Vec<String>)> {
         .files
         .operations
         .iter()
-        .filter(|operation| operation_status(operation) == SaveStatus::Unknown)
+        .filter(|operation| operation.status() == SaveStatus::Unknown)
         .filter_map(|operation| {
-            let id = operation["operation_id"]
-                .as_str()
-                .filter(|id| !id.is_empty())?;
+            let id = operation.id();
             (!state
                 .files
                 .polling_operations

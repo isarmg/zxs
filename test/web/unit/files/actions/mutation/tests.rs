@@ -78,17 +78,22 @@ fn failed_editor_requests_record_only_their_original_outcome() {
                     code: storage_contract::ErrorCode::InjectedFailure,
                     message: "request failed".into(),
                     retryable: false,
-                    request_id: None,
+                    request_id: Some("failure-request".into()),
                     source: None,
                 },
             );
             state.with_untracked(|s| {
-                assert_eq!(s.files.operations[0]["operation_id"], "original");
-                assert_eq!(
-                    crate::files::model::operation_status(&s.files.operations[0]),
-                    expected
-                );
+                assert_eq!(s.files.operations[0].id(), "original");
+                assert_eq!(s.files.operations[0].status(), expected);
                 assert_eq!(super::super::pending(s), expected == SaveStatus::Unknown);
+                assert_eq!(s.errors.len(), 1);
+                assert_eq!(s.errors[0].request_id.as_deref(), Some("failure-request"));
+                assert!(s.errors[0].message.contains("request failed"));
+                if expected == SaveStatus::Unknown {
+                    assert_eq!(s.notice, crate::files::model::publication_notice(expected));
+                } else {
+                    assert!(s.notice.is_empty());
+                }
             });
         }
     });

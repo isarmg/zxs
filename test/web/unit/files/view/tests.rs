@@ -1,5 +1,6 @@
 use super::super::model::{Disk, Model};
 use super::*;
+use crate::files::model::FileOperation;
 
 #[test]
 fn disk_roots_preserve_loading_empty_and_refresh_states() {
@@ -39,7 +40,7 @@ fn disk_roots_preserve_order_access_capacity_and_ignore_directory_state() {
     };
     model.directory = "unrelated/path".into();
     model.selected = Some(json_codec::json!({"name": "unrelated"}));
-    model.operations = vec![json_codec::json!({"operation_id": "unrelated"})];
+    model.operations = vec![FileOperation::unknown("unrelated")];
     model.checked_entries.insert("unrelated".into());
     assert_eq!(disk_roots_projection(&model), DiskRoots::Disks(disks));
 }

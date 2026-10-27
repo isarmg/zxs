@@ -1,4 +1,5 @@
 use super::*;
+use crate::files::FileOperation;
 
 #[test]
 fn hidden_documents_do_not_start_and_resume_once_without_replaying_timer_debt() {
@@ -17,9 +18,10 @@ fn pausing_has_no_access_to_operation_receipts_or_admitted_reads() {
         authenticated: true,
         ..Default::default()
     };
-    state.files.operations.push(json_codec::json!({
-        "operation_id":"pending", "state":"in_doubt"
-    }));
+    state
+        .files
+        .operations
+        .push(FileOperation::unknown("pending"));
     state.files.polling_operations.push("pending".into());
     state.management.loading = true;
     assert_eq!(demand(&state, false), Demand::default());
@@ -31,7 +33,7 @@ fn pausing_has_no_access_to_operation_receipts_or_admitted_reads() {
             telemetry: false,
         }
     );
-    assert_eq!(state.files.operations[0]["operation_id"], "pending");
+    assert_eq!(state.files.operations[0].id(), "pending");
     assert_eq!(state.files.polling_operations, ["pending"]);
     assert!(state.management.loading);
     assert!(crate::files::pending(&state));

@@ -1,4 +1,5 @@
 use super::*;
+use crate::files::FileOperation;
 #[test]
 fn session_transitions_reject_duplicate_and_overlapping_submissions() {
     let mut state = State::default();
@@ -140,13 +141,14 @@ fn language_reload_waits_for_pending_or_uncertain_work() {
     state
         .files
         .operations
-        .push(json!({"operation_id":"original", "commit_state":"IN_DOUBT"}));
+        .push(FileOperation::unknown("original"));
     assert!(state.reload_blocked());
-    state.files.operations[0] = json_codec::from_str(include_str!(
+    let mut receipt: json_codec::Value = json_codec::from_str(include_str!(
         "../files/fixtures/damaged-published-save-operation.json"
     ))
     .unwrap();
-    state.files.operations[0]["operation_id"] = "original".into();
+    receipt["operation_id"] = "original".into();
+    state.files.operations[0] = FileOperation::from_receipt("original", &receipt);
     assert!(!state.reload_blocked());
     state.password_change = crate::ui::PasswordChangeState::Pending;
     assert!(state.reload_blocked());
@@ -447,7 +449,7 @@ fn expired_password_change_session_closes_business_admission_without_losing_reco
     state
         .files
         .operations
-        .push(json!({"operation_id":"original","state":"in_doubt"}));
+        .push(FileOperation::unknown("original"));
     reject_password_change(
         &mut state,
         &api::Error {
@@ -465,7 +467,7 @@ fn expired_password_change_session_closes_business_admission_without_losing_reco
     assert_eq!(session_view(&state).phase, SessionPhase::Anonymous);
     assert_eq!(state.password_change, PasswordChangeState::Idle);
     assert_eq!(state.files.slot, "P01");
-    assert_eq!(state.files.operations[0]["operation_id"], "original");
+    assert_eq!(state.files.operations[0].id(), "original");
     assert!(
         state.reload_blocked(),
         "unresolved file receipts remain fenced"

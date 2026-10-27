@@ -558,7 +558,7 @@ fn registration_poll_reloads_its_branch_records_without_reposting() {
                 ..Default::default()
             });
             state.update(|s| s.files.batch = Some(batch));
-            file_actions::record_operation(state, json!({"operation_id":"scope-original","state":"in_doubt"}));
+            file_actions::record_operation(state, crate::files::FileOperation::unknown("scope-original"));
             assert!(state.with_untracked(file_actions::pending));
             let mut receipt: Value = json_codec::from_str(include_str!("../../fixtures/namespace-batch-operation.json")).unwrap();
             receipt["operation_id"] = "scope-original".into();

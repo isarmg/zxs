@@ -1,4 +1,5 @@
 use super::*;
+use json_codec::json;
 
 fn published() -> Value {
     let mut value: Value = json_codec::from_str(include_str!(
@@ -16,6 +17,10 @@ fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() 
         missing.as_object_mut().unwrap().remove("request_digest");
         let mut wrong = published();
         wrong["operation_id"] = "other".into();
+        let mut missing_id = published();
+        missing_id.as_object_mut().unwrap().remove("operation_id");
+        let mut empty_id = published();
+        empty_id["operation_id"] = "".into();
         let mut contradictory = published();
         contradictory["state"] = "in_doubt".into();
         let mut extra = published();
@@ -31,6 +36,8 @@ fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() 
             json!({"operation":published()}),
             missing,
             wrong,
+            missing_id,
+            empty_id,
             contradictory,
             extra,
         ] {
@@ -73,10 +80,7 @@ fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() 
                     Some("original")
                 );
                 assert_eq!(s.files.operations.len(), 1);
-                assert_eq!(
-                    s.files.operations[0],
-                    json!({"operation_id":"original", "state":"in_doubt"})
-                );
+                assert_eq!(s.files.operations[0], FileOperation::unknown("original"));
             });
             // A later valid poll settles this ID and draft, without a new write.
             assert_eq!(
@@ -96,7 +100,7 @@ fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() 
 }
 
 #[test]
-fn complete_current_receipts_preserve_terminal_and_unknown_evidence() {
+fn receipt_observations_keep_terminal_and_unknown_statuses() {
     let mut aborted = published();
     aborted["commit_state"] = "ABORTED".into();
     aborted["state"] = "in_doubt".into();
@@ -107,18 +111,23 @@ fn complete_current_receipts_preserve_terminal_and_unknown_evidence() {
     let mut degraded: Value =
         json_codec::from_str(include_str!("../../fixtures/degraded-save-operation.json")).unwrap();
     degraded["operation_id"] = "original".into();
-    for (value, status) in [
+    for (mut value, status) in [
         (published(), SaveStatus::Published),
         (aborted, SaveStatus::Rejected),
         (pending, SaveStatus::Unknown),
         (degraded, SaveStatus::Degraded),
     ] {
-        assert_eq!(receipt("original", value.clone()), value);
-        assert_eq!(operation_status(&value), status);
+        let operation = FileOperation::from_receipt("original", &value);
+        assert_eq!(operation.id(), "original");
+        assert_eq!(operation.status(), status);
         assert_eq!(
             storage_contract::client_protocol::operation_status(&value),
             Some(status)
         );
+        value["operation_id"] = "unrelated".into();
+        value["state"] = "invalid".into();
+        assert_eq!(operation.id(), "original");
+        assert_eq!(operation.status(), status);
     }
 }
 
@@ -138,7 +147,7 @@ fn metadata_polling_requires_an_active_session_before_scheduling_network_work() 
             initial
                 .files
                 .operations
-                .push(json!({"operation_id":"pending-rename","state":"in_doubt"}));
+                .push(FileOperation::unknown("pending-rename"));
             let state = RwSignal::new(initial);
             // Native tests cannot schedule browser requests; returning here also
             // proves that inactive sessions do not admit a metadata poll.
@@ -162,14 +171,13 @@ fn poll_projection_copies_only_unpolled_operation_ids_and_keeps_session_epoch() 
     state.files.file_history = json!({"nodes":[{"note":"x".repeat(100_000)}]}).into();
     state.monitor.history = json!({"samples":[{"extra":"y".repeat(100_000)}]}).into();
     state.files.operations = vec![
-        json!({"operation_id":"pending","commit_state":"IN_DOUBT"}),
-        json!({"operation_id":"in-flight","commit_state":"IN_DOUBT"}),
+        FileOperation::unknown("pending"),
+        FileOperation::unknown("in-flight"),
         {
             let mut value = published();
             value["operation_id"] = "done".into();
-            value
+            FileOperation::from_receipt("done", &value)
         },
-        json!({"commit_state":"IN_DOUBT"}),
     ];
     state.files.polling_operations.push("in-flight".into());
     crate::snapshot::CLONES.with(|c| c.set(0));
@@ -181,4 +189,56 @@ fn poll_projection_copies_only_unpolled_operation_ids_and_keeps_session_epoch() 
     );
     state.session_transition = crate::ui::SessionTransition::LoggingOut;
     assert_eq!(poll_work(&state), None);
+}
+
+#[test]
+fn local_outcomes_are_typed_but_network_markers_cannot_claim_rejection() {
+    assert_eq!(
+        FileOperation::unknown("original").status(),
+        SaveStatus::Unknown
+    );
+    assert_eq!(
+        FileOperation::rejected("original").status(),
+        SaveStatus::Rejected
+    );
+    for status in ["REJECTED", "in_doubt", "completed"] {
+        let operation = FileOperation::from_receipt(
+            "original",
+            &json!({"operation_id":"original", "state":status}),
+        );
+        assert_eq!(operation.id(), "original");
+        assert_eq!(operation.status(), SaveStatus::Unknown);
+    }
+}
+
+#[test]
+fn observations_replace_only_the_original_id_and_keep_the_ui_bound() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State::default());
+        for index in 0..101 {
+            record_operation(state, FileOperation::unknown(&format!("operation-{index}")));
+        }
+        record_operation(state, FileOperation::rejected("operation-50"));
+        state.with_untracked(|s| {
+            assert_eq!(s.files.operations.len(), 100);
+            assert_eq!(s.files.operations[0].id(), "operation-50");
+            assert_eq!(s.files.operations[0].status(), SaveStatus::Rejected);
+            assert_eq!(s.files.operations[1].id(), "operation-100");
+            assert!(
+                !s.files
+                    .operations
+                    .iter()
+                    .any(|operation| operation.id() == "operation-0")
+            );
+            assert_eq!(
+                s.files
+                    .operations
+                    .iter()
+                    .filter(|operation| operation.id() == "operation-50")
+                    .count(),
+                1
+            );
+            assert!(super::super::pending(s));
+        });
+    });
 }

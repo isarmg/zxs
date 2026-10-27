@@ -2,13 +2,13 @@
 //! tied to their original operation, and definitive conflicts preserve drafts.
 use super::{
     actions,
-    model::{Model, SaveStatus, publication_notice},
+    model::{FileOperation, Model, SaveStatus, publication_notice},
 };
 use crate::{
     api,
     ui::{State, current_session, fail},
 };
-use json_codec::{Value, json};
+use json_codec::Value;
 use std::collections::BTreeMap;
 use web_interface::prelude::*;
 use web_interface::tasks::spawn_local;
@@ -112,7 +112,7 @@ pub(crate) fn submit(
             Err(error) => {
                 let unknown = error.mutation_outcome_unknown();
                 if unknown {
-                    actions::record_operation(state, json!({"operation_id":id,"state":"in_doubt"}));
+                    actions::record_operation(state, FileOperation::unknown(&id));
                 }
                 state.update(|s| {
                     if let Some(publication) = s

@@ -1,5 +1,6 @@
 //! Captured scope reads and publication with session/generation fences.
 use super::*;
+use crate::files::model::FileOperation;
 pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Value>) {
     let draft = state.with_untracked(|snapshot| {
         if !file_actions::write_allowed(snapshot) {
@@ -499,10 +500,7 @@ pub(super) fn initialize_scope(state: RwSignal<State>, destination: bool) {
             }
             Err(error) => {
                 if error.mutation_outcome_unknown() {
-                    file_actions::record_operation(
-                        state,
-                        json!({"operation_id":operation_id,"state":"in_doubt"}),
-                    );
+                    file_actions::record_operation(state, FileOperation::unknown(&operation_id));
                 } else {
                     state.update(|s| {
                         settle_operation(
@@ -712,10 +710,7 @@ pub(super) fn submit(state: RwSignal<State>) {
             }
             Err(error) => {
                 if error.mutation_outcome_unknown() {
-                    file_actions::record_operation(
-                        state,
-                        json!({"operation_id":id,"state":"in_doubt"}),
-                    );
+                    file_actions::record_operation(state, FileOperation::unknown(&id));
                 }
                 if same_draft(state, &draft_id) {
                     update(state, |draft| {

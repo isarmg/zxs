@@ -261,8 +261,8 @@ impl Draft {
                     s.files
                         .operations
                         .iter()
-                        .find(|op| op["operation_id"].as_str() == Some(id.as_str()))
-                        .map(super::model::operation_status)
+                        .find(|op| op.id() == id)
+                        .map(super::model::FileOperation::status)
                 });
                 if let Some(status) = status {
                     draft.settle(&id, status);

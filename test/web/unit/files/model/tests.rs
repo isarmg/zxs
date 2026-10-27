@@ -83,19 +83,30 @@ fn publication_protection_is_not_rewritten_by_later_damage() {
     let mut good = damage.clone();
     good["current_health"]["state"] = "HEALTHY".into();
     assert_eq!(good["result"], damage["result"]);
-    assert_eq!(operation_status(&good), SaveStatus::Published);
-    assert_eq!(operation_status(&damage), SaveStatus::Published);
+    let id = damage["operation_id"].as_str().unwrap();
+    assert_eq!(
+        FileOperation::from_receipt(id, &good).status(),
+        SaveStatus::Published
+    );
+    assert_eq!(
+        FileOperation::from_receipt(id, &damage).status(),
+        SaveStatus::Published
+    );
 }
 #[test]
 fn permanent_loss_is_distinct_from_ordinary_save() {
     let loss: Value = json_codec::from_str(DEGRADED).unwrap();
-    assert_eq!(operation_status(&loss), SaveStatus::Degraded);
+    let id = loss["operation_id"].as_str().unwrap();
+    assert_eq!(
+        FileOperation::from_receipt(id, &loss).status(),
+        SaveStatus::Degraded
+    );
     assert!(publication_notice(SaveStatus::Degraded).contains("Permanently lost"));
 }
 #[test]
 fn uncertain_save_cannot_be_relabelled_as_a_failure() {
     assert_eq!(
-        operation_status(&json_codec::json!({"state":"in_doubt"})),
+        FileOperation::from_receipt("original", &json_codec::json!({"state":"in_doubt"})).status(),
         SaveStatus::Unknown
     );
 }

@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     api,
-    files::model::{NamespaceAction, SaveStatus, join_path},
+    files::model::{FileOperation, NamespaceAction, SaveStatus, join_path},
     ui::{State, current_session, fail, set_notice, text},
 };
 use json_codec::{Value, json};
@@ -380,8 +380,12 @@ fn file_mutation(
 /// malformed-success responses stay tied to the original ID for polling.
 fn record_failure(state: RwSignal<State>, id: &str, error: api::Error) {
     let unknown = error.mutation_outcome_unknown();
-    let status = if unknown { "in_doubt" } else { "REJECTED" };
-    record_operation(state, json!({"operation_id":id,"state":status}));
+    let operation = if unknown {
+        FileOperation::unknown(id)
+    } else {
+        FileOperation::rejected(id)
+    };
+    record_operation(state, operation);
     if !unknown {
         // This is a rejected HTTP request, not a server staging receipt.
         // Present its actual error without claiming any content was retained.

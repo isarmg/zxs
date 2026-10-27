@@ -1,4 +1,5 @@
 use super::*;
+use crate::files::model::FileOperation;
 
 #[test]
 fn metadata_limits_are_bytes_without_splitting_utf8() {
@@ -304,8 +305,8 @@ fn scheduled_shared_context_effects_preserve_pending_drafts_and_follow_page_owne
     }
     state.update(|s| {
         s.files.operations = vec![
-            json_codec::json!({"operation_id":"first", "state":"in_doubt"}),
-            json_codec::json!({"operation_id":"second", "state":"in_doubt"}),
+            FileOperation::unknown("first"),
+            FileOperation::unknown("second"),
         ];
         s.management.storage = crate::management::Storage::ReadOnly;
     });
