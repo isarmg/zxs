@@ -1,4 +1,34 @@
 use super::*;
+
+#[test]
+fn log_filter_errors_retain_typed_sources_without_displaying_input() {
+    use std::{error::Error, ffi::OsString, os::unix::ffi::OsStringExt};
+    let parse_error =
+        EnvFilter::try_new("zxs[request{token=redaction-test-only(}]=info").unwrap_err();
+    let error = LogFilterError::InvalidDirective(parse_error);
+    assert_eq!(
+        error.to_string(),
+        "RUST_LOG contains an invalid filter directive"
+    );
+    let source = error
+        .source()
+        .unwrap()
+        .downcast_ref::<tracing::collector::filter::ParseError>()
+        .unwrap();
+    assert!(
+        source.source().is_some(),
+        "regex parser cause must be retained"
+    );
+
+    let input = OsString::from_vec(b"redaction-test-only\xff".to_vec());
+    let error = LogFilterError::NotUnicode(std::env::VarError::NotUnicode(input.clone()));
+    assert_eq!(error.to_string(), "RUST_LOG must contain valid Unicode");
+    assert_eq!(
+        error.source().unwrap().downcast_ref::<std::env::VarError>(),
+        Some(&std::env::VarError::NotUnicode(input))
+    );
+}
+
 #[test]
 fn setup_maps_validate_syntax_without_accessing_missing_files() {
     assert!(

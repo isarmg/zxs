@@ -45,6 +45,101 @@ fn no_subcommand_is_required_to_start_daemon_runtime() {
 }
 
 #[test]
+fn absent_empty_and_valid_log_filters_reach_runtime_with_the_selected_level() {
+    for (value, logs_info) in [(None, false), (Some(""), false), (Some("zxs=info"), true)] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_zxs"));
+        command
+            .current_dir(directory.path())
+            .args([
+                "--scrub-interval-seconds",
+                "2",
+                "--scrub-max-age-seconds",
+                "1",
+            ])
+            .env("TOKIO_WORKER_THREADS", "1")
+            .env_remove("RUST_LOG");
+        if let Some(value) = value {
+            command.env("RUST_LOG", value);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{value:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{value:?}: {output:?}");
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        // A later policy failure gives the real runtime a bounded stop without
+        // opening services or creating state; it is not a log-filter rejection.
+        assert!(
+            diagnostic.contains("InvalidScrubPolicy"),
+            "{value:?}: {output:?}"
+        );
+        assert_eq!(
+            diagnostic.contains("daemon runtime stopped; admitted blocking work joined"),
+            logs_info,
+            "{value:?}: {output:?}"
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn invalid_log_filters_fail_before_runtime_or_state_creation() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+    for (value, expected) in [
+        (
+            OsString::from("zxs=not-a-level"),
+            "zxs: RUST_LOG contains an invalid filter directive\n",
+        ),
+        (
+            OsString::from("warn,zxs=not-a-level"),
+            "zxs: RUST_LOG contains an invalid filter directive\n",
+        ),
+        (
+            OsString::from("zxs[request{token=redaction-test-only(}]=info"),
+            "zxs: RUST_LOG contains an invalid filter directive\n",
+        ),
+        (
+            OsString::from_vec(b"redaction-test-only\xff".to_vec()),
+            "zxs: RUST_LOG must contain valid Unicode\n",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_zxs"))
+            .current_dir(directory.path())
+            .args(["--root", "pool", "--management-root", "management"])
+            // A fall-through to runtime creation would panic instead of
+            // returning this exact configuration diagnostic.
+            .env("TOKIO_WORKER_THREADS", "0")
+            .env("RUST_LOG", &value)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert_eq!(String::from_utf8(output.stderr).unwrap(), expected);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn help_and_version_ignore_invalid_log_configuration() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+    for value in [
+        OsString::from("zxs=not-a-level"),
+        OsString::from_vec(vec![0xff]),
+    ] {
+        for argument in ["--help", "--version"] {
+            let output = Command::new(env!("CARGO_BIN_EXE_zxs"))
+                .arg(argument)
+                .env("RUST_LOG", &value)
+                .env("TOKIO_WORKER_THREADS", "0")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            assert!(output.stderr.is_empty(), "{output:?}");
+        }
+    }
+}
+
+#[test]
 fn malformed_setup_identifiers_fail_before_creating_state() {
     for (flag, id) in [("--setup-disk", "P.01"), ("--setup-config", "layout.prod")] {
         let directory = tempfile::tempdir().unwrap();

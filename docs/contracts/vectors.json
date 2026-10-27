@@ -1141,6 +1141,18 @@
       }
     },
     {
+      "name": "single-administrator-password-generation-exhausted",
+      "schema": "ErrorResponse",
+      "value": {
+        "error": {
+          "code": "AUTH_STATE_INVALID",
+          "message": "administrator generation has been exhausted",
+          "retryable": false,
+          "request_id": "req_00000000000000000000000000000001"
+        }
+      }
+    },
+    {
       "name": "config-independent-nondefault-runtime-budgets",
       "schema": "config",
       "value": {

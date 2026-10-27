@@ -209,6 +209,7 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `UNSUPPORTED_FILE_SEMANTICS` | mmap、链接等未支持操作 | 显式报错，不空实现成功 |
 | `IDEMPOTENCY_KEY_REUSED` / `REQUEST_DIGEST_MISMATCH` | 操作 ID 对应不同输入或摘要不匹配 | 查询原操作，不能修改原输入后继续使用同一 ID |
 | `RESOURCE_LIMIT_EXCEEDED` | 工作区、上传、句柄或队列达到准入上限 | 停止新增工作，查询或处理已有工作，不删除脏数据腾空间 |
+| `AUTH_STATE_INVALID`（改密） | 管理员凭据代数已达 UInt64 上限，无法推进，HTTP 409、`retryable:false` | 保留凭据、会话和磁盘状态；等待或重试不能解决，不回绕、重置或自动恢复 |
 | `UPLOAD_GENERATION_CONFLICT` / `UPLOAD_RANGE_CONFLICT` | 上传代际变化或重叠范围内容不同 | 查询原上传状态，保留本地内容，显式创建新代际 |
 | `TRANSFER_TIMEOUT` | HTTP 正文空闲或总期限到达；响应头前为 408，已开始的正文终止为流错误 | 查询上传状态后重试；已有字节/操作记录保留，阻塞 I/O 可能仍在完成 |
 | `UPLOAD_INCOMPLETE` | 长度或有效范围未满足封存条件 | 补齐缺失范围，不能补零冒充完整上传 |

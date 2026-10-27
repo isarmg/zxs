@@ -607,6 +607,63 @@ fn password_request(token: &str) -> Request<Body> {
         .unwrap()
 }
 
+#[tokio::test]
+async fn exhausted_generation_returns_nonretryable_http_conflict_without_mutation() {
+    let root = crate::tests::private_tempdir();
+    let mut store = AuthStore::initialize(root.path(), "owner", OLD_PASSWORD).unwrap();
+    store.database_mut().unwrap().administrator.generation = u64::MAX;
+    let login = store.login("owner", OLD_PASSWORD).unwrap();
+    let before = store.snapshot().unwrap();
+    let disk = fs::read(root.path().join("auth.json")).unwrap();
+    let (app, auth) = application(root.path(), store);
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(password_request(&login.token))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 409);
+        assert_eq!(response.headers()["content-type"], "application/json");
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert!(!response.headers().contains_key("set-cookie"));
+        assert!(!response.headers().contains_key("retry-after"));
+        let bytes = http_routing::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let body: json_codec::Value = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(body.as_object().unwrap().len(), 1);
+        let error = &body["error"];
+        assert_eq!(error.as_object().unwrap().len(), 4);
+        assert_eq!(error["code"], "AUTH_STATE_INVALID");
+        assert_eq!(error["retryable"], false);
+        assert_eq!(
+            error["message"],
+            "administrator generation has been exhausted"
+        );
+        storage_contract::validate_id(error["request_id"].as_str().unwrap(), "req").unwrap();
+        assert_eq!(auth.lock().unwrap().snapshot().unwrap(), before);
+        assert_eq!(fs::read(root.path().join("auth.json")).unwrap(), disk);
+        assert!(auth.lock().unwrap().authenticate(&login.token).is_ok());
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/me")
+                .header("authorization", format!("Bearer {}", login.token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    drop(app);
+    drop(auth);
+    let store = AuthStore::open(root.path()).unwrap();
+    assert_eq!(store.snapshot().unwrap(), before);
+    assert!(store.authenticate(&login.token).is_ok());
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn password_work_does_not_hold_the_authority_lock_or_block_session_authentication() {
     let root = crate::tests::private_tempdir();

@@ -21,6 +21,10 @@ use std::{
 
 mod integrity_scrub;
 use integrity_scrub::IntegrityScrubService;
+mod setup_command;
+use setup_command::SetupCommand;
+mod startup_diagnostic;
+use startup_diagnostic::StartupDiagnostic;
 
 pub use crate::StorageState;
 struct State {
@@ -179,7 +183,7 @@ pub fn open_service_with_options(
     }
     create_private_directory(management_root)?;
     let mut auth = AuthStore::open_management(management_root).unwrap_or_else(|error| {
-        tracing::warn!(code = %error.code, "management credentials require recovery");
+        tracing::warn!(code = %error.code, error = %StartupDiagnostic(&error), "management credentials require recovery");
         AuthStore::unavailable(management_root)
     });
     if auth.is_available() {
@@ -187,7 +191,7 @@ pub fn open_service_with_options(
         // including when the data pool itself cannot be opened.
         let claim = create_private_directory(data_root).and_then(|_| claim_authority(data_root));
         if let Err(error) = claim {
-            tracing::warn!(code = %error.code,"cannot durably establish management authority");
+            tracing::warn!(code = %error.code, error = %StartupDiagnostic(&error), "cannot durably establish management authority");
             auth = AuthStore::unavailable(management_root);
         }
     }
@@ -1204,10 +1208,7 @@ impl Backend for ManagementBackend {
         identity: Option<&Identity>,
     ) -> Result<Value, ApiError> {
         self.inner.ensure_running()?;
-        use crate::setup_recovery::{
-            CompleteSetupRequest, PresetPreviewRequest, PresetSetupRequest, RecoveryCommitRequest,
-            RecoveryPreviewRequest, RestoreRequest, SetupRecovery, SetupRequest,
-        };
+        use crate::setup_recovery::{PresetPreviewRequest, SetupRecovery};
         // Authenticate against system-disk state before touching any data path.
         let auth = crate::lock(&self.inner.auth)
             .clone()
@@ -1255,41 +1256,10 @@ impl Backend for ManagementBackend {
             return setup
                 .preview_preset(permit.as_ref().ok_or_else(ApiError::unauthorized)?, request);
         }
-        // Reject malformed DTOs before changing the optional engine lifecycle.
-        let mut recovery_preview = None;
-        match action {
-            "initialize" => {
-                json_codec::from_value::<SetupRequest>(input.clone())
-                    .map_err(ApiError::invalid_source)?;
-            }
-            "initialize_preset" => {
-                json_codec::from_value::<PresetSetupRequest>(input.clone())
-                    .map_err(ApiError::invalid_source)?;
-            }
-            "complete_initialization" => {
-                json_codec::from_value::<CompleteSetupRequest>(input.clone())
-                    .map_err(ApiError::invalid_source)?;
-            }
-            "restore_system" => {
-                json_codec::from_value::<RestoreRequest>(input.clone())
-                    .map_err(ApiError::invalid_source)?;
-            }
-            "recovery_preview" => {
-                recovery_preview = Some(RecoveryPreviewRequest::parse(input.clone())?);
-            }
-            "recovery_commit" => {
-                json_codec::from_value::<RecoveryCommitRequest>(input.clone())
-                    .map_err(ApiError::invalid_source)?;
-            }
-            "offline_check" => {
-                if input.as_object().is_none_or(|object| {
-                    object.len() != 1 || object.get("disk_id").is_none_or(|id| !id.is_string())
-                }) {
-                    return Err(ApiError::invalid("offline check accepts only disk_id"));
-                }
-            }
-            _ => return Err(ApiError::unsupported()),
-        }
+        // Keep typed admission before lifecycle changes; later execution owns
+        // these same DTOs, not a second decode of the original JSON.
+        let command = SetupCommand::parse(action, input)?;
+        let resumes_storage = command.resumes_storage();
         if self.inner.recovering.swap(true, Ordering::SeqCst) {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::StorageRetryRunning,
@@ -1329,33 +1299,25 @@ impl Backend for ManagementBackend {
             crate::lock(&auth).replace_authority(new_auth);
             EngineBackend::new(engine).replicate_auth(snapshot)
         };
-        let result = match action {
-            "initialize" => {
-                let request: SetupRequest =
-                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+        let result = match command {
+            SetupCommand::Initialize(request) => {
                 let permit = permit.as_ref().ok_or_else(ApiError::unauthorized)?;
                 setup
                     .initialize(permit, request, install)
                     .map(|_| json!({"initialized":true,"restart_required":false,"recovering":true}))
             }
-            "initialize_preset" => {
-                let request: PresetSetupRequest =
-                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+            SetupCommand::InitializePreset(request) => {
                 let permit = permit.as_ref().ok_or_else(ApiError::unauthorized)?;
                 setup
                     .initialize_preset(permit, request, install)
                     .map(|_| json!({"initialized":true,"restart_required":false,"recovering":true}))
             }
-            "complete_initialization" => {
-                let request: CompleteSetupRequest =
-                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+            SetupCommand::CompleteInitialization(request) => {
                 let permit = permit.as_ref().ok_or_else(ApiError::unauthorized)?;
                 setup.complete_initialization(permit,request,install)
                     .map(|_|json!({"initialized":true,"completed":true,"restart_required":false,"recovering":true}))
             }
-            "restore_system" => {
-                let request: RestoreRequest =
-                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+            SetupCommand::RestoreSystem(request) => {
                 let restore = |engine: storage_engine::Engine| {
                     if let Some(identity) = &identity {
                         // Disk reconstruction can outlive the original session.
@@ -1397,64 +1359,36 @@ impl Backend for ManagementBackend {
                 }
                 .map(|_| json!({"restored":true,"restart_required":false,"recovering":true}))
             }
-            "offline_check" => {
-                if input
-                    .as_object()
-                    .is_none_or(|object| object.len() != 1 || !object.contains_key("disk_id"))
-                {
-                    return Err(ApiError::invalid("offline check accepts only disk_id"));
-                }
+            SetupCommand::OfflineCheck(disk) => {
                 let identity = identity.as_ref().ok_or_else(ApiError::unauthorized)?;
-                let disk = input
-                    .get("disk_id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| ApiError::invalid("disk_id required"))?;
-                setup.offline_check(identity, disk).map(|value| {
+                setup.offline_check(identity, &disk).map(|value| {
                     json_codec::to_value(value)
                         .expect("invariant: internal response serialization succeeds")
                 })
             }
-            "recovery_preview" => {
-                let request = recovery_preview
-                    .expect("invariant: recovery preview was parsed before lifecycle changes");
-                setup
-                    .recovery_preview(
-                        identity.as_ref().ok_or_else(ApiError::unauthorized)?,
-                        request,
-                        |identity| crate::lock(&auth).revalidate_identity(identity).map(|_| ()),
-                    )
-                    .map(|value| {
-                        json_codec::to_value(value)
-                            .expect("invariant: internal response serialization succeeds")
-                    })
-            }
-            "recovery_commit" => {
-                let request: RecoveryCommitRequest =
-                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-                setup
-                    .recovery_commit(
-                        identity.as_ref().ok_or_else(ApiError::unauthorized)?,
-                        request,
-                        |identity| crate::lock(&auth).revalidate_identity(identity).map(|_| ()),
-                    )
-                    .map(|value| {
-                        json_codec::to_value(value)
-                            .expect("invariant: internal response serialization succeeds")
-                    })
-            }
-            _ => Err(ApiError::unsupported()),
+            SetupCommand::RecoveryPreview(request) => setup
+                .recovery_preview(
+                    identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+                    request,
+                    |identity| crate::lock(&auth).revalidate_identity(identity).map(|_| ()),
+                )
+                .map(|value| {
+                    json_codec::to_value(value)
+                        .expect("invariant: internal response serialization succeeds")
+                }),
+            SetupCommand::RecoveryCommit(request) => setup
+                .recovery_commit(
+                    identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+                    request,
+                    |identity| crate::lock(&auth).revalidate_identity(identity).map(|_| ()),
+                )
+                .map(|value| {
+                    json_codec::to_value(value)
+                        .expect("invariant: internal response serialization succeeds")
+                }),
         };
         drop(lifecycle);
-        if result.is_ok()
-            && matches!(
-                action,
-                "initialize"
-                    | "initialize_preset"
-                    | "complete_initialization"
-                    | "restore_system"
-                    | "recovery_commit"
-            )
-        {
+        if result.is_ok() && resumes_storage {
             return self.inner.resume_after_setup(result?);
         }
         result
@@ -1641,3 +1575,7 @@ mod recovery_admission_tests;
 #[cfg(test)]
 #[path = "../../../test/server/unit/management_shutdown_tests.rs"]
 mod shutdown_tests;
+
+#[cfg(test)]
+#[path = "../../../test/server/unit/management_admission_tests.rs"]
+mod admission_tests;

@@ -319,11 +319,12 @@ impl PasswordChangeChallenge {
                 "current password is incorrect",
             ));
         }
-        let generation = self
-            .previous
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| ApiError::limit("administrator generation has been exhausted"))?;
+        let generation = self.previous.generation.checked_add(1).ok_or_else(|| {
+            ApiError::conflict(
+                storage_contract::ErrorCode::AuthStateInvalid,
+                "administrator generation has been exhausted",
+            )
+        })?;
         #[cfg(test)]
         if let Some(hook) = &self.password_work_hook {
             hook();

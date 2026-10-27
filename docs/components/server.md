@@ -31,6 +31,8 @@ target/native/debug/zxs --root /srv/zxs/system \
   --listen 127.0.0.1:7400 --web-dir /srv/zxs/web/dist
 ```
 
+`RUST_LOG` 仅在环境变量缺失时默认 `warn`；已配置值交给当前本地 `EnvFilter` 严格解析，空值保留其显式关闭日志的语义，不当作缺失。无效 directive（包括合法项与无效项混合）或非 Unicode 值以退出码 1 拒绝启动，发生在创建 Tokio 运行时、状态目录及监听服务之前。stderr 分别报告 `zxs: RUST_LOG contains an invalid filter directive` 或 `zxs: RUST_LOG must contain valid Unicode`；具名错误保留原始解析／环境读取 source，但进程诊断不输出可能含凭据的环境值或 source 内容。`--help`、`--version` 和 CLI 语法检查仍先于日志配置，不受无效 `RUST_LOG` 影响。
+
 HTTP 监听地址必须是回环地址。对外部署由同机反向代理终止 TLS；同时指定公开 HTTPS Origin，例如 `--external-origin https://storage.example.org`。服务只信任显式配置的 Origin，不根据任意转发头改变安全策略。`--web-dir` 可省略；省略时仅提供 API。
 
 公开 `router` / `serve_with_shutdown` 入口（CLI 经 `serve` 转入）消费原始 `ServerConfig`，失败返回错误；准入后以私有不可变配置及 `Arc` 共享，不在请求提取或中间件克隆中复制路径、代理列表。静态 HTTPS Origin 在准入时解析一次，缓存浏览器规范化表示；同源比较和 Secure Cookie 使用同一证明。每个请求的 Origin 仍逐次检查数量、文本及精确同源值，未配置外部 Origin 时仍逐次解析并限制请求 Host 为回环；CSRF、Sec-Fetch-Site、真实代理对端与转发头校验不缓存、不省略。配置修改需重新准入，不提供运行中可变出口。
@@ -63,9 +65,13 @@ HTTP 监听地址必须是回环地址。对外部署由同机反向代理终止
 
 `POST /api/auth/password` 只接受 `current_password`、`new_password`。新密码遵守 12 至 1024 UTF-8 字节且无 ASCII 控制字符的共享规则。旧密码不正确返回 `403 CURRENT_PASSWORD_INVALID` 并保留会话；成功返回 `{changed:true,reauthentication_required:true}`，推进凭据代数、撤销全部会话并清除 cookie。每个来源 IP 和管理员主体分别限制每分钟 10 次改密尝试，与登录共享密码计算并发上限。变更先耐久发布到系统盘主库，不以数据盘可用作为登录或改密的前提。
 
+管理员凭据代数已达 UInt64 上限时，正确旧密码的改密请求返回 `409 AUTH_STATE_INVALID`、`retryable:false`。等待或重试不能释放代数；拒绝保留原密码、全部会话和持久字节，不清除 cookie、不回绕代数，也不触发重置或恢复。最后一次合法递增（上限减一到上限）仍正常改密并撤销旧会话；登录、尝试次数和密码计算并发的暂时准入上限仍返回可重试的 429。
+
 私有凭据库是必填单体 `administrator` 与 `sessions`：管理员只保存 `username`、`password_hash`、字符串代数 `generation`；每个会话以 token 摘要为键，只保存字符串 `generation`、`expires_at`。旧 `accounts` 集合、角色、禁用状态、仓库准入及旧会话用户名等未知字段一律拒绝。不能自动选择旧账户、迁移格式或重置认证。
 
 正常 daemon 的认证主权威是系统盘 `management-auth.json`。`management-authority.json` 围栏阻止主库丢失后自动恢复旧凭据；数据池仅接收不含会话的管理员灾备快照，不是离线授权回退。主库缺失或无效时登录失败关闭，静态 Web、公开诊断和受保护恢复仍可用。显式凭据恢复必须接受恢复旧密码的后果，恢复会话一律丢弃。
+
+启动决定进入凭据恢复状态时，仅在该决定边界记录一次具体诊断，保留文件系统与认证来源链。凭据 JSON 的重复键、未知字段和类型错误可能含秘密输入，因此仅记录原错误码、解码类别及行列，不打印 JSON 错误文本或凭据内容；公开响应与失败关闭语义不变。离线 setup 命令在原有授权之后、取得恢复生命周期或撤下引擎之前解析为私有具名 DTO，执行时消费同一份值，不再次解码；实际磁盘读取、bootstrap 和发布前撤权检查仍独立保留。
 
 受管理请求取得引擎锁后按当前主库重新核验管理员及会话；排队请求不能凭旧身份绕过注销或改密。已准入执行的事务可能完成，已传输的字节不能收回，后续请求必须重新验证。可信嵌入式模式的受保护认证快照也使用同一单体 schema，不是 daemon 管理主库的替代来源；未挂接认证库的可信本机调用仍需显式主体，不构成网络匿名入口。
 

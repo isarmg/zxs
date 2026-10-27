@@ -57,7 +57,13 @@ fn the_single_session_limit_is_enforced_without_mutating_state() {
     }
     store.persist(false).unwrap();
     let before = store.snapshot().unwrap();
-    assert_eq!(store.finish_login(proof(&store)).err().unwrap().status, 429);
+    let error = store.finish_login(proof(&store)).err().unwrap();
+    assert_eq!(error.status, 429);
+    assert_eq!(
+        error.code,
+        storage_contract::ErrorCode::ResourceLimitExceeded
+    );
+    assert!(error.retryable);
     assert_eq!(store.snapshot().unwrap(), before);
     store
         .change_password(
@@ -152,20 +158,82 @@ fn exhausted_generation_rejects_password_change_without_revivifying_sessions() {
     let mut store = AuthStore::initialize(root.path(), "owner", "capacity-test-password").unwrap();
     store.database_mut().unwrap().administrator.generation = u64::MAX;
     let login = store.finish_login(proof(&store)).unwrap();
+    let revoked = primitives::random_token().unwrap();
+    store.database_mut().unwrap().sessions.insert(
+        primitives::token_hash_hex(&revoked),
+        Session {
+            generation: 1,
+            expires_at: u64::MAX,
+        },
+    );
+    seed(&mut store, 0, u64::MAX, 0);
+    store.persist(false).unwrap();
+    drop(store);
+    let mut store = AuthStore::open(root.path()).unwrap();
     let before = store.snapshot().unwrap();
     let disk = fs::read(root.path().join("auth.json")).unwrap();
+    let wrong_password = store
+        .change_password(
+            &login.token,
+            "incorrect-capacity-password",
+            "rotated-capacity-password",
+        )
+        .unwrap_err();
+    assert_eq!(wrong_password.status, 403);
     assert_eq!(
-        store
-            .change_password(
-                &login.token,
-                "capacity-test-password",
-                "rotated-capacity-password"
-            )
-            .unwrap_err()
-            .status,
-        429
+        wrong_password.code,
+        storage_contract::ErrorCode::CurrentPasswordInvalid
     );
+    let error = store
+        .change_password(
+            &login.token,
+            "capacity-test-password",
+            "rotated-capacity-password",
+        )
+        .unwrap_err();
+    assert_eq!(error.status, 409);
+    assert_eq!(error.code, storage_contract::ErrorCode::AuthStateInvalid);
+    assert!(!error.retryable);
+    assert!(error.source.is_none());
+    assert_eq!(error.message, "administrator generation has been exhausted");
     assert_eq!(store.snapshot().unwrap(), before);
     assert_eq!(fs::read(root.path().join("auth.json")).unwrap(), disk);
     assert!(store.authenticate(&login.token).is_ok());
+    assert_eq!(store.authenticate(&revoked).unwrap_err().status, 401);
+    drop(store);
+    let store = AuthStore::open(root.path()).unwrap();
+    assert_eq!(store.snapshot().unwrap(), before);
+    assert!(store.authenticate(&login.token).is_ok());
+    assert_eq!(store.authenticate(&revoked).unwrap_err().status, 401);
+}
+
+#[test]
+fn final_available_generation_still_rotates_and_revokes_old_sessions() {
+    let root = crate::tests::private_tempdir();
+    let mut store = AuthStore::initialize(root.path(), "owner", "capacity-test-password").unwrap();
+    store.database_mut().unwrap().administrator.generation = u64::MAX - 1;
+    let login = store.finish_login(proof(&store)).unwrap();
+    store
+        .change_password(
+            &login.token,
+            "capacity-test-password",
+            "rotated-capacity-password",
+        )
+        .unwrap();
+    assert_eq!(store.database().unwrap().administrator.generation, u64::MAX);
+    assert!(store.database().unwrap().sessions.is_empty());
+    assert_eq!(store.authenticate(&login.token).unwrap_err().status, 401);
+    drop(store);
+    let mut store = AuthStore::open(root.path()).unwrap();
+    assert_eq!(store.database().unwrap().administrator.generation, u64::MAX);
+    assert!(store.database().unwrap().sessions.is_empty());
+    assert_eq!(
+        store
+            .login("owner", "capacity-test-password")
+            .err()
+            .unwrap()
+            .status,
+        401
+    );
+    assert!(store.login("owner", "rotated-capacity-password").is_ok());
 }

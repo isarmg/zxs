@@ -168,6 +168,16 @@
               }
             }
           },
+          "409": {
+            "description": "管理员凭据代数已达 UInt64 上限时返回 AUTH_STATE_INVALID、retryable:false；保留密码、会话和磁盘状态，不清除 cookie，不回绕、重置或自动恢复。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "default": {
             "description": "结构化错误；认证、Origin/CSRF、限流、凭据恢复或持久化失败不视为成功。",
             "content": {

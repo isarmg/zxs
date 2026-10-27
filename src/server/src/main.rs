@@ -1,7 +1,26 @@
 use command_line::Parser;
 use std::{net::SocketAddr, path::PathBuf};
 use storage_server::ServerConfig;
+use tracing::collector::{EnvFilter, filter::LevelFilter};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+#[derive(Debug, error_definition::Error)]
+enum LogFilterError {
+    #[error("RUST_LOG contains an invalid filter directive")]
+    InvalidDirective(#[source] tracing::collector::filter::ParseError),
+    #[error("RUST_LOG must contain valid Unicode")]
+    NotUnicode(#[source] std::env::VarError),
+}
+
+fn log_filter_from_env() -> std::result::Result<EnvFilter, LogFilterError> {
+    match std::env::var(EnvFilter::DEFAULT_ENV) {
+        Ok(directives) => EnvFilter::try_new(directives).map_err(LogFilterError::InvalidDirective),
+        Err(std::env::VarError::NotPresent) => {
+            Ok(EnvFilter::default().add_directive(LevelFilter::WARN.into()))
+        }
+        Err(error @ std::env::VarError::NotUnicode(_)) => Err(LogFilterError::NotUnicode(error)),
+    }
+}
 
 /// Direct service entry. Daily administration and initialization belong in Web.
 #[derive(Parser)]
@@ -109,10 +128,17 @@ impl Args {
 
 fn main() -> std::process::ExitCode {
     let args = Args::parse();
+    let log_filter = match log_filter_from_env() {
+        Ok(filter) => filter,
+        Err(error) => {
+            // Sources may retain operator input; do not expose it through Debug or
+            // a source-chain formatter at the process diagnostic boundary.
+            eprintln!("zxs: {error}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
     tracing::collector::fmt()
-        .with_env_filter(
-            tracing::collector::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
-        )
+        .with_env_filter(log_filter)
         .with_writer(std::io::stderr)
         .log_internal_errors(false)
         .init();
