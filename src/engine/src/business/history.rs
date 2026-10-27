@@ -144,16 +144,15 @@ impl Engine {
     pub fn create_branch(
         &mut self,
         source_commit: &str,
-        name: &str,
+        name: &storage_contract::BranchName,
         principal: &str,
         operation: OperationId,
     ) -> Result<Branch> {
-        super::validate_branch_name(name)?;
         let op = self.mutate(
             "branch.create",
             principal,
             operation,
-            json!({"source_commit_id":source_commit,"name":name}),
+            json!({"source_commit_id":source_commit,"name":name.as_str()}),
             |engine, state, _| {
                 let source = state.commits.get(source_commit).cloned().ok_or_else(|| {
                     Error::new(
@@ -173,7 +172,7 @@ impl Engine {
                 }
                 if state.branches.values().any(|branch| {
                     branch.history_tree_id == source.history_tree_id
-                        && name_policy::lookup_key(&branch.name) == name_policy::lookup_key(name)
+                        && name_policy::lookup_key(&branch.name) == name.key()
                 }) {
                     return Err(Error::new(
                         storage_contract::ErrorCode::NameCollision,
@@ -203,7 +202,7 @@ impl Engine {
                         sequence: state.sequence,
                         operation_id: operation,
                         author: principal.into(),
-                        message: format!("Create pending branch {name}"),
+                        message: format!("Create pending branch {}", name.as_str()),
                         entries,
                         pending_file_versions: pending_file_versions.clone(),
                         provenance: Some(source_commit.into()),
@@ -213,7 +212,7 @@ impl Engine {
                     file_node_id: None,
                     branch_id: id.clone(),
                     history_tree_id: source.history_tree_id.clone(),
-                    name: name.into(),
+                    name: name.as_str().into(),
                     head_commit_id: commit_id.clone(),
                     fork_commit_id: source_commit.into(),
                     branch_kind: BranchKind::Full,

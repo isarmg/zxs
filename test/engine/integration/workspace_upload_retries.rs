@@ -26,7 +26,7 @@ fn upload_retry_recovers_published_bytes_after_manifest_failure() {
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
             .create_repository(
-                "Retry uploads",
+                &storage_contract::RepositoryName::parse("Retry uploads").unwrap(),
                 "P01",
                 1,
                 "admin",
@@ -142,7 +142,7 @@ fn same_generation_retry_rejects_missing_or_corrupt_retained_bytes() {
             .unwrap();
             let repo = engine
                 .create_repository(
-                    "Retained upload",
+                    &storage_contract::RepositoryName::parse("Retained upload").unwrap(),
                     "P01",
                     1,
                     "admin",
@@ -200,7 +200,7 @@ fn same_generation_retry_revalidates_held_target_before_acknowledging() {
         .unwrap();
         let repo = engine
             .create_repository(
-                "Retained upload",
+                &storage_contract::RepositoryName::parse("Retained upload").unwrap(),
                 "P01",
                 1,
                 "admin",
@@ -260,7 +260,7 @@ fn detached_upload_keeps_writer_locks_until_cancelled() {
         .unwrap();
         let repo = engine
             .create_repository(
-                "Detached upload",
+                &storage_contract::RepositoryName::parse("Detached upload").unwrap(),
                 "P01",
                 1,
                 "admin",
@@ -326,7 +326,7 @@ fn first_upload_revalidates_prepared_bytes_before_acknowledging() {
         let mut engine = Engine::initialize(&root, Config::development([primary.clone()])).unwrap();
         let repo = engine
             .create_repository(
-                "Prepared upload",
+                &storage_contract::RepositoryName::parse("Prepared upload").unwrap(),
                 "P01",
                 1,
                 "admin",
@@ -400,7 +400,7 @@ fn interrupted_copy_temporaries_consume_workspace_bytes_and_generation_slots() {
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
             .create_repository(
-                "Interrupted upload",
+                &storage_contract::RepositoryName::parse("Interrupted upload").unwrap(),
                 "P01",
                 1,
                 "admin",

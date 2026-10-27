@@ -439,7 +439,7 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let first = engine
         .create_repository(
-            "first",
+            &storage_contract::RepositoryName::parse("first").unwrap(),
             "P01",
             1,
             "oracle",
@@ -449,7 +449,7 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
     let file = save_oracle_file(&mut engine, &first.main_branch_id);
     let second = engine
         .create_repository(
-            "second",
+            &storage_contract::RepositoryName::parse("second").unwrap(),
             "P01",
             1,
             "oracle",
@@ -508,7 +508,7 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
     let original_roots = store_history_manifests_bounded(&members, &base, MAX_METADATA).unwrap();
     let third = engine
         .create_repository(
-            "third",
+            &storage_contract::RepositoryName::parse("third").unwrap(),
             "P01",
             1,
             "oracle",

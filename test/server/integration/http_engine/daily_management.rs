@@ -227,7 +227,7 @@ async fn web_purge_and_split_preview_digest_cancel_and_commit_use_real_engine() 
         .unwrap();
         let repo = engine
             .create_repository(
-                "Maintenance fixture",
+                &storage_contract::RepositoryName::parse("Maintenance fixture").unwrap(),
                 "P01",
                 1,
                 "admin",

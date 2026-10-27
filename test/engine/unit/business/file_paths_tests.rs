@@ -61,8 +61,8 @@ fn folder_and_file_rename_append_path_nodes_reusing_bodies_then_write_follows_th
     let untouched = e
         .create_directory_branches(
             &r.repository_id,
-            "folder",
-            "untouched",
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("untouched").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )

@@ -14,7 +14,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     .unwrap();
     let repo = engine
         .create_repository(
-            "branch regression",
+            &storage_contract::RepositoryName::parse("branch regression").unwrap(),
             "P01",
             3,
             "admin",
@@ -226,7 +226,7 @@ fn selected_file_materialization_replaces_a_split_main_placeholder() {
     let pending = engine
         .create_branch(
             original.commit_id.as_ref().unwrap(),
-            "pending full",
+            &storage_contract::BranchName::parse("pending full").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )

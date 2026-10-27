@@ -89,7 +89,18 @@ async fn missing_data_disks_leave_login_diagnostics_and_health_usable() {
             .0,
         StatusCode::OK
     );
-    let (status, error) = request(&app, "/api/repositories", Some(token), Some(json!({}))).await;
+    let invalid = request(&app, "/api/repositories", Some(token), Some(json!({}))).await;
+    assert_eq!(invalid.0, StatusCode::BAD_REQUEST);
+    let (status, error) = request(
+        &app,
+        "/api/repositories",
+        Some(token),
+        Some(json!({
+            "name":"Unavailable", "primary_slot_id":"P01", "target_copies":3,
+            "operation_id":storage_contract::OperationId::generate()
+        })),
+    )
+    .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(error["error"]["code"], "STORAGE_UNAVAILABLE");
     assert_eq!(
@@ -994,7 +1005,7 @@ async fn background_reopen_uses_local_workspace_limits_and_authenticated_capacit
     let mut engine = storage_engine::Engine::initialize(&data, config.clone()).unwrap();
     let repo = engine
         .create_repository(
-            "capacity",
+            &storage_contract::RepositoryName::parse("capacity").unwrap(),
             "P01",
             1,
             "admin",

@@ -1,9 +1,8 @@
 use super::*;
-use crate::BackendAction;
 use storage_engine::Config;
 
 #[test]
-fn scope_reads_dispatch_by_action_without_changing_state() {
+fn typed_scope_read_and_bounded_selection_do_not_change_state() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
@@ -13,7 +12,7 @@ fn scope_reads_dispatch_by_action_without_changing_state() {
     let identity = install_test_administrator(&mut engine, "owner");
     let repo = engine
         .create_repository(
-            "Scopes",
+            &storage_contract::RepositoryName::parse("Scopes").unwrap(),
             "P01",
             1,
             "owner",
@@ -23,7 +22,7 @@ fn scope_reads_dispatch_by_action_without_changing_state() {
     engine
         .initialize_directory_scope(
             &repo.repository_id,
-            "",
+            None,
             "owner",
             storage_contract::OperationId::generate(),
         )
@@ -31,58 +30,62 @@ fn scope_reads_dispatch_by_action_without_changing_state() {
     let before = json_codec::to_value(engine.state()).unwrap();
     let backend = EngineBackend::new(engine);
     let direct = backend
-        .call(
-            BackendAction::DirectoryBranchScopes,
+        .directory_scopes(
             &identity,
-            json!({"repository_id":repo.repository_id}),
+            crate::ReadDirectoryScopes {
+                repository_id: &repo.repository_id,
+                filter: &crate::DirectoryBranchFilter::All,
+                projection: crate::DirectoryBranchProjection::Full,
+            },
         )
         .unwrap();
-    let via_get = backend
-        .call(
-            BackendAction::DirectoryBranchScopes,
-            &identity,
-            json!({"repository_id":repo.repository_id,"query":{}}),
-        )
-        .unwrap();
-    assert_eq!(direct, via_get);
-    let branches = direct["directory_branches"].as_array().unwrap();
+    let crate::DirectoryScopeRows::Full(branches) = direct.branches else {
+        panic!("full request returned a summary")
+    };
     assert!(!branches.is_empty());
-    let branch = &branches[0];
-    let selected = backend
-        .call(
-            BackendAction::DirectoryBranchSelection,
-            &identity,
-            json!({"repository_id":repo.repository_id,"path":"","sources":[{
-                "directory_branch_id":branch["directory_branch_id"],
-                "expected_tree_id":branch["head_tree_id"]
-            }],"entries":[]}),
+    let branch = &branches[0].branch;
+    let request = || {
+        crate::ReadDirectorySelection::parse(
+            repo.repository_id.clone(),
+            "",
+            vec![crate::DirectorySelectionSourceInput {
+                directory_branch_id: branch.directory_branch_id.clone(),
+                expected_tree_id: branch.head_tree_id.clone(),
+            }],
+            vec![],
         )
-        .unwrap();
-    assert_eq!(selected["directory_branches"].as_array().unwrap().len(), 1);
-    assert_eq!(selected["directory_branches"][0]["entries"], json!([]));
-    // A missing selection payload must never silently become a full-scope read.
-    assert!(
-        backend
-            .call(
-                BackendAction::DirectoryBranchSelection,
-                &identity,
-                json!({"repository_id":repo.repository_id}),
-            )
-            .is_err()
-    );
+        .unwrap()
+    };
+    let selected = backend.directory_selection(&identity, request()).unwrap();
+    assert_eq!(selected.branches.len(), 1);
+    assert!(selected.branches[0].entries.is_empty());
     let stranger = Identity {
         principal: "other".into(),
         ..identity
     };
-    for action in [
-        BackendAction::DirectoryBranchScopes,
-        BackendAction::DirectoryBranchSelection,
-    ] {
-        assert_eq!(
-            backend.call(action, &stranger, json!({})).unwrap_err().code,
-            storage_contract::ErrorCode::Unauthorized
-        );
-    }
+    assert_eq!(
+        backend
+            .directory_scopes(
+                &stranger,
+                crate::ReadDirectoryScopes {
+                    repository_id: &repo.repository_id,
+                    filter: &crate::DirectoryBranchFilter::All,
+                    projection: crate::DirectoryBranchProjection::Full
+                }
+            )
+            .err()
+            .unwrap()
+            .code,
+        storage_contract::ErrorCode::Unauthorized
+    );
+    assert_eq!(
+        backend
+            .directory_selection(&stranger, request())
+            .err()
+            .unwrap()
+            .code,
+        storage_contract::ErrorCode::Unauthorized
+    );
     assert_eq!(
         json_codec::to_value(backend.engine.lock().unwrap().state()).unwrap(),
         before

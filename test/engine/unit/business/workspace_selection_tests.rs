@@ -10,7 +10,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     .unwrap();
     let repo = engine
         .create_repository(
-            "Workspace selections",
+            &storage_contract::RepositoryName::parse("Workspace selections").unwrap(),
             "P01",
             1,
             "admin",
@@ -206,7 +206,7 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
     engine
         .initialize_directory_scope(
             &repo.repository_id,
-            "",
+            None,
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -214,8 +214,8 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
     engine
         .create_directory_branches(
             &repo.repository_id,
-            "Folder",
-            "draft",
+            Some(&name_policy::LookupPath::parse("Folder").unwrap()),
+            &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -225,7 +225,7 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
         .unwrap();
     let other = engine
         .create_repository(
-            "Other",
+            &storage_contract::RepositoryName::parse("Other").unwrap(),
             "P01",
             1,
             "admin",
@@ -235,8 +235,8 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
     engine
         .create_directory_branches(
             &other.repository_id,
-            "",
-            "draft",
+            None,
+            &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -244,8 +244,8 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
     engine
         .select_directory_branches(
             &other.repository_id,
-            "",
-            "draft",
+            None,
+            &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -260,8 +260,8 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
         engine
             .select_directory_branches(
                 &repo.repository_id,
-                "Folder",
-                selection,
+                Some(&name_policy::LookupPath::parse("Folder").unwrap()),
+                &storage_contract::BranchName::parse(selection).unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )
@@ -297,8 +297,8 @@ fn workspace_capture_matches_path_lookup_for_bootstrap_and_inherited_contexts() 
             engine
                 .create_directory_branches(
                     &repo.repository_id,
-                    "Folder",
-                    "draft",
+                    Some(&name_policy::LookupPath::parse("Folder").unwrap()),
+                    &storage_contract::BranchName::parse("draft").unwrap(),
                     "admin",
                     storage_contract::OperationId::generate(),
                 )
@@ -306,8 +306,8 @@ fn workspace_capture_matches_path_lookup_for_bootstrap_and_inherited_contexts() 
             engine
                 .select_directory_branches(
                     &repo.repository_id,
-                    "Folder",
-                    "draft",
+                    Some(&name_policy::LookupPath::parse("Folder").unwrap()),
+                    &storage_contract::BranchName::parse("draft").unwrap(),
                     "admin",
                     storage_contract::OperationId::generate(),
                 )
@@ -372,8 +372,8 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
             engine
                 .create_directory_branches(
                     &repo.repository_id,
-                    "Folder",
-                    "draft",
+                    Some(&name_policy::LookupPath::parse("Folder").unwrap()),
+                    &storage_contract::BranchName::parse("draft").unwrap(),
                     "admin",
                     storage_contract::OperationId::generate(),
                 )
@@ -381,8 +381,8 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
             engine
                 .select_directory_branches(
                     &repo.repository_id,
-                    "Folder",
-                    "draft",
+                    Some(&name_policy::LookupPath::parse("Folder").unwrap()),
+                    &storage_contract::BranchName::parse("draft").unwrap(),
                     "admin",
                     storage_contract::OperationId::generate(),
                 )

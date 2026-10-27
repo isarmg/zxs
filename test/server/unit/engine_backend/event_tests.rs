@@ -62,7 +62,7 @@ fn event_cursor_preserves_singleton_visibility_progress_and_recovery_order() {
         let mut engine = backend.engine.lock().unwrap();
         engine
             .create_repository(
-                "First",
+                &storage_contract::RepositoryName::parse("First").unwrap(),
                 "P01",
                 1,
                 "owner",
@@ -72,7 +72,7 @@ fn event_cursor_preserves_singleton_visibility_progress_and_recovery_order() {
         let first = engine.state().sequence;
         engine
             .create_repository(
-                "Second",
+                &storage_contract::RepositoryName::parse("Second").unwrap(),
                 "P01",
                 1,
                 "owner",
@@ -151,7 +151,7 @@ fn typed_event_page_is_frozen_and_serializes_without_the_engine_lock() {
     let identity = install_test_administrator(&mut engine, "owner");
     engine
         .create_repository(
-            "first",
+            &storage_contract::RepositoryName::parse("first").unwrap(),
             "P01",
             1,
             "owner",
@@ -166,7 +166,7 @@ fn typed_event_page_is_frozen_and_serializes_without_the_engine_lock() {
         .lock()
         .unwrap()
         .create_repository(
-            "second",
+            &storage_contract::RepositoryName::parse("second").unwrap(),
             "P01",
             1,
             "owner",

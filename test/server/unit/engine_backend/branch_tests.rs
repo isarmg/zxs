@@ -71,7 +71,7 @@ fn branch_projection_matches_fixed_legacy_shapes_and_pending_precedence() {
     .unwrap();
     let repo = engine
         .create_repository(
-            "Repo",
+            &storage_contract::RepositoryName::parse("Repo").unwrap(),
             "P01",
             1,
             "owner",

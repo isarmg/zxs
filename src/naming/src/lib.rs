@@ -101,6 +101,16 @@ impl LookupPath {
     pub fn key(&self) -> &str {
         &self.key
     }
+    /// Retain a component suffix of this parsed lookup reference without revalidation.
+    pub fn strip_components(&self, depth: usize) -> Option<Self> {
+        let display = component_suffix(&self.display, depth)?;
+        let key = component_suffix(&self.key, depth)
+            .expect("invariant: lookup path and key have identical depth");
+        Some(Self {
+            display: display.into(),
+            key: key.into(),
+        })
+    }
 }
 impl From<&PortablePath> for LookupPath {
     fn from(path: &PortablePath) -> Self {

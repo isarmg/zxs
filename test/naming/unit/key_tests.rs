@@ -111,3 +111,14 @@ fn path_keys_preserve_all_fold_expansions_at_component_boundaries() {
         }
     }
 }
+
+#[test]
+fn lookup_suffix_preserves_parsed_display_and_cached_component_keys() {
+    let path = LookupPath::parse("Repo/Cafe\u{301}/FILE.txt").unwrap();
+    assert_eq!(path.strip_components(0).unwrap(), path);
+    let suffix = path.strip_components(1).unwrap();
+    assert_eq!(suffix.as_str(), "Cafe\u{301}/FILE.txt");
+    assert_eq!(suffix.key(), "café/file.txt");
+    assert_eq!(suffix.strip_components(1).unwrap().as_str(), "FILE.txt");
+    assert!(path.strip_components(3).is_none());
+}

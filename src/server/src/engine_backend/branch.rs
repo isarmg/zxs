@@ -4,6 +4,9 @@ use storage_contract::State;
 use storage_contract::{Branch, BranchState};
 
 pub(super) fn capture(state: &State, branch: &Branch) -> BranchSnapshot {
+    capture_owned(state, branch.clone())
+}
+pub(super) fn capture_owned(state: &State, branch: Branch) -> BranchSnapshot {
     let Branch {
         branch_id,
         history_tree_id,
@@ -19,14 +22,10 @@ pub(super) fn capture(state: &State, branch: &Branch) -> BranchSnapshot {
     } = branch;
     let snapshot = state
         .commits
-        .get(head_commit_id)
+        .get(&head_commit_id)
         .expect("invariant: admitted branch head references an existing commit");
     let mut pending = snapshot.pending_file_versions.clone();
-    pending.extend(
-        pending_file_versions
-            .iter()
-            .map(|(file, version)| (file.clone(), version.clone())),
-    );
+    pending.extend(pending_file_versions);
     let file = file_id.as_ref().map(|file| {
         let visible = snapshot
             .entries
@@ -34,26 +33,26 @@ pub(super) fn capture(state: &State, branch: &Branch) -> BranchSnapshot {
             .find(|entry| &entry.file_id == file)
             .map(|entry| entry.version_id.as_str());
         let content = capture_content(state, visible, pending.get(file).map(String::as_str));
-        let alias_of = state.file_branch_aliases.get(branch_id).cloned();
+        let alias_of = state.file_branch_aliases.get(&branch_id).cloned();
         FileBranchSnapshot {
             node_id: file_node_id.clone().or_else(|| visible.map(str::to_owned)),
             content,
-            read_only: *branch_state != BranchState::Active || alias_of.is_some(),
+            read_only: branch_state != BranchState::Active || alias_of.is_some(),
             alias_of,
         }
     });
     BranchSnapshot {
-        branch_id: branch_id.clone(),
-        history_tree_id: history_tree_id.clone(),
-        name: name.clone(),
-        head_commit_id: head_commit_id.clone(),
-        fork_commit_id: fork_commit_id.clone(),
-        branch_kind: *branch_kind,
-        file_id: file_id.clone(),
-        file_node_id: file_node_id.clone(),
+        branch_id,
+        history_tree_id,
+        name,
+        head_commit_id,
+        fork_commit_id,
+        branch_kind,
+        file_id,
+        file_node_id,
         pending_file_versions: pending,
-        generation: *generation,
-        state: *branch_state,
+        generation,
+        state: branch_state,
         file,
     }
 }

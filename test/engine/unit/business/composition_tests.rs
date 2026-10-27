@@ -45,8 +45,13 @@ fn body(e: &Engine, id: &str) -> Vec<u8> {
 fn create(e: &mut Engine, r: &Repository, path: &str, name: &str) -> String {
     e.create_directory_branches(
         &r.repository_id,
-        path,
-        name,
+        (if (path).is_empty() {
+            None
+        } else {
+            Some(name_policy::LookupPath::parse(path).unwrap())
+        })
+        .as_ref(),
+        &storage_contract::BranchName::parse(name).unwrap(),
         "admin",
         storage_contract::OperationId::generate(),
     )
@@ -59,8 +64,13 @@ fn create(e: &mut Engine, r: &Repository, path: &str, name: &str) -> String {
 fn select(e: &mut Engine, r: &Repository, path: &str, name: &str) {
     e.select_directory_branches(
         &r.repository_id,
-        path,
-        name,
+        (if (path).is_empty() {
+            None
+        } else {
+            Some(name_policy::LookupPath::parse(path).unwrap())
+        })
+        .as_ref(),
+        &storage_contract::BranchName::parse(name).unwrap(),
         "admin",
         storage_contract::OperationId::generate(),
     )
@@ -370,7 +380,7 @@ fn inherited_automatic_file_branch_name_is_utf8_safe_and_collision_free() {
     e.rename_directory_branch(
         &r.repository_id,
         &first,
-        "renamed",
+        &storage_contract::BranchName::parse("renamed").unwrap(),
         "admin",
         storage_contract::OperationId::generate(),
     )

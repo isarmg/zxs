@@ -4,7 +4,12 @@ fn initialize(pool: &mut Pool, path: &str) -> String {
     pool.engine
         .initialize_directory_scope(
             &pool.repo.repository_id,
-            path,
+            (if path.is_empty() {
+                None
+            } else {
+                Some(name_policy::LookupPath::parse(path).unwrap())
+            })
+            .as_ref(),
             "admin",
             storage_contract::OperationId::generate(),
         )

@@ -214,6 +214,83 @@ impl Backend for Probe {
     ) -> Result<storage_contract::CheckReport, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn create_merge_link(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateMergeLink,
+    ) -> Result<storage_contract::MergeLink, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn create_repository(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateRepository,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn create_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateBranch,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn mutate_disk_directory(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::MutateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn initialize_directory_scope(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::InitializeDirectoryScope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn archive_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ArchiveBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn rename_directory_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::RenameDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn select_default_directory_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::SelectDefaultDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn directory_selection(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadDirectorySelection,
+    ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn directory_scopes(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadDirectoryScopes<'_>,
+    ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn default_directory_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _repository_id: &str,
+    ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn file_history(
         &self,
         _identity: &crate::auth::Identity,

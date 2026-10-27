@@ -22,7 +22,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
     .unwrap();
     let repo = engine
         .create_repository(
-            "UTC",
+            &storage_contract::RepositoryName::parse("UTC").unwrap(),
             "P01",
             1,
             "owner",

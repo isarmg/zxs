@@ -15,7 +15,7 @@ fn fixture_with_payload(count: usize, payload: &[u8]) -> (tempfile::TempDir, Eng
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(
-            "proof",
+            &storage_contract::RepositoryName::parse("proof").unwrap(),
             "P01",
             3,
             "admin",

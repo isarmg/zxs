@@ -12,7 +12,15 @@ pub use operation_id::OperationId;
 pub use public_commit::{
     FilePlacement, PublicCommitEnvelope, PublicCommitParseError, SealedWorkspace,
 };
+mod branch_name;
+mod repository_name;
+pub use repository_name::RepositoryName;
 mod commit_comparison;
+mod directory_branch_summary;
+pub use branch_name::{BranchName, validate_branch_name};
+pub use directory_branch_summary::{
+    DirectoryBranchScope, DirectoryBranchSummary, directory_branch_summaries,
+};
 pub mod model;
 pub use commit_comparison::{CommitChange, CommitComparison};
 mod shared_records;

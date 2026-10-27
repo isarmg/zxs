@@ -23,7 +23,7 @@ impl Pool {
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
             .create_repository(
-                "Directory quota",
+                &storage_contract::RepositoryName::parse("Directory quota").unwrap(),
                 "P01",
                 3,
                 "admin",
@@ -74,8 +74,13 @@ impl Pool {
         self.engine
             .create_directory_branches(
                 &self.repo.repository_id,
-                path,
-                name,
+                (if (path).is_empty() {
+                    None
+                } else {
+                    Some(name_policy::LookupPath::parse(path).unwrap())
+                })
+                .as_ref(),
+                &storage_contract::BranchName::parse(name).unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )
@@ -167,7 +172,13 @@ fn oversized_sibling_selection_preserves_state_journals_and_operation_id() {
     for _ in 0..2 {
         let error = pool
             .engine
-            .select_directory_branches(&pool.repo.repository_id, "left", "full", "admin", operation)
+            .select_directory_branches(
+                &pool.repo.repository_id,
+                Some(&name_policy::LookupPath::parse("left").unwrap()),
+                &storage_contract::BranchName::parse("full").unwrap(),
+                "admin",
+                operation,
+            )
             .unwrap_err();
         assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
         // Includes commits, branch heads, file contexts, directory selections,
@@ -193,7 +204,13 @@ fn oversized_sibling_selection_preserves_state_journals_and_operation_id() {
     );
     let result = pool
         .engine
-        .select_directory_branches(&pool.repo.repository_id, "left", "full", "admin", operation)
+        .select_directory_branches(
+            &pool.repo.repository_id,
+            Some(&name_policy::LookupPath::parse("left").unwrap()),
+            &storage_contract::BranchName::parse("full").unwrap(),
+            "admin",
+            operation,
+        )
         .unwrap();
     assert_eq!(
         pool.paths(),
@@ -207,7 +224,13 @@ fn oversized_sibling_selection_preserves_state_journals_and_operation_id() {
     let journals = pool.journals();
     assert_eq!(
         pool.engine
-            .select_directory_branches(&pool.repo.repository_id, "left", "full", "admin", operation)
+            .select_directory_branches(
+                &pool.repo.repository_id,
+                Some(&name_policy::LookupPath::parse("left").unwrap()),
+                &storage_contract::BranchName::parse("full").unwrap(),
+                "admin",
+                operation
+            )
             .unwrap()
             .result,
         result.result
@@ -234,8 +257,8 @@ fn root_selection_replaces_the_tree_at_the_entry_limit_and_survives_restart() {
     pool.engine
         .select_directory_branches(
             &pool.repo.repository_id,
-            "",
-            "right-full",
+            None,
+            &storage_contract::BranchName::parse("right-full").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )

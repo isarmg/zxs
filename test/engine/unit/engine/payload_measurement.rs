@@ -31,7 +31,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Workspace, u64) {
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(
-            "payload-measurement",
+            &storage_contract::RepositoryName::parse("payload-measurement").unwrap(),
             "P01",
             3,
             "admin",

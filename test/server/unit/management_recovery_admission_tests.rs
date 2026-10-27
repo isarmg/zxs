@@ -61,7 +61,7 @@ impl Fixture {
             .unwrap();
         let repo = engine
             .create_repository(
-                "Recovery admission",
+                &storage_contract::RepositoryName::parse("Recovery admission").unwrap(),
                 "P01",
                 3,
                 "admin",

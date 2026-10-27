@@ -85,7 +85,7 @@ fn published_body() -> (tempfile::TempDir, PathBuf, FileVersion) {
     let mut engine = Engine::initialize(&temporary.path().join("system"), config.clone()).unwrap();
     let repository = engine
         .create_repository(
-            "Export",
+            &storage_contract::RepositoryName::parse("Export").unwrap(),
             "P01",
             3,
             "owner",
@@ -202,7 +202,7 @@ fn tombstoned_body(state: &str) -> (tempfile::TempDir, Engine, Config, FileVersi
     let mut engine = Engine::initialize(&root.join("system"), config.clone()).unwrap();
     let repository = engine
         .create_repository(
-            "Tombstones",
+            &storage_contract::RepositoryName::parse("Tombstones").unwrap(),
             "P01",
             3,
             "owner",

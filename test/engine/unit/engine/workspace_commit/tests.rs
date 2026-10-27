@@ -18,7 +18,7 @@ fn detached_snapshot_keeps_only_target_and_preserves_live_retained_evidence() {
     let mut engine = Engine::initialize_with_workspace_limits(&root, config, Some(limits)).unwrap();
     let repo = engine
         .create_repository(
-            "planning",
+            &storage_contract::RepositoryName::parse("planning").unwrap(),
             "P01",
             1,
             "alice",
@@ -139,7 +139,7 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
     .unwrap();
     let repo = engine
         .create_repository(
-            "shared state",
+            &storage_contract::RepositoryName::parse("shared state").unwrap(),
             "P01",
             1,
             "admin",
@@ -265,7 +265,7 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
     .unwrap();
     let repo = engine
         .create_repository(
-            "record isolation",
+            &storage_contract::RepositoryName::parse("record isolation").unwrap(),
             "P01",
             1,
             "admin",
@@ -292,7 +292,7 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
     engine
         .initialize_directory_scope(
             &repo.repository_id,
-            "nested",
+            Some(&name_policy::LookupPath::parse("nested").unwrap()),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -402,7 +402,7 @@ fn plan_failed_change_can_abandon_a_temporarily_missing_main_head() {
     .unwrap();
     let repo = engine
         .create_repository(
-            "abandoned head",
+            &storage_contract::RepositoryName::parse("abandoned head").unwrap(),
             "P01",
             1,
             "admin",
@@ -447,7 +447,7 @@ fn plan_successful_change_must_restore_main_head_before_returning() {
     .unwrap();
     let repo = engine
         .create_repository(
-            "broken successful head",
+            &storage_contract::RepositoryName::parse("broken successful head").unwrap(),
             "P01",
             1,
             "admin",
@@ -518,7 +518,13 @@ fn wire_envelope_errors_precede_missing_workspace_lookup() {
     );
     let operation = storage_contract::OperationId::generate();
     engine
-        .create_repository("repo", "P01", 1, "alice", operation)
+        .create_repository(
+            &storage_contract::RepositoryName::parse("repo").unwrap(),
+            "P01",
+            1,
+            "alice",
+            operation,
+        )
         .unwrap();
     request.operation_id = operation;
     assert_eq!(
@@ -545,7 +551,13 @@ fn public_preparation_fences_registration_and_finish_rechecks_live_receipt() {
         )
         .unwrap();
         let repo = engine
-            .create_repository("receipt race", "P01", 1, "owner", OperationId::generate())
+            .create_repository(
+                &storage_contract::RepositoryName::parse("receipt race").unwrap(),
+                "P01",
+                1,
+                "owner",
+                OperationId::generate(),
+            )
             .unwrap();
         let workspace = engine
             .create_workspace(&repo.main_branch_id, "owner")

@@ -26,7 +26,25 @@ mod uploads;
 mod web_assets;
 
 mod backend_action;
+mod backend_archive;
+mod backend_directory_scope;
+mod backend_disk_directory;
+mod http_disk_directory;
+pub use backend_disk_directory::{DiskDirectoryAction, MutateDiskDirectory};
+mod http_directory_scope;
+pub use backend_directory_scope::InitializeDirectoryScope;
+mod backend_create_branch;
+mod backend_create_repository;
+mod backend_merge_link;
+mod http_merge_link;
+pub use backend_merge_link::CreateMergeLink;
+mod http_create_repository;
+pub use backend_create_repository::CreateRepository;
+mod http_create_branch;
+pub use backend_archive::ArchiveBranch;
+pub use backend_create_branch::CreateBranch;
 mod backend_smb_binding;
+mod http_archive;
 pub use backend_smb_binding::{SmbBindingStatus, UpdateSmbBinding};
 mod http_smb_binding;
 use http_smb_binding::{smb_binding, update_smb_binding};
@@ -46,7 +64,26 @@ mod backend_graph;
 pub use backend_graph::HistoryGraphSnapshot;
 mod backend_branch;
 pub use backend_branch::{BranchSnapshot, ContentDispositionSnapshot, FileBranchSnapshot};
+mod backend_directory_selection;
+pub use backend_directory_selection::{
+    DirectorySelectionBranch, DirectorySelectionEntryInput, DirectorySelectionSnapshot,
+    DirectorySelectionSourceInput, ReadDirectorySelection, SelectedDirectoryEntry,
+    SelectedEntryFact,
+};
+mod backend_directory_scopes;
+mod http_directory_selection;
+pub use backend_directory_scopes::{
+    DirectoryBranchChoice, DirectoryBranchFilter, DirectoryBranchProjection, DirectoryScopeBranch,
+    DirectoryScopeRows, DirectoryScopesSnapshot, ReadDirectoryScopes,
+};
+mod backend_default_directory;
 mod backend_diagnostics;
+mod http_default_directory;
+mod http_directory_scopes;
+pub use backend_default_directory::{
+    DefaultDirectoryBranchSnapshot, RenameDirectoryBranch, SelectDefaultDirectoryBranch,
+    SelectedDirectoryBranch,
+};
 mod backend_monitoring;
 pub use backend_monitoring::{DiskSample, PowerUnavailable};
 mod backend_read;
@@ -361,6 +398,61 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
     ) -> Result<storage_contract::CheckReport, ApiError>;
+    fn create_merge_link(
+        &self,
+        identity: &Identity,
+        request: CreateMergeLink,
+    ) -> Result<storage_contract::MergeLink, ApiError>;
+    fn create_repository(
+        &self,
+        identity: &Identity,
+        request: CreateRepository,
+    ) -> Result<storage_contract::Repository, ApiError>;
+    fn create_branch(
+        &self,
+        identity: &Identity,
+        request: CreateBranch,
+    ) -> Result<BranchSnapshot, ApiError>;
+    fn mutate_disk_directory(
+        &self,
+        identity: &Identity,
+        request: MutateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn initialize_directory_scope(
+        &self,
+        identity: &Identity,
+        request: InitializeDirectoryScope,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn archive_branch(
+        &self,
+        identity: &Identity,
+        request: ArchiveBranch,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn rename_directory_branch(
+        &self,
+        identity: &Identity,
+        request: RenameDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn select_default_directory_branch(
+        &self,
+        identity: &Identity,
+        request: SelectDefaultDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn directory_selection(
+        &self,
+        identity: &Identity,
+        request: ReadDirectorySelection,
+    ) -> Result<DirectorySelectionSnapshot, ApiError>;
+    fn directory_scopes(
+        &self,
+        identity: &Identity,
+        request: ReadDirectoryScopes<'_>,
+    ) -> Result<DirectoryScopesSnapshot, ApiError>;
+    fn default_directory_branch(
+        &self,
+        identity: &Identity,
+        repository_id: &str,
+    ) -> Result<DefaultDirectoryBranchSnapshot, ApiError>;
     fn file_history(
         &self,
         identity: &Identity,
@@ -709,6 +801,94 @@ impl Backend for AuthorizedBackend {
         identity: &crate::auth::Identity,
     ) -> Result<storage_contract::CheckReport, crate::ApiError> {
         self.backend.integrity_check(&self.current(identity)?)
+    }
+    fn create_merge_link(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateMergeLink,
+    ) -> Result<storage_contract::MergeLink, crate::ApiError> {
+        self.backend
+            .create_merge_link(&self.current(identity)?, request)
+    }
+    fn create_repository(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateRepository,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        self.backend
+            .create_repository(&self.current(identity)?, request)
+    }
+    fn create_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateBranch,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.backend
+            .create_branch(&self.current(identity)?, request)
+    }
+    fn mutate_disk_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::MutateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .mutate_disk_directory(&self.current(identity)?, request)
+    }
+    fn initialize_directory_scope(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::InitializeDirectoryScope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .initialize_directory_scope(&self.current(identity)?, request)
+    }
+    fn archive_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ArchiveBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .archive_branch(&self.current(identity)?, request)
+    }
+    fn rename_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::RenameDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .rename_directory_branch(&self.current(identity)?, request)
+    }
+    fn select_default_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::SelectDefaultDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .select_default_directory_branch(&self.current(identity)?, request)
+    }
+    fn directory_selection(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectorySelection,
+    ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
+        self.backend
+            .directory_selection(&self.current(identity)?, request)
+    }
+    fn directory_scopes(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectoryScopes<'_>,
+    ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
+        self.backend
+            .directory_scopes(&self.current(identity)?, request)
+    }
+    fn default_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        repository_id: &str,
+    ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
+        self.backend
+            .default_directory_branch(&self.current(identity)?, repository_id)
     }
     fn file_history(
         &self,
@@ -1239,7 +1419,7 @@ fn router_shared(
         .route("/api/auth/password", post(change_password))
         .route(
             "/api/repositories",
-            get(repositories).post(create_repository),
+            get(repositories).post(http_create_repository::create),
         )
         .route("/api/repositories/{repo}", get(repository))
         .route(
@@ -1248,29 +1428,32 @@ fn router_shared(
         )
         .route(
             "/api/repositories/{repo}/default-branch",
-            get(default_branch).put(update_default_branch),
+            get(default_branch).put(http_default_directory::select),
         )
         .route(
             "/api/repositories/{repo}/directory-scopes",
-            post(initialize_directory_scope),
+            post(http_directory_scope::initialize),
         )
         .route(
             "/api/repositories/{repo}/directory-branches",
-            get(directory_branch_scopes).post(query_directory_branch_scopes),
+            get(http_directory_scopes::read).post(http_directory_selection::read),
         )
         .route(
             "/api/repositories/{repo}/directory-branches/{id}",
-            patch(rename_directory_branch),
+            patch(http_default_directory::rename),
         )
         .route(
             "/api/repositories/{repo}/branches",
-            get(branches).post(create_branch),
+            get(branches).post(http_create_branch::create),
         )
         .route("/api/branches/{branch}/tree", get(tree))
         .route("/api/branches/{branch}", get(branch_info))
         .route("/api/branches/{branch}/resolve", post(resolve))
         .route("/api/branches/{branch}/write-sessions", post(write_session))
-        .route("/api/branches/{branch}/archive", post(archive))
+        .route(
+            "/api/branches/{branch}/archive",
+            post(http_archive::archive),
+        )
         .route("/api/workspaces", post(workspace))
         .route("/api/workspaces/capacity", get(workspace_capacity))
         .route("/api/workspaces/{workspace}", get(workspace_info))
@@ -1300,7 +1483,10 @@ fn router_shared(
         .route("/api/files/{file}/history", get(history))
         .route("/api/commits/{commit}", get(commit_info))
         .route("/api/history-trees/{history}/graph", get(graph))
-        .route("/api/history-trees/{history}/merge-links", post(merge_link))
+        .route(
+            "/api/history-trees/{history}/merge-links",
+            post(http_merge_link::create),
+        )
         .route("/api/history-trees/{history}/purge-plans", post(purge_plan))
         .route("/api/history-trees/{history}/split-plans", post(split_plan))
         .route(
@@ -1685,11 +1871,28 @@ async fn repository(
     .map(Json)
 }
 
-read_handler!(
-    default_branch,
-    crate::BackendAction::DefaultBranch,
-    "repository_id"
-);
+async fn default_branch(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<backend_default_directory::DefaultDirectoryBranchResponse>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state
+            .backend
+            .default_directory_branch(&identity, &id)
+            .map(backend_default_directory::DefaultDirectoryBranchResponse::from)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
 
 async fn branch_info(
     State(state): State<AppState>,
@@ -1900,58 +2103,8 @@ async fn topology(
 
 read_handler!(plan_info, crate::BackendAction::Plan, "plan_id");
 
-read_handler!(
-    directory_branch_scopes,
-    crate::BackendAction::DirectoryBranchScopes,
-    "repository_id"
-);
-id_post_handler!(
-    query_directory_branch_scopes,
-    crate::BackendAction::DirectoryBranchSelection,
-    "repository_id"
-);
-post_handler!(create_repository, crate::BackendAction::CreateRepository);
 post_handler!(register_disk, crate::BackendAction::RegisterDisk);
 
-id_post_handler!(
-    create_branch,
-    crate::BackendAction::CreateBranch,
-    "repository_id"
-);
-
-id_post_handler!(
-    initialize_directory_scope,
-    crate::BackendAction::InitializeDirectoryScope,
-    "repository_id"
-);
-id_post_handler!(
-    update_default_branch,
-    crate::BackendAction::UpdateDefaultBranch,
-    "repository_id"
-);
-async fn rename_directory_branch(
-    State(state): State<AppState>,
-    http_routing::Extension(identity): http_routing::Extension<Identity>,
-    ApiPath((repo, id)): ApiPath<(String, String)>,
-    request: Request,
-) -> Result<Json<Value>, ApiError> {
-    let input = with_id(json_body(request).await?, "repository_id", repo)?;
-    let input = with_id(input, "directory_branch_id", id)?;
-    call(
-        state,
-        identity,
-        crate::BackendAction::RenameDirectoryBranch,
-        input,
-    )
-    .await
-}
-id_post_handler!(archive, crate::BackendAction::Archive, "branch_id");
-
-id_post_handler!(
-    merge_link,
-    crate::BackendAction::MergeLink,
-    "history_tree_id"
-);
 id_post_handler!(
     purge_plan,
     crate::BackendAction::PurgePlan,

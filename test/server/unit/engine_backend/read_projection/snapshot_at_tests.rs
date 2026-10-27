@@ -47,7 +47,7 @@ fn shared_snapshot_preserves_tree_errors_and_current_identity_admission() {
         .clone();
     let other = engine
         .create_repository(
-            "Other",
+            &storage_contract::RepositoryName::parse("Other").unwrap(),
             "P01",
             3,
             "owner",
@@ -135,7 +135,7 @@ fn shared_snapshot_preserves_archived_reads_and_migrated_branch_rejection() {
     let archived = engine
         .create_branch(
             &cut,
-            "Archive",
+            &storage_contract::BranchName::parse("Archive").unwrap(),
             "owner",
             storage_contract::OperationId::generate(),
         )

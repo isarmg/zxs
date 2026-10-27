@@ -129,7 +129,13 @@ fn main() -> Result<()> {
     ]);
     let mut engine = Engine::initialize(&root, config)?;
     let oldest = OperationId::generate();
-    let repo = engine.create_repository("State sharing probe", "P01", 3, "admin", oldest)?;
+    let repo = engine.create_repository(
+        &storage_engine::RepositoryName::parse("State sharing probe")?,
+        "P01",
+        3,
+        "admin",
+        oldest,
+    )?;
     let branch = repo.main_branch_id.clone();
     let mut transactions = Vec::new();
     let mut commits = Vec::new();
@@ -207,7 +213,13 @@ fn main() -> Result<()> {
             restart_evidence.push(evidence);
             assert_eq!(storage_engine::canonical_json(engine.state())?, before);
             assert_eq!(
-                engine.create_repository("State sharing probe", "P01", 3, "admin", oldest)?,
+                engine.create_repository(
+                    &storage_engine::RepositoryName::parse("State sharing probe")?,
+                    "P01",
+                    3,
+                    "admin",
+                    oldest
+                )?,
                 repo
             );
             assert_eq!(engine.state().sequence, sequence);

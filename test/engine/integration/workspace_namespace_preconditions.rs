@@ -14,7 +14,7 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
             .create_repository(
-                "Namespace preconditions",
+                &storage_contract::RepositoryName::parse("Namespace preconditions").unwrap(),
                 "P01",
                 3,
                 "admin",
@@ -110,7 +110,7 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
     .unwrap();
     let repo = engine
         .create_repository(
-            "Canonical queries",
+            &storage_contract::RepositoryName::parse("Canonical queries").unwrap(),
             "P01",
             1,
             "admin",
@@ -192,7 +192,7 @@ fn canonical_equivalent_workspace_source_survives_reopen_before_commit() {
     .unwrap();
     let repo = engine
         .create_repository(
-            "Persisted query",
+            &storage_contract::RepositoryName::parse("Persisted query").unwrap(),
             "P01",
             1,
             "admin",

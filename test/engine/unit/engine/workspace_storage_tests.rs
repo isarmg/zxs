@@ -11,7 +11,13 @@ fn historical_completion_rejects_invalid_persisted_fence_instead_of_leaving_work
     ]);
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repo = engine
-        .create_repository("history", "P01", 1, "admin", OperationId::generate())
+        .create_repository(
+            &storage_contract::RepositoryName::parse("history").unwrap(),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate(),
+        )
         .unwrap();
     let head = engine.state.branches[&repo.main_branch_id]
         .head_commit_id

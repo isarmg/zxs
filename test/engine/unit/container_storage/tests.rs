@@ -378,7 +378,7 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
         let mut engine = Engine::initialize_validated(&root, config.clone()).unwrap();
         let repo = engine
             .create_repository(
-                "移动恢复",
+                &storage_contract::RepositoryName::parse("移动恢复").unwrap(),
                 "P01",
                 3,
                 "alice",
@@ -414,7 +414,7 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
         let source = engine
             .initialize_directory_scope(
                 &repo.repository_id,
-                "a",
+                Some(&name_policy::LookupPath::parse("a").unwrap()),
                 "alice",
                 storage_contract::OperationId::generate(),
             )
@@ -426,7 +426,7 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
         let target = engine
             .initialize_directory_scope(
                 &repo.repository_id,
-                "b",
+                Some(&name_policy::LookupPath::parse("b").unwrap()),
                 "alice",
                 storage_contract::OperationId::generate(),
             )
@@ -438,8 +438,8 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
         let retained = engine
             .create_directory_branches(
                 &repo.repository_id,
-                "a",
-                "retained",
+                Some(&name_policy::LookupPath::parse("a").unwrap()),
+                &storage_contract::BranchName::parse("retained").unwrap(),
                 "alice",
                 storage_contract::OperationId::generate(),
             )
@@ -879,7 +879,7 @@ fn capture_fixture() -> (State, String, String) {
     .unwrap();
     let repo = engine
         .create_repository(
-            "Names",
+            &storage_contract::RepositoryName::parse("Names").unwrap(),
             "P01",
             1,
             "owner",

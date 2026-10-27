@@ -512,6 +512,83 @@ impl Backend for PanickingBackend {
     ) -> Result<storage_contract::CheckReport, crate::ApiError> {
         panic!("private integrity_check panic detail")
     }
+    fn create_merge_link(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateMergeLink,
+    ) -> Result<storage_contract::MergeLink, crate::ApiError> {
+        panic!("private create merge link panic detail")
+    }
+    fn create_repository(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateRepository,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        panic!("private create repository panic detail")
+    }
+    fn create_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateBranch,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        panic!("private create branch panic detail")
+    }
+    fn mutate_disk_directory(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::MutateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn initialize_directory_scope(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::InitializeDirectoryScope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn archive_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ArchiveBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private archive branch panic detail")
+    }
+    fn rename_directory_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::RenameDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private rename directory branch panic detail")
+    }
+    fn select_default_directory_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::SelectDefaultDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private select default directory branch panic detail")
+    }
+    fn directory_selection(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadDirectorySelection,
+    ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
+        panic!("private directory selection panic detail")
+    }
+    fn directory_scopes(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadDirectoryScopes<'_>,
+    ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
+        panic!("private directory scopes panic detail")
+    }
+    fn default_directory_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _repository_id: &str,
+    ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
+        panic!("private default directory branch panic detail")
+    }
     fn file_history(
         &self,
         _identity: &crate::auth::Identity,
@@ -695,11 +772,80 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         ("POST", "/api/system/storage/retry", Some(json!({}))),
         ("GET", "/api/repositories", None),
         ("GET", "/api/branches/branch", None),
+        (
+            "POST",
+            "/api/history-trees/history/merge-links",
+            Some(
+                json!({"source_branch_id":"source","source_commit_id":"source_commit","target_branch_id":"target","target_commit_id":"target_commit","operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "POST",
+            "/api/repositories",
+            Some(
+                json!({"name":"Repository","primary_slot_id":"P01","target_copies":3,"operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "POST",
+            "/api/repositories/repo/branches",
+            Some(
+                json!({"source_commit_id":"source","name":"Side","operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "POST",
+            "/api/branches/branch/archive",
+            Some(json!({"operation_id":"op_00000000000000000000000000000000"})),
+        ),
+        (
+            "POST",
+            "/api/repositories/repo/directory-scopes",
+            Some(json!({"path":"","operation_id":"op_00000000000000000000000000000000"})),
+        ),
+        (
+            "POST",
+            "/api/file-manager/disks/P01/directory-branches",
+            Some(json!({"name":"Side","operation_id":"op_00000000000000000000000000000000"})),
+        ),
+        (
+            "POST",
+            "/api/file-manager/disks/P01/directory-select",
+            Some(json!({"name":"Side","operation_id":"op_00000000000000000000000000000000"})),
+        ),
         ("GET", "/api/commits/commit", None),
         ("GET", "/api/history-trees/history/graph", None),
         ("GET", "/api/events?after=17", None),
         ("GET", "/api/backup-topologies/default", None),
         ("GET", "/api/files/file/history", None),
+        ("GET", "/api/repositories/repository/default-branch", None),
+        (
+            "PATCH",
+            "/api/repositories/repository/directory-branches/directory",
+            Some(json!({"name":"renamed","operation_id":"op_00000000000000000000000000000000"})),
+        ),
+        (
+            "GET",
+            "/api/repositories/repository/directory-branches",
+            None,
+        ),
+        (
+            "POST",
+            "/api/repositories/repository/directory-branches",
+            Some(json!({"path":"","sources":[],"entries":[]})),
+        ),
+        (
+            "GET",
+            "/api/repositories/repository/directory-branches?summary=true&path=",
+            None,
+        ),
+        (
+            "PUT",
+            "/api/repositories/repository/default-branch",
+            Some(
+                json!({"directory_branch_id":"directory","operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
         ("GET", "/api/admin/disks", None),
         ("GET", "/api/file-manager/disks", None),
         ("GET", "/api/admin/check", None),

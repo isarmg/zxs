@@ -256,6 +256,84 @@ impl Backend for CloseFailure {
     ) -> Result<storage_contract::CheckReport, crate::ApiError> {
         self.inner.integrity_check(identity)
     }
+    fn create_merge_link(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateMergeLink,
+    ) -> Result<storage_contract::MergeLink, crate::ApiError> {
+        self.inner.create_merge_link(identity, request)
+    }
+    fn create_repository(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateRepository,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        self.inner.create_repository(identity, request)
+    }
+    fn create_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateBranch,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.inner.create_branch(identity, request)
+    }
+    fn mutate_disk_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::MutateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.mutate_disk_directory(identity, request)
+    }
+    fn initialize_directory_scope(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::InitializeDirectoryScope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.initialize_directory_scope(identity, request)
+    }
+    fn archive_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ArchiveBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.archive_branch(identity, request)
+    }
+    fn rename_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::RenameDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.rename_directory_branch(identity, request)
+    }
+    fn select_default_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::SelectDefaultDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner
+            .select_default_directory_branch(identity, request)
+    }
+    fn directory_selection(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectorySelection,
+    ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
+        self.inner.directory_selection(identity, request)
+    }
+    fn directory_scopes(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectoryScopes<'_>,
+    ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
+        self.inner.directory_scopes(identity, request)
+    }
+    fn default_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        repository_id: &str,
+    ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
+        self.inner.default_directory_branch(identity, repository_id)
+    }
     fn file_history(
         &self,
         identity: &crate::auth::Identity,

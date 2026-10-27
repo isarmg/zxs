@@ -41,7 +41,7 @@ fn fixture() -> (
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
-            "Projection",
+            &storage_contract::RepositoryName::parse("Projection").unwrap(),
             "P01",
             3,
             "owner",
@@ -112,7 +112,7 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
         crate::TreeSnapshot::capture(&engine, crate::tests::tree_request(&input)).unwrap();
     let other = engine
         .create_repository(
-            "Other",
+            &storage_contract::RepositoryName::parse("Other").unwrap(),
             "P01",
             3,
             "owner",
@@ -514,8 +514,8 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
     engine
         .create_directory_branches(
             &repo.repository_id,
-            "folder",
-            "inherited-view",
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("inherited-view").unwrap(),
             "owner",
             storage_contract::OperationId::generate(),
         )
@@ -523,8 +523,8 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
     engine
         .select_directory_branches(
             &repo.repository_id,
-            "folder",
-            "inherited-view",
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("inherited-view").unwrap(),
             "owner",
             storage_contract::OperationId::generate(),
         )
@@ -1073,3 +1073,24 @@ mod history_tests;
 
 #[path = "diagnostics_tests.rs"]
 mod diagnostics_tests;
+
+#[path = "default_directory_tests.rs"]
+mod default_directory_tests;
+
+#[path = "directory_scopes_tests.rs"]
+mod directory_scopes_tests;
+
+#[path = "directory_selection_tests.rs"]
+mod directory_selection_tests;
+
+#[path = "archive_tests.rs"]
+mod archive_tests;
+
+#[path = "create_branch_tests.rs"]
+mod create_branch_tests;
+
+#[path = "create_repository_tests.rs"]
+mod create_repository_tests;
+
+#[path = "merge_link_tests.rs"]
+mod merge_link_tests;

@@ -238,7 +238,7 @@ fn stored_snapshot_rejects_file_identity_reused_across_histories() {
     save(&mut engine, &first.main_branch_id, "first.txt", b"first");
     let second = engine
         .create_repository(
-            "second",
+            &storage_contract::RepositoryName::parse("second").unwrap(),
             "P01",
             3,
             "admin",

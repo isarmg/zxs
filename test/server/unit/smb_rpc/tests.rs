@@ -334,6 +334,84 @@ impl Backend for LostCommitReply {
     ) -> Result<storage_contract::CheckReport, crate::ApiError> {
         self.inner.integrity_check(identity)
     }
+    fn create_merge_link(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateMergeLink,
+    ) -> Result<storage_contract::MergeLink, crate::ApiError> {
+        self.inner.create_merge_link(identity, request)
+    }
+    fn create_repository(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateRepository,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        self.inner.create_repository(identity, request)
+    }
+    fn create_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateBranch,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.inner.create_branch(identity, request)
+    }
+    fn mutate_disk_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::MutateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.mutate_disk_directory(identity, request)
+    }
+    fn initialize_directory_scope(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::InitializeDirectoryScope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.initialize_directory_scope(identity, request)
+    }
+    fn archive_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ArchiveBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.archive_branch(identity, request)
+    }
+    fn rename_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::RenameDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.rename_directory_branch(identity, request)
+    }
+    fn select_default_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::SelectDefaultDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner
+            .select_default_directory_branch(identity, request)
+    }
+    fn directory_selection(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectorySelection,
+    ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
+        self.inner.directory_selection(identity, request)
+    }
+    fn directory_scopes(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectoryScopes<'_>,
+    ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
+        self.inner.directory_scopes(identity, request)
+    }
+    fn default_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        repository_id: &str,
+    ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
+        self.inner.default_directory_branch(identity, repository_id)
+    }
     fn file_history(
         &self,
         identity: &crate::auth::Identity,
@@ -534,7 +612,7 @@ pub(super) fn fixture() -> (Fixture, Arc<Shared>, Arc<LostCommitReply>, String) 
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(
-            "资料",
+            &storage_contract::RepositoryName::parse("资料").unwrap(),
             "P01",
             3,
             "alice",
@@ -675,25 +753,24 @@ fn directory_fixture(shared: &Shared) -> (String, String, String) {
     let repository = repositories[0].repository_id.clone();
     let created = shared
         .backend
-        .call(
-            crate::BackendAction::FileManagerDirectoryBranches,
+        .mutate_disk_directory(
             identity,
-            json!({
-                "slot_id":"P01","path":"资料","name":"draft","operation_id":new_id("op")
-            }),
+            crate::tests::disk_directory_request(
+                json!({
+                    "slot_id":"P01","path":"资料","name":"draft","operation_id":new_id("op")
+                }),
+                crate::DiskDirectoryAction::Create,
+            ),
         )
+        .and_then(crate::operation_wire::operation_wire)
         .unwrap();
     let initial = shared
         .backend
-        .call(
-            crate::BackendAction::DefaultBranch,
-            identity,
-            json!({"repository_id":repository}),
-        )
+        .default_directory_branch(identity, &repository)
         .unwrap();
     (
         repository,
-        initial["directory_branch_id"].as_str().unwrap().to_owned(),
+        initial.selected.unwrap().directory_branch_id,
         created["result"]["directory_branch_id"]
             .as_str()
             .unwrap()
@@ -702,9 +779,17 @@ fn directory_fixture(shared: &Shared) -> (String, String, String) {
 }
 
 fn select_directory(shared: &Shared, repository: &str, directory: &str) {
-    shared.backend.call(crate::BackendAction::UpdateDefaultBranch, &identity(shared), json!({
-        "repository_id":repository,"directory_branch_id":directory,"operation_id":new_id("op")
-    })).unwrap();
+    shared
+        .backend
+        .select_default_directory_branch(
+            &identity(shared),
+            crate::SelectDefaultDirectoryBranch {
+                repository_id: repository.into(),
+                directory_branch_id: directory.into(),
+                operation_id: storage_contract::OperationId::generate(),
+            },
+        )
+        .unwrap();
 }
 
 #[test]
@@ -788,34 +873,37 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
         .repository_id
         .clone();
     let register = |path: &str, name: &str| {
-        shared.backend.call(crate::BackendAction::FileManagerDirectoryBranches,identity,json!({
+        shared.backend.mutate_disk_directory(identity, crate::tests::disk_directory_request(json!({
         "slot_id":"P01","path":format!("资料/{path}"),"name":name,"operation_id":new_id("op")
-    })).unwrap()["result"]["directory_branch_id"].as_str().unwrap().to_owned()
+    }),crate::DiskDirectoryAction::Create)).and_then(crate::operation_wire::operation_wire).unwrap()["result"]["directory_branch_id"].as_str().unwrap().to_owned()
     };
     let a_m = register("a", "m");
     let a_n = register("a", "n");
     let b_l = register("b", "l");
     let b_p = register("b", "p");
     for (path, name) in [("a", "m"), ("b", "l")] {
-        shared.backend.call(crate::BackendAction::FileManagerDirectorySelect,identity,json!({
+        shared.backend.mutate_disk_directory(identity, crate::tests::disk_directory_request(json!({
             "slot_id":"P01","path":format!("资料/{path}"),"name":name,"operation_id":new_id("op")
-        })).unwrap();
+        }),crate::DiskDirectoryAction::Select)).and_then(crate::operation_wire::operation_wire).unwrap();
     }
     let scope = |id: &str| {
-        shared
+        let snapshot = shared
             .backend
-            .call(
-                crate::BackendAction::DirectoryBranchScopes,
+            .directory_scopes(
                 identity,
-                json!({"repository_id":repo}),
+                crate::ReadDirectoryScopes {
+                    repository_id: &repo,
+                    filter: &crate::DirectoryBranchFilter::All,
+                    projection: crate::DirectoryBranchProjection::Summary,
+                },
             )
-            .unwrap()["directory_branches"]
-            .as_array()
+            .unwrap();
+        let crate::DirectoryScopeRows::Summary(rows) = snapshot.branches else {
+            panic!("summary request returned full scopes")
+        };
+        rows.into_iter()
+            .find(|branch| branch.directory_branch_id == id)
             .unwrap()
-            .iter()
-            .find(|s| s["directory_branch_id"] == id)
-            .unwrap()
-            .clone()
     };
     let m0 = scope(&a_m);
     let n0 = scope(&a_n);
@@ -853,10 +941,10 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
     assert_eq!(moved.version_id, source.version_id);
     let m1 = scope(&a_m);
     let l1 = scope(&b_l);
-    assert_ne!(m1["head_tree_id"], m0["head_tree_id"]);
-    assert_ne!(l1["head_tree_id"], l0["head_tree_id"]);
-    assert_eq!(scope(&a_n)["head_tree_id"], n0["head_tree_id"]);
-    assert_eq!(scope(&b_p)["head_tree_id"], p0["head_tree_id"]);
+    assert_ne!(m1.head_tree_id, m0.head_tree_id);
+    assert_ne!(l1.head_tree_id, l0.head_tree_id);
+    assert_eq!(scope(&a_n).head_tree_id, n0.head_tree_id);
+    assert_eq!(scope(&b_p).head_tree_id, p0.head_tree_id);
     let mut bytes = [0; 6];
     reader.read_exact_at(&mut bytes, 0).unwrap();
     assert_eq!(&bytes, b"source");
@@ -869,13 +957,13 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
     client.dirty(opened.handle).unwrap();
     client.close(opened.handle, false).unwrap();
     assert_eq!(
-        scope(&a_m)["head_tree_id"],
-        m1["head_tree_id"],
+        scope(&a_m).head_tree_id,
+        m1.head_tree_id,
         "source stopped tracking the moved file"
     );
-    assert_ne!(scope(&b_l)["head_tree_id"], l1["head_tree_id"]);
-    assert_eq!(scope(&a_n)["head_tree_id"], n0["head_tree_id"]);
-    assert_eq!(scope(&b_p)["head_tree_id"], p0["head_tree_id"]);
+    assert_ne!(scope(&b_l).head_tree_id, l1.head_tree_id);
+    assert_eq!(scope(&a_n).head_tree_id, n0.head_tree_id);
+    assert_eq!(scope(&b_p).head_tree_id, p0.head_tree_id);
     let previous = backend.content(identity, &source.version_id).unwrap();
     previous.file.read_exact_at(&mut bytes, 0).unwrap();
     assert_eq!(&bytes, b"source");
@@ -902,23 +990,15 @@ fn newly_created_ancestor_selection_fences_an_existing_create_handle() {
     creator.close(other.handle, false).unwrap();
     shared
         .backend
-        .call(
-            crate::BackendAction::FileManagerDirectoryBranches,
-            &identity(&shared),
-            json!({
+        .mutate_disk_directory(&identity(&shared), crate::tests::disk_directory_request(json!({
                 "slot_id":"P01","path":"资料/future","name":"alternate","operation_id":new_id("op")
-            }),
-        )
+            }),crate::DiskDirectoryAction::Create)).and_then(crate::operation_wire::operation_wire)
         .unwrap();
     shared
         .backend
-        .call(
-            crate::BackendAction::FileManagerDirectorySelect,
-            &identity(&shared),
-            json!({
+        .mutate_disk_directory(&identity(&shared), crate::tests::disk_directory_request(json!({
                 "slot_id":"P01","path":"资料/future","name":"alternate","operation_id":new_id("op")
-            }),
-        )
+            }),crate::DiskDirectoryAction::Select)).and_then(crate::operation_wire::operation_wire)
         .unwrap();
     file.write_all_at(b"keep", 0).unwrap();
     assert_eq!(
@@ -953,25 +1033,17 @@ fn nested_directory_switch_does_not_fence_an_unrelated_open_file() {
     let (_repository, _main, _draft) = directory_fixture(&shared);
     shared
         .backend
-        .call(
-            crate::BackendAction::FileManagerDirectoryBranches,
-            &identity(&shared),
-            json!({
+        .mutate_disk_directory(&identity(&shared), crate::tests::disk_directory_request(json!({
                 "slot_id":"P01","path":"资料/nested","name":"alternate","operation_id":new_id("op")
-            }),
-        )
+            }),crate::DiskDirectoryAction::Create)).and_then(crate::operation_wire::operation_wire)
         .unwrap();
     let mut one = session(shared.clone(), &branch);
     let (opened, file) = open_file(&mut one, true);
     shared
         .backend
-        .call(
-            crate::BackendAction::FileManagerDirectorySelect,
-            &identity(&shared),
-            json!({
+        .mutate_disk_directory(&identity(&shared), crate::tests::disk_directory_request(json!({
                 "slot_id":"P01","path":"资料/nested","name":"alternate","operation_id":new_id("op")
-            }),
-        )
+            }),crate::DiskDirectoryAction::Select)).and_then(crate::operation_wire::operation_wire)
         .unwrap();
     file.write_all_at(b"new", 0).unwrap();
     one.dirty(opened.handle).unwrap();

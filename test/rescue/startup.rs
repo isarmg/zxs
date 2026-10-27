@@ -87,7 +87,7 @@ fn rescue_restores_from_two_old_members_without_management_commands() {
     let baseline = engine.config().clone();
     let repository = engine
         .create_repository(
-            "rescue-fixture",
+            &storage_engine::RepositoryName::parse("rescue-fixture").unwrap(),
             "P01",
             3,
             "admin",
@@ -166,7 +166,7 @@ fn history_package_round_trip_preserves_checks_and_refuses_overwrite() {
     let mut engine = initialize(&source, "source");
     let repository = engine
         .create_repository(
-            "package-fixture",
+            &storage_engine::RepositoryName::parse("package-fixture").unwrap(),
             "P01",
             3,
             "admin",

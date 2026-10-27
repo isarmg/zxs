@@ -11,7 +11,7 @@ fn pending() -> (tempfile::TempDir, PathBuf, Config, String, OperationId) {
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     let repo = engine
         .create_repository(
-            "repair",
+            &storage_contract::RepositoryName::parse("repair").unwrap(),
             "P01",
             3,
             "admin",

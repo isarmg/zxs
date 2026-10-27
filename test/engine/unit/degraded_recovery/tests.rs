@@ -15,7 +15,7 @@ fn fixture_with_history(
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(
-            "恢复测试",
+            &storage_contract::RepositoryName::parse("恢复测试").unwrap(),
             "P01",
             3,
             "alice",
@@ -430,7 +430,7 @@ fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
         assert_eq!(
             engine
                 .create_repository(
-                    "must-not-write",
+                    &storage_contract::RepositoryName::parse("must-not-write").unwrap(),
                     "P01",
                     3,
                     "alice",

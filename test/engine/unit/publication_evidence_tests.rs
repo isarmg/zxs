@@ -16,7 +16,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     .unwrap();
     let repository = engine
         .create_repository(
-            "replica recovery",
+            &storage_contract::RepositoryName::parse("replica recovery").unwrap(),
             "P01",
             3,
             "admin",

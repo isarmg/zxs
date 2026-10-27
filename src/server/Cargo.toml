@@ -47,14 +47,17 @@ service-stack = { version = "0.5", features = ["util"], path = "../foundation/ne
 [[test]]
 name = "http_engine"
 path = "../../test/server/integration/http_engine.rs"
+required-features = ["core"]
 
 [[test]]
 name = "login_admission"
 path = "../../test/server/integration/login_admission.rs"
+required-features = ["core"]
 
 [[test]]
 name = "telemetry_status"
 path = "../../test/server/integration/telemetry_status.rs"
+required-features = ["core"]
 
 [[test]]
 name = "service_startup"

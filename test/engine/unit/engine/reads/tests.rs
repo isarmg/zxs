@@ -11,7 +11,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Workspace) {
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(
-            "reads",
+            &storage_contract::RepositoryName::parse("reads").unwrap(),
             "P01",
             3,
             "admin",

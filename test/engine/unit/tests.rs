@@ -28,7 +28,7 @@ impl Fixture {
 }
 fn repository(e: &mut Engine, copies: u32) -> Repository {
     e.create_repository(
-        "项目",
+        &storage_contract::RepositoryName::parse("项目").unwrap(),
         "P01",
         copies,
         "admin",
@@ -807,7 +807,13 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
     let versions = engine.state().versions.len();
     let operation = storage_contract::OperationId::generate();
     let created = engine
-        .create_directory_branches(&repo.repository_id, "inside", "draft", "admin", operation)
+        .create_directory_branches(
+            &repo.repository_id,
+            Some(&name_policy::LookupPath::parse("inside").unwrap()),
+            &storage_contract::BranchName::parse("draft").unwrap(),
+            "admin",
+            operation,
+        )
         .unwrap();
     assert_eq!(created.result["count"], "2");
     assert_eq!(created.result["copied_files"], "0");
@@ -817,7 +823,13 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
     let sequence = engine.state().sequence;
     assert_eq!(
         engine
-            .create_directory_branches(&repo.repository_id, "inside", "draft", "admin", operation)
+            .create_directory_branches(
+                &repo.repository_id,
+                Some(&name_policy::LookupPath::parse("inside").unwrap()),
+                &storage_contract::BranchName::parse("draft").unwrap(),
+                "admin",
+                operation
+            )
             .unwrap()
             .result,
         created.result
@@ -846,7 +858,13 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
     }
     let selection = storage_contract::OperationId::generate();
     let selected = engine
-        .select_directory_branches(&repo.repository_id, "inside", "draft", "admin", selection)
+        .select_directory_branches(
+            &repo.repository_id,
+            Some(&name_policy::LookupPath::parse("inside").unwrap()),
+            &storage_contract::BranchName::parse("draft").unwrap(),
+            "admin",
+            selection,
+        )
         .unwrap();
     assert_eq!(selected.result["count"], "2");
     let tree = engine.list_tree(&repo.main_branch_id).unwrap();
@@ -875,14 +893,26 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
     let mut engine = Engine::open(&fixture.root).unwrap();
     assert_eq!(
         engine
-            .select_directory_branches(&repo.repository_id, "inside", "draft", "admin", selection)
+            .select_directory_branches(
+                &repo.repository_id,
+                Some(&name_policy::LookupPath::parse("inside").unwrap()),
+                &storage_contract::BranchName::parse("draft").unwrap(),
+                "admin",
+                selection
+            )
             .unwrap()
             .result,
         selected.result
     );
     assert_eq!(
         engine
-            .create_directory_branches(&repo.repository_id, "inside", "draft", "admin", operation)
+            .create_directory_branches(
+                &repo.repository_id,
+                Some(&name_policy::LookupPath::parse("inside").unwrap()),
+                &storage_contract::BranchName::parse("draft").unwrap(),
+                "admin",
+                operation
+            )
             .unwrap()
             .result,
         created.result
@@ -922,8 +952,8 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
     engine
         .create_directory_branches(
             &repo.repository_id,
-            "folder",
-            "taken",
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("taken").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -933,8 +963,8 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
         engine
             .create_directory_branches(
                 &repo.repository_id,
-                "folder",
-                "taken",
+                Some(&name_policy::LookupPath::parse("folder").unwrap()),
+                &storage_contract::BranchName::parse("taken").unwrap(),
                 "admin",
                 storage_contract::OperationId::generate()
             )
@@ -950,8 +980,8 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
     engine
         .create_directory_branches(
             &repo.repository_id,
-            "folder",
-            "complete",
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("complete").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -965,8 +995,8 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
     engine
         .select_directory_branches(
             &repo.repository_id,
-            "folder",
-            "complete",
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("complete").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -983,8 +1013,8 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
         engine
             .create_directory_branches(
                 &repo.repository_id,
-                "folder",
-                "missing actor",
+                Some(&name_policy::LookupPath::parse("folder").unwrap()),
+                &storage_contract::BranchName::parse("missing actor").unwrap(),
                 "",
                 storage_contract::OperationId::generate()
             )
@@ -1003,8 +1033,8 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
     let placeholders = engine
         .create_directory_branches(
             &repo.repository_id,
-            "folder",
-            "unavailable",
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("unavailable").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -1015,8 +1045,8 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
     engine
         .select_directory_branches(
             &repo.repository_id,
-            "folder",
-            "unavailable",
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("unavailable").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -1097,7 +1127,7 @@ fn written_branch_survives_source_purge_and_merge_is_metadata_only() {
     let b = e
         .create_branch(
             first.commit_id.as_deref().unwrap(),
-            "独立分支",
+            &storage_contract::BranchName::parse("独立分支").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -1326,18 +1356,36 @@ fn workspace_actor_binding_and_idempotency_conflicts() {
     e.commit_workspace(request).unwrap();
     let op = storage_contract::OperationId::generate();
     let b = e
-        .create_repository("second", "P01", 1, "admin", op)
+        .create_repository(
+            &storage_contract::RepositoryName::parse("second").unwrap(),
+            "P01",
+            1,
+            "admin",
+            op,
+        )
         .unwrap();
     assert_eq!(
-        e.create_repository("second", "P01", 1, "admin", op)
-            .unwrap()
-            .repository_id,
+        e.create_repository(
+            &storage_contract::RepositoryName::parse("second").unwrap(),
+            "P01",
+            1,
+            "admin",
+            op
+        )
+        .unwrap()
+        .repository_id,
         b.repository_id
     );
     assert_eq!(
-        e.create_repository("other", "P01", 1, "admin", op)
-            .unwrap_err()
-            .code(),
+        e.create_repository(
+            &storage_contract::RepositoryName::parse("other").unwrap(),
+            "P01",
+            1,
+            "admin",
+            op
+        )
+        .unwrap_err()
+        .code(),
         storage_contract::ErrorCode::IdempotencyKeyReused
     );
 }
@@ -1800,7 +1848,7 @@ fn conditional_directory_policies_change_only_future_placements() {
     );
     let other = e
         .create_repository(
-            "other",
+            &storage_contract::RepositoryName::parse("other").unwrap(),
             "P01",
             3,
             "admin",
@@ -1934,7 +1982,7 @@ fn smb_binding_is_explicit_conditional_and_requires_clean_workspaces() {
     let branch = e
         .create_branch(
             &root,
-            "new-main",
+            &storage_contract::BranchName::parse("new-main").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -2043,7 +2091,7 @@ fn merge_link_endpoints_must_belong_to_the_selected_distinct_branches() {
     let branch = e
         .create_branch(
             &first,
-            "other",
+            &storage_contract::BranchName::parse("other").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -2542,8 +2590,8 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
     let created = engine
         .create_directory_branches(
             &repo.repository_id,
-            "folder",
-            "draft",
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -2561,8 +2609,8 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
     engine
         .select_directory_branches(
             &repo.repository_id,
-            "folder",
-            "draft",
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -2987,7 +3035,7 @@ fn content_read_plan_pins_before_io_and_authenticates_manifest_outside_engine() 
     // disk verification; no borrow or Engine mutex is retained.
     engine
         .create_repository(
-            "second",
+            &storage_contract::RepositoryName::parse("second").unwrap(),
             "P01",
             1,
             "admin",
@@ -3146,7 +3194,7 @@ fn upload_preparation_releases_engine_and_revalidates_workspace_without_lost_upd
     // The copy plan is detached from Engine; unrelated writer work is allowed.
     engine
         .create_repository(
-            "parallel",
+            &storage_contract::RepositoryName::parse("parallel").unwrap(),
             "P01",
             1,
             "admin",
@@ -3486,7 +3534,7 @@ fn detached_workspace_commit_stale_base_is_definite_retryable_conflict() {
         .unwrap();
     let busy = engine
         .create_repository(
-            "unrelated-writer",
+            &storage_contract::RepositoryName::parse("unrelated-writer").unwrap(),
             "P01",
             1,
             "admin",
@@ -3810,7 +3858,13 @@ fn pending_operation_reads_exact_snapshot_replica_without_repair() {
         engine.inject_fault_once("after_accept_1");
         assert!(
             engine
-                .create_repository("pending", "P01", 3, "admin", operation)
+                .create_repository(
+                    &storage_contract::RepositoryName::parse("pending").unwrap(),
+                    "P01",
+                    3,
+                    "admin",
+                    operation
+                )
                 .is_err()
         );
         let members = engine.members();
@@ -3914,7 +3968,13 @@ fn pending_operation_requires_a_trusted_decision_not_prepared_objects() {
         engine.inject_fault_once(fault);
         assert!(
             engine
-                .create_repository("pending", "P01", 3, "admin", operation)
+                .create_repository(
+                    &storage_contract::RepositoryName::parse("pending").unwrap(),
+                    "P01",
+                    3,
+                    "admin",
+                    operation
+                )
                 .is_err()
         );
         if fault == "after_accept_1" {
@@ -4148,7 +4208,7 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
 
     let other = engine
         .create_repository(
-            "Other",
+            &storage_contract::RepositoryName::parse("Other").unwrap(),
             "P01",
             1,
             "admin",

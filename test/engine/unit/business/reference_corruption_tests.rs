@@ -173,8 +173,8 @@ fn batch_rejects_missing_references_without_publication() {
         let result = engine
             .create_directory_branches(
                 &repo.repository_id,
-                "folder",
-                "draft",
+                Some(&name_policy::LookupPath::parse("folder").unwrap()),
+                &storage_contract::BranchName::parse("draft").unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )
@@ -316,8 +316,8 @@ fn file_node_publication_requires_frozen_path_contexts_without_publication() {
         let result = engine
             .create_directory_branches(
                 &repo.repository_id,
-                "folder",
-                "pending",
+                Some(&name_policy::LookupPath::parse("folder").unwrap()),
+                &storage_contract::BranchName::parse("pending").unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )
@@ -678,8 +678,8 @@ fn frozen_directory_compositions_reject_missing_path_contexts() {
         let branch = engine
             .create_directory_branches(
                 &repo.repository_id,
-                "folder",
-                "draft",
+                Some(&name_policy::LookupPath::parse("folder").unwrap()),
+                &storage_contract::BranchName::parse("draft").unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )
@@ -706,8 +706,8 @@ fn frozen_directory_compositions_reject_missing_path_contexts() {
             engine
                 .create_directory_branches(
                     &repo.repository_id,
-                    "folder",
-                    "second",
+                    Some(&name_policy::LookupPath::parse("folder").unwrap()),
+                    &storage_contract::BranchName::parse("second").unwrap(),
                     "admin",
                     storage_contract::OperationId::generate(),
                 )
@@ -716,8 +716,8 @@ fn frozen_directory_compositions_reject_missing_path_contexts() {
             engine
                 .select_directory_branches(
                     &repo.repository_id,
-                    "folder",
-                    "draft",
+                    Some(&name_policy::LookupPath::parse("folder").unwrap()),
+                    &storage_contract::BranchName::parse("draft").unwrap(),
                     "admin",
                     storage_contract::OperationId::generate(),
                 )

@@ -106,7 +106,7 @@ fn workspace_authorization_borrows_records_and_preserves_owner_checks() {
     let owner = install_test_administrator(&mut engine, "owner");
     let repo = engine
         .create_repository(
-            "Borrowed workspace",
+            &storage_contract::RepositoryName::parse("Borrowed workspace").unwrap(),
             "P01",
             1,
             "owner",
@@ -166,7 +166,7 @@ fn typed_upload_admission_preserves_owner_state_expiry_and_size_precedence() {
     let owner = install_test_administrator(&mut engine, "owner");
     let repository = engine
         .create_repository(
-            "Upload admission",
+            &storage_contract::RepositoryName::parse("Upload admission").unwrap(),
             "P01",
             1,
             "owner",
@@ -252,7 +252,7 @@ fn typed_workspace_status_distinguishes_admission_errors_from_absent_items() {
     let owner = install_test_administrator(&mut engine, "owner");
     let repo = engine
         .create_repository(
-            "Status",
+            &storage_contract::RepositoryName::parse("Status").unwrap(),
             "P01",
             1,
             "owner",

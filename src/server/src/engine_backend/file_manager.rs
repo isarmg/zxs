@@ -7,12 +7,7 @@ mod history_nodes;
 mod listing;
 mod operations;
 mod pagination;
-mod scope_query;
-pub(super) use scope_query::read as query_directory_branch_scopes;
-use std::{
-    cmp::Reverse,
-    collections::{BTreeMap, BTreeSet},
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Present stored UTC seconds in the same whole-second UTC form as body
 /// versions. This changes the read projection, never the persisted timestamp.
@@ -114,14 +109,15 @@ fn admit_root_operation(
     slot: &str,
     path: &str,
     operation: storage_contract::OperationId,
-) -> Result<(), ApiError> {
-    if needs_disk_root(engine, slot, path) && engine.state().operations.contains_key(&operation) {
+) -> Result<bool, ApiError> {
+    let needs_root = needs_disk_root(engine, slot, path);
+    if needs_root && engine.state().operations.contains_key(&operation) {
         return Err(ApiError::conflict(
             storage_contract::ErrorCode::IdempotencyKeyReused,
             "operation is already bound to another request",
         ));
     }
-    Ok(())
+    Ok(needs_root)
 }
 
 /// Named repositories and a disk-root tree share one displayed namespace.
@@ -157,12 +153,12 @@ fn ensure_unambiguous_disk_path(
     Ok(())
 }
 
-fn resolve_existing(
+fn resolve_existing<'a>(
     engine: &Engine,
     slot: &str,
-    value: &str,
+    value: &'a str,
     access: DiskAccess,
-) -> Result<Option<(Repository, String)>, ApiError> {
+) -> Result<Option<(Repository, &'a str)>, ApiError> {
     let write = access != DiskAccess::Read;
     if write && disk(engine, slot)?.level != 1 {
         return Err(ApiError::new(
@@ -171,12 +167,12 @@ fn resolve_existing(
             "backup disks are read only",
         ));
     }
-    let (primary, relative) = (slot.to_owned(), value);
+    let relative = value;
     let existing = engine
         .state()
         .repositories
         .values()
-        .find(|r| r.primary_slot_id == primary && r.file_manager_root)
+        .find(|r| r.primary_slot_id == slot && r.file_manager_root)
         .cloned();
     if let Some(root) = &existing {
         ensure_unambiguous_disk_path(engine, root, relative)?;
@@ -187,7 +183,7 @@ fn resolve_existing(
         .repositories
         .values()
         .find(|r| {
-            r.primary_slot_id == primary
+            r.primary_slot_id == slot
                 && !r.file_manager_root
                 && name_policy::lookup_key(&r.name) == name_policy::lookup_key(first)
         })
@@ -202,17 +198,13 @@ fn resolve_existing(
         }
         return Ok(Some((
             repo,
-            relative
-                .split_once('/')
-                .map(|(_, p)| p)
-                .unwrap_or("")
-                .into(),
+            relative.split_once('/').map(|(_, p)| p).unwrap_or(""),
         )));
     }
     let Some(repo) = existing else {
         return Ok(None);
     };
-    Ok(Some((repo, relative.into())))
+    Ok(Some((repo, relative)))
 }
 fn empty_directory() -> ApiError {
     ApiError::new(
@@ -222,21 +214,21 @@ fn empty_directory() -> ApiError {
     )
 }
 
-fn resolve_read(
+fn resolve_read<'a>(
     engine: &Engine,
     slot: &str,
-    value: &str,
-) -> Result<(Repository, String), ApiError> {
+    value: &'a str,
+) -> Result<(Repository, &'a str), ApiError> {
     resolve_existing(engine, slot, value, DiskAccess::Read)?.ok_or_else(empty_directory)
 }
 
-fn resolve(
+fn resolve<'a>(
     engine: &mut Engine,
     identity: &Identity,
     slot: &str,
-    value: &str,
+    value: &'a str,
     access: DiskAccess,
-) -> Result<(Repository, String), ApiError> {
+) -> Result<(Repository, &'a str), ApiError> {
     if let Some(resolved) = resolve_existing(engine, slot, value, access)? {
         return Ok(resolved);
     }
@@ -251,7 +243,7 @@ fn resolve(
             storage_contract::OperationId::generate(),
         )
         .map_err(error)?;
-    Ok((repo, value.into()))
+    Ok((repo, value))
 }
 
 fn file_repo<'a>(engine: &'a Engine, file: &str) -> Result<&'a Repository, ApiError> {
@@ -354,94 +346,11 @@ fn scoped_directory_branches<'a>(
         name_policy::validate_lookup_path(path).map_err(ApiError::invalid_source)?;
     }
     let requested_key = requested_path.map(name_policy::path_key);
-    let requested_directory_id = requested_key.as_ref().and_then(|key| {
-        if key.is_empty() {
-            return Some(repo.to_owned());
-        }
-        let namespace = engine.state().branches.get(&repository.main_branch_id)?;
-        engine
-            .state()
-            .commits
-            .get(&namespace.head_commit_id)?
-            .entries
-            .iter()
-            .find(|entry| {
-                entry.kind == storage_contract::NamespaceEntryKind::Directory
-                    && entry.lookup_key() == *key
-            })
-            .map(|entry| entry.entry_id.clone())
-    });
-    let mut scopes = engine
-        .state()
-        .directory_branches
-        .values()
-        .filter(|branch| {
-            branch.repository_id == repo
-                && requested_key.as_ref().is_none_or(|key| {
-                    requested_directory_id.as_ref().map_or_else(
-                        || name_policy::path_key(&branch.path) == *key,
-                        |directory| &branch.directory_id == directory,
-                    )
-                })
-        })
-        .collect::<Vec<_>>();
-    scopes.sort_by_key(|branch| {
-        (
-            Reverse(branch.sequence),
-            branch.directory_branch_id.as_str(),
-        )
-    });
-    Ok(scopes)
-}
-
-pub(super) fn directory_branch_scopes(
-    engine: &Engine,
-    repo: &str,
-    requested_path: Option<&str>,
-) -> Result<Value, ApiError> {
-    let scopes = scoped_directory_branches(engine, repo, requested_path)?;
-    let branches = scopes
-        .into_iter()
-        .map(|branch| {
-            let mut value = encode(branch)?;
-            value["current"] = (engine
-                .state()
-                .directory_selections
-                .get(&branch.directory_id)
-                == Some(&branch.directory_branch_id))
-            .into();
-            value["file_count"] = branch
-                .entries
-                .iter()
-                .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
-                .count()
-                .to_string()
-                .into();
-            Ok(value)
-        })
-        .collect::<Result<Vec<_>, ApiError>>()?;
-    Ok(json!({"repository_id":repo,"directory_branches":branches}))
-}
-
-pub(super) fn directory_branch_summaries(
-    engine: &Engine,
-    repo: &str,
-    path: Option<&str>,
-) -> Result<Value, ApiError> {
-    let branches = scoped_directory_branches(engine, repo, path)?
-        .into_iter()
-        .map(|branch| {
-            listing::branch_summary(
-                branch,
-                engine
-                    .state()
-                    .directory_selections
-                    .get(&branch.directory_id)
-                    == Some(&branch.directory_branch_id),
-            )
-        })
-        .collect::<Vec<_>>();
-    Ok(json!({"repository_id":repo,"directory_branches":branches}))
+    Ok(super::directory_scopes::matching(
+        engine.state(),
+        repository,
+        requested_key.as_deref(),
+    ))
 }
 
 fn root_has_virtual_directories(engine: &Engine, slot: &str) -> bool {
@@ -653,6 +562,67 @@ pub(super) fn read(
     }
 }
 
+pub(super) fn mutate_directory(
+    engine: &mut Engine,
+    identity: &Identity,
+    request: crate::MutateDiskDirectory,
+) -> Result<storage_contract::OperationResult, ApiError> {
+    let crate::MutateDiskDirectory {
+        slot_id,
+        path,
+        name,
+        operation_id,
+        action,
+    } = request;
+    let display = path.as_ref().map_or("", name_policy::LookupPath::as_str);
+    if display.is_empty() && root_has_virtual_directories(engine, &slot_id) {
+        return Err(ApiError::new(
+            ::http::StatusCode::CONFLICT,
+            storage_contract::ErrorCode::DirectoryScopeRequired,
+            "select a specific folder before branching this disk root",
+        ));
+    }
+    let access = match action {
+        crate::DiskDirectoryAction::Create if path.is_none() => DiskAccess::Create,
+        crate::DiskDirectoryAction::Create | crate::DiskDirectoryAction::Select => {
+            DiskAccess::Write
+        }
+    };
+    if access == DiskAccess::Create
+        && admit_root_operation(engine, &slot_id, display, operation_id)?
+        && name.key() == "main"
+    {
+        return Err(ApiError::conflict(
+            storage_contract::ErrorCode::NameCollision,
+            "directory baseline branch already uses this name",
+        ));
+    }
+    let (repo, _) = resolve(engine, identity, &slot_id, display, access)?;
+    let relative = if repo.file_manager_root {
+        path
+    } else {
+        path.expect("invariant: named repository resolution matched a path component")
+            .strip_components(1)
+    };
+    match action {
+        crate::DiskDirectoryAction::Create => engine.create_directory_branches(
+            &repo.repository_id,
+            relative.as_ref(),
+            &name,
+            &identity.principal,
+            operation_id,
+        ),
+        crate::DiskDirectoryAction::Select => engine.select_directory_branches(
+            &repo.repository_id,
+            relative.as_ref(),
+            &name,
+            &identity.principal,
+            operation_id,
+        ),
+    }
+    .map_err(error)
+}
+
 pub(super) fn call(
     engine: &mut Engine,
     identity: &Identity,
@@ -664,61 +634,6 @@ pub(super) fn call(
         | crate::BackendAction::FileManagerTags
         | crate::BackendAction::FileManagerConfigureBackups => {
             operations::call(engine, identity, action, &input)
-        }
-        crate::BackendAction::FileManagerDirectoryBranches
-        | crate::BackendAction::FileManagerDirectorySelect => {
-            keys(&input, &["slot_id", "path", "name", "operation_id"])?;
-            let slot = field(&input, "slot_id")?;
-            let display = path(&input)?;
-            let name = field(&input, "name")?;
-            storage_engine::validate_branch_name(name).map_err(error)?;
-            let operation = field(&input, "operation_id")?
-                .parse()
-                .map_err(ApiError::invalid_source)?;
-            if display.is_empty() && root_has_virtual_directories(engine, slot) {
-                return Err(ApiError::new(
-                    ::http::StatusCode::CONFLICT,
-                    storage_contract::ErrorCode::DirectoryScopeRequired,
-                    "select a specific folder before branching this disk root",
-                ));
-            }
-            let access = if action == crate::BackendAction::FileManagerDirectoryBranches
-                && display.is_empty()
-            {
-                DiskAccess::Create
-            } else {
-                DiskAccess::Write
-            };
-            if access == DiskAccess::Create {
-                admit_root_operation(engine, slot, display, operation)?;
-                if needs_disk_root(engine, slot, display) && name_policy::lookup_key(name) == "main"
-                {
-                    return Err(ApiError::conflict(
-                        storage_contract::ErrorCode::NameCollision,
-                        "directory baseline branch already uses this name",
-                    ));
-                }
-            }
-            let (repo, relative) = resolve(engine, identity, slot, display, access)?;
-            let result = if action == crate::BackendAction::FileManagerDirectoryBranches {
-                engine.create_directory_branches(
-                    &repo.repository_id,
-                    &relative,
-                    name,
-                    &identity.principal,
-                    operation,
-                )
-            } else {
-                engine.select_directory_branches(
-                    &repo.repository_id,
-                    &relative,
-                    name,
-                    &identity.principal,
-                    operation,
-                )
-            }
-            .map_err(error)?;
-            operation_wire(result)
         }
         crate::BackendAction::FileManagerWriteSession => {
             keys(&input, &["slot_id", "path", "branch_id"])?;
@@ -751,7 +666,7 @@ pub(super) fn call(
                 return Err(ApiError::invalid("cannot upload over a disk directory"));
             }
             let tree = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
-            let existing = tree.get(&relative);
+            let existing = tree.get(relative);
             if let Some(context) =
                 existing.and_then(|entry| engine.file_context(&repo.repository_id, &entry.path))
                 && context.inherited_from.is_none()
@@ -824,7 +739,7 @@ pub(super) fn call(
                     &repo.repository_id,
                     NamespaceOperation::parse(
                         storage_contract::NamespaceOperationKind::Mkdir,
-                        &relative,
+                        relative,
                         None,
                     )
                     .map_err(|source| error(source.into()))?,

@@ -1,5 +1,4 @@
 //! Login admission through the actual HTTP router and persistent account store.
-#![cfg(feature = "core")]
 use http_routing::{
     Router,
     body::Body,

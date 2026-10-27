@@ -35,8 +35,8 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String) {
     let branch = engine
         .create_directory_branches(
             &repo.repository_id,
-            "folder",
-            "draft",
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -116,8 +116,8 @@ fn missing_directory_selection_references_return_errors_without_publication() {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             engine.select_directory_branches(
                 &repo.repository_id,
-                "folder",
-                "draft",
+                Some(&name_policy::LookupPath::parse("folder").unwrap()),
+                &storage_contract::BranchName::parse("draft").unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )
@@ -161,7 +161,7 @@ fn missing_baseline_branch_or_tree_cannot_initialize_or_fork() {
         let error = engine
             .initialize_directory_scope(
                 &repo.repository_id,
-                "folder",
+                Some(&name_policy::LookupPath::parse("folder").unwrap()),
                 "admin",
                 storage_contract::OperationId::generate(),
             )
@@ -170,8 +170,8 @@ fn missing_baseline_branch_or_tree_cannot_initialize_or_fork() {
         let error = engine
             .create_directory_branches(
                 &repo.repository_id,
-                "folder",
-                "another",
+                Some(&name_policy::LookupPath::parse("folder").unwrap()),
+                &storage_contract::BranchName::parse("another").unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )
@@ -187,8 +187,8 @@ fn unchanged_selection_still_rejects_unavailable_file_branch() {
     engine
         .select_directory_branches(
             &repo.repository_id,
-            "folder",
-            "draft",
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -206,8 +206,8 @@ fn unchanged_selection_still_rejects_unavailable_file_branch() {
     let error = engine
         .select_directory_branches(
             &repo.repository_id,
-            "folder",
-            "draft",
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -217,4 +217,22 @@ fn unchanged_selection_still_rejects_unavailable_file_branch() {
         storage_contract::ErrorCode::FileBranchNotFound
     );
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
+}
+
+#[test]
+fn directory_snapshot_source_shares_immutable_commit_and_only_owns_selected_entries() {
+    let (_temporary, engine, repo, _) = fixture();
+    let mut state = engine.state().clone();
+    let view = scope_view(&state, &repo.repository_id, "FOLDER").unwrap();
+    let commit_id = view.commit.commit_id.clone();
+    let shared = state.commits.get_shared(&commit_id).unwrap();
+    let source = DirectorySnapshotSource::capture(&state, view);
+    assert!(Arc::ptr_eq(&shared, &source.current));
+    assert_eq!(source.path, "folder");
+    assert_eq!(source.entries.len(), 1);
+    assert_eq!(source.entries[0].path(), "folder/file.txt");
+    let old_entries = source.current.entries.clone();
+    state.commits.get_mut(&commit_id).unwrap().entries.clear();
+    assert_eq!(source.current.entries, old_entries);
+    assert_eq!(source.entries[0].path(), "folder/file.txt");
 }

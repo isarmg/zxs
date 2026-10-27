@@ -232,7 +232,7 @@ fn sibling_prefixes_and_other_repositories_do_not_add_parent_routes() {
     }
     let other = engine
         .create_repository(
-            "other routes",
+            &storage_contract::RepositoryName::parse("other routes").unwrap(),
             "P01",
             1,
             "admin",

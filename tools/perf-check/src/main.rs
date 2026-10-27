@@ -157,7 +157,7 @@ fn main() -> Result<()> {
     ]);
     let mut engine = Engine::initialize(&root, config)?;
     let repo = engine.create_repository(
-        "Architecture probe",
+        &storage_engine::RepositoryName::parse("Architecture probe")?,
         "P01",
         3,
         "admin",

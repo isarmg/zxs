@@ -10,7 +10,7 @@ fn historical_edits_materialize_only_written_files_without_changing_the_source_h
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
-            "history",
+            &storage_contract::RepositoryName::parse("history").unwrap(),
             "P01",
             3,
             "admin",
@@ -139,7 +139,7 @@ fn historical_placeholders_need_no_old_payload_and_written_replacements_material
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
-            "purged history",
+            &storage_contract::RepositoryName::parse("purged history").unwrap(),
             "P01",
             3,
             "admin",
@@ -263,7 +263,7 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
     .unwrap();
     let repo = engine
         .create_repository(
-            "historical deletion",
+            &storage_contract::RepositoryName::parse("historical deletion").unwrap(),
             "P01",
             1,
             "admin",
@@ -373,7 +373,7 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
     let branch = engine
         .create_branch(
             &commit,
-            "ordinary copy",
+            &storage_contract::BranchName::parse("ordinary copy").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )

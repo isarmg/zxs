@@ -14,7 +14,7 @@ fn typed_graph_shares_only_selected_payloads_and_preserves_the_frozen_legacy_res
     let fork = engine
         .create_branch(
             &old,
-            "fork",
+            &storage_contract::BranchName::parse("fork").unwrap(),
             "owner",
             storage_contract::OperationId::generate(),
         )
@@ -31,7 +31,7 @@ fn typed_graph_shares_only_selected_payloads_and_preserves_the_frozen_legacy_res
         .unwrap();
     let other = engine
         .create_repository(
-            "Other",
+            &storage_contract::RepositoryName::parse("Other").unwrap(),
             "P01",
             3,
             "owner",

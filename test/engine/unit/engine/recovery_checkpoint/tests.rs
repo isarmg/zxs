@@ -14,7 +14,7 @@ fn setup() -> (tempfile::TempDir, std::path::PathBuf, Config) {
     for n in 0..6 {
         engine
             .create_repository(
-                &format!("repo{n}"),
+                &storage_contract::RepositoryName::parse(&format!("repo{n}")).unwrap(),
                 "P01",
                 3,
                 "admin",
@@ -151,7 +151,13 @@ fn cold_replay_reuses_member_specific_receipts_across_decision_slots() {
     let (mut engine, _) = reopen(&root);
     for name in ["suffix-a", "suffix-b", "suffix-c"] {
         engine
-            .create_repository(name, "P01", 3, "admin", OperationId::generate())
+            .create_repository(
+                &storage_contract::RepositoryName::parse(name).unwrap(),
+                "P01",
+                3,
+                "admin",
+                OperationId::generate(),
+            )
             .unwrap();
     }
     let expected = canonical_json(engine.state()).unwrap();
@@ -522,7 +528,7 @@ fn sealed_suffix_replays_only_new_decision_and_refreshes_checkpoint() {
     let (mut engine, _) = reopen(&root);
     engine
         .create_repository(
-            "newer",
+            &storage_contract::RepositoryName::parse("newer").unwrap(),
             "P01",
             3,
             "admin",

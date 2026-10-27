@@ -59,11 +59,11 @@ pub(crate) fn routes() -> Router<AppState> {
         )
         .route(
             "/api/file-manager/disks/{slot}/directory-branches",
-            post(directory_branches),
+            post(http_disk_directory::create),
         )
         .route(
             "/api/file-manager/disks/{slot}/directory-select",
-            post(directory_select),
+            post(http_disk_directory::select),
         )
         .route("/api/file-manager/files/{file}/history", get(file_history))
         .route("/api/file-manager/files/{file}/branches", post(branch))
@@ -133,16 +133,6 @@ id_post_handler!(
 id_post_handler!(
     namespace_batch,
     crate::BackendAction::FileManagerNamespaceBatch,
-    "slot_id"
-);
-id_post_handler!(
-    directory_branches,
-    crate::BackendAction::FileManagerDirectoryBranches,
-    "slot_id"
-);
-id_post_handler!(
-    directory_select,
-    crate::BackendAction::FileManagerDirectorySelect,
     "slot_id"
 );
 id_post_handler!(branch, crate::BackendAction::FileManagerBranch, "file_id");

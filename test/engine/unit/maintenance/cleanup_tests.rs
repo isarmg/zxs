@@ -42,7 +42,7 @@ fn fixture() -> (
     .unwrap();
     let repo = engine
         .create_repository(
-            "cleanup",
+            &storage_contract::RepositoryName::parse("cleanup").unwrap(),
             "P01",
             3,
             "admin",

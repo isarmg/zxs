@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 
 
@@ -69,7 +70,19 @@ class SuiteCoverageTests(unittest.TestCase):
             "check", "--locked", "--offline", "-p", "storage-engine",
             "-p", "storage-server", "-p", "storage-rescue",
         ]})
-        self.assertEqual(calls[2], {"tool": "cargo", "args": ["test", "--locked", "--offline"]})
+        self.assertEqual(calls[2], {"tool": "cargo", "args": [
+            "check", "--locked", "--offline", "-p", "storage-server",
+            "--no-default-features", "--all-targets",
+        ]})
+        self.assertEqual(calls[3], {"tool": "cargo", "args": ["test", "--locked", "--offline"]})
+
+    def test_server_engine_integration_targets_declare_core_admission(self):
+        root = Path(__file__).resolve().parents[2]
+        manifest = tomllib.loads((root / "src/server/Cargo.toml").read_text())
+        tests = {target["name"]: target for target in manifest["test"]}
+        for name in ("http_engine", "login_admission", "telemetry_status", "service_startup"):
+            with self.subTest(target=name):
+                self.assertEqual(tests[name]["required-features"], ["core"])
 
     def test_build_tools_keep_log_filter_and_formatter_regressions(self):
         calls = self.suite("build-tools")

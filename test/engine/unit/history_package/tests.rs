@@ -11,7 +11,7 @@ fn retained_policy_manifests_require_bindings_and_unique_current_scopes() {
     let mut engine = initialize(temp.path());
     let repo = engine
         .create_repository(
-            "retained policies",
+            &storage_contract::RepositoryName::parse("retained policies").unwrap(),
             "P01",
             2,
             "alice",
@@ -110,7 +110,7 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
         let mut engine = initialize(&temp.path().join("source"));
         let repo = engine
             .create_repository(
-                "empty backup scope",
+                &storage_contract::RepositoryName::parse("empty backup scope").unwrap(),
                 "P01",
                 1,
                 "alice",
@@ -241,7 +241,7 @@ fn restore_backup_prefixes_preserve_evidenced_positions_and_reject_identity_coll
         let mut engine = initialize(&temp.path().join("source"));
         let repo = engine
             .create_repository(
-                "prefix positions",
+                &storage_contract::RepositoryName::parse("prefix positions").unwrap(),
                 "P01",
                 source_copies,
                 "alice",
@@ -331,7 +331,7 @@ fn paged_pending_recovery_repairs_leaf_index_and_root_and_checkpoint_checks_them
         let mut engine = initialize(&source);
         let repo = engine
             .create_repository(
-                "history",
+                &storage_contract::RepositoryName::parse("history").unwrap(),
                 "P01",
                 3,
                 "alice",
@@ -406,7 +406,7 @@ fn paged_history_resolves_disjoint_replicas_without_read_repair() {
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
         .create_repository(
-            "history",
+            &storage_contract::RepositoryName::parse("history").unwrap(),
             "P01",
             3,
             "alice",
@@ -467,7 +467,13 @@ fn admitted_snapshot_binding_rejects_rehashed_different_and_invalid_histories() 
     let temp = tempfile::tempdir().unwrap();
     let mut engine = initialize(temp.path());
     let repo = engine
-        .create_repository("admission", "P01", 3, "alice", OperationId::generate())
+        .create_repository(
+            &storage_contract::RepositoryName::parse("admission").unwrap(),
+            "P01",
+            3,
+            "alice",
+            OperationId::generate(),
+        )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"body");
     let members = engine.members();
@@ -526,7 +532,13 @@ fn offline_package_authenticates_raw_leaf_before_graph_admission() {
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
-        .create_repository("raw boundary", "P01", 3, "alice", OperationId::generate())
+        .create_repository(
+            &storage_contract::RepositoryName::parse("raw boundary").unwrap(),
+            "P01",
+            3,
+            "alice",
+            OperationId::generate(),
+        )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"body");
     let package = temp.path().join("package");
@@ -569,7 +581,7 @@ fn paged_package_missing_leaf_and_flat_proof_substitution_fail_closed() {
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
         .create_repository(
-            "history",
+            &storage_contract::RepositoryName::parse("history").unwrap(),
             "P01",
             3,
             "alice",
@@ -646,7 +658,7 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
         .create_repository(
-            "嵌套恢复",
+            &storage_contract::RepositoryName::parse("嵌套恢复").unwrap(),
             "P01",
             3,
             "alice",
@@ -678,7 +690,7 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
     engine
         .initialize_directory_scope(
             &repo.repository_id,
-            "folder/nested",
+            Some(&name_policy::LookupPath::parse("folder/nested").unwrap()),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -686,8 +698,8 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
     let created = engine
         .create_directory_branches(
             &repo.repository_id,
-            "folder",
-            "draft",
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("draft").unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -707,8 +719,8 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
     engine
         .select_directory_branches(
             &repo.repository_id,
-            "folder",
-            "draft",
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("draft").unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -776,7 +788,7 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
     assert!(
         visible
             .iter()
-            .any(|branch| branch["directory_branch_id"] == id)
+            .any(|branch| branch.directory_branch_id == id)
     );
     let package = temp.path().join("package");
     engine
@@ -829,7 +841,7 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
             .directory_branches(&repo.repository_id, "renamed")
             .unwrap()
             .iter()
-            .any(|branch| branch["directory_branch_id"] == id)
+            .any(|branch| branch.directory_branch_id == id)
     );
     assert!(restored.open_content(&frozen.version_id).is_ok());
 }
@@ -873,8 +885,13 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
         engine
             .create_directory_branches(
                 &repo.repository_id,
-                path,
-                name,
+                (if (path).is_empty() {
+                    None
+                } else {
+                    Some(name_policy::LookupPath::parse(path).unwrap())
+                })
+                .as_ref(),
+                &storage_contract::BranchName::parse(name).unwrap(),
                 "alice",
                 storage_contract::OperationId::generate(),
             )
@@ -890,8 +907,8 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
     engine
         .select_directory_branches(
             &repo.repository_id,
-            "a",
-            "m",
+            Some(&name_policy::LookupPath::parse("a").unwrap()),
+            &storage_contract::BranchName::parse("m").unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -899,8 +916,8 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
     engine
         .select_directory_branches(
             &repo.repository_id,
-            "b",
-            "l",
+            Some(&name_policy::LookupPath::parse("b").unwrap()),
+            &storage_contract::BranchName::parse("l").unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -939,8 +956,8 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
     engine
         .select_directory_branches(
             &repo.repository_id,
-            "a",
-            "n",
+            Some(&name_policy::LookupPath::parse("a").unwrap()),
+            &storage_contract::BranchName::parse("n").unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -1240,7 +1257,7 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
         .create_repository(
-            "组合恢复",
+            &storage_contract::RepositoryName::parse("组合恢复").unwrap(),
             "P01",
             3,
             "alice",
@@ -1581,7 +1598,7 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
         .create_repository(
-            "引用恢复",
+            &storage_contract::RepositoryName::parse("引用恢复").unwrap(),
             "P01",
             3,
             "alice",
@@ -1760,7 +1777,7 @@ fn inherited_metadata_replays_after_decision_without_preparing_payloads_or_stubs
         let mut engine = initialize(&root);
         let repo = engine
             .create_repository(
-                "回放",
+                &storage_contract::RepositoryName::parse("回放").unwrap(),
                 "P01",
                 3,
                 "alice",
@@ -1773,7 +1790,12 @@ fn inherited_metadata_replays_after_decision_without_preparing_payloads_or_stubs
         engine.inject_fault_once(point);
         assert_eq!(
             engine
-                .create_branch(&source_commit, "pending", "alice", operation)
+                .create_branch(
+                    &source_commit,
+                    &storage_contract::BranchName::parse("pending").unwrap(),
+                    "alice",
+                    operation
+                )
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::InDoubt
@@ -1782,7 +1804,12 @@ fn inherited_metadata_replays_after_decision_without_preparing_payloads_or_stubs
         drop(engine);
         let mut engine = Engine::open(&root.join("state")).unwrap();
         let branch = engine
-            .create_branch(&source_commit, "pending", "alice", operation)
+            .create_branch(
+                &source_commit,
+                &storage_contract::BranchName::parse("pending").unwrap(),
+                "alice",
+                operation,
+            )
             .unwrap();
         assert_eq!(engine.state.versions.len(), 1);
         assert_eq!(branch.pending_file_versions[&file.file_id], file.version_id);
@@ -1835,7 +1862,7 @@ fn split_package_restores_full_history_after_all_original_paths_are_removed() {
     let mut engine = initialize(&source);
     let repository = engine
         .create_repository(
-            "来源",
+            &storage_contract::RepositoryName::parse("来源").unwrap(),
             "P01",
             3,
             "alice",
@@ -2036,7 +2063,7 @@ fn tombstoned_storage_identity_is_validated_before_restore_decision() {
     let mut source = initialize(&temp.path().join("source"));
     let repo = source
         .create_repository(
-            "retained identity",
+            &storage_contract::RepositoryName::parse("retained identity").unwrap(),
             "P01",
             3,
             "alice",
@@ -2150,7 +2177,7 @@ fn package_preserves_purge_and_rejects_missing_bytes_or_unpublished_manifest() {
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
         .create_repository(
-            "历史",
+            &storage_contract::RepositoryName::parse("历史").unwrap(),
             "P01",
             3,
             "alice",
@@ -2224,7 +2251,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
         .create_repository(
-            "metadata recovery",
+            &storage_contract::RepositoryName::parse("metadata recovery").unwrap(),
             "P01",
             1,
             "alice",
@@ -2235,7 +2262,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
     engine
         .initialize_directory_scope(
             &repo.repository_id,
-            "",
+            None,
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -2462,7 +2489,7 @@ fn history_notes_use_the_current_write_format_without_legacy_limits() {
     let mut engine = initialize(temporary.path());
     let repo = engine
         .create_repository(
-            "notes",
+            &storage_contract::RepositoryName::parse("notes").unwrap(),
             "P01",
             3,
             "alice",
@@ -2514,7 +2541,7 @@ fn commit_namespace_envelope_rejects_malformed_entries() {
     let mut engine = initialize(temporary.path());
     let repo = engine
         .create_repository(
-            "namespace envelope",
+            &storage_contract::RepositoryName::parse("namespace envelope").unwrap(),
             "P01",
             3,
             "alice",
@@ -2606,7 +2633,7 @@ fn history_branch_names_match_the_current_128_byte_write_limit() {
     let mut engine = initialize(temporary.path());
     let repo = engine
         .create_repository(
-            "branch name limits",
+            &storage_contract::RepositoryName::parse("branch name limits").unwrap(),
             "P01",
             3,
             "alice",
@@ -2621,7 +2648,7 @@ fn history_branch_names_match_the_current_128_byte_write_limit() {
     let branch = engine
         .create_branch(
             &root,
-            &name,
+            &storage_contract::BranchName::parse(&name).unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -2629,8 +2656,8 @@ fn history_branch_names_match_the_current_128_byte_write_limit() {
     let directory = engine
         .create_directory_branches(
             &repo.repository_id,
-            "",
-            &name,
+            None,
+            &storage_contract::BranchName::parse(&name).unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -2667,7 +2694,7 @@ fn namespace_deletion_facts_validate_without_snapshot_or_content_dependencies() 
     let mut engine = initialize(temp.path());
     let repo = engine
         .create_repository(
-            "deletion facts",
+            &storage_contract::RepositoryName::parse("deletion facts").unwrap(),
             "P01",
             1,
             "alice",
@@ -2740,7 +2767,7 @@ fn namespace_deletions_survive_export_restore_and_replay_without_operation_recor
     let mut engine = initialize(temp.path());
     let repo = engine
         .create_repository(
-            "deleted namespace",
+            &storage_contract::RepositoryName::parse("deleted namespace").unwrap(),
             "P01",
             1,
             "alice",
@@ -2831,7 +2858,7 @@ fn failed_workspace_namespace_sequence_does_not_publish_deletion_facts() {
     let mut engine = initialize(temp.path());
     let repo = engine
         .create_repository(
-            "failed deletion",
+            &storage_contract::RepositoryName::parse("failed deletion").unwrap(),
             "P01",
             1,
             "alice",
@@ -2887,7 +2914,7 @@ fn net_zero_namespace_sequence_persists_deletion_once() {
     let mut engine = initialize(temp.path());
     let repo = engine
         .create_repository(
-            "temporary namespace",
+            &storage_contract::RepositoryName::parse("temporary namespace").unwrap(),
             "P01",
             1,
             "alice",
@@ -2942,7 +2969,7 @@ fn manifest_record_projection_is_scoped_shared_and_mutation_isolated() {
     let mut engine = initialize(temporary.path());
     let first = engine
         .create_repository(
-            "first",
+            &storage_contract::RepositoryName::parse("first").unwrap(),
             "P01",
             1,
             "alice",
@@ -2951,7 +2978,7 @@ fn manifest_record_projection_is_scoped_shared_and_mutation_isolated() {
         .unwrap();
     let second = engine
         .create_repository(
-            "second",
+            &storage_contract::RepositoryName::parse("second").unwrap(),
             "P01",
             1,
             "alice",
@@ -2968,7 +2995,7 @@ fn manifest_record_projection_is_scoped_shared_and_mutation_isolated() {
         engine
             .initialize_directory_scope(
                 &repo.repository_id,
-                "folder",
+                Some(&name_policy::LookupPath::parse("folder").unwrap()),
                 "alice",
                 storage_contract::OperationId::generate(),
             )
@@ -3081,7 +3108,7 @@ fn manifest_content_state_coverage_rejects_equal_length_wrong_version_keys() {
     let mut engine = initialize(temp.path());
     let repo = engine
         .create_repository(
-            "state coverage",
+            &storage_contract::RepositoryName::parse("state coverage").unwrap(),
             "P01",
             1,
             "alice",
@@ -3106,7 +3133,7 @@ fn failed_export_cleans_staging_without_overwriting_the_destination() {
     let mut engine = initialize(temp.path());
     let repo = engine
         .create_repository(
-            "export cleanup",
+            &storage_contract::RepositoryName::parse("export cleanup").unwrap(),
             "P01",
             1,
             "alice",
@@ -3142,7 +3169,7 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
         .create_repository(
-            "merge sources",
+            &storage_contract::RepositoryName::parse("merge sources").unwrap(),
             "P01",
             1,
             "alice",

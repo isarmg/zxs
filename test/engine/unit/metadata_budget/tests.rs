@@ -9,7 +9,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(
-            "容量边界",
+            &storage_contract::RepositoryName::parse("容量边界").unwrap(),
             "P01",
             3,
             "alice",

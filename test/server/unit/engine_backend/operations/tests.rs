@@ -29,7 +29,7 @@ fn fixture() -> (
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
-            "Operation",
+            &storage_contract::RepositoryName::parse("Operation").unwrap(),
             "P01",
             3,
             "owner",
@@ -103,7 +103,13 @@ fn unauthorized_operations_never_start_payload_observation() {
         .engine
         .lock()
         .unwrap()
-        .create_repository("Foreign receipt", "P01", 3, "other", foreign_operation)
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Foreign receipt").unwrap(),
+            "P01",
+            3,
+            "other",
+            foreign_operation,
+        )
         .unwrap();
     assert_eq!(
         backend
@@ -273,7 +279,13 @@ fn pending_owner_discovery_failure_is_not_a_missing_operation_response() {
         engine.inject_fault_once("after_accept_1");
         assert!(
             engine
-                .create_repository("pending-owner", "P01", 3, &identity.principal, operation)
+                .create_repository(
+                    &storage_contract::RepositoryName::parse("pending-owner").unwrap(),
+                    "P01",
+                    3,
+                    &identity.principal,
+                    operation
+                )
                 .is_err()
         );
         for disk in &engine.config().disks {

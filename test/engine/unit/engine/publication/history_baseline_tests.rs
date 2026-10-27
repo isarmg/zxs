@@ -9,7 +9,7 @@ fn engine(root: &std::path::Path) -> Engine {
     .unwrap();
     engine
         .create_repository(
-            "first",
+            &storage_contract::RepositoryName::parse("first").unwrap(),
             "P01",
             1,
             "alice",

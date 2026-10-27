@@ -291,18 +291,18 @@ impl Session {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "core"))]
 thread_local! {
     static FAIL_NEXT_RECORD_SYNC: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "core"))]
 pub(super) fn fail_next_record_sync(directory: bool) {
     FAIL_NEXT_RECORD_SYNC.set(Some(directory));
 }
 
 fn sync_namespace_record(file: &File, _directory: bool) -> Result<(), ApiError> {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "core"))]
     if FAIL_NEXT_RECORD_SYNC.get() == Some(_directory) {
         FAIL_NEXT_RECORD_SYNC.set(None);
         return Err(ApiError::io(io::Error::other(

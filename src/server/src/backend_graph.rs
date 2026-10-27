@@ -128,7 +128,7 @@ impl From<Branch> for BranchRecord {
 }
 
 #[derive(Serialize)]
-struct MergeLinkRecord {
+pub(crate) struct MergeLinkRecord {
     merge_link_id: String,
     history_tree_id: String,
     source_branch_id: String,

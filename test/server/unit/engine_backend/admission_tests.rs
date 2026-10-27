@@ -231,7 +231,7 @@ fn backend_fixture() -> (
     let (root, mut holder) = fixture();
     let repo = holder
         .create_repository(
-            "ReadFixture",
+            &storage_contract::RepositoryName::parse("ReadFixture").unwrap(),
             "P01",
             3,
             "owner",

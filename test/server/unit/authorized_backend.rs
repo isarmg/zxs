@@ -436,6 +436,136 @@ impl Backend for RecordingBackend {
             issues: vec!["diagnostic".into()],
         })
     }
+    fn create_merge_link(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateMergeLink,
+    ) -> Result<storage_contract::MergeLink, crate::ApiError> {
+        self.record("create_merge_link",Some(identity),json!({"history_tree_id":request.history_tree_id,"source_branch_id":request.source_branch_id,"source_commit_id":request.source_commit_id,"target_branch_id":request.target_branch_id,"target_commit_id":request.target_commit_id,"operation_id":request.operation_id}))?;
+        Ok(recorded_merge_link(request.operation_id))
+    }
+    fn create_repository(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateRepository,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        self.record("create_repository",Some(identity),json!({"name":request.name.as_str(),"key":request.name.key(),"primary_slot_id":request.primary_slot_id,"target_copies":request.target_copies,"operation_id":request.operation_id}))?;
+        Ok(recorded_repository("created"))
+    }
+    fn create_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateBranch,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.record("create_branch",Some(identity),json!({"repository_id":request.repository_id,"source_commit_id":request.source_commit_id,"name":request.name.as_str(),"key":request.name.key(),"operation_id":request.operation_id}))?;
+        Ok(recorded_branch())
+    }
+    fn mutate_disk_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::MutateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record(
+            "mutate_disk_directory",
+            Some(identity),
+            json!({"slot_id":request.slot_id,"path":request.path.as_ref().map_or("",name_policy::LookupPath::as_str),"operation_id":request.operation_id,"name":request.name.as_str(),"action":format!("{:?}",request.action)}),
+        )?;
+        Ok(recorded_operation(
+            request.operation_id,
+            "mutate_disk_directory",
+        ))
+    }
+    fn initialize_directory_scope(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::InitializeDirectoryScope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record(
+            "initialize_directory_scope",
+            Some(identity),
+            json!({"repository_id":request.repository_id,"path":request.path.as_ref().map_or("",name_policy::LookupPath::as_str),"operation_id":request.operation_id}),
+        )?;
+        Ok(recorded_operation(
+            request.operation_id,
+            "initialize_directory_scope",
+        ))
+    }
+    fn archive_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ArchiveBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record(
+            "archive_branch",
+            Some(identity),
+            json!({"branch_id":request.branch_id,"operation_id":request.operation_id}),
+        )?;
+        Ok(recorded_operation(request.operation_id, "archive_branch"))
+    }
+    fn rename_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::RenameDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record("rename_directory_branch",Some(identity),json!({"repository_id":request.repository_id,"directory_branch_id":request.directory_branch_id,"name":request.name.as_str(),"key":request.name.key(),"operation_id":request.operation_id}))?;
+        Ok(recorded_operation(
+            request.operation_id,
+            "rename_directory_branch",
+        ))
+    }
+    fn select_default_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::SelectDefaultDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record("select_default_directory_branch",Some(identity),json!({"repository_id":request.repository_id,"directory_branch_id":request.directory_branch_id,"operation_id":request.operation_id}))?;
+        Ok(recorded_operation(
+            request.operation_id,
+            "select_default_directory_branch",
+        ))
+    }
+    fn directory_selection(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectorySelection,
+    ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
+        self.record("directory_selection",Some(identity),json!({"repository_id":request.repository_id(),"key":request.scope().map(name_policy::LookupPath::key),"sources":request.sources().len(),"entries":request.entries().len()}))?;
+        Ok(crate::DirectorySelectionSnapshot {
+            repository_id: request.repository_id().into(),
+            branches: vec![],
+        })
+    }
+    fn directory_scopes(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectoryScopes<'_>,
+    ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
+        self.record("directory_scopes",Some(identity),json!({"repository_id":request.repository_id,"key":request.filter.key(),"summary":matches!(request.projection,crate::DirectoryBranchProjection::Summary)}))?;
+        Ok(crate::DirectoryScopesSnapshot {
+            repository_id: request.repository_id.into(),
+            branches: crate::DirectoryScopeRows::Summary(vec![]),
+        })
+    }
+    fn default_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        repository_id: &str,
+    ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
+        self.record(
+            "default_directory_branch",
+            Some(identity),
+            json!({"repository_id":repository_id}),
+        )?;
+        Ok(crate::DefaultDirectoryBranchSnapshot {
+            repository_id: repository_id.into(),
+            namespace_branch_id: "namespace".into(),
+            selected: Some(crate::SelectedDirectoryBranch {
+                directory_branch_id: "directory".into(),
+                name: "selected".into(),
+            }),
+            directory_branches: vec![],
+        })
+    }
     fn file_history(
         &self,
         identity: &crate::auth::Identity,
@@ -1060,6 +1190,97 @@ impl Fixture {
                     json!({"returned_by":"integrity_check"})
                 }),
             ),
+            ("create_merge_link", {
+                backend.create_merge_link(identity,crate::CreateMergeLink {history_tree_id:"history".into(),source_branch_id:"source_branch".into(),source_commit_id:"source_commit".into(),target_branch_id:"target_branch".into(),target_commit_id:"target_commit".into(),operation_id}).map(|result| {assert_eq!(result,recorded_merge_link(operation_id));json!({"returned_by":"create_merge_link"})})
+            }),
+            ("create_repository", {
+                backend.create_repository(identity,crate::CreateRepository {name:storage_contract::RepositoryName::parse("Café").unwrap(),primary_slot_id:"P01".into(),target_copies:3,operation_id}).map(|result| {assert_eq!(result,recorded_repository("created"));json!({"returned_by":"create_repository"})})
+            }),
+            ("create_branch", {
+                backend.create_branch(identity,crate::CreateBranch {repository_id:"repository".into(),source_commit_id:"source".into(),name:storage_contract::BranchName::parse("Café").unwrap(),operation_id}).map(|result| {
+                    assert_eq!(result.branch_id,"branch"); assert_eq!(result.generation,u64::MAX);
+                    json!({"returned_by":"create_branch"})
+                })
+            }),
+            ("mutate_disk_directory", {
+                backend.mutate_disk_directory(identity,crate::MutateDiskDirectory {slot_id:"P01".into(),path:Some(name_policy::LookupPath::parse("Café").unwrap()),name:storage_contract::BranchName::parse("Side").unwrap(),operation_id,action:crate::DiskDirectoryAction::Create}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"mutate_disk_directory"));json!({"returned_by":"mutate_disk_directory"})})
+            }),
+            ("mutate_disk_directory", {
+                backend.mutate_disk_directory(identity,crate::MutateDiskDirectory {slot_id:"P01".into(),path:Some(name_policy::LookupPath::parse("Café").unwrap()),name:storage_contract::BranchName::parse("Side").unwrap(),operation_id,action:crate::DiskDirectoryAction::Select}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"mutate_disk_directory"));json!({"returned_by":"mutate_disk_directory"})})
+            }),
+            ("initialize_directory_scope", {
+                backend.initialize_directory_scope(identity,crate::InitializeDirectoryScope {repository_id:"repository".into(),path:Some(name_policy::LookupPath::parse("Café").unwrap()),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"initialize_directory_scope"));json!({"returned_by":"initialize_directory_scope"})})
+            }),
+            ("archive_branch", {
+                let request = crate::ArchiveBranch {branch_id:"branch".into(),operation_id};
+                backend.archive_branch(identity,request).map(|result| {
+                    assert_eq!(result,recorded_operation(operation_id,"archive_branch"));
+                    json!({"returned_by":"archive_branch"})
+                })
+            }),
+            ("rename_directory_branch", {
+                let request = crate::RenameDirectoryBranch {
+                    repository_id: "repository".into(),
+                    directory_branch_id: "directory".into(),
+                    name: storage_contract::BranchName::parse("Café").unwrap(),
+                    operation_id,
+                };
+                backend.rename_directory_branch(identity, request).map(|result| {
+                    assert_eq!(result, recorded_operation(operation_id, "rename_directory_branch"));
+                    json!({"returned_by":"rename_directory_branch"})
+                })
+            }),
+            (
+                "select_default_directory_branch",
+                backend
+                    .select_default_directory_branch(
+                        identity,
+                        crate::SelectDefaultDirectoryBranch {
+                            repository_id: "repository".into(),
+                            directory_branch_id: "directory".into(),
+                            operation_id,
+                        },
+                    )
+                    .map(|result| {
+                        assert_eq!(
+                            result,
+                            recorded_operation(operation_id, "select_default_directory_branch")
+                        );
+                        json!({"returned_by":"select_default_directory_branch"})
+                    }),
+            ),
+            ("directory_selection", {
+                let request = crate::ReadDirectorySelection::parse(
+                    "repository".into(),
+                    "Folder",
+                    vec![crate::DirectorySelectionSourceInput {
+                        directory_branch_id: "directory".into(),
+                        expected_tree_id: "tree".into(),
+                    }],
+                    vec![crate::DirectorySelectionEntryInput {
+                        entry_id: "entry".into(),
+                        path: "Folder/File.txt".into(),
+                    }],
+                ).unwrap();
+                backend.directory_selection(identity, request).map(|snapshot| {
+                    assert_eq!(snapshot.repository_id, "repository");
+                    assert!(snapshot.branches.is_empty());
+                    json!({"returned_by":"directory_selection"})
+                })
+            }),
+            ("directory_scopes",backend.directory_scopes(identity,crate::ReadDirectoryScopes {repository_id:"repository",filter:&crate::DirectoryBranchFilter::Directory(name_policy::LookupPath::parse("Folder").unwrap()),projection:crate::DirectoryBranchProjection::Summary}).map(|snapshot|{assert_eq!(snapshot.repository_id,"repository");assert!(matches!(snapshot.branches,crate::DirectoryScopeRows::Summary(rows) if rows.is_empty()));json!({"returned_by":"directory_scopes"})})),
+            (
+                "default_directory_branch",
+                backend
+                    .default_directory_branch(identity, "repository")
+                    .map(|snapshot| {
+                        assert_eq!(snapshot.repository_id, "repository");
+                        assert_eq!(snapshot.namespace_branch_id, "namespace");
+                        assert_eq!(snapshot.selected.unwrap().name, "selected");
+                        assert!(snapshot.directory_branches.is_empty());
+                        json!({"returned_by":"default_directory_branch"})
+                    }),
+            ),
             (
                 "file_history",
                 backend.file_history(identity, "file").map(|versions| {
@@ -1282,7 +1503,7 @@ impl Fixture {
             ),
             (
                 "call",
-                backend.call(BackendAction::Archive, identity, json!({"probe": 7})),
+                backend.call(BackendAction::Plan, identity, json!({"probe": 7})),
             ),
             (
                 "upload",
@@ -1418,6 +1639,18 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"left_commit_id":"left","right_commit_id":"right"}),
         Value::Null,
         Value::Null,
+        json!({"history_tree_id":"history","source_branch_id":"source_branch","source_commit_id":"source_commit","target_branch_id":"target_branch","target_commit_id":"target_commit","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"name":"Café","key":"café","primary_slot_id":"P01","target_copies":3,"operation_id":"op_00000000000000000000000000000000"}),
+        json!({"repository_id":"repository","source_commit_id":"source","name":"Café","key":"café","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"slot_id":"P01","path":"Café","name":"Side","action":"Create","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"slot_id":"P01","path":"Café","name":"Side","action":"Select","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"repository_id":"repository","path":"Café","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"branch_id":"branch","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"repository_id":"repository","directory_branch_id":"directory","name":"Café","key":"café","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"repository_id":"repository","directory_branch_id":"directory","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"repository_id":"repository","key":"folder","sources":1,"entries":1}),
+        json!({"repository_id":"repository","key":"folder","summary":true}),
+        json!({"repository_id":"repository"}),
         json!({"file_id":"file"}),
         Value::Null,
         json!({"version_id":"version"}),
@@ -1439,7 +1672,7 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"branch":"branch","entry_id":"branch"}),
         json!({"branch":"branch","path":"File.txt","key":"file.txt"}),
         json!({"branch":"branch","commit":"commit","path":"File.txt","key":"file.txt"}),
-        json!({"action": format!("{:?}", BackendAction::Archive), "input": {"probe": 7}}),
+        json!({"action": format!("{:?}", BackendAction::Plan), "input": {"probe": 7}}),
         upload,
         generation,
         json!({"version": "version-content"}),
@@ -1753,5 +1986,18 @@ fn recorded_placement_rule(id: &str) -> storage_contract::PlacementRule {
         path_prefix: "".into(),
         primary_slot_id: "P01".into(),
         generation: 17,
+    }
+}
+
+fn recorded_merge_link(operation_id: storage_contract::OperationId) -> storage_contract::MergeLink {
+    storage_contract::MergeLink {
+        merge_link_id: "link".into(),
+        history_tree_id: "history".into(),
+        source_branch_id: "source_branch".into(),
+        source_commit_id: "source_commit".into(),
+        target_branch_id: "target_branch".into(),
+        target_commit_id: "target_commit".into(),
+        author: "author".into(),
+        operation_id,
     }
 }

@@ -236,7 +236,7 @@ fn workspace_commit_exposes_corrupted_admitted_source() {
     .unwrap();
     let repo = engine
         .create_repository(
-            "Draft",
+            &storage_contract::RepositoryName::parse("Draft").unwrap(),
             "P01",
             1,
             "admin",

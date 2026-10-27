@@ -113,7 +113,7 @@ impl Engine {
     }
     pub fn create_repository(
         &mut self,
-        name: &str,
+        name: &storage_contract::RepositoryName,
         primary: &str,
         copies: u32,
         principal: &str,
@@ -142,7 +142,7 @@ impl Engine {
             return Ok(repo.clone());
         }
         self.create_repository_kind(
-            &format!("ZXS disk {primary}"),
+            &storage_contract::RepositoryName::parse(&format!("ZXS disk {primary}"))?,
             &primary,
             // A disk root needs only its own primary. Additional copies are
             // an explicit protection policy, not a prerequisite for using it.
@@ -154,16 +154,16 @@ impl Engine {
     }
     fn create_repository_kind(
         &mut self,
-        name: &str,
+        name: &storage_contract::RepositoryName,
         primary: &str,
         copies: u32,
         principal: &str,
         operation: OperationId,
         file_manager_root: bool,
     ) -> Result<Repository> {
-        name_policy::validate_name(name)?;
         self.route(primary, copies)?;
-        let mut input = json!({"name":name,"primary_slot_id":primary,"target_copies":copies});
+        let mut input =
+            json!({"name":name.as_str(),"primary_slot_id":primary,"target_copies":copies});
         if file_manager_root {
             input["file_manager_root"] = json!(true);
         }
@@ -176,7 +176,7 @@ impl Engine {
                 if state
                     .repositories
                     .values()
-                    .any(|r| name_policy::lookup_key(&r.name) == name_policy::lookup_key(name))
+                    .any(|r| name_policy::lookup_key(&r.name) == name.key())
                 {
                     return Err(Error::new(
                         storage_contract::ErrorCode::NameCollision,
@@ -192,7 +192,7 @@ impl Engine {
                     smb_enabled: true,
                     smb_binding_generation: 1,
                     file_manager_root,
-                    name: name.into(),
+                    name: name.as_str().into(),
                     history_tree_id: history_id.clone(),
                     main_branch_id: branch_id.clone(),
                     primary_slot_id: engine.disk(primary)?.slot_id.clone(),

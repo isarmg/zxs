@@ -10,7 +10,7 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
     .unwrap();
     let repo = engine
         .create_repository(
-            "Branch replay",
+            &storage_contract::RepositoryName::parse("Branch replay").unwrap(),
             "P01",
             1,
             "admin",
@@ -22,7 +22,12 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
         .clone();
     let operation = storage_contract::OperationId::generate();
     let original = engine
-        .create_branch(&source, "side", "admin", operation)
+        .create_branch(
+            &source,
+            &storage_contract::BranchName::parse("side").unwrap(),
+            "admin",
+            operation,
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&original.branch_id, "admin")
@@ -57,14 +62,24 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
         let before = canonical_json(engine.state()).unwrap();
         assert_eq!(
             engine
-                .create_branch(&source, "side", "admin", operation)
+                .create_branch(
+                    &source,
+                    &storage_contract::BranchName::parse("side").unwrap(),
+                    "admin",
+                    operation
+                )
                 .unwrap(),
             original
         );
         for (name, principal) in [("different", "admin"), ("side", "other")] {
             assert_eq!(
                 engine
-                    .create_branch(&source, name, principal, operation)
+                    .create_branch(
+                        &source,
+                        &storage_contract::BranchName::parse(name).unwrap(),
+                        principal,
+                        operation
+                    )
                     .unwrap_err()
                     .code(),
                 storage_contract::ErrorCode::IdempotencyKeyReused
@@ -89,7 +104,7 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
         .unwrap();
         let repo = engine
             .create_repository(
-                "Replay",
+                &storage_contract::RepositoryName::parse("Replay").unwrap(),
                 "P01",
                 3,
                 "admin",
@@ -121,7 +136,7 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
         let side = engine
             .create_branch(
                 if crossing { &root_commit } else { &cut },
-                "side",
+                &storage_contract::BranchName::parse("side").unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )

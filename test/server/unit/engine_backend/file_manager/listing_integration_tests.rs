@@ -12,7 +12,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
-            "Files",
+            &storage_contract::RepositoryName::parse("Files").unwrap(),
             "P01",
             3,
             "owner",
@@ -86,7 +86,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
     engine
         .initialize_directory_scope(
             &repo.repository_id,
-            "",
+            None,
             "owner",
             storage_contract::OperationId::generate(),
         )
@@ -105,43 +105,49 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
         .iter()
         .find(|entry| entry["name"] == "zeta.txt")
         .unwrap();
-    let request = json!({"repository_id":repo.repository_id,"path":"","sources":[{"directory_branch_id":branch["directory_branch_id"],"expected_tree_id":branch["head_tree_id"]}],"entries":[{"entry_id":chosen["entry_id"],"path":"zeta.txt"}]});
+    let selection = |head: String, path: &str| {
+        crate::ReadDirectorySelection::parse(
+            repo.repository_id.clone(),
+            "",
+            vec![crate::DirectorySelectionSourceInput {
+                directory_branch_id: branch["directory_branch_id"].as_str().unwrap().into(),
+                expected_tree_id: head,
+            }],
+            vec![crate::DirectorySelectionEntryInput {
+                entry_id: chosen["entry_id"].as_str().unwrap().into(),
+                path: path.into(),
+            }],
+        )
+    };
     let before = (engine.state().sequence, engine.state().operations.len());
-    let facts = scope_query::read(&engine, &request).unwrap();
-    assert_eq!(
-        facts["directory_branches"][0]["entries"],
-        json!([{"entry_id":chosen["entry_id"],"path":"zeta.txt","selected_path":"zeta.txt"}])
-    );
+    let request = selection(branch["head_tree_id"].as_str().unwrap().into(), "zeta.txt").unwrap();
+    let facts = crate::engine_backend::directory_selection::read(&engine, &request).unwrap();
+    let facts = &facts.branches[0].entries;
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].entry_id, chosen["entry_id"]);
+    assert_eq!(facts[0].path, "zeta.txt");
+    assert_eq!(facts[0].selected_path, "zeta.txt");
     assert_eq!(
         (engine.state().sequence, engine.state().operations.len()),
         before
     );
-    let mut stale = request.clone();
-    stale["sources"][0]["expected_tree_id"] = new_id("tree").into();
+    let stale = selection(new_id("tree"), "zeta.txt").unwrap();
     assert_eq!(
-        scope_query::read(&engine, &stale).unwrap_err().code,
+        crate::engine_backend::directory_selection::read(&engine, &stale)
+            .err()
+            .unwrap()
+            .code,
         storage_contract::ErrorCode::ListingChanged
     );
-    for path in [Value::Null, json!(12), json!([])] {
-        let mut malformed = request.clone();
-        malformed["path"] = path;
+    for path in ["../zeta.txt", "folder/child.txt"] {
         assert_eq!(
-            scope_query::read(&engine, &malformed).unwrap_err().status,
+            selection(branch["head_tree_id"].as_str().unwrap().into(), path)
+                .err()
+                .unwrap()
+                .status,
             http::StatusCode::BAD_REQUEST
         );
     }
-    let mut traversal = request.clone();
-    traversal["entries"][0]["path"] = "../zeta.txt".into();
-    assert_eq!(
-        scope_query::read(&engine, &traversal).unwrap_err().status,
-        http::StatusCode::BAD_REQUEST
-    );
-    let mut nested = request;
-    nested["entries"][0]["path"] = "folder/child.txt".into();
-    assert_eq!(
-        scope_query::read(&engine, &nested).unwrap_err().status,
-        http::StatusCode::BAD_REQUEST
-    );
 }
 
 #[test]
@@ -154,7 +160,7 @@ fn selected_display_path_may_include_a_repository_prefix_beyond_stored_path_limi
     .unwrap();
     let repo = engine
         .create_repository(
-            "Repository",
+            &storage_contract::RepositoryName::parse("Repository").unwrap(),
             "P01",
             1,
             "owner",

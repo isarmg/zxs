@@ -37,22 +37,6 @@ fn malformed_lazy_root_requests_do_not_publish_any_state() {
     let op = storage_engine::new_id("op");
     let cases = [
         (
-            FileManagerDirectoryBranches,
-            json!({"slot_id":"P01","path":"","operation_id":op}),
-        ),
-        (
-            FileManagerDirectoryBranches,
-            json!({"slot_id":"P01","path":"","name":"branch","operation_id":"bad"}),
-        ),
-        (
-            FileManagerDirectoryBranches,
-            json!({"slot_id":"P01","path":"","name":"x".repeat(129),"operation_id":op}),
-        ),
-        (
-            FileManagerDirectorySelect,
-            json!({"slot_id":"P01","path":"","name":null,"operation_id":op}),
-        ),
-        (
             FileManagerWriteSession,
             json!({"slot_id":"P01","path":"file.txt","branch_id":123}),
         ),
@@ -147,7 +131,7 @@ fn destructive_path_only_requests_never_mutate_or_create_a_disk_root() {
     }
     let repo = engine
         .create_repository(
-            "Existing",
+            &storage_contract::RepositoryName::parse("Existing").unwrap(),
             "P01",
             3,
             "owner",
@@ -192,10 +176,15 @@ fn destructive_path_only_requests_never_mutate_or_create_a_disk_root() {
 
 #[test]
 fn valid_creation_and_upload_still_create_the_lazy_root() {
-    for action in [
-        BackendAction::FileManagerNamespace,
-        BackendAction::FileManagerDirectoryBranches,
-        BackendAction::FileManagerWriteSession,
+    enum Creation {
+        Namespace,
+        DirectoryBranch,
+        Upload,
+    }
+    for creation in [
+        Creation::Namespace,
+        Creation::DirectoryBranch,
+        Creation::Upload,
     ] {
         let root = tempfile::tempdir().unwrap();
         let mut engine = Engine::initialize(
@@ -212,16 +201,23 @@ fn valid_creation_and_upload_still_create_the_lazy_root() {
             smb_binding: None,
             principal: "owner".into(),
         };
-        let input = match action {
-            BackendAction::FileManagerNamespace => {
-                json!({"slot_id":"P01","kind":"mkdir","path":"folder","operation_id":storage_engine::new_id("op")})
+        match creation {
+            Creation::Namespace => {
+                call(&mut engine,&identity,BackendAction::FileManagerNamespace,json!({"slot_id":"P01","kind":"mkdir","path":"folder","operation_id":storage_engine::new_id("op")})).unwrap();
             }
-            BackendAction::FileManagerDirectoryBranches => {
-                json!({"slot_id":"P01","path":"","name":"branch","operation_id":storage_engine::new_id("op")})
+            Creation::DirectoryBranch => {
+                directory_mutation(&mut engine,&identity,crate::DiskDirectoryAction::Create,json!({"slot_id":"P01","name":"branch","operation_id":storage_engine::new_id("op")})).unwrap();
             }
-            _ => json!({"slot_id":"P01","path":"file.txt"}),
-        };
-        call(&mut engine, &identity, action, input).unwrap();
+            Creation::Upload => {
+                call(
+                    &mut engine,
+                    &identity,
+                    BackendAction::FileManagerWriteSession,
+                    json!({"slot_id":"P01","path":"file.txt"}),
+                )
+                .unwrap();
+            }
+        }
         assert_eq!(engine.state().repositories.len(), 1);
         assert!(
             engine
@@ -255,14 +251,20 @@ fn baseline_name_and_used_operation_are_rejected_before_root_initialization() {
     };
     for name in ["main", "MAIN"] {
         let before = disk_files(&disks);
-        let error = call(&mut engine, &identity, BackendAction::FileManagerDirectoryBranches, json!({"slot_id":"P01","path":"","name":name,"operation_id":storage_engine::new_id("op")})).unwrap_err();
+        let error = directory_mutation(&mut engine, &identity, crate::DiskDirectoryAction::Create, json!({"slot_id":"P01","path":"","name":name,"operation_id":storage_engine::new_id("op")})).unwrap_err();
         assert_eq!(error.code, storage_contract::ErrorCode::NameCollision);
         assert_eq!(engine.state().sequence, 0);
         assert_eq!(disk_files(&disks), before);
     }
     let used = storage_contract::OperationId::generate();
     engine
-        .create_repository("Existing", "P01", 3, "owner", used)
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Existing").unwrap(),
+            "P01",
+            3,
+            "owner",
+            used,
+        )
         .unwrap();
     let before = json_codec::to_value(engine.state()).unwrap();
     let bytes = disk_files(&disks);
@@ -307,10 +309,8 @@ fn destination_scope_reads_disambiguate_reused_directory_paths_by_identity() {
         BackendAction::FileManagerNamespace,
         json!({"kind":"mkdir","path":"target"}),
     );
-    let frozen = mutate(
-        BackendAction::FileManagerDirectoryBranches,
-        json!({"path":"target","name":"frozen"}),
-    );
+    let frozen = directory_mutation(&mut engine, &identity, crate::DiskDirectoryAction::Create,
+        json!({"slot_id":"P01","path":"target","name":"frozen","operation_id":storage_engine::new_id("op")})).unwrap();
     let old_branch = frozen["result"]["directory_branch_id"]
         .as_str()
         .unwrap()
@@ -323,7 +323,7 @@ fn destination_scope_reads_disambiguate_reused_directory_paths_by_identity() {
         .unwrap()
         .repository_id
         .clone();
-    let root_scopes = directory_branch_scopes(&engine, &repo, Some("")).unwrap();
+    let root_scopes = scope_response(&engine, &repo, crate::DirectoryBranchFilter::Root).unwrap();
     let root_scope = root_scopes["directory_branches"]
         .as_array()
         .unwrap()
@@ -349,9 +349,9 @@ fn destination_scope_reads_disambiguate_reused_directory_paths_by_identity() {
     )
     .unwrap();
     call(&mut engine, &identity, BackendAction::FileManagerNamespace, json!({"slot_id":"P01","operation_id":storage_engine::new_id("op"),"kind":"mkdir","path":"target"})).unwrap();
-    let fresh = call(&mut engine, &identity, BackendAction::FileManagerDirectoryBranches, json!({"slot_id":"P01","operation_id":storage_engine::new_id("op"),"path":"target","name":"fresh"})).unwrap();
+    let fresh = directory_mutation(&mut engine, &identity, crate::DiskDirectoryAction::Create, json!({"slot_id":"P01","operation_id":storage_engine::new_id("op"),"path":"target","name":"fresh"})).unwrap();
     let fresh_branch = fresh["result"]["directory_branch_id"].as_str().unwrap();
-    let all = directory_branch_scopes(&engine, &repo, None).unwrap();
+    let all = scope_response(&engine, &repo, crate::DirectoryBranchFilter::All).unwrap();
     let cached_matches = all["directory_branches"]
         .as_array()
         .unwrap()
@@ -370,7 +370,12 @@ fn destination_scope_reads_disambiguate_reused_directory_paths_by_identity() {
     );
     let before = engine.state().sequence;
     for path in ["target", "TARGET"] {
-        let scoped = directory_branch_scopes(&engine, &repo, Some(path)).unwrap();
+        let scoped = scope_response(
+            &engine,
+            &repo,
+            crate::DirectoryBranchFilter::Directory(name_policy::LookupPath::parse(path).unwrap()),
+        )
+        .unwrap();
         let branches = scoped["directory_branches"].as_array().unwrap();
         assert!(
             branches
@@ -418,7 +423,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
             let create_named = |engine: &mut Engine| {
                 engine
                     .create_repository(
-                        named_name,
+                        &storage_contract::RepositoryName::parse(named_name).unwrap(),
                         "P01",
                         1,
                         "owner",
@@ -514,16 +519,24 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                     BackendAction::FileManagerWriteSession,
                     json!({"slot_id":"P01","path":format!("{root_name}/new-file.txt")}),
                 ),
-                (
-                    BackendAction::FileManagerDirectoryBranches,
-                    json!({"slot_id":"P01","path":root_name,"name":"new-branch","operation_id":storage_engine::new_id("op")}),
-                ),
-                (
-                    BackendAction::FileManagerDirectorySelect,
-                    json!({"slot_id":"P01","path":root_name,"name":"main","operation_id":storage_engine::new_id("op")}),
-                ),
             ] {
                 let failure = call(&mut engine, &identity, action, input).unwrap_err();
+                assert_eq!(
+                    (failure.status, failure.code),
+                    (
+                        ::http::StatusCode::CONFLICT,
+                        storage_contract::ErrorCode::NameCollision
+                    )
+                );
+                assert_eq!(engine.state(), &before);
+                assert_eq!(engine.workspace_capacity("owner"), capacity);
+                assert_eq!(disk_files(&disks), bytes);
+            }
+            for action in [
+                crate::DiskDirectoryAction::Create,
+                crate::DiskDirectoryAction::Select,
+            ] {
+                let failure = directory_mutation(&mut engine,&identity,action,json!({"slot_id":"P01","path":root_name,"name":"main","operation_id":storage_engine::new_id("op")})).unwrap_err();
                 assert_eq!(
                     (failure.status, failure.code),
                     (
@@ -587,4 +600,37 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
             }
         }
     }
+}
+
+fn scope_response(
+    engine: &Engine,
+    repository_id: &str,
+    filter: crate::DirectoryBranchFilter,
+) -> Result<Value, ApiError> {
+    let snapshot = crate::engine_backend::directory_scopes::capture(
+        engine,
+        crate::ReadDirectoryScopes {
+            repository_id,
+            filter: &filter,
+            projection: crate::DirectoryBranchProjection::Full,
+        },
+    )?;
+    Ok(json_codec::to_value(
+        crate::backend_directory_scopes::DirectoryScopesResponse::from(snapshot),
+    )
+    .unwrap())
+}
+
+fn directory_mutation(
+    engine: &mut Engine,
+    identity: &Identity,
+    action: crate::DiskDirectoryAction,
+    body: Value,
+) -> Result<Value, ApiError> {
+    mutate_directory(
+        engine,
+        identity,
+        crate::tests::disk_directory_request(body, action),
+    )
+    .and_then(operation_wire)
 }

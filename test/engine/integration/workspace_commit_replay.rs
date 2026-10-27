@@ -11,7 +11,7 @@ fn saved() -> (tempfile::TempDir, Engine, String, CommitRequest) {
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
-            "files",
+            &storage_contract::RepositoryName::parse("files").unwrap(),
             "P01",
             1,
             "admin",
@@ -652,7 +652,7 @@ fn historical_workspace_mirror_recovery_uses_published_plan() {
         let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
         let repo = engine
             .create_repository(
-                "history",
+                &storage_contract::RepositoryName::parse("history").unwrap(),
                 "P01",
                 1,
                 "admin",

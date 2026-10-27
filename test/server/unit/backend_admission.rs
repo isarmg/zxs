@@ -284,6 +284,94 @@ impl Backend for BackendProbe {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
+    fn create_merge_link(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateMergeLink,
+    ) -> Result<storage_contract::MergeLink, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn create_repository(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateRepository,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn create_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateBranch,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn mutate_disk_directory(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::MutateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn initialize_directory_scope(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::InitializeDirectoryScope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn archive_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ArchiveBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn rename_directory_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::RenameDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn select_default_directory_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::SelectDefaultDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn directory_selection(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadDirectorySelection,
+    ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn directory_scopes(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadDirectoryScopes<'_>,
+    ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn default_directory_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _repository_id: &str,
+    ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn file_history(
         &self,
         _identity: &crate::auth::Identity,
@@ -716,8 +804,28 @@ async fn workspace_request(app: Router, method: &str, path: &str) -> Response {
         json!({"repository_id":"repository","path_prefix":"Folder","target_copies":3,"expected_generation":"0","operation_id":"op_00000000000000000000000000000000"})
     } else if method == "PUT" && path.starts_with("/api/primary-placement-rules/") {
         json!({"repository_id":"repository","path_prefix":"Folder","primary_slot_id":"P01","expected_generation":"0","operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "PUT" && path.ends_with("/default-branch") {
+        json!({"directory_branch_id":"directory","operation_id":"op_00000000000000000000000000000000"})
     } else if method == "PUT" && path.ends_with("/smb-binding") {
         json!({"branch_id":"branch","enabled":false,"expected_history_generation":"1","operation_id":"op_00000000000000000000000000000000"})
+    } else if path.ends_with("/merge-links") {
+        json!({"source_branch_id":"source","source_commit_id":"source_commit","target_branch_id":"target","target_commit_id":"target_commit","operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "POST" && path == "/api/repositories" {
+        json!({"name":"Repository","primary_slot_id":"P01","target_copies":3,"operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "POST" && path.ends_with("/branches") {
+        json!({"source_commit_id":"source","name":"Side","operation_id":"op_00000000000000000000000000000000"})
+    } else if path.starts_with("/api/file-manager/disks/")
+        && (path.ends_with("/directory-branches") || path.ends_with("/directory-select"))
+    {
+        json!({"name":"Side","operation_id":"op_00000000000000000000000000000000"})
+    } else if path.ends_with("/directory-scopes") {
+        json!({"path":"","operation_id":"op_00000000000000000000000000000000"})
+    } else if path.ends_with("/archive") {
+        json!({"operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "PATCH" && path.contains("/directory-branches/") {
+        json!({"name":"renamed","operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "POST" && path.ends_with("/directory-branches") {
+        json!({"path":"","sources":[],"entries":[]})
     } else if path == "/api/compare" {
         json!({"left_commit_id":"left","right_commit_id":"right"})
     } else if path.ends_with("/resolve") {
@@ -750,11 +858,30 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
         ("GET", "/api/branches/branch/tree?commit_id=commit"),
         ("GET", "/api/repositories/repository"),
         ("GET", "/api/branches/branch"),
+        ("POST", "/api/file-manager/disks/P01/directory-branches"),
+        ("POST", "/api/file-manager/disks/P01/directory-select"),
+        ("POST", "/api/repositories/repo/directory-scopes"),
+        ("POST", "/api/branches/branch/archive"),
+        ("POST", "/api/repositories/repo/branches"),
+        ("POST", "/api/repositories"),
+        ("POST", "/api/history-trees/history/merge-links"),
         ("GET", "/api/commits/commit"),
         ("GET", "/api/history-trees/history/graph"),
         ("GET", "/api/events?after=17"),
         ("GET", "/api/backup-topologies/default"),
         ("GET", "/api/files/file/history"),
+        ("GET", "/api/repositories/repository/default-branch"),
+        ("GET", "/api/repositories/repository/directory-branches"),
+        ("POST", "/api/repositories/repository/directory-branches"),
+        (
+            "PATCH",
+            "/api/repositories/repository/directory-branches/directory",
+        ),
+        (
+            "GET",
+            "/api/repositories/repository/directory-branches?summary=true&path=",
+        ),
+        ("PUT", "/api/repositories/repository/default-branch"),
         ("GET", "/api/admin/disks"),
         ("GET", "/api/file-manager/disks"),
         ("GET", "/api/admin/check"),

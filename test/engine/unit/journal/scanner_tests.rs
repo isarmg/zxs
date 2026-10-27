@@ -277,7 +277,13 @@ fn typed_phases_survive_normal_publication_and_recovery() {
     .unwrap();
     let operation = storage_contract::OperationId::generate();
     engine
-        .create_repository("typed phases", "P01", 1, "alice", operation)
+        .create_repository(
+            &storage_contract::RepositoryName::parse("typed phases").unwrap(),
+            "P01",
+            1,
+            "alice",
+            operation,
+        )
         .unwrap();
     let result = engine.operation(operation).unwrap();
     for disk in engine.members() {

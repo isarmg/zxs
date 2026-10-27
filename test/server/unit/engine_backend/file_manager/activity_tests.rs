@@ -136,7 +136,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
     .unwrap();
     let repo = engine
         .create_repository(
-            "Audit",
+            &storage_contract::RepositoryName::parse("Audit").unwrap(),
             "P01",
             1,
             "owner",

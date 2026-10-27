@@ -123,7 +123,7 @@ fn real_enospc_blocks_engine_before_first_prepare_and_preserves_publication() {
         .unwrap();
     let error = engine
         .create_repository(
-            "failed",
+            &storage_contract::RepositoryName::parse("failed").unwrap(),
             "P01",
             1,
             "admin",
@@ -139,7 +139,7 @@ fn real_enospc_blocks_engine_before_first_prepare_and_preserves_publication() {
     assert!(!recovered.is_read_only());
     recovered
         .create_repository(
-            "saved",
+            &storage_contract::RepositoryName::parse("saved").unwrap(),
             "P01",
             1,
             "admin",
@@ -158,7 +158,7 @@ fn full_recovery_keeps_historical_receipts_and_wire_bytes() {
     for i in 0..6 {
         engine
             .create_repository(
-                &format!("repo-{i}"),
+                &storage_contract::RepositoryName::parse(&format!("repo-{i}")).unwrap(),
                 "P01",
                 1,
                 "admin",
@@ -181,7 +181,7 @@ fn full_recovery_keeps_historical_receipts_and_wire_bytes() {
     }
     recovered
         .create_repository(
-            "after-recovery",
+            &storage_contract::RepositoryName::parse("after-recovery").unwrap(),
             "P01",
             1,
             "admin",
@@ -203,25 +203,49 @@ fn prepare_io_failure_requires_reopen_and_retry_keeps_operation_identity() {
         engine.inject_journal_fault_once("P01", fault).unwrap();
         assert!(
             engine
-                .create_repository("retry", "P01", 1, "admin", operation)
+                .create_repository(
+                    &storage_contract::RepositoryName::parse("retry").unwrap(),
+                    "P01",
+                    1,
+                    "admin",
+                    operation
+                )
                 .is_err()
         );
         assert!(engine.is_read_only());
         assert!(engine.state().operations.is_empty());
         assert!(
             engine
-                .create_repository("retry", "P01", 1, "admin", operation)
+                .create_repository(
+                    &storage_contract::RepositoryName::parse("retry").unwrap(),
+                    "P01",
+                    1,
+                    "admin",
+                    operation
+                )
                 .is_err()
         );
         drop(engine);
         let mut recovered = Engine::open(&root).unwrap();
         let repo = recovered
-            .create_repository("retry", "P01", 1, "admin", operation)
+            .create_repository(
+                &storage_contract::RepositoryName::parse("retry").unwrap(),
+                "P01",
+                1,
+                "admin",
+                operation,
+            )
             .unwrap();
         assert_eq!(recovered.state().repositories.len(), 1);
         assert_eq!(
             recovered
-                .create_repository("retry", "P01", 1, "admin", operation)
+                .create_repository(
+                    &storage_contract::RepositoryName::parse("retry").unwrap(),
+                    "P01",
+                    1,
+                    "admin",
+                    operation
+                )
                 .unwrap()
                 .repository_id,
             repo.repository_id
@@ -242,7 +266,7 @@ fn recovery_modes_preserve_evidence_or_repair_the_same_torn_tail() {
     let mut engine = Engine::initialize(&root, config).unwrap();
     engine
         .create_repository(
-            "published",
+            &storage_contract::RepositoryName::parse("published").unwrap(),
             "P01",
             1,
             "admin",
@@ -270,7 +294,7 @@ fn recovery_modes_preserve_evidence_or_repair_the_same_torn_tail() {
     assert_eq!(std::fs::read(&path).unwrap(), valid);
     recovered
         .create_repository(
-            "next",
+            &storage_contract::RepositoryName::parse("next").unwrap(),
             "P01",
             1,
             "admin",
@@ -309,7 +333,7 @@ fn leftover_created_leaf_requires_both_opening_durability_fences() {
         assert!(!recovered.is_read_only());
         recovered
             .create_repository(
-                "durable",
+                &storage_contract::RepositoryName::parse("durable").unwrap(),
                 "P01",
                 1,
                 "admin",

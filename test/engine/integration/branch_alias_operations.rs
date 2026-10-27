@@ -33,7 +33,7 @@ impl Pool {
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
             .create_repository(
-                "Alias fixtures",
+                &storage_contract::RepositoryName::parse("Alias fixtures").unwrap(),
                 "P01",
                 3,
                 "admin",
@@ -74,8 +74,13 @@ impl Pool {
         self.engine
             .create_directory_branches(
                 &self.repo.repository_id,
-                path,
-                name,
+                (if (path).is_empty() {
+                    None
+                } else {
+                    Some(name_policy::LookupPath::parse(path).unwrap())
+                })
+                .as_ref(),
+                &storage_contract::BranchName::parse(name).unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )
@@ -89,8 +94,13 @@ impl Pool {
         self.engine
             .select_directory_branches(
                 &self.repo.repository_id,
-                path,
-                name,
+                (if (path).is_empty() {
+                    None
+                } else {
+                    Some(name_policy::LookupPath::parse(path).unwrap())
+                })
+                .as_ref(),
+                &storage_contract::BranchName::parse(name).unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )

@@ -1,7 +1,11 @@
 //! Frozen directory compositions over public file branches and immutable nodes.
 use super::*;
 use json_codec::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 fn required<'a, T>(value: Option<&'a T>, message: &str) -> Result<&'a T> {
     value.ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, message))
@@ -108,11 +112,17 @@ pub(crate) fn branch_context_at_key(
     }
 }
 
-pub(crate) fn scope(
-    state: &State,
+struct DirectoryScopeView<'a> {
+    directory_id: &'a str,
+    path: &'a str,
+    key: Cow<'a, str>,
+    commit: &'a Commit,
+}
+fn scope_view<'a>(
+    state: &'a State,
     repository: &str,
     path: &str,
-) -> Result<(String, Vec<Entry>, String)> {
+) -> Result<DirectoryScopeView<'a>> {
     if !path.is_empty() {
         name_policy::validate_lookup_path(path)?;
     }
@@ -122,6 +132,13 @@ pub(crate) fn scope(
             "directory repository missing",
         )
     })?;
+    scope_view_for_key(state, repo, Cow::Owned(name_policy::path_key(path)))
+}
+fn scope_view_for_key<'a>(
+    state: &'a State,
+    repo: &'a Repository,
+    key: Cow<'a, str>,
+) -> Result<DirectoryScopeView<'a>> {
     let branch = required(
         state.branches.get(&repo.main_branch_id),
         "repository main branch missing",
@@ -130,30 +147,79 @@ pub(crate) fn scope(
         state.commits.get(&branch.head_commit_id),
         "repository head commit missing",
     )?;
-    let key = name_policy::path_key(path);
-    let id = if key.is_empty() {
-        repository.to_owned()
+    let (directory_id, path) = if key.is_empty() {
+        (repo.repository_id.as_str(), "")
     } else {
-        commit
+        let entry = commit
             .entries
             .iter()
-            .find(|e| e.kind == NamespaceEntryKind::Directory && e.lookup_key() == key)
+            .find(|entry| {
+                entry.kind == NamespaceEntryKind::Directory && entry.lookup_key() == key.as_ref()
+            })
             .ok_or_else(|| {
                 Error::new(
                     storage_contract::ErrorCode::DirectoryNotFound,
                     "directory missing",
                 )
-            })?
-            .entry_id
-            .clone()
+            })?;
+        (entry.entry_id.as_str(), entry.path())
     };
-    let entries = commit
+    Ok(DirectoryScopeView {
+        directory_id,
+        path,
+        key,
+        commit,
+    })
+}
+struct DirectorySnapshotSource {
+    directory_id: String,
+    path: String,
+    current: Arc<Commit>,
+    entries: Vec<Entry>,
+}
+impl DirectorySnapshotSource {
+    fn capture(state: &State, view: DirectoryScopeView<'_>) -> Self {
+        let entries = view
+            .commit
+            .entries
+            .iter()
+            .filter(|entry| {
+                view.key.is_empty() || namespace::is_descendant(entry.lookup_key(), &view.key)
+            })
+            .cloned()
+            .collect();
+        Self {
+            directory_id: view.directory_id.into(),
+            path: view.path.into(),
+            current: state
+                .commits
+                .get_shared(&view.commit.commit_id)
+                .expect("invariant: scope view borrows an existing commit"),
+            entries,
+        }
+    }
+}
+
+pub(crate) fn scope(
+    state: &State,
+    repository: &str,
+    path: &str,
+) -> Result<(String, Vec<Entry>, String)> {
+    let view = scope_view(state, repository, path)?;
+    let entries = view
+        .commit
         .entries
         .iter()
-        .filter(|e| key.is_empty() || namespace::is_descendant(e.lookup_key(), &key))
+        .filter(|entry| {
+            view.key.is_empty() || namespace::is_descendant(entry.lookup_key(), &view.key)
+        })
         .cloned()
         .collect();
-    Ok((id, entries, commit.commit_id.clone()))
+    Ok((
+        view.directory_id.to_owned(),
+        entries,
+        view.commit.commit_id.clone(),
+    ))
 }
 
 pub(crate) fn rebase_path(path: &str, from: &str, to: &str) -> Result<String> {
@@ -210,30 +276,21 @@ pub(crate) fn rebase_entries(entries: &[Entry], from: &str, to: &str) -> Result<
 }
 
 fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
-    let (directory_id, entries, commit_id) = scope(state, repository, path)?;
-    let current = required(
-        state.commits.get(&commit_id),
-        "directory snapshot commit missing",
-    )?
-    .clone();
-    // A source query may use an equivalent spelling. Frozen scope metadata
-    // must retain the canonical display path from the matched namespace entry.
-    let path = if path.is_empty() {
-        ""
-    } else {
-        let key = name_policy::path_key(path);
-        current
-            .entries
-            .iter()
-            .find(|entry| entry.lookup_key() == key && entry.kind == NamespaceEntryKind::Directory)
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::DirectoryNotFound,
-                    "directory missing",
-                )
-            })?
-            .path()
-    };
+    let source = DirectorySnapshotSource::capture(state, scope_view(state, repository, path)?);
+    snapshot_source(state, repository, source)
+}
+fn snapshot_source(
+    state: &mut State,
+    repository: &str,
+    source: DirectorySnapshotSource,
+) -> Result<String> {
+    let DirectorySnapshotSource {
+        directory_id,
+        path,
+        current,
+        entries,
+    } = source;
+    let commit_id = current.commit_id.clone();
     let mut files = BTreeMap::new();
     for e in entries
         .iter()
@@ -329,7 +386,7 @@ fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
             directory_branch_id: id.clone(),
             parent_tree_id,
             commit_id: commit_id.clone(),
-            path: path.into(),
+            path: path.clone(),
             entries: entries.clone(),
             file_contexts: file_contexts.clone(),
             file_branches: files.clone(),
@@ -341,7 +398,7 @@ fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
     if let Some(target) = state.directory_branches.get_mut(&id) {
         target.head_tree_id = tree_id.clone();
         target.commit_id = commit_id;
-        target.path = path.into();
+        target.path = path;
         target.entries = entries;
         target.file_contexts = file_contexts;
         target.file_branches = files;
@@ -356,7 +413,7 @@ fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
                 directory_branch_id: id.clone(),
                 repository_id: repository.into(),
                 directory_id: directory_id.clone(),
-                path: path.into(),
+                path,
                 name: "main".into(),
                 parent_branch_id: None,
                 head_tree_id: tree_id.clone(),
@@ -1132,7 +1189,7 @@ impl Engine {
     pub fn initialize_directory_scope(
         &mut self,
         repository: &str,
-        path: &str,
+        path: Option<&name_policy::LookupPath>,
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
@@ -1140,18 +1197,24 @@ impl Engine {
             "directory.scope.initialize",
             principal,
             operation,
-            json!({"repository_id":repository,"path":path}),
+            json!({"repository_id":repository,"path":path.map_or("",name_policy::LookupPath::as_str)}),
             |_, state, _| {
-                state.repositories.get(repository).ok_or_else(|| {
+                let repo = state.repositories.get(repository).ok_or_else(|| {
                     Error::new(
                         storage_contract::ErrorCode::RepositoryNotFound,
                         "repository missing",
                     )
                 })?;
 
-                let (id, _, _) = scope(state, repository, path)?;
+                let view = scope_view_for_key(
+                    state,
+                    repo,
+                    Cow::Borrowed(path.map_or("", name_policy::LookupPath::key)),
+                )?;
+                let id = view.directory_id.to_owned();
                 if !state.directory_selections.contains_key(&id) {
-                    snapshot(state, repository, path)?;
+                    let source = DirectorySnapshotSource::capture(state, view);
+                    snapshot_source(state, repository, source)?;
                 }
                 let (branch, tree) = selected_tree(state, &id)?;
                 Ok(json!({"directory_branch_id":branch,"head_tree_id":tree.tree_id}))
@@ -1161,32 +1224,42 @@ impl Engine {
     pub fn create_directory_branches(
         &mut self,
         repository: &str,
-        path: &str,
-        name: &str,
+        path: Option<&name_policy::LookupPath>,
+        name: &storage_contract::BranchName,
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        validate_branch_name(name)?;
         self.mutate(
             "directory.branches.create",
             principal,
             operation,
-            json!({"repository_id":repository,"path":path,"name":name}),
+            json!({
+                "repository_id": repository,
+                "path": path.map_or("", name_policy::LookupPath::as_str),
+                "name": name.as_str(),
+            }),
             |_, state, _| {
-                let repo = state.repositories.get(repository).cloned().ok_or_else(|| {
+                let repo = state.repositories.get(repository).ok_or_else(|| {
                     Error::new(
                         storage_contract::ErrorCode::RepositoryNotFound,
                         "repository missing",
                     )
                 })?;
 
-                let (directory_id, _, _) = scope(state, repository, path)?;
+                let history_tree_id = repo.history_tree_id.clone();
+                let view = scope_view_for_key(
+                    state,
+                    repo,
+                    Cow::Borrowed(path.map_or("", name_policy::LookupPath::key)),
+                )?;
+                let directory_id = view.directory_id.to_owned();
                 if !state.directory_selections.contains_key(&directory_id) {
-                    snapshot(state, repository, path)?;
+                    let source = DirectorySnapshotSource::capture(state, view);
+                    snapshot_source(state, repository, source)?;
                 }
                 if state.directory_branches.values().any(|b| {
                     b.directory_id == directory_id
-                        && name_policy::lookup_key(&b.name) == name_policy::lookup_key(name)
+                        && name_policy::lookup_key(&b.name) == name.key()
                 }) {
                     return Err(Error::new(
                         storage_contract::ErrorCode::NameCollision,
@@ -1224,7 +1297,7 @@ impl Engine {
                     repository_id: repository.into(),
                     directory_id,
                     path: tree.path.clone(),
-                    name: name.into(),
+                    name: name.as_str().into(),
                     parent_branch_id: Some(parent.into()),
                     head_tree_id: tree.tree_id.clone(),
                     commit_id: tree.commit_id.clone(),
@@ -1239,8 +1312,8 @@ impl Engine {
                 let tree_id = branch.head_tree_id.clone();
                 state.directory_branches.insert(id.clone(), branch);
                 Ok(
-                    json!({"directory_branch_id":id,"history_tree_id":repo.history_tree_id,
-                    "path":path,"name":name,"branches":files,"copied_files":"0",
+                    json!({"directory_branch_id":id,"history_tree_id":history_tree_id,
+                    "path":path.map_or("",name_policy::LookupPath::as_str),"name":name.as_str(),"branches":files,"copied_files":"0",
                     "placeholder_files":"0","count":files.len().to_string(),
                     "materialized":false,"head_tree_id":tree_id,"selected":false}),
                 )
@@ -1251,32 +1324,39 @@ impl Engine {
     pub fn select_directory_branches(
         &mut self,
         repository: &str,
-        path: &str,
-        name: &str,
+        path: Option<&name_policy::LookupPath>,
+        name: &storage_contract::BranchName,
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        validate_branch_name(name)?;
         self.mutate(
             "directory.branches.select",
             principal,
             operation,
-            json!({"repository_id":repository,"path":path,"name":name}),
+            json!({
+                "repository_id": repository,
+                "path": path.map_or("", name_policy::LookupPath::as_str),
+                "name": name.as_str(),
+            }),
             |engine, state, _| {
-                state.repositories.get(repository).ok_or_else(|| {
+                let repo = state.repositories.get(repository).ok_or_else(|| {
                     Error::new(
                         storage_contract::ErrorCode::RepositoryNotFound,
                         "repository missing",
                     )
                 })?;
 
-                let (id, _, _) = scope(state, repository, path)?;
+                let view = scope_view_for_key(
+                    state,
+                    repo,
+                    Cow::Borrowed(path.map_or("", name_policy::LookupPath::key)),
+                )?;
+                let id = view.directory_id;
                 let selected = state
                     .directory_branches
                     .values()
                     .find(|b| {
-                        b.directory_id == id
-                            && name_policy::lookup_key(&b.name) == name_policy::lookup_key(name)
+                        b.directory_id == id && name_policy::lookup_key(&b.name) == name.key()
                     })
                     .map(|b| b.directory_branch_id.clone())
                     .ok_or_else(|| {
@@ -1296,22 +1376,20 @@ impl Engine {
             },
         )
     }
-    pub fn directory_branches(&self, repository: &str, path: &str) -> Result<Vec<Value>> {
-        let (id, _, _) = scope(&self.state, repository, path)?;
-        let selected = self.state.directory_selections.get(&id);
-        let mut branches = self
-            .state
-            .directory_branches
-            .values()
-            .filter(|b| b.repository_id == repository && b.directory_id == id)
-            .collect::<Vec<_>>();
-        branches.sort_by_key(|b| {
-            (
-                std::cmp::Reverse(b.sequence),
-                b.directory_branch_id.as_str(),
-            )
-        });
-        Ok(branches.into_iter().map(|b|json!({"directory_branch_id":b.directory_branch_id,"name":b.name,"path":path,"current":selected==Some(&b.directory_branch_id),"materialized":b.materialized,"head_tree_id":b.head_tree_id,"file_count":b.file_branches.len().to_string(),"parent_branch_id":b.parent_branch_id})).collect())
+    pub fn directory_branches(
+        &self,
+        repository: &str,
+        path: &str,
+    ) -> Result<Vec<storage_contract::DirectoryBranchSummary>> {
+        let view = scope_view(&self.state, repository, path)?;
+        Ok(storage_contract::directory_branch_summaries(
+            &self.state,
+            storage_contract::DirectoryBranchScope {
+                repository_id: repository,
+                directory_id: view.directory_id,
+                path,
+            },
+        ))
     }
     pub fn select_default_directory_branch(
         &mut self,
@@ -1358,16 +1436,15 @@ impl Engine {
         &mut self,
         repository: &str,
         branch: &str,
-        name: &str,
+        name: &storage_contract::BranchName,
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        validate_branch_name(name)?;
         self.mutate(
             "directory.branch.rename",
             principal,
             operation,
-            json!({"repository_id":repository,"directory_branch_id":branch,"name":name}),
+            json!({"repository_id":repository,"directory_branch_id":branch,"name":name.as_str()}),
             |_, state, _| {
                 state.repositories.get(repository).ok_or_else(|| {
                     Error::new(
@@ -1389,21 +1466,18 @@ impl Engine {
                 if state.directory_branches.values().any(|b| {
                     b.directory_id == current.directory_id
                         && b.directory_branch_id != branch
-                        && name_policy::lookup_key(&b.name) == name_policy::lookup_key(name)
+                        && name_policy::lookup_key(&b.name) == name.key()
                 }) {
                     return Err(Error::new(
                         storage_contract::ErrorCode::NameCollision,
                         "directory branch name exists",
                     ));
                 }
-                let target = state.directory_branches.get_mut(branch).ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::StateInvalid,
-                        "directory branch missing",
-                    )
-                })?;
-                target.name = name.into();
-                Ok(json!({"directory_branch_id":branch,"name":name,
+                let target = state.directory_branches.get_mut(branch).expect(
+                    "invariant: the directory branch was resolved in this unchanged candidate",
+                );
+                target.name = name.as_str().into();
+                Ok(json!({"directory_branch_id":branch,"name":name.as_str(),
                     "path":target.path,"head_tree_id":target.head_tree_id}))
             },
         )

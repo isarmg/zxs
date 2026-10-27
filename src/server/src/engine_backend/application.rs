@@ -13,32 +13,9 @@ use crate::CommitWorkspace;
 
 pub use crate::StageNamespace;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub struct CreateBranch {
-    pub repository_id: String,
-    pub source_commit_id: String,
-    pub name: String,
-    pub operation_id: String,
-}
+use crate::CreateBranch;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub struct ArchiveBranch {
-    pub branch_id: String,
-    pub operation_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub struct MergeLink {
-    pub history_tree_id: String,
-    pub source_branch_id: String,
-    pub source_commit_id: String,
-    pub target_branch_id: String,
-    pub target_commit_id: String,
-    pub operation_id: String,
-}
+use crate::CreateMergeLink;
 
 pub struct NamespaceBatch {
     pub slot_id: String,
@@ -185,39 +162,16 @@ impl<'a> Application<'a> {
                 &command.source_commit_id,
                 &command.name,
                 &self.identity.principal,
-                command
-                    .operation_id
-                    .parse::<storage_contract::OperationId>()
-                    .map_err(|source| error(source.into()))?,
-            )
-            .map_err(error)
-    }
-
-    pub fn archive_branch(
-        &mut self,
-        command: ArchiveBranch,
-    ) -> Result<storage_engine::OperationResult, ApiError> {
-        repo_for_branch(self.engine, &command.branch_id)?;
-        self.engine
-            .archive_branch(
-                &command.branch_id,
-                &self.identity.principal,
-                command
-                    .operation_id
-                    .parse::<storage_contract::OperationId>()
-                    .map_err(|source| error(source.into()))?,
+                command.operation_id,
             )
             .map_err(error)
     }
 
     pub fn merge_link(
         &mut self,
-        command: MergeLink,
+        command: CreateMergeLink,
     ) -> Result<storage_contract::MergeLink, ApiError> {
-        let operation_id = command
-            .operation_id
-            .parse::<storage_contract::OperationId>()
-            .map_err(|source| error(source.into()))?;
+        let operation_id = command.operation_id;
         repo_for_history(self.engine, &command.history_tree_id)?;
         // A split can move both original endpoints after this operation was
         // published. Admit only its original owner/history to core replay;

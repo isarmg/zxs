@@ -11,7 +11,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(
-            "项目",
+            &storage_contract::RepositoryName::parse("项目").unwrap(),
             "P01",
             3,
             "alice",
@@ -670,7 +670,7 @@ fn inherited_branches_and_their_workspaces_pin_sources_until_first_own_content()
     let pending = engine
         .create_branch(
             &source,
-            "pending",
+            &storage_contract::BranchName::parse("pending").unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -844,7 +844,7 @@ fn split_remaps_inherited_references_without_creating_placeholder_files() {
     let pending = engine
         .create_branch(
             &cut,
-            "pending",
+            &storage_contract::BranchName::parse("pending").unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -951,7 +951,7 @@ fn split_keeps_pending_prefix_snapshots_and_remaps_mixed_snapshot_reservations()
     let pending = engine
         .create_branch(
             &source,
-            "pending",
+            &storage_contract::BranchName::parse("pending").unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -1105,7 +1105,7 @@ fn split_merge_links_have_local_branch_stubs_and_explicit_crossing_boundaries() 
     let outside = engine
         .create_branch(
             &root,
-            "前缀分支",
+            &storage_contract::BranchName::parse("前缀分支").unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -1184,7 +1184,7 @@ fn split_preserves_archived_branches_and_selects_an_active_main() {
         let side = engine
             .create_branch(
                 &root,
-                "side",
+                &storage_contract::BranchName::parse("side").unwrap(),
                 "alice",
                 storage_contract::OperationId::generate(),
             )
@@ -1209,7 +1209,7 @@ fn split_preserves_archived_branches_and_selects_an_active_main() {
             engine
                 .create_branch(
                     &cut,
-                    "live",
+                    &storage_contract::BranchName::parse("live").unwrap(),
                     "alice",
                     storage_contract::OperationId::generate(),
                 )

@@ -52063,7 +52063,7 @@
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "cf85f72fb40b8d9a90ac77d7a6df9a6d1c649a00bba9f6636901721e6d5c9d98",
     "compliance/external-tests/foundation.json": "5154f42ad9e4dc40546fdd21a9159b3619b8a9a8a50258b0f69c412509d448d6",
-    "compliance/external-tests/integrated.json": "4e5232add94a803e60b093deb88047d86d5f3d22156a5d530ebe783a3b003465",
+    "compliance/external-tests/integrated.json": "b45ed96cb65338acc1015cbaf767fc9e86790adbf368b37822fb0ef45aeb0eb6",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
   "external_tests": {
@@ -79247,13 +79247,13 @@
       ]
     },
     "src/naming": {
-      "bytes": 19999,
+      "bytes": 20491,
       "directory": "src/naming",
       "file_count": 7,
       "files": [
         {
           "path": "test/naming/unit/key_tests.rs",
-          "sha256": "bfee832d4cb59797a228b7cbcefcf16ee942846d9d9f4e5147e67e213ad33b96",
+          "sha256": "df159c50d848f115a14966edd3dd5494d8fd6d68faddaf84d9a88f0ffe522303",
           "source": "src/naming/src/key_tests.rs",
           "source_sha256_before": "b7769845ea159b121934cd4e721d445177731fe90df5fd6ba8ae20c9093dd75d"
         },
@@ -79584,7 +79584,7 @@
     "src/naming/Cargo.toml": "14f34fa82d476daeac6d300225a028f92d589a3f117095ed025c3ae607af79e7",
     "src/platform/Cargo.toml": "def4ab4a06fb1a06321d60b8ddf7bf7d2892634de45cf4496bb938bf93615187",
     "src/rescue/Cargo.toml": "b1dbb74d35585df17d9e12fcb77d4397d142f61ffbb561b964b0447048db7e38",
-    "src/server/Cargo.toml": "14cd6309e4c425f5021dc0624f7548fcf86dc312d35bf62e614b1b0c0dff53f5",
+    "src/server/Cargo.toml": "001eae30704ef6190fdf6efc86e980217d71ff3e5782345d2c5dd26371d92a32",
     "src/smb-vfs/Cargo.toml": "0106d55c98c1383db6d579eb9c7ed7ac0d91e069e6e6bd2722bc670b2cdef1cd",
     "src/smb/Cargo.toml": "66ca64b286cff2b2a6b2f551145e267b2eac6017affcd4c239605a9d080ecec4",
     "src/web/Cargo.toml": "3bd3b4c6364bcfd4fa0c4feff912727a6a25da0d0c236a43331e3361793c34b1",
@@ -79609,7 +79609,7 @@
         "examples/key_profile.rs": "2418b463d24c2ebdeb9807601b410a12b5eeed4a6e5406042b60c73fe22fe229",
         "examples/path_profile.rs": "58b8da3260f369df65a59657bdb50d8473770f0fbe37e33db6055c06c4514686",
         "src/error.rs": "67beab8f4cbb818a43c82bb6167aa0172499d18da06f53c16e0b9236b89a2231",
-        "src/lib.rs": "ce323a79046d8885d3eb1b03cc8f1c340ff663b5bc06f7ea7888a89d777f0c5f",
+        "src/lib.rs": "e404525f534a705ed47dbfcc66f99ac72162594bc78d2187dfe2fd6791f20370",
         "src/profiling.rs": "25683c6f39ff13c1a49e834d6231e5eda41313196b30c78fa0d8ff3c42722f8f",
         "src/unicode/casefold.rs": "784e01851cbf138eb0ea419214432d213a2adda5d54e66421f33135b2b7d5be8",
         "src/unicode/decompose.rs": "115d2fcec0c0b660afdcea290ab0af099feb0c9af8280ed9fc3ef56cac98a2a8",

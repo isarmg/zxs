@@ -12,6 +12,8 @@ pub mod application;
 use application::Application;
 mod branch;
 mod content;
+mod directory_scopes;
+mod directory_selection;
 mod disk_monitor;
 mod error_registry;
 mod file_manager;
@@ -724,6 +726,199 @@ impl Backend for EngineBackend {
         current_protected_identity(&engine, identity)?;
         engine.check().map_err(error)
     }
+    fn create_merge_link(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateMergeLink,
+    ) -> Result<storage_contract::MergeLink, crate::ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        Application::new(&mut engine, &current).merge_link(request)
+    }
+    fn create_repository(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateRepository,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        engine
+            .create_repository(
+                &request.name,
+                &request.primary_slot_id,
+                request.target_copies,
+                &current.principal,
+                request.operation_id,
+            )
+            .map_err(error)
+    }
+    fn create_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateBranch,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        let branch = Application::new(&mut engine, &current).create_branch(request)?;
+        Ok(branch::capture_owned(engine.state(), branch))
+    }
+    fn mutate_disk_directory(
+        &self,
+        identity: &Identity,
+        request: crate::MutateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        file_manager::mutate_directory(&mut engine, &current, request)
+    }
+    fn initialize_directory_scope(
+        &self,
+        identity: &Identity,
+        request: crate::InitializeDirectoryScope,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        repository(&engine, &request.repository_id)?;
+        engine
+            .initialize_directory_scope(
+                &request.repository_id,
+                request.path.as_ref(),
+                &current.principal,
+                request.operation_id,
+            )
+            .map_err(error)
+    }
+    fn archive_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ArchiveBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        repo_for_branch(&engine, &request.branch_id)?;
+        engine
+            .archive_branch(&request.branch_id, &current.principal, request.operation_id)
+            .map_err(error)
+    }
+    fn rename_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::RenameDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        repository(&engine, &request.repository_id)?;
+        engine
+            .rename_directory_branch(
+                &request.repository_id,
+                &request.directory_branch_id,
+                &request.name,
+                &current.principal,
+                request.operation_id,
+            )
+            .map_err(error)
+    }
+    fn select_default_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::SelectDefaultDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        repository(&engine, &request.repository_id)?;
+        engine
+            .select_default_directory_branch(
+                &request.repository_id,
+                &request.directory_branch_id,
+                &current.principal,
+                request.operation_id,
+            )
+            .map_err(error)
+    }
+    fn directory_selection(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectorySelection,
+    ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        directory_selection::read(&engine, &request)
+    }
+    fn directory_scopes(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectoryScopes<'_>,
+    ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        directory_scopes::capture(&engine, request)
+    }
+    fn default_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        repository_id: &str,
+    ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        let repo = repository(&engine, repository_id)?;
+        let state = engine.state();
+        let selected = state.directory_selections.get(repository_id).map(|id| {
+            let branch = state
+                .directory_branches
+                .get(id)
+                .expect("invariant: admitted directory selection references its branch");
+            crate::SelectedDirectoryBranch {
+                directory_branch_id: id.clone(),
+                name: branch.name.clone(),
+            }
+        });
+        Ok(crate::DefaultDirectoryBranchSnapshot {
+            repository_id: repo.repository_id.clone(),
+            namespace_branch_id: repo.main_branch_id.clone(),
+            selected,
+            directory_branches: storage_contract::directory_branch_summaries(
+                state,
+                storage_contract::DirectoryBranchScope {
+                    repository_id,
+                    directory_id: repository_id,
+                    path: "",
+                },
+            ),
+        })
+    }
     fn file_history(
         &self,
         identity: &crate::auth::Identity,
@@ -1030,8 +1225,6 @@ impl Backend for EngineBackend {
             }
             crate::BackendAction::FileManagerBranch
             | crate::BackendAction::FileManagerConfigureBackups
-            | crate::BackendAction::FileManagerDirectoryBranches
-            | crate::BackendAction::FileManagerDirectorySelect
             | crate::BackendAction::FileManagerFileMetadata
             | crate::BackendAction::FileManagerMerge
             | crate::BackendAction::FileManagerNamespace
@@ -1044,108 +1237,6 @@ impl Backend for EngineBackend {
             | crate::BackendAction::FileManagerWriteSession => {
                 file_manager::call(&mut engine, identity, action, input)
             }
-            crate::BackendAction::DefaultBranch => {
-                let repo = repository(&engine, field(&input, "repository_id")?)?;
-                let selected = engine.state().directory_selections.get(&repo.repository_id);
-                let name = selected
-                    .and_then(|id| engine.state().directory_branches.get(id))
-                    .map(|branch| branch.name.as_str())
-                    .unwrap_or("main");
-                let branches = engine
-                    .directory_branches(&repo.repository_id, "")
-                    .map_err(error)?;
-                Ok(
-                    json!({"repository_id":repo.repository_id,"namespace_branch_id":repo.main_branch_id,
-                    "directory_branch_id":selected,"name":name,"directory_branches":branches}),
-                )
-            }
-            crate::BackendAction::DirectoryBranchSelection => {
-                file_manager::query_directory_branch_scopes(&engine, &input)
-            }
-            crate::BackendAction::DirectoryBranchScopes => {
-                let empty_query = json!({});
-                let query = input.get("query").unwrap_or(&empty_query);
-                keys(query, &["path", "summary"])?;
-                let path = query
-                    .get("path")
-                    .map(|path| {
-                        path.as_str()
-                            .ok_or_else(|| ApiError::invalid("path must be a string"))
-                    })
-                    .transpose()?;
-                match query.get("summary") {
-                    Some(Value::String(summary)) if summary == "true" => {
-                        file_manager::directory_branch_summaries(
-                            &engine,
-                            field(&input, "repository_id")?,
-                            path,
-                        )
-                    }
-                    None => file_manager::directory_branch_scopes(
-                        &engine,
-                        field(&input, "repository_id")?,
-                        path,
-                    ),
-                    _ => Err(ApiError::invalid("summary must be true when supplied")),
-                }
-            }
-            crate::BackendAction::InitializeDirectoryScope => {
-                keys(&input, &["repository_id", "path", "operation_id"])?;
-                let repo = field(&input, "repository_id")?;
-                repository(&engine, repo)?;
-                // The empty path explicitly identifies the repository root.
-                let path = input
-                    .get("path")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| ApiError::invalid("path must be a string"))?;
-                if !path.is_empty() {
-                    name_policy::validate_path(path).map_err(ApiError::invalid_source)?;
-                }
-                let result = engine
-                    .initialize_directory_scope(repo, path, &identity.principal, operation(&input)?)
-                    .map_err(error)?;
-                operation_wire(result)
-            }
-            crate::BackendAction::UpdateDefaultBranch => {
-                keys(
-                    &input,
-                    &["repository_id", "directory_branch_id", "operation_id"],
-                )?;
-                let repo = field(&input, "repository_id")?;
-                repository(&engine, repo)?;
-                let result = engine
-                    .select_default_directory_branch(
-                        repo,
-                        field(&input, "directory_branch_id")?,
-                        &identity.principal,
-                        operation(&input)?,
-                    )
-                    .map_err(error)?;
-                operation_wire(result)
-            }
-            crate::BackendAction::RenameDirectoryBranch => {
-                keys(
-                    &input,
-                    &[
-                        "repository_id",
-                        "directory_branch_id",
-                        "name",
-                        "operation_id",
-                    ],
-                )?;
-                let repo = field(&input, "repository_id")?;
-                repository(&engine, repo)?;
-                let result = engine
-                    .rename_directory_branch(
-                        repo,
-                        field(&input, "directory_branch_id")?,
-                        field(&input, "name")?,
-                        &identity.principal,
-                        operation(&input)?,
-                    )
-                    .map_err(error)?;
-                operation_wire(result)
-            }
             crate::BackendAction::Plan => {
                 let plan = engine.plan(field(&input, "plan_id")?).map_err(error)?;
                 if plan.principal != identity.principal {
@@ -1153,28 +1244,6 @@ impl Backend for EngineBackend {
                 }
                 repo_for_history(&engine, field(&plan.input, "history_tree_id")?)?;
                 encode(plan)
-            }
-            crate::BackendAction::CreateRepository => {
-                keys(
-                    &input,
-                    &["name", "primary_slot_id", "target_copies", "operation_id"],
-                )?;
-                let replicas = input
-                    .get("target_copies")
-                    .and_then(Value::as_u64)
-                    .ok_or_else(|| ApiError::invalid("target_copies must be a positive integer"))?;
-                let replicas = u32::try_from(replicas).map_err(ApiError::invalid_source)?;
-                encode(
-                    engine
-                        .create_repository(
-                            field(&input, "name")?,
-                            field(&input, "primary_slot_id")?,
-                            replicas,
-                            &identity.principal,
-                            operation(&input)?,
-                        )
-                        .map_err(error)?,
-                )
             }
             crate::BackendAction::PlanCancel => {
                 keys(&input, &["plan_id", "operation_id"])?;
@@ -1216,35 +1285,6 @@ impl Backend for EngineBackend {
                         .create_historical_save_plan(history, options, &identity.principal)
                         .map_err(error)?,
                 )
-            }
-            crate::BackendAction::CreateBranch => {
-                for key in ["repository_id", "source_commit_id", "name", "operation_id"] {
-                    field(&input, key)?;
-                }
-                let command = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-                let branch = Application::new(&mut engine, identity).create_branch(command)?;
-                branch_wire(&engine, &branch)
-            }
-            crate::BackendAction::Archive => {
-                for key in ["branch_id", "operation_id"] {
-                    field(&input, key)?;
-                }
-                let command = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-                encode(Application::new(&mut engine, identity).archive_branch(command)?)
-            }
-            crate::BackendAction::MergeLink => {
-                for key in [
-                    "history_tree_id",
-                    "source_branch_id",
-                    "source_commit_id",
-                    "target_branch_id",
-                    "target_commit_id",
-                    "operation_id",
-                ] {
-                    field(&input, key)?;
-                }
-                let command = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-                encode(Application::new(&mut engine, identity).merge_link(command)?)
             }
             crate::BackendAction::PurgePlan => {
                 keys(&input, &["history_tree_id", "version_ids"])?;

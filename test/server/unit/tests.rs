@@ -214,6 +214,111 @@ impl Backend for TestBackend {
     ) -> Result<storage_contract::CheckReport, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn create_merge_link(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateMergeLink,
+    ) -> Result<storage_contract::MergeLink, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn create_repository(
+        &self,
+        _identity: &crate::auth::Identity,
+        request: crate::CreateRepository,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        Ok(storage_contract::Repository {
+            repository_id: "repository".into(),
+            name: request.name.as_str().into(),
+            history_tree_id: "history".into(),
+            main_branch_id: "branch".into(),
+            primary_slot_id: request.primary_slot_id,
+            target_copies: request.target_copies,
+            name_policy: name_policy::NAME_POLICY.into(),
+            unicode_version: name_policy::UNICODE_VERSION.into(),
+            smb_enabled: true,
+            smb_binding_generation: 1,
+            file_manager_root: false,
+        })
+    }
+    fn create_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateBranch,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn mutate_disk_directory(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::MutateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn initialize_directory_scope(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::InitializeDirectoryScope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn archive_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ArchiveBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn rename_directory_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::RenameDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn select_default_directory_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::SelectDefaultDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn directory_selection(
+        &self,
+        _identity: &crate::auth::Identity,
+        request: crate::ReadDirectorySelection,
+    ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
+        assert_eq!(request.repository_id(), "repo");
+        assert!(request.scope().is_none());
+        assert!(request.sources().is_empty());
+        assert!(request.entries().is_empty());
+        Ok(crate::DirectorySelectionSnapshot {
+            repository_id: request.repository_id().into(),
+            branches: vec![],
+        })
+    }
+    fn directory_scopes(
+        &self,
+        _identity: &crate::auth::Identity,
+        request: crate::ReadDirectoryScopes<'_>,
+    ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
+        assert_eq!(request.repository_id, "repo");
+        assert!(matches!(request.filter, crate::DirectoryBranchFilter::All));
+        assert!(matches!(
+            request.projection,
+            crate::DirectoryBranchProjection::Full
+        ));
+        Ok(crate::DirectoryScopesSnapshot {
+            repository_id: request.repository_id.into(),
+            branches: crate::DirectoryScopeRows::Full(vec![]),
+        })
+    }
+    fn default_directory_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _repository_id: &str,
+    ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn file_history(
         &self,
         _identity: &crate::auth::Identity,
@@ -333,17 +438,11 @@ impl Backend for TestBackend {
 
     fn call(
         &self,
-        action: crate::BackendAction,
+        _action: crate::BackendAction,
         _identity: &Identity,
         _input: Value,
     ) -> Result<Value, ApiError> {
-        match action {
-            crate::BackendAction::CreateRepository => Ok(json!({"accepted":true})),
-            BackendAction::DirectoryBranchScopes | BackendAction::DirectoryBranchSelection => {
-                Ok(json!({"action":format!("{action:?}")}))
-            }
-            _ => Err(ApiError::unsupported()),
-        }
+        Err(ApiError::unsupported())
     }
     fn upload(
         &self,
@@ -568,7 +667,7 @@ async fn cookie_mutations_require_csrf_and_foreign_origins_are_rejected() {
                 .header("cookie", &cookie)
                 .header("host", "127.0.0.1:7400")
                 .header("origin", "http://127.0.0.1:7400")
-                .body(Body::from("{}"))
+                .body(Body::from(json!({"name":"Repository","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate()}).to_string()))
                 .unwrap(),
         )
         .await
@@ -584,7 +683,7 @@ async fn cookie_mutations_require_csrf_and_foreign_origins_are_rejected() {
                 .header("x-csrf-token", csrf)
                 .header("host", "127.0.0.1:7400")
                 .header("origin", "http://127.0.0.1:7400")
-                .body(Body::from("{}"))
+                .body(Body::from(json!({"name":"Repository","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate()}).to_string()))
                 .unwrap(),
         )
         .await
@@ -1183,6 +1282,85 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         ) -> Result<storage_contract::CheckReport, crate::ApiError> {
             self.delegate.integrity_check(identity)
         }
+        fn create_merge_link(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::CreateMergeLink,
+        ) -> Result<storage_contract::MergeLink, crate::ApiError> {
+            self.delegate.create_merge_link(identity, request)
+        }
+        fn create_repository(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::CreateRepository,
+        ) -> Result<storage_contract::Repository, crate::ApiError> {
+            self.delegate.create_repository(identity, request)
+        }
+        fn create_branch(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::CreateBranch,
+        ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+            self.delegate.create_branch(identity, request)
+        }
+        fn mutate_disk_directory(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::MutateDiskDirectory,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.mutate_disk_directory(identity, request)
+        }
+        fn initialize_directory_scope(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::InitializeDirectoryScope,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.initialize_directory_scope(identity, request)
+        }
+        fn archive_branch(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::ArchiveBranch,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.archive_branch(identity, request)
+        }
+        fn rename_directory_branch(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::RenameDirectoryBranch,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.rename_directory_branch(identity, request)
+        }
+        fn select_default_directory_branch(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::SelectDefaultDirectoryBranch,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate
+                .select_default_directory_branch(identity, request)
+        }
+        fn directory_selection(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::ReadDirectorySelection,
+        ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
+            self.delegate.directory_selection(identity, request)
+        }
+        fn directory_scopes(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::ReadDirectoryScopes<'_>,
+        ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
+            self.delegate.directory_scopes(identity, request)
+        }
+        fn default_directory_branch(
+            &self,
+            identity: &crate::auth::Identity,
+            repository_id: &str,
+        ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
+            self.delegate
+                .default_directory_branch(identity, repository_id)
+        }
         fn file_history(
             &self,
             identity: &crate::auth::Identity,
@@ -1508,15 +1686,12 @@ async fn workspace_capacity_requires_authentication_and_preserves_unsupported_ba
 }
 
 #[tokio::test]
-async fn directory_scope_routes_select_distinct_actions_and_preserve_csrf() {
+async fn directory_scope_routes_select_typed_reads_and_separate_selection_with_csrf() {
     let root = private_tempdir();
     let app = application(root.path());
     let (_, csrf, cookie) = authenticated(&app).await;
     let uri = "/api/repositories/repo/directory-branches";
-    for (method, expected) in [
-        ("GET", BackendAction::DirectoryBranchScopes),
-        ("POST", BackendAction::DirectoryBranchSelection),
-    ] {
+    for method in ["GET", "POST"] {
         let response = app
             .clone()
             .oneshot(
@@ -1528,7 +1703,7 @@ async fn directory_scope_routes_select_distinct_actions_and_preserve_csrf() {
                     .header(header::ORIGIN, "http://127.0.0.1:7400")
                     .header("x-csrf-token", &csrf)
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from("{}"))
+                    .body(Body::from(r#"{"path":"","sources":[],"entries":[]}"#))
                     .unwrap(),
             )
             .await
@@ -1540,9 +1715,10 @@ async fn directory_scope_routes_select_distinct_actions_and_preserve_csrf() {
                 .unwrap(),
         )
         .unwrap();
-        // The fake reports Debug only to prove typed route dispatch; this is
-        // not a production wire action name or response contract.
-        assert_eq!(body["action"], format!("{expected:?}"));
+        assert_eq!(
+            body,
+            json!({"repository_id":"repo","directory_branches":[]})
+        );
     }
     let response = app
         .oneshot(
@@ -1690,6 +1866,7 @@ async fn canonical_static_origin_drives_http_login_cookie_and_request_rejection(
 }
 
 // Existing JSON fixture vectors are test-client input, never an internal backend path.
+#[cfg(feature = "core")]
 pub(crate) fn tree_request(value: &Value) -> crate::ReadTree<'_> {
     crate::ReadTree {
         branch: value["branch_id"].as_str().expect("fixture branch id"),
@@ -1697,5 +1874,25 @@ pub(crate) fn tree_request(value: &Value) -> crate::ReadTree<'_> {
             .get("query")
             .and_then(|q| q.get("commit_id"))
             .and_then(Value::as_str),
+    }
+}
+
+/// Build a typed command from this suite's valid directory fixtures.
+#[cfg(feature = "core")]
+pub(crate) fn disk_directory_request(
+    value: Value,
+    action: crate::DiskDirectoryAction,
+) -> crate::MutateDiskDirectory {
+    let path = value
+        .get("path")
+        .map(|value| value.as_str().unwrap())
+        .filter(|path| !path.is_empty())
+        .map(|path| name_policy::LookupPath::parse(path).unwrap());
+    crate::MutateDiskDirectory {
+        slot_id: value["slot_id"].as_str().unwrap().into(),
+        path,
+        name: storage_contract::BranchName::parse(value["name"].as_str().unwrap()).unwrap(),
+        operation_id: value["operation_id"].as_str().unwrap().parse().unwrap(),
+        action,
     }
 }

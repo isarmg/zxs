@@ -2333,7 +2333,7 @@ async fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavail
     seed_engine_authority(&mut engine, &system);
     let repo = engine
         .create_repository(
-            "Lost candidate",
+            &storage_contract::RepositoryName::parse("Lost candidate").unwrap(),
             "P01",
             3,
             "admin",
@@ -2450,7 +2450,7 @@ async fn damage_after_normal_publication_keeps_original_target_met_in_save_wire(
     seed_engine_authority(&mut engine, &root.path().join("system"));
     let repo = engine
         .create_repository(
-            "Published evidence",
+            &storage_contract::RepositoryName::parse("Published evidence").unwrap(),
             "P01",
             3,
             "admin",
@@ -2586,17 +2586,79 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         success(&app, &session, "GET", &api, None).await["namespace_branch_id"],
         namespace
     );
+    let selection_operation = new_id("op");
     let selected = success(
         &app,
         &session,
         "PUT",
         &api,
         Some(json!({
-            "directory_branch_id":frozen,"operation_id":new_id("op")
+            "directory_branch_id":frozen,"operation_id":selection_operation
         })),
     )
     .await;
     assert_eq!(selected["result"]["directory_branch_id"], frozen);
+    let replay = success(
+        &app,
+        &session,
+        "PUT",
+        &api,
+        Some(json!({"directory_branch_id":frozen,"operation_id":selection_operation})),
+    )
+    .await;
+    // Health is a fresh observation; only its timestamp varies across replay.
+    assert!(replay["current_health"]["checked_at"].is_string());
+    let mut first_receipt = selected.clone();
+    let mut replay_receipt = replay;
+    first_receipt["current_health"]
+        .as_object_mut()
+        .unwrap()
+        .remove("checked_at");
+    replay_receipt["current_health"]
+        .as_object_mut()
+        .unwrap()
+        .remove("checked_at");
+    assert_eq!(replay_receipt, first_receipt);
+    let changed = send(
+        &app,
+        Some(&session),
+        "PUT",
+        &api,
+        Some(json!({"directory_branch_id":"missing-directory","operation_id":selection_operation})),
+    )
+    .await;
+    assert_eq!(changed.0, StatusCode::CONFLICT);
+    assert_eq!(changed.1["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
+    for body in [
+        json!({"repository_id":"other","directory_branch_id":frozen,"operation_id":new_id("op")}),
+        json!({"directory_branch_id":frozen,"operation_id":new_id("op"),"principal":"forged"}),
+    ] {
+        let invalid = send(&app, Some(&session), "PUT", &api, Some(body)).await;
+        assert_eq!(invalid.0, StatusCode::BAD_REQUEST);
+        assert_eq!(invalid.1["error"]["code"], "INVALID_REQUEST");
+    }
+    let invalid = send(
+        &app,
+        Some(&session),
+        "PUT",
+        &api,
+        Some(json!({"directory_branch_id":frozen,"operation_id":"bad-id"})),
+    )
+    .await;
+    assert_eq!(invalid.1["error"]["code"], "INVALID_ID");
+    assert_eq!(
+        send(
+            &app,
+            None,
+            "PUT",
+            &api,
+            Some(json!({"operation_id":"bad-id"}))
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+
     let current = success(&app, &session, "GET", &api, None).await;
     assert_eq!(current["directory_branch_id"], frozen);
     assert_eq!(current["namespace_branch_id"], namespace);
@@ -4091,16 +4153,58 @@ async fn directory_scope_initialization_accepts_root_but_requires_a_string_path(
             StatusCode::BAD_REQUEST
         );
     }
+    let operation = storage_contract::OperationId::generate();
     let initialized = success(
         &app,
         &token,
         "POST",
         &endpoint,
-        Some(json!({"path":"", "operation_id":new_id("op")})),
+        Some(json!({"path":"", "operation_id":operation})),
     )
     .await;
     assert_eq!(initialized["state"], "completed");
     assert!(initialized["result"]["directory_branch_id"].is_string());
+    assert_eq!(initialized["operation_kind"], "directory.scope.initialize");
+    assert!(initialized["publication_sequence"].is_string());
+    assert!(initialized["current_health"]["checked_at"].is_string());
+    let replay = success(
+        &app,
+        &token,
+        "POST",
+        &endpoint,
+        Some(json!({"path":"", "operation_id":operation})),
+    )
+    .await;
+    for key in [
+        "operation_id",
+        "request_digest",
+        "result",
+        "commit_state",
+        "protection_at_publish",
+        "publication_sequence",
+    ] {
+        assert_eq!(initialized[key], replay[key], "{key}");
+    }
+    let (status, changed) = send(
+        &app,
+        Some(&token),
+        "POST",
+        &endpoint,
+        Some(json!({"path":"missing", "operation_id":operation})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(changed["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
+    let (status, unauthenticated) = send(
+        &app,
+        None,
+        "POST",
+        &endpoint,
+        Some(json!({"path":17, "operation_id":operation})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(unauthenticated["error"]["code"], "UNAUTHORIZED");
 }
 
 #[tokio::test]
@@ -4208,4 +4312,120 @@ async fn removed_account_and_grant_routes_cannot_create_a_second_identity() {
             .get("account_scope_repository_id")
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn typed_disk_directory_rejects_raw_errors_before_lazy_root_and_keeps_replay() {
+    fn files(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+        fn visit(
+            path: &Path,
+            output: &mut std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+        ) {
+            for entry in std::fs::read_dir(path).unwrap() {
+                let entry = entry.unwrap();
+                if entry.file_type().unwrap().is_dir() {
+                    visit(&entry.path(), output);
+                } else {
+                    output.insert(entry.path(), std::fs::read(entry.path()).unwrap());
+                }
+            }
+        }
+        let mut output = std::collections::BTreeMap::new();
+        for disk in ["d1", "d2", "d3"] {
+            visit(&root.join(disk), &mut output);
+        }
+        output
+    }
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let before = files(root.path());
+    let operation = storage_contract::OperationId::generate();
+    for route in ["directory-branches", "directory-select"] {
+        let endpoint = format!("/api/file-manager/disks/P01/{route}");
+        for body in [
+            json!({"path":"","operation_id":operation}),
+            json!({"path":"","name":"branch","operation_id":"bad"}),
+            json!({"path":"","name":"x".repeat(129),"operation_id":operation}),
+            json!({"path":"","name":null,"operation_id":operation}),
+            json!({"path":123,"name":"branch","operation_id":operation}),
+            json!({"path":"../outside","name":"branch","operation_id":operation}),
+            json!({"name":"branch","operation_id":operation,"extra":true}),
+        ] {
+            let (status, response) = send(&app, Some(&token), "POST", &endpoint, Some(body)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+            assert!(
+                success(&app, &token, "GET", "/api/repositories", None).await["repositories"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(files(root.path()), before);
+        }
+    }
+    for name in ["main", "MAIN"] {
+        let (status, response) = send(
+            &app,
+            Some(&token),
+            "POST",
+            "/api/file-manager/disks/P01/directory-branches",
+            Some(json!({"name":name,"operation_id":operation})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(response["error"]["code"], "NAME_COLLISION");
+        assert_eq!(files(root.path()), before);
+    }
+    let created = success(
+        &app,
+        &token,
+        "POST",
+        "/api/file-manager/disks/P01/directory-branches",
+        Some(json!({"name":"side","operation_id":operation})),
+    )
+    .await;
+    assert_eq!(created["operation_kind"], "directory.branches.create");
+    let repositories = success(&app, &token, "GET", "/api/repositories", None).await;
+    let repo = &repositories["repositories"][0]["repository_id"];
+    let digest=storage_contract::object_hash("request",&json!({"kind":"directory.branches.create","principal":"admin","body":{"repository_id":repo,"path":"","name":"side"}})).unwrap();
+    assert_eq!(created["request_digest"], digest);
+    assert_eq!(created["result"]["path"], "");
+    let replay = success(
+        &app,
+        &token,
+        "POST",
+        "/api/file-manager/disks/P01/directory-branches",
+        Some(json!({"path":"","name":"side","operation_id":operation})),
+    )
+    .await;
+    for key in [
+        "result",
+        "publication_sequence",
+        "request_digest",
+        "operation_id",
+    ] {
+        assert_eq!(created[key], replay[key], "{key}");
+    }
+    let selected = success(
+        &app,
+        &token,
+        "POST",
+        "/api/file-manager/disks/P01/directory-select",
+        Some(json!({"name":"SIDE","operation_id":storage_contract::OperationId::generate()})),
+    )
+    .await;
+    assert_eq!(
+        selected["result"]["directory_branch_id"],
+        created["result"]["directory_branch_id"]
+    );
+    let (status, response) = send(
+        &app,
+        None,
+        "POST",
+        "/api/file-manager/disks/P01/directory-select",
+        Some(json!({"name":null})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(response["error"]["code"], "UNAUTHORIZED");
 }

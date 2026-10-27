@@ -81,7 +81,7 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
         return Err("browser fixture requires a fresh disposable pool with no repositories".into());
     }
     let repository = engine.create_repository(
-        "browser-fixtures",
+        &storage_engine::RepositoryName::parse("browser-fixtures").unwrap(),
         "P01",
         3,
         PRINCIPAL,

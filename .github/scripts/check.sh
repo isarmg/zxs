@@ -43,6 +43,7 @@ case "${1:-}" in
     python3 .github/scripts/check-native-consumer-features.py
     # Compile the hook-free product graph separately from dev feature unification.
     cargo check --locked --offline -p storage-engine -p storage-server -p storage-rescue
+    cargo check --locked --offline -p storage-server --no-default-features --all-targets
     cargo test --locked --offline
     cargo test --locked --offline -p storage-engine --lib \
       history_package::graph::tests::distributed_history_larger_than_real_reader_limit_roundtrips \

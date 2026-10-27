@@ -73,7 +73,7 @@ fn accounting_snapshot_preserves_purge_and_duplicate_route_semantics() {
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
-            "Accounting",
+            &storage_contract::RepositoryName::parse("Accounting").unwrap(),
             "P01",
             3,
             "owner",
@@ -146,7 +146,7 @@ fn observation_exposes_dangling_internal_placement() {
     .unwrap();
     let repo = engine
         .create_repository(
-            "Accounting",
+            &storage_contract::RepositoryName::parse("Accounting").unwrap(),
             "P01",
             3,
             "owner",

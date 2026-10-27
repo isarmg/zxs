@@ -14,7 +14,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String, String) {
     .unwrap();
     let repo = engine
         .create_repository(
-            "split",
+            &storage_contract::RepositoryName::parse("split").unwrap(),
             "P01",
             3,
             "admin",
@@ -184,7 +184,7 @@ fn snapshot_admission_rejects_broken_crossing_merge_endpoints() {
         let outside = engine
             .create_branch(
                 &prefix,
-                "prefix",
+                &storage_contract::BranchName::parse("prefix").unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )

@@ -12,7 +12,7 @@ fn snapshot_lookup_preserves_frozen_identity_equivalent_spelling_and_absence() {
     save_projection_file(&mut engine, &repo.main_branch_id, "Café.txt", b"second");
     let other = engine
         .create_repository(
-            "Other",
+            &storage_contract::RepositoryName::parse("Other").unwrap(),
             "P01",
             3,
             "owner",

@@ -12,7 +12,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
-            "Health",
+            &storage_contract::RepositoryName::parse("Health").unwrap(),
             "P01",
             3,
             "owner",
@@ -160,7 +160,13 @@ fn pending_receipt_reads_only_exact_operation_pages_and_owner_first() {
     engine.inject_fault_once("after_accept_1");
     assert!(
         engine
-            .create_repository("pending", "P01", 3, "owner", operation)
+            .create_repository(
+                &storage_contract::RepositoryName::parse("pending").unwrap(),
+                "P01",
+                3,
+                "owner",
+                operation
+            )
             .is_err()
     );
     let (members, snapshot, _) = engine.pending_operation_snapshot(operation).unwrap();
@@ -211,7 +217,13 @@ fn pending_receipt_does_not_turn_corrupt_journals_into_not_found() {
     engine.inject_fault_once("after_accept_1");
     assert!(
         engine
-            .create_repository("pending", "P01", 3, "owner", operation)
+            .create_repository(
+                &storage_contract::RepositoryName::parse("pending").unwrap(),
+                "P01",
+                3,
+                "owner",
+                operation
+            )
             .is_err()
     );
     for disk in engine.members() {

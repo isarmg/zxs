@@ -778,7 +778,13 @@ fn publication_rejects_substituted_marker_view_and_reopen_recovers() {
     assert!(!engine.history_query_proof.lock().unwrap().healthy);
     let operation = storage_contract::OperationId::generate();
     let error = engine
-        .create_repository("published", "P01", 1, "admin", operation)
+        .create_repository(
+            &storage_contract::RepositoryName::parse("published").unwrap(),
+            "P01",
+            1,
+            "admin",
+            operation,
+        )
         .unwrap_err();
     assert_eq!(
         error.code(),
@@ -813,7 +819,7 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
     let mut engine = Engine::initialize(&root, config).unwrap();
     engine
         .create_repository(
-            "first",
+            &storage_contract::RepositoryName::parse("first").unwrap(),
             "P01",
             1,
             "admin",
@@ -829,7 +835,13 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
     );
     let operation = storage_contract::OperationId::generate();
     let error = engine
-        .create_repository("second", "P01", 1, "admin", operation)
+        .create_repository(
+            &storage_contract::RepositoryName::parse("second").unwrap(),
+            "P01",
+            1,
+            "admin",
+            operation,
+        )
         .unwrap_err();
     assert_eq!(
         error.code(),
@@ -843,7 +855,13 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
     let mut engine = Engine::open(&root).unwrap();
     assert!(!engine.is_read_only());
     engine
-        .create_repository("second", "P01", 1, "admin", operation)
+        .create_repository(
+            &storage_contract::RepositoryName::parse("second").unwrap(),
+            "P01",
+            1,
+            "admin",
+            operation,
+        )
         .unwrap();
     assert_eq!(*engine.state, published);
     assert_projection(&path, &published);
@@ -861,7 +879,7 @@ fn startup_rebuilds_a_corrupt_disposable_database_from_durable_evidence() {
         let mut engine = engine(&temp);
         engine
             .create_repository(
-                "published",
+                &storage_contract::RepositoryName::parse("published").unwrap(),
                 "P01",
                 1,
                 "admin",
@@ -1026,7 +1044,7 @@ fn runtime_linked_cache_falls_back_and_blocks_publication_without_touching_targe
             assert!(!engine.history_query_proof.lock().unwrap().healthy);
             let error = engine
                 .create_repository(
-                    "published",
+                    &storage_contract::RepositoryName::parse("published").unwrap(),
                     "P01",
                     1,
                     "admin",
@@ -1129,7 +1147,7 @@ fn publications_reuse_admitted_worker_and_full_commit_policy() {
     for n in 0..3 {
         engine
             .create_repository(
-                &format!("repo-{n}"),
+                &storage_contract::RepositoryName::parse(&format!("repo-{n}")).unwrap(),
                 "P01",
                 1,
                 "admin",
@@ -1203,7 +1221,13 @@ fn replaced_database_identity_blocks_publication_and_retains_receipt() {
     std::fs::rename(&replacement, &path).unwrap();
     let operation = storage_contract::OperationId::generate();
     let error = engine
-        .create_repository("published", "P01", 1, "admin", operation)
+        .create_repository(
+            &storage_contract::RepositoryName::parse("published").unwrap(),
+            "P01",
+            1,
+            "admin",
+            operation,
+        )
         .unwrap_err();
     assert_eq!(error.code(), ErrorCode::UnsafePath);
     assert!(error.to_string().contains("identity changed"));

@@ -20,7 +20,7 @@ fn initialize_routes(root: &Path) -> (Engine, Repository) {
     let mut engine = Engine::initialize(&root.join("state"), config).unwrap();
     let repo = engine
         .create_repository(
-            "shorter route",
+            &storage_contract::RepositoryName::parse("shorter route").unwrap(),
             "P01",
             1,
             "admin",

@@ -223,7 +223,7 @@ fn published_fixture() -> (tempfile::TempDir, Engine, Repository) {
     .unwrap();
     let repo = engine
         .create_repository(
-            "Lookup",
+            &storage_contract::RepositoryName::parse("Lookup").unwrap(),
             "P01",
             1,
             "admin",
@@ -404,7 +404,7 @@ fn query_views_keep_missing_foreign_and_migrated_branch_errors() {
     let (_temporary, mut engine, repo) = published_fixture();
     let other = engine
         .create_repository(
-            "Other lookup",
+            &storage_contract::RepositoryName::parse("Other lookup").unwrap(),
             "P01",
             1,
             "admin",

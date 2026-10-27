@@ -54,15 +54,17 @@ fn session_cap_is_shared_across_repositories_and_rejects_other_samba_names() {
     let repository = repository(&shared);
     let other_repository = shared
         .backend
-        .call(
-            crate::BackendAction::CreateRepository,
+        .create_repository(
             &identity(&shared),
-            json!({"name":"second-share","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op")}),
+            crate::CreateRepository {
+                name: storage_contract::RepositoryName::parse("second-share").unwrap(),
+                primary_slot_id: "P01".into(),
+                target_copies: 3,
+                operation_id: storage_contract::OperationId::generate(),
+            },
         )
-        .unwrap()["repository_id"]
-        .as_str()
         .unwrap()
-        .to_owned();
+        .repository_id;
     let mut idle = Vec::new();
     for index in 0..MAX_AUTHENTICATED_SESSIONS {
         let target = if index % 2 == 0 {

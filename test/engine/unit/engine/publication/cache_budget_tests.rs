@@ -12,7 +12,7 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
     let mut engine = Engine::initialize(&root, config).unwrap();
     let repo = engine
         .create_repository(
-            "cache",
+            &storage_contract::RepositoryName::parse("cache").unwrap(),
             "P01",
             3,
             "alice",
@@ -109,7 +109,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
     let mut engine = Engine::initialize(&root, config).unwrap();
     let repo = engine
         .create_repository(
-            "cache",
+            &storage_contract::RepositoryName::parse("cache").unwrap(),
             "P01",
             3,
             "alice",

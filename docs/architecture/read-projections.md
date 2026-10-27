@@ -84,12 +84,12 @@ SMB RPC 入口一次解析路径并直接构造同一类型，替换目标删除
 
 ## 剩余 Value 调用清单
 
-此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 35 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
+此迁移没有覆盖所有应用接口。[BackendAction](../../src/server/src/backend_action.rs) 仍有 26 个变体；它是准确动作库存，下面按实际消费者列出后续范围，不表示每个动作存在同样的往返成本：
 
 - **工作区 seal／公开发布已接续迁移。** 见[公开提交边界](detached-workspace-commits.md#public-commit-envelope-and-seal)；HTTP 与 SMB 保留各自摘要契约。上传 publication 结果也已接续类型化；namespace 暂存也已接续迁移；write-session 已接续迁移，通用读取仍有 Value，不能据当前迁移宣称全部工作区接口已经分层。
 - **SMB 绑定／只读冻结版本。** 绑定 GET/PUT、Capabilities、Repository 与冻结版本已使用 typed 请求/快照/准入，生产 Session::call 已删除。不是本次 typed 当前查询的后备路径。
-- **HTTP 通用读取。** 默认分支、目录分支及选择，仍由 HTTP 通用分派调用 `Backend::call`。
-- **HTTP 写入与计划。** 仓库／分支／目录分支创建和选择、split/purge/historical-save/plan 的请求与结果仍需逐组迁移。operation HTTP 入口已接续到既有 typed 方法；其余 action 仍需逐项迁移。
+- **HTTP 通用读取。** 目录分支 GET full/summary 与 POST 有界目录选择已接续迁移；Plan 等其余查询仍由 HTTP 通用分派调用 `Backend::call`。
+- **HTTP 写入与计划。** 目录范围创建、split/purge/historical-save/plan 的请求与结果仍需逐组迁移；仓库和完整分支创建及目录默认选择、重命名已接续迁移。operation HTTP 入口已接续到既有 typed 方法；其余 action 仍需逐项迁移。
 - **文件管理与管理控制面。** `FileManager*` action、setup_operation 等仍有独立 Value 协议；management_status/retry_storage 已接续类型化；需要核对每个 HTTP 消费者，不能以新增一个包裹枚举代替拆除旧 JSON 路径。
 
 这次不改领域 `OperationResult.result`、Plan 输入、持久化编码、canonical 哈希、永久幂等收据或公开 `Commit.kind`。当前 `core.schema.json` 的 `$defs.Commit.properties.kind` 是开放 string，不可仅按内部已见字面量将它收窄为封闭枚举。后续 model/persist/wire 分离应独立建立固定向量和公开消费者证据。
@@ -303,3 +303,110 @@ Backend 返回既有 Vec<DiskStatus>/CheckReport，HTTP 才做穷尽 wire 投影
 原 disk_access 只是同一 config.disks 的 slot→level==1 映射；观察计划捕获同一配置，filter_map 查询缺槽不是合法业务分支。映射、二次查表/静默过滤、FileManagerDisks action 已删除，writable 直接使用捕获的 level==1。它描述一级盘策略，不是假装当前 online；掉盘一级盘仍 writable=true、online=false，已有实际写入口的可用性/只读授权不变。配置顺序和全部槽保持，不创建 lazy 根仓库、不新增账户过滤，未知 query 沿原规则忽略。
 
 回归验证两级/掉盘/最大bytes/七字段白名单，真实HTTP调用不创建根仓库、匿名拒绝和旧多槽场景；同一真实disk_status方法的公开panic和取消许可矩阵扩至文件管理路由。删除的是每次请求额外O(n log n)映射及查表，不改变核心采样I/O或声明未经测量的吞吐提升。
+
+
+## 默认目录分支的轻量摘要
+
+GET `/api/repositories/{repo}/default-branch` 与 SMB 目录选择回归的实际读取直接调用 required default_directory_branch，删除 DefaultBranch action。当前身份与 repository 一次同锁查找后捕获 owned 选择和目录摘要，HTTP 显式输出原五字段/每分支八字段，file_count 只在出口转十进制字符串；query 仍不能覆盖路径身份。
+
+portable directory_branch_summaries 只对指定 repository/directory 的借用 DirectoryBranch 排序并穷尽投影小字段，不解析输入ID、不复制entries；顺序保持 sequence 逆序再ID、数量保持 file_branches.len（不混用另一路径按entries统计的定义）、path保持查询展示拼写。核心公开 Engine::directory_branches 也改为该typed结果，两个真实 package rename/restore 消费者使用字段；原scope解析拆成借用 DirectoryScopeView，只有实际需要 namespace payload 的原scope调用方才复制entries，元数据读不再为取directory ID clone整棵树。没有新增JSON旁路、索引或历史缓存。
+
+未初始化选择的None由真实新仓库/HTTP回归证明合法，公开name=main保持；Some选择指向缺失branch不是业务缺失，manifest目录选择闭包已在磁盘准入保证，读取使用明确内部不变量而不再and_then→main掩盖。外部未知repo仍原NotFound，撤权仍先于资源查找。真实mutation后已准入摘要保持冻结、序列化可另线程取引擎锁，owner释放后仍可输出；纯排序/作用域/字段、固定wire、空/初始化HTTP、包重命名恢复、panic/取消/排队撤权矩阵覆盖实际typed路径。DirectoryBranchScopes的full/summary与有界选择在后节独立接续，其他目录写入仍待迁移，不借摘要迁移扩大其权限/筛选。
+
+
+## 默认目录选择写入
+
+Web files/actions/mutation.rs 的 PUT default-branch 以及真实 SMB 目录切换回归改为 required select_default_directory_branch。HTTP 绑定路径/严格JSON后，在持有 backend_slots 的阻塞任务一次解析 SelectDefaultDirectoryBranch；OperationId 保持类型并保留非法非空ID的 INVALID_ID/source。未知字段、空字段和路径身份冲突在 HTTP 拒绝，资源ID仍按原查找契约处理，不新增格式门槛。静态格式错误现在先于排队后Backend当前身份复核；HTTP中间件认证仍先于body，合法命令的撤权仍先于资源查找。
+
+EngineBackend 同锁当前身份→既有repository准入→核心 select_default_directory_branch，直接返回 OperationResult，HTTP才 operation_wire；删除 UpdateDefaultBranch action/JSON arm。SMB回归直接生成typed OperationId，不用字符串绕行。repository缺失先于永久receipt，同operation不同branch摘要冲突先于动态scope检查；核心公开入口自己的repository/scope检查仍服务直接调用方，未把它们移动到receipt前。canonical directory.default.select 的kind/principal/body与永久幂等语义不变，无新增锁、I/O、发布阶段或格式迁移。
+
+回归覆盖独立摘要计算、核心直接调用共享receipt、重放、冲突/作用域/未知repo/撤权次序、真实HTTP回复与路径绑定、SMB目录切换对已打开writer的fencing，以及实际方法的授权参数/排队撤权/panic/取消许可矩阵。
+
+
+## 目录范围 GET 的完整记录与轻量选择
+
+`/api/repositories/{repo}/directory-branches` 的 GET full/summary 是不同的真实响应：Web batch/actions.rs:257 读取12字段摘要，namespace HTTP回归读取完整entries/maps；SMB目录移动回归只读head_tree_id，现也直接消费typed Summary。HTTP将省略path、显式空path、具名LookupPath分别表达All/Root/Directory，summary只接收字符串true，未知query仍拒绝。静态query/path解析移到HTTP阻塞任务，不再穿Value到引擎；因此静态坏格式在Backend当前身份/资源准入前拒绝，中间件认证仍最先。POST bounded selection在后节独立接续，不混入GET投影。
+
+required directory_scopes 在同锁current/repository准入后使用共享借用筛选器，原排序sequence逆序再ID、NFD/casefold路径查询、当前目录身份优先和当前目录不存在时按历史branch.path回退均保留。manifest验证已保证repository→main branch→head commit（manifest.rs主分支及live commit验证，加state_read完整coverage；真实磁盘state_read_tests已有MissingMain/MissingHead负例）；原链式Option不能把缺父链伪装成历史path回退，现明确内部不变量。合法的未找到当前目录Entry仍是Option业务缺失，外部未知repository仍NotFound；不新增每行父链验证。
+
+State.directory_branches仍是TrackedMap而非SharedRecords：Full为实际锁外序列化捕获一次owned DirectoryBranch，file_count从该冻结记录在锁外计算，出口move各字段、entries/maps不再复制；Summary只复制展示字段，不复制entries或上下文map。两者file_count仍按entries中的File计数，不混用default-branch摘要的file_branches.len。模型/持久化的共享表示不在此批擅改；当前完整响应原本需要O(payload)的JSON树分配，现为typed所有权再直接编码，不宣称零复制或未经测量的吞吐提升。嵌套Entry/FileContext等仍沿既有公开字段编码，未宣称全模型已完成wire分离。
+
+回归覆盖原full wire/可选map省略/12字段摘要、NFD/root/all过滤、移动目录身份回归、稳定排序、后续mutation不影响已捕获所有权、锁外序列化/owner释放、实际HTTP摘要与完整响应、未知query/非法路径/匿名拒绝，以及required方法的授权参数/撤权/panic/取消许可矩阵。没有新增缓存、状态索引、fsync或永久幂等格式。
+
+
+## 有界目录选择事实
+
+Web batch/actions.rs 的 POST directory-branches 现传入私有已验证 ReadDirectorySelection，删除 DirectoryBranchSelection action 和原 scope_query Value路径。HTTP严格JSON/path-body绑定并拒绝顶层/嵌套未知字段、缺失数组和错误类型；公开构造器一次接收边界字符串，保持 sources≤500、entries≤500、乘积≤10000、entry ID≤256、LookupPath/NFD及直接子项/去重规则。短路上界证明乘法不会溢出；sources保持输入顺序，entries保持原按ID/请求展示路径排序。scope的None只表达显式空path的根范围，缺path在wire拒绝。静态解析/预算现在在HTTP阻塞任务内、Backend当前身份/资源/动态source判断之前；中间件认证及backend_slots取消所有权不变，合法请求仍同锁current→repository→当前source immutable tree复核。
+
+核心借用已缓存lookup key，不再重新validate/path_key或构造Value。SelectedEntryFact仅捕获请求的身份、实际展示path和原selected_path；单身份唯一匹配优先、同身份多个alias按exact key、合法缺失省略保持。Unique/Ambiguous表达算法真实所需状态，替代永不需要完整数量的饱和计数和Option组合；键/索引借用记录与请求，不复制Unicode键串。Summary复用既有12字段typed选择投影，最终HTTP加entries并编码一次，不把结果快照当作后续mutation授权/基线证明。
+
+回归覆盖边界预算与静态错误、严格HTTP、NFD与10k alias事实、来源顺序/请求排序、当前tree冲突/未知repo/撤权次序、真实只读状态不变、捕获后修改分支不影响回复、锁外序列化与owner释放、公开panic/取消容量及真实排队撤权矩阵。永久幂等、磁盘格式和写入发布阶段未变。
+
+
+## 目录分支重命名的已验证名称
+
+Web files/actions/mutation.rs 的 PATCH directory-branches/{id} 绑定repository/branch路径后，HTTP解析 RenameDirectoryBranch 并调用 required rename_directory_branch，删除同名action/JSON arm。portable BranchName私有保存通过原128 UTF-8字节/PortableName/NFC政策的展示文本及固定Unicode碰撞key，不承担serde/磁盘编码。核心rename直接接受&BranchName，不再次校验或在每个候选中重复fold同一新名称；原公开validate_branch_name仍由manifest及其他真实原始边界消费，委托同一contract校验规则，不为保留API制造未使用wrapper。该规则自身仍可能为保留名stem分配，不宣称校验零分配；公开模型名字String与持久化格式未在此批全面重构。
+
+HTTP保留精确静态优先级：缺失/空name字段先拒绝；非空name先读OperationId、再验证name政策，所以bad operation赢过非法名称，已存在operation遇非法名称仍先报告NAME*/METADATA_TOO_LONG。错误保留contract source及原public code/400，不被invalid_source降成INVALID_REQUEST。静态边界失败先于排队后的Backend current/repository复核；合法命令仍同锁current→repository→原mutate/receipt→动态branch/碰撞。canonical directory.branch.rename的kind/principal/body仍绑定原NFC展示字符串，不使用折叠key替代摘要输入，永久receipt/replay/冲突次序不变。
+
+已同candidate解析branch后没有移除操作，后续get_mut必存在，改明确内部不变量而不伪造StateInvalid外部错误。回归覆盖名称边界/固定Unicode key、UTF-8上限、NFD/保留名、HTTP错误优先级/双路径绑定、独立canonical摘要/核心直接replay、同名fold碰撞、缺repo/branch与撤权、完整公开panic/取消/排队矩阵。没有更改Commit.kind开放string、发布阶段、授权范围或增加旧格式迁移。
+
+
+## 显式归档与原始操作收据
+
+文档声明的 POST branches/{branch}/archive 与创建后归档/重放回归改为 required archive_branch，删除Archive action以及Application中仅被此入口消费的String operation/Deserialize薄转发。HTTP在bounded strict JSON/path-body绑定后一次解析ArchiveBranch(OperationId)，字段非空→未知字段→operation格式的原静态次序保留；静态格式错误现先于排队后current/资源检查，中间件认证仍先于body，backend_slots仍由阻塞任务持有。
+
+原该路由输出raw OperationResult，而非operation_wire观察包。显式ArchiveResponse穷尽移动原11字段，保留kind、sequence十进制字符串、nullable commit/history/branch、current_health枚举（不把RECOVERING变UNKNOWN或加checked_at）、result载荷，不错误切换为operation_kind/publication_sequence格式。内部没有encode→Value路径，也没有为归档引入时钟观察；公共Commit.kind与OperationResult.kind仍开放String。
+
+同锁current→repo_for_branch（含migrated拒绝）→原core archive保持资源准入先于永久receipt，同operation变更既有branch先报摘要冲突，未知branch仍先NotFound；主分支保护、选中文件分支/工作区拒绝与generation溢出检查不变。回归覆盖固定canonical raw字节/最大sequence/null/Recovering、独立原请求digest与核心直接重放、只增一次generation、实际HTTP活动工作区拒绝/归档/replay、未知branch和匿名拒绝、真实panic/取消/撤权矩阵；generic授权probe移到仍存在MergeLink且ALL遍历保留。没有持久化迁移或发布阶段改变。
+
+
+## 完整分支创建的类型化输入与永久响应
+
+POST repositories/{repository}/branches 绑定路径身份后，在 bounded strict JSON 与 backend_slots 阻塞任务中一次解析 CreateBranch：repository/source/name/operation 非空字段次序、未知字段、OperationId、BranchName。BranchName 沿原 128 UTF-8 字节/NFC/PortableName 规则并缓存碰撞 key；非法 operation 仍先于名称政策失败。静态解析现在早于 Backend 排队后的 current/repository/source 动态检查；认证中间件仍先于 body。required create_branch 不再经 CreateBranch action、Deserialize 或 encode→Value；Application 保留实际 repository/source-history 归属判断，但接收 typed 命令且不重复解析 operation。
+
+同锁 current→repository→source 属于 repository→核心 mutate/永久 receipt 的顺序保持；未知或跨仓库 source 仍 HistoryNodeNotFound，先于已存在 operation 的摘要冲突。核心公开 create_branch 接受 &BranchName，所有真实直接调用方已迁移；canonical branch.create 的 source_commit_id/name 仍使用原展示字符串，碰撞循环不再为每个现有分支重复 fold 同一新名称。旧记录名称仍是 String，按各自已有边界准入，并非全模型名称重构。
+
+创建结果来自不可变永久 receipt 的 created_branch，不读取后来修改的当前分支代替重放；原核心 receipt 解码仍是既有 OperationResult.result 持久化契约，本批不宣称消除全部动态 receipt 载荷。捕获函数支持 owned 创建记录 move 字段/map，借用 GET 仍仅 clone 一次所需记录；同锁捕获原 head 的 pending facts，HTTP 复用 BranchResponse 在锁外编码。归档、后续写入、共享绑定变化、重新打开后的响应保持原创建 state/generation/head；没有新增缓存、锁、发布阶段、fsync 或格式迁移。
+
+回归覆盖静态错误优先级、独立 canonical digest、核心直接重放、折叠名称冲突、跨仓库/缺 source 在 receipt 前拒绝、归档后冻结响应、核心重启重放、真实 HTTP wire/path 绑定/匿名拒绝，以及实际 required 方法的授权、排队撤权、panic 和取消许可矩阵。剩余其他创建和文件管理动作继续列于动作库存，不以通用 Backend 方法包装旧 JSON 冒充完成。
+
+
+## 仓库创建与动态固定路由
+
+POST repositories 使用 required create_repository 和已有 RepositoryResponse，删除 CreateRepository action/通用 JSON arm。HTTP保留未知字段→target_copies 的 u64/u32 表示→name/primary/operation 非空→OperationId→名称政策的次序；strict JSON/bounded body、认证中间件和 backend_slots 任务所有权保留。target_copies=0 不在表示边界偷偷变为新的错误，而仍在原核心 route 报 PlacementInvalid；动态 slot/level/copies 的 route 校验仍先于永久 receipt，不能用已解析命令作为未来路由有效证明。
+
+RepositoryName 私有保存 PortableName 的原始 NFC 展示名与固定 Unicode key，保留原240 UTF-8字节/UTF16限制，不套用 BranchName 的128字节上限。核心 create_repository 与私有 create_repository_kind 接收此类型，不再次validate_name或对每个候选重算同一新名称key。首次 disk-root创建在原名称验证位置解析新生成的完整标签；已存在root的返回路径、actor检查、slot查找与永久operation优先级不变。真实直接调用方（核心/服务/救援测试、浏览器fixture、perf工具）同步改为明确构造类型，没有增加裸字符串后备API。
+
+当前身份同锁复核后调用原核心：合法动态route→mutate/receipt→名称碰撞/创建。canonical repository.create 的name、primary_slot_id展示输入、数值target_copies与disk-root私有file_manager_root标志不变；响应移交创建receipt内的原Repository，不读取后来的SMB绑定代替重放。核心 OperationResult.result 的 created_repository 解码仍是现有持久化契约，本批不重构其格式或宣称所有内部Value消失。
+
+回归覆盖200/240字节名称、NFC/保留名与来源、copies表示拒绝/zero策略、独立digest、same-operation动态route错误优先于冲突、名称fold碰撞、核心直接replay、绑定变化/重启后原创建wire，以及实际HTTP授权/撤权/panic/取消容量。CSRF单元fixture改用合法创建请求和typed Repository返回，不再以空对象+fake accepted响应制造公开路由已调用backend的假证明。没有新增发布阶段、同步预算、真实SDK/浏览器运行或持久化迁移。
+
+
+## 纯合并连线登记与拆分后的原始重放
+
+Web admin/request.rs 的 Kind::Link 和 admin/response.rs 是 merge-links 真实消费者；此入口仅记录关系，不承担文件结果采用或目录分支合并。HTTP绑定history路径、bounded strict JSON后按原history/source branch/source commit/target branch/target commit/operation非空字段次序解析，再拒绝未知字段并生成OperationId，调用 required create_merge_link。删除MergeLink action/Deserialize/内部JSON编码；静态格式错误前移到Backend current之前，认证中间件与阻塞任务持有backend_slots不变。
+
+EngineBackend同锁current→Application的history/repository准入→原split重放资格→核心add_merge_link。现有receipt的kind/history/actor全匹配才允许跳过已迁移端点的当前history检查，核心仍重新匹配永久请求摘要；它不是跨锁缓存，也不是旧身份永久授权。原owner/history在split后可重放；不同digest仍冲突，wrong history拒绝，新operation对迁移端点仍TreeMoved。history不写入原core canonical请求body，仍只绑定四个endpoint字段与kind/principal，不能在迁移中悄悄重建不同摘要。
+
+返回原MergeLink记录，复用Graph已有MergeLinkRecord的八字段穷尽move投影；仅为新的真实HTTP消费者扩到pub(crate)，不维护第二份字段表。核心仍按已匹配receipt重建原端点/author/history；永久记录中merge_link_id的既有动态载荷不在此批伪装成已经完成持久化类型分离。没有内容I/O、时钟观察、额外锁或发布阶段。
+
+原Application split/reopen回归已提升为真实required Backend入口，保留原冲突/错history/TreeMoved与全state不变断言；新增独立digest、同op缺端点先冲突/新op缺端点404、缺history、撤权、真实HTTP与Graph wire一致性/replay/路径绑定、完整授权/panic/取消/排队撤权矩阵。通用授权probe只改为仍存在Plan的测试期Debug记录，ALL仍遍历所有剩余动作，不恢复生产动作字符串协议。
+
+### 目录范围初始化：解析路径与快照源复用
+
+POST directory-scopes 的 HTTP 边界把空 path 转为根范围 None，非空 path 按原创建拼写规则解析 PortablePath 后无重复验证地转为 LookupPath，operation_id 解析为 OperationId。HTTP 仍拒绝 NFD 创建拼写、未知字段、非字符串与 path/body 身份冲突；核心公开初始化接口只接受已经验证的 LookupPath，因此直接库调用仍可引用规范等价的既有目录。原始请求展示拼写仍进入永久摘要，不把等价拼写错误地合并成同一幂等请求。
+
+required Backend::initialize_directory_scope 取代 JSON action；AuthorizedBackend、ManagedBackend、EngineBackend 保留当前身份与仓库的动态准入，核心事务内再做当前目录存在性与选择检查。返回 OperationResult，HTTP 才应用原 operation_wire，包括即时 current_health 时间，不改成归档接口的原始收据格式。撤权、取消后的槽位归属与 panic 边界测试走真实新方法。
+
+初始化现在只取得借用 scope view；已有选择不再为了取得目录 ID 复制 entries。首次初始化捕获一次选中子树和当前 Commit 的共享句柄，保留同一快照的规范展示路径，避免再次路径验证、再次规范化和整份 Commit 深复制。其他实际需要 entries 的 scope 调用方仍得到自有条目。没有新缓存、后台任务、锁、持久化阶段或格式迁移；首次子树筛选仍为 O(当前 namespace 条目数)，不声称全链路增量化。
+
+### 文件管理器目录分支创建与选择
+
+磁盘路径的 directory-branches / directory-select 使用同一真实命令 MutateDiskDirectory 与封闭 Create / Select 动作，移除两个 BackendAction 的 JSON 分派。bounded HTTP 解析 slot/path/name/operation：省略 path 或空串都保持原磁盘根语义，显式非字符串仍拒绝；创建拼写 PortablePath 转为 LookupPath，BranchName 缓存名称 key，OperationId 按该路由原 INVALID_REQUEST 映射保留来源。原名称失败先于 operation 格式失败的顺序不变，未知字段仍拒绝。静态格式解析现位于 HTTP 阻塞任务内、先于排队后的 current 再验证；中间件认证仍先于 body，合法命令仍先验证当前身份再接触资源。
+
+EngineBackend 在同锁 current 身份后进入真实目录命令。虚拟仓库目录需显式范围、备份盘只读、合并命名空间歧义与惰性根准入保持；只有 Create 且根路径才允许建磁盘根，已用 operation 和 main 基线名称碰撞在建根前失败。共享磁盘解析器返回输入路径的借用后缀，不先分配裸 String。命名仓库去掉一个已验证组件得到 LookupPath 后缀，直接复用 display/key；磁盘根路径直接移动原解析结果，没有内部重新 parse 或 re-hash。
+
+核心 create_directory_branches / select_directory_branches 接收 LookupPath 和 BranchName，只重查当前资源/选择/配额/正文可读性等动态条件。创建时仅需要 history ID 而不复制整个 Repository；已有目录选择和按名称选择不为取得目录 ID 复制 entries，首次物化复用已捕获共享 Commit。新名称 key 在碰撞/查找循环外已缓存，现有名称记录仍按当前存储模型计算 key。原 directory.branches.create/select 的 kind/principal/repository/path/name 展示字符串摘要、永久 receipt、scope 生成、同步顺序、操作健康观察包与文件正文检查不变；不承诺持久化全增量或吞吐提升。
+
+无效裸 JSON 的原惰性根回归迁到真实 parser 和 HTTP 路由，逐次比较数据盘字节及仓库列表；合法内核/SMB夹具调用 typed backend，授权、两种动作的排队撤权、取消容量与 panic 边界均有对应调用。既有目录选择预算、部分选择、冲突、损坏正文和重启回归保留，不使用只改测试期望来放行不完整选择。

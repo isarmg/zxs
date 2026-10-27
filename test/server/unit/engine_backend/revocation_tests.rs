@@ -244,6 +244,95 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.integrity_check(identity)
     }
+    fn create_merge_link(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateMergeLink,
+    ) -> Result<storage_contract::MergeLink, crate::ApiError> {
+        self.enter();
+        self.inner.create_merge_link(identity, request)
+    }
+    fn create_repository(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateRepository,
+    ) -> Result<storage_contract::Repository, crate::ApiError> {
+        self.enter();
+        self.inner.create_repository(identity, request)
+    }
+    fn create_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateBranch,
+    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        self.enter();
+        self.inner.create_branch(identity, request)
+    }
+    fn mutate_disk_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::MutateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.mutate_disk_directory(identity, request)
+    }
+    fn initialize_directory_scope(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::InitializeDirectoryScope,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.initialize_directory_scope(identity, request)
+    }
+    fn archive_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ArchiveBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.archive_branch(identity, request)
+    }
+    fn rename_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::RenameDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.rename_directory_branch(identity, request)
+    }
+    fn select_default_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::SelectDefaultDirectoryBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner
+            .select_default_directory_branch(identity, request)
+    }
+    fn directory_selection(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectorySelection,
+    ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
+        self.enter();
+        self.inner.directory_selection(identity, request)
+    }
+    fn directory_scopes(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadDirectoryScopes<'_>,
+    ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
+        self.enter();
+        self.inner.directory_scopes(identity, request)
+    }
+    fn default_directory_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        repository_id: &str,
+    ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
+        self.enter();
+        self.inner.default_directory_branch(identity, repository_id)
+    }
     fn file_history(
         &self,
         identity: &crate::auth::Identity,
@@ -462,7 +551,7 @@ impl Fixture {
         let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
         let repo = engine
             .create_repository(
-                "Authorization",
+                &storage_contract::RepositoryName::parse("Authorization").unwrap(),
                 "P01",
                 3,
                 "owner",
@@ -576,6 +665,17 @@ enum Request {
     EventPage,
     TopologySnapshot,
     FileHistory,
+    DefaultDirectoryBranch,
+    DirectoryScopes,
+    DirectorySelection,
+    SelectDefaultDirectoryBranch,
+    RenameDirectoryBranch,
+    DiskDirectoryCreate,
+    DiskDirectorySelect,
+    InitializeDirectoryScope,
+    ArchiveBranch,
+    CreateBranch,
+    CreateMergeLink,
     DiskStatus,
     IntegrityCheck,
     CompareCommits,
@@ -629,13 +729,15 @@ impl Request {
                 )
                 .map(|_| ()),
             Self::Administrator => backend
-                .call(
-                    BackendAction::CreateRepository,
+                .create_repository(
                     identity,
-                    json!({
-                        "name":"Forbidden new repository","primary_slot_id":"P01","target_copies":3,
-                        "operation_id":new_id("op")
-                    }),
+                    crate::CreateRepository {
+                        name: storage_contract::RepositoryName::parse("Forbidden new repository")
+                            .unwrap(),
+                        primary_slot_id: "P01".into(),
+                        target_copies: 3,
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
                 )
                 .map(|_| ()),
             Self::Tree => backend
@@ -781,6 +883,113 @@ impl Request {
                 .map(|_| ()),
             Self::DiskStatus => backend.disk_status(identity).map(|_| ()),
             Self::IntegrityCheck => backend.integrity_check(identity).map(|_| ()),
+            Self::DefaultDirectoryBranch => backend
+                .default_directory_branch(identity, "missing-repository")
+                .map(|_| ()),
+            Self::SelectDefaultDirectoryBranch => {
+                let request = crate::SelectDefaultDirectoryBranch {
+                    repository_id: "missing-repository".into(),
+                    directory_branch_id: "missing-directory".into(),
+                    operation_id: storage_contract::OperationId::generate(),
+                };
+                backend
+                    .select_default_directory_branch(identity, request)
+                    .map(|_| ())
+            }
+            Self::DirectorySelection => {
+                let request = crate::ReadDirectorySelection::parse(
+                    "missing-repository".into(),
+                    "",
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                backend.directory_selection(identity, request).map(|_| ())
+            }
+            Self::DirectoryScopes => {
+                let request = crate::ReadDirectoryScopes {
+                    repository_id: "missing-repository",
+                    filter: &crate::DirectoryBranchFilter::All,
+                    projection: crate::DirectoryBranchProjection::Full,
+                };
+                backend.directory_scopes(identity, request).map(|_| ())
+            }
+            Self::RenameDirectoryBranch => {
+                let request = crate::RenameDirectoryBranch {
+                    repository_id: "missing-repository".into(),
+                    directory_branch_id: "missing-directory".into(),
+                    name: storage_contract::BranchName::parse("renamed").unwrap(),
+                    operation_id: storage_contract::OperationId::generate(),
+                };
+                backend
+                    .rename_directory_branch(identity, request)
+                    .map(|_| ())
+            }
+            Self::ArchiveBranch => {
+                let request = crate::ArchiveBranch {
+                    branch_id: "missing-branch".into(),
+                    operation_id: storage_contract::OperationId::generate(),
+                };
+                backend.archive_branch(identity, request).map(|_| ())
+            }
+            Self::CreateBranch => backend
+                .create_branch(
+                    identity,
+                    crate::CreateBranch {
+                        repository_id: "missing".into(),
+                        source_commit_id: "missing".into(),
+                        name: storage_contract::BranchName::parse("Side").unwrap(),
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::CreateMergeLink => backend
+                .create_merge_link(
+                    identity,
+                    crate::CreateMergeLink {
+                        history_tree_id: "missing".into(),
+                        source_branch_id: "missing".into(),
+                        source_commit_id: "missing".into(),
+                        target_branch_id: "missing".into(),
+                        target_commit_id: "missing".into(),
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::InitializeDirectoryScope => backend
+                .initialize_directory_scope(
+                    identity,
+                    crate::InitializeDirectoryScope {
+                        repository_id: "missing".into(),
+                        path: None,
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::DiskDirectoryCreate => backend
+                .mutate_disk_directory(
+                    identity,
+                    crate::MutateDiskDirectory {
+                        slot_id: "missing".into(),
+                        path: None,
+                        name: storage_contract::BranchName::parse("Side").unwrap(),
+                        operation_id: storage_contract::OperationId::generate(),
+                        action: crate::DiskDirectoryAction::Create,
+                    },
+                )
+                .map(|_| ()),
+            Self::DiskDirectorySelect => backend
+                .mutate_disk_directory(
+                    identity,
+                    crate::MutateDiskDirectory {
+                        slot_id: "missing".into(),
+                        path: None,
+                        name: storage_contract::BranchName::parse("Side").unwrap(),
+                        operation_id: storage_contract::OperationId::generate(),
+                        action: crate::DiskDirectoryAction::Select,
+                    },
+                )
+                .map(|_| ()),
             Self::FileHistory => backend.file_history(identity, "missing-file").map(|_| ()),
             Self::TopologySnapshot => backend.topology_snapshot(identity).map(|_| ()),
             Self::PlacementSnapshot => backend
@@ -934,6 +1143,17 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::CommitSnapshot,
                 Request::HistoryGraph,
                 Request::FileHistory,
+                Request::DiskDirectorySelect,
+                Request::DiskDirectoryCreate,
+                Request::InitializeDirectoryScope,
+                Request::CreateMergeLink,
+                Request::CreateBranch,
+                Request::ArchiveBranch,
+                Request::RenameDirectoryBranch,
+                Request::DirectoryScopes,
+                Request::DirectorySelection,
+                Request::SelectDefaultDirectoryBranch,
+                Request::DefaultDirectoryBranch,
                 Request::EventPage,
                 Request::TopologySnapshot,
                 Request::CompareCommits,
@@ -1079,6 +1299,9 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
     );
     let before = fixture.snapshot();
     for request in [
+        Request::Operation,
+        Request::CommitWorkspace,
+        Request::SnapshotLookup,
         Request::Metadata,
         Request::Administrator,
         Request::Tree,
@@ -1107,6 +1330,17 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::EventPage,
         Request::TopologySnapshot,
         Request::FileHistory,
+        Request::DefaultDirectoryBranch,
+        Request::DirectoryScopes,
+        Request::DirectorySelection,
+        Request::SelectDefaultDirectoryBranch,
+        Request::RenameDirectoryBranch,
+        Request::DiskDirectoryCreate,
+        Request::DiskDirectorySelect,
+        Request::InitializeDirectoryScope,
+        Request::ArchiveBranch,
+        Request::CreateBranch,
+        Request::CreateMergeLink,
         Request::DiskStatus,
         Request::IntegrityCheck,
         Request::CompareCommits,

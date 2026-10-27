@@ -15,7 +15,7 @@ fn initialize(root: &Path, copies: u32, capacity: Option<u64>) -> (Engine, Repos
     let mut engine = Engine::initialize(&root.join("state"), config).unwrap();
     let repo = engine
         .create_repository(
-            "备份规则",
+            &storage_contract::RepositoryName::parse("备份规则").unwrap(),
             "P01",
             copies,
             "admin",
@@ -421,7 +421,7 @@ fn arbitrary_fixed_route_copy_count_and_independent_prefixes_are_supported() {
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(
-            "four",
+            &storage_contract::RepositoryName::parse("four").unwrap(),
             "P01",
             1,
             "admin",
@@ -495,7 +495,7 @@ fn configuration_exposes_all_historical_primary_chains_before_collecting_prefixe
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(
-            "mixed routes",
+            &storage_contract::RepositoryName::parse("mixed routes").unwrap(),
             "P01",
             1,
             "admin",
@@ -929,7 +929,13 @@ fn public_placement_query_does_not_inherit_another_repositories_file_policy() {
         })
         .unwrap();
     let other = engine
-        .create_repository("other", "P01", 2, "admin", OperationId::generate())
+        .create_repository(
+            &storage_contract::RepositoryName::parse("other").unwrap(),
+            "P01",
+            2,
+            "admin",
+            OperationId::generate(),
+        )
         .unwrap();
     assert_eq!(
         engine

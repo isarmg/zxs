@@ -20,7 +20,8 @@ fn serialized_engine_mutations_preserve_one_verified_hash_chain() {
                     .lock()
                     .unwrap()
                     .create_repository(
-                        &format!("repository-{index}"),
+                        &storage_contract::RepositoryName::parse(&format!("repository-{index}"))
+                            .unwrap(),
                         "P01",
                         1,
                         "admin",
@@ -53,7 +54,7 @@ fn detached_preparation_retains_writer_ownership_without_appending() {
     let mut engine = Engine::initialize(&root, config).unwrap();
     let repo = engine
         .create_repository(
-            "repo",
+            &storage_contract::RepositoryName::parse("repo").unwrap(),
             "P01",
             1,
             "admin",

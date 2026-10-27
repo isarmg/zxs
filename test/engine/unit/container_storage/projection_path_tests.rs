@@ -20,7 +20,7 @@ impl Fixture {
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
             .create_repository(
-                "Projection paths",
+                &storage_contract::RepositoryName::parse("Projection paths").unwrap(),
                 "P01",
                 3,
                 "admin",

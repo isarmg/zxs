@@ -18,7 +18,7 @@ fn fixture() -> (
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
-            "Application",
+            &storage_contract::RepositoryName::parse("Application").unwrap(),
             "P01",
             3,
             "owner",
@@ -323,7 +323,7 @@ fn typed_branch_rejects_cross_repository_source() {
     let (_root, mut engine, repo, owner) = fixture();
     let other = engine
         .create_repository(
-            "Other",
+            &storage_contract::RepositoryName::parse("Other").unwrap(),
             "P01",
             3,
             &owner.principal,
@@ -336,8 +336,8 @@ fn typed_branch_rejects_cross_repository_source() {
     let result = Application::new(&mut engine, &owner).create_branch(CreateBranch {
         repository_id: repo.repository_id,
         source_commit_id: source,
-        name: "Cross scope".into(),
-        operation_id: new_id("op"),
+        name: storage_contract::BranchName::parse("Cross scope").unwrap(),
+        operation_id: storage_contract::OperationId::generate(),
     });
     assert_eq!(
         result.unwrap_err().code,
@@ -349,42 +349,46 @@ fn typed_branch_rejects_cross_repository_source() {
 fn creation_replays_keep_public_response_shapes_after_archive_binding_change_and_reopen() {
     let (root, engine, _, owner) = fixture();
     let mut backend = EngineBackend::new(engine);
-    let repository_request = json!({
-        "name":"Creation response", "primary_slot_id":"P01",
-        "target_copies":3, "operation_id":new_id("op")
-    });
-    let repository = backend
-        .call(
-            crate::BackendAction::CreateRepository,
-            &owner,
-            repository_request.clone(),
-        )
+    let repository_operation = storage_contract::OperationId::generate();
+    let repository_request = |name: &str| crate::CreateRepository {
+        name: storage_contract::RepositoryName::parse(name).unwrap(),
+        primary_slot_id: "P01".into(),
+        target_copies: 3,
+        operation_id: repository_operation,
+    };
+    let created = backend
+        .create_repository(&owner, repository_request("Creation response"))
         .unwrap();
-    let created: storage_engine::Repository = json_codec::from_value(repository.clone()).unwrap();
+    let repository = json_codec::to_value(crate::backend_read::RepositoryResponse::from(
+        created.clone(),
+    ))
+    .unwrap();
     let source = backend.engine.lock().unwrap().state().histories[&created.history_tree_id]
         .root_commit_id
         .clone();
-    let branch_request = json!({
-        "repository_id":created.repository_id, "source_commit_id":source,
-        "name":"side", "operation_id":new_id("op")
-    });
-    let branch = backend
-        .call(
-            crate::BackendAction::CreateBranch,
-            &owner,
-            branch_request.clone(),
-        )
-        .unwrap();
+    let operation_id = storage_contract::OperationId::generate();
+    let branch_request = |name: &str| crate::CreateBranch {
+        repository_id: created.repository_id.clone(),
+        source_commit_id: source.clone(),
+        name: storage_contract::BranchName::parse(name).unwrap(),
+        operation_id,
+    };
+    let branch = json_codec::to_value(crate::backend_branch::BranchResponse::from(
+        backend
+            .create_branch(&owner, branch_request("side"))
+            .unwrap(),
+    ))
+    .unwrap();
     assert_eq!(branch["state"], "active");
     assert_eq!(branch["generation"], "1");
     assert!(branch.get("created_branch").is_none());
     backend
-        .call(
-            crate::BackendAction::Archive,
+        .archive_branch(
             &owner,
-            json!({
-                "branch_id":branch["branch_id"], "operation_id":new_id("op")
-            }),
+            crate::ArchiveBranch {
+                branch_id: branch["branch_id"].as_str().unwrap().into(),
+                operation_id: storage_contract::OperationId::generate(),
+            },
         )
         .unwrap();
     backend
@@ -406,25 +410,34 @@ fn creation_replays_keep_public_response_shapes_after_archive_binding_change_and
         }
         let before =
             storage_engine::canonical_json(backend.engine.lock().unwrap().state()).unwrap();
-        for (action, request, response) in [
-            (
-                crate::BackendAction::CreateRepository,
-                &repository_request,
-                &repository,
-            ),
-            (crate::BackendAction::CreateBranch, &branch_request, &branch),
-        ] {
-            assert_eq!(
-                backend.call(action, &owner, request.clone()).unwrap(),
-                *response
-            );
-            let mut changed = request.clone();
-            changed["name"] = "Different request".into();
-            assert_eq!(
-                backend.call(action, &owner, changed).unwrap_err().code,
-                storage_contract::ErrorCode::IdempotencyKeyReused
-            );
-        }
+        let replay = backend
+            .create_repository(&owner, repository_request("Creation response"))
+            .unwrap();
+        assert_eq!(
+            json_codec::to_value(crate::backend_read::RepositoryResponse::from(replay)).unwrap(),
+            repository
+        );
+        assert_eq!(
+            backend
+                .create_repository(&owner, repository_request("Different request"))
+                .unwrap_err()
+                .code,
+            storage_contract::ErrorCode::IdempotencyKeyReused
+        );
+        let replay = backend
+            .create_branch(&owner, branch_request("side"))
+            .unwrap();
+        assert_eq!(
+            json_codec::to_value(crate::backend_branch::BranchResponse::from(replay)).unwrap(),
+            branch
+        );
+        assert_eq!(
+            backend
+                .create_branch(&owner, branch_request("Different request"))
+                .unwrap_err()
+                .code,
+            storage_contract::ErrorCode::IdempotencyKeyReused
+        );
         assert_eq!(
             storage_engine::canonical_json(backend.engine.lock().unwrap().state()).unwrap(),
             before
@@ -441,7 +454,7 @@ fn merge_link_retry_replays_original_scope_after_split_and_restart() {
     let side = engine
         .create_branch(
             &root_commit,
-            "side",
+            &storage_contract::BranchName::parse("side").unwrap(),
             &owner.principal,
             storage_contract::OperationId::generate(),
         )
@@ -465,17 +478,18 @@ fn merge_link_retry_replays_original_scope_after_split_and_restart() {
         .unwrap()
         .commit_id
         .unwrap();
-    let command = MergeLink {
+    let operation_id = storage_contract::OperationId::generate();
+    let command = || crate::CreateMergeLink {
         history_tree_id: repo.history_tree_id.clone(),
-        source_branch_id: side.branch_id,
-        source_commit_id: side.head_commit_id,
-        target_branch_id: repo.main_branch_id,
+        source_branch_id: side.branch_id.clone(),
+        source_commit_id: side.head_commit_id.clone(),
+        target_branch_id: repo.main_branch_id.clone(),
         target_commit_id: cut.clone(),
-        operation_id: new_id("op"),
+        operation_id,
     };
-    let original = Application::new(&mut engine, &owner)
-        .merge_link(command.clone())
-        .unwrap();
+    let mut backend = EngineBackend::new(engine);
+    let original = backend.create_merge_link(&owner, command()).unwrap();
+    let mut engine = backend.engine.lock().unwrap();
     let plan = engine
         .create_split_plan(&repo.history_tree_id, &cut, &owner.principal)
         .unwrap();
@@ -486,46 +500,39 @@ fn merge_link_retry_replays_original_scope_after_split_and_restart() {
             storage_contract::OperationId::generate(),
         )
         .unwrap();
+    drop(engine);
     for reopened in [false, true] {
         if reopened {
-            drop(engine);
-            engine = Engine::open(&root.path().join("system")).unwrap();
+            drop(backend);
+            backend = EngineBackend::new(Engine::open(&root.path().join("system")).unwrap());
         }
-        let before = storage_engine::canonical_json(engine.state()).unwrap();
-        let replay = Application::new(&mut engine, &owner)
-            .merge_link(command.clone())
-            .unwrap();
+        let before =
+            storage_engine::canonical_json(backend.engine.lock().unwrap().state()).unwrap();
+        let replay = backend.create_merge_link(&owner, command()).unwrap();
         assert_eq!(
             storage_engine::canonical_json(&replay).unwrap(),
             storage_engine::canonical_json(&original).unwrap()
         );
-        let mut changed = command.clone();
+        let mut changed = command();
         changed.target_commit_id = root_commit.clone();
         assert_eq!(
-            Application::new(&mut engine, &owner)
-                .merge_link(changed)
-                .unwrap_err()
-                .code,
+            backend.create_merge_link(&owner, changed).unwrap_err().code,
             storage_contract::ErrorCode::IdempotencyKeyReused
         );
-        let mut wrong_history = command.clone();
+        let mut wrong_history = command();
         wrong_history.history_tree_id = split.history_tree_id.clone().unwrap();
-        assert!(
-            Application::new(&mut engine, &owner)
-                .merge_link(wrong_history)
-                .is_err()
-        );
-        let mut new_request = command.clone();
-        new_request.operation_id = new_id("op");
+        assert!(backend.create_merge_link(&owner, wrong_history).is_err());
+        let mut new_request = command();
+        new_request.operation_id = storage_contract::OperationId::generate();
         assert_eq!(
-            Application::new(&mut engine, &owner)
-                .merge_link(new_request)
+            backend
+                .create_merge_link(&owner, new_request)
                 .unwrap_err()
                 .code,
             storage_contract::ErrorCode::TreeMoved
         );
         assert_eq!(
-            storage_engine::canonical_json(engine.state()).unwrap(),
+            storage_engine::canonical_json(backend.engine.lock().unwrap().state()).unwrap(),
             before
         );
     }

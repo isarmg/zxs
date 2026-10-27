@@ -36,13 +36,7 @@ fn unix_seconds(time: SystemTime) -> Result<u64> {
 }
 
 pub fn validate_branch_name(name: &str) -> Result<()> {
-    if name.len() > 128 {
-        return Err(Error::new(
-            storage_contract::ErrorCode::MetadataTooLong,
-            "branch names must not exceed 128 UTF-8 bytes",
-        ));
-    }
-    name_policy::validate_name(name).map_err(Into::into)
+    storage_contract::validate_branch_name(name).map_err(Into::into)
 }
 
 #[cfg(test)]

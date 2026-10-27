@@ -20,6 +20,14 @@
 - Rustdoc 示例仍在文档中。生产资源、生产生成宏和已有导出的下游代码生成 API 不因名字中含 `test` 而移动或删除。
 - 未具备开发依赖、原本未启用的上游测试不因目录变化自动成为活动测试目标，也不能记为通过。
 
+### Server 的 core 特性边界
+
+`storage-server` 的 HTTP / Backend 契约库支持不启用 core 的构建；这些库代码及其可用单元测试不因集成测试依赖核心而被排除。四个实际核心集成目标 `http_engine`、`login_admission`、`telemetry_status`、`service_startup` 分别调用 EngineBackend 或启动需要 core 的守护进程，统一在 Cargo 的 `required-features = ["core"]` 声明准入。默认 core 模式继续运行这些目标；不用测试文件级 cfg 把不满足条件的目标伪装成零测试通过。
+
+仅 core 测试调用的 BackendAction 全变体清单、树请求夹具和 SMB 记录同步故障注入按同一 core 条件接线；不把无 core 仍可运行的命名空间记录、HTTP parser 或授权 mock 测试一起屏蔽，也不用 allow 隐藏空目标中的未使用项。
+
+workspace 门禁同时检查无默认特性的 all-targets 图，然后执行默认原生测试。前者验证可用目标的类型与接线，不代表核心集成测试或无 core 单元测试已经执行；运行结果仍需单列。
+
 ### 运行时夹具路径回归
 
 `test/ci/test_manifest_runtime_paths.py` 按当前来源目录和根工作区的实际 manifest 所有权检查显式 `[[test]]`、`[[bench]]` 入口，并与 `test/ci/fixtures/manifest-runtime-paths.json` 中已审阅的有限清单比对。辅助检查只识别基于 `CARGO_MANIFEST_DIR` 的静态 `concat!` 字符串和 `Path::new`／`PathBuf::from` 后接字面量 `.join()` 两种形式；不分析嵌套模块、隐式目标或动态 Rust 表达式，也不代替编译与运行验收。

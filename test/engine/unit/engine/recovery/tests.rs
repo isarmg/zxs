@@ -14,7 +14,7 @@ fn recovery_rejects_lost_published_journals_before_rewriting_projection() {
             .unwrap();
             engine
                 .create_repository(
-                    "first",
+                    &storage_contract::RepositoryName::parse("first").unwrap(),
                     "P01",
                     1,
                     "admin",
@@ -28,7 +28,13 @@ fn recovery_rejects_lost_published_journals_before_rewriting_projection() {
                 .collect();
             let operation = storage_contract::OperationId::generate();
             engine
-                .create_repository("second", "P01", 1, "admin", operation)
+                .create_repository(
+                    &storage_contract::RepositoryName::parse("second").unwrap(),
+                    "P01",
+                    1,
+                    "admin",
+                    operation,
+                )
                 .unwrap();
             let complete: Vec<_> = members
                 .iter()
@@ -90,7 +96,7 @@ fn recovery_allows_new_empty_pools_and_unpublished_preparation_artifacts() {
             assert!(
                 engine
                     .create_repository(
-                        "unpublished",
+                        &storage_contract::RepositoryName::parse("unpublished").unwrap(),
                         "P01",
                         1,
                         "admin",
@@ -109,7 +115,7 @@ fn recovery_allows_new_empty_pools_and_unpublished_preparation_artifacts() {
         assert!(reopened.state.repositories.is_empty());
         reopened
             .create_repository(
-                "published",
+                &storage_contract::RepositoryName::parse("published").unwrap(),
                 "P01",
                 1,
                 "admin",
@@ -130,7 +136,13 @@ fn recovery_rejects_dangling_journal_paths_instead_of_an_empty_history() {
             Engine::initialize(&root, Config::development([temp.path().join("primary")])).unwrap();
         let operation = storage_contract::OperationId::generate();
         engine
-            .create_repository("repo", "P01", 1, "admin", operation)
+            .create_repository(
+                &storage_contract::RepositoryName::parse("repo").unwrap(),
+                "P01",
+                1,
+                "admin",
+                operation,
+            )
             .unwrap();
         let journal = log_path(&engine.members()[0]);
         let journal_bytes = std::fs::read(&journal).unwrap();
@@ -179,7 +191,7 @@ fn recovery_repairs_exact_candidate_and_publication_replicas() {
                     engine.inject_fault_once("after_publication_3");
                 }
                 let result = engine.create_repository(
-                    "repo",
+                    &storage_contract::RepositoryName::parse("repo").unwrap(),
                     "P01",
                     3,
                     "admin",
@@ -236,7 +248,13 @@ fn pending_candidate_recovers_from_healthy_exact_replica() {
             let operation = storage_contract::OperationId::generate();
             assert!(
                 engine
-                    .create_repository("repo", "P01", 3, "admin", operation)
+                    .create_repository(
+                        &storage_contract::RepositoryName::parse("repo").unwrap(),
+                        "P01",
+                        3,
+                        "admin",
+                        operation
+                    )
                     .is_err()
             );
             let members = engine.members();
@@ -281,7 +299,7 @@ fn recovery_rejects_all_digest_mismatched_object_replicas_without_rewriting_them
         let mut engine = Engine::initialize(&root, config).unwrap();
         engine
             .create_repository(
-                "repo",
+                &storage_contract::RepositoryName::parse("repo").unwrap(),
                 "P01",
                 3,
                 "admin",
@@ -343,7 +361,7 @@ fn recovery_rejects_flat_objects_without_repair_or_deletion() {
     let mut engine = Engine::initialize(&root, config).unwrap();
     engine
         .create_repository(
-            "repo",
+            &storage_contract::RepositoryName::parse("repo").unwrap(),
             "P01",
             3,
             "admin",
@@ -419,7 +437,7 @@ fn bound_snapshot_repair_preserves_alternate_page_partition() {
     let members = engine.members();
     let repository = engine
         .create_repository(
-            "partition fixture",
+            &storage_contract::RepositoryName::parse("partition fixture").unwrap(),
             "P01",
             3,
             "admin",
@@ -551,7 +569,7 @@ fn shared_pages_are_repaired_once_per_recovery_and_rechecked_next_time() {
     let mut engine = Engine::initialize(&root, config).unwrap();
     engine
         .create_repository(
-            "files",
+            &storage_contract::RepositoryName::parse("files").unwrap(),
             "P01",
             3,
             "admin",
@@ -588,7 +606,7 @@ fn shared_pages_are_repaired_once_per_recovery_and_rechecked_next_time() {
     for n in 0..6 {
         engine
             .create_repository(
-                &format!("repo{n}"),
+                &storage_contract::RepositoryName::parse(&format!("repo{n}")).unwrap(),
                 "P01",
                 3,
                 "admin",
@@ -658,7 +676,7 @@ fn single_storage_disk_publishes_reopens_rebuilds_index_and_restores_system() {
     let mut engine = Engine::initialize(&root, config).unwrap();
     let repo = engine
         .create_repository(
-            "single",
+            &storage_contract::RepositoryName::parse("single").unwrap(),
             "P01",
             1,
             "admin",
@@ -729,7 +747,7 @@ fn configured_metadata_majority_does_not_shrink_when_disks_disappear() {
         let mut engine = Engine::initialize(&root, Config::development(disks.clone())).unwrap();
         engine
             .create_repository(
-                "majority",
+                &storage_contract::RepositoryName::parse("majority").unwrap(),
                 "P01",
                 1,
                 "admin",
@@ -771,7 +789,7 @@ fn publication_proofs_require_exact_nonempty_unique_membership() {
             Engine::initialize(&temp.path().join("system"), Config::development(disks)).unwrap();
         engine
             .create_repository(
-                "proof",
+                &storage_contract::RepositoryName::parse("proof").unwrap(),
                 "P01",
                 1,
                 "admin",
@@ -820,7 +838,13 @@ fn single_storage_disk_completes_pending_accept_but_never_invents_lost_metadata(
     engine.inject_fault_once("after_accept_1");
     assert!(
         engine
-            .create_repository("pending", "P01", 1, "admin", operation)
+            .create_repository(
+                &storage_contract::RepositoryName::parse("pending").unwrap(),
+                "P01",
+                1,
+                "admin",
+                operation
+            )
             .is_err()
     );
     let member = engine.members().remove(0);
@@ -856,7 +880,7 @@ fn self_consistent_one_member_seal_cannot_downgrade_configured_three_members() {
     let mut forged = Engine::initialize(&temp.path().join("forged-system"), reduced).unwrap();
     forged
         .create_repository(
-            "forged",
+            &storage_contract::RepositoryName::parse("forged").unwrap(),
             "P01",
             1,
             "admin",
@@ -912,7 +936,7 @@ fn nonmetadata_payload_disk_offline_proofs_require_saved_membership() {
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
-            "offline",
+            &storage_contract::RepositoryName::parse("offline").unwrap(),
             "P01",
             4,
             "admin",
@@ -988,7 +1012,7 @@ fn empty_unmounted_root_is_unavailable_without_writes() {
         let mut engine = Engine::initialize(&root, config.clone()).unwrap();
         let repo = engine
             .create_repository(
-                "majority",
+                &storage_contract::RepositoryName::parse("majority").unwrap(),
                 "P01",
                 1,
                 "admin",
@@ -1072,7 +1096,7 @@ fn missing_payload_only_replica_preserves_history_but_not_new_copy_admission() {
             let mut engine = Engine::initialize(&root, config.clone()).unwrap();
             let repo = engine
                 .create_repository(
-                    "history",
+                    &storage_contract::RepositoryName::parse("history").unwrap(),
                     "P01",
                     4,
                     "admin",
@@ -1244,7 +1268,7 @@ fn transient_seal_read_failure_requires_reopening_missing_journal_admission() {
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     engine
         .create_repository(
-            "published",
+            &storage_contract::RepositoryName::parse("published").unwrap(),
             "P01",
             1,
             "admin",
@@ -1286,7 +1310,7 @@ fn preservation_mode_keeps_partially_written_publication_bytes() {
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     engine
         .create_repository(
-            "published",
+            &storage_contract::RepositoryName::parse("published").unwrap(),
             "P01",
             1,
             "admin",

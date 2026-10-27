@@ -10,7 +10,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     .unwrap();
     let repo = engine
         .create_repository(
-            "Published selections",
+            &storage_contract::RepositoryName::parse("Published selections").unwrap(),
             "P01",
             1,
             "admin",

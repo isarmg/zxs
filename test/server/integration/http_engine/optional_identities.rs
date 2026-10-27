@@ -21,7 +21,7 @@ fn fixture() -> (tempfile::TempDir, Router, String, String, String) {
     let mut engine = Engine::initialize(&system, config).unwrap();
     let repository = engine
         .create_repository(
-            "Optional identities",
+            &storage_contract::RepositoryName::parse("Optional identities").unwrap(),
             "P01",
             1,
             "admin",
@@ -1547,4 +1547,719 @@ async fn typed_file_manager_disks_keep_projection_without_creating_roots() {
     let (status, body) = send(&app, None, "GET", "/api/file-manager/disks", None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"]["code"], "UNAUTHORIZED");
+}
+
+#[tokio::test]
+async fn typed_default_directory_http_preserves_empty_and_initialized_views() {
+    let (_root, app, namespace, _, _) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let branch = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/branches/{namespace}"),
+        None,
+    )
+    .await;
+    let history = branch["history_tree_id"].as_str().unwrap();
+    let graph = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/history-trees/{history}/graph"),
+        None,
+    )
+    .await;
+    let repository = graph["history"]["repository_id"].as_str().unwrap();
+    let uri =
+        format!("/api/repositories/{repository}/default-branch?repository_id=missing&unused=yes");
+    let before = success(&app, &token, "GET", &uri, None).await;
+    assert_eq!(before.as_object().unwrap().len(), 5);
+    assert_eq!(before["repository_id"], repository);
+    assert_eq!(before["namespace_branch_id"], namespace);
+    assert_eq!(before["name"], "main");
+    assert!(before["directory_branch_id"].is_null());
+    assert!(before["directory_branches"].as_array().unwrap().is_empty());
+    let initialized = success(
+        &app,
+        &token,
+        "POST",
+        &format!("/api/repositories/{repository}/directory-scopes"),
+        Some(json!({"path":"","operation_id":storage_contract::OperationId::generate()})),
+    )
+    .await;
+    let after = success(&app, &token, "GET", &uri, None).await;
+    assert_eq!(
+        after["directory_branch_id"],
+        initialized["result"]["directory_branch_id"]
+    );
+    assert_eq!(after["directory_branches"].as_array().unwrap().len(), 1);
+    let summary = &after["directory_branches"][0];
+    assert_eq!(summary.as_object().unwrap().len(), 8);
+    assert_eq!(summary["current"], true);
+    assert_eq!(summary["path"], "");
+    assert_eq!(summary["file_count"], "1");
+    assert!(summary.get("entries").is_none());
+    let (status, body) = send(
+        &app,
+        Some(&token),
+        "GET",
+        "/api/repositories/missing/default-branch",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "NOT_FOUND");
+    assert_eq!(body["error"]["message"], "repository not found");
+    assert_eq!(
+        send(&app, None, "GET", &uri, None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn typed_directory_scopes_keep_full_summary_and_lookup_wire() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    manager_upload(&app, &token, "Café/file.txt", b"data").await;
+    let listing = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks/P01/entries",
+        None,
+    )
+    .await;
+    let repo = listing["context"]["repository_id"].as_str().unwrap();
+    let uri = format!("/api/repositories/{repo}/directory-branches");
+    let all = success(&app, &token, "GET", &uri, None).await;
+    let summary = success(&app, &token, "GET", &format!("{uri}?summary=true"), None).await;
+    assert_eq!(all["repository_id"], repo);
+    let full_rows = all["directory_branches"].as_array().unwrap();
+    assert!(!full_rows.is_empty());
+    let summaries = summary["directory_branches"].as_array().unwrap();
+    assert_eq!(full_rows.len(), summaries.len());
+    for (full, small) in full_rows.iter().zip(summaries) {
+        assert!(full["entries"].is_array());
+        assert_eq!(small.as_object().unwrap().len(), 12);
+        for (key, value) in small.as_object().unwrap() {
+            assert_eq!(value, &full[key], "{key}");
+        }
+        assert!(small.get("entries").is_none());
+        assert!(small["sequence"].is_string());
+        assert_eq!(
+            small["file_count"],
+            full["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry["kind"] == "file")
+                .count()
+                .to_string()
+        );
+    }
+    let root_only = success(
+        &app,
+        &token,
+        "GET",
+        &format!("{uri}?path=&summary=true"),
+        None,
+    )
+    .await;
+    assert!(
+        root_only["directory_branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["directory_id"] == repo)
+    );
+    let query = url_encoding::form::Serializer::new(String::new())
+        .append_pair("path", "CAFE\u{301}")
+        .append_pair("summary", "true")
+        .finish();
+    let nfd = success(&app, &token, "GET", &format!("{uri}?{query}"), None).await;
+    let rows = nfd["directory_branches"].as_array().unwrap();
+    assert!(!rows.is_empty());
+    assert!(rows.iter().all(|row| row["path"] == "Café"));
+    for query in [
+        "summary=false",
+        "summary=TRUE",
+        "extra=yes",
+        "path=..%2Fbad",
+    ] {
+        assert_eq!(
+            send(&app, Some(&token), "GET", &format!("{uri}?{query}"), None)
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        send(
+            &app,
+            Some(&token),
+            "GET",
+            "/api/repositories/missing/directory-branches",
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(&app, None, "GET", &format!("{uri}?summary=false"), None)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn typed_directory_selection_preserves_bounded_facts_and_current_tree_conflicts() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    manager_upload(&app, &token, "Café/file.txt", b"data").await;
+    let listing = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks/P01/entries",
+        None,
+    )
+    .await;
+    let repo = listing["context"]["repository_id"].as_str().unwrap();
+    let uri = format!("/api/repositories/{repo}/directory-branches");
+    let full = success(&app, &token, "GET", &uri, None).await;
+    let branch = full["directory_branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|branch| branch["path"] == "Café" && branch["current"] == true)
+        .unwrap();
+    let entry = branch["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["kind"] == "file")
+        .unwrap();
+    let selected_path = "CAFE\u{301}/FILE.txt";
+    let body = json!({"path":"CAFE\u{301}","sources":[{"directory_branch_id":branch["directory_branch_id"],"expected_tree_id":branch["head_tree_id"]}],"entries":[{"entry_id":entry["entry_id"],"path":selected_path}]});
+    let response = success(&app, &token, "POST", &uri, Some(body.clone())).await;
+    assert_eq!(response["repository_id"], repo);
+    let rows = response["directory_branches"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].as_object().unwrap().len(), 13);
+    for (key, value) in rows[0].as_object().unwrap() {
+        if key != "entries" {
+            assert_eq!(value, &branch[key], "{key}");
+        }
+    }
+    assert_eq!(
+        rows[0]["entries"],
+        json!([{"entry_id":entry["entry_id"],"path":entry["path"],"selected_path":selected_path}])
+    );
+    let mut stale = body.clone();
+    stale["sources"][0]["expected_tree_id"] = json!("missing-tree");
+    let changed = send(&app, Some(&token), "POST", &uri, Some(stale)).await;
+    assert_eq!(changed.0, StatusCode::CONFLICT);
+    assert_eq!(changed.1["error"]["code"], "LISTING_CHANGED");
+    for malformed in [json!(null), json!(12), json!([])] {
+        let mut invalid = body.clone();
+        invalid["path"] = malformed;
+        assert_eq!(
+            send(&app, Some(&token), "POST", &uri, Some(invalid))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let mut duplicate = body.clone();
+    duplicate["entries"] = json!([body["entries"][0], body["entries"][0]]);
+    assert_eq!(
+        send(&app, Some(&token), "POST", &uri, Some(duplicate))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let mut oversized = body.clone();
+    oversized["entries"] = json!(vec![body["entries"][0].clone(); 501]);
+    let limited = send(&app, Some(&token), "POST", &uri, Some(oversized)).await;
+    assert_eq!(limited.0, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(limited.1["error"]["code"], "RESOURCE_LIMIT_EXCEEDED");
+    let empty = success(
+        &app,
+        &token,
+        "POST",
+        &uri,
+        Some(json!({"path":"","sources":[],"entries":[]})),
+    )
+    .await;
+    assert_eq!(empty["directory_branches"], json!([]));
+    assert_eq!(
+        send(
+            &app,
+            Some(&token),
+            "POST",
+            "/api/repositories/missing/directory-branches",
+            Some(body)
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(&app, None, "POST", &uri, Some(json!({}))).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn typed_directory_rename_preserves_public_receipt_and_name_error_priority() {
+    let (_root, app, namespace, _, _) = fixture();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let branch = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/branches/{namespace}"),
+        None,
+    )
+    .await;
+    let history = branch["history_tree_id"].as_str().unwrap();
+    let graph = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/history-trees/{history}/graph"),
+        None,
+    )
+    .await;
+    let repo = graph["history"]["repository_id"].as_str().unwrap();
+    let initialized = success(
+        &app,
+        &token,
+        "POST",
+        &format!("/api/repositories/{repo}/directory-scopes"),
+        Some(json!({"path":"","operation_id":storage_contract::OperationId::generate()})),
+    )
+    .await;
+    let directory = initialized["result"]["directory_branch_id"]
+        .as_str()
+        .unwrap();
+    let uri = format!("/api/repositories/{repo}/directory-branches/{directory}");
+    let operation = storage_contract::OperationId::generate();
+    let body = json!({"name":"Café","operation_id":operation});
+    let result = success(&app, &token, "PATCH", &uri, Some(body.clone())).await;
+    assert_eq!(result["operation_kind"], "directory.branch.rename");
+    assert_eq!(result["result"]["name"], "Café");
+    let replay = success(&app, &token, "PATCH", &uri, Some(body.clone())).await;
+    for key in [
+        "operation_id",
+        "operation_kind",
+        "request_digest",
+        "result",
+        "publication_sequence",
+        "commit_state",
+    ] {
+        assert_eq!(replay[key], result[key], "{key}");
+    }
+    let changed = send(
+        &app,
+        Some(&token),
+        "PATCH",
+        &uri,
+        Some(json!({"name":"Other","operation_id":operation})),
+    )
+    .await;
+    assert_eq!(changed.0, StatusCode::CONFLICT);
+    assert_eq!(changed.1["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
+    let invalid = send(
+        &app,
+        Some(&token),
+        "PATCH",
+        &uri,
+        Some(json!({"name":"bad/name","operation_id":"bad-id"})),
+    )
+    .await;
+    assert_eq!(invalid.1["error"]["code"], "INVALID_ID");
+    for (name, code) in [
+        ("bad/name".into(), "NAME_INVALID_CHARACTER"),
+        ("Cafe\u{301}".into(), "NAME_NOT_NORMALIZED"),
+        ("CON.txt".into(), "NAME_RESERVED"),
+        ("x".repeat(129), "METADATA_TOO_LONG"),
+    ] {
+        let invalid = send(
+            &app,
+            Some(&token),
+            "PATCH",
+            &uri,
+            Some(json!({"name":name,"operation_id":operation})),
+        )
+        .await;
+        assert_eq!(invalid.0, StatusCode::BAD_REQUEST);
+        assert_eq!(invalid.1["error"]["code"], code);
+    }
+    for key in ["repository_id", "directory_branch_id"] {
+        let mut mismatch = body.clone();
+        mismatch[key] = json!("other");
+        assert_eq!(
+            send(&app, Some(&token), "PATCH", &uri, Some(mismatch))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        send(
+            &app,
+            Some(&token),
+            "PATCH",
+            &format!("/api/repositories/{repo}/directory-branches/missing"),
+            Some(json!({"name":"Valid","operation_id":storage_contract::OperationId::generate()}))
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(
+            &app,
+            None,
+            "PATCH",
+            &uri,
+            Some(json!({"name":"bad/name","operation_id":"bad-id"}))
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn typed_archive_http_keeps_raw_receipt_and_rejects_active_workspace() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Archive","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate()}))).await;
+    let repository = repo["repository_id"].as_str().unwrap();
+    let history = repo["history_tree_id"].as_str().unwrap();
+    let graph = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/history-trees/{history}/graph"),
+        None,
+    )
+    .await;
+    let side=success(&app,&token,"POST",&format!("/api/repositories/{repository}/branches"),Some(json!({"source_commit_id":graph["history"]["root_commit_id"],"name":"side","operation_id":storage_contract::OperationId::generate()}))).await;
+    let branch = side["branch_id"].as_str().unwrap();
+    let uri = format!("/api/branches/{branch}/archive");
+    let workspace = success(
+        &app,
+        &token,
+        "POST",
+        "/api/workspaces",
+        Some(json!({"branch_id":branch})),
+    )
+    .await;
+    let busy = send(
+        &app,
+        Some(&token),
+        "POST",
+        &uri,
+        Some(json!({"operation_id":storage_contract::OperationId::generate()})),
+    )
+    .await;
+    assert_eq!(busy.1["error"]["code"], "WORKSPACE_BUSY");
+    success(
+        &app,
+        &token,
+        "POST",
+        &format!(
+            "/api/workspaces/{}/abort",
+            workspace["workspace_id"].as_str().unwrap()
+        ),
+        Some(json!({})),
+    )
+    .await;
+    let operation = storage_contract::OperationId::generate();
+    let body = json!({"operation_id":operation});
+    let receipt = success(&app, &token, "POST", &uri, Some(body.clone())).await;
+    assert_eq!(receipt.as_object().unwrap().len(), 11);
+    assert_eq!(receipt["kind"], "branch.archive");
+    assert_eq!(receipt["branch_id"], branch);
+    assert!(receipt["current_health"].is_string());
+    assert!(receipt["sequence"].is_string());
+    assert!(receipt["commit_id"].is_null());
+    assert!(receipt.get("operation_kind").is_none());
+    assert!(receipt.get("publication_sequence").is_none());
+    assert_eq!(
+        success(&app, &token, "POST", &uri, Some(body.clone())).await,
+        receipt
+    );
+    let archived = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/branches/{branch}"),
+        None,
+    )
+    .await;
+    assert_eq!(archived["state"], "archived");
+    let main = format!(
+        "/api/branches/{}/archive",
+        repo["main_branch_id"].as_str().unwrap()
+    );
+    let conflict = send(&app, Some(&token), "POST", &main, Some(body.clone())).await;
+    assert_eq!(conflict.1["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
+    let protected = send(
+        &app,
+        Some(&token),
+        "POST",
+        &main,
+        Some(json!({"operation_id":storage_contract::OperationId::generate()})),
+    )
+    .await;
+    assert_eq!(protected.1["error"]["code"], "MAIN_BRANCH_REQUIRED");
+    assert_eq!(
+        send(
+            &app,
+            Some(&token),
+            "POST",
+            "/api/branches/missing/archive",
+            Some(body)
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let invalid = send(
+        &app,
+        Some(&token),
+        "POST",
+        &uri,
+        Some(json!({"operation_id":"bad-id"})),
+    )
+    .await;
+    assert_eq!(invalid.1["error"]["code"], "INVALID_ID");
+    let mismatch = send(
+        &app,
+        Some(&token),
+        "POST",
+        &uri,
+        Some(json!({"branch_id":"other","operation_id":operation})),
+    )
+    .await;
+    assert_eq!(mismatch.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        send(&app, None, "POST", &uri, Some(json!({}))).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn typed_branch_creation_keeps_receipt_snapshot_and_boundary_errors() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Creation","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate()}))).await;
+    let repository = repo["repository_id"].as_str().unwrap();
+    let graph = success(
+        &app,
+        &token,
+        "GET",
+        &format!(
+            "/api/history-trees/{}/graph",
+            repo["history_tree_id"].as_str().unwrap()
+        ),
+        None,
+    )
+    .await;
+    let uri = format!("/api/repositories/{repository}/branches");
+    let body = json!({"source_commit_id":graph["history"]["root_commit_id"],"name":"Café","operation_id":storage_contract::OperationId::generate()});
+    let created = success(&app, &token, "POST", &uri, Some(body.clone())).await;
+    assert_eq!(created["name"], "Café");
+    assert_eq!(created["generation"], "1");
+    assert_eq!(created["state"], "active");
+    assert!(created.get("created_branch").is_none());
+    assert_eq!(created["materialized"], true);
+    assert_eq!(created["inherited"], false);
+    assert_eq!(created["content_state"], "LIVE");
+    assert!(created.get("file_id").is_none());
+    success(
+        &app,
+        &token,
+        "POST",
+        &format!(
+            "/api/branches/{}/archive",
+            created["branch_id"].as_str().unwrap()
+        ),
+        Some(json!({"operation_id":storage_contract::OperationId::generate()})),
+    )
+    .await;
+    assert_eq!(
+        success(&app, &token, "POST", &uri, Some(body.clone())).await,
+        created
+    );
+    let mut changed = body.clone();
+    changed["name"] = "Different".into();
+    assert_eq!(
+        send(&app, Some(&token), "POST", &uri, Some(changed))
+            .await
+            .1["error"]["code"],
+        "IDEMPOTENCY_KEY_REUSED"
+    );
+    let mut invalid = body.clone();
+    invalid["operation_id"] = "bad".into();
+    invalid["name"] = "../bad".into();
+    let error = send(&app, Some(&token), "POST", &uri, Some(invalid)).await;
+    assert_eq!(error.0, StatusCode::BAD_REQUEST);
+    assert_eq!(error.1["error"]["code"], "INVALID_ID");
+    let mut outside = body.clone();
+    outside["source_commit_id"] = "missing".into();
+    assert_eq!(
+        send(&app, Some(&token), "POST", &uri, Some(outside))
+            .await
+            .1["error"]["code"],
+        "HISTORY_NODE_NOT_FOUND"
+    );
+    let mut forged = body.clone();
+    forged["repository_id"] = "other".into();
+    assert_eq!(
+        send(&app, Some(&token), "POST", &uri, Some(forged)).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        send(&app, None, "POST", &uri, Some(body)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn typed_repository_creation_preserves_long_names_original_binding_and_route_priority() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let uri = "/api/repositories";
+    let body = json!({"name":"R".repeat(200),"primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate()});
+    let created = success(&app, &token, "POST", uri, Some(body.clone())).await;
+    assert_eq!(created["name"], body["name"]);
+    assert_eq!(created["target_copies"], 3);
+    assert_eq!(created["smb_binding_generation"], "1");
+    assert!(created.get("file_manager_root").is_none());
+    assert!(created.get("created_repository").is_none());
+    let binding = format!(
+        "/api/repositories/{}/smb-binding",
+        created["repository_id"].as_str().unwrap()
+    );
+    success(&app,&token,"PUT",&binding,Some(json!({"branch_id":created["main_branch_id"],"enabled":false,"expected_history_generation":"1","operation_id":storage_contract::OperationId::generate()}))).await;
+    assert_eq!(
+        success(&app, &token, "POST", uri, Some(body.clone())).await,
+        created
+    );
+    for (copies, code) in [
+        (0, "PLACEMENT_INVALID"),
+        (4, "BACKUP_ROUTE_INCOMPLETE"),
+        (2, "IDEMPOTENCY_KEY_REUSED"),
+    ] {
+        let mut changed = body.clone();
+        changed["target_copies"] = json!(copies);
+        assert_eq!(
+            send(&app, Some(&token), "POST", uri, Some(changed)).await.1["error"]["code"],
+            code
+        );
+    }
+    let mut invalid = body.clone();
+    invalid["operation_id"] = "bad".into();
+    invalid["name"] = "../bad".into();
+    assert_eq!(
+        send(&app, Some(&token), "POST", uri, Some(invalid)).await.1["error"]["code"],
+        "INVALID_ID"
+    );
+    for copies in [json!(u64::MAX), json!("3"), json!(-1)] {
+        let mut invalid = body.clone();
+        invalid["target_copies"] = copies;
+        assert_eq!(
+            send(&app, Some(&token), "POST", uri, Some(invalid)).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let mut forged = body.clone();
+    forged["file_manager_root"] = json!(true);
+    assert_eq!(
+        send(&app, Some(&token), "POST", uri, Some(forged)).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        send(&app, None, "POST", uri, Some(body)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn typed_merge_link_http_reuses_graph_wire_and_permanent_receipt() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Links","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate()}))).await;
+    let history = repo["history_tree_id"].as_str().unwrap();
+    let graph_uri = format!("/api/history-trees/{history}/graph");
+    let graph = success(&app, &token, "GET", &graph_uri, None).await;
+    let root_commit = graph["history"]["root_commit_id"].clone();
+    let side=success(&app,&token,"POST",&format!("/api/repositories/{}/branches",repo["repository_id"].as_str().unwrap()),Some(json!({"name":"side","source_commit_id":root_commit,"operation_id":storage_contract::OperationId::generate()}))).await;
+    let uri = format!("/api/history-trees/{history}/merge-links");
+    let body = json!({"source_branch_id":side["branch_id"],"source_commit_id":side["head_commit_id"],"target_branch_id":repo["main_branch_id"],"target_commit_id":root_commit,"operation_id":storage_contract::OperationId::generate()});
+    let created = success(&app, &token, "POST", &uri, Some(body.clone())).await;
+    assert_eq!(created.as_object().unwrap().len(), 8);
+    assert_eq!(created["history_tree_id"], history);
+    assert_eq!(created["operation_id"], body["operation_id"]);
+    for field in [
+        "source_branch_id",
+        "source_commit_id",
+        "target_branch_id",
+        "target_commit_id",
+    ] {
+        assert_eq!(created[field], body[field]);
+    }
+    let graph = success(&app, &token, "GET", &graph_uri, None).await;
+    assert_eq!(graph["merge_links"][0], created);
+    assert_eq!(
+        success(&app, &token, "POST", &uri, Some(body.clone())).await,
+        created
+    );
+    let mut conflict = body.clone();
+    conflict["source_branch_id"] = "missing".into();
+    assert_eq!(
+        send(&app, Some(&token), "POST", &uri, Some(conflict.clone()))
+            .await
+            .1["error"]["code"],
+        "IDEMPOTENCY_KEY_REUSED"
+    );
+    conflict["operation_id"] = json!(storage_contract::OperationId::generate());
+    assert_eq!(
+        send(&app, Some(&token), "POST", &uri, Some(conflict))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let mut invalid = body.clone();
+    invalid["operation_id"] = "bad".into();
+    assert_eq!(
+        send(&app, Some(&token), "POST", &uri, Some(invalid))
+            .await
+            .1["error"]["code"],
+        "INVALID_ID"
+    );
+    let mut forged = body.clone();
+    forged["history_tree_id"] = "other".into();
+    assert_eq!(
+        send(&app, Some(&token), "POST", &uri, Some(forged)).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        send(&app, None, "POST", &uri, Some(body)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
 }
