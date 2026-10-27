@@ -383,15 +383,15 @@ fn save_oracle_file(engine: &mut Engine, branch: &str) -> String {
 fn assert_full_encoder_oracle(
     before: &State,
     after: &State,
-    roots: &BTreeMap<String, String>,
+    roots: &crate::metadata_map::MapRoot,
     members: &[DiskConfig],
-) -> BTreeMap<String, String> {
+) -> crate::metadata_map::MapRoot {
     let (actual, prepared) =
         prepare_history_manifests_incremental(before, after, roots, members, MAX_METADATA).unwrap();
     let (expected, full) = prepare_history_manifests(after, MAX_METADATA).unwrap();
     assert_eq!(
-        canonical_json(&actual).unwrap(),
-        canonical_json(&expected).unwrap()
+        canonical_json(actual.reference()).unwrap(),
+        canonical_json(expected.reference()).unwrap()
     );
     assert_eq!(
         prepared
@@ -415,8 +415,9 @@ fn assert_full_encoder_oracle(
     for object in full {
         object.store(oracle).unwrap();
     }
-    for hash in expected.values() {
-        let (_, graph) = bound_history_graph(oracle, hash).unwrap();
+    for id in after.histories.keys() {
+        let hash = &expected.catalog_binding(id).unwrap().hash;
+        let (_, graph) = bound_history_graph_observed(oracle, hash, &mut |_| {}).unwrap();
         for object in graph {
             let (kind, digest) = (object.kind(), object.hash());
             assert_eq!(
@@ -460,7 +461,11 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
     let members = engine.members();
     let mut before = engine.state().clone();
     let mut roots = store_history_manifests_bounded(&members, &before, MAX_METADATA).unwrap();
-    let untouched = roots[&second.history_tree_id].clone();
+    let untouched = roots
+        .catalog_binding(&second.history_tree_id)
+        .unwrap()
+        .hash
+        .clone();
     for note in [Some("added"), Some("updated"), None] {
         let mut after = before.clone();
         after.begin_tracking();
@@ -473,7 +478,10 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
             }
         }
         roots = assert_full_encoder_oracle(&before, &after, &roots, &members);
-        assert_eq!(roots[&second.history_tree_id], untouched);
+        assert_eq!(
+            roots.catalog_binding(&second.history_tree_id).unwrap().hash,
+            untouched
+        );
         before = after;
     }
     let mut after = before.clone();
@@ -521,8 +529,11 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
         BTreeSet::from([third.history_tree_id.clone()])
     );
     let expanded = assert_full_encoder_oracle(&base, &new_state, &original_roots, &members);
-    for (history, hash) in &original_roots {
-        assert_eq!(&expanded[history], hash);
+    for history in base.histories.keys() {
+        assert_eq!(
+            expanded.catalog_binding(history).unwrap().hash,
+            original_roots.catalog_binding(history).unwrap().hash
+        );
     }
     let mut removed = new_state.clone();
     removed.begin_tracking();
@@ -549,11 +560,12 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
         temp.path().join("c"),
     ]);
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
-    let (history, hash) = roots.iter().next().unwrap();
+    let history = before.histories.keys().next().unwrap();
+    let hash = &roots.catalog_binding(history).unwrap().hash;
 
     // A missing leaf (with an intact root on every replica) exercises failure
     // after the loader has already authenticated the published root.
-    let (_, graph) = bound_history_graph(&config.disks, hash).unwrap();
+    let (_, graph) = bound_history_graph_observed(&config.disks, hash, &mut |_| {}).unwrap();
     let object = graph
         .iter()
         .find(|object| object.kind() == "state-page")
@@ -570,7 +582,7 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
         object.store(&config.disks).unwrap();
     }
     for disk in &config.disks {
-        bound_history_graph(std::slice::from_ref(disk), hash).unwrap();
+        bound_history_graph_observed(std::slice::from_ref(disk), hash, &mut |_| {}).unwrap();
     }
 
     // Every root is corrupt, so a healthy replica cannot mask the fallback.
@@ -595,8 +607,15 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
 
     // A syntactically valid but wrong prior root cannot be silently rebound to
     // the reconstructed State, even when the claimed object is wholly absent.
-    let mut wrong_roots = roots.clone();
-    wrong_roots.insert(history.clone(), "0".repeat(64));
+    let wrong_roots = crate::metadata_map::Encoder::new(MAX_METADATA)
+        .update_catalog(&roots, BTreeSet::from([history.clone()]), |id| {
+            let mut binding = roots.catalog_binding(id).cloned();
+            if id == history {
+                binding.as_mut().unwrap().hash = "0".repeat(64);
+            }
+            Ok(binding)
+        })
+        .unwrap();
     let Err(error) = prepare_history_manifests_incremental(
         &before,
         &after,

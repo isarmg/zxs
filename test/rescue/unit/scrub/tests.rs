@@ -172,6 +172,15 @@ fn json_outcome_never_promotes_partial_cancelled_or_failed_reports_to_success() 
     let json = json_codec::to_value(wire::Report::from(&report)).unwrap();
     assert_eq!(json["state"], "partial_failure");
     assert!(json["last_complete_success_at"].is_null());
+    for (completion, state) in [
+        (IntegrityScrubCompletion::Running, "running"),
+        (IntegrityScrubCompletion::Superseded, "expired"),
+    ] {
+        report.completion = completion;
+        let json = json_codec::to_value(wire::Report::from(&report)).unwrap();
+        assert_eq!(json["state"], state);
+        assert!(json["last_complete_success_at"].is_null());
+    }
     report.completion = IntegrityScrubCompletion::Cancelled;
     let json = json_codec::to_value(wire::Report::from(&report)).unwrap();
     assert_eq!(json["state"], "cancelled");

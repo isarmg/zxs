@@ -4,6 +4,11 @@ use json_codec::Value;
 use storage_engine::Engine;
 
 pub(crate) fn error(error: storage_engine::Error) -> ApiError {
+    error_response(&error).with_source(error)
+}
+
+/// Borrowed HTTP projection for retained reports; diagnostic sources stay local.
+pub(crate) fn error_response(error: &storage_engine::Error) -> ApiError {
     let code = super::error_registry::public_code(error.code());
     let status = super::error_registry::status(code);
     if status == ::http::StatusCode::INTERNAL_SERVER_ERROR {
@@ -12,11 +17,10 @@ pub(crate) fn error(error: storage_engine::Error) -> ApiError {
             code,
             "storage operation could not be completed; administrator inspection is required",
         )
-        .with_source(error)
     } else {
         let mut mapped = ApiError::new(status, code, error.message());
         mapped.retryable |= error.is_retryable();
-        mapped.with_source(error)
+        mapped
     }
 }
 

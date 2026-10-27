@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 /// Current metadata identity probes, detached from the engine lock.
 /// This is an observation, never admission for a write.
 pub struct MetadataMemberProbe {
+    metadata_integrity: std::sync::Arc<super::provenance::MetadataIntegrity>,
     config: ValidatedConfig,
 }
 
@@ -25,13 +26,15 @@ impl MetadataMemberProbe {
     /// Returns the first unavailable or mismatched member, preserving its source.
     pub fn verify(&self) -> Result<()> {
         for disk in self.config.metadata_members() {
-            validate_seal(&self.config, disk)?;
+            self.metadata_integrity
+                .observe(validate_seal(&self.config, disk))?;
         }
         Ok(())
     }
 }
 
 pub struct DiskObservationPlan {
+    metadata_integrity: std::sync::Arc<super::provenance::MetadataIntegrity>,
     config: ValidatedConfig,
     used_bytes: BTreeMap<String, u64>,
 }
@@ -47,6 +50,7 @@ impl Engine {
     /// Capture shared immutable configuration without inspecting historical state.
     pub fn prepare_metadata_member_probe(&self) -> MetadataMemberProbe {
         MetadataMemberProbe {
+            metadata_integrity: std::sync::Arc::clone(&self.metadata_integrity),
             config: self.config.clone(),
         }
     }
@@ -79,6 +83,7 @@ impl Engine {
             }
         }
         DiskObservationPlan {
+            metadata_integrity: std::sync::Arc::clone(&self.metadata_integrity),
             config: self.config.clone(),
             used_bytes,
         }
@@ -92,7 +97,17 @@ impl Engine {
     /// Development directories may share one physical filesystem.
     pub fn disk_capacity(&self, slot: &str) -> Result<(u64, u64, u64)> {
         let disk = self.disk(slot)?;
-        capacity(disk, &validate_seal(&self.config, disk)?)
+        let identity = validate_seal(&self.config, disk);
+        let identity = if disk.metadata_member {
+            self.metadata_integrity.observe(identity)?
+        } else {
+            identity?
+        };
+        capacity(disk, &identity).inspect_err(|error| {
+            if disk.metadata_member && error.code() == ErrorCode::DiskIdentityMismatch {
+                self.metadata_integrity.fault(error);
+            }
+        })
     }
 }
 
@@ -135,8 +150,24 @@ impl DiskObservationPlan {
             .disks
             .iter()
             .map(|disk| {
-                let seal = validate_seal(&self.config, disk).ok();
-                let capacity = seal.as_ref().and_then(|seal| capacity(disk, seal).ok());
+                let identity = validate_seal(&self.config, disk);
+                let seal = if disk.metadata_member {
+                    self.metadata_integrity.observe(identity)
+                } else {
+                    identity
+                }
+                .ok();
+                let capacity = seal.as_ref().and_then(|seal| {
+                    capacity(disk, seal)
+                        .inspect_err(|error| {
+                            if disk.metadata_member
+                                && error.code() == ErrorCode::DiskIdentityMismatch
+                            {
+                                self.metadata_integrity.fault(error);
+                            }
+                        })
+                        .ok()
+                });
                 let status = DiskStatus {
                     slot_id: disk.slot_id.clone(),
                     disk_id: disk.disk_id.clone(),

@@ -1,4 +1,4 @@
-//! Independent schema/byte oracle for unchanged-field snapshot reuse.
+//! Independent schema/byte oracle for typed-key radix snapshot updates.
 //!
 //! Fixtures are decoded through State's serde schema; the reference encoder
 //! materializes State independently of the incremental field classification.
@@ -182,7 +182,20 @@ fn raw_hash(kind: &str, bytes: &[u8]) -> String {
 
 fn assert_complete_byte_oracle(actual: &PreparedSnapshot, state: &State, members: &[DiskConfig]) {
     let reference = prepare_snapshot_reference(state, MAX_METADATA).unwrap();
+    let full = prepare_snapshot(state, MAX_METADATA).unwrap();
     assert_eq!(actual.hash, reference.hash);
+    assert_eq!(full.hash, reference.hash);
+    assert_eq!(full.objects.len(), reference.objects.len());
+    for prepared in [actual, &full] {
+        for object in &prepared.objects {
+            let expected = reference
+                .objects
+                .iter()
+                .find(|entry| entry.kind == object.kind && entry.hash == object.hash)
+                .unwrap();
+            assert_eq!(object.bytes, expected.bytes);
+        }
+    }
     assert_eq!(
         canonical_json(&actual.descriptor).unwrap(),
         canonical_json(&reference.descriptor).unwrap()
@@ -212,6 +225,28 @@ fn assert_complete_byte_oracle(actual: &PreparedSnapshot, state: &State, members
     }
 }
 
+fn assert_explicit_empty_roots(snapshot: &Snapshot) {
+    let expected_hash = raw_hash("state-page", b"{}");
+    assert_eq!(
+        snapshot.maps.len(),
+        REQUIRED_FIELDS.len() + OPTIONAL_FIELDS.len()
+    );
+    for field in REQUIRED_FIELDS.iter().chain(OPTIONAL_FIELDS) {
+        let reference = &snapshot.maps[*field];
+        assert_eq!(reference.kind(), crate::metadata_map::ReferenceKind::Page);
+        assert_eq!(reference.hash(), expected_hash, "{field}");
+    }
+    assert_eq!(
+        snapshot.events.kind(),
+        crate::metadata_map::ReferenceKind::Page
+    );
+    assert_eq!(snapshot.events.hash(), expected_hash);
+    let encoded = json_codec::to_value(snapshot).unwrap();
+    assert_eq!(encoded["format"], "radix-map-roots");
+    assert!(encoded.get("pages").is_none());
+    assert!(encoded.get("scalars").is_none());
+}
+
 #[test]
 fn incremental_oracle_fixture_covers_every_tracked_field_and_current_wire_categories() {
     let state = populated_state();
@@ -219,19 +254,16 @@ fn incremental_oracle_fixture_covers_every_tracked_field_and_current_wire_catego
     let config = config(temp.path());
     let actual = prepare_snapshot(&state, MAX_METADATA).unwrap();
     assert_complete_byte_oracle(&actual, &state, &config.disks);
-    let empty = prepare_snapshot(&State::default(), MAX_METADATA).unwrap();
-    for field in REQUIRED_FIELDS.iter().chain(std::iter::once(&"events")) {
-        assert_eq!(empty.descriptor.pages[*field], Vec::<String>::new());
-    }
-    for field in OPTIONAL_FIELDS {
-        assert!(!empty.descriptor.pages.contains_key(*field), "{field}");
-    }
+    let empty_state = State::default();
+    let empty = prepare_snapshot(&empty_state, MAX_METADATA).unwrap();
+    assert_explicit_empty_roots(&empty.descriptor);
+    assert_complete_byte_oracle(&empty, &empty_state, &config.disks);
 }
 
 fn baseline(state: &State, members: &[DiskConfig]) -> SnapshotReuse {
     let snapshot = prepare_snapshot(state, MAX_METADATA).unwrap();
     snapshot.store(members, state).unwrap();
-    snapshot.reuse_basis().unwrap()
+    snapshot.reuse_basis()
 }
 
 fn incremental(
@@ -276,7 +308,20 @@ fn incremental_snapshot_retains_fixed_publication_root_and_every_raw_object_byte
     assert_only_field_encoded(&counts, None);
     let fixture = fixture();
     assert_eq!(actual.hash, fixture["snapshot_hash"].as_str().unwrap());
-    assert_eq!(fixture["snapshot_objects"].as_object().unwrap().len(), 23);
+    let mut addresses = snapshot_addresses(&config.disks[0], &actual.descriptor)
+        .into_iter()
+        .map(|(kind, hash)| format!("{kind}/{hash}"))
+        .collect::<BTreeSet<_>>();
+    addresses.insert(format!("snapshot/{}", actual.hash));
+    assert_eq!(
+        addresses,
+        fixture["snapshot_objects"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    );
     for (address, bytes) in fixture["snapshot_objects"].as_object().unwrap() {
         let (kind, hash) = address.split_once('/').unwrap();
         for disk in &config.disks {
@@ -290,7 +335,7 @@ fn incremental_snapshot_retains_fixed_publication_root_and_every_raw_object_byte
 }
 
 #[test]
-fn incremental_snapshot_unchanged_maps_have_zero_page_serde_with_all_auth_shapes() {
+fn incremental_snapshot_unchanged_maps_have_zero_record_serialization_with_all_auth_shapes() {
     let before = populated_state();
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
@@ -352,13 +397,13 @@ fn incremental_snapshot_each_tracked_field_mutation_reencodes_only_that_field() 
             let (actual, counts) = incremental(&before, &after, &basis, &config.disks);
             assert_only_field_encoded(&counts, Some(stringify!($field)));
             assert_ne!(
-                actual.descriptor.pages[stringify!($field)],
-                descriptor.pages[stringify!($field)]
+                actual.descriptor.maps[stringify!($field)],
+                descriptor.maps[stringify!($field)]
             );
             for field in REQUIRED_FIELDS.iter().chain(OPTIONAL_FIELDS) {
                 if *field != stringify!($field) {
                     assert_eq!(
-                        actual.descriptor.pages[*field], descriptor.pages[*field],
+                        actual.descriptor.maps[*field], descriptor.maps[*field],
                         "{field}"
                     );
                 }
@@ -397,6 +442,7 @@ fn incremental_snapshot_all_and_foreign_map_replacements_never_claim_empty_delta
                 ));
                 let (actual, counts) = incremental(&before, &after, &basis, &config.disks);
                 assert_only_field_encoded(&counts, Some(stringify!($field)));
+                assert_eq!(counts[stringify!($field)], after.$field.len());
                 assert_complete_byte_oracle(&actual, &after, &config.disks);
             }
         }};
@@ -422,14 +468,9 @@ fn incremental_snapshot_empty_required_optional_removal_and_reintroduction_match
     empty.control_auth = None;
     let (actual, counts) = incremental(&before, &empty, &basis, &config.disks);
     assert_only_field_encoded(&counts, None); // No values exist to serialize.
-    for field in REQUIRED_FIELDS.iter().chain(std::iter::once(&"events")) {
-        assert_eq!(actual.descriptor.pages[*field], Vec::<String>::new());
-    }
-    for field in OPTIONAL_FIELDS {
-        assert!(!actual.descriptor.pages.contains_key(*field), "{field}");
-    }
+    assert_explicit_empty_roots(&actual.descriptor);
     assert_complete_byte_oracle(&actual, &empty, &config.disks);
-    let empty_basis = actual.reuse_basis().unwrap();
+    let empty_basis = actual.reuse_basis();
     let mut still_empty = empty.clone();
     still_empty.begin_tracking();
     let (actual, counts) = incremental(&empty, &still_empty, &empty_basis, &config.disks);
@@ -467,19 +508,17 @@ fn incremental_snapshot_deserialized_maps_are_cold_and_u64_maps_stay_decimal_str
         ("file_selection_generations", 9_007_199_254_740_992),
     ] {
         let mut seen = Vec::new();
-        actual
-            .visit_field_pages(field, &config.disks, &after, |_, bytes| {
-                let page: BTreeMap<String, String> = json_codec::from_slice(bytes)?;
-                seen.extend(page.into_values());
-                Ok(())
-            })
-            .unwrap();
+        for hash in map_pages(&config.disks[0], &actual.descriptor.maps[field]) {
+            let bytes = std::fs::read(object_path(&config.disks[0], "state-page", &hash)).unwrap();
+            let page: BTreeMap<String, String> = json_codec::from_slice(&bytes).unwrap();
+            seen.extend(page.into_values());
+        }
         assert_eq!(seen, vec![value.to_string()]);
     }
 }
 
 #[test]
-fn incremental_snapshot_many_pages_reuse_exact_order_without_value_serialization() {
+fn incremental_snapshot_many_radix_nodes_reuse_exact_roots_without_value_serialization() {
     let before = State {
         content_states: (0u32..4096)
             .map(|number| {
@@ -497,20 +536,25 @@ fn incremental_snapshot_many_pages_reuse_exact_order_without_value_serialization
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
     let original = prepare_snapshot(&before, MAX_METADATA).unwrap();
-    assert!(original.descriptor.pages["content_states"].len() > 50);
-    assert!(original.descriptor.pages["file_notes"].len() > 50);
     original.store(&config.disks, &before).unwrap();
-    let basis = original.reuse_basis().unwrap();
+    for field in ["content_states", "file_notes"] {
+        assert!(map_pages(&config.disks[0], &original.descriptor.maps[field]).len() > 32);
+    }
+    let basis = original.reuse_basis();
     let mut after = before.clone();
     after.begin_tracking();
     after.sequence = 1;
     let (actual, counts) = incremental(&before, &after, &basis, &config.disks);
     assert_only_field_encoded(&counts, None);
-    assert_eq!(actual.descriptor.pages, original.descriptor.pages);
+    assert_eq!(actual.descriptor.maps, original.descriptor.maps);
     assert_eq!(
-        snapshot::SNAPSHOT_PEAK_PAGE_ENTRIES.with(|peak| peak.get()),
-        0,
-        "reference-only preparation and installation must not collect typed map entries"
+        actual.objects.len(),
+        1,
+        "unchanged maps prepare no dependency objects"
+    );
+    assert_eq!(
+        snapshot_addresses(&config.disks[0], &actual.descriptor),
+        snapshot_addresses(&config.disks[0], &original.descriptor)
     );
     assert_complete_byte_oracle(&actual, &after, &config.disks);
 }
@@ -550,18 +594,27 @@ fn incremental_snapshot_missing_special_map_pages_reconstruct_exact_wire_bytes()
     let config = config(temp.path());
     let original = prepare_snapshot(&before, MAX_METADATA).unwrap();
     original.store(&config.disks, &before).unwrap();
-    let basis = original.reuse_basis().unwrap();
+    let basis = original.reuse_basis();
     let missing = [
         "directory_selection_generations",
         "file_selection_generations",
         "file_names",
     ];
-    assert!(original.descriptor.pages["file_selection_generations"].len() > 1);
-    for field in missing {
-        for hash in &original.descriptor.pages[field] {
-            for disk in &config.disks {
-                std::fs::remove_file(object_path(disk, "state-page", hash)).unwrap();
-            }
+    assert!(
+        map_pages(
+            &config.disks[0],
+            &original.descriptor.maps["file_selection_generations"]
+        )
+        .len()
+            > 1
+    );
+    let addresses = missing
+        .iter()
+        .flat_map(|field| map_addresses(&config.disks[0], &original.descriptor.maps[*field]))
+        .collect::<BTreeSet<_>>();
+    for (kind, hash) in addresses {
+        for disk in &config.disks {
+            std::fs::remove_file(object_path(disk, kind, &hash)).unwrap();
         }
     }
     let mut after = before.clone();
@@ -575,12 +628,12 @@ fn incremental_snapshot_missing_special_map_pages_reconstruct_exact_wire_bytes()
             "{field}: {counts:?}"
         );
     }
-    assert_eq!(actual.descriptor.pages, original.descriptor.pages);
+    assert_eq!(actual.descriptor.maps, original.descriptor.maps);
     assert_complete_byte_oracle(&actual, &after, &config.disks);
 }
 
 #[test]
-fn incremental_snapshot_middle_and_final_missing_pages_are_visited_once_in_original_order() {
+fn incremental_snapshot_middle_and_final_missing_pages_require_the_exact_reconstructed_root() {
     let before = State {
         file_notes: (0..2048)
             .map(|number| (format!("note-{number:020}"), "value".into()))
@@ -591,84 +644,117 @@ fn incremental_snapshot_middle_and_final_missing_pages_are_visited_once_in_origi
     let config = config(temp.path());
     let original = prepare_snapshot(&before, MAX_METADATA).unwrap();
     original.store(&config.disks, &before).unwrap();
-    let basis = original.reuse_basis().unwrap();
-    let expected = &original.descriptor.pages["file_notes"];
-    assert!(expected.len() > 20);
+    let basis = original.reuse_basis();
+    let expected = map_addresses(&config.disks[0], &original.descriptor.maps["file_notes"]);
+    let pages = map_pages(&config.disks[0], &original.descriptor.maps["file_notes"]);
+    assert!(pages.len() > 16);
+    let first: BTreeMap<String, String> =
+        load_object(&config.disks[0], "state-page", &pages[0]).unwrap();
+    let first_key = first.keys().next().unwrap();
+    let original_bytes = expected
+        .iter()
+        .map(|(kind, hash)| {
+            (
+                (*kind, hash.clone()),
+                std::fs::read(object_path(&config.disks[0], kind, hash)).unwrap(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut after = before.clone();
     after.begin_tracking();
-    for missing_index in [expected.len() / 2, expected.len() - 1] {
+    for missing_index in [pages.len() / 2, pages.len() - 1] {
+        after.sequence += 1;
+        let missing = &pages[missing_index];
         for disk in &config.disks {
-            std::fs::remove_file(object_path(disk, "state-page", &expected[missing_index]))
-                .unwrap();
+            std::fs::remove_file(object_path(disk, "state-page", missing)).unwrap();
         }
         let actual = prepare_snapshot_incremental(&before, &after, &basis, MAX_METADATA).unwrap();
-        let mut visited = Vec::new();
-        actual
-            .visit_field_pages("file_notes", &config.disks, &after, |hash, bytes| {
-                assert_eq!(raw_hash("state-page", bytes), hash);
-                visited.push(hash.to_owned());
-                Ok(())
-            })
-            .unwrap();
-        assert_eq!(visited, *expected, "missing page index {missing_index}");
-        // Suppressing duplicate callbacks must not skip verification of the
-        // reconstructed prefix. Its already-read bytes still bind this field.
+        // A different value in an already-read radix prefix must invalidate the
+        // reconstruction even when the missing object is later in the traversal.
         let mut wrong = after.clone();
-        let first_key = wrong.file_notes.keys().next().unwrap().clone();
-        wrong.file_notes.insert(first_key, "changed prefix".into());
-        let mut visited_before_error = Vec::new();
-        let error = actual
-            .visit_field_pages("file_notes", &config.disks, &wrong, |hash, _| {
-                visited_before_error.push(hash.to_owned());
-                Ok(())
-            })
-            .unwrap_err();
-        assert_eq!(error.code(), storage_contract::ErrorCode::ObjectCorrupt);
-        assert_eq!(visited_before_error, expected[..missing_index]);
-        // Restore through the full immutable writer before moving the hole to
-        // the final page; otherwise a previous middle hole would mask it.
-        original.store(&config.disks, &before).unwrap();
+        wrong
+            .file_notes
+            .insert(first_key.clone(), "changed prefix".into());
+        snapshot::take_encoding_counts();
+        assert_eq!(
+            actual.store(&config.disks, &wrong).unwrap_err().code(),
+            storage_contract::ErrorCode::ObjectCorrupt
+        );
+        assert_eq!(
+            snapshot::take_encoding_counts(),
+            BTreeMap::from([("file_notes".into(), before.file_notes.len())])
+        );
+        for disk in &config.disks {
+            assert!(!object_path(disk, "snapshot", &actual.hash).exists());
+            assert!(!object_path(disk, "state-page", missing).exists());
+            for ((kind, hash), bytes) in &original_bytes {
+                if *kind != "state-page" || hash != missing {
+                    assert_eq!(
+                        std::fs::read(object_path(disk, kind, hash)).unwrap(),
+                        *bytes
+                    );
+                }
+            }
+        }
+        snapshot::take_encoding_counts();
+        actual.store(&config.disks, &after).unwrap();
+        assert_eq!(
+            snapshot::take_encoding_counts(),
+            BTreeMap::from([("file_notes".into(), before.file_notes.len())])
+        );
+        assert_eq!(
+            map_addresses(&config.disks[0], &actual.descriptor.maps["file_notes"]),
+            expected
+        );
+        assert_complete_byte_oracle(&actual, &after, &config.disks);
     }
 }
 
 #[test]
-fn incremental_snapshot_callback_errors_are_not_retried_as_source_failures() {
-    let before = State {
-        file_notes: (0..512)
-            .map(|number| (format!("note-{number:020}"), "value".into()))
-            .collect(),
-        ..Default::default()
-    };
-    let temp = tempfile::tempdir().unwrap();
-    let config = config(temp.path());
-    let original = prepare_snapshot(&before, MAX_METADATA).unwrap();
-    original.store(&config.disks, &before).unwrap();
-    let basis = original.reuse_basis().unwrap();
-    let mut after = before.clone();
-    after.begin_tracking();
+fn incremental_snapshot_installation_errors_are_not_retried_as_source_failures() {
     for missing in [false, true] {
+        let before = State {
+            file_notes: (0..512)
+                .map(|number| (format!("note-{number:020}"), "value".into()))
+                .collect(),
+            ..Default::default()
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let config = config(temp.path());
+        let original = prepare_snapshot(&before, MAX_METADATA).unwrap();
+        original.store(&config.disks, &before).unwrap();
+        let pages = map_pages(&config.disks[0], &original.descriptor.maps["file_notes"]);
+        assert!(pages.len() > 2);
+        let mut after = before.clone();
+        after.begin_tracking();
+        after.sequence += 1;
+        let actual =
+            prepare_snapshot_incremental(&before, &after, &original.reuse_basis(), MAX_METADATA)
+                .unwrap();
         if missing {
-            let first = &original.descriptor.pages["file_notes"][0];
             for disk in &config.disks {
-                std::fs::remove_file(object_path(disk, "state-page", first)).unwrap();
+                std::fs::remove_file(object_path(disk, "state-page", &pages[0])).unwrap();
             }
         }
+        let path = object_path(&config.disks[0], "state-page", &pages[1]);
+        let mut corrupt = std::fs::read(&path).unwrap();
+        corrupt[0] ^= 1;
+        std::fs::write(&path, &corrupt).unwrap();
         snapshot::take_encoding_counts();
-        let actual = prepare_snapshot_incremental(&before, &after, &basis, MAX_METADATA).unwrap();
-        let mut visits = 0;
-        let error = actual
-            .visit_field_pages("file_notes", &config.disks, &after, |_, _| {
-                visits += 1;
-                Err(Error::new(
-                    storage_contract::ErrorCode::InjectedFailure,
-                    "stop at the first callback",
-                ))
-            })
-            .unwrap_err();
-        assert_eq!(error.code(), storage_contract::ErrorCode::InjectedFailure);
-        assert_eq!(visits, 1, "callback failure must not trigger any retry");
+        assert_eq!(
+            actual.store(&config.disks, &after).unwrap_err().code(),
+            storage_contract::ErrorCode::ObjectCollision
+        );
         let counts = snapshot::take_encoding_counts();
-        assert_eq!(counts.get("file_notes").copied().unwrap_or(0) > 0, missing);
+        assert_eq!(
+            counts.get("file_notes").copied().unwrap_or(0),
+            if missing { before.file_notes.len() } else { 0 },
+            "a destination failure must not cause another logical reconstruction"
+        );
+        assert_eq!(std::fs::read(path).unwrap(), corrupt);
+        for disk in &config.disks {
+            assert!(!object_path(disk, "snapshot", &actual.hash).exists());
+        }
     }
 }
 
@@ -699,5 +785,109 @@ fn operation_identity_writes_remain_typed_through_snapshot_preparation() {
     let (actual, counts) = incremental(&before, &after, &basis, &config.disks);
     assert!(counts["operations"] > 0);
     assert!(counts["operation_principals"] > 0);
+    assert_complete_byte_oracle(&actual, &after, &config.disks);
+}
+
+#[test]
+fn incremental_snapshot_typed_point_changes_stay_leaf_bounded_across_radix_transitions() {
+    for count in [0, 1, 127, 128, 129, 4096] {
+        let before = State {
+            file_notes: (0..count)
+                .map(|number| (format!("note-{number:020}"), "值/\u{10000}".into()))
+                .collect(),
+            ..Default::default()
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let config = config(temp.path());
+        let original = prepare_snapshot(&before, MAX_METADATA).unwrap();
+        original.store(&config.disks, &before).unwrap();
+        let basis = original.reuse_basis();
+        let mut cases = Vec::new();
+        let mut inserted = before.clone();
+        inserted.begin_tracking();
+        inserted
+            .file_notes
+            .insert("new-字段-\u{e000}".into(), "new value".into());
+        cases.push((inserted, STATE_PAGE_ENTRIES + 1));
+        if let Some(key) = before.file_notes.keys().next() {
+            let mut changed = before.clone();
+            changed.begin_tracking();
+            changed.file_notes.insert(key.clone(), "changed".into());
+            cases.push((changed, STATE_PAGE_ENTRIES));
+            let mut removed = before.clone();
+            removed.begin_tracking();
+            removed.file_notes.remove(key);
+            cases.push((removed, STATE_PAGE_ENTRIES));
+        }
+        for (mut after, maximum) in cases {
+            after.sequence += 1;
+            let MapChanges::Keys(keys) = after.file_notes.changes_since(&before.file_notes) else {
+                panic!("point operations must retain their typed key set");
+            };
+            assert_eq!(keys.len(), 1);
+            let (actual, counts) = incremental(&before, &after, &basis, &config.disks);
+            let encoded = counts.get("file_notes").copied().unwrap_or(0);
+            assert!(encoded <= maximum, "{count} records: {counts:?}");
+            assert!(encoded <= after.file_notes.len());
+            if !after.file_notes.is_empty() {
+                assert!(encoded > 0);
+            }
+            assert_only_field_encoded(
+                &counts,
+                (!after.file_notes.is_empty()).then_some("file_notes"),
+            );
+            assert_complete_byte_oracle(&actual, &after, &config.disks);
+        }
+    }
+}
+
+#[test]
+fn incremental_snapshot_value_replacement_preserves_every_unaffected_radix_path() {
+    let before = State {
+        file_notes: (0..4096)
+            .map(|number| (format!("note-{number:020}"), "value".into()))
+            .collect(),
+        ..Default::default()
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let config = config(temp.path());
+    let original = prepare_snapshot(&before, MAX_METADATA).unwrap();
+    original.store(&config.disks, &before).unwrap();
+    let mut after = before.clone();
+    after.begin_tracking();
+    let key = before.file_notes.keys().next().unwrap();
+    after.file_notes.insert(key.clone(), "other".into());
+    after.sequence += 1;
+    let (actual, counts) = incremental(&before, &after, &original.reuse_basis(), &config.disks);
+    assert!(counts["file_notes"] <= STATE_PAGE_ENTRIES);
+    let route = blake3::hash(key.as_bytes()).to_hex().to_string();
+    let mut paths = BTreeMap::new();
+    let snapshot::FieldRoot::Text(actual_notes) = &actual.fields["file_notes"] else {
+        panic!("note provenance must retain text keys")
+    };
+    actual_notes
+        .visit_nodes("", &mut |root, prefix| {
+            paths.insert(prefix.to_owned(), root.reference().clone());
+            Ok(())
+        })
+        .unwrap();
+    let mut reused = 0;
+    let snapshot::FieldRoot::Text(original_notes) = &original.fields["file_notes"] else {
+        panic!("note provenance must retain text keys")
+    };
+    original_notes
+        .visit_nodes("", &mut |root, prefix| {
+            if !route.starts_with(prefix) {
+                assert_eq!(paths.get(prefix), Some(root.reference()), "{prefix}");
+                assert!(!actual.objects.iter().any(|object| {
+                    object.kind == root.reference().kind().domain()
+                        && object.hash == root.reference().hash()
+                }));
+                reused += 1;
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert!(reused > 32);
     assert_complete_byte_oracle(&actual, &after, &config.disks);
 }

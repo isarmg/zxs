@@ -98,7 +98,7 @@ impl Engine {
         let repository = self.repository_for_branch(&workspace.branch_id)?;
         let disk = self.disk(&repository.primary_slot_id)?;
         if !disk_unavailable(disk)? {
-            validate_seal(&self.config, disk)?;
+            self.metadata_integrity.validate_seal(&self.config, disk)?;
         }
         Ok(disk
             .root
@@ -140,7 +140,7 @@ impl Engine {
                         .iter()
                         .find(|disk| root == disk.root.join("staging/workspaces"))
                     {
-                        validate_seal(&self.config, disk)?;
+                        self.metadata_integrity.validate_seal(&self.config, disk)?;
                     }
                     existing_private_dir(&root)?;
                 }
@@ -423,17 +423,22 @@ impl Engine {
             let operation = &self.state.operations[&request.operation_id];
             let members = self.trusted_evidence_members();
             for member in &members {
-                for (record, _) in crate::journal::scan(member)?.records {
+                for (record, _) in self
+                    .metadata_integrity
+                    .observe(crate::journal::scan(member))?
+                    .records
+                {
                     if record.sequence != operation.sequence
                         || record.record_type != RecordType::Publication
                     {
                         continue;
                     }
                     let candidate: crate::journal::Candidate =
-                        crate::publication_evidence::verified_object(
+                        crate::publication_evidence::verified_object_observed(
                             &members,
                             "candidate",
                             &record.candidate_hash,
+                            &mut |error| self.metadata_integrity.fault(error),
                         )?;
                     if candidate.operation_id != request.operation_id
                         || candidate.sequence != operation.sequence
@@ -638,7 +643,7 @@ impl crate::engine::PlanningContext<'_> {
     pub(crate) fn workspace_data_directory(&self, w: &Workspace) -> Result<PathBuf> {
         let repo = self.repository_for_branch(&w.branch_id)?;
         let disk = self.disk(&repo.primary_slot_id)?;
-        validate_seal(self.config, disk)?;
+        self.metadata_integrity.validate_seal(self.config, disk)?;
         Ok(disk.root.join("staging/workspaces").join(&w.workspace_id))
     }
 }

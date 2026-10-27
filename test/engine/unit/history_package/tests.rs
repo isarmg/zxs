@@ -326,7 +326,7 @@ fn latest_candidate(engine: &Engine) -> Candidate {
 
 #[test]
 fn paged_pending_recovery_repairs_leaf_index_and_root_and_checkpoint_checks_them() {
-    for kind in ["state-page", "history-index", "history-manifest"] {
+    for kind in ["state-page", "metadata-index", "history-manifest"] {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source");
         let mut engine = initialize(&source);
@@ -494,7 +494,7 @@ fn admitted_snapshot_binding_rejects_rehashed_different_and_invalid_histories() 
             .collect::<Vec<_>>(),
     );
     let mut missing = candidate.clone();
-    missing.history_manifest_hashes.clear();
+    crate::journal::set_candidate_catalog(&members, &mut missing, BTreeMap::new());
     let Err(error) = bound_history_objects(&members, &missing, Some(&admitted)) else {
         panic!("missing history coverage must fail");
     };
@@ -512,9 +512,9 @@ fn admitted_snapshot_binding_rejects_rehashed_different_and_invalid_histories() 
             object.store(&members).unwrap();
         }
         let mut different = candidate.clone();
-        different
-            .history_manifest_hashes
-            .insert(repo.history_tree_id.clone(), hash);
+        let mut catalog = crate::journal::candidate_catalog(&members[0], &candidate);
+        catalog.insert(repo.history_tree_id.clone(), hash);
+        crate::journal::set_candidate_catalog(&members, &mut different, catalog);
         let Err(error) = bound_history_objects(&members, &different, Some(&admitted)) else {
             panic!("a different authenticated history must fail projection binding");
         };
@@ -1982,10 +1982,16 @@ fn rebind_test_package(
         write_atomic(&path, object.bytes(), true).unwrap();
     }
     proof.manifest_hash = root_hash.clone();
-    proof
-        .candidate
-        .history_manifest_hashes
-        .insert(manifest.history.history_tree_id.clone(), root_hash);
+    let mut catalog = crate::journal::candidate_catalog(&source_members[0], &proof.candidate);
+    catalog.insert(manifest.history.history_tree_id.clone(), root_hash);
+    crate::journal::set_candidate_catalog(&members, &mut proof.candidate, catalog);
+    proof.history_root_proof = crate::metadata_map::read_proof(
+        &proof.candidate.history_roots,
+        &manifest.history.history_tree_id,
+        |kind, hash| crate::publication_evidence::verified_graph_object(&members, kind, hash),
+    )
+    .unwrap()
+    .1;
     let candidate_hash = object_hash("candidate", &proof.candidate).unwrap();
     let sequence = proof.candidate.sequence;
     let accepts = members
@@ -3377,7 +3383,7 @@ fn real_branch_rename_uses_precise_projection_and_matches_complete_graph_bytes()
         .unwrap()
         .0;
     let candidate: Candidate = load_object(disk, "candidate", &record.candidate_hash).unwrap();
-    assert_eq!(candidate.history_manifest_hashes, expected);
+    assert_eq!(&candidate.history_roots, expected.reference());
     for object in objects {
         assert_eq!(
             fs::read(object_path(disk, object.kind(), &object.hash)).unwrap(),

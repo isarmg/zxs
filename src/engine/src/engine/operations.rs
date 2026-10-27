@@ -204,13 +204,8 @@ impl Engine {
                 }
                 let snapshot: Snapshot =
                     verified_object(&members, "snapshot", &candidate.snapshot_hash)?;
-                if snapshot.sequence != candidate.sequence
-                    || snapshot
-                        .scalars
-                        .get("sequence")
-                        .and_then(json_codec::Value::as_str)
-                        != Some(candidate.sequence.to_string().as_str())
-                {
+                validate_snapshot_schema(&snapshot)?;
+                if snapshot.sequence != candidate.sequence {
                     return Err(Error::new(
                         storage_contract::ErrorCode::ObjectCorrupt,
                         "snapshot sequence differs",
@@ -238,38 +233,19 @@ fn snapshot_entry<T: data_serialization::Serialize + data_serialization::de::Des
     field: &str,
     id: OperationId,
 ) -> Result<Option<T>> {
-    if snapshot.scalars.contains_key(field) {
-        return Err(Error::new(
-            storage_contract::ErrorCode::ObjectCorrupt,
-            "operation snapshot field is not paged",
-        ));
-    }
-    let hashes = snapshot.pages.get(field).ok_or_else(|| {
+    let reference = snapshot.maps.get(field).ok_or_else(|| {
         Error::new(
-            storage_contract::ErrorCode::ObjectCorrupt,
+            ErrorCode::ObjectCorrupt,
             "operation snapshot field is missing",
         )
     })?;
-    let mut found = None;
-    for hash in hashes {
-        let mut page: std::collections::BTreeMap<OperationId, T> =
-            verified_object(members, "state-page", hash)?;
-        if page.len() > STATE_PAGE_ENTRIES {
-            return Err(Error::new(
-                storage_contract::ErrorCode::ObjectCorrupt,
-                "operation snapshot page exceeds entry limit",
-            ));
-        }
-        if let Some(value) = page.remove(&id)
-            && found.replace(value).is_some()
-        {
-            return Err(Error::new(
-                storage_contract::ErrorCode::ObjectCorrupt,
-                "duplicate operation snapshot entity",
-            ));
-        }
-    }
-    Ok(found)
+    let value = crate::metadata_map::lookup(reference, &id.to_string(), |kind, hash| {
+        crate::publication_evidence::verified_graph_object(members, kind, hash)
+    })?;
+    value
+        .map(json_codec::from_value)
+        .transpose()
+        .map_err(Into::into)
 }
 
 #[cfg(test)]

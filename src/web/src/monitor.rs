@@ -1,4 +1,5 @@
 mod chart;
+mod scrub;
 
 use crate::{
     api, format,
@@ -17,6 +18,7 @@ const RANGES: [&str; 5] = ["1min", "30min", "1h", "24h", "1month"];
 
 #[derive(Clone)]
 pub(crate) struct Model {
+    scrub: scrub::Model,
     pub snapshot: Value,
     pub capacity: Option<WorkspaceCapacity>,
     pub capacity_loading: bool,
@@ -34,6 +36,7 @@ pub(crate) struct Model {
 impl Default for Model {
     fn default() -> Self {
         Self {
+            scrub: scrub::Model::default(),
             snapshot: Value::Null,
             capacity: None,
             capacity_loading: false,
@@ -57,6 +60,7 @@ pub(crate) fn load(state: RwSignal<State>) {
     }
     load_history(state);
     load_capacity(state);
+    scrub::load(state);
     if state.with_untracked(|s| s.monitor.loading) {
         return;
     }
@@ -442,6 +446,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 {move ||state.with(|s|s.monitor.failure.clone()).map(|failure|view!{<ErrorState message=failure.message request_id=failure.request_id/>})}
                 {move ||state.with(|s|s.monitor.history_failure.clone()).map(|failure|view!{<ErrorState message=failure.message request_id=failure.request_id/>})}
                 <Show when=move ||state.with(|s|s.monitor.loading&&!s.monitor.loaded)><LoadingState/></Show>
+                {scrub::view(state)}
                 <article class="zxs-content-panel zxs-frame zxs-frame--inset" aria-label=t("持久工作区证据配额", "Retained workspace evidence capacity")>
                     <h2>{t("持久工作区证据配额", "Retained workspace evidence capacity")}</h2>
                     {move || state.with(|s| s.monitor.capacity_failure.clone()).map(|failure| view!{<ErrorState message=failure.message request_id=failure.request_id/>})}

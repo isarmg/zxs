@@ -15,18 +15,23 @@ type ExistingCopies<'a> = Vec<Option<VerifiedExisting<'a>>>;
 #[derive(Clone)]
 pub(super) struct PublishedStateBase {
     state: std::sync::Weak<State>,
+    metadata_epoch: super::provenance::MetadataEpoch,
     snapshot: String,
     sequence: u64,
     config_hash: String,
-    roots: BTreeMap<String, String>,
-    snapshot_basis: Option<SnapshotReuse>,
+    config: super::ValidatedConfig,
+    roots: crate::metadata_map::MapRoot,
+    snapshot_basis: SnapshotReuse,
 }
 impl PublishedStateBase {
     fn matches(&self, engine: &crate::engine::PlanningContext<'_>, config_hash: &str) -> bool {
-        self.state.ptr_eq(&std::sync::Arc::downgrade(engine.state))
+        !engine.blocked
+            && self.metadata_epoch.matches(engine.metadata_integrity)
+            && self.state.ptr_eq(&std::sync::Arc::downgrade(engine.state))
             && engine.snapshot.as_deref() == Some(self.snapshot.as_str())
             && engine.state.sequence == self.sequence
             && self.config_hash == config_hash
+            && self.config.same_admission(engine.config)
     }
 }
 
@@ -37,12 +42,16 @@ pub(crate) struct DetachedPublication {
     result: OperationResult,
     verified: VerifiedPayloadSet,
     names: crate::container_storage::PreparedNames,
+    metadata_epoch: super::provenance::MetadataEpoch,
+    prepared_epoch: super::provenance::MetadataEpoch,
+    base_config: super::ValidatedConfig,
     base_root: std::path::PathBuf,
     base_snapshot: Option<String>,
     base_sequence: u64,
     base_next_slot: u64,
     config_hash: String,
-    snapshot_basis: Option<SnapshotReuse>,
+    snapshot_basis: SnapshotReuse,
+    history_basis: crate::metadata_map::MapRoot,
 }
 
 enum Completion<'a> {
@@ -87,6 +96,8 @@ impl Engine {
         detached: DetachedPublication,
     ) -> Result<OperationResult> {
         if self.blocked
+            || !detached.prepared_epoch.matches(&self.metadata_integrity)
+            || !self.config.same_admission(&detached.base_config)
             || self.root != detached.base_root
             || self.snapshot != detached.base_snapshot
             || self.state.sequence != detached.base_sequence
@@ -106,7 +117,9 @@ impl Engine {
             verified,
             names,
             snapshot_basis,
+            history_basis,
             config_hash,
+            metadata_epoch,
             ..
         } = detached;
         verified
@@ -135,7 +148,8 @@ impl Engine {
         }
         let members = self.members();
         for disk in &members {
-            validate_seal(&self.config, disk)?;
+            self.metadata_integrity
+                .observe(validate_seal(&self.config, disk))?;
         }
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_payloads")?;
@@ -176,6 +190,7 @@ impl Engine {
             },
         );
         if let Err(e) = finish {
+            self.metadata_integrity.invalidate();
             let message = format!("{e}; query operation {} and recover", result.operation_id);
             return Err(e
                 .context(storage_contract::ErrorCode::InDoubt, message)
@@ -183,16 +198,23 @@ impl Engine {
         }
         let previous = std::mem::replace(&mut self.state, std::sync::Arc::new(next));
         self.snapshot = Some(candidate.snapshot_hash.clone());
-        self.update_index(&previous)?;
+        if let Err(error) = self.update_index(&previous) {
+            self.metadata_integrity.invalidate();
+            return Err(error);
+        }
         // Do not install on partial publication or post-decision index failure.
-        self.published_state_base = Some(std::sync::Arc::new(PublishedStateBase {
-            state: std::sync::Arc::downgrade(&self.state),
-            snapshot: candidate.snapshot_hash,
-            sequence: self.state.sequence,
-            config_hash,
-            roots: candidate.history_manifest_hashes,
-            snapshot_basis,
-        }));
+        self.published_state_base = metadata_epoch.matches(&self.metadata_integrity).then(|| {
+            std::sync::Arc::new(PublishedStateBase {
+                state: std::sync::Arc::downgrade(&self.state),
+                metadata_epoch,
+                snapshot: candidate.snapshot_hash,
+                sequence: self.state.sequence,
+                config_hash,
+                config: self.config.clone(),
+                roots: history_basis,
+                snapshot_basis,
+            })
+        });
         self.blocked = false;
         Ok(result)
     }
@@ -229,7 +251,12 @@ impl Engine {
                 "stored publication does not bind this candidate",
             ));
         }
-        crate::container_storage::repair_historical_names(&self.config, &self.state, next)?;
+        crate::container_storage::repair_historical_names(
+            &self.config,
+            &self.state,
+            next,
+            &self.metadata_integrity,
+        )?;
         let pub_hash = object_hash("publication", &publication)?;
         let mut publication_receipts = Vec::new();
         for d in self.members() {
@@ -370,6 +397,7 @@ impl Engine {
                 &self.state,
                 next,
                 MAX_METADATA,
+                Some(&self.metadata_integrity),
             )?,
         };
         let members = self.members();
@@ -704,6 +732,7 @@ impl crate::engine::PlanningContext<'_> {
         maximum: usize,
         cache_maximum: usize,
     ) -> Result<DetachedPublication> {
+        let metadata_epoch = self.metadata_integrity.capture();
         let members = self.members();
         let mut required = BTreeMap::<String, u64>::new();
         // One held descriptor per proof; release all before decision proofs.
@@ -752,7 +781,7 @@ impl crate::engine::PlanningContext<'_> {
         }
         for (slot, bytes) in &required {
             let d = self.disk(slot)?;
-            validate_seal(self.config, d)?;
+            self.metadata_integrity.validate_seal(self.config, d)?;
             let free = available(&d.root)?;
             let budget = d
                 .capacity_bytes
@@ -772,14 +801,17 @@ impl crate::engine::PlanningContext<'_> {
             .published_state_base
             .as_ref()
             .filter(|base| base.matches(self, &config_hash));
-        let snapshot = match baseline.and_then(|base| {
-            base.snapshot_basis
-                .as_ref()
-                .filter(|basis| basis.matches_snapshot(&base.snapshot))
-        }) {
-            Some(basis) => prepare_snapshot_incremental(self.state, &next, basis, maximum)?,
+        let mut snapshot = match baseline {
+            Some(base) => {
+                assert!(
+                    base.snapshot_basis.matches_snapshot(&base.snapshot),
+                    "invariant: published snapshot descriptor binds the successful publication root"
+                );
+                prepare_snapshot_incremental(self.state, &next, &base.snapshot_basis, maximum)?
+            }
             None => prepare_snapshot(&next, maximum)?,
         };
+        snapshot.metadata_integrity = Some(std::sync::Arc::clone(self.metadata_integrity));
         let snapshot_hash = snapshot.hash.clone();
         #[cfg(test)]
         assert_eq!(
@@ -787,17 +819,18 @@ impl crate::engine::PlanningContext<'_> {
             prepare_snapshot(&next, maximum)?.hash,
             "incremental snapshot differs from full encoding"
         );
-        let (history_manifest_hashes, manifests) = match self
+        let (history_basis, manifests) = match self
             .published_state_base
             .as_ref()
             .filter(|base| base.matches(self, &config_hash))
         {
-            Some(base) => crate::history_package::prepare_history_manifests_incremental(
+            Some(base) => crate::history_package::prepare_history_manifests_incremental_observed(
                 self.state,
                 &next,
                 &base.roots,
                 &members,
                 maximum,
+                &mut |error| self.metadata_integrity.fault(error),
             )?,
             None => crate::history_package::prepare_history_manifests(&next, maximum)?,
         };
@@ -805,8 +838,10 @@ impl crate::engine::PlanningContext<'_> {
         // engine publication test, including merge/split/restore workflows.
         #[cfg(test)]
         assert_eq!(
-            history_manifest_hashes,
-            crate::history_package::prepare_history_manifests(&next, maximum)?.0,
+            history_basis.reference(),
+            crate::history_package::prepare_history_manifests(&next, maximum)?
+                .0
+                .reference(),
             "incremental history roots differ from complete projection",
         );
         let candidate = Candidate {
@@ -825,7 +860,7 @@ impl crate::engine::PlanningContext<'_> {
                 })
                 .collect(),
             metadata_disk_ids: members.iter().map(|d| d.disk_id.clone()).collect(),
-            history_manifest_hashes,
+            history_roots: history_basis.reference().clone(),
         };
         crate::metadata_budget::preflight_publication_prepared(
             self.config,
@@ -834,20 +869,30 @@ impl crate::engine::PlanningContext<'_> {
             &next,
             None,
             maximum,
-            Some(&snapshot),
+            Some((&snapshot, &history_basis)),
         )?;
         crate::container_storage::validate_new_projection_paths(self.state, &next)?;
-        let preparation = PayloadPreparation::new(self.config, &candidate)?;
+        let preparation = PayloadPreparation::new(
+            self.config,
+            &candidate,
+            std::sync::Arc::clone(self.metadata_integrity),
+        )?;
         self.prepare_payloads(&prepared, existing)?;
         let verified = preparation.verify(self.config, &candidate)?;
         // Payload installation establishes the physical container, but no decision
         // exists yet. Encode its complete projection before ACCEPT can be written.
-        let names =
-            crate::container_storage::prepare_names(self.config, self.state, &next, cache_maximum)?;
-        snapshot.store(&members, &next)?;
+        let names = crate::container_storage::prepare_names(
+            self.config,
+            self.state,
+            &next,
+            cache_maximum,
+            Some(self.metadata_integrity),
+        )?;
+        self.metadata_integrity
+            .observe(snapshot.store(&members, &next))?;
         let snapshot_basis = snapshot.reuse_basis();
         for manifest in manifests {
-            manifest.store(&members)?;
+            self.metadata_integrity.observe(manifest.store(&members))?;
         }
         Ok(DetachedPublication {
             next,
@@ -855,12 +900,16 @@ impl crate::engine::PlanningContext<'_> {
             result,
             verified,
             names,
+            metadata_epoch,
+            prepared_epoch: self.metadata_integrity.capture(),
+            base_config: self.config.clone(),
             base_root: self.root.to_path_buf(),
             base_snapshot: self.snapshot.clone(),
             base_sequence: self.state.sequence,
             base_next_slot: self.next_slot,
             config_hash,
             snapshot_basis,
+            history_basis,
         })
     }
 }
@@ -907,7 +956,7 @@ impl crate::engine::PlanningContext<'_> {
         let mut source = p.source.clone();
         for (index, slot) in p.placement.route_slot_ids.iter().enumerate() {
             let disk = self.disk(slot)?;
-            validate_seal(self.config, disk)?;
+            self.metadata_integrity.validate_seal(self.config, disk)?;
             let directory = version_dir(disk, &p.version.history_tree_id, &p.version.version_id);
             let content = match read_json::<FileVersion>(&directory.join("version.json")) {
                 Ok(recorded) => {

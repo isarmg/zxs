@@ -27,6 +27,8 @@ zxs-rescue --root /srv/zxs/system recovery-commit RECOVERY_ID \
 
 仅支持已经获得 ACCEPT 但尚未发布、所有原始数据盘都可访问且正文确已不可修复的操作。执行时必须持有池的独占锁及适当本机权限。先审查持久预览和损失范围，再提交完全匹配的摘要并明确接受永久数据损失。缺盘替换、自动重试发布、自动 reset 和任意撤销已发布历史均不属于此能力。
 
+<a id="integrity-scrub"></a>
+
 ## 显式完整巡检（第一阶段）
 
 ```sh

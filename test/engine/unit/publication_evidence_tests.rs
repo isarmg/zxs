@@ -53,11 +53,15 @@ fn snapshot_recovers_disjoint_page_replicas_without_read_repair() {
     let hash = engine.snapshot.clone().unwrap();
     let expected = canonical_json(engine.state()).unwrap();
     let descriptor: Snapshot = load_object(&members[0], "snapshot", &hash).unwrap();
-    let pages: std::collections::BTreeSet<_> = descriptor.pages.values().flatten().collect();
+    let pages: std::collections::BTreeSet<_> =
+        crate::journal::snapshot_addresses(&members[0], &descriptor)
+            .into_iter()
+            .filter_map(|(kind, hash)| (kind == "state-page").then_some(hash))
+            .collect();
     assert!(pages.len() >= 3);
     let mut missing = Vec::new();
     for (member, page) in members.iter().zip(pages.into_iter().take(3)) {
-        let path = object_path(member, "state-page", page);
+        let path = object_path(member, "state-page", &page);
         let bytes = fs::read(&path).unwrap();
         fs::remove_file(&path).unwrap();
         missing.push((path, bytes));
@@ -123,7 +127,7 @@ fn purged_state_reopens_with_one_damaged_and_one_offline_metadata_member() {
             _ => object_path(
                 &members[0],
                 "state-page",
-                &snapshot.pages["content_states"][0],
+                &crate::journal::map_pages(&members[0], &snapshot.maps["content_states"])[0],
             ),
         };
         drop(engine);
@@ -243,13 +247,18 @@ fn snapshot_rejects_unverifiable_page_closure_without_repair() {
     let members = engine.members();
     let hash = engine.snapshot.clone().unwrap();
     let snapshot: Snapshot = load_object(&members[0], "snapshot", &hash).unwrap();
-    let page = snapshot.pages.values().flatten().next().unwrap();
+    let page =
+        crate::journal::map_pages(&members[0], snapshot.maps.values().next().unwrap())[0].clone();
     let journals = members
         .iter()
         .map(|disk| fs::read(log_path(disk)).unwrap())
         .collect::<Vec<_>>();
     for disk in &members {
-        fs::write(object_path(disk, "state-page", page), b"{\"unbound\":true}").unwrap();
+        fs::write(
+            object_path(disk, "state-page", &page),
+            b"{\"unbound\":true}",
+        )
+        .unwrap();
     }
     assert!(verified_snapshot(&members, &hash).is_err());
     drop(engine);
@@ -257,7 +266,7 @@ fn snapshot_rejects_unverifiable_page_closure_without_repair() {
     for (disk, journal) in members.iter().zip(journals) {
         assert_eq!(fs::read(log_path(disk)).unwrap(), journal);
         assert_eq!(
-            fs::read(object_path(disk, "state-page", page)).unwrap(),
+            fs::read(object_path(disk, "state-page", &page)).unwrap(),
             b"{\"unbound\":true}"
         );
     }

@@ -48,6 +48,7 @@ const MAP_FIELDS: &[&str] = &[
 #[derive(Deserialize, Serialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct PagedHistoryRoot {
+    pub(crate) format: crate::metadata_map::RootFormat,
     pub(crate) repository: Repository,
     pub(crate) history: HistoryTree,
     pub(crate) maps: BTreeMap<String, Reference>,
@@ -91,6 +92,7 @@ pub(super) fn prepare(
         ));
     }
     let root = PagedHistoryRoot {
+        format: crate::metadata_map::RootFormat::RadixMapRoots,
         repository: manifest.repository.clone(),
         history: manifest.history.clone(),
         maps,

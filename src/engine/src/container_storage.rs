@@ -171,6 +171,15 @@ const NAMESPACE_MARKER: &str = ".zxs-namespace.json";
 const OWNER_MARKER: &str = ".zxs-container-owner.json";
 
 fn marker_matches(path: &Path, file_id: &str) -> Result<bool> {
+    marker_matches_observed(path, file_id, &mut |_| Ok(()))
+}
+
+fn marker_matches_observed(
+    path: &Path,
+    file_id: &str,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<bool> {
+    observe(0)?;
     match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error.into()),
@@ -179,7 +188,7 @@ fn marker_matches(path: &Path, file_id: &str) -> Result<bool> {
         }
         Ok(_) => {}
     }
-    if !file_exists(path)? || read_json::<String>(path)? != file_id {
+    if !file_exists(path)? || read_json_observed::<String>(path, observe)? != file_id {
         return Err(invalid(
             "container location marker differs from its stable file identity",
         ));
@@ -210,14 +219,16 @@ fn named_containers(
     file_id: &str,
     depth: usize,
     selected: &mut Option<PathBuf>,
+    observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<()> {
     if depth > 33 {
         return Err(invalid("container namespace exceeds the path depth limit"));
     }
     for entry in fs::read_dir(root)? {
+        observe(0)?;
         let entry = entry?;
         if depth == 0 && entry.file_name() == NAMESPACE_MARKER {
-            if !marker_matches(&entry.path(), file_id)? {
+            if !marker_matches_observed(&entry.path(), file_id, observe)? {
                 return Err(invalid("container namespace marker is missing"));
             }
             continue;
@@ -236,7 +247,7 @@ fn named_containers(
         name_policy::validate_name(&name)?;
         let path = entry.path();
         existing_private_dir(&path)?;
-        if marker_matches(&path.join(OWNER_MARKER), file_id)? {
+        if marker_matches_observed(&path.join(OWNER_MARKER), file_id, observe)? {
             reject_unsupported_container(&path)?;
             if !directory_exists(&path.join("versions"))? {
                 return Err(invalid("owned container has no version directory"));
@@ -248,13 +259,22 @@ fn named_containers(
                 ));
             }
         } else {
-            named_containers(&path, file_id, depth + 1, selected)?;
+            named_containers(&path, file_id, depth + 1, selected, observe)?;
         }
     }
     Ok(())
 }
 
 fn container(history: &Path, file_id: &str) -> Result<Option<PathBuf>> {
+    container_observed(history, file_id, &mut |_| Ok(()))
+}
+
+fn container_observed(
+    history: &Path,
+    file_id: &str,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<Option<PathBuf>> {
+    observe(0)?;
     validate_id(file_id, "file")?;
     if !directory_exists(history)? {
         return Ok(None);
@@ -269,6 +289,7 @@ fn container(history: &Path, file_id: &str) -> Result<Option<PathBuf>> {
     }
     let mut selected = None;
     for entry in fs::read_dir(&root)? {
+        observe(0)?;
         let entry = entry?;
         if !entry.file_type()?.is_dir() || entry.file_type()?.is_symlink() {
             return Err(invalid(
@@ -283,11 +304,13 @@ fn container(history: &Path, file_id: &str) -> Result<Option<PathBuf>> {
         })?;
         name_policy::validate_name(&name)?;
         existing_private_dir(&entry.path())?;
-        if name == "namespace" && marker_matches(&entry.path().join(NAMESPACE_MARKER), file_id)? {
+        if name == "namespace"
+            && marker_matches_observed(&entry.path().join(NAMESPACE_MARKER), file_id, observe)?
+        {
             // The stable identity is the lookup key; logical aliases never
             // choose the physical location. Empty source parents left by an
             // interrupted move are harmless, but two payload owners fail closed.
-            named_containers(&entry.path(), file_id, 0, &mut selected)?;
+            named_containers(&entry.path(), file_id, 0, &mut selected, observe)?;
             continue;
         }
         reject_unsupported_container(&entry.path())?;
@@ -320,11 +343,19 @@ fn file_exists(path: &Path) -> Result<bool> {
 /// Missing bodies return their expected path so repair can retain its existing
 /// MISSING classification. Only malformed or ambiguous layout fails closed.
 pub(crate) fn content_path(directory: &Path, version: &FileVersion) -> Result<PathBuf> {
+    content_path_observed(directory, version, &mut |_| Ok(()))
+}
+
+pub(crate) fn content_path_observed(
+    directory: &Path,
+    version: &FileVersion,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<PathBuf> {
     validate_version(version)?;
     let prepared = directory.join("content").join(&version.creation_name);
     let name = &version.storage_name;
     let history = history_root(directory)?;
-    let named = container(history, &version.file_id)?.unwrap_or_else(|| {
+    let named = container_observed(history, &version.file_id, observe)?.unwrap_or_else(|| {
         history
             .join("file-containers")
             .join(&version.file_id)
@@ -959,7 +990,7 @@ pub(crate) fn synchronize_names(
     previous: &State,
     next: &State,
 ) -> Result<()> {
-    prepare_names(config, previous, next, MAX_METADATA)?.apply(config)
+    prepare_names(config, previous, next, MAX_METADATA, None)?.apply(config)
 }
 
 /// A verified Publication authorizes repair that skips unavailable replicas.
@@ -969,8 +1000,9 @@ pub(crate) fn repair_historical_names(
     config: &ValidatedConfig,
     previous: &State,
     next: &State,
+    metadata: &crate::engine::provenance::MetadataIntegrity,
 ) -> Result<()> {
-    prepare_names_inner(config, previous, next, MAX_METADATA, true)?.apply(config)
+    prepare_names_inner(config, previous, next, MAX_METADATA, true, Some(metadata))?.apply(config)
 }
 
 pub(crate) fn prepare_names(
@@ -978,8 +1010,9 @@ pub(crate) fn prepare_names(
     previous: &State,
     next: &State,
     maximum: usize,
+    metadata: Option<&crate::engine::provenance::MetadataIntegrity>,
 ) -> Result<PreparedNames> {
-    prepare_names_inner(config, previous, next, maximum, false)
+    prepare_names_inner(config, previous, next, maximum, false, metadata)
 }
 
 fn projection_locations(
@@ -1056,6 +1089,7 @@ fn prepare_names_inner(
     next: &State,
     maximum: usize,
     historical: bool,
+    metadata: Option<&crate::engine::provenance::MetadataIntegrity>,
 ) -> Result<PreparedNames> {
     let mut cache: Option<PreparedNameCache> = None;
     let mut node_projection = crate::business::file_nodes::NodeProjection::new(next);
@@ -1094,7 +1128,10 @@ fn prepare_names_inner(
                 continue;
             }
             let history = disk.root.join("histories").join(&history_id);
-            validate_seal(config, disk)?;
+            match metadata {
+                Some(metadata) => metadata.validate_seal(config, disk)?,
+                None => validate_seal(config, disk)?,
+            };
             let pending_here = pending
                 .iter()
                 .copied()

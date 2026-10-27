@@ -1,11 +1,13 @@
 //! Owned, non-serializable evidence for the live prepare/decide path only.
 //! Recovery cannot construct a proof without reading the complete payload.
+use crate::engine::provenance::MetadataIntegrity;
 use crate::{disk::*, journal::*, *};
 use std::{
     fs::File,
     io::Read,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -62,6 +64,7 @@ struct VerifiedPayload {
     metadata: Vec<(PathBuf, HeldFile)>,
 }
 struct HeldDisk {
+    metadata_member: bool,
     root: PathBuf,
     directory: File,
     device: u64,
@@ -69,6 +72,7 @@ struct HeldDisk {
     seal: HeldFile,
 }
 pub(super) struct VerifiedPayloadSet {
+    metadata_integrity: Arc<MetadataIntegrity>,
     entries: Vec<VerifiedPayload>,
     disks: Vec<HeldDisk>,
     full_revalidation: bool,
@@ -83,10 +87,15 @@ std::thread_local! {
 /// Disk identities are pinned before copying begins. Only complete verification
 /// can turn this preparation into a live decision proof.
 pub(super) struct PayloadPreparation {
+    metadata_integrity: Arc<MetadataIntegrity>,
     disks: Vec<HeldDisk>,
 }
 impl PayloadPreparation {
-    pub(super) fn new(config: &ValidatedConfig, candidate: &Candidate) -> Result<Self> {
+    pub(super) fn new(
+        config: &ValidatedConfig,
+        candidate: &Candidate,
+        metadata_integrity: Arc<MetadataIntegrity>,
+    ) -> Result<Self> {
         let mut disks = Vec::new();
         for disk in &config.disks {
             if !disk.metadata_member
@@ -97,18 +106,29 @@ impl PayloadPreparation {
             {
                 continue;
             }
-            validate_seal(config, disk)?;
-            let directory = File::open(&disk.root)?;
-            let metadata = directory.metadata()?;
-            disks.push(HeldDisk {
-                root: disk.root.clone(),
-                directory,
-                device: metadata.dev(),
-                inode: metadata.ino(),
-                seal: HeldFile::open(&disk.root.join("disk.json"))?,
+            let identity = (|| {
+                validate_seal(config, disk)?;
+                let directory = File::open(&disk.root)?;
+                let metadata = directory.metadata()?;
+                Ok(HeldDisk {
+                    metadata_member: disk.metadata_member,
+                    root: disk.root.clone(),
+                    directory,
+                    device: metadata.dev(),
+                    inode: metadata.ino(),
+                    seal: HeldFile::open(&disk.root.join("disk.json"))?,
+                })
+            })();
+            disks.push(if disk.metadata_member {
+                metadata_integrity.observe(identity)?
+            } else {
+                identity?
             });
         }
-        Ok(Self { disks })
+        Ok(Self {
+            metadata_integrity,
+            disks,
+        })
     }
     pub(super) fn verify(
         self,
@@ -133,7 +153,12 @@ impl PayloadPreparation {
         if !full_revalidation {
             for evidence in &candidate.versions {
                 for slot in &evidence.placement.route_slot_ids {
-                    entries.push(verify_replica(config, &evidence.version, slot)?);
+                    entries.push(verify_replica(
+                        config,
+                        &evidence.version,
+                        slot,
+                        &self.metadata_integrity,
+                    )?);
                 }
             }
         }
@@ -141,6 +166,7 @@ impl PayloadPreparation {
         // already hashes every byte with held-inode checks; a preceding pass
         // would only hash and immediately discard the same proof.
         let proof = VerifiedPayloadSet {
+            metadata_integrity: self.metadata_integrity,
             entries,
             disks: self.disks,
             full_revalidation,
@@ -153,6 +179,7 @@ fn verify_replica(
     config: &ValidatedConfig,
     version: &FileVersion,
     slot: &str,
+    metadata_integrity: &MetadataIntegrity,
 ) -> Result<VerifiedPayload> {
     #[cfg(test)]
     VERIFICATION_COST.with(|cost| {
@@ -169,7 +196,7 @@ fn verify_replica(
                 "prepared payload slot disappeared",
             )
         })?;
-    validate_seal(config, disk)?;
+    metadata_integrity.validate_seal(config, disk)?;
     let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
     let mut metadata = Vec::new();
     for name in ["version.json", "checksums.bin", "payload.json"] {
@@ -250,26 +277,38 @@ fn verify_replica(
 
 impl VerifiedPayloadSet {
     #[cfg(test)]
-    fn prepare(config: &ValidatedConfig, candidate: &Candidate) -> Result<Self> {
-        PayloadPreparation::new(config, candidate)?.verify(config, candidate)
+    fn prepare(engine: &Engine, candidate: &Candidate) -> Result<Self> {
+        PayloadPreparation::new(
+            &engine.config,
+            candidate,
+            Arc::clone(&engine.metadata_integrity),
+        )?
+        .verify(&engine.config, candidate)
     }
     fn validate_disks(&self) -> Result<()> {
         for disk in &self.disks {
-            let current = std::fs::symlink_metadata(&disk.root)?;
-            let held = disk.directory.metadata()?;
-            if !current.is_dir()
-                || current.file_type().is_symlink()
-                || current.dev() != disk.device
-                || current.ino() != disk.inode
-                || held.dev() != disk.device
-                || held.ino() != disk.inode
-            {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::PreparationStale,
-                    "prepared disk directory identity changed",
-                ));
+            let identity = (|| {
+                let current = std::fs::symlink_metadata(&disk.root)?;
+                let held = disk.directory.metadata()?;
+                if !current.is_dir()
+                    || current.file_type().is_symlink()
+                    || current.dev() != disk.device
+                    || current.ino() != disk.inode
+                    || held.dev() != disk.device
+                    || held.ino() != disk.inode
+                {
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::PreparationStale,
+                        "prepared disk directory identity changed",
+                    ));
+                }
+                disk.seal.validate(&disk.root.join("disk.json"))
+            })();
+            if disk.metadata_member {
+                self.metadata_integrity.observe(identity)?;
+            } else {
+                identity?;
             }
-            disk.seal.validate(&disk.root.join("disk.json"))?;
         }
         Ok(())
     }
@@ -313,7 +352,7 @@ impl VerifiedPayloadSet {
             // Large candidates keep only disk identities pinned. Re-read every
             // byte with the same metadata and held-inode checks, one replica at
             // a time, rather than exhausting process-wide file descriptors.
-            verify_replica(config, version, slot)?;
+            verify_replica(config, version, slot, &self.metadata_integrity)?;
             return Ok(());
         }
         let entry = self
@@ -336,7 +375,7 @@ impl VerifiedPayloadSet {
                     "payload slot changed",
                 )
             })?;
-        validate_seal(config, disk)?;
+        self.metadata_integrity.validate_seal(config, disk)?;
         if entry.directory != version_dir(disk, &version.history_tree_id, &version.version_id)
             || entry.version_hash != object_hash("version", version)?
         {

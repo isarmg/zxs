@@ -180,16 +180,32 @@ impl<R: Read> JournalFrameReader<R> {
         }
     }
 
+    /// One real-byte probe beyond a captured frontier, without chasing append-time EOF.
+    pub(crate) fn probe_extra_observed(
+        &mut self,
+        observe: &mut impl FnMut(usize) -> Result<()>,
+    ) -> Result<bool> {
+        Ok(read_observed_fill(&mut self.reader, &mut [0u8; 1], observe)? != 0)
+    }
+
     pub(crate) fn next_record(&mut self) -> Result<Option<(Record, String)>> {
+        self.next_record_with_limit(usize::MAX, &mut |_| Ok(()))
+    }
+
+    pub(crate) fn next_record_observed(
+        &mut self,
+        observe: &mut impl FnMut(usize) -> Result<()>,
+    ) -> Result<Option<(Record, String)>> {
+        self.next_record_with_limit(64 * 1024, observe)
+    }
+
+    fn next_record_with_limit(
+        &mut self,
+        maximum_read: usize,
+        observe: &mut impl FnMut(usize) -> Result<()>,
+    ) -> Result<Option<(Record, String)>> {
         let mut header = [0u8; LOG_HEADER_BYTES];
-        let mut got = 0;
-        while got < LOG_HEADER_BYTES {
-            let n = self.reader.read(&mut header[got..])?;
-            if n == 0 {
-                break;
-            }
-            got += n;
-        }
+        let got = read_fill_with_limit(&mut self.reader, &mut header, maximum_read, observe)?;
         if got == 0 {
             return Ok(None);
         }
@@ -215,20 +231,16 @@ impl<R: Read> JournalFrameReader<R> {
             ));
         }
         let mut payload = vec![0; len];
-        if let Err(e) = self.reader.read_exact(&mut payload) {
-            if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                self.torn_tail = true;
-                return Ok(None);
-            }
-            return Err(e.into());
+        if read_fill_with_limit(&mut self.reader, &mut payload, maximum_read, observe)? != len {
+            self.torn_tail = true;
+            return Ok(None);
         }
         let mut digest = [0; 32];
-        if let Err(e) = self.reader.read_exact(&mut digest) {
-            if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                self.torn_tail = true;
-                return Ok(None);
-            }
-            return Err(e.into());
+        if read_fill_with_limit(&mut self.reader, &mut digest, maximum_read, observe)?
+            != digest.len()
+        {
+            self.torn_tail = true;
+            return Ok(None);
         }
         let mut h = blake3::Hasher::new();
         h.update(&header);
@@ -492,11 +504,14 @@ impl JournalWriter {
 #[path = "../../../test/engine/unit/journal/test_support.rs"]
 mod test_support;
 #[cfg(test)]
-pub(crate) use test_support::{append, store_object_replicas_bounded};
+pub(crate) use test_support::{
+    append, candidate_catalog, map_addresses, map_pages, set_candidate_catalog, snapshot_addresses,
+    store_object_replicas_bounded, stored_map,
+};
 
 mod object_storage;
 pub(crate) use object_storage::{existing_object_paths, list_object_hashes, object_path};
-use object_storage::{read_object_bytes, write_object_bytes};
+use object_storage::{read_object_bytes_observed, write_object_bytes};
 pub(crate) fn store_object<T: Serialize + ?Sized>(
     d: &DiskConfig,
     kind: &str,
@@ -613,7 +628,31 @@ pub(crate) fn load_authenticated_object(
     AuthenticatedMetadataObject::authenticate(
         kind,
         hash,
-        decode_strict(&read_object_bytes(disk, kind, hash)?)?,
+        decode_strict(&object_storage::read_object_bytes_bounded(
+            disk,
+            kind,
+            hash,
+            MAX_METADATA,
+        )?)?,
+    )
+}
+
+pub(crate) fn load_authenticated_object_observed(
+    disk: &DiskConfig,
+    kind: &'static str,
+    hash: &str,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<AuthenticatedMetadataObject> {
+    AuthenticatedMetadataObject::authenticate(
+        kind,
+        hash,
+        decode_strict(&read_object_bytes_observed(
+            disk,
+            kind,
+            hash,
+            MAX_METADATA,
+            observe,
+        )?)?,
     )
 }
 
@@ -622,7 +661,32 @@ pub(crate) fn load_object<T: data_serialization::de::DeserializeOwned + Serializ
     kind: &str,
     hash: &str,
 ) -> Result<T> {
-    let value = decode_strict(&read_object_bytes(d, kind, hash)?)?;
+    decode_object(
+        kind,
+        hash,
+        &object_storage::read_object_bytes_bounded(d, kind, hash, MAX_METADATA)?,
+    )
+}
+
+pub(crate) fn load_object_observed<T: data_serialization::de::DeserializeOwned + Serialize>(
+    d: &DiskConfig,
+    kind: &str,
+    hash: &str,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<T> {
+    decode_object(
+        kind,
+        hash,
+        &read_object_bytes_observed(d, kind, hash, MAX_METADATA, observe)?,
+    )
+}
+
+fn decode_object<T: data_serialization::de::DeserializeOwned + Serialize>(
+    kind: &str,
+    hash: &str,
+    bytes: &[u8],
+) -> Result<T> {
+    let value = decode_strict(bytes)?;
     if object_hash(kind, &value)? != hash {
         return Err(Error::new(
             storage_contract::ErrorCode::ObjectCorrupt,
@@ -635,37 +699,49 @@ pub(crate) fn load_object<T: data_serialization::de::DeserializeOwned + Serializ
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Snapshot {
+    pub format: crate::metadata_map::RootFormat,
     #[serialization(with = "storage_contract::u64_string")]
     pub sequence: u64,
-    pub pages: BTreeMap<String, Vec<String>>,
-    pub scalars: json_codec::Map<String, json_codec::Value>,
+    #[serialization(with = "storage_contract::u64_string")]
+    pub business_generation: u64,
+    #[serialization(with = "storage_contract::u64_string")]
+    pub topology_generation: u64,
+    pub maps: BTreeMap<String, crate::metadata_map::Reference>,
+    pub events: crate::metadata_map::Reference,
+    pub control_auth: ControlAuthReference,
 }
-pub(crate) const STATE_PAGE_ENTRIES: usize = 128;
-/// Content-defined key boundaries keep an insertion from shifting every later
-/// page (about 32 entries per page for uniformly distributed key hashes).
-/// Values do not participate: updating an entity only rewrites its page.
-/// The hard cap bounds adversarial keys within the single current on-disk format.
-/// Readers verify exact bound pages; partitioning is not a format discriminator.
-#[cfg(test)]
-pub(crate) fn state_pages(
-    map: &json_codec::Map<String, json_codec::Value>,
-) -> impl Iterator<Item = json_codec::Map<String, json_codec::Value>> + '_ {
-    let mut entries = map.iter().peekable();
-    std::iter::from_fn(move || {
-        let mut page = json_codec::Map::new();
-        while let Some((key, _)) = entries.peek() {
-            let boundary = blake3::hash(key.as_bytes()).as_bytes()[0] & 31 == 0;
-            if !page.is_empty() && (page.len() == STATE_PAGE_ENTRIES || boundary) {
-                break;
-            }
-            let (key, value) = entries.next().expect("peeked entry");
-            page.insert(key.clone(), value.clone());
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+enum ControlAuthKind {
+    #[serialization(rename = "state-control-auth")]
+    StateControlAuth,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct ControlAuthReference {
+    kind: ControlAuthKind,
+    hash: String,
+}
+impl ControlAuthReference {
+    pub(crate) fn hash(&self) -> &str {
+        &self.hash
+    }
+    fn validate(&self) -> Result<()> {
+        if self.hash.len() != 64
+            || !self
+                .hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(Error::new(
+                ErrorCode::ObjectCorrupt,
+                "invalid control auth reference",
+            ));
         }
-        (!page.is_empty()).then_some(page)
-    })
+        Ok(())
+    }
 }
-
-/// Each page is immutable and independently hashed; the journal holds only roots.
+#[cfg(test)]
+pub(crate) const STATE_PAGE_ENTRIES: usize = 128;
 #[cfg(test)]
 pub(crate) fn store_snapshot(members: &[DiskConfig], state: &State) -> Result<String> {
     store_snapshot_bounded(members, state, MAX_METADATA)
@@ -678,27 +754,22 @@ pub(crate) fn store_snapshot_bounded(
 ) -> Result<String> {
     prepare_snapshot(state, maximum)?.store(members, state)
 }
-/// Opaque in-process encoding provenance, never loaded from disk. Its parent
-/// Engine publication receipt is the authority to reuse it for a future state.
+/// Same-process published provenance. Each map root clone only increments an Arc.
 #[derive(Clone)]
 pub(crate) struct SnapshotReuse {
     descriptor: Snapshot,
     hash: String,
-    page_maxima: BTreeMap<String, usize>,
-    event_tail_start: usize,
-}
-struct SnapshotFieldPlan {
-    /// The published prefix is followed by this exact range of newly encoded pages.
-    reused_pages: usize,
-    objects: std::ops::Range<usize>,
-    max_page_bytes: usize,
+    fields: BTreeMap<String, snapshot::FieldRoot>,
+    auth_bytes: usize,
 }
 pub(crate) struct PreparedSnapshot {
+    pub(crate) metadata_integrity:
+        Option<std::sync::Arc<crate::engine::provenance::MetadataIntegrity>>,
     pub(crate) descriptor: Snapshot,
     pub(crate) hash: String,
     objects: Vec<PreparedMetadataObject>,
-    fields: BTreeMap<String, SnapshotFieldPlan>,
-    event_tail_start: usize,
+    fields: BTreeMap<String, snapshot::FieldRoot>,
+    auth_bytes: usize,
     maximum: usize,
 }
 #[path = "journal/snapshot.rs"]
@@ -717,181 +788,81 @@ pub(crate) fn prepare_snapshot_incremental(
 ) -> Result<PreparedSnapshot> {
     snapshot::prepare_incremental(before, after, basis, maximum)
 }
-
-// Differential oracle for exact current bytes and field-specific serde rules.
 #[cfg(test)]
 fn prepare_snapshot_reference(state: &State, maximum: usize) -> Result<PreparedSnapshot> {
-    let value = json_codec::to_value(state)?;
-    let obj = value.as_object().ok_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::StateInvalid,
-            "state is not an object",
-        )
-    })?;
-    let mut pages = BTreeMap::new();
-    let mut scalars = json_codec::Map::new();
-    let mut objects = Vec::new();
-    let mut fields = BTreeMap::new();
-    let mut event_tail_start = 0;
-    for (field, value) in obj {
-        // Event indexes are fixed-width, so lexical order is chronological.
-        // Reuse ordinary object pages: dependency repair and historical proofs
-        // continue to traverse the exact same content-addressed object graph.
-        let events = (field == "events").then(|| {
-            value
-                .as_array()
-                .expect("State events serialize as an array")
-                .iter()
-                .enumerate()
-                .map(|(i, event)| (format!("{i:020}"), event.clone()))
-                .collect::<json_codec::Map<_, _>>()
-        });
-        if let Some(map) = events.as_ref().or_else(|| value.as_object()) {
-            let start = objects.len();
-            let mut max_page_bytes = 0;
-            let mut hashes = Vec::new();
-            let mut entries = 0;
-            for page in state_pages(map) {
-                if field == "events" {
-                    event_tail_start = entries;
-                    entries += page.len();
-                }
-                let object = PreparedMetadataObject::new("state-page", &page, maximum)?;
-                max_page_bytes = max_page_bytes.max(object.bytes.len());
-                hashes.push(object.hash.clone());
-                objects.push(object);
-            }
-            fields.insert(
-                field.clone(),
-                SnapshotFieldPlan {
-                    reused_pages: 0,
-                    objects: start..objects.len(),
-                    max_page_bytes,
-                },
-            );
-            pages.insert(field.clone(), hashes);
-        } else {
-            scalars.insert(field.clone(), value.clone());
-        }
-    }
-    let descriptor = Snapshot {
-        sequence: state.sequence,
-        pages,
-        scalars,
-    };
-    let root = PreparedMetadataObject::new("snapshot", &descriptor, maximum)?;
-    let hash = root.hash.clone();
-    objects.push(root);
-    Ok(PreparedSnapshot {
-        descriptor,
-        hash,
-        objects,
-        fields,
-        event_tail_start,
-        maximum,
-    })
+    snapshot::prepare_reference(state, maximum)
 }
-
 #[cfg(test)]
-thread_local! {
-    pub(crate) static SNAPSHOT_LOAD_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
+thread_local! { pub(crate) static SNAPSHOT_LOAD_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 #[cfg(test)]
 pub(crate) fn load_snapshot(d: &DiskConfig, hash: &str) -> Result<State> {
     let snapshot: Snapshot = load_object(d, "snapshot", hash)?;
-    resolve_snapshot(snapshot, |hash| load_object(d, "state-page", hash))
+    resolve_snapshot(snapshot, |kind, hash| {
+        load_authenticated_object(d, kind, hash)
+    })
 }
-
-// Page-codec tests intentionally use partial maps, not engine-admissible state.
 #[cfg(test)]
 fn load_raw_snapshot_fixture(d: &DiskConfig, hash: &str) -> Result<State> {
     let snapshot: Snapshot = load_object(d, "snapshot", hash)?;
-    Ok(
-        resolve_raw_snapshot(snapshot, |hash| load_object(d, "state-page", hash))?
-            .into_codec_fixture(),
-    )
+    Ok(resolve_raw_snapshot(snapshot, |kind, hash| {
+        load_authenticated_object(d, kind, hash)
+    })?
+    .into_codec_fixture())
 }
-
-/// Decode the complete exact root using only authenticated page objects. The
-/// resolver may select different replicas, never alternate roots or page hashes.
 #[cfg(test)]
 pub(crate) fn resolve_snapshot(
     snapshot: Snapshot,
-    page: impl FnMut(&str) -> Result<json_codec::Map<String, json_codec::Value>>,
+    load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
 ) -> Result<State> {
-    Ok(resolve_admitted_snapshot(snapshot, page)?.into_state())
+    Ok(resolve_admitted_snapshot(snapshot, load)?.into_state())
 }
-
 pub(crate) fn resolve_admitted_snapshot(
     snapshot: Snapshot,
-    page: impl FnMut(&str) -> Result<json_codec::Map<String, json_codec::Value>>,
+    load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
 ) -> Result<crate::history_package::AdmittedState> {
-    resolve_raw_snapshot(snapshot, page)?.try_into()
+    resolve_raw_snapshot(snapshot, load)?.try_into()
 }
-
 fn resolve_raw_snapshot(
     snapshot: Snapshot,
-    mut page: impl FnMut(&str) -> Result<json_codec::Map<String, json_codec::Value>>,
+    mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
 ) -> Result<crate::history_package::RawState> {
     #[cfg(test)]
     SNAPSHOT_LOAD_COUNT.with(|count| count.set(count.get() + 1));
-    if snapshot.scalars.contains_key("events") && snapshot.pages.contains_key("events") {
-        return Err(Error::new(
-            storage_contract::ErrorCode::ObjectCorrupt,
-            "snapshot events are both scalar and paged",
-        ));
+    validate_snapshot_schema(&snapshot)?;
+    let auth = load("state-control-auth", snapshot.control_auth.hash())?;
+
+    let mut out = json_codec::Map::new();
+    out.insert("sequence".into(), snapshot.sequence.to_string().into());
+    out.insert(
+        "business_generation".into(),
+        snapshot.business_generation.to_string().into(),
+    );
+    out.insert(
+        "topology_generation".into(),
+        snapshot.topology_generation.to_string().into(),
+    );
+    out.insert("control_auth".into(), auth.value().clone());
+    for (field, reference) in snapshot.maps {
+        out.insert(
+            field,
+            json_codec::Value::Object(crate::metadata_map::read_map(&reference, &mut load)?),
+        );
     }
-    if !snapshot.pages.contains_key("events") {
-        return Err(Error::new(
-            storage_contract::ErrorCode::FormatUnsupported,
-            "snapshot events must use the current paged representation",
-        ));
-    }
-    let mut out = snapshot.scalars;
-    for (field, hashes) in snapshot.pages {
-        let mut map = json_codec::Map::new();
-        for h in hashes {
-            for (k, v) in page(&h)? {
-                if map.insert(k, v).is_some() {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::ObjectCorrupt,
-                        "duplicate snapshot entity",
-                    ));
-                }
-            }
-        }
-        if out.contains_key(&field) {
+    let mut events = Vec::new();
+    for (index, (key, value)) in crate::metadata_map::read_map(&snapshot.events, &mut load)?
+        .into_iter()
+        .enumerate()
+    {
+        if key != format!("{index:020}") {
             return Err(Error::new(
-                storage_contract::ErrorCode::ObjectCorrupt,
-                "snapshot field is both scalar and paged",
+                ErrorCode::ObjectCorrupt,
+                "snapshot event indexes are not contiguous",
             ));
         }
-        let value = if field == "events" {
-            let mut events = Vec::with_capacity(map.len());
-            for (index, (key, value)) in map.into_iter().enumerate() {
-                if key != format!("{index:020}") {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::ObjectCorrupt,
-                        "snapshot event indexes are not contiguous",
-                    ));
-                }
-                events.push(value);
-            }
-            json_codec::Value::Array(events)
-        } else {
-            json_codec::Value::Object(map)
-        };
-        out.insert(field, value);
+        events.push(value);
     }
-    let state: crate::history_package::RawState =
-        json_codec::from_value(json_codec::Value::Object(out))?;
-    if state.sequence() != snapshot.sequence {
-        return Err(Error::new(
-            storage_contract::ErrorCode::ObjectCorrupt,
-            "snapshot sequence differs",
-        ));
-    }
-    Ok(state)
+    out.insert("events".into(), json_codec::Value::Array(events));
+    Ok(json_codec::from_value(json_codec::Value::Object(out))?)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -912,8 +883,7 @@ pub(crate) struct Candidate {
     pub snapshot_hash: String,
     pub versions: Vec<VersionEvidence>,
     pub metadata_disk_ids: Vec<String>,
-    #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub history_manifest_hashes: BTreeMap<String, String>,
+    pub history_roots: crate::metadata_map::Reference,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Finalize {
@@ -1128,14 +1098,31 @@ pub(crate) struct ContentTombstone {
     pub publication: Publication,
     pub publication_seal: PublicationSeal,
     pub snapshot: Snapshot,
-    pub content_state_page: json_codec::Map<String, json_codec::Value>,
+    pub content_state_proof: crate::metadata_map::InclusionProof,
 }
+fn read_local_json<T: data_serialization::de::DeserializeOwned>(
+    path: &Path,
+    read: &mut impl FnMut(&Path) -> Result<Vec<u8>>,
+) -> Result<T> {
+    decode_strict(&read(path)?).map_err(Into::into)
+}
+
 /// Offline receipts must bind the saved pool membership, not a smaller set
 /// declared by their own candidate. Verification never creates a missing anchor.
-fn verify_local_membership(root: &Path, candidate: &Candidate, seal: &DiskSeal) -> Result<()> {
-    let config = ValidatedConfig::try_from(read_json::<Config>(
-        &root.join("metadata/pool-membership/config.json"),
-    )?)?;
+fn verify_local_membership(
+    root: &Path,
+    candidate: &Candidate,
+    seal: &DiskSeal,
+    read: &mut impl FnMut(&Path) -> Result<Vec<u8>>,
+    metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
+) -> Result<()> {
+    let loaded =
+        read_local_json::<Config>(&root.join("metadata/pool-membership/config.json"), read)
+            .and_then(ValidatedConfig::try_from);
+    let config = match metadata {
+        Some(metadata) => metadata.membership(loaded)?,
+        None => loaded?,
+    };
     let expected = config
         .disks
         .iter()
@@ -1168,17 +1155,50 @@ fn verify_local_membership(root: &Path, candidate: &Candidate, seal: &DiskSeal) 
 #[cfg(test)]
 pub(crate) fn verify_tombstone(directory: &Path, version: &FileVersion) -> Result<()> {
     let tombstone: ContentTombstone = read_json(&directory.join("purged.json"))?;
-    verify_tombstone_content(directory, version, &tombstone)
+    verify_tombstone_content_in_context(directory, version, &tombstone, None)
 }
 
-pub(crate) fn verify_tombstone_content(
+pub(crate) fn verify_tombstone_content_in_context(
     directory: &Path,
     version: &FileVersion,
     t: &ContentTombstone,
+    metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
+) -> Result<()> {
+    verify_tombstone_content_with(
+        directory,
+        version,
+        t,
+        &mut |path| read_bytes(path, MAX_METADATA),
+        metadata,
+    )
+}
+
+pub(crate) fn verify_tombstone_content_observed(
+    directory: &Path,
+    version: &FileVersion,
+    t: &ContentTombstone,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+    metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
+) -> Result<()> {
+    verify_tombstone_content_with(
+        directory,
+        version,
+        t,
+        &mut |path| read_bytes_observed(path, MAX_METADATA, observe),
+        metadata,
+    )
+}
+
+fn verify_tombstone_content_with(
+    directory: &Path,
+    version: &FileVersion,
+    t: &ContentTombstone,
+    read: &mut impl FnMut(&Path) -> Result<Vec<u8>>,
+    metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
 ) -> Result<()> {
     // Intentional removal proves the content state, not the retained descriptor.
     // Its immutable identity and location must still bind to the local publication.
-    verify_local_version_publication(directory, version)?;
+    verify_local_version_publication(directory, version, read, metadata)?;
     verify_publication_seal(&t.candidate, &t.publication, &t.publication_seal)?;
     let root = directory.ancestors().nth(4).ok_or_else(|| {
         Error::new(
@@ -1186,21 +1206,23 @@ pub(crate) fn verify_tombstone_content(
             "invalid version location",
         )
     })?;
-    let seal: DiskSeal = read_json(&root.join("disk.json"))?;
-    verify_local_membership(root, &t.candidate, &seal)?;
+    let loaded = read_local_json(&root.join("disk.json"), read);
+    let seal: DiskSeal = match metadata {
+        Some(metadata) => metadata.seal(loaded)?,
+        None => loaded?,
+    };
+    verify_local_membership(root, &t.candidate, &seal, read, metadata)?;
+    validate_snapshot_schema(&t.snapshot)?;
+    let content_state = t
+        .content_state_proof
+        .verify(&t.snapshot.maps["content_states"], &t.version_id)?;
     if t.version_id != version.version_id
         || !matches!(t.state, ContentState::Purged | ContentState::Migrated)
         || t.candidate.pool_id != seal.pool_id
         || t.publication.candidate_hash != object_hash("candidate", &t.candidate)?
         || object_hash("snapshot", &t.snapshot)? != t.candidate.snapshot_hash
         || t.snapshot.sequence != t.candidate.sequence
-        || t.content_state_page
-            .get(&t.version_id)
-            .and_then(|v| v.as_str())
-            != Some(t.state.as_str())
-        || !t.snapshot.pages.get("content_states").is_some_and(|pages| {
-            object_hash("state-page", &t.content_state_page).is_ok_and(|hash| pages.contains(&hash))
-        })
+        || content_state.as_ref().and_then(json_codec::Value::as_str) != Some(t.state.as_str())
     {
         return Err(Error::new(
             storage_contract::ErrorCode::TombstoneInvalid,
@@ -1229,7 +1251,43 @@ pub(crate) fn local_proof_directory(directory: &Path, candidate: &str) -> Result
 }
 
 pub(crate) fn verify_local_publication(directory: &Path, version: &FileVersion) -> Result<()> {
-    verify_local_version_publication(directory, version)?;
+    verify_local_publication_in_context(directory, version, None)
+}
+
+pub(crate) fn verify_local_publication_in_context(
+    directory: &Path,
+    version: &FileVersion,
+    metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
+) -> Result<()> {
+    verify_local_publication_with(
+        directory,
+        version,
+        &mut |path| read_bytes(path, MAX_METADATA),
+        metadata,
+    )
+}
+
+pub(crate) fn verify_local_publication_observed(
+    directory: &Path,
+    version: &FileVersion,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+    metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
+) -> Result<()> {
+    verify_local_publication_with(
+        directory,
+        version,
+        &mut |path| read_bytes_observed(path, MAX_METADATA, observe),
+        metadata,
+    )
+}
+
+fn verify_local_publication_with(
+    directory: &Path,
+    version: &FileVersion,
+    read: &mut impl FnMut(&Path) -> Result<Vec<u8>>,
+    metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
+) -> Result<()> {
+    verify_local_version_publication(directory, version, read, metadata)?;
     if open_optional_regular(&directory.join("purged.json"))?.is_some() {
         return Err(Error::new(
             storage_contract::ErrorCode::ContentPurged,
@@ -1240,7 +1298,12 @@ pub(crate) fn verify_local_publication(directory: &Path, version: &FileVersion) 
 }
 
 /// Verify immutable publication identity independently of current availability.
-fn verify_local_version_publication(directory: &Path, version: &FileVersion) -> Result<()> {
+fn verify_local_version_publication(
+    directory: &Path,
+    version: &FileVersion,
+    read: &mut impl FnMut(&Path) -> Result<Vec<u8>>,
+    metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
+) -> Result<()> {
     if directory.file_name().and_then(|s| s.to_str()) != Some(version.version_id.as_str())
         || directory
             .ancestors()
@@ -1266,8 +1329,8 @@ fn verify_local_version_publication(directory: &Path, version: &FileVersion) -> 
             "version directory identity differs from its descriptor",
         ));
     }
-    let local: LocalPublication = read_json(&directory.join("publication-proof.json"))?;
-    let proof: CommitProof = read_json(&directory.join("commit-proof.json"))?;
+    let local: LocalPublication = read_local_json(&directory.join("publication-proof.json"), read)?;
+    let proof: CommitProof = read_local_json(&directory.join("commit-proof.json"), read)?;
     let candidate_hash = object_hash("candidate", &local.candidate)?;
     let c = &local.candidate;
     let p = &local.publication;
@@ -1286,8 +1349,12 @@ fn verify_local_version_publication(directory: &Path, version: &FileVersion) -> 
             "version is outside disk layout",
         )
     })?;
-    let seal: DiskSeal = read_json(&root.join("disk.json"))?;
-    verify_local_membership(root, c, &seal)?;
+    let loaded = read_local_json(&root.join("disk.json"), read);
+    let seal: DiskSeal = match metadata {
+        Some(metadata) => metadata.seal(loaded)?,
+        None => loaded?,
+    };
+    verify_local_membership(root, c, &seal, read, metadata)?;
     let finalize_hash = object_hash("finalize", &p.finalize)?;
     if p.candidate_hash != candidate_hash
         || proof.candidate_hash != candidate_hash

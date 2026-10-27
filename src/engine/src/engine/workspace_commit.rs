@@ -28,6 +28,7 @@ struct PlanningSnapshot {
     blocked: bool,
     snapshot: Option<String>,
     published_state_base: Option<Arc<super::publication::PublishedStateBase>>,
+    metadata_integrity: Arc<super::provenance::MetadataIntegrity>,
     next_slot: u64,
     replay: Option<super::OperationReadPlan>,
     locks: Vec<File>,
@@ -43,6 +44,7 @@ impl PlanningSnapshot {
             blocked: self.blocked,
             admission: super::planning::Admission::Detached,
             published_state_base: self.published_state_base.as_ref(),
+            metadata_integrity: &self.metadata_integrity,
         }
     }
 }
@@ -148,6 +150,7 @@ impl Engine {
             blocked: self.blocked,
             snapshot: self.snapshot.clone(),
             published_state_base: self.published_state_base.clone(),
+            metadata_integrity: Arc::clone(&self.metadata_integrity),
             next_slot: self.next_slot,
             replay: if replay {
                 Some(self.prepare_operation_health(self.operation_record(request.operation_id)?))

@@ -238,7 +238,10 @@ fn incremental_history_roots_equal_full_oracle_and_reuse_checks_existing_bytes()
         object.store(&config.disks).unwrap();
     }
     // A retained root is not permission to trust its on-disk dependencies.
-    let hash = roots.values().next().unwrap();
+    let hash = &roots
+        .catalog_binding(before.histories.keys().next().unwrap())
+        .unwrap()
+        .hash;
     let path = object_path(&config.disks[0], "history-manifest", hash);
     fs::write(&path, b"corrupt").unwrap();
     let next = fork(&before);
@@ -253,7 +256,7 @@ fn incremental_history_roots_equal_full_oracle_and_reuse_checks_existing_bytes()
     assert_eq!(fs::read(path).unwrap(), b"corrupt");
     // Losing every replica must retain the full publisher's ability to
     // reconstruct from State, but only under the identical published root.
-    let (_, graph) = bound_history_graph(&config.disks, hash).unwrap();
+    let (_, graph) = bound_history_graph_observed(&config.disks, hash, &mut |_| {}).unwrap();
     for object in graph {
         let (kind, object_hash) = (object.kind(), object.hash());
         for disk in &config.disks {
@@ -268,7 +271,7 @@ fn incremental_history_roots_equal_full_oracle_and_reuse_checks_existing_bytes()
         object.store(&config.disks).unwrap();
     }
     for disk in &config.disks {
-        bound_history_graph(std::slice::from_ref(disk), hash).unwrap();
+        bound_history_graph_observed(std::slice::from_ref(disk), hash, &mut |_| {}).unwrap();
     }
     let mut next = fork(&before);
     next.histories.clear();
@@ -276,7 +279,8 @@ fn incremental_history_roots_equal_full_oracle_and_reuse_checks_existing_bytes()
         prepare_history_manifests_incremental(&before, &next, &roots, &config.disks, MAX_METADATA)
             .unwrap()
             .0
-            .is_empty()
+            .reference()
+            == &crate::journal::stored_map(&[], json_codec::Map::new())
     );
 }
 
@@ -290,7 +294,10 @@ fn reconstruction_never_overwrites_corruption_unsafe_targets_or_changes_bound_ro
     ]);
     let before = fixture();
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
-    let hash = roots.values().next().unwrap();
+    let hash = &roots
+        .catalog_binding(before.histories.keys().next().unwrap())
+        .unwrap()
+        .hash;
     for disk in &config.disks {
         fs::write(object_path(disk, "history-manifest", hash), b"corrupt").unwrap();
     }
@@ -330,8 +337,22 @@ fn reconstruction_never_overwrites_corruption_unsafe_targets_or_changes_bound_ro
             .is_symlink()
     );
     assert_eq!(fs::read(&outside).unwrap(), b"untouched");
-    let mut incorrect = roots;
-    *incorrect.values_mut().next().unwrap() = "0".repeat(64);
+    let bindings = before
+        .histories
+        .keys()
+        .map(|id| {
+            (
+                id.clone(),
+                crate::metadata_map::HistoryBinding {
+                    hash: "0".repeat(64),
+                    maximum_object_bytes: MAX_METADATA,
+                },
+            )
+        })
+        .collect();
+    let incorrect = crate::metadata_map::Encoder::new(MAX_METADATA)
+        .map_catalog(&bindings)
+        .unwrap();
     let error = prepare_history_manifests_incremental(
         &before,
         &next,
@@ -545,7 +566,11 @@ fn branch_value_updates_preserve_full_graph_bytes_and_rebuild_unavailable_old_ro
         if missing_old_root {
             for disk in &config.disks {
                 fs::write(
-                    object_path(disk, "history-manifest", &roots[&branch.history_tree_id]),
+                    object_path(
+                        disk,
+                        "history-manifest",
+                        &roots.catalog_binding(&branch.history_tree_id).unwrap().hash,
+                    ),
                     b"unreadable old root",
                 )
                 .unwrap();
@@ -584,14 +609,22 @@ fn branch_value_updates_preserve_full_graph_bytes_and_rebuild_unavailable_old_ro
                     fs::read(object_path(
                         disk,
                         "history-manifest",
-                        &roots[&branch.history_tree_id]
+                        &roots.catalog_binding(&branch.history_tree_id).unwrap().hash
                     ))
                     .unwrap(),
                     b"unreadable old root"
                 );
             }
         }
-        bound_history_graph(&config.disks, &actual[&branch.history_tree_id]).unwrap();
+        bound_history_graph_observed(
+            &config.disks,
+            &actual
+                .catalog_binding(&branch.history_tree_id)
+                .unwrap()
+                .hash,
+            &mut |_| {},
+        )
+        .unwrap();
     }
 }
 

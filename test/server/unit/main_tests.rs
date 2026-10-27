@@ -175,3 +175,18 @@ fn smb_requires_one_exact_authenticated_account_without_mapping_syntax() {
         assert!(Args::try_parse_from(args).is_err());
     }
 }
+
+#[test]
+fn scrub_host_policy_flags_are_positive_and_daemon_defaults_are_periodic() {
+    let args = Args::try_parse_from(["zxs"]).unwrap();
+    assert_eq!(args.scrub_interval_seconds.get(), 86_400);
+    assert_eq!(args.scrub_max_age_seconds.get(), 172_800);
+    assert_eq!(args.scrub_bytes_per_second.get(), 67_108_864);
+    for flag in [
+        "--scrub-interval-seconds",
+        "--scrub-max-age-seconds",
+        "--scrub-bytes-per-second",
+    ] {
+        assert!(Args::try_parse_from(["zxs", flag, "0"]).is_err());
+    }
+}

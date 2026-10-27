@@ -6,12 +6,22 @@ fn fixture_with_files(count: usize) -> (tempfile::TempDir, Engine, Candidate) {
     fixture_with_payload(count, b"original")
 }
 fn fixture_with_payload(count: usize, payload: &[u8]) -> (tempfile::TempDir, Engine, Candidate) {
+    fixture_with_payload_and_members(count, payload, [true; 3])
+}
+fn fixture_with_payload_and_members(
+    count: usize,
+    payload: &[u8],
+    metadata_members: [bool; 3],
+) -> (tempfile::TempDir, Engine, Candidate) {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
+    let mut config = Config::development([
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("t"),
     ]);
+    for (disk, member) in config.disks.iter_mut().zip(metadata_members) {
+        disk.metadata_member = member;
+    }
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -67,14 +77,14 @@ fn fixture_with_payload(count: usize, payload: &[u8]) -> (tempfile::TempDir, Eng
             .iter()
             .map(|disk| disk.disk_id.clone())
             .collect(),
-        history_manifest_hashes: Default::default(),
+        history_roots: crate::journal::stored_map(&[], json_codec::Map::new()),
     };
     (temp, engine, candidate)
 }
 #[test]
 fn large_candidate_uses_bounded_full_revalidation_and_rejects_changes() {
     let (_temp, mut engine, candidate) = fixture_with_files(MAX_HELD_PAYLOAD_FILES / 12 + 1);
-    let proof = VerifiedPayloadSet::prepare(&engine.config, &candidate).unwrap();
+    let proof = VerifiedPayloadSet::prepare(&engine, &candidate).unwrap();
     assert!(proof.full_revalidation);
     assert!(proof.entries.is_empty());
     assert_eq!(proof.disks.len(), 3);
@@ -134,7 +144,8 @@ fn large_candidate_uses_bounded_full_revalidation_and_rejects_changes() {
 #[test]
 fn held_proof_rejects_in_place_content_changes() {
     let (_temp, engine, candidate) = fixture();
-    let proof = VerifiedPayloadSet::prepare(&engine.config, &candidate).unwrap();
+    let epoch = engine.metadata_integrity.capture();
+    let proof = VerifiedPayloadSet::prepare(&engine, &candidate).unwrap();
     proof.validate(&engine.config, &candidate).unwrap();
     let evidence = &candidate.versions[0];
     let disk = engine.disk(&evidence.placement.route_slot_ids[0]).unwrap();
@@ -154,11 +165,13 @@ fn held_proof_rejects_in_place_content_changes() {
             .code(),
         storage_contract::ErrorCode::PreparationStale
     );
+    assert!(epoch.matches(&engine.metadata_integrity));
 }
 #[test]
 fn held_proof_rejects_replaced_checksum_inode() {
     let (_temp, engine, candidate) = fixture();
-    let proof = VerifiedPayloadSet::prepare(&engine.config, &candidate).unwrap();
+    let epoch = engine.metadata_integrity.capture();
+    let proof = VerifiedPayloadSet::prepare(&engine, &candidate).unwrap();
     let entry = &proof.entries[0];
     let path = entry.directory.join("checksums.bin");
     let bytes = std::fs::read(&path).unwrap();
@@ -171,17 +184,20 @@ fn held_proof_rejects_replaced_checksum_inode() {
             .code(),
         storage_contract::ErrorCode::PreparationStale
     );
+    assert!(epoch.matches(&engine.metadata_integrity));
 }
 #[test]
 fn held_proof_rejects_disk_seal_replacement_and_candidate_changes() {
     let (_temp, engine, candidate) = fixture();
-    let proof = VerifiedPayloadSet::prepare(&engine.config, &candidate).unwrap();
+    let epoch = engine.metadata_integrity.capture();
+    let proof = VerifiedPayloadSet::prepare(&engine, &candidate).unwrap();
     let mut changed = candidate.clone();
     changed.versions[0].version.content_hash = "0".repeat(64).parse().unwrap();
     assert_eq!(
         proof.validate(&engine.config, &changed).unwrap_err().code(),
         storage_contract::ErrorCode::PreparationStale
     );
+    assert!(epoch.matches(&engine.metadata_integrity));
     let path = proof.disks[0].root.join("disk.json");
     let bytes = std::fs::read(&path).unwrap();
     std::fs::rename(&path, path.with_extension("old")).unwrap();
@@ -193,6 +209,83 @@ fn held_proof_rejects_disk_seal_replacement_and_candidate_changes() {
             .code(),
         storage_contract::ErrorCode::PreparationStale
     );
+    assert!(!epoch.matches(&engine.metadata_integrity));
+}
+
+#[test]
+fn old_payload_proof_identity_fault_revokes_the_current_writer_after_a_later_publication() {
+    let (_temp, mut engine, candidate) = fixture();
+    let proof = VerifiedPayloadSet::prepare(&engine, &candidate).unwrap();
+    engine
+        .persist_auth_state(
+            json_codec::json!({"auth": "later publication"}),
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let current_epoch = engine.metadata_integrity.capture();
+    let path = proof
+        .disks
+        .iter()
+        .find(|disk| disk.metadata_member)
+        .unwrap()
+        .root
+        .join("disk.json");
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::rename(&path, path.with_extension("old")).unwrap();
+    std::fs::write(path, bytes).unwrap();
+    assert_eq!(
+        proof
+            .validate(&engine.config, &candidate)
+            .unwrap_err()
+            .code(),
+        storage_contract::ErrorCode::PreparationStale
+    );
+    assert!(!current_epoch.matches(&engine.metadata_integrity));
+    assert!(!engine.blocked);
+}
+
+#[test]
+fn non_metadata_payload_disk_identity_fault_does_not_revoke_shared_graph_provenance() {
+    let (_temp, engine, candidate) =
+        fixture_with_payload_and_members(1, b"original", [true, false, true]);
+    let proof = VerifiedPayloadSet::prepare(&engine, &candidate).unwrap();
+    let epoch = engine.metadata_integrity.capture();
+    let path = proof
+        .disks
+        .iter()
+        .find(|disk| !disk.metadata_member)
+        .unwrap()
+        .root
+        .join("disk.json");
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::rename(&path, path.with_extension("old")).unwrap();
+    std::fs::write(path, bytes).unwrap();
+    assert_eq!(
+        proof
+            .validate(&engine.config, &candidate)
+            .unwrap_err()
+            .code(),
+        storage_contract::ErrorCode::PreparationStale
+    );
+    assert!(epoch.matches(&engine.metadata_integrity));
+}
+
+#[test]
+fn payload_preparation_reports_a_missing_metadata_seal_to_its_writer() {
+    let (_temp, engine, candidate) = fixture();
+    let epoch = engine.metadata_integrity.capture();
+    let member = engine.config.metadata_members().next().unwrap();
+    std::fs::remove_file(member.root.join("disk.json")).unwrap();
+    assert!(
+        PayloadPreparation::new(
+            &engine.config,
+            &candidate,
+            Arc::clone(&engine.metadata_integrity)
+        )
+        .is_err()
+    );
+    assert!(!epoch.matches(&engine.metadata_integrity));
 }
 #[test]
 fn detached_decision_rejects_changed_topology_before_journaling() {
@@ -219,7 +312,13 @@ fn detached_decision_rejects_changed_topology_before_journaling() {
 #[test]
 fn preparation_pins_disk_identity_before_payload_work() {
     let (_temp, engine, candidate) = fixture();
-    let preparation = PayloadPreparation::new(&engine.config, &candidate).unwrap();
+    let epoch = engine.metadata_integrity.capture();
+    let preparation = PayloadPreparation::new(
+        &engine.config,
+        &candidate,
+        Arc::clone(&engine.metadata_integrity),
+    )
+    .unwrap();
     let path = preparation.disks[0].root.join("disk.json");
     let bytes = std::fs::read(&path).unwrap();
     std::fs::rename(&path, path.with_extension("old")).unwrap();
@@ -228,14 +327,14 @@ fn preparation_pins_disk_identity_before_payload_work() {
         Err(error) => assert_eq!(error.code(), storage_contract::ErrorCode::PreparationStale),
         Ok(_) => panic!("replaced disk seal was accepted"),
     }
+    assert!(!epoch.matches(&engine.metadata_integrity));
 }
 
 // Pre-optimization reference: retain the discarded first pass explicitly.
-fn reference_prepare(
-    config: &ValidatedConfig,
-    candidate: &Candidate,
-) -> Result<VerifiedPayloadSet> {
-    let preparation = PayloadPreparation::new(config, candidate)?;
+fn reference_prepare(engine: &Engine, candidate: &Candidate) -> Result<VerifiedPayloadSet> {
+    let config = &engine.config;
+    let preparation =
+        PayloadPreparation::new(config, candidate, Arc::clone(&engine.metadata_integrity))?;
     let replicas: usize = candidate
         .versions
         .iter()
@@ -245,13 +344,15 @@ fn reference_prepare(
     let mut entries = Vec::new();
     for evidence in &candidate.versions {
         for slot in &evidence.placement.route_slot_ids {
-            let entry = verify_replica(config, &evidence.version, slot)?;
+            let entry =
+                verify_replica(config, &evidence.version, slot, &engine.metadata_integrity)?;
             if !full_revalidation {
                 entries.push(entry);
             }
         }
     }
     let proof = VerifiedPayloadSet {
+        metadata_integrity: preparation.metadata_integrity,
         entries,
         disks: preparation.disks,
         full_revalidation,
@@ -271,10 +372,9 @@ fn preparation_hash_cost_matches_reference_at_proof_budget_boundary() {
         let mut candidate = candidate.clone();
         let last = candidate.versions.last_mut().unwrap();
         last.placement.route_slot_ids.truncate(replicas - 30);
-        let (reference, old_cost) =
-            verification_cost(|| reference_prepare(&engine.config, &candidate));
+        let (reference, old_cost) = verification_cost(|| reference_prepare(&engine, &candidate));
         let (optimized, new_cost) =
-            verification_cost(|| VerifiedPayloadSet::prepare(&engine.config, &candidate));
+            verification_cost(|| VerifiedPayloadSet::prepare(&engine, &candidate));
         let reference = reference.unwrap();
         let optimized = optimized.unwrap();
         assert_eq!(reference.full_revalidation, optimized.full_revalidation);
@@ -302,8 +402,8 @@ fn large_preparation_rejects_corruption_like_reference() {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&body, std::fs::Permissions::from_mode(0o600)).unwrap();
     std::fs::write(body, b"tampered").unwrap();
-    let old_error = reference_prepare(&engine.config, &candidate).err().unwrap();
-    let new_error = VerifiedPayloadSet::prepare(&engine.config, &candidate)
+    let old_error = reference_prepare(&engine, &candidate).err().unwrap();
+    let new_error = VerifiedPayloadSet::prepare(&engine, &candidate)
         .err()
         .unwrap();
     assert_eq!(
@@ -327,9 +427,9 @@ fn benchmark_large_preparation_hash_passes() {
             let start = std::time::Instant::now();
             let (proof, (replicas, bytes)) = verification_cost(|| {
                 if reference {
-                    reference_prepare(&engine.config, &candidate)
+                    reference_prepare(&engine, &candidate)
                 } else {
-                    VerifiedPayloadSet::prepare(&engine.config, &candidate)
+                    VerifiedPayloadSet::prepare(&engine, &candidate)
                 }
             });
             let proof = proof.unwrap();
@@ -346,7 +446,13 @@ fn benchmark_large_preparation_hash_passes() {
 #[test]
 fn large_preparation_rechecks_disk_identity_after_last_replica() {
     let (_temp, engine, candidate) = fixture_with_files(MAX_HELD_PAYLOAD_FILES / 12 + 1);
-    let preparation = PayloadPreparation::new(&engine.config, &candidate).unwrap();
+    let epoch = engine.metadata_integrity.capture();
+    let preparation = PayloadPreparation::new(
+        &engine.config,
+        &candidate,
+        Arc::clone(&engine.metadata_integrity),
+    )
+    .unwrap();
     let path = preparation.disks[0].root.join("disk.json");
     let bytes = std::fs::read(&path).unwrap();
     // Replace with identical contents after all hashes succeed, while the
@@ -362,11 +468,18 @@ fn large_preparation_rechecks_disk_identity_after_last_replica() {
         .err()
         .unwrap();
     assert_eq!(error.code(), storage_contract::ErrorCode::PreparationStale);
+    assert!(!epoch.matches(&engine.metadata_integrity));
 }
 #[test]
 fn large_preparation_rejects_disk_change_before_hashing() {
     let (_temp, engine, candidate) = fixture_with_files(MAX_HELD_PAYLOAD_FILES / 12 + 1);
-    let preparation = PayloadPreparation::new(&engine.config, &candidate).unwrap();
+    let epoch = engine.metadata_integrity.capture();
+    let preparation = PayloadPreparation::new(
+        &engine.config,
+        &candidate,
+        Arc::clone(&engine.metadata_integrity),
+    )
+    .unwrap();
     let path = preparation.disks[0].root.join("disk.json");
     let bytes = std::fs::read(&path).unwrap();
     std::fs::rename(&path, path.with_extension("old")).unwrap();
@@ -377,6 +490,7 @@ fn large_preparation_rejects_disk_change_before_hashing() {
         storage_contract::ErrorCode::PreparationStale
     );
     assert_eq!(cost, (0, 0));
+    assert!(!epoch.matches(&engine.metadata_integrity));
 }
 
 fn existing_prepared(engine: &Engine, candidate: &Candidate) -> Vec<crate::engine::Prepared> {
@@ -481,12 +595,16 @@ fn existing_install_token_does_not_replace_decision_byte_verification() {
     )
     .unwrap();
     assert_eq!(
-        PayloadPreparation::new(&engine.config, &candidate)
-            .unwrap()
-            .verify(&engine.config, &candidate)
-            .err()
-            .unwrap()
-            .code(),
+        PayloadPreparation::new(
+            &engine.config,
+            &candidate,
+            Arc::clone(&engine.metadata_integrity)
+        )
+        .unwrap()
+        .verify(&engine.config, &candidate)
+        .err()
+        .unwrap()
+        .code(),
         storage_contract::ErrorCode::ChecksumMismatch
     );
     assert!(!engine.blocked);
@@ -511,4 +629,30 @@ fn existing_admission_above_descriptor_budget_uses_uncached_preparation() {
         .unwrap();
     assert!(detached.verified.full_revalidation);
     assert!(detached.verified.entries.is_empty());
+}
+
+#[test]
+fn name_projection_preparation_reports_shared_identity_faults_at_the_source() {
+    let (_temp, engine, candidate) = fixture();
+    let version = &candidate.versions[0].version;
+    let mut next = engine.state().clone();
+    next.file_names
+        .insert(version.file_id.clone(), "renamed.txt".into());
+    let disk = engine
+        .disk(&candidate.versions[0].placement.route_slot_ids[0])
+        .unwrap();
+    assert!(disk.metadata_member);
+    let epoch = engine.metadata_integrity.capture();
+    std::fs::remove_file(disk.root.join("disk.json")).unwrap();
+    assert!(
+        crate::container_storage::prepare_names(
+            &engine.config,
+            engine.state(),
+            &next,
+            MAX_METADATA,
+            Some(&engine.metadata_integrity),
+        )
+        .is_err()
+    );
+    assert!(!epoch.matches(&engine.metadata_integrity));
 }

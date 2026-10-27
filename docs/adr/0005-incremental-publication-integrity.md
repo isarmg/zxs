@@ -18,12 +18,12 @@
 | --- | --- |
 | [State](../../src/contract/src/model.rs)、[Tracked](../../src/contract/src/tracked.rs)、[SharedRecords](../../src/contract/src/shared_records.rs) | 有写集和大记录共享；普通映射、永久操作收据仍用 `BTreeMap`，事件仍是 `Vec`，共享记录首次写仍复制整张键/句柄表；不是持久路径复制容器 |
 | [index.rs](../../src/engine/src/engine/index.rs) | 版本索引差分已消费可信写集；未知谱系/全字段变更及重建仍保留完整比较，不能把这一步称为端到端增量 |
-| [snapshot.rs](../../src/engine/src/journal/snapshot.rs)、[snapshot_reuse.rs](../../src/engine/src/journal/snapshot_reuse.rs)、[journal.rs](../../src/engine/src/journal.rs) | 字段复用仍读取准确页并向全部成员安装；变化字段完整编码，快照根仍列出全部页，Candidate 仍列出全部历史根 |
-| [history_package.rs](../../src/engine/src/history_package.rs)、[changes.rs](../../src/engine/src/history_package/changes.rs) | 未变图仍读验、语义准入并安装；变化历史完整投影/编码，文件和目录归属仍可能扫描全部版本/提交 |
+| [snapshot.rs](../../src/engine/src/journal/snapshot.rs)、[snapshot_reuse.rs](../../src/engine/src/journal/snapshot_reuse.rs)、[journal.rs](../../src/engine/src/journal.rs) | [ADR 0006](0006-bounded-metadata-roots.md)改用固定 Snapshot 映射根与 Candidate 历史目录根，按真实写集增量编码并维护精确预算摘要；全部旧依赖仍实读验存，未启用免读 |
+| [history_package.rs](../../src/engine/src/history_package.rs)、[changes.rs](../../src/engine/src/history_package/changes.rs) | 未变图仍读验、语义准入并安装；稳定history/file归属的分支值更新可按窄delta编码，其他变化历史仍完整投影，文件和目录归属仍可能扫描全部版本/提交 |
 | [publication.rs](../../src/engine/src/engine/publication.rs) | `PublishedStateBase` 仅在完整发布且索引成功后签发，匹配精确 State 分配、快照、序号和配置；不证明各对象此刻健康 |
 | [reads.rs](../../src/engine/src/engine/reads.rs)、[disk.rs](../../src/engine/src/disk.rs)、[engine_backend.rs](../../src/server/src/engine_backend.rs) | `Engine::check` 调用逐盘 `offline_check`，服务端仍持引擎锁；扫描版本目录、本盘证明、墓碑和正文，不是完整快照/历史元数据图的有界后台巡检，也没有由此建立周期调度或健康新鲜度 |
 
-当前普通准备在所有磁盘来源均缺失时，可能从仍有效的内存 State 精确重建原页序列或原历史根，再走原碰撞和同步规则；这不授权启动、恢复、导出从任意 State 或 SQLite 重定根。增量目标也不承诺在每次无关写入中保留这种全历史补齐时机。
+当前普通准备在所有磁盘来源均缺失时，可能从仍有效的内存 State 精确重建原字段映射图或原历史根，再走原碰撞和同步规则；这不授权启动、恢复、导出从任意 State 或 SQLite 重定根。增量目标也不承诺在每次无关写入中保留这种全历史补齐时机。
 
 ## 责任与不变项
 

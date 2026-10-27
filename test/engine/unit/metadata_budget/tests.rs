@@ -77,7 +77,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     (temp, engine, repo)
 }
 #[test]
-fn manifest_limit_rejects_before_any_new_payload_or_decision_and_keeps_published_state() {
+fn metadata_graph_limit_rejects_before_any_new_payload_or_decision_and_keeps_published_state() {
     let (_temp, mut engine, repo) = fixture();
     let before = canonical_json(engine.state()).unwrap();
     let snapshot = engine.snapshot.clone();
@@ -142,10 +142,10 @@ fn manifest_limit_rejects_before_any_new_payload_or_decision_and_keeps_published
         }
     }
     assert!(crate::history_package::store_history_manifests_bounded(&[], &next, high).is_ok());
-    assert!(
-        store_snapshot_bounded(&[], &next, high - 1).is_ok(),
-        "the manifest itself must be the limiting object"
-    );
+    // The fixed Snapshot root can now exceed the smaller history root. The
+    // rejection contract is independent of which metadata object is checked
+    // first: this limit is already proven insufficient for a real history object.
+    assert!(crate::history_package::store_history_manifests_bounded(&[], &next, high - 1).is_err());
     let logs = engine
         .members()
         .iter()
@@ -309,7 +309,11 @@ fn local_publication_borrowed_schema_preserves_encoding_and_reader_policy() {
         "\u{e000}": "UTF-16 key order",
     });
     assert_local_publication_encoding(&local);
-    local.candidate.history_manifest_hashes.clear();
+    crate::journal::set_candidate_catalog(
+        &[],
+        &mut local.candidate,
+        std::collections::BTreeMap::new(),
+    );
     local.candidate.previous_snapshot = None;
     assert_local_publication_encoding(&local);
 }
@@ -423,8 +427,21 @@ fn metadata_only_package_and_purge_tombstone_combinations_are_preflighted() {
     let seal: PublicationSeal =
         read_json(&publication_seal_path(&disk, &record.candidate_hash)).unwrap();
     assert_eq!(
-        crate::history_package::package_proof_bytes(&candidate, &publication, &seal, MAX_METADATA)
+        crate::history_package::package_proof_bytes(
+            &candidate,
+            &publication,
+            &seal,
+            crate::metadata_map::MapRoot::load(
+                &candidate.history_roots,
+                crate::metadata_map::ProofMeasure::Plain,
+                |kind, hash| load_authenticated_object(&disk, kind, hash)
+            )
+            .unwrap()
+            .maximum_inclusion_proof_bytes()
             .unwrap(),
+            MAX_METADATA
+        )
+        .unwrap(),
         package_size
     );
     let tombstone = version_dir(&disk, &repo.history_tree_id, &old).join("purged.json");
@@ -465,194 +482,123 @@ fn metadata_only_package_and_purge_tombstone_combinations_are_preflighted() {
     );
     assert!(package_size > canonical_json(&publication).unwrap().len());
 
-    // Exercise multiple content-defined pages without hundreds of disk
-    // publications. Only the state shape varies here; proof hashes have
-    // fixed width, so the existing real publication supplies exact sizes.
+    // Brute-force every actual eligible ID/path independently of NodeStats.
+    // This codec fixture enlarges only the tombstone field, not pool history.
     let mut wide_state = engine.state().clone();
     for n in 0u32..600 {
         wide_state.content_states.insert(
             blake3::hash(&n.to_le_bytes()).to_hex().to_string(),
             if n % 3 == 0 {
-                storage_contract::ContentState::Migrated
+                ContentState::Migrated
             } else {
-                storage_contract::ContentState::Purged
+                ContentState::Purged
             },
         );
     }
-    // Keep each modern page below half the legacy cap so this fixture
-    // deterministically distinguishes legacy and current tombstone sizes.
-    let values = json_codec::to_value(&wide_state.content_states).unwrap();
-    let mut in_page = 0;
-    for key in values.as_object().unwrap().keys() {
-        if blake3::hash(key.as_bytes()).as_bytes()[0] & 31 == 0 {
-            in_page = 0;
-        }
-        in_page += 1;
-        if in_page > 64 {
-            wide_state.content_states.remove(key);
-        }
-    }
     let snapshot_hash = store_snapshot(std::slice::from_ref(&disk), &wide_state).unwrap();
     let snapshot: Snapshot = load_object(&disk, "snapshot", &snapshot_hash).unwrap();
-    assert!(snapshot.pages["content_states"].len() > 5);
+    let pages = crate::journal::map_pages(&disk, &snapshot.maps["content_states"]);
+    assert!(pages.len() > 5);
+    let mut wide_candidate = candidate.clone();
+    wide_candidate.snapshot_hash = snapshot_hash;
     let mut actual_largest = package_size;
-    for hash in &snapshot.pages["content_states"] {
-        let page: json_codec::Map<String, json_codec::Value> =
-            load_object(&disk, "state-page", hash).unwrap();
-        for (id, status) in &page {
-            if !matches!(status.as_str(), Some("PURGED" | "MIGRATED")) {
-                continue;
-            }
-            actual_largest = actual_largest.max(
-                canonical_json(&ContentTombstone {
-                    version_id: id.clone(),
-                    state: json_codec::from_value(status.clone()).unwrap(),
-                    candidate: candidate.clone(),
-                    publication: publication.clone(),
-                    publication_seal: seal.clone(),
-                    snapshot: snapshot.clone(),
-                    content_state_page: page.clone(),
-                })
-                .unwrap()
-                .len(),
-            );
+    for (id, status) in &wide_state.content_states {
+        if !matches!(status, ContentState::Purged | ContentState::Migrated) {
+            continue;
         }
+        let (value, content_state_proof) =
+            crate::metadata_map::read_proof(&snapshot.maps["content_states"], id, |kind, hash| {
+                load_authenticated_object(&disk, kind, hash)
+            })
+            .unwrap();
+        assert_eq!(value.unwrap().as_str(), Some(status.as_str()));
+        actual_largest = actual_largest.max(
+            canonical_json(&ContentTombstone {
+                version_id: id.clone(),
+                state: *status,
+                candidate: wide_candidate.clone(),
+                publication: publication.clone(),
+                publication_seal: seal.clone(),
+                snapshot: snapshot.clone(),
+                content_state_proof,
+            })
+            .unwrap()
+            .len(),
+        );
     }
-    let bounded = preflight_publication(
+    let bound = preflight_publication(
         &engine,
-        &candidate,
+        &wide_candidate,
         &publication.result,
         &wide_state,
         None,
         MAX_METADATA,
     )
     .unwrap();
-    assert_eq!(bounded, actual_largest);
-    assert!(
-        preflight_publication(
+    assert_eq!(bound, actual_largest);
+    assert_eq!(
+        preflight_bound_publication(
             &engine,
-            &candidate,
+            &wide_candidate,
             &publication.result,
             &wide_state,
             None,
-            bounded,
+            MAX_METADATA
+        )
+        .unwrap(),
+        bound
+    );
+    assert!(
+        preflight_publication(
+            &engine,
+            &wide_candidate,
+            &publication.result,
+            &wide_state,
+            None,
+            bound
         )
         .is_ok()
     );
     assert_eq!(
         preflight_publication(
             &engine,
-            &candidate,
+            &wide_candidate,
             &publication.result,
             &wide_state,
             None,
-            bounded - 1,
+            bound - 1
         )
         .unwrap_err()
         .code(),
-        storage_contract::ErrorCode::ResourceLimit
+        ErrorCode::ResourceLimit
     );
-
-    // A pre-upgrade decided candidate must keep its old, larger pages for
-    // exact preflight, even though the current writer makes smaller ones.
-    let mut legacy = snapshot.clone();
-    let states = json_codec::to_value(&wide_state.content_states).unwrap();
-    let entries = states.as_object().unwrap().iter().collect::<Vec<_>>();
-    let legacy_pages = entries
-        .chunks(STATE_PAGE_ENTRIES)
-        .map(|chunk| {
-            let page = chunk
-                .iter()
-                .map(|(key, value)| ((*key).clone(), (*value).clone()))
-                .collect::<json_codec::Map<_, _>>();
-            store_object(&disk, "state-page", &page).unwrap()
-        })
-        .collect::<Vec<_>>();
-    legacy
-        .pages
-        .insert("content_states".into(), legacy_pages.clone());
-    let legacy_hash = store_object(&disk, "snapshot", &legacy).unwrap();
-    let mut legacy_candidate = candidate.clone();
-    legacy_candidate.snapshot_hash = legacy_hash;
-    // Preflight sizes proofs but does not authorize or publish recovery.
-    let recovery = RecoveryProof {
-        plan: json_codec::from_value(json_codec::json!({
-            "recovery_id": "test-recovery", "digest": "0".repeat(64),
-            "operation_id": candidate.operation_id, "candidate_hash": "0".repeat(64),
-            "principal": "alice", "reason": "size regression", "isolation_generation": "1",
-            "sequence": candidate.sequence.to_string(), "version_protection": [],
-            "loss_details": [], "members": [], "original_accepts": publication.finalize.accepts,
-        }))
-        .unwrap(),
-        reprotect: Vec::new(),
-    };
-    let old_bound = preflight_publication(
-        &engine,
-        &legacy_candidate,
-        &publication.result,
-        &wide_state,
-        Some(recovery.clone()),
-        MAX_METADATA,
-    )
-    .unwrap();
-    let mut modern_candidate = candidate.clone();
-    modern_candidate.snapshot_hash = snapshot_hash;
-    let modern_bound = preflight_publication(
-        &engine,
-        &modern_candidate,
-        &publication.result,
-        &wide_state,
-        Some(recovery.clone()),
-        MAX_METADATA,
-    )
-    .unwrap();
+    // Decided roots must read their exact stored paths; no reconstruction or
+    // new canonical partition can stand in for a missing bound dependency.
+    std::fs::remove_file(object_path(&disk, "state-page", &pages[0])).unwrap();
     assert!(
-        old_bound > modern_bound,
-        "legacy 128-entry tombstones need the larger bound: old={old_bound}, modern={modern_bound}, pages={:?}",
-        state_pages(states.as_object().unwrap())
-            .map(|p| p.len())
-            .collect::<Vec<_>>()
+        preflight_bound_publication(
+            &engine,
+            &wide_candidate,
+            &publication.result,
+            &wide_state,
+            None,
+            MAX_METADATA
+        )
+        .is_err()
     );
-    for limit in [modern_bound, old_bound - 1] {
-        assert_eq!(
-            preflight_publication(
-                &engine,
-                &legacy_candidate,
-                &publication.result,
-                &wide_state,
-                Some(recovery.clone()),
-                limit,
-            )
-            .unwrap_err()
-            .code(),
-            storage_contract::ErrorCode::ResourceLimit
-        );
-    }
     assert_eq!(
         preflight_publication(
             &engine,
-            &legacy_candidate,
+            &wide_candidate,
             &publication.result,
             &wide_state,
-            Some(recovery.clone()),
-            old_bound,
+            None,
+            MAX_METADATA
         )
         .unwrap(),
-        old_bound
+        bound
     );
-    std::fs::remove_file(object_path(&disk, "state-page", &legacy_pages[0])).unwrap();
-    assert!(
-        preflight_publication(
-            &engine,
-            &legacy_candidate,
-            &publication.result,
-            &wide_state,
-            Some(recovery),
-            MAX_METADATA,
-        )
-        .is_err(),
-        "missing legacy pages must fail closed, not use a new partition"
-    );
+    assert!(!object_path(&disk, "state-page", &pages[0]).exists());
 }
 
 #[test]
@@ -719,15 +665,14 @@ fn reused_content_pages_have_identical_exact_tombstone_budget_without_installing
     result.sequence = after.sequence;
     candidate.sequence = after.sequence;
     let fresh = prepare_snapshot(&after, MAX_METADATA).unwrap();
-    let reused = prepare_snapshot_incremental(
-        &before,
-        &after,
-        &prepared.reuse_basis().unwrap(),
-        MAX_METADATA,
-    )
-    .unwrap();
+    let reused =
+        prepare_snapshot_incremental(&before, &after, &prepared.reuse_basis(), MAX_METADATA)
+            .unwrap();
     assert_eq!(fresh.hash, reused.hash);
     candidate.snapshot_hash = reused.hash.clone();
+    let catalog = crate::history_package::prepare_history_manifests(&after, MAX_METADATA)
+        .unwrap()
+        .0;
     let budget = |snapshot: &PreparedSnapshot, maximum| {
         preflight_publication_prepared(
             &engine.config,
@@ -736,7 +681,7 @@ fn reused_content_pages_have_identical_exact_tombstone_budget_without_installing
             &after,
             None,
             maximum,
-            Some(snapshot),
+            Some((snapshot, &catalog)),
         )
     };
     let largest = budget(&fresh, MAX_METADATA).unwrap();
@@ -746,15 +691,16 @@ fn reused_content_pages_have_identical_exact_tombstone_budget_without_installing
         budget(&reused, largest - 1).unwrap_err().code(),
         storage_contract::ErrorCode::ResourceLimit
     );
-    let page_hashes = &prepared.descriptor.pages["content_states"];
+    let page_hashes =
+        crate::journal::map_pages(&members[0], &prepared.descriptor.maps["content_states"]);
     assert!(page_hashes.len() > 1);
-    for hash in page_hashes {
+    for hash in &page_hashes {
         for disk in &members {
             std::fs::remove_file(object_path(disk, "state-page", hash)).unwrap();
         }
     }
     // An unrelated field is not decoded merely to size content tombstones.
-    for hash in &prepared.descriptor.pages["file_notes"] {
+    for hash in &crate::journal::map_pages(&members[0], &prepared.descriptor.maps["file_notes"]) {
         for disk in &members {
             std::fs::write(
                 object_path(disk, "state-page", hash),
@@ -766,7 +712,7 @@ fn reused_content_pages_have_identical_exact_tombstone_budget_without_installing
     assert_eq!(budget(&reused, MAX_METADATA).unwrap(), largest);
     for disk in &members {
         assert!(!object_path(disk, "snapshot", &reused.hash).exists());
-        for hash in page_hashes {
+        for hash in &page_hashes {
             assert!(
                 !object_path(disk, "state-page", hash).exists(),
                 "preflight must not install reconstructed pages"

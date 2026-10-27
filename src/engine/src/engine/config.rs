@@ -69,6 +69,49 @@ impl Deref for ValidatedConfig {
 }
 
 impl ValidatedConfig {
+    pub(super) fn same_admission(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.admitted, &other.admitted)
+    }
+
+    pub(super) fn verify_candidate_membership(
+        &self,
+        candidate: &crate::journal::Candidate,
+    ) -> Result<()> {
+        let expected: BTreeSet<_> = self
+            .metadata_members()
+            .map(|disk| disk.disk_id.as_str())
+            .collect();
+        let actual: BTreeSet<_> = candidate
+            .metadata_disk_ids
+            .iter()
+            .map(String::as_str)
+            .collect();
+        if expected.is_empty()
+            || actual != expected
+            || actual.len() != candidate.metadata_disk_ids.len()
+        {
+            return Err(Error::new(
+                storage_contract::ErrorCode::PublicationInvalid,
+                "candidate membership differs from configured metadata members",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn verify_saved_metadata_membership(&self, saved: &Self) -> Result<()> {
+        fn identity(member: &DiskConfig) -> (&str, &str, u64) {
+            (&member.disk_id, &member.slot_id, member.binding_generation)
+        }
+        let expected: BTreeSet<_> = self.metadata_members().map(identity).collect();
+        let actual: BTreeSet<_> = saved.metadata_members().map(identity).collect();
+        if saved.pool_id != self.pool_id || actual != expected {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "saved metadata membership differs from admitted configuration",
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn metadata_members(&self) -> impl ExactSizeIterator<Item = &DiskConfig> {
         self.admitted
             .metadata_members

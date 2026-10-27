@@ -166,17 +166,17 @@
 
 ## 8.7 分页历史清单与独立历史包
 
-[ADR 0004](adr/0004-paged-history-manifests.md)的分页历史清单图已进入实验实现；只维护一种当前格式，不设置格式代际或兼容分支。此实现不代表物理设备耐久验收。
+[ADR 0004](adr/0004-paged-history-manifests.md)的分页历史图由[ADR 0006](adr/0006-bounded-metadata-roots.md)统一为有界元数据根。本次实验源码只维护一种格式；语义 marker 不等于发行版本或兼容分支，也不表示已发布或完成物理设备耐久验收。
 
-候选的 `history_manifest_hashes[history_tree_id]` 始终直接绑定 `history-manifest` 域对象的准确摘要。存储对象只接受分页根，字段仅包括 `repository`、`history`、`maps`。`maps` 必须包含逻辑清单全部固定映射字段，连空映射也有显式引用；不得遗漏字段或接受未知字段。展开后的 `HistoryManifest` 是语义模型，其扁平 JSON 摘要不是分页根身份，不能替换候选中的摘要。
+候选必须携带 `history_roots: {kind, hash}`，引用 history ID→`history-manifest` 域摘要的 radix 目录，不再接受 `history_manifest_hashes` 平面映射。历史根字段为必需的 `format: "radix-map-roots"`、`repository`、`history`、`maps`。`maps` 必须包含全部30个固定映射字段，连空映射也有显式引用；不得遗漏字段或接受未知字段。展开后的 `HistoryManifest` 是语义模型，其扁平 JSON 摘要不是分页根身份，不能替换目录中已绑定的摘要。完整恢复验证目录全部条目、history ID与根身份及每个历史图，不从 State 重新计算另一个目录冒充原绑定值。
 
 | 对象域 | 内容与边界 |
 | --- | --- |
-| `history-manifest` | 分页根保留仓库/历史身份及固定映射集合，引用以 `kind`、`hash` 明确区分叶页和索引 |
-| `history-index` | `prefix` 和 `children`；按实体键 UTF-8 字节的 BLAKE3 摘要小写十六进制逐位分路，最多 16 个单字符子键，最多 64 位深度 |
+| `history-manifest` | 必需 `radix-map-roots` 标识、仓库/历史身份及固定30映射集合 |
+| `metadata-index` | `prefix` 为0..63位小写十六进制；`children` 为1..16个单十六进制位键的引用。按键文本 UTF-8 字节的 BLAKE3 摘要（不另做Unicode规范化）逐位分路，最多64层 |
 | `state-page` | 普通 JSON 实体映射；每页最多 128 项，64 KiB 为多实体页的拆分目标；不可分单实体可独占一页，但整个编码页仍不得超过 64 MiB 读取上限 |
 
-分区参数属于格式常量，与本次准入预算无关。根、索引、叶页和候选/组合证明均先冻结规范字节并检查实际大小，再复制新正文及推进 PREPARE/ACCEPT；全部配置成员先安装依赖，后推进决定。每层读取验证域哈希、引用种类、前缀、深度和条目归属；拒绝重复实体、未知字段、空索引和非根空叶页。缓存对象在不同逻辑位置复用时仍检查前缀，不能跳过语义校验。上述映射字段与对象形状见[机器契约](contracts/README.md)，图闭包与历史语义仍由核心验证。
+Snapshot、历史目录及历史投影共用同一 radix 算法；引用 `kind` 仅允许 `state-page` 或 `metadata-index`，不接受旧 `history-index`。域哈希分别使用 `zxs:state-page\0` 与 `zxs:metadata-index\0`；字段与 owner 语义仍由准确根和准入检查约束。分区参数属于格式常量，与本次准入预算无关。根、索引、叶页和候选/组合证明均先冻结规范字节并检查实际大小，再复制新正文及推进 PREPARE/ACCEPT；全部配置成员先安装依赖，后推进决定。每层读取验证域哈希、引用种类、前缀、深度和条目归属；拒绝重复实体、未知字段、空索引和非根空叶页。缓存对象在不同逻辑位置复用时仍检查前缀，不能跳过语义校验。上述映射字段与对象形状见[机器契约](contracts/README.md)，图闭包与历史语义仍由核心验证。
 
 新包布局为：
 
@@ -184,18 +184,18 @@
 <history-package>/
 ├── manifest.json                         # 准确分页根
 ├── publication.json                      # 与根版本一致的 PackageProof
-├── objects/history-index/<前两位>/<hash>.json
+├── objects/metadata-index/<前两位>/<hash>.json
 ├── objects/state-page/<前两位>/<hash>.json
 └── versions/<version-id>/                # 完整正文、版本描述及 checksums.bin
 ```
 
-`publication.json` 包含 `manifest_hash`、原 `candidate`、`publication` 和 `publication_seal`。证明链必须为：发布闭包 → 候选绑定的准确根 → 全部可达索引/叶页 → 逻辑历史语义 → 完整正文和校验清单。`HistoryPackageReport.manifest_hash` 表示绑定根，不是展开清单摘要。包必须携带全部可达依赖；离线检查和恢复不依赖原池、SQLite 或网络。可选的展开便捷文件不是权威输入，不能替代缺失图对象。没有外部可信成员配置时，独立包验证只证明包内证据与内容完整、自洽，不独立证明来源池的成员权威或最新状态。导入先验证全包，再执行身份冲突检查、路由重绑定、正文复制及目标池新的本地发布；外来发布不能替代目标池的配置锚和发布权威。
+`publication.json` 包含 `manifest_hash`、原 `candidate`、`publication`、`publication_seal` 和必需的 `history_root_proof`。证明链为：发布闭包 → `Candidate.history_roots` → 单个 history ID 的目录 inclusion proof → 准确根 → 该历史全部可达索引/叶页 → 逻辑语义 → 完整正文和校验清单。证明为 `{nodes: [...]}`，按根到叶顺序携带1..65个实际JSON节点；每层验证域哈希、前缀/路由和叶界限，拒绝目标值不符、截断或多余节点。它不携带整目录或其他历史子图，不能替代恢复时的完整目录验证。`HistoryPackageReport.manifest_hash` 表示绑定根，不是展开清单摘要。包必须携带全部可达依赖；离线检查和恢复不依赖原池、SQLite 或网络。可选的展开便捷文件不是权威输入，不能替代缺失图对象。没有外部可信成员配置时，独立包验证只证明包内证据与内容完整、自洽，不独立证明来源池的成员权威或最新状态。导入先验证全包，再执行身份冲突检查、路由重绑定、正文复制及目标池新的本地发布；外来发布不能替代目标池的配置锚和发布权威。
 
 备份前缀优先按包内真实版本的原路由位置重绑定。空目录等尚无版本路由证据的设置，只在其备份槽位 ID 与目标备份槽位精确相同时保留前缀，不按名字排序猜测层级；已知原路由中因减少份数而排除的层级不会重新加入。目标新增层级或未知改名槽位缺少前缀时拒绝导入，不同前缀映射到同一目标槽位时拒绝冲突，不先发布部分结果。
 
-导出选择与当前逻辑历史匹配的原发布证据并复制其准确对象图。根、索引、包证明和展开逻辑模型均不带项目格式版本字段；读取采用严格固定形状，不接受扁平逻辑投影代替根、不根据快照重建扁平根、不升级证明，也不执行破坏性迁移或删除已有数据。当前格式生成的全部保留历史继续按准确绑定根验证与恢复。不匹配的外部材料须另行处理，当前程序不承诺兼容读取或回滚。
+导出选择与当前逻辑历史匹配的原发布证据并复制其准确对象图。根的必需语义 marker 不是项目发行版本字段；读取采用严格固定形状，拒绝 markerless/flat 根、旧目录字段及旧索引引用，不升级证明、不兼容双读、不迁移或删除已有数据。拒绝后保留原材料，不以重置运行池解决格式差异；实现格式变更不授权真实部署。当前格式生成的保留历史仍按准确绑定证据恢复。
 
-分页移除单树扁平清单的对象大小瓶颈，不移除单个大型实体（例如 `Commit.entries`）、候选全部历史根映射、快照根及组合证明的上限。State 克隆、全版本索引差分或重建、快照遍历和校验仍可能是 O(total)，冻结整图也仍占用与图规模相关的内存；不得把页面共享解释为端到端 O(delta)。
+有界根移除全页 hash 列表和全部 history 根映射随总量增长的根瓶颈，但单个大型实体（例如 `Commit.entries`、完整控制认证对象）、本次 Candidate.versions、成员集合及组合证明仍受实际字节与元数据上限约束。Snapshot/catalog 编码按可信写集更新路径，预算使用驻留精确摘要；完整旧依赖读验、碰撞比较和全部成员同步仍保留，history 投影仅稳定归属分支值更新使用窄增量。一般 owner closure、冷准入/故障重建及其他全量成本仍在，不得宣称端到端 O(delta) 或性能已经提高。
 
 [S10]: https://btrfs.readthedocs.io/en/latest/btrfs-scrub.html
 [S16]: https://btrfs.readthedocs.io/en/latest/Reflink.html
@@ -208,9 +208,11 @@
 
 元数据对象只支持 `metadata/objects/<kind>/<hash前两位>/<hash>.json`。目标摘要存在旧平面文件时读取和写入均拒绝；对象清点拒绝非分片项。程序不自动搬迁、覆盖或删除旧平面文件。
 
-当前快照使用唯一的结构定义，不携带发布版本号；事件必须位于 `pages.events`（空事件使用空页面列表），不再接受 `scalars.events` 或缺失事件字段。页面分区方式不是版本标志；同一当前格式内的准确绑定根和页面仍按原摘要校验和修复，不因新编码器分区不同而重写。Candidate、配置、盘封印及检查点也不携带发布版本号；读取必须满足各自字段结构，不能忽略额外版本字段。
+Snapshot 必须携带 `format: "radix-map-roots"`、十进制 UInt64 字符串 `sequence/business_generation/topology_generation`、准确35个 `maps` 根、独立 `events` 根及 `control_auth: {kind: "state-control-auth", hash}`。control_auth 正文仍为原 `Option<Value>`（包括 null），作为独立对象认证，不把它解释为新的认证 DTO。events 使用20位补零 ordinal 文本键；完整读取验证从0连续排列并还原数组，空事件同样有空映射根。拒绝旧 `scalars/pages`、页 hash 列表及缺 marker 结构。Candidate 自身没有 format 字段，其必需 `history_roots` 定义当前目录结构；配置、盘封印和检查点也不添加发行版本号。
 
-候选绑定的准确快照根和各页面可以分别从不同的可信元数据成员读取；不要求单个成员恰好保存完整闭包，但全部依赖都必须通过各自摘要及结构校验。副本选择不使用多数票，不尝试替代根或重新编码状态来补齐缺页。该读取过程不改盘；持有写者锁的全部配置成员恢复路径才修复这些已认证对象的副本。缺少任何必需的有效对象时拒绝恢复，不承诺从任意损坏中重建。
+候选绑定的准确快照根、索引、叶页及独立控制认证对象可以分别从不同的可信元数据成员读取；不要求单个成员恰好保存完整闭包，但全部依赖都必须通过各自摘要及结构校验。副本选择不使用多数票，不尝试替代根或重新编码状态来补齐缺页。该读取过程不改盘；持有写者锁的全部配置成员恢复路径才修复这些已认证对象的副本。缺少任何必需的有效对象时拒绝恢复，不承诺从任意损坏中重建。
+
+内容墓碑的 `content_state_proof` 替代嵌入单个 `content_state_page`。验证链为封印与发布 → Candidate →准确 Snapshot/序号 → `maps.content_states` → 目标版本的路径证明与 Purged/Migrated 状态；原本地版本发布、配置成员和盘封印校验保留。清除按 key 取得路径证明，先持久化墓碑再删除正文并同步父目录；证明缺失或不符不得删正文。
 
 恢复已验证的发布闭包时，本地 `commit-proof.json` 或 `publication-proof.json` 若与权威证明冲突，先把原普通文件移入其所在证明目录的 `proof-quarantine/`，再重建准确证明；不会把冲突文件当作另一发布结果的依据，也不删除它。链接、特殊文件或无法安全访问的路径仍失败关闭，不以健康副本绕过路径安全检查。
 

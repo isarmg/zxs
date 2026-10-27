@@ -328,8 +328,8 @@ fn valid_checksum_does_not_admit_noncanonical_receipt_payload() {
 }
 
 #[test]
-fn operation_id_candidate_preserves_legacy_canonical_bytes_and_digest() {
-    let bytes = br#"{"metadata_disk_ids":["disk"],"operation_id":"op_0123456789abcdef0123456789abcdef","pool_id":"pool","previous_snapshot":null,"request_digest":"request","sequence":"1","snapshot_hash":"snapshot","transaction_id":"transaction","versions":[]}"#;
+fn operation_id_candidate_preserves_current_canonical_bytes_and_digest() {
+    let bytes = br#"{"history_roots":{"hash":"ea047f909a3791b1133c3a2dd3c41e0c454897720aa8101e5f951b69a060f0ab","kind":"state-page"},"metadata_disk_ids":["disk"],"operation_id":"op_0123456789abcdef0123456789abcdef","pool_id":"pool","previous_snapshot":null,"request_digest":"request","sequence":"1","snapshot_hash":"snapshot","transaction_id":"transaction","versions":[]}"#;
     let candidate: Candidate = json_codec::from_slice(bytes).unwrap();
     assert_eq!(canonical_json(&candidate).unwrap(), bytes);
     let mut expected = blake3::Hasher::new();

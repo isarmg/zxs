@@ -14,13 +14,16 @@ pub(crate) use planning::PlanningContext;
 mod index;
 mod integrity_scrub;
 pub use integrity_scrub::{
-    IntegrityScrubArea, IntegrityScrubCancellation, IntegrityScrubCompletion, IntegrityScrubIssue,
-    IntegrityScrubReport, IntegrityScrubTarget,
+    IntegrityScrubArea, IntegrityScrubBatch, IntegrityScrubBatchAdmission,
+    IntegrityScrubCancellation, IntegrityScrubCompletion, IntegrityScrubIssue,
+    IntegrityScrubOutcome, IntegrityScrubPlan, IntegrityScrubReport, IntegrityScrubSchedule,
+    IntegrityScrubTarget,
 };
 mod observations;
 mod operations;
 pub use observations::{DiskObservation, DiskObservationPlan, MetadataMemberProbe};
 pub use operations::{OperationReadPlan, OperationRecord};
+pub(crate) mod provenance;
 mod publication;
 pub(crate) use publication::DetachedPublication;
 mod workspace_commit;
@@ -52,6 +55,8 @@ pub struct Engine {
     pub(crate) blocked: bool,
     pub(crate) snapshot: Option<String>,
     published_state_base: Option<Arc<publication::PublishedStateBase>>,
+    pub(crate) metadata_integrity: Arc<provenance::MetadataIntegrity>,
+    integrity_scrub_schedule: Option<std::sync::Weak<integrity_scrub::ScheduleState>>,
     pub(crate) next_slot: u64,
     pub(crate) journals: BTreeMap<String, crate::journal::JournalWriter>,
     pub(crate) reads: Arc<Mutex<BTreeMap<String, usize>>>,
@@ -145,6 +150,7 @@ impl Engine {
         let result = journal.append(disk, kind, sequence, candidate, object);
         if journal.requires_reopen() {
             self.blocked = true;
+            self.metadata_integrity.invalidate();
         }
         result
     }
@@ -164,6 +170,7 @@ impl Engine {
         let result = journal.append_recovered(disk, kind, sequence, candidate, object);
         if journal.requires_reopen() {
             self.blocked = true;
+            self.metadata_integrity.invalidate();
         }
         result
     }
@@ -183,26 +190,8 @@ impl Engine {
         &self,
         candidate: &crate::journal::Candidate,
     ) -> Result<()> {
-        let expected: BTreeSet<_> = self
-            .config
-            .metadata_members()
-            .map(|disk| disk.disk_id.as_str())
-            .collect();
-        let actual: BTreeSet<_> = candidate
-            .metadata_disk_ids
-            .iter()
-            .map(String::as_str)
-            .collect();
-        if expected.is_empty()
-            || actual != expected
-            || actual.len() != candidate.metadata_disk_ids.len()
-        {
-            return Err(Error::new(
-                storage_contract::ErrorCode::PublicationInvalid,
-                "candidate membership differs from configured metadata members",
-            ));
-        }
-        Ok(())
+        self.metadata_integrity
+            .observe(self.config.verify_candidate_membership(candidate))
     }
 
     pub fn initialize(root: &Path, config: Config) -> Result<Self> {
@@ -305,6 +294,8 @@ impl Engine {
             blocked: false,
             snapshot: None,
             published_state_base: None,
+            metadata_integrity: Arc::new(provenance::MetadataIntegrity::default()),
+            integrity_scrub_schedule: None,
             next_slot: 1,
             journals,
             reads: Arc::new(Mutex::new(BTreeMap::new())),
@@ -373,6 +364,8 @@ impl Engine {
             blocked: false,
             snapshot: None,
             published_state_base: None,
+            metadata_integrity: Arc::new(provenance::MetadataIntegrity::default()),
+            integrity_scrub_schedule: None,
             next_slot: 1,
             journals: BTreeMap::new(),
             reads: Arc::new(Mutex::new(BTreeMap::new())),
@@ -511,7 +504,7 @@ impl Engine {
             ));
         }
         for disk in &self.config.disks {
-            validate_seal(&self.config, disk)?;
+            self.metadata_integrity.validate_seal(&self.config, disk)?;
         }
         Ok(())
     }
@@ -598,7 +591,11 @@ impl Engine {
     pub(crate) fn trusted_evidence_members(&self) -> Vec<DiskConfig> {
         self.members()
             .into_iter()
-            .filter(|disk| validate_seal(&self.config, disk).is_ok())
+            .filter(|disk| {
+                self.metadata_integrity
+                    .observe(validate_seal(&self.config, disk))
+                    .is_ok()
+            })
             .collect()
     }
     pub(crate) fn members(&self) -> Vec<DiskConfig> {
@@ -633,7 +630,8 @@ impl Engine {
             .retryable());
         }
         for d in self.members() {
-            validate_seal(&self.config, &d)?;
+            self.metadata_integrity
+                .observe(validate_seal(&self.config, &d))?;
         }
         Ok(())
     }

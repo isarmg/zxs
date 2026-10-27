@@ -65,14 +65,21 @@ impl Engine {
     /// Read the complete exact candidate-bound object closure across replicas.
     /// A damaged preferred member must not hide healthy metadata dependencies.
     pub(crate) fn load_bound_snapshot(&self, hash: &str) -> Result<State> {
-        Ok(verified_snapshot(&self.members(), hash)?.into_state())
+        Ok(crate::publication_evidence::verified_snapshot_observed(
+            &self.members(),
+            hash,
+            &mut |error| self.metadata_integrity.fault(error),
+        )?
+        .into_state())
     }
 
     /// Preserve the candidate's original snapshot layout when completing a
     /// persisted decision, including decisions made by an older page writer.
     pub(crate) fn repair_bound_snapshot(&self, hash: &str) -> Result<()> {
         let members = self.members();
-        verified_snapshot(&members, hash)?;
+        crate::publication_evidence::verified_snapshot_observed(&members, hash, &mut |error| {
+            self.metadata_integrity.fault(error)
+        })?;
         repair_snapshot_copies(&members, &members, hash, &mut BTreeSet::new())
     }
 
@@ -87,6 +94,8 @@ impl Engine {
     }
 
     pub(super) fn recover_mode(&mut self, mode: RecoveryMode) -> Result<()> {
+        self.metadata_integrity.invalidate();
+        self.published_state_base = None;
         self.recovery_warnings = super::RecoveryWarnings::default();
         let members = self.members();
         let mut online = Vec::new();
@@ -466,31 +475,37 @@ fn repair_snapshot_copies(
     hash: &str,
     repaired_pages: &mut BTreeSet<String>,
 ) -> Result<()> {
-    fn install<T: data_serialization::Serialize + data_serialization::de::DeserializeOwned>(
-        sources: &[DiskConfig],
-        members: &[DiskConfig],
-        kind: &str,
-        hash: &str,
-    ) -> Result<()> {
-        let value: T = verified_object(sources, kind, hash)?;
-        repair_object_copies(members, kind, hash, &value)
+    let root = crate::publication_evidence::verified_graph_object(sources, "snapshot", hash)?;
+    let snapshot: Snapshot = json_codec::from_value(root.value().clone())?;
+    validate_snapshot_schema(&snapshot)?;
+    for reference in snapshot
+        .maps
+        .values()
+        .chain(std::iter::once(&snapshot.events))
+    {
+        crate::metadata_map::visit_objects(
+            reference,
+            |kind, hash| crate::publication_evidence::verified_graph_object(sources, kind, hash),
+            |object| {
+                // Domain participates in the key: a digest is not an object kind.
+                let address = format!("{}/{}", object.kind(), object.hash());
+                if !repaired_pages.contains(&address) {
+                    crate::publication_evidence::repair_authenticated_object(members, &object)?;
+                    remember_repaired_page(repaired_pages, &address);
+                    #[cfg(test)]
+                    PAGE_REPAIR_COUNT.with(|count| count.set(count.get() + 1));
+                }
+                Ok(())
+            },
+        )?;
     }
-    let snapshot: Snapshot = verified_object(sources, "snapshot", hash)?;
-    for hash in snapshot.pages.values().flatten() {
-        if !repaired_pages.contains(hash) {
-            install::<json_codec::Map<String, json_codec::Value>>(
-                sources,
-                members,
-                "state-page",
-                hash,
-            )?;
-            // Record only after every replica was successfully checked/repaired.
-            remember_repaired_page(repaired_pages, hash);
-            #[cfg(test)]
-            PAGE_REPAIR_COUNT.with(|count| count.set(count.get() + 1));
-        }
-    }
-    install::<Snapshot>(sources, members, "snapshot", hash)
+    let auth = crate::publication_evidence::verified_graph_object(
+        sources,
+        "state-control-auth",
+        snapshot.control_auth.hash(),
+    )?;
+    crate::publication_evidence::repair_authenticated_object(members, &auth)?;
+    crate::publication_evidence::repair_authenticated_object(members, &root)
 }
 
 #[cfg(test)]

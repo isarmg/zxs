@@ -9,10 +9,6 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(crate) struct RawState(State);
 
 impl RawState {
-    pub(crate) fn sequence(&self) -> u64 {
-        self.0.sequence
-    }
-
     #[cfg(test)]
     pub(crate) fn into_codec_fixture(self) -> State {
         self.0

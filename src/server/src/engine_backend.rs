@@ -18,11 +18,12 @@ mod disk_monitor;
 mod error_registry;
 mod file_manager;
 mod graph;
+mod integrity_scrub;
 mod operations;
 mod read_projection;
 mod wire;
-pub(crate) use wire::error;
 use wire::{current_entry_source, field};
+pub(crate) use wire::{error, error_response};
 
 pub(crate) fn report_recovery_warnings(engine: &mut Engine) {
     let warnings = engine.take_recovery_warnings();
@@ -53,9 +54,9 @@ impl EngineBackend {
         }
     }
     #[cfg(test)]
-    pub(crate) fn test_with_engine_locked(&self, f: impl FnOnce()) {
-        let _guard = self.engine.lock().unwrap();
-        f();
+    pub(crate) fn test_with_engine_locked<T>(&self, f: impl FnOnce(&mut Engine) -> T) -> T {
+        let mut engine = self.engine.lock().unwrap();
+        f(&mut engine)
     }
     /// Managed dispatch linearizes admission after acquiring the engine mutex.
     /// An operation already admitted may finish; queued requests see revocation.

@@ -586,6 +586,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
+        "format": "radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -732,8 +733,8 @@
       }
     },
     {
-      "name": "history-index",
-      "schema": "HistoryIndex",
+      "name": "metadata-index",
+      "schema": "MetadataIndex",
       "layer": "schema",
       "value": {
         "prefix": "0a",
@@ -746,17 +747,17 @@
       }
     },
     {
-      "name": "history-ref-index",
-      "schema": "HistoryGraphReference",
+      "name": "metadata-ref-index",
+      "schema": "MetadataReference",
       "layer": "schema",
       "value": {
-        "kind": "history-index",
+        "kind": "metadata-index",
         "hash": "0000000000000000000000000000000000000000000000000000000000000000"
       }
     },
     {
-      "name": "history-leaf-empty",
-      "schema": "HistoryLeaf",
+      "name": "metadata-leaf-empty",
+      "schema": "MetadataLeaf",
       "layer": "schema",
       "value": {}
     },
@@ -1402,6 +1403,271 @@
           }
         ],
         "sealed_manifest_hash": null
+      }
+    },
+    {
+      "name": "metadata-index-root-prefix",
+      "schema": "MetadataIndex",
+      "layer": "schema",
+      "value": {
+        "prefix": "",
+        "children": {
+          "0": {
+            "kind": "metadata-index",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "f": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        }
+      }
+    },
+    {
+      "name": "bounded-snapshot",
+      "schema": "Snapshot",
+      "layer": "schema",
+      "value": {
+        "format": "radix-map-roots",
+        "sequence": "0",
+        "business_generation": "1",
+        "topology_generation": "18446744073709551615",
+        "maps": {
+          "repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "histories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "commits": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "versions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placements": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "merge_links": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "history_boundaries": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_states": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "plans": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placement_rules": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_principals": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_trees": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_write_origins": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_contexts": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_metadata_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_merges": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_aliases": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_node_parents": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_tree_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_locations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_paths": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "version_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_names": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "events": {
+          "kind": "state-page",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "control_auth": {
+          "kind": "state-control-auth",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "name": "inclusion-proof-single-node-shape",
+      "schema": "InclusionProof",
+      "layer": "schema",
+      "value": {
+        "nodes": [
+          {
+            "key": "value"
+          }
+        ]
+      }
+    },
+    {
+      "name": "inclusion-proof-65-node-shape-only",
+      "schema": "InclusionProof",
+      "layer": "schema",
+      "value": {
+        "nodes": [
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {}
+        ]
       }
     }
   ],
@@ -2322,6 +2588,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
+        "format": "radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -2468,6 +2735,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
+        "format": "radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -2622,6 +2890,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
+        "format": "radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -2773,6 +3042,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
+        "format": "radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -2923,6 +3193,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
+        "format": "radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -3074,6 +3345,7 @@
       "schema": "PagedHistoryRoot",
       "layer": "schema",
       "value": {
+        "format": "radix-map-roots",
         "repository": {
           "repository_id": "repo_11111111111111111111111111111111",
           "name": "分页历史",
@@ -3220,8 +3492,8 @@
       }
     },
     {
-      "name": "history-index-empty",
-      "schema": "HistoryIndex",
+      "name": "metadata-index-empty",
+      "schema": "MetadataIndex",
       "layer": "schema",
       "value": {
         "prefix": "0a",
@@ -3229,8 +3501,8 @@
       }
     },
     {
-      "name": "history-index-deep",
-      "schema": "HistoryIndex",
+      "name": "metadata-index-deep",
+      "schema": "MetadataIndex",
       "layer": "schema",
       "value": {
         "prefix": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -3243,8 +3515,8 @@
       }
     },
     {
-      "name": "history-index-wrong-digit",
-      "schema": "HistoryIndex",
+      "name": "metadata-index-wrong-digit",
+      "schema": "MetadataIndex",
       "layer": "schema",
       "value": {
         "prefix": "0a",
@@ -3257,8 +3529,8 @@
       }
     },
     {
-      "name": "history-index-unknown-field",
-      "schema": "HistoryIndex",
+      "name": "metadata-index-unknown-field",
+      "schema": "MetadataIndex",
       "layer": "schema",
       "value": {
         "prefix": "0a",
@@ -3272,8 +3544,8 @@
       }
     },
     {
-      "name": "history-leaf-too-many-entities",
-      "schema": "HistoryLeaf",
+      "name": "metadata-leaf-too-many-entities",
+      "schema": "MetadataLeaf",
       "layer": "schema",
       "value": {
         "0": "",
@@ -5302,6 +5574,1579 @@
           }
         ],
         "sealed_manifest_hash": null
+      }
+    },
+    {
+      "name": "history-root-markerless",
+      "schema": "PagedHistoryRoot",
+      "layer": "schema",
+      "value": {
+        "repository": {
+          "repository_id": "repo_11111111111111111111111111111111",
+          "name": "分页历史",
+          "history_tree_id": "history_11111111111111111111111111111111",
+          "main_branch_id": "br_11111111111111111111111111111111",
+          "primary_slot_id": "P01",
+          "target_copies": 3,
+          "name_policy": "PortableName",
+          "unicode_version": "16.0.0",
+          "smb_enabled": true,
+          "smb_binding_generation": "1"
+        },
+        "history": {
+          "history_tree_id": "history_11111111111111111111111111111111",
+          "repository_id": "repo_11111111111111111111111111111111",
+          "root_commit_id": "commit_11111111111111111111111111111111",
+          "main_branch_id": "br_11111111111111111111111111111111",
+          "generation": "18446744073709551615",
+          "state": "ACTIVE",
+          "provenance": null
+        },
+        "maps": {
+          "branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_trees": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_write_origins": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_contexts": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_metadata_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_merges": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_aliases": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_node_parents": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_tree_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_locations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_paths": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "version_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_names": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "commits": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "versions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placements": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "merge_links": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "boundary_marks": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_states": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placement_rules": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        }
+      }
+    },
+    {
+      "name": "history-root-unsupported-format",
+      "schema": "PagedHistoryRoot",
+      "layer": "schema",
+      "value": {
+        "format": "flat-map-roots",
+        "repository": {
+          "repository_id": "repo_11111111111111111111111111111111",
+          "name": "分页历史",
+          "history_tree_id": "history_11111111111111111111111111111111",
+          "main_branch_id": "br_11111111111111111111111111111111",
+          "primary_slot_id": "P01",
+          "target_copies": 3,
+          "name_policy": "PortableName",
+          "unicode_version": "16.0.0",
+          "smb_enabled": true,
+          "smb_binding_generation": "1"
+        },
+        "history": {
+          "history_tree_id": "history_11111111111111111111111111111111",
+          "repository_id": "repo_11111111111111111111111111111111",
+          "root_commit_id": "commit_11111111111111111111111111111111",
+          "main_branch_id": "br_11111111111111111111111111111111",
+          "generation": "18446744073709551615",
+          "state": "ACTIVE",
+          "provenance": null
+        },
+        "maps": {
+          "branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_trees": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_write_origins": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_contexts": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_metadata_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_merges": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_aliases": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_node_parents": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_tree_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_locations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_paths": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "version_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_names": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "commits": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "versions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placements": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "merge_links": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "boundary_marks": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_states": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placement_rules": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        }
+      }
+    },
+    {
+      "name": "history-root-obsolete-reference",
+      "schema": "PagedHistoryRoot",
+      "layer": "schema",
+      "value": {
+        "format": "radix-map-roots",
+        "repository": {
+          "repository_id": "repo_11111111111111111111111111111111",
+          "name": "分页历史",
+          "history_tree_id": "history_11111111111111111111111111111111",
+          "main_branch_id": "br_11111111111111111111111111111111",
+          "primary_slot_id": "P01",
+          "target_copies": 3,
+          "name_policy": "PortableName",
+          "unicode_version": "16.0.0",
+          "smb_enabled": true,
+          "smb_binding_generation": "1"
+        },
+        "history": {
+          "history_tree_id": "history_11111111111111111111111111111111",
+          "repository_id": "repo_11111111111111111111111111111111",
+          "root_commit_id": "commit_11111111111111111111111111111111",
+          "main_branch_id": "br_11111111111111111111111111111111",
+          "generation": "18446744073709551615",
+          "state": "ACTIVE",
+          "provenance": null
+        },
+        "maps": {
+          "branches": {
+            "kind": "history-index",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_trees": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_write_origins": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_contexts": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_metadata_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_merges": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_aliases": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_node_parents": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_tree_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_locations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_paths": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "version_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_names": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "commits": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "versions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placements": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "merge_links": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "boundary_marks": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_states": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placement_rules": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        }
+      }
+    },
+    {
+      "name": "metadata-reference-obsolete-history-index",
+      "schema": "MetadataReference",
+      "layer": "schema",
+      "value": {
+        "kind": "history-index",
+        "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "metadata-reference-uppercase-hash",
+      "schema": "MetadataReference",
+      "layer": "schema",
+      "value": {
+        "kind": "state-page",
+        "hash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    },
+    {
+      "name": "metadata-index-uppercase-prefix",
+      "schema": "MetadataIndex",
+      "layer": "schema",
+      "value": {
+        "prefix": "A",
+        "children": {
+          "0": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        }
+      }
+    },
+    {
+      "name": "snapshot-markerless",
+      "schema": "Snapshot",
+      "layer": "schema",
+      "value": {
+        "sequence": "0",
+        "business_generation": "1",
+        "topology_generation": "18446744073709551615",
+        "maps": {
+          "repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "histories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "commits": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "versions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placements": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "merge_links": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "history_boundaries": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_states": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "plans": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placement_rules": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_principals": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_trees": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_write_origins": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_contexts": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_metadata_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_merges": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_aliases": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_node_parents": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_tree_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_locations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_paths": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "version_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_names": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "events": {
+          "kind": "state-page",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "control_auth": {
+          "kind": "state-control-auth",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "name": "snapshot-missing-map",
+      "schema": "Snapshot",
+      "layer": "schema",
+      "value": {
+        "format": "radix-map-roots",
+        "sequence": "0",
+        "business_generation": "1",
+        "topology_generation": "18446744073709551615",
+        "maps": {
+          "repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "histories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "commits": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "versions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placements": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "merge_links": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "history_boundaries": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_states": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "plans": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placement_rules": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_trees": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_write_origins": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_contexts": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_metadata_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_merges": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_aliases": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_node_parents": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_tree_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_locations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_paths": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "version_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_names": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "events": {
+          "kind": "state-page",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "control_auth": {
+          "kind": "state-control-auth",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "name": "snapshot-unknown-map",
+      "schema": "Snapshot",
+      "layer": "schema",
+      "value": {
+        "format": "radix-map-roots",
+        "sequence": "0",
+        "business_generation": "1",
+        "topology_generation": "18446744073709551615",
+        "maps": {
+          "repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "histories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "commits": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "versions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placements": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "merge_links": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "history_boundaries": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_states": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "plans": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placement_rules": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_principals": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_trees": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_write_origins": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_contexts": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_metadata_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_merges": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_aliases": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_node_parents": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_tree_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_locations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_paths": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "version_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_names": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "unknown": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "events": {
+          "kind": "state-page",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "control_auth": {
+          "kind": "state-control-auth",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "name": "snapshot-numeric-sequence",
+      "schema": "Snapshot",
+      "layer": "schema",
+      "value": {
+        "format": "radix-map-roots",
+        "sequence": 0,
+        "business_generation": "1",
+        "topology_generation": "18446744073709551615",
+        "maps": {
+          "repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "histories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "commits": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "versions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placements": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "merge_links": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "history_boundaries": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_states": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "plans": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placement_rules": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_principals": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_trees": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_write_origins": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_contexts": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_metadata_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_merges": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_aliases": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_node_parents": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_tree_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_locations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_paths": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "version_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_names": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "events": {
+          "kind": "state-page",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "control_auth": {
+          "kind": "state-control-auth",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "name": "snapshot-events-page-list",
+      "schema": "Snapshot",
+      "layer": "schema",
+      "value": {
+        "format": "radix-map-roots",
+        "sequence": "0",
+        "business_generation": "1",
+        "topology_generation": "18446744073709551615",
+        "maps": {
+          "repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "histories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "commits": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "versions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placements": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "merge_links": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "history_boundaries": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_states": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "plans": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placement_rules": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_principals": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_trees": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_write_origins": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_contexts": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_metadata_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_merges": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_aliases": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_node_parents": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_tree_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_locations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_paths": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "version_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_names": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "events": [],
+        "control_auth": {
+          "kind": "state-control-auth",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "name": "snapshot-inline-control-auth",
+      "schema": "Snapshot",
+      "layer": "schema",
+      "value": {
+        "format": "radix-map-roots",
+        "sequence": "0",
+        "business_generation": "1",
+        "topology_generation": "18446744073709551615",
+        "maps": {
+          "repositories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "histories": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "commits": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "versions": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placements": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "merge_links": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "history_boundaries": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "content_states": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "plans": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "placement_rules": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "protection_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_principals": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_branches": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_trees": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_write_origins": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_contexts": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_metadata_nodes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_merges": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_branch_aliases": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_node_parents": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_path_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_tree_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_locations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_paths": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_backup_policies": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selections": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "version_notes": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_names": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "directory_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "file_selection_generations": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "events": {
+          "kind": "state-page",
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "control_auth": null
+      }
+    },
+    {
+      "name": "snapshot-obsolete-flat-root",
+      "schema": "Snapshot",
+      "layer": "schema",
+      "value": {
+        "format": "radix-map-roots",
+        "scalars": {
+          "sequence": "0",
+          "business_generation": "1",
+          "topology_generation": "1",
+          "control_auth": null
+        },
+        "pages": {
+          "events": []
+        }
+      }
+    },
+    {
+      "name": "control-auth-wrong-object-kind",
+      "schema": "ControlAuthReference",
+      "layer": "schema",
+      "value": {
+        "kind": "state-page",
+        "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "inclusion-proof-empty",
+      "schema": "InclusionProof",
+      "layer": "schema",
+      "value": {
+        "nodes": []
+      }
+    },
+    {
+      "name": "inclusion-proof-too-many-nodes",
+      "schema": "InclusionProof",
+      "layer": "schema",
+      "value": {
+        "nodes": [
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {}
+        ]
+      }
+    },
+    {
+      "name": "inclusion-proof-nonobject-node",
+      "schema": "InclusionProof",
+      "layer": "schema",
+      "value": {
+        "nodes": [
+          null
+        ]
+      }
+    },
+    {
+      "name": "inclusion-proof-unknown-field",
+      "schema": "InclusionProof",
+      "layer": "schema",
+      "value": {
+        "nodes": [
+          {}
+        ],
+        "count": 1
       }
     }
   ],

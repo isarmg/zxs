@@ -452,43 +452,25 @@ fn bound_snapshot_repair_preserves_alternate_page_partition() {
         branch.name = format!("branch-{n}");
         state.branches.insert(branch.branch_id.clone(), branch);
     }
-    let value = json_codec::to_value(&state).unwrap();
-    let mut pages = BTreeMap::new();
-    let mut scalars = json_codec::Map::new();
-    // Page partitioning is not a version discriminator. Repair must retain
-    // the bound root rather than regenerate content-defined boundaries.
-    for (field, value) in value.as_object().unwrap() {
-        if let Some(map) = value.as_object() {
-            let entries = map.iter().collect::<Vec<_>>();
-            let mut hashes = Vec::new();
-            for chunk in entries.chunks(128) {
-                let page: json_codec::Map<_, _> = chunk
-                    .iter()
-                    .map(|(key, value)| ((*key).clone(), (*value).clone()))
-                    .collect();
-                hashes.push(store_object(&members[0], "state-page", &page).unwrap());
-            }
-            pages.insert(field.clone(), hashes);
-        } else {
-            scalars.insert(field.clone(), value.clone());
-        }
-    }
-    scalars.remove("events");
-    let events: json_codec::Map<_, _> = state
-        .events
-        .iter()
-        .enumerate()
-        .map(|(index, event)| (format!("{index:020}"), json_codec::to_value(event).unwrap()))
-        .collect();
-    pages.insert(
-        "events".into(),
-        vec![store_object(&members[0], "state-page", &events).unwrap()],
+    let canonical = prepare_snapshot(&state, MAX_METADATA).unwrap();
+    canonical.store(&members[..1], &state).unwrap();
+    std::fs::remove_file(object_path(&members[0], "snapshot", &canonical.hash)).unwrap();
+    let mut alternate = canonical.descriptor.clone();
+    // The current reader accepts a route-correct extra index. Repair must keep
+    // its exact root, not silently normalize it through the current encoder.
+    let field = "repositories";
+    let page: json_codec::Value =
+        load_object(&members[0], "state-page", alternate.maps[field].hash()).unwrap();
+    assert_eq!(page.as_object().unwrap().len(), 1);
+    let key = page.as_object().unwrap().keys().next().unwrap();
+    let digit = blake3::hash(key.as_bytes()).to_hex().to_string()[..1].to_owned();
+    let index = json_codec::json!({"prefix":"","children":{digit:alternate.maps[field]}});
+    let index_hash = store_object(&members[0], "metadata-index", &index).unwrap();
+    alternate.maps.insert(
+        field.into(),
+        json_codec::from_value(json_codec::json!({"kind":"metadata-index","hash":index_hash}))
+            .unwrap(),
     );
-    let alternate = Snapshot {
-        sequence: state.sequence,
-        pages,
-        scalars,
-    };
     let hash = store_object(&members[0], "snapshot", &alternate).unwrap();
     let modern_hash = store_snapshot(&[], &state).unwrap();
     assert_ne!(
@@ -538,8 +520,9 @@ fn failed_replica_repair_does_not_cache_page_success() {
         .insert("file_test".into(), "unchanged".into());
     let hash = store_snapshot(&members, &state).unwrap();
     let snapshot: Snapshot = load_object(&members[0], "snapshot", &hash).unwrap();
-    let page = snapshot.pages.values().flatten().next().unwrap();
-    let target = object_path(&members[2], "state-page", page);
+    let page =
+        crate::journal::map_pages(&members[0], snapshot.maps.values().next().unwrap())[0].clone();
+    let target = object_path(&members[2], "state-page", &page);
     let original = std::fs::read(&target).unwrap();
     std::fs::remove_file(&target).unwrap();
     std::fs::create_dir(&target).unwrap();
@@ -550,10 +533,10 @@ fn failed_replica_repair_does_not_cache_page_success() {
             .code(),
         storage_contract::ErrorCode::UnsafePath
     );
-    assert!(!repaired.contains(page));
+    assert!(!repaired.contains(&format!("state-page/{page}")));
     std::fs::remove_dir(&target).unwrap();
     repair_snapshot_copies(&members, &members, &hash, &mut repaired).unwrap();
-    assert!(repaired.contains(page));
+    assert!(repaired.contains(&format!("state-page/{page}")));
     assert_eq!(std::fs::read(&target).unwrap(), original);
 }
 
@@ -629,7 +612,10 @@ fn shared_pages_are_repaired_once_per_recovery_and_rechecked_next_time() {
             load_object(&members[0], "candidate", &record.candidate_hash).unwrap();
         let snapshot: Snapshot =
             load_object(&members[0], "snapshot", &candidate.snapshot_hash).unwrap();
-        for hash in snapshot.pages.values().flatten() {
+        for hash in crate::journal::snapshot_addresses(&members[0], &snapshot)
+            .into_iter()
+            .filter_map(|(kind, hash)| (kind == "state-page").then_some(hash))
+        {
             references += 1;
             if !pages.insert(hash.clone()) {
                 shared = Some(hash.clone());

@@ -22,6 +22,7 @@ pub(crate) struct PlanningContext<'a> {
     pub(crate) snapshot: &'a Option<String>,
     pub(crate) next_slot: u64,
     pub(crate) blocked: bool,
+    pub(crate) metadata_integrity: &'a Arc<super::provenance::MetadataIntegrity>,
     pub(super) admission: Admission<'a>,
     pub(super) published_state_base: Option<&'a Arc<super::publication::PublishedStateBase>>,
 }
@@ -34,6 +35,7 @@ impl Engine {
             snapshot: &self.snapshot,
             next_slot: self.next_slot,
             blocked: self.blocked,
+            metadata_integrity: &self.metadata_integrity,
             admission: Admission::Live(&self.commit_preparation),
             published_state_base: self.published_state_base.as_ref(),
         }
@@ -159,7 +161,8 @@ impl<'a> PlanningContext<'a> {
             .retryable());
         }
         for disk in self.members() {
-            validate_seal(self.config, &disk)?;
+            self.metadata_integrity
+                .observe(validate_seal(self.config, &disk))?;
         }
         Ok(())
     }

@@ -126,6 +126,13 @@ Web 在浏览器中提供认证、文件元数据、历史与管理状态界面�
 完整快照的引用闭包及 history 语义通过后产生 `AdmittedState`，消费前仅提供只读访问。冷恢复将候选绑定的精确历史图与该快照投影作 canonical equality 比较，因此不再对同一逻辑 history 再执行一遍语义准入。没有已准入快照的 checkpoint 路径，以及离线包和独立历史图读取，仍执行完整 history 语义验证。日志扫描产出的帧哈希随已有 sequence/candidate 分组传递，回放只在当前候选的成员 receipts 中查找发布证据。
 
 这些复用均限于当前读取/恢复过程，保留四阶段持久化、损坏副本选择、fork、torn-tail 和缺失证据处理。逐历史根的图展开及派生容器修复仍可能重复全量工作；这里没有消除全部历史规模二次方成本。 测量与边界回归见[恢复路径去重验证](validation/recovery-deduplication.md)。
+
+### 有界根与驻留描述
+
+Snapshot 的35个映射、events、Candidate 的历史目录和每个历史根的30个投影共用 `metadata_map`；根与 consumer 保留各自严格 schema。内存 `MapRoot` 使用 Arc 路径复制，保留键、节点与精确最大对象/证明长度摘要，不长期缓存全部 canonical JSON。根 clone 为 O(1)，驻留空间仍为 O(keys + nodes)。预算消费同一已认证图的摘要，不能相信磁盘自报统计。
+
+普通准备仍实读所有旧依赖并向全部成员安装，发现故障使发布谱系不可继续沿用；本次有界根不启用 PublishedGraphEpoch 的跳读。Snapshot/catalog 的增量编码不代表一般 history owner closure 已完成；稳定 history/file 归属的分支改名是现有窄路径，其余投影、冷载入和故障重建仍可能全量。
+
 ### 操作标识的信任边界
 
 `storage_contract::OperationId` 用私有 16 字节 UUID 表示操作身份，内部直接生成并按值传递。HTTP 字段提取、已认证 SMB 会话的请求分派、救援 CLI 参数解析，以及启动/恢复/导入时的反序列化，把外部字符串解析一次；核心的变更、查询、计划、提交与恢复接口依赖该类型，不再检查 `op_` 前缀。
@@ -134,7 +141,7 @@ Web 在浏览器中提供认证、文件元数据、历史与管理状态界面�
 
 SMB 的操作查询和工作区提交通过 `Backend::operation`、`Backend::commit_workspace` 直接传递领域记录；HTTP 单独负责 wire 编码。当前身份、操作所有者、工作区所有权、fence 及解锁 I/O 后重新鉴权仍按原流程执行。`principal`/actor 仍是另一项约束，本次操作标识类型化不替代它。
 
-仅 `State.operations` 和 `operation_principals` 改用操作标识键。两者不属于历史 manifest，快照增量逻辑只消费其变更集是否为空；显式 `Tracked::insert` 标记 `All`，保持原来的整字段重新编码行为。快照分页边界仍对规范 `op_...` 字符串字节哈希，UUID 字节排序与旧小写定长字符串排序一致，原有 wire、请求摘要及内容寻址格式保持不变。
+`State.operations` 和 `operation_principals` 使用操作标识键，且不属于历史 manifest。显式键级修改保留 `MapChanges<OperationId>::Keys`，Snapshot 编码按准确 key 更新 radix 路径；未知谱系/任意可变访问仍为 `All`。路由使用规范 `op_...` 文本字节而非裸 UUID 字节；领域 OperationId 的 HTTP/SMB 表示和请求摘要规则不变，Snapshot 存储根形状另按[有界根格式](adr/0006-bounded-metadata-roots.md)切换。
 
 <a id="s03-03"></a>
 

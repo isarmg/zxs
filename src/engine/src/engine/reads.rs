@@ -1,6 +1,6 @@
 //! Verified replicas, read leases, offline export and disk observations.
 use super::{Engine, OpenedContent, ReadLease};
-use crate::{disk::*, journal::verify_local_publication, *};
+use crate::{disk::*, journal::verify_local_publication_in_context, *};
 use std::path::Path;
 use std::{io::Read, path::PathBuf, sync::Arc};
 
@@ -54,9 +54,18 @@ impl Engine {
         for slot in &placement.route_slot_ids {
             let d = self.disk(slot)?;
             let candidate = (|| {
-                validate_seal(&self.config, d)?;
+                let identity = validate_seal(&self.config, d);
+                let identity = if d.metadata_member {
+                    self.metadata_integrity.observe(identity)?
+                } else {
+                    identity?
+                };
                 let dir = version_dir(d, &version.history_tree_id, version_id);
-                verify_local_publication(&dir, version)?;
+                let metadata = d.metadata_member.then(|| {
+                    self.metadata_integrity
+                        .read_context(&self.config, &identity)
+                });
+                verify_local_publication_in_context(&dir, version, metadata.as_ref())?;
                 read(&dir, version)
             })();
             match candidate {
@@ -176,7 +185,19 @@ impl Engine {
             issues: Vec::new(),
         };
         for d in &self.config.disks {
-            match offline_check(&d.root) {
+            let checked = if d.metadata_member {
+                self.metadata_integrity
+                    .observe(identity(&self.config, d))
+                    .and_then(|identity| {
+                        let metadata = self
+                            .metadata_integrity
+                            .read_context(&self.config, &identity);
+                        offline_check_in_context(&d.root, Some(&metadata))
+                    })
+            } else {
+                offline_check(&d.root)
+            };
+            match checked {
                 Ok(r) => {
                     result.checked_versions += r.checked_versions;
                     result.healthy_replicas += r.healthy_replicas;
@@ -200,6 +221,7 @@ pub struct ContentReadPlan {
     disks: Vec<DiskConfig>,
     version: FileVersion,
     lease: ReadLease,
+    metadata_integrity: Arc<super::provenance::MetadataIntegrity>,
 }
 
 pub struct RangeContent {
@@ -254,6 +276,7 @@ impl Engine {
             .entry(version_id.into())
             .or_default() += 1;
         Ok(ContentReadPlan {
+            metadata_integrity: Arc::clone(&self.metadata_integrity),
             config: self.config.clone(),
             disks,
             version,
@@ -278,8 +301,21 @@ impl ContentReadPlan {
                     &self.version.history_tree_id,
                     &self.version.version_id,
                 );
-                validate_seal(&self.config, disk).is_ok()
-                    && verify_local_publication(&directory, &self.version).is_ok()
+                let identity = validate_seal(&self.config, disk);
+                let identity = if disk.metadata_member {
+                    self.metadata_integrity.observe(identity)
+                } else {
+                    identity
+                };
+                let Ok(identity) = identity else {
+                    return false;
+                };
+                let metadata = disk.metadata_member.then(|| {
+                    self.metadata_integrity
+                        .read_context(&self.config, &identity)
+                });
+                verify_local_publication_in_context(&directory, &self.version, metadata.as_ref())
+                    .is_ok()
                     && verify_payload(&directory, &self.version).is_ok()
             })
             .count();
@@ -297,13 +333,22 @@ impl ContentReadPlan {
         let mut first_error: Option<Error> = None;
         for disk in &self.disks {
             let candidate = (|| {
-                validate_seal(&self.config, disk)?;
+                let identity = validate_seal(&self.config, disk);
+                let identity = if disk.metadata_member {
+                    self.metadata_integrity.observe(identity)?
+                } else {
+                    identity?
+                };
                 let dir = version_dir(
                     disk,
                     &self.version.history_tree_id,
                     &self.version.version_id,
                 );
-                verify_local_publication(&dir, &self.version)?;
+                let metadata = disk.metadata_member.then(|| {
+                    self.metadata_integrity
+                        .read_context(&self.config, &identity)
+                });
+                verify_local_publication_in_context(&dir, &self.version, metadata.as_ref())?;
                 let checks = read_bytes(&dir.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
                 if blake3::hash(&checks).to_hex().as_str() != self.version.checksum_manifest_hash {
                     return Err(Error::new(

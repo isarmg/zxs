@@ -52,7 +52,7 @@ SMB 模块须匹配固定 Samba SDK 单独构建，发行归档不含预编译 V
 ## 23.3 当前限制
 
 - 持久工作区证据默认累计上限为全池 4096 条、每主体 1024 条，不是同时活动数；成功提交也消耗名额。支持本机启动参数显式提高有限的运行期上限，但没有自动退休或在线 HTTP 调额；不能删除终态清单释放额度。按预计保存频率和服务周期评估[容量限制](19-capacity-and-performance.md#s19-11)。
-- 分页历史清单不等于端到端增量处理。完整 State 克隆、全版本索引差分或重建及部分验证仍有 O(total) 成本；单实体、根映射、候选与组合证明继续受元数据上限约束，不承诺无限历史容量。见[分页清单决策](adr/0004-paged-history-manifests.md)。
+- 有界元数据根实验源码按准确写集更新 Snapshot/catalog 路径，预算使用驻留精确摘要，但不等于端到端增量处理。完整旧依赖读验/安装和 compare/fsync 保留，无 PublishedGraphEpoch 跳读；history 仅稳定归属分支更新有窄 delta，其余 owner closure、State/冷恢复/重建仍有全量成本。驻留键/节点、单实体、本次候选与组合证明继续受实际容量限制，不承诺无限历史容量、性能已提高或格式已发布。见[有界根决策](adr/0006-bounded-metadata-roots.md)。
 - 中断初始化仅在原意图与存储完成证明准确匹配的受限窗口可补全。ready 之前的部分登记不自动续做；权威发布后、凭据建立前的中断也不能伪装成空池重建。不得自动清盘或仅凭 pool ID 恢复初始化。见[初始化与恢复](management/setup-recovery.md#precisely-bounded-interrupted-initialization-completion)。
 - 目录分支合并尚未实现；历史树拆分不是对任意分支模型都可执行，含目录组合的历史按当前核心限制拒绝。管理表单存在不表示操作满足执行条件。见[核心](components/engine.md)及[管理覆盖](components/daily-management-coverage.md)。
 - 配置草稿仅用于未初始化部署，不是在线任意配置编辑器，也不代表线上换盘、拓扑迁移或安全卸载已经实现。见[救援工具](components/rescue.md)和[配置边界](21-configuration.md)。

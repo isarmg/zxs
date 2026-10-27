@@ -171,10 +171,10 @@ fn pending_receipt_reads_only_exact_operation_pages_and_owner_first() {
     );
     let (members, snapshot, _) = engine.pending_operation_snapshot(operation).unwrap();
     for field in ["repositories", "commits"] {
-        for hash in &snapshot.pages[field] {
+        for hash in crate::journal::map_pages(&members[0], &snapshot.maps[field]) {
             for disk in &members {
                 fs::write(
-                    object_path(disk, "state-page", hash),
+                    object_path(disk, "state-page", &hash),
                     b"unrelated broken page",
                 )
                 .unwrap();
@@ -198,9 +198,9 @@ fn pending_receipt_reads_only_exact_operation_pages_and_owner_first() {
     assert!(engine.reads.lock().unwrap().is_empty());
     SNAPSHOT_LOAD_COUNT.with(|count| assert_eq!(count.get(), 0));
     // Ownership lookup does not load potentially large operation results.
-    for hash in &snapshot.pages["operations"] {
+    for hash in crate::journal::map_pages(&members[0], &snapshot.maps["operations"]) {
         for disk in &members {
-            fs::write(object_path(disk, "state-page", hash), b"broken results").unwrap();
+            fs::write(object_path(disk, "state-page", &hash), b"broken results").unwrap();
         }
     }
     assert_eq!(

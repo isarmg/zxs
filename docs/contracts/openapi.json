@@ -8109,13 +8109,13 @@
         "additionalProperties": true,
         "description": "State及HistoryManifest新增字段的受检投影；各映射省略时默认为空。不声称覆盖完整状态或恢复包。"
       },
-      "HistoryGraphReference": {
+      "MetadataReference": {
         "type": "object",
         "properties": {
           "kind": {
             "enum": [
               "state-page",
-              "history-index"
+              "metadata-index"
             ]
           },
           "hash": {
@@ -8126,9 +8126,10 @@
           "kind",
           "hash"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "Snapshot、历史目录及历史投影共用的映射引用；旧 history-index 不接受。域哈希及引用位置由核心验证。"
       },
-      "HistoryIndex": {
+      "MetadataIndex": {
         "type": "object",
         "properties": {
           "prefix": {
@@ -8143,7 +8144,7 @@
               "pattern": "^[0-9a-f](?![\\s\\S])"
             },
             "additionalProperties": {
-              "$ref": "#/components/schemas/HistoryGraphReference"
+              "$ref": "#/components/schemas/MetadataReference"
             }
           }
         },
@@ -8152,13 +8153,13 @@
           "children"
         ],
         "additionalProperties": false,
-        "description": "实体键UTF-8字节的BLAKE3摘要按十六进制分路；prefix须匹配引用位置，子引用哈希和实际实体归属由核心验证。"
+        "description": "实体键文本UTF-8字节的BLAKE3摘要逐十六进制位分路，不另做Unicode规范化；prefix须匹配引用位置，子引用域哈希和全部叶键归属由核心验证。"
       },
-      "HistoryLeaf": {
+      "MetadataLeaf": {
         "type": "object",
         "maxProperties": 128,
         "additionalProperties": true,
-        "description": "state-page域普通实体映射。多实体规范编码最多64KiB；单实体页可至64MiB。字节上限、非根空页拒绝和各字段实体语义由核心检查，JSON Schema不验证图闭包。"
+        "description": "state-page域普通映射，最多128项；多实体规范编码最多64KiB，不可分单实体页可至MAX_METADATA（64MiB）。字节上限、非根空页拒绝及实体语义由核心检查，JSON Schema不验证图闭包。"
       },
       "HistoryRepository": {
         "type": "object",
@@ -8267,6 +8268,9 @@
       "PagedHistoryRoot": {
         "type": "object",
         "properties": {
+          "format": {
+            "const": "radix-map-roots"
+          },
           "repository": {
             "$ref": "#/components/schemas/HistoryRepository"
           },
@@ -8277,94 +8281,94 @@
             "type": "object",
             "properties": {
               "branches": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "file_selections": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "directory_branches": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "directory_trees": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "file_write_origins": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "file_contexts": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "file_path_nodes": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "file_metadata_nodes": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "file_branch_merges": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "file_branch_aliases": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "file_node_parents": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "file_path_notes": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "directory_tree_selections": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "file_locations": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "file_backup_paths": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "file_backup_policies": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "directory_selections": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "directory_selection_generations": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "file_selection_generations": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "file_notes": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "version_notes": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "file_names": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "commits": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "versions": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "placements": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "merge_links": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "boundary_marks": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "content_states": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "placement_rules": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               },
               "protection_policies": {
-                "$ref": "#/components/schemas/HistoryGraphReference"
+                "$ref": "#/components/schemas/MetadataReference"
               }
             },
             "required": [
@@ -8403,12 +8407,13 @@
           }
         },
         "required": [
+          "format",
           "repository",
           "history",
           "maps"
         ],
         "additionalProperties": false,
-        "description": "当前分页历史根，位于history-manifest域；候选直接绑定此根摘要。根不带格式代际字段，展开逻辑HistoryManifest不是根的替代身份。"
+        "description": "history-manifest域当前有界分页历史根，format是必需语义标识而非发行版本号；固定30个映射。Candidate.history_roots目录通过history ID绑定此根摘要，展开逻辑HistoryManifest不是根身份。"
       },
       "CapacityMeasure": {
         "type": "object",
@@ -8651,6 +8656,223 @@
         ],
         "additionalProperties": false,
         "description": "提交拥有的命名空间删除事实。时间按UINT64十进制字符串编码；非空paths按实际操作效果顺序保存，允许同一路径删除、重建后再次删除，不排序或去重。不依赖操作回执或正文存在性。"
+      },
+      "ControlAuthReference": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "state-control-auth"
+          },
+          "hash": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "kind",
+          "hash"
+        ],
+        "additionalProperties": false,
+        "description": "引用独立state-control-auth域对象，其正文保持原Option<Value>编码（包括null），不嵌入Snapshot根。"
+      },
+      "Snapshot": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "const": "radix-map-roots"
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "business_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "topology_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "maps": {
+            "type": "object",
+            "properties": {
+              "repositories": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "histories": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "branches": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "commits": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "versions": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "placements": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "merge_links": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "history_boundaries": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "content_states": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "operations": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "plans": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "placement_rules": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "protection_policies": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "operation_principals": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_selections": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "directory_branches": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "directory_trees": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_write_origins": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_contexts": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_path_nodes": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_metadata_nodes": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_branch_merges": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_branch_aliases": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_node_parents": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_path_notes": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "directory_tree_selections": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_locations": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_backup_paths": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_backup_policies": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "directory_selections": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_notes": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "version_notes": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_names": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "directory_selection_generations": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "file_selection_generations": {
+                "$ref": "#/components/schemas/MetadataReference"
+              }
+            },
+            "required": [
+              "repositories",
+              "histories",
+              "branches",
+              "commits",
+              "versions",
+              "placements",
+              "merge_links",
+              "history_boundaries",
+              "content_states",
+              "operations",
+              "plans",
+              "placement_rules",
+              "protection_policies",
+              "operation_principals",
+              "file_selections",
+              "directory_branches",
+              "directory_trees",
+              "file_write_origins",
+              "file_contexts",
+              "file_path_nodes",
+              "file_metadata_nodes",
+              "file_branch_merges",
+              "file_branch_aliases",
+              "file_node_parents",
+              "file_path_notes",
+              "directory_tree_selections",
+              "file_locations",
+              "file_backup_paths",
+              "file_backup_policies",
+              "directory_selections",
+              "file_notes",
+              "version_notes",
+              "file_names",
+              "directory_selection_generations",
+              "file_selection_generations"
+            ],
+            "additionalProperties": false
+          },
+          "events": {
+            "$ref": "#/components/schemas/MetadataReference"
+          },
+          "control_auth": {
+            "$ref": "#/components/schemas/ControlAuthReference"
+          }
+        },
+        "required": [
+          "format",
+          "sequence",
+          "business_generation",
+          "topology_generation",
+          "maps",
+          "events",
+          "control_auth"
+        ],
+        "additionalProperties": false,
+        "description": "snapshot域固定35个State映射根及独立events根；空映射仍有根引用。events叶键为20位补零ordinal，由核心验证0..len-1连续。拒绝旧scalars/pages形状；schema不验证对象存在、摘要、事件连续性或State语义。"
+      },
+      "InclusionProof": {
+        "type": "object",
+        "properties": {
+          "nodes": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "minItems": 1,
+            "maxItems": 65
+          }
+        },
+        "required": [
+          "nodes"
+        ],
+        "additionalProperties": false,
+        "description": "按root-to-leaf顺序携带一条路径的实际JSON节点；只约束外形与1..65节点数。核心按根引用验证每步域哈希、位置前缀、路由、叶页界限和目标值，并拒绝多余或截断节点；schema不能证明成员关系。"
       }
     }
   }

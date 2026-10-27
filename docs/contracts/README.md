@@ -8,10 +8,10 @@
 
 | 文件 | 当前覆盖 | 尚未证明 |
 | --- | --- | --- |
-| [core.schema.json](core.schema.json) | UINT64 精确上界、实体 ID、Branch / Commit 待写入映射、泛型 Entry 及文件分支投影、唯一管理员认证请求/响应、版本描述、内容提交请求、操作结果、完整上传状态、内容保存 PUBLICATION 字段、当前分页历史根/索引/引用/叶页形状 | 完整命名规则、父边和来源闭合、授权、实际 I/O、Tree/日志完整格式及所有管理操作 |
+| [core.schema.json](core.schema.json) | UINT64 精确上界、实体 ID、Branch / Commit 待写入映射、泛型 Entry 及文件分支投影、唯一管理员认证请求/响应、版本描述、内容提交请求、操作结果、完整上传状态、内容保存 PUBLICATION 字段、当前有界快照、分页历史根、共享索引/引用/叶页及路径证明形状 | 完整命名规则、父边和来源闭合、授权、实际 I/O、Tree/日志完整格式及所有管理操作 |
 | [openapi.json](openapi.json) | 登录/当前会话/注销/改密、保存、结果查询、版本/校验/内容/上传状态、文件管理（含零正文分支创建、冻结父版本与自有版本分开的继承投影、目录分页与精确选择、目录批量分支准备查询和128字节单行备注）及管理员系统状态、真实功耗和监测历史 | bootstrap 与凭据恢复、工作区创建/上传写接口、事件及其余尚未建模的管理接口 |
 | [config-constraints.schema.json](config-constraints.schema.json) | 第 21 章关键常量、分支冻结引用/首写物化、当前 JSON/CLI 资源额度及明确标注的分页/告警设计目标投影 | 当前进程 JSON Config、完整部署配置、物理身份、拓扑和启动状态验证 |
-| [vectors.json](vectors.json) | 正反字段样例、旧账户权限字段拒绝、分支映射键/值和文件作用域拒绝、Branch / Commit 当前稀疏编码、分页历史图固定映射/引用种类/深度/未知字段拒绝、规范字节与 BLAKE3、空文件和短文件分段清单 | 跨 Rust/Web/离线工具的一致实现及断电恢复 |
+| [vectors.json](vectors.json) | 正反字段样例、旧账户权限字段拒绝、分支映射键/值和文件作用域拒绝、Branch / Commit 当前稀疏编码、快照35映射与历史根30映射、必需标识、共享引用种类/深度/未知字段及旧格式拒绝、路径证明节点数边界、规范字节与 BLAKE3、空文件和短文件分段清单 | 跨 Rust/Web/离线工具的一致实现及断电恢复 |
 | [contract-check](../tools/contract-check.md) | Rust 实现的 schema/OpenAPI 有效性、两者定义一致性、固定向量、配置投影、文档本地链接和 JSON/TOML 语法校验 | 模型检查、平台测试、网络端点行为和性能 |
 
 认证契约仅描述现有四个端点：`POST /api/auth/login` 返回 `token/csrf_token/principal/expires_at`，`GET /api/auth/me` 返回 `principal/csrf_token`，`POST /api/auth/logout` 返回 `logged_out`，`POST /api/auth/password` 以 `current_password/new_password` 换取 `changed/reauthentication_required`。响应不带角色、禁用或仓库准入字段；请求和响应 schema 均拒绝额外字段。Cookie 与 Bearer 两条认证路径共享当前唯一管理员，Cookie 变更请求仍需 Origin/CSRF。Schema 不替代密码验证、撤销持久性或真实 HTTP 安全测试。
@@ -66,9 +66,11 @@ Rust 依赖源码已包含在仓库中，首次构建也使用唯一根锁文件
 
 `FileMetadataNode` 保存不可变标签/合并子节点，`FileBranchMerge` 独立保存全部合并来源和安全图边。文件合并请求要求明确确认、结果归属及每个参与head，标签批量请求固定源节点与branch head，scope备份配置同时固定稳定身份和自身代数。标签的16项/128字节限制、无控制字符和全部预检由共享Rust验证及业务事务执行；schema检查不代替真实发布。目录分支合并待用户确认，暂不实现，能力为false。
 
-`PagedHistoryRoot`、`HistoryIndex`、`HistoryGraphReference` 和 `HistoryLeaf` 描述实际实验存储图的字段形状；所有历史图结构均不带项目格式代际字段；根内仓库/历史身份使用 `HistoryRepository`、`HistoryIdentity`。原 `FileFeatureStateFields` 仍只是 State / 逻辑 HistoryManifest 的局部投影，未改成分页根。新增定义仅镜像进 OpenAPI 的离线组件，不新增网络端点或改变现有请求。
+`Snapshot`、`PagedHistoryRoot`、`MetadataIndex`、`MetadataReference` 和 `MetadataLeaf` 描述本次有界根实验源码的存储形状。两个根都必须携带 `format: "radix-map-roots"`，这是布局语义标识，不是项目发行版本号；分别要求准确35个 State 映射和30个历史映射，空映射也有引用。快照的三个代数使用 UInt64 十进制字符串，events 是独立映射根，control_auth 引用独立 `state-control-auth` 对象；该对象仍按原 `Option<Value>` 编码（包括 null）。历史根内仓库/历史身份使用 `HistoryRepository`、`HistoryIdentity`。`Candidate.history_roots` 绑定 history ID→manifest hash 的映射根，替代旧 `history_manifest_hashes`；当前 Candidate 自身没有 format 字段。原 `FileFeatureStateFields` 仍只是 State / 逻辑 HistoryManifest 的局部投影。OpenAPI 只镜像存储组件，未改变 HTTP DTO 或新增端点。
 
-新字段向量使用合成摘要，只检查 schema，不能证明引用对象存在或摘要正确。规范编码字节上限（128 项、64 KiB 软目标、不可分单实体页 64 MiB 上限）、逐位置前缀、图闭包、重复实体及完整历史语义由核心图读取器和测试验证；扁平投影误作根及未知字段拒绝、真实超过 64 MiB 的聚合图往返、正常/降级恢复、独立包和篡改检查亦属于核心测试，不冒充 JSON Schema 的能力。PackageProof 的完整候选/回执闭包尚未在本附件全部建模，发行格式仍未冻结；版本边界见[第 8.7 节](../08-full-storage-and-disk-format.md#s08-07)。
+字段向量使用合成摘要，只检查 schema，不能证明引用对象存在或摘要正确。已有历史根正反向量均使用有效 marker，另行覆盖 markerless 根、旧 `history-index` 引用和旧 flat Snapshot 的拒绝，避免负例只因缺 marker 通过。原固定 canonical bytes/BLAKE3 向量保持不变，不由被测编码器生成期望。
+
+`InclusionProof` 只描述 `{nodes: [...]}` 的对象节点外形及1..65数量上限；65节点正例仅证明 schema 边界，不是有效 Merkle 路径。真实验证还须按根引用逐步核对域哈希、路由与前缀、叶界限、准确目标值，以及截断/多余节点。规范编码字节上限（128项、64 KiB 多实体页目标、不可分单实体页 MAX_METADATA 上限）、events 的20位 ordinal 与连续性、图闭包及完整历史语义均由核心验证，不冒充 JSON Schema 的能力。`PackageProof.history_root_proof` 绑定目录中的单个 history，`ContentTombstone.content_state_proof` 绑定准确快照中的目标状态；完整 Candidate、PackageProof、墓碑和回执闭包尚未全部建模。单路径证明不能替代完整恢复的 catalog walk，也不携带其他历史子图。发行格式仍未冻结，合入与验证结果另行记录；参见[第8.7节](../08-full-storage-and-disk-format.md#s08-07)和[ADR 0006](../adr/0006-bounded-metadata-roots.md)。
 
 规范 JSON 整数写出优化的边界、差分测试与完整编码测量方法见
 [规范 JSON 编码验证](../validation/canonical-number-encoding.md)。

@@ -111,10 +111,31 @@ HTTP 监听地址必须是回环地址。对外部署由同机反向代理终止
 | `/api/history-trees/{history}/purge-plans`、`/split-plans`、`/historical-save-plans` | POST 预览，尚不执行变更 |
 | `/api/plans/{plan}`、`/commit`、`/cancel` | GET 已保存预览、POST 按摘要执行或取消 |
 | `/api/policies/{policy}`、`/api/primary-placement-rules/{rule}` | GET 保护策略／主盘规则；PUT 按 generation 更新，保护策略仅接受无稳定 scope 的现行路径规则 |
-| `/api/admin/disks`、`/api/backup-topologies/default`、`/api/admin/check` | GET 盘状态、拓扑、完整性检查 |
+| `/api/admin/disks`、`/api/backup-topologies/default`、`/api/admin/check` | GET 盘状态、拓扑、既有目录诊断 |
+| `/api/admin/scrub`、`/api/admin/scrub/{job_id}/cancel` | GET 完整巡检状态、POST 启动、POST 请求取消 |
 | `/api/operations/{operation}`、`/api/events`、`/api/compare` | GET 结果/分页事件、POST 两次提交比较 |
 
 表中同一行的缩写路径共享资源前缀，例如 `/api/branches/{branch}/tree` 和 `/api/branches/{branch}/resolve`。请求字段以代码及 [HTTP 契约](../15-api-and-errors.md) 为准；64 位整数使用规范十进制字符串。重复 JSON 键、浮点数、未声明的变更字段会被拒绝。失败响应包含 `error.code/message/retryable/request_id`，不会把未实现操作返回为成功。
+
+## 锁外完整巡检
+
+正常 daemon 在存储准入后自动运行完整巡检；默认每轮结束后 24 小时再调度，实际读取限速 64 MiB/s，成功报告从扫描开始起 48 小时内有效。主机参数 `--scrub-interval-seconds`、`--scrub-max-age-seconds`、`--scrub-bytes-per-second` 分别默认 `86400`、`172800`、`67108864`；必须为正，最大年龄不能短于间隔。间隔不是扫描完成 SLA；长扫描可能完成时已过期。
+
+- `POST /api/admin/scrub` 接受空对象，返回 202 和字符串 `job_id`；同时只能一个 queued/running job，重复请求返回 409。请求不能覆盖主机限速/周期。
+- `GET /api/admin/scrub` 返回 `phase`、`latest`、`last_complete_success_at`、`freshness`。运行状态包括 `baseline.sequence/snapshot_hash`、`started_at`、字符串 `bytes_read` 与 `expected_payload_bytes`。后者仅为正文期望字节，不是总 I/O，不能据此显示总完成百分比。
+- `POST /api/admin/scrub/{job_id}/cancel` 接受空对象，返回 202 表示取消已请求；实际 I/O 结束后才能出现终态。旧 job ID 不会取消新任务。
+
+接口都要求当前管理员认证；排队启动还会在实际 Engine 准入处再次核验撤权。status/cancel 不等扫描的 Engine 锁。状态与写成功和 `/readyz` 分离：只有完整无故障扫描更新成功时间；取消、过期、部分故障、重开和 worker 失败不产生绿色结论。HTTP 时间使用 UTC `YYYY-MM-DDTHH:mm:ssZ`；无成功记录为 null，freshness 为 `not_checked/fresh/expired/unavailable`。
+
+`/api/admin/check` 保留原目录诊断语义，没有暗换成全池读验。嵌入 `ManagementOptions::default()` 仅手动启用；无托管 owner 的 `EngineBackend` 返回 Unsupported，无 core 构建不提供新路由。所有实际后台 I/O、lease 和 Engine owner 结束后服务关闭才返回；详细资源、基线及验证边界见[巡检生命周期](../design/integrity-scrub-lifecycle.md)。
+
+### 周期 owner 与内部复用资格
+
+托管 native worker 在实际周期策略下持有核心签发的 `IntegrityScrubSchedule`；注册本身不提供资格。它通过 `prepare_scheduled_integrity_scrub` 执行真实扫描，只有私有 Outcome 回到同一 writer/config/撤销 epoch 的 finish 才建立内部共享元数据覆盖。资格窗口不超过 `min(扫描开始 + max_age, 接纳完成 + interval)`；普通写入和公开报告不能刷新，错过下一轮自动失效。此资格不等于完整正文健康，也尚未启用普通发布跳过旧依赖检查。
+
+资格依据真实周期 owner，而不是手动/周期触发标签：daemon 的同一周期 worker 可以接纳手动启动的真实扫描，仍在 Engine 锁内核验该用户；`ManagementOptions::default()` 的纯手动嵌入模式不创建 owner，永不据此签发内部复用资格。stop 经短控制状态立即撤销 owner，不等待 Engine；真实 I/O 仍须随后 drain/join。worker 退出或 panic 丢弃 lease，重开后必须替换 lease 并重新实际扫描；空闲 owner 只弱引用 backend，不增加 Engine/AuthStore 强计数，也不强留旧 State。
+
+共享图故障由核心源归因撤销资格；版本本地 proof/正文失败仍使完整健康报告失败，但不能仅因 `metadata_failures` 总数就撤销全池共享图覆盖或封锁无关写入。服务层只保留这两个结论的区别，不从 public report、布尔配置或心跳伪造 proof。
 
 ## HTTP 上传与发布
 

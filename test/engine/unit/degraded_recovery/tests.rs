@@ -285,8 +285,10 @@ fn degraded_recovery_uses_verified_snapshot_replica_and_repairs_missing_page() {
         let members = engine.members();
         let snapshot: Snapshot =
             load_object(&members[0], "snapshot", &candidate.snapshot_hash).unwrap();
-        let page = snapshot.pages.values().flatten().next().unwrap();
-        let path = object_path(&members[0], "state-page", page);
+        let page = crate::journal::map_pages(&members[0], snapshot.maps.values().next().unwrap())
+            [0]
+        .clone();
+        let path = object_path(&members[0], "state-page", &page);
         let original = fs::read(&path).unwrap();
         if corrupt {
             fs::write(&path, b"corrupt").unwrap();
@@ -319,7 +321,7 @@ fn degraded_recovery_uses_verified_snapshot_replica_and_repairs_missing_page() {
 
 #[test]
 fn degraded_recovery_verifies_and_repairs_exact_history_graph_before_reprotect() {
-    for kind in ["state-page", "history-index", "history-manifest"] {
+    for kind in ["state-page", "metadata-index", "history-manifest"] {
         for missing_all in [false, true] {
             let (_temp, mut engine, operation, candidate) =
                 fixture_with_history("after_accept_2", 160);
@@ -371,13 +373,14 @@ fn degraded_recovery_rejects_unverifiable_snapshot_before_reprotect() {
     let members = engine.members();
     let snapshot: Snapshot =
         load_object(&members[0], "snapshot", &candidate.snapshot_hash).unwrap();
-    let page = snapshot.pages.values().flatten().next().unwrap();
+    let page =
+        crate::journal::map_pages(&members[0], snapshot.maps.values().next().unwrap())[0].clone();
     let logs = members
         .iter()
         .map(|d| fs::read(log_path(d)).unwrap())
         .collect::<Vec<_>>();
     for member in &members {
-        fs::remove_file(object_path(member, "state-page", page)).unwrap();
+        fs::remove_file(object_path(member, "state-page", &page)).unwrap();
     }
     assert!(
         engine

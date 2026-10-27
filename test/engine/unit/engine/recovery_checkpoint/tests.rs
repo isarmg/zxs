@@ -48,12 +48,9 @@ fn missing_or_corrupt_selected_snapshot_source_repairs_from_verified_replica() {
             .0;
         let candidate: Candidate = load_object(source, "candidate", &first.candidate_hash).unwrap();
         let snapshot: Snapshot = load_object(source, "snapshot", &candidate.snapshot_hash).unwrap();
-        let page = snapshot
-            .pages
-            .values()
-            .find_map(|pages| pages.first())
-            .unwrap();
-        let path = object_path(source, "state-page", page);
+        let page =
+            crate::journal::map_pages(source, snapshot.maps.values().next().unwrap())[0].clone();
+        let path = object_path(source, "state-page", &page);
         let original = std::fs::read(&path).unwrap();
         if corrupt {
             std::fs::write(&path, b"corrupt").unwrap();
@@ -81,13 +78,9 @@ fn all_snapshot_replicas_invalid_fail_closed() {
         .0;
     let candidate: Candidate = load_object(source, "candidate", &first.candidate_hash).unwrap();
     let snapshot: Snapshot = load_object(source, "snapshot", &candidate.snapshot_hash).unwrap();
-    let page = snapshot
-        .pages
-        .values()
-        .find_map(|pages| pages.first())
-        .unwrap();
+    let page = crate::journal::map_pages(source, snapshot.maps.values().next().unwrap())[0].clone();
     for disk in &config.disks {
-        std::fs::remove_file(object_path(disk, "state-page", page)).unwrap();
+        std::fs::remove_file(object_path(disk, "state-page", &page)).unwrap();
     }
     assert!(Engine::open(&root).is_err());
 }
@@ -224,12 +217,8 @@ fn missing_historical_page_falls_back_and_repairs_replica() {
         .0;
     let candidate: Candidate = load_object(source, "candidate", &first.candidate_hash).unwrap();
     let snapshot: Snapshot = load_object(source, "snapshot", &candidate.snapshot_hash).unwrap();
-    let page = snapshot
-        .pages
-        .values()
-        .find_map(|pages| pages.first())
-        .unwrap();
-    let missing = object_path(source, "state-page", page);
+    let page = crate::journal::map_pages(source, snapshot.maps.values().next().unwrap())[0].clone();
+    let missing = object_path(source, "state-page", &page);
     assert!(missing.exists());
     std::fs::remove_file(&missing).unwrap();
     let (engine, count) = reopen(&root);

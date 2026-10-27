@@ -19,6 +19,9 @@ use std::{
     },
 };
 
+mod integrity_scrub;
+use integrity_scrub::IntegrityScrubService;
+
 pub use crate::StorageState;
 struct State {
     backend: Option<Arc<EngineBackend>>,
@@ -54,12 +57,17 @@ struct Inner {
     retained_workspace_limits: Option<storage_engine::RetainedWorkspaceLimits>,
 }
 pub struct ManagementBackend {
+    // Fields drop in declaration order: join scrub before releasing Inner/auth.
+    scrub: IntegrityScrubService,
+    drain: Mutex<()>,
     inner: Arc<Inner>,
 }
 /// Locally provisioned setup choices and immutable engine policy. Paths are
 /// retained without reading them; unavailable presets never gate management startup.
 #[derive(Default)]
 pub struct ManagementOptions {
+    /// Immutable host scheduling and bandwidth policy for full integrity jobs.
+    pub scrub_policy: crate::integrity_scrub::IntegrityScrubPolicy,
     pub setup_disks: BTreeMap<String, PathBuf>,
     pub setup_configs: BTreeMap<String, PathBuf>,
     pub allow_development_setup: bool,
@@ -140,6 +148,7 @@ pub fn open_service_with_disks(
         data_root,
         management_root,
         ManagementOptions {
+            scrub_policy: crate::integrity_scrub::IntegrityScrubPolicy::default(),
             setup_disks,
             setup_configs: BTreeMap::new(),
             allow_development_setup,
@@ -153,6 +162,7 @@ pub fn open_service_with_options(
     options: ManagementOptions,
 ) -> Result<(Arc<ManagementBackend>, AuthStore), ApiError> {
     let ManagementOptions {
+        scrub_policy,
         setup_disks,
         setup_configs,
         allow_development_setup,
@@ -182,6 +192,8 @@ pub fn open_service_with_options(
         }
     }
     let backend = Arc::new(ManagementBackend {
+        scrub: IntegrityScrubService::new(scrub_policy),
+        drain: Mutex::new(()),
         inner: Arc::new(Inner {
             data_root: data_root.into(),
             management_root: management_root.into(),
@@ -231,6 +243,14 @@ struct RecoveryShutdownError {
     admission_state_poisoned: bool,
     #[source]
     worker_panic: Option<RecoveryWorkerPanic>,
+}
+
+#[derive(Debug, error_definition::Error)]
+#[error("management recovery drain failed: {recovery}; integrity scrub drain failed: {scrub}")]
+struct ManagementDrainErrors {
+    #[source]
+    recovery: ApiError,
+    scrub: ApiError,
 }
 
 struct RecoveryPermit<'a>(&'a AtomicBool);
@@ -1444,6 +1464,7 @@ impl Backend for ManagementBackend {
         if self.inner.ensure_running().is_err() {
             return;
         }
+        let reader = crate::lock(&auth).reader();
         {
             let mut current = self.inner.auth.lock().expect("service state lock poisoned");
             if current.is_some() {
@@ -1453,6 +1474,9 @@ impl Backend for ManagementBackend {
         }
         if let Err(error) = self.inner.recover() {
             tracing::warn!(error = ?error, "initial storage recovery could not start");
+        }
+        if let Err(error) = self.scrub.start(Arc::downgrade(&self.inner), reader) {
+            tracing::error!(error = ?error, "integrity scrub scheduler could not start");
         }
         let weak = Arc::downgrade(&self.inner);
         if let Err(error) = std::thread::Builder::new()
@@ -1475,10 +1499,49 @@ impl Backend for ManagementBackend {
         }
     }
     fn stop_management(&self) {
+        self.scrub.stop();
         self.inner.stop();
     }
     fn drain_management(&self) -> Result<(), ApiError> {
-        self.inner.drain()
+        self.stop_management();
+        // The recovery worker takes its own inventory lock at exit, so the
+        // public drain obligation is serialized separately from worker locks.
+        let _drain = match self.drain.lock() {
+            Ok(drain) => drain,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        // Both native owners must drain, even if either reports failure.
+        let scrub = self.scrub.drain();
+        let recovery = self.inner.drain();
+        match (scrub, recovery) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(scrub), Err(recovery)) => {
+                Err(ApiError::io(std::io::Error::other(ManagementDrainErrors {
+                    scrub,
+                    recovery,
+                })))
+            }
+        }
+    }
+    fn start_integrity_scrub(
+        &self,
+        identity: &Identity,
+    ) -> Result<crate::integrity_scrub::IntegrityScrubJobId, ApiError> {
+        self.scrub.enqueue(&self.inner, identity)
+    }
+    fn integrity_scrub_status(
+        &self,
+        identity: &Identity,
+    ) -> Result<crate::integrity_scrub::IntegrityScrubStatus, ApiError> {
+        self.scrub.status(&self.inner, identity)
+    }
+    fn cancel_integrity_scrub(
+        &self,
+        identity: &Identity,
+        job: crate::integrity_scrub::IntegrityScrubJobId,
+    ) -> Result<(), ApiError> {
+        self.scrub.cancel(identity, job)
     }
     fn management_status(&self) -> crate::StorageStatus {
         let state = self

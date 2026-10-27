@@ -13,11 +13,23 @@ pub(crate) fn verified_object<
     kind: &str,
     hash: &str,
 ) -> Result<T> {
+    verified_object_observed(members, kind, hash, &mut |_| {})
+}
+
+pub(crate) fn verified_object_observed<
+    T: data_serialization::Serialize + data_serialization::de::DeserializeOwned,
+>(
+    members: &[DiskConfig],
+    kind: &str,
+    hash: &str,
+    fault: &mut impl FnMut(&Error),
+) -> Result<T> {
     let mut first_error = None;
     for member in members {
         match load_object(member, kind, hash) {
             Ok(value) => return Ok(value),
             Err(error) => {
+                fault(&error);
                 first_error.get_or_insert(error);
             }
         }
@@ -35,11 +47,21 @@ pub(crate) fn verified_graph_object(
     kind: &'static str,
     hash: &str,
 ) -> Result<AuthenticatedMetadataObject> {
+    verified_graph_object_observed(members, kind, hash, &mut |_| {})
+}
+
+pub(crate) fn verified_graph_object_observed(
+    members: &[DiskConfig],
+    kind: &'static str,
+    hash: &str,
+    fault: &mut impl FnMut(&Error),
+) -> Result<AuthenticatedMetadataObject> {
     let mut first_error = None;
     for member in members {
         match load_authenticated_object(member, kind, hash) {
             Ok(object) => return Ok(object),
             Err(error) => {
+                fault(&error);
                 first_error.get_or_insert(error);
             }
         }
@@ -60,10 +82,22 @@ pub(crate) fn verified_snapshot(
     members: &[DiskConfig],
     hash: &str,
 ) -> Result<crate::history_package::AdmittedState> {
-    let snapshot: Snapshot = verified_object(members, "snapshot", hash)?;
-    resolve_admitted_snapshot(snapshot, |hash| {
-        verified_object(members, "state-page", hash)
-    })
+    verified_snapshot_observed(members, hash, &mut |_| {})
+}
+
+pub(crate) fn verified_snapshot_observed(
+    members: &[DiskConfig],
+    hash: &str,
+    fault: &mut impl FnMut(&Error),
+) -> Result<crate::history_package::AdmittedState> {
+    let snapshot: Snapshot = verified_object_observed(members, "snapshot", hash, fault)?;
+    let result = resolve_admitted_snapshot(snapshot, |kind, hash| {
+        verified_graph_object_observed(members, kind, hash, fault)
+    });
+    if let Err(error) = &result {
+        fault(error);
+    }
+    result
 }
 /// A seal has no independently supplied digest: validate its complete receipt
 /// barrier against the exact candidate and publication before accepting a copy.
@@ -71,6 +105,15 @@ pub(crate) fn verified_publication_seal(
     members: &[DiskConfig],
     candidate: &Candidate,
     publication: &Publication,
+) -> Result<PublicationSeal> {
+    verified_publication_seal_observed(members, candidate, publication, &mut |_| {})
+}
+
+pub(crate) fn verified_publication_seal_observed(
+    members: &[DiskConfig],
+    candidate: &Candidate,
+    publication: &Publication,
+    fault: &mut impl FnMut(&Error),
 ) -> Result<PublicationSeal> {
     let hash = object_hash("candidate", candidate)?;
     let mut first_error = None;
@@ -82,6 +125,7 @@ pub(crate) fn verified_publication_seal(
         match result {
             Ok(seal) => return Ok(seal),
             Err(error) => {
+                fault(&error);
                 first_error.get_or_insert(error);
             }
         }

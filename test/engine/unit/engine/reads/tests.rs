@@ -522,3 +522,42 @@ fn detached_content_plan_checks_current_member_identity_and_preserves_cause() {
     assert_eq!(error.code(), ErrorCode::ContentUnavailable);
     assert!(std::error::Error::source(&error).is_some());
 }
+
+#[test]
+fn version_health_fallback_observes_shared_membership_but_not_missing_local_bodies() {
+    for shared_membership in [false, true] {
+        let (_temp, mut engine, workspace) = fixture();
+        engine
+            .commit_workspace(CommitRequest {
+                workspace_id: workspace.workspace_id,
+                operation_id: storage_contract::OperationId::generate(),
+                principal: "admin".into(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: "health observation".into(),
+                request_digest: None,
+            })
+            .unwrap();
+        let version_id = engine.list_tree(&workspace.branch_id).unwrap()[0]
+            .version_id
+            .clone();
+        let version = &engine.state.versions[&version_id];
+        let disk = engine
+            .disk(&engine.state.placements[&version_id].route_slot_ids[0])
+            .unwrap();
+        let path = if shared_membership {
+            disk.root.join("metadata/pool-membership/config.json")
+        } else {
+            let directory = version_dir(disk, &version.history_tree_id, &version_id);
+            crate::container_storage::content_path(&directory, version).unwrap()
+        };
+        let epoch = engine.metadata_integrity.capture();
+        fs::remove_file(path).unwrap();
+        assert_eq!(engine.version_health(&version_id).unwrap(), "DEGRADED");
+        assert_eq!(
+            epoch.matches(&engine.metadata_integrity),
+            !shared_membership
+        );
+        assert!(!engine.blocked);
+    }
+}

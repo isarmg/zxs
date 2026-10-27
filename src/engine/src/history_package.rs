@@ -39,126 +39,221 @@ struct PackageProof {
     candidate: Candidate,
     publication: Publication,
     publication_seal: PublicationSeal,
+    history_root_proof: crate::metadata_map::InclusionProof,
 }
 pub(crate) fn package_proof_bytes(
     candidate: &Candidate,
     publication: &Publication,
     seal: &PublicationSeal,
+    proof_bytes: usize,
     maximum: usize,
 ) -> Result<usize> {
-    Ok(encode_metadata(
-        &PackageProof {
-            manifest_hash: "0".repeat(64),
-            candidate: candidate.clone(),
-            publication: publication.clone(),
-            publication_seal: seal.clone(),
-        },
-        maximum,
-    )?
-    .len())
+    let envelope = json!({"manifest_hash":"0".repeat(64),"candidate":candidate,"publication":publication,"publication_seal":seal,"history_root_proof":{"nodes":[]}});
+    let bytes = canonical_json_value(&envelope)?.len() - 2 + proof_bytes;
+    if bytes > maximum {
+        return Err(Error::new(
+            ErrorCode::ResourceLimit,
+            "history package proof exceeds metadata reader budget",
+        ));
+    }
+    Ok(bytes)
 }
+
 #[cfg(test)]
 pub(crate) fn store_history_manifests_bounded(
     members: &[DiskConfig],
     state: &State,
     maximum: usize,
-) -> Result<BTreeMap<String, String>> {
-    let (hashes, objects) = prepare_history_manifests(state, maximum)?;
+) -> Result<crate::metadata_map::MapRoot> {
+    let (catalog, objects) = prepare_history_manifests(state, maximum)?;
     for object in objects {
         object.store(members)?;
     }
-    Ok(hashes)
+    Ok(catalog)
 }
 pub(crate) fn prepare_history_manifests(
     state: &State,
     maximum: usize,
-) -> Result<(BTreeMap<String, String>, Vec<PreparedMetadataObject>)> {
-    let mut hashes = BTreeMap::new();
+) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
+    let mut bindings = BTreeMap::new();
     let mut objects = Vec::new();
     for id in state.histories.keys() {
         let manifest = HistoryManifest::from_state(state, id)?;
         let (hash, graph) = graph::prepare(&manifest, maximum)?;
-        hashes.insert(id.clone(), hash);
+        bindings.insert(
+            id.clone(),
+            crate::metadata_map::HistoryBinding {
+                hash,
+                maximum_object_bytes: graph
+                    .iter()
+                    .map(|o| o.bytes().len())
+                    .max()
+                    .expect("invariant: a prepared history includes its root"),
+            },
+        );
         objects.extend(graph);
     }
-    Ok((hashes, unique_prepared_objects(objects)?))
+    let mut encoder = crate::metadata_map::Encoder::new(maximum);
+    let catalog = encoder.map_catalog(&bindings)?;
+    objects.extend(encoder.finish());
+    Ok((catalog, unique_prepared_objects(objects)?))
 }
-
-/// Reuse is offered only by the engine's same-process published baseline.
-/// Every reused dependency is still read, hash/graph validated, admitted and
-/// installed through the original collision checks and durability barriers.
+/// All old graph dependencies are still authenticated and installed. Only dirty
+/// catalog paths and the supported projection delta are encoded anew.
+#[cfg(test)]
 pub(crate) fn prepare_history_manifests_incremental(
     before: &State,
     after: &State,
-    previous_roots: &BTreeMap<String, String>,
+    previous: &crate::metadata_map::MapRoot,
     members: &[DiskConfig],
     maximum: usize,
-) -> Result<(BTreeMap<String, String>, Vec<PreparedMetadataObject>)> {
-    if previous_roots.keys().ne(before.histories.keys()) {
-        return Err(Error::new(
-            storage_contract::ErrorCode::StateInvalid,
-            "published history baseline coverage differs",
-        ));
-    }
+) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
+    prepare_history_manifests_incremental_observed(
+        before,
+        after,
+        previous,
+        members,
+        maximum,
+        &mut |_| {},
+    )
+}
+
+pub(crate) fn prepare_history_manifests_incremental_observed(
+    before: &State,
+    after: &State,
+    previous: &crate::metadata_map::MapRoot,
+    members: &[DiskConfig],
+    maximum: usize,
+    fault: &mut impl FnMut(&Error),
+) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
     let projection = delta::ProjectionDelta::between(before, after);
     let changed = match &projection {
         delta::ProjectionDelta::StableBranches(edits) => edits.keys().cloned().collect(),
         delta::ProjectionDelta::Full => changes::HistoryChanges::between(before, after).histories,
     };
-    let mut hashes = BTreeMap::new();
+    let mut bindings = BTreeMap::new();
     let mut objects = Vec::new();
     for id in after.histories.keys() {
-        if changed.contains(id) || !previous_roots.contains_key(id) {
-            let incremental = try_prepare_branch_update(
-                members,
-                previous_roots.get(id),
-                id,
-                &projection,
-                maximum,
-            )?;
-            let (hash, graph) = match incremental {
-                Some(graph) => graph,
-                None => {
-                    let manifest = HistoryManifest::from_state(after, id)?;
-                    graph::prepare(&manifest, maximum)?
-                }
-            };
-            hashes.insert(id.clone(), hash);
-            objects.extend(graph);
-        } else {
-            let hash = &previous_roots[id];
-            let (manifest, graph) = match bound_history_graph(members, hash) {
+        let old = previous.catalog_binding(id);
+        if let Some(old) = old.filter(|_| !changed.contains(id)) {
+            let hash = &old.hash;
+            let (manifest, graph) = match bound_history_graph_observed(members, hash, fault) {
                 Ok(graph) => graph,
                 Err(_) => {
-                    // The full publisher can recreate wholly missing replicas
-                    // from State. Preserve that ability without replacing the
-                    // candidate-bound root or bypassing store collision checks.
-                    let manifest = HistoryManifest::from_state(after, id)?;
-                    let (rebuilt_hash, rebuilt) = graph::prepare(&manifest, maximum)?;
+                    let (rebuilt_hash, rebuilt) =
+                        graph::prepare(&HistoryManifest::from_state(after, id)?, maximum)?;
                     if &rebuilt_hash != hash {
                         return Err(Error::new(
-                            storage_contract::ErrorCode::ObjectCorrupt,
+                            ErrorCode::ObjectCorrupt,
                             "reconstructed history differs from published baseline",
                         ));
                     }
-                    hashes.insert(id.clone(), hash.clone());
                     objects.extend(rebuilt);
                     continue;
                 }
             };
             if manifest.history.history_tree_id != *id {
                 return Err(Error::new(
-                    storage_contract::ErrorCode::ObjectCorrupt,
+                    ErrorCode::ObjectCorrupt,
                     "published history baseline identity differs",
                 ));
             }
             for object in graph {
                 objects.push(object.into_prepared(maximum)?);
             }
-            hashes.insert(id.clone(), hash.clone());
+        } else {
+            let incremental = try_prepare_branch_update(
+                members,
+                old.map(|binding| &binding.hash),
+                id,
+                &projection,
+                maximum,
+                fault,
+            )?;
+            let (hash, graph) = match incremental {
+                Some(graph) => graph,
+                None => graph::prepare(&HistoryManifest::from_state(after, id)?, maximum)?,
+            };
+            bindings.insert(
+                id.clone(),
+                crate::metadata_map::HistoryBinding {
+                    hash,
+                    maximum_object_bytes: graph
+                        .iter()
+                        .map(|o| o.bytes().len())
+                        .max()
+                        .expect("invariant: history includes root"),
+                },
+            );
+            objects.extend(graph);
         }
     }
-    Ok((hashes, unique_prepared_objects(objects)?))
+    let mut encoder = crate::metadata_map::Encoder::new(maximum);
+    let catalog = encoder.update_catalog(previous, changed, |id| {
+        if !after.histories.contains_key(id) {
+            return Ok(None);
+        }
+        Ok(bindings
+            .get(id)
+            .or_else(|| previous.catalog_binding(id))
+            .cloned())
+    })?;
+    if catalog.maximum_object_bytes() > maximum {
+        return Err(Error::new(
+            ErrorCode::ResourceLimit,
+            "history graph exceeds metadata reader budget",
+        ));
+    }
+    let mut fresh = encoder
+        .finish()
+        .into_iter()
+        .map(|object| ((object.kind(), object.hash.clone()), object))
+        .collect::<BTreeMap<_, _>>();
+    catalog.visit_nodes("", &mut |node, prefix| {
+        let reference = node.reference();
+        let address = (reference.kind().domain(), reference.hash().to_owned());
+        let object = if let Some(object) = fresh.remove(&address) {
+            object
+        } else {
+            match crate::publication_evidence::verified_graph_object_observed(
+                members, address.0, &address.1, fault,
+            ) {
+                Ok(object) => object.into_prepared(maximum)?,
+                Err(_) => node.reconstruct_catalog_object(prefix, maximum)?,
+            }
+        };
+        objects.push(object);
+        Ok(())
+    })?;
+    Ok((catalog, unique_prepared_objects(objects)?))
+}
+
+/// Cold readers resolve the exact catalog before checking complete history coverage.
+pub(crate) fn resolve_catalog(
+    reference: &crate::metadata_map::Reference,
+    load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
+) -> Result<(BTreeMap<String, String>, Vec<AuthenticatedMetadataObject>)> {
+    let mut resolver = crate::metadata_map::Resolver::new(load);
+    let entries = resolver.map(reference)?;
+    let mut bindings = BTreeMap::new();
+    for (id, value) in entries {
+        let hash = catalog_entry(&id, &value)?;
+        bindings.insert(id, hash.to_owned());
+    }
+    Ok((bindings, resolver.finish()))
+}
+
+pub(crate) fn catalog_entry<'a>(id: &str, value: &'a json_codec::Value) -> Result<&'a str> {
+    validate_id(id, "history")?;
+    value
+        .as_str()
+        .filter(|hash| {
+            hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+        .ok_or_else(|| Error::new(ErrorCode::ObjectCorrupt, "invalid history catalog digest"))
 }
 
 fn try_prepare_branch_update(
@@ -167,6 +262,7 @@ fn try_prepare_branch_update(
     id: &str,
     projection: &delta::ProjectionDelta,
     maximum: usize,
+    fault: &mut impl FnMut(&Error),
 ) -> Result<Option<(String, Vec<PreparedMetadataObject>)>> {
     let delta::ProjectionDelta::StableBranches(edits) = projection else {
         return Ok(None);
@@ -174,7 +270,7 @@ fn try_prepare_branch_update(
     let (Some(edits), Some(previous)) = (edits.get(id), previous) else {
         return Ok(None);
     };
-    let (manifest, objects) = match read_history_graph(members, previous) {
+    let (manifest, objects) = match read_history_graph_observed(members, previous, fault) {
         Ok(graph) => graph,
         // Only this read-only source graph acquisition may fall back to the
         // original complete encoder for the admitted after State. It prepares
@@ -218,12 +314,16 @@ fn unique_prepared_objects(
 type HistoryGraphObjects = Vec<AuthenticatedMetadataObject>;
 
 /// Select every dependency independently from trusted replicas, without repair.
-fn bound_history_graph(
+fn bound_history_graph_observed(
     members: &[DiskConfig],
     hash: &str,
+    fault: &mut impl FnMut(&Error),
 ) -> Result<(HistoryManifest, HistoryGraphObjects)> {
-    let (manifest, objects) = read_history_graph(members, hash)?;
-    manifest.validate()?;
+    let (manifest, objects) = read_history_graph_observed(members, hash, fault)?;
+    if let Err(error) = manifest.validate() {
+        fault(&error);
+        return Err(error);
+    }
     Ok((manifest, objects))
 }
 
@@ -231,11 +331,27 @@ fn read_history_graph(
     members: &[DiskConfig],
     hash: &str,
 ) -> Result<(HistoryManifest, HistoryGraphObjects)> {
-    let root =
-        crate::publication_evidence::verified_graph_object(members, "history-manifest", hash)?;
-    graph::resolve_with_objects(root, |kind, hash| {
-        crate::publication_evidence::verified_graph_object(members, kind, hash)
-    })
+    read_history_graph_observed(members, hash, &mut |_| {})
+}
+
+fn read_history_graph_observed(
+    members: &[DiskConfig],
+    hash: &str,
+    fault: &mut impl FnMut(&Error),
+) -> Result<(HistoryManifest, HistoryGraphObjects)> {
+    let root = crate::publication_evidence::verified_graph_object_observed(
+        members,
+        "history-manifest",
+        hash,
+        fault,
+    )?;
+    let result = graph::resolve_with_objects(root, |kind, hash| {
+        crate::publication_evidence::verified_graph_object_observed(members, kind, hash, fault)
+    });
+    if let Err(error) = &result {
+        fault(error);
+    }
+    result
 }
 
 /// Bind the exact authenticated graph to an admitted snapshot projection, or
@@ -245,21 +361,21 @@ pub(crate) fn bound_history_objects(
     candidate: &Candidate,
     admitted: Option<&AdmittedState>,
 ) -> Result<HistoryGraphObjects> {
+    let (catalog, catalog_objects) = resolve_catalog(&candidate.history_roots, |kind, hash| {
+        crate::publication_evidence::verified_graph_object(members, kind, hash)
+    })?;
     let mut objects = Vec::new();
     let mut seen = BTreeSet::new();
     let state = admitted.map(AdmittedState::state);
     if let Some(state) = state
-        && candidate
-            .history_manifest_hashes
-            .keys()
-            .ne(state.histories.keys())
+        && catalog.keys().ne(state.histories.keys())
     {
         return Err(Error::new(
-            storage_contract::ErrorCode::ObjectCorrupt,
+            ErrorCode::ObjectCorrupt,
             "candidate history set differs",
         ));
     }
-    for (id, hash) in &candidate.history_manifest_hashes {
+    for (id, hash) in &catalog {
         let (manifest, graph) = read_history_graph(members, hash)?;
         if manifest.history.history_tree_id != *id {
             return Err(Error::new(
@@ -283,6 +399,11 @@ pub(crate) fn bound_history_objects(
             if seen.insert((object.kind(), object.hash().to_owned())) {
                 objects.push(object);
             }
+        }
+    }
+    for object in catalog_objects {
+        if seen.insert((object.kind(), object.hash().to_owned())) {
+            objects.push(object);
         }
     }
     Ok(objects)
@@ -310,7 +431,7 @@ fn package_version(package: &Path, version: &str) -> PathBuf {
     package.join("versions").join(version)
 }
 fn package_object(package: &Path, kind: &str, hash: &str) -> Result<PathBuf> {
-    if !matches!(kind, "state-page" | "history-index")
+    if !matches!(kind, "state-page" | "metadata-index")
         || hash.len() != 64
         || !hash
             .bytes()
@@ -355,15 +476,14 @@ fn load_package(package: &Path) -> Result<(HistoryManifest, PackageProof, Histor
         &proof.publication,
         &proof.publication_seal,
     )?;
-    if proof
-        .candidate
-        .history_manifest_hashes
-        .get(&manifest.history.history_tree_id)
-        != Some(&hash)
-    {
+    let included = proof.history_root_proof.verify(
+        &proof.candidate.history_roots,
+        &manifest.history.history_tree_id,
+    )?;
+    if included.as_ref().and_then(json_codec::Value::as_str) != Some(hash.as_str()) {
         return Err(Error::new(
-            storage_contract::ErrorCode::HistoryPackageInvalid,
-            "manifest is not bound by the published candidate",
+            ErrorCode::HistoryPackageInvalid,
+            "manifest is not bound by the published catalog",
         ));
     }
     let mut full_files = 0;
@@ -422,16 +542,19 @@ impl Engine {
         let mut graph_objects = Vec::new();
         let members = self.trusted_evidence_members();
         for disk in &members {
-            for (record, _) in scan(disk)?
+            for (record, _) in self
+                .metadata_integrity
+                .observe(scan(disk))?
                 .records
                 .into_iter()
                 .rev()
                 .filter(|(r, _)| r.record_type == RecordType::Publication)
             {
-                let candidate: Candidate = crate::publication_evidence::verified_object(
+                let candidate: Candidate = crate::publication_evidence::verified_object_observed(
                     &members,
                     "candidate",
                     &record.candidate_hash,
+                    &mut |error| self.metadata_integrity.fault(error),
                 )?;
                 self.verify_candidate_membership(&candidate)?;
                 if candidate.pool_id != self.config.pool_id || candidate.sequence != record.sequence
@@ -441,30 +564,58 @@ impl Engine {
                         "candidate differs from journal or pool",
                     ));
                 }
-                let Some(hash) = candidate.history_manifest_hashes.get(history).cloned() else {
+                let (value, history_root_proof) = crate::metadata_map::read_proof(
+                    &candidate.history_roots,
+                    history,
+                    |kind, hash| {
+                        crate::publication_evidence::verified_graph_object_observed(
+                            &members,
+                            kind,
+                            hash,
+                            &mut |error| self.metadata_integrity.fault(error),
+                        )
+                    },
+                )?;
+                let Some(value) = value else {
                     continue;
                 };
-                let (bound, objects) = bound_history_graph(&members, &hash)?;
+                let hash = value
+                    .as_str()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorCode::ObjectCorrupt,
+                            "history catalog digest is not text",
+                        )
+                    })?
+                    .to_owned();
+                let (bound, objects) =
+                    bound_history_graph_observed(&members, &hash, &mut |error| {
+                        self.metadata_integrity.fault(error)
+                    })?;
                 if canonical_json(&bound)? != canonical_json(&manifest)? {
                     continue;
                 }
                 graph_objects = objects;
-                let publication: Publication = crate::publication_evidence::verified_object(
-                    &members,
-                    "publication",
-                    &record.object_hash,
-                )?;
+                let publication: Publication =
+                    crate::publication_evidence::verified_object_observed(
+                        &members,
+                        "publication",
+                        &record.object_hash,
+                        &mut |error| self.metadata_integrity.fault(error),
+                    )?;
                 let publication_seal: PublicationSeal =
-                    crate::publication_evidence::verified_publication_seal(
+                    crate::publication_evidence::verified_publication_seal_observed(
                         &members,
                         &candidate,
                         &publication,
+                        &mut |error| self.metadata_integrity.fault(error),
                     )?;
                 proof = Some(PackageProof {
                     manifest_hash: hash.clone(),
                     candidate,
                     publication,
                     publication_seal,
+                    history_root_proof,
                 });
                 break;
             }

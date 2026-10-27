@@ -164,7 +164,7 @@ fn deterministic_bounded_graph_preserves_logical_wire_rules() {
             .keys()
             .map(String::as_str)
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["history", "maps", "repository"])
+        BTreeSet::from(["format", "history", "maps", "repository"])
     );
     assert_eq!(root["maps"].as_object().unwrap().len(), MAP_FIELDS.len());
     assert_eq!(root["history"]["generation"], u64::MAX.to_string());
@@ -174,7 +174,7 @@ fn deterministic_bounded_graph_preserves_logical_wire_rules() {
         assert!(canonical_json(&value).unwrap().len() <= PAGE_TARGET_BYTES);
         if kind == "state-page" {
             assert!(value.as_object().unwrap().len() <= PAGE_ENTRIES);
-        } else if kind == "history-index" {
+        } else if kind == "metadata-index" {
             assert_eq!(
                 value
                     .as_object()
@@ -225,7 +225,7 @@ fn truly_oversized_singleton_fails_before_any_object_can_be_installed() {
         Ok(_) => panic!("a caller cannot enlarge the immutable object reader limit"),
     };
     assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
-    assert!(error.message().contains("one history entity"));
+    assert!(error.message().contains("one metadata entity"));
 }
 
 /// This is a codec capacity test, not a semantic notes-policy or an
@@ -406,7 +406,7 @@ fn corrupt_index_routes_prefixes_kinds_and_fields_fail_closed() {
             _ => unreachable!(),
         }
         let mut altered_root = root.clone();
-        altered_root["maps"]["file_notes"] = object(&mut values, "history-index", index);
+        altered_root["maps"]["file_notes"] = object(&mut values, "metadata-index", index);
         assert!(read(altered_root, &values).is_err(), "case {invalid_index}");
     }
 }
@@ -432,7 +432,7 @@ fn leaf_bounds_and_empty_nonroot_pages_are_validated_on_read() {
     let mut altered_root = root;
     altered_root["maps"]["file_notes"] = object(
         &mut values,
-        "history-index",
+        "metadata-index",
         json!({"prefix": "", "children": {"0": empty}}),
     );
     assert!(read(altered_root, &values).is_err());
@@ -454,7 +454,7 @@ fn index_cannot_extend_beyond_the_full_key_digest() {
         children.insert(digit.to_owned(), reference);
         reference = object(
             &mut values,
-            "history-index",
+            "metadata-index",
             json!({"prefix": &route[..depth], "children": children}),
         );
     }
@@ -475,7 +475,7 @@ fn cached_objects_are_revalidated_at_each_logical_route() {
         let child = if reuse_index {
             object(
                 &mut values,
-                "history-index",
+                "metadata-index",
                 json!({"prefix": "0", "children": {"0": page}}),
             )
         } else {
@@ -483,7 +483,7 @@ fn cached_objects_are_revalidated_at_each_logical_route() {
         };
         let index = object(
             &mut values,
-            "history-index",
+            "metadata-index",
             json!({
                 "prefix": "",
                 "children": {"0": child.clone(), "1": child}
@@ -640,5 +640,36 @@ fn content_state_manifest_graph_preserves_string_bytes_and_rejects_unknown_value
             raw["content_states"].clone(),
         );
         assert!(read(damaged_root, &damaged_objects).is_err());
+    }
+}
+
+#[test]
+fn markerless_and_previous_domain_history_roots_are_rejected_without_rewriting() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = Config::development([temp.path().join("disk")]);
+    let disk = &config.disks[0];
+    let (_, current, _) = encoded(&manifest(), MAX_METADATA);
+    for mutation in ["missing_marker", "unknown_marker", "previous_index_domain"] {
+        let mut old = current.clone();
+        match mutation {
+            "missing_marker" => {
+                old.as_object_mut().unwrap().remove("format");
+            }
+            "unknown_marker" => old["format"] = json!("unknown"),
+            _ => old["maps"]["file_notes"]["kind"] = json!("history-index"),
+        }
+        let hash = crate::journal::store_object(disk, "history-manifest", &old).unwrap();
+        let path = object_path(disk, "history-manifest", &hash);
+        let bytes = std::fs::read(&path).unwrap();
+        let object =
+            crate::journal::load_authenticated_object(disk, "history-manifest", &hash).unwrap();
+        assert!(
+            super::resolve_with_objects(object, |_, _| panic!(
+                "old root must reject before dependency I/O"
+            ))
+            .is_err(),
+            "{mutation}"
+        );
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
     }
 }

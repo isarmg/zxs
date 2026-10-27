@@ -398,9 +398,9 @@ fn stored_snapshots_admit_all_version_identities_before_per_file_sequence_use() 
                 let mut evidence = Vec::new();
                 for disk in &fixture.config.disks {
                     for (kind, hash) in std::iter::once(("snapshot", hash.as_str())).chain(
-                        snapshot.pages["versions"]
+                        crate::journal::map_addresses(disk, &snapshot.maps["versions"])
                             .iter()
-                            .map(|hash| ("state-page", hash.as_str())),
+                            .map(|(kind, hash)| (*kind, hash.as_str())),
                     ) {
                         let path = crate::journal::object_path(disk, kind, hash);
                         evidence.push((path.clone(), fs::read(path).unwrap()));
@@ -498,9 +498,9 @@ fn stored_event_sequences_admit_duplicates_and_reject_rehashed_invalid_sequences
         let mut evidence = Vec::new();
         for disk in &fixture.config.disks {
             for (kind, address) in std::iter::once(("snapshot", hash.as_str())).chain(
-                snapshot.pages["events"]
+                crate::journal::map_addresses(disk, &snapshot.events)
                     .iter()
-                    .map(|hash| ("state-page", hash.as_str())),
+                    .map(|(kind, hash)| (*kind, hash.as_str())),
             ) {
                 let path = crate::journal::object_path(disk, kind, address);
                 evidence.push((path.clone(), fs::read(path).unwrap()));

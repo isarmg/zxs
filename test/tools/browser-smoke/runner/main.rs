@@ -26,6 +26,7 @@ mod file_rows;
 mod fixture;
 use fixture::seed_files;
 mod fonts;
+mod integrity_scrub;
 mod lifecycle;
 mod management;
 mod metadata;
@@ -312,7 +313,7 @@ fn exercise(
     wait_for("seeded file in activity history", || {
         if browser.script("return Array.from(document.querySelectorAll('.zxs-history-path')).some(e=>e.textContent.includes('browser-smoke.txt'))")? == true { Ok(()) } else { Err("history missing seeded file".into()) }
     })?;
-    browser.click(&browser.button("Status", "状态")?)?;
+    integrity_scrub::run(browser)?;
     browser.css(".zxs-monitor-page .zxs-metric-card")?;
     assert_metadata_only(browser)?;
     println!("PASS administrator status page retains real telemetry controls");

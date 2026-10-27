@@ -95,14 +95,34 @@ pub(crate) fn existing_object_paths(
     }
     Ok(paths)
 }
-pub(super) fn read_object_bytes(d: &DiskConfig, kind: &str, hash: &str) -> Result<Vec<u8>> {
-    read_object_bytes_bounded(d, kind, hash, MAX_METADATA)
-}
 pub(super) fn read_object_bytes_bounded(
     d: &DiskConfig,
     kind: &str,
     hash: &str,
     maximum: usize,
+) -> Result<Vec<u8>> {
+    read_object_bytes_with(d, kind, hash, |path| {
+        read_bytes(path, maximum.min(MAX_METADATA))
+    })
+}
+
+pub(super) fn read_object_bytes_observed(
+    d: &DiskConfig,
+    kind: &str,
+    hash: &str,
+    maximum: usize,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<Vec<u8>> {
+    read_object_bytes_with(d, kind, hash, |path| {
+        read_bytes_observed(path, maximum.min(MAX_METADATA), observe)
+    })
+}
+
+fn read_object_bytes_with(
+    d: &DiskConfig,
+    kind: &str,
+    hash: &str,
+    mut read: impl FnMut(&Path) -> Result<Vec<u8>>,
 ) -> Result<Vec<u8>> {
     let paths = existing_object_paths(d, kind, hash)?;
     let path = paths.first().ok_or_else(|| {
@@ -111,7 +131,7 @@ pub(super) fn read_object_bytes_bounded(
             "immutable object is missing",
         )
     })?;
-    read_bytes(path, maximum.min(MAX_METADATA))
+    read(path)
 }
 pub(super) fn write_object_bytes(
     d: &DiskConfig,

@@ -5,9 +5,13 @@ pub mod engine_backend;
 mod file_manager;
 mod http_auth;
 mod http_boundary;
+#[cfg(feature = "core")]
+mod http_integrity_scrub;
 mod http_job;
 mod http_shutdown;
 mod http_spool;
+#[cfg(feature = "core")]
+pub mod integrity_scrub;
 #[cfg(feature = "core")]
 pub mod management;
 mod service_lifecycle;
@@ -366,6 +370,30 @@ pub trait Backend: Send + Sync {
         StorageStatus::EmbeddedReady
     }
     fn retry_storage(&self, _identity: &Identity) -> Result<StorageStatus, ApiError> {
+        Err(ApiError::unsupported())
+    }
+
+    /// Background scrub is supported only by an explicitly managed backend.
+    #[cfg(feature = "core")]
+    fn start_integrity_scrub(
+        &self,
+        _identity: &Identity,
+    ) -> Result<integrity_scrub::IntegrityScrubJobId, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    #[cfg(feature = "core")]
+    fn integrity_scrub_status(
+        &self,
+        _identity: &Identity,
+    ) -> Result<integrity_scrub::IntegrityScrubStatus, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    #[cfg(feature = "core")]
+    fn cancel_integrity_scrub(
+        &self,
+        _identity: &Identity,
+        _job: integrity_scrub::IntegrityScrubJobId,
+    ) -> Result<(), ApiError> {
         Err(ApiError::unsupported())
     }
 
@@ -1353,6 +1381,31 @@ impl Backend for AuthorizedBackend {
             .lookup_at(&self.current(identity)?, branch, commit, path)
     }
 
+    #[cfg(feature = "core")]
+    fn start_integrity_scrub(
+        &self,
+        identity: &Identity,
+    ) -> Result<integrity_scrub::IntegrityScrubJobId, ApiError> {
+        self.backend.start_integrity_scrub(&self.current(identity)?)
+    }
+    #[cfg(feature = "core")]
+    fn integrity_scrub_status(
+        &self,
+        identity: &Identity,
+    ) -> Result<integrity_scrub::IntegrityScrubStatus, ApiError> {
+        self.backend
+            .integrity_scrub_status(&self.current(identity)?)
+    }
+    #[cfg(feature = "core")]
+    fn cancel_integrity_scrub(
+        &self,
+        identity: &Identity,
+        job: integrity_scrub::IntegrityScrubJobId,
+    ) -> Result<(), ApiError> {
+        self.backend
+            .cancel_integrity_scrub(&self.current(identity)?, job)
+    }
+
     // Startup runs on the raw backend before this wrapper is constructed;
     // telemetry also retains that raw backend for private disk sampling. Keep
     // start_management and observe_disks on their inert defaults here.
@@ -1713,7 +1766,9 @@ fn router_shared(
     };
     let protected = Router::new();
     #[cfg(feature = "core")]
-    let protected = protected.merge(setup_recovery::protected_routes());
+    let protected = protected
+        .merge(setup_recovery::protected_routes())
+        .merge(http_integrity_scrub::routes());
     let protected = protected
         .merge(file_manager::routes())
         .route("/api/system/storage", get(storage_status))

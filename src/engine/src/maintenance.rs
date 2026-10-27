@@ -451,25 +451,29 @@ impl Engine {
         let mut published = None;
         let members = self.trusted_evidence_members();
         for member in &members {
-            let scanned = scan(member)?;
+            let scanned = self.metadata_integrity.observe(scan(member))?;
             if let Some((record, _)) = scanned.records.iter().rev().find(|(r, _)| {
                 r.sequence == self.state.sequence && r.record_type == RecordType::Publication
             }) {
-                let candidate: Candidate = crate::publication_evidence::verified_object(
+                let candidate: Candidate = crate::publication_evidence::verified_object_observed(
                     &members,
                     "candidate",
                     &record.candidate_hash,
+                    &mut |error| self.metadata_integrity.fault(error),
                 )?;
                 self.verify_candidate_membership(&candidate)?;
-                let publication: Publication = crate::publication_evidence::verified_object(
-                    &members,
-                    "publication",
-                    &record.object_hash,
-                )?;
-                let seal = crate::publication_evidence::verified_publication_seal(
+                let publication: Publication =
+                    crate::publication_evidence::verified_object_observed(
+                        &members,
+                        "publication",
+                        &record.object_hash,
+                        &mut |error| self.metadata_integrity.fault(error),
+                    )?;
+                let seal = crate::publication_evidence::verified_publication_seal_observed(
                     &members,
                     &candidate,
                     &publication,
+                    &mut |error| self.metadata_integrity.fault(error),
                 )?;
                 if candidate.sequence != self.state.sequence
                     || self.snapshot.as_deref() != Some(candidate.snapshot_hash.as_str())
@@ -479,10 +483,11 @@ impl Engine {
                         "tombstone publication differs from recovered state",
                     ));
                 }
-                let snapshot: Snapshot = crate::publication_evidence::verified_object(
+                let snapshot: Snapshot = crate::publication_evidence::verified_object_observed(
                     &members,
                     "snapshot",
                     &candidate.snapshot_hash,
+                    &mut |error| self.metadata_integrity.fault(error),
                 )?;
                 published = Some((candidate, publication, seal, snapshot));
                 break;
@@ -508,21 +513,25 @@ impl Engine {
                 .placements
                 .get(id)
                 .expect("invariant: every version has a placement");
-            let mut inclusion = None;
-            for hash in snapshot.pages.get("content_states").into_iter().flatten() {
-                let page: json_codec::Map<String, json_codec::Value> =
-                    crate::publication_evidence::verified_object(&members, "state-page", hash)?;
-                if page.get(id).and_then(|v| v.as_str()) == Some(state.as_str()) {
-                    inclusion = Some(page);
-                    break;
-                }
+            validate_snapshot_schema(&snapshot)?;
+            let (value, content_state_proof) = crate::metadata_map::read_proof(
+                &snapshot.maps["content_states"],
+                id,
+                |kind, hash| {
+                    crate::publication_evidence::verified_graph_object_observed(
+                        &members,
+                        kind,
+                        hash,
+                        &mut |error| self.metadata_integrity.fault(error),
+                    )
+                },
+            )?;
+            if value.as_ref().and_then(json_codec::Value::as_str) != Some(state.as_str()) {
+                return Err(Error::new(
+                    ErrorCode::TombstoneInvalid,
+                    "published state proof does not contain the tombstone",
+                ));
             }
-            let content_state_page = inclusion.ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::TombstoneInvalid,
-                    "published state page does not contain the tombstone",
-                )
-            })?;
             let tombstone = ContentTombstone {
                 version_id: id.clone(),
                 state: *state,
@@ -530,11 +539,15 @@ impl Engine {
                 publication: publication.clone(),
                 publication_seal: seal.clone(),
                 snapshot: snapshot.clone(),
-                content_state_page,
+                content_state_proof,
             };
             for slot in &p.route_slot_ids {
                 let d = self.disk(slot)?;
-                if validate_seal(&self.config, d).is_err() {
+                if self
+                    .metadata_integrity
+                    .validate_seal(&self.config, d)
+                    .is_err()
+                {
                     continue;
                 }
                 let dir = version_dir(d, &v.history_tree_id, id);

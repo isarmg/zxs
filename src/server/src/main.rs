@@ -19,6 +19,15 @@ struct Args {
     /// Host per-principal retained-workspace metadata byte limit.
     #[arg(long, requires_all = ["max_retained_workspaces", "max_retained_workspaces_per_principal", "max_retained_workspace_metadata_bytes"])]
     max_retained_workspace_metadata_bytes_per_principal: Option<std::num::NonZeroU64>,
+    /// Non-overlapping automatic scrub interval, measured after each completed attempt.
+    #[arg(long, default_value = "86400")]
+    scrub_interval_seconds: std::num::NonZeroU64,
+    /// Expire full-integrity observations from scan start, not ordinary writes.
+    #[arg(long, default_value = "172800")]
+    scrub_max_age_seconds: std::num::NonZeroU64,
+    /// Maximum background read rate; one bounded read may burst before accounting.
+    #[arg(long, default_value = "67108864")]
+    scrub_bytes_per_second: std::num::NonZeroU64,
     #[arg(long, default_value = "./zxs-data")]
     root: PathBuf,
     /// System-disk management state; defaults to ROOT/management, never a data member.
@@ -137,6 +146,11 @@ async fn run_with_runtime(args: Args) -> std::process::ExitCode {
 
 async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()> {
     let retained_workspace_limits = args.workspace_limits()?;
+    let scrub_policy = storage_server::integrity_scrub::IntegrityScrubPolicy::periodic(
+        args.scrub_interval_seconds,
+        args.scrub_max_age_seconds,
+        args.scrub_bytes_per_second,
+    )?;
     let Args {
         root,
         management_root,
@@ -210,6 +224,7 @@ async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()>
         &root,
         &management_root,
         storage_server::management::ManagementOptions {
+            scrub_policy,
             setup_disks: parse_setup_map(setup_disks, "--setup-disk")?,
             setup_configs: parse_setup_map(setup_configs, "--setup-config")?,
             allow_development_setup,

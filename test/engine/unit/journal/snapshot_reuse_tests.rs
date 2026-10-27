@@ -28,21 +28,26 @@ fn next(state: &State) -> State {
 fn heat(state: &State, prepared: &PreparedSnapshot) -> (State, PreparedSnapshot) {
     let next = next(state);
     let hot =
-        prepare_snapshot_incremental(state, &next, &prepared.reuse_basis().unwrap(), MAX_METADATA)
-            .unwrap();
+        prepare_snapshot_incremental(state, &next, &prepared.reuse_basis(), MAX_METADATA).unwrap();
     (next, hot)
+}
+
+fn note_pages(config: &Config, prepared: &PreparedSnapshot) -> Vec<String> {
+    map_pages(&config.disks[0], &prepared.descriptor.maps["file_notes"])
 }
 
 #[test]
 fn raw_page_digest_is_the_original_canonical_domain_digest_not_a_semantic_load() {
     let (_temp, config, state, prepared) = fixture(12);
-    let hash = &prepared.descriptor.pages["file_notes"][0];
-    let bytes = read_published_page(&config.disks, hash, MAX_METADATA).unwrap();
+    let hashes = note_pages(&config, &prepared);
+    let hash = &hashes[0];
+    let bytes = read_published_object(&config.disks, "state-page", hash, MAX_METADATA, &mut |_| {})
+        .unwrap();
     let page: json_codec::Value = decode_strict(&bytes).unwrap();
     let (canonical, digest) = encode_hashed_object("state-page", &page).unwrap();
     assert_eq!(bytes, canonical);
     assert_eq!(digest, *hash);
-    assert_ne!(object_hash("history-index", &page).unwrap(), *hash);
+    assert_ne!(object_hash("metadata-index", &page).unwrap(), *hash);
     let noncanonical = [b" ".as_slice(), bytes.as_slice()].concat();
     for disk in &config.disks {
         fs::write(object_path(disk, "state-page", hash), &noncanonical).unwrap();
@@ -51,7 +56,7 @@ fn raw_page_digest_is_the_original_canonical_domain_digest_not_a_semantic_load()
     // must not mistake that for the originally published exact byte string.
     let _: json_codec::Value = load_object(&config.disks[0], "state-page", hash).unwrap();
     assert_eq!(
-        read_published_page(&config.disks, hash, MAX_METADATA)
+        read_published_object(&config.disks, "state-page", hash, MAX_METADATA, &mut |_| {})
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::ObjectCorrupt
@@ -72,22 +77,17 @@ fn raw_page_digest_is_the_original_canonical_domain_digest_not_a_semantic_load()
 #[test]
 fn reused_fields_hold_one_page_buffer_and_never_serialize_their_records() {
     let (_temp, config, state, prepared) = fixture(4096);
-    let maximum = prepared.fields["file_notes"].max_page_bytes;
-    assert!(prepared.descriptor.pages["file_notes"].len() > 50);
+    let maximum = prepared.fields["file_notes"].maximum_object_bytes();
+    assert!(note_pages(&config, &prepared).len() > 16);
     let next = next(&state);
     snapshot::take_encoding_counts();
-    let hot = prepare_snapshot_incremental(
-        &state,
-        &next,
-        &prepared.reuse_basis().unwrap(),
-        MAX_METADATA,
-    )
-    .unwrap();
+    let hot =
+        prepare_snapshot_incremental(&state, &next, &prepared.reuse_basis(), MAX_METADATA).unwrap();
     assert_eq!(snapshot::take_encoding_counts().get("file_notes"), None);
-    REUSED_PAGE_PEAK_BYTES.with(|peak| peak.set(0));
+    REUSED_OBJECT_PEAK_BYTES.with(|peak| peak.set(0));
     hot.store(&config.disks, &next).unwrap();
     assert_eq!(snapshot::take_encoding_counts().get("file_notes"), None);
-    assert_eq!(REUSED_PAGE_PEAK_BYTES.with(|peak| peak.get()), maximum);
+    assert_eq!(REUSED_OBJECT_PEAK_BYTES.with(|peak| peak.get()), maximum);
     for disk in &config.disks {
         assert_eq!(load_raw_snapshot_fixture(disk, &hot.hash).unwrap(), next);
     }
@@ -100,7 +100,7 @@ fn missing_pages_reconstruct_the_field_once_with_the_identical_reference_sequenc
     prepare_snapshot(&state, MAX_METADATA).unwrap();
     let expected_serializations = snapshot::take_encoding_counts()["file_notes"];
     let (next, hot) = heat(&state, &prepared);
-    for hash in prepared.descriptor.pages["file_notes"].iter().skip(1) {
+    for hash in note_pages(&config, &prepared).iter().skip(1) {
         for disk in &config.disks {
             fs::remove_file(object_path(disk, "state-page", hash)).unwrap();
         }
@@ -112,8 +112,8 @@ fn missing_pages_reconstruct_the_field_once_with_the_identical_reference_sequenc
         BTreeMap::from([("file_notes".into(), expected_serializations)])
     );
     assert_eq!(
-        hot.descriptor.pages["file_notes"],
-        prepared.descriptor.pages["file_notes"]
+        hot.descriptor.maps["file_notes"],
+        prepared.descriptor.maps["file_notes"]
     );
     for disk in &config.disks {
         assert_eq!(load_raw_snapshot_fixture(disk, &hot.hash).unwrap(), next);
@@ -124,7 +124,7 @@ fn missing_pages_reconstruct_the_field_once_with_the_identical_reference_sequenc
 fn field_reconstruction_cannot_substitute_different_bytes_or_a_different_page_count() {
     let (_temp, config, state, prepared) = fixture(256);
     let (mut wrong, hot) = heat(&state, &prepared);
-    for hash in &prepared.descriptor.pages["file_notes"] {
+    for hash in &note_pages(&config, &prepared) {
         for disk in &config.disks {
             fs::remove_file(object_path(disk, "state-page", hash)).unwrap();
         }
@@ -156,24 +156,25 @@ fn field_reconstruction_cannot_substitute_different_bytes_or_a_different_page_co
 fn corrupt_large_targets_and_unsafe_targets_are_not_overwritten_or_buffered_to_global_limit() {
     let (temp, config, state, prepared) = fixture(300);
     let (next, hot) = heat(&state, &prepared);
-    let hash = &prepared.descriptor.pages["file_notes"][0];
+    let hashes = note_pages(&config, &prepared);
+    let hash = &hashes[0];
     let path = object_path(&config.disks[0], "state-page", hash);
-    let size = prepared.fields["file_notes"].max_page_bytes + 1024 * 1024;
+    let size = prepared.fields["file_notes"].maximum_object_bytes() + 1024 * 1024;
     fs::OpenOptions::new()
         .write(true)
         .open(&path)
         .unwrap()
         .set_len(size as u64)
         .unwrap();
-    REUSED_PAGE_PEAK_BYTES.with(|peak| peak.set(0));
+    REUSED_OBJECT_PEAK_BYTES.with(|peak| peak.set(0));
     assert_eq!(
         hot.store(&config.disks, &next).unwrap_err().code(),
         storage_contract::ErrorCode::ObjectCollision
     );
     assert_eq!(fs::metadata(&path).unwrap().len(), size as u64);
     assert!(
-        REUSED_PAGE_PEAK_BYTES.with(|peak| peak.get())
-            <= prepared.fields["file_notes"].max_page_bytes
+        REUSED_OBJECT_PEAK_BYTES.with(|peak| peak.get())
+            <= prepared.fields["file_notes"].maximum_object_bytes()
     );
     let outside = temp.path().join("outside");
     fs::write(&outside, b"untouched").unwrap();
@@ -199,8 +200,8 @@ fn existing_reused_pages_cannot_bypass_a_failed_directory_barrier() {
     let (next, hot) = heat(&state, &prepared);
     let mut barriers = 0;
     let error = hot
-        .store_with(&config.disks, &next, |disk, hash, bytes| {
-            object_storage::write_object_bytes_with(disk, "state-page", hash, bytes, |_, _| {
+        .store_with(&config.disks, &next, |disk, kind, hash, bytes| {
+            object_storage::write_object_bytes_with(disk, kind, hash, bytes, |_, _| {
                 barriers += 1;
                 Err(Error::new(
                     storage_contract::ErrorCode::InjectedFailure,
@@ -212,9 +213,9 @@ fn existing_reused_pages_cannot_bypass_a_failed_directory_barrier() {
     assert_eq!(error.code(), storage_contract::ErrorCode::InjectedFailure);
     assert_eq!(barriers, 1);
     assert!(!object_path(&config.disks[0], "snapshot", &hot.hash).exists());
-    hot.store_with(&config.disks, &next, |disk, hash, bytes| {
+    hot.store_with(&config.disks, &next, |disk, kind, hash, bytes| {
         barriers += 1;
-        write_object_bytes(disk, "state-page", hash, bytes)
+        write_object_bytes(disk, kind, hash, bytes)
     })
     .unwrap();
     assert!(barriers > 1);
@@ -227,10 +228,10 @@ fn existing_reused_pages_cannot_bypass_a_failed_directory_barrier() {
 #[test]
 fn reused_page_maxima_are_admitted_before_reading_sources_or_reencoding_records() {
     let (_temp, config, state, prepared) = fixture(1024);
-    let basis = prepared.reuse_basis().unwrap();
-    let maximum = basis.page_maxima["file_notes"];
+    let basis = prepared.reuse_basis();
+    let maximum = basis.fields["file_notes"].maximum_object_bytes();
     assert!(maximum > prepared.objects.last().unwrap().bytes.len());
-    for hash in &prepared.descriptor.pages["file_notes"] {
+    for hash in &note_pages(&config, &prepared) {
         for disk in &config.disks {
             fs::remove_file(object_path(disk, "state-page", hash)).unwrap();
         }
@@ -245,49 +246,63 @@ fn reused_page_maxima_are_admitted_before_reading_sources_or_reencoding_records(
 }
 
 #[test]
-fn baseline_memory_limit_disables_only_reuse_not_the_current_snapshot() {
+fn large_opaque_auth_is_not_copied_into_the_bounded_snapshot_root() {
     let state = State {
-        control_auth: Some(json_codec::Value::String(
-            "x".repeat(MAX_REUSE_DESCRIPTOR_BYTES),
-        )),
+        control_auth: Some(json_codec::Value::String("x".repeat(8 * 1024 * 1024))),
         ..Default::default()
     };
     let prepared = prepare_snapshot(&state, MAX_METADATA).unwrap();
-    assert!(prepared.reuse_basis().is_none());
+    assert!(prepared.objects.last().unwrap().bytes.len() < 8192);
+    let basis = prepared.reuse_basis();
+    assert!(canonical_json(&basis.descriptor).unwrap().len() < 8192);
+    let after = next(&state);
+    let hot = prepare_snapshot_incremental(&state, &after, &basis, MAX_METADATA).unwrap();
+    assert!(
+        hot.objects
+            .iter()
+            .all(|object| object.kind != "state-control-auth")
+    );
     assert_eq!(
-        prepared.hash,
-        prepare_snapshot_reference(&state, MAX_METADATA)
-            .unwrap()
-            .hash
+        hot.hash,
+        prepare_snapshot(&after, MAX_METADATA).unwrap().hash
     );
 }
 
 #[test]
-fn middle_or_last_missing_page_keeps_ordered_visitation_exactly_once() {
+fn middle_or_last_missing_page_keeps_completed_installation_callbacks_exactly_once() {
     for last in [false, true] {
         let (_temp, config, state, prepared) = fixture(512);
         let (next, hot) = heat(&state, &prepared);
-        let expected = &hot.descriptor.pages["file_notes"];
-        assert!(expected.len() > 2);
+        let expected = map_addresses(&config.disks[0], &hot.descriptor.maps["file_notes"]);
+        let pages = note_pages(&config, &prepared);
+        assert!(pages.len() > 2);
         let missing = if last {
-            expected.len() - 1
+            pages.len() - 1
         } else {
-            expected.len() / 2
+            pages.len() / 2
         };
         for disk in &config.disks {
-            fs::remove_file(object_path(disk, "state-page", &expected[missing])).unwrap();
+            fs::remove_file(object_path(disk, "state-page", &pages[missing])).unwrap();
         }
         let mut visited = Vec::new();
-        hot.visit_field_pages("file_notes", &config.disks, &next, |hash, _| {
-            visited.push(hash.to_owned());
-            Ok(())
+        hot.store_with(&config.disks, &next, |disk, kind, hash, bytes| {
+            if disk.disk_id == config.disks[0].disk_id
+                && expected
+                    .iter()
+                    .any(|(domain, digest)| *domain == kind && digest == hash)
+            {
+                visited.push((kind.to_owned(), hash.to_owned()));
+            }
+            write_object_bytes(disk, kind, hash, bytes)
         })
         .unwrap();
         assert_eq!(
-            &visited, expected,
-            "one callback per logical page, including successful prefixes"
+            visited,
+            expected
+                .into_iter()
+                .map(|(kind, hash)| (kind.to_owned(), hash))
+                .collect::<Vec<_>>()
         );
-        hot.store(&config.disks, &next).unwrap();
         assert_eq!(
             load_raw_snapshot_fixture(&config.disks[0], &hot.hash).unwrap(),
             next
@@ -309,7 +324,35 @@ fn missing_prepared_field_plan_is_an_internal_bug() {
     let state = State::default();
     let mut prepared = prepare_snapshot(&state, MAX_METADATA).unwrap();
     prepared.fields.remove("versions");
-    prepared
-        .visit_field_pages("versions", &[], &state, |_, _| Ok(()))
-        .unwrap();
+    prepared.store(&[], &state).unwrap();
+}
+
+#[test]
+fn oversized_first_source_reports_its_bound_fault_even_when_a_healthy_replica_succeeds() {
+    let (_temp, config, _state, prepared) = fixture(12);
+    let pages = note_pages(&config, &prepared);
+    let hash = &pages[0];
+    let path = object_path(&config.disks[0], "state-page", hash);
+    let expected = std::fs::read(&path).unwrap();
+    let mut damaged = expected.clone();
+    damaged.push(b' ');
+    std::fs::write(&path, &damaged).unwrap();
+    let mut failures = Vec::new();
+    let actual = read_published_object(
+        &config.disks,
+        "state-page",
+        hash,
+        expected.len(),
+        &mut |error| {
+            failures.push(error.code());
+        },
+    )
+    .unwrap();
+    assert_eq!(actual, expected);
+    assert_eq!(failures, vec![ErrorCode::ResourceLimit]);
+    assert_eq!(
+        std::fs::read(path).unwrap(),
+        damaged,
+        "source selection never repairs or replaces evidence"
+    );
 }

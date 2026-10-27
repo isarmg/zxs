@@ -63,7 +63,7 @@ pub(crate) fn preflight_bound_publication(
         PreflightOptions {
             recovery,
             maximum,
-            prepared_snapshot: None,
+            prepared_graphs: None,
             bound_snapshot: true,
         },
     )
@@ -75,7 +75,7 @@ pub(crate) fn preflight_publication_prepared(
     state: &State,
     recovery: Option<RecoveryProof>,
     maximum: usize,
-    prepared_snapshot: Option<&PreparedSnapshot>,
+    prepared_graphs: Option<(&PreparedSnapshot, &crate::metadata_map::MapRoot)>,
 ) -> Result<usize> {
     preflight_inner(
         config,
@@ -85,7 +85,7 @@ pub(crate) fn preflight_publication_prepared(
         PreflightOptions {
             recovery,
             maximum,
-            prepared_snapshot,
+            prepared_graphs,
             bound_snapshot: false,
         },
     )
@@ -93,7 +93,7 @@ pub(crate) fn preflight_publication_prepared(
 struct PreflightOptions<'a> {
     recovery: Option<RecoveryProof>,
     maximum: usize,
-    prepared_snapshot: Option<&'a PreparedSnapshot>,
+    prepared_graphs: Option<(&'a PreparedSnapshot, &'a crate::metadata_map::MapRoot)>,
     bound_snapshot: bool,
 }
 
@@ -107,7 +107,7 @@ fn preflight_inner(
     let PreflightOptions {
         mut recovery,
         maximum,
-        prepared_snapshot,
+        prepared_graphs,
         bound_snapshot,
     } = options;
     let mut largest = 0usize;
@@ -224,94 +224,77 @@ fn preflight_inner(
         receipts: publication_receipts.clone(),
     };
     check(encode_metadata(&seal, maximum)?);
-    let package_size =
-        crate::history_package::package_proof_bytes(candidate, &publication, &seal, maximum)?;
-    if state
-        .content_states
-        .values()
-        .any(|status| matches!(status, ContentState::Purged | ContentState::Migrated))
-    {
-        // Decided candidates retain their original snapshot partitioning. Read
-        // each exact dependency without repair so preflight precedes mutation.
-        let recovering = bound_snapshot || publication.recovery.is_some();
-        let generated = if !recovering && prepared_snapshot.is_none() {
-            Some(prepare_snapshot(state, maximum)?)
-        } else {
-            None
-        };
-        let planned = prepared_snapshot.or(generated.as_ref());
-        let snapshot = if recovering {
-            crate::publication_evidence::verified_object(
-                &members,
-                "snapshot",
-                &candidate.snapshot_hash,
-            )?
-        } else {
-            planned
-                .expect("invariant: normal publication prepares a snapshot")
-                .descriptor
-                .clone()
-        };
-        let mut check_page = |page: json_codec::Map<String, json_codec::Value>| -> Result<()> {
-            // Only pages containing a tombstone can be embedded by cleanup.
-            let mut longest = None;
-            for (id, raw) in &page {
-                let status: ContentState = data_serialization::Deserialize::deserialize(raw)?;
-                if status == ContentState::Available {
-                    continue;
-                }
-                // These are the only two fields that differ between tombstones
-                // embedding this exact page. Compare their encoded lengths.
-                let size = encode_metadata(
-                    &json_codec::json!({"version_id":id,"state":status}),
-                    maximum,
-                )?
-                .len();
-                if longest
-                    .as_ref()
-                    .is_none_or(|(previous, _, _)| size > *previous)
-                {
-                    longest = Some((size, id, status));
-                }
-            }
-            let Some((_, id, status)) = longest else {
-                return Ok(());
-            };
-            check(encode_metadata(
-                &ContentTombstone {
-                    version_id: id.clone(),
-                    state: status,
-                    candidate: candidate.clone(),
-                    publication: publication.clone(),
-                    publication_seal: seal.clone(),
-                    snapshot: snapshot.clone(),
-                    content_state_page: page,
-                },
-                maximum,
-            )?);
-            Ok(())
-        };
-        if recovering {
-            // Existing decided-candidate behavior: exact bound pages, never a
-            // reconstruction or a new partition. This path is unchanged.
-            for hash in snapshot.pages.get("content_states").into_iter().flatten() {
-                check_page(crate::publication_evidence::verified_object(
-                    &members,
-                    "state-page",
-                    hash,
-                )?)?;
-            }
-        } else {
-            // The normal publisher consumes its actual page plan. Only this
-            // tombstone-bearing field is decoded, one page at a time; there is
-            // no second whole-map Value or independently chosen partition.
-            planned
-                .expect("invariant: normal publication prepares a snapshot")
-                .visit_field_pages("content_states", &members, state, |_, bytes| {
-                    check_page(decode_strict(bytes)?)
-                })?;
+    // A normal prepared publication consumes exact resident summaries: no
+    // State content scan, page decode, or second independent partition pass.
+    let recovering = bound_snapshot || publication.recovery.is_some();
+    let generated = if !recovering && prepared_graphs.is_none() {
+        Some((
+            prepare_snapshot(state, maximum)?,
+            crate::history_package::prepare_history_manifests(state, maximum)?.0,
+        ))
+    } else {
+        None
+    };
+    let planned = prepared_graphs.or_else(|| {
+        generated
+            .as_ref()
+            .map(|(snapshot, catalog)| (snapshot, catalog))
+    });
+    let (snapshot, tail, history_proof_bytes) = if recovering {
+        let snapshot: Snapshot = crate::publication_evidence::verified_object(
+            &members,
+            "snapshot",
+            &candidate.snapshot_hash,
+        )?;
+        validate_snapshot_schema(&snapshot)?;
+        let content = crate::metadata_map::MapRoot::load(
+            &snapshot.maps["content_states"],
+            crate::metadata_map::ProofMeasure::ContentStates,
+            |kind, hash| crate::publication_evidence::verified_graph_object(&members, kind, hash),
+        )?;
+        let catalog = crate::metadata_map::MapRoot::load(
+            &candidate.history_roots,
+            crate::metadata_map::ProofMeasure::Plain,
+            |kind, hash| crate::publication_evidence::verified_graph_object(&members, kind, hash),
+        )?;
+        let tail = content.maximum_tombstone_tail();
+        (snapshot, tail, catalog.maximum_inclusion_proof_bytes())
+    } else {
+        let (snapshot, catalog) =
+            planned.expect("invariant: normal publication prepared both metadata graphs");
+        (
+            snapshot.descriptor.clone(),
+            snapshot.content_state_budget(),
+            catalog.maximum_inclusion_proof_bytes(),
+        )
+    };
+    let package_size = match history_proof_bytes {
+        Some(proof_bytes) => crate::history_package::package_proof_bytes(
+            candidate,
+            &publication,
+            &seal,
+            proof_bytes,
+            maximum,
+        )?,
+        None => 0, // An empty catalog has no history that can be exported.
+    };
+    let tombstone_size = if let Some(tail) = tail {
+        // The resident maximum pairs a real eligible ID/status with its own
+        // exact path, rather than combining unrelated maxima or estimated depth.
+        let envelope = json_codec::json!({"version_id":null,"state":null,"candidate":candidate,"publication":&publication,"publication_seal":&seal,"snapshot":&snapshot,"content_state_proof":{"nodes":[]}});
+        // Replace null ID (4), null state (4), [] (2) by actual ID/status
+        // and the measured nodes contents plus its surrounding [] (2).
+        let bytes = canonical_json_value(&envelope)?.len() - 8 + tail;
+        if bytes > maximum {
+            return Err(Error::new(
+                ErrorCode::ResourceLimit,
+                "content tombstone proof exceeds metadata reader budget",
+            ));
         }
-    }
+        bytes
+    } else {
+        0
+    };
 
     for proof in proofs {
         check(encode_metadata(
@@ -324,7 +307,7 @@ fn preflight_inner(
             maximum,
         )?);
     }
-    Ok(largest.max(package_size))
+    Ok(largest.max(package_size).max(tombstone_size))
 }
 
 #[cfg(test)]

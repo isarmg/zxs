@@ -2197,7 +2197,11 @@ fn auth_sessions_do_not_stale_plans_and_offline_tombstones_are_proven() {
     let dir = crate::disk::version_dir(&f.config.disks[0], &r.history_tree_id, &old);
     let mut proof: json_codec::Value =
         json_codec::from_slice(&fs::read(dir.join("purged.json")).unwrap()).unwrap();
-    proof["content_state_page"][&old] = json_codec::json!("AVAILABLE");
+    proof["content_state_proof"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .last_mut()
+        .unwrap()[&old] = json_codec::json!("AVAILABLE");
     fs::write(dir.join("purged.json"), json_codec::to_vec(&proof).unwrap()).unwrap();
     assert_eq!(
         offline_check(&f.config.disks[0].root).unwrap().issues.len(),
@@ -3894,7 +3898,7 @@ fn pending_operation_reads_exact_snapshot_replica_without_repair() {
                 let snapshot: crate::journal::Snapshot =
                     crate::journal::load_object(source, "snapshot", &candidate.snapshot_hash)
                         .unwrap();
-                snapshot.pages["operation_principals"][0].clone()
+                crate::journal::map_pages(source, &snapshot.maps["operation_principals"])[0].clone()
             }
         };
         let path = crate::journal::object_path(source, kind, &hash);

@@ -1,9 +1,8 @@
 //! Per-member hash/shape/closure verification. No replica fallback or repair.
 use super::*;
 use crate::history_package::decode_history_root;
-use crate::metadata_map::{PageShape, Reference, ReferenceKind, decode_index};
+use crate::metadata_map::{MetadataIndex, PageShape, Reference, ReferenceKind, decode_index};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::BufReader;
 
 // Cache only fixed-size addresses and bounded structural summaries, never State,
 // complete JSON objects or one descriptor per historical logical record. When
@@ -55,58 +54,72 @@ impl AcknowledgedUnavailable {
 }
 
 enum Shape {
-    Page(PageShape),
-    Index(String),
+    Page {
+        summary: PageShape,
+        catalog: Option<Vec<(String, String)>>,
+    },
+    Index {
+        node: MetadataIndex,
+        complete: bool,
+    },
+    ControlAuth,
     History(String),
     Snapshot(u64),
 }
 
-struct MemberScan<'a> {
-    engine: &'a Engine,
+struct MemberScan<'a, O, P> {
+    plan: &'a IntegrityScrubPlan,
     disk: &'a DiskConfig,
-    cancellation: &'a IntegrityScrubCancellation,
+    observe: &'a mut O,
+    progress: &'a mut P,
     report: &'a mut IntegrityScrubReport,
     verified: BTreeMap<(&'static str, String), Shape>,
     loaded_objects: usize,
+    catalog_bindings: usize,
     unavailable: AcknowledgedUnavailable,
 }
 
 pub(super) fn verify_member(
-    engine: &Engine,
+    plan: &IntegrityScrubPlan,
     disk: &DiskConfig,
-    cancellation: &IntegrityScrubCancellation,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+    progress: &mut impl FnMut(&IntegrityScrubReport),
     report: &mut IntegrityScrubReport,
-) -> Result<AcknowledgedUnavailable> {
-    verify_saved_membership(engine, disk)?;
+) -> Result<(AcknowledgedUnavailable, bool)> {
+    verify_saved_membership(plan, disk, observe)?;
     MemberScan {
-        engine,
+        plan,
         disk,
-        cancellation,
+        observe,
+        progress,
         report,
         verified: BTreeMap::new(),
         loaded_objects: 0,
+        catalog_bindings: 0,
         unavailable: AcknowledgedUnavailable::default(),
     }
     .journal()
 }
 
-impl MemberScan<'_> {
-    fn journal(&mut self) -> Result<AcknowledgedUnavailable> {
+impl<O: FnMut(usize) -> Result<()>, P: FnMut(&IntegrityScrubReport)> MemberScan<'_, O, P> {
+    fn journal(&mut self) -> Result<(AcknowledgedUnavailable, bool)> {
         // Hash-linked receipts are not signatures. Bind the observed chain to
         // this Engine's admitted writer tail, not a newly self-consistent disk.
-        let writer = self.engine.journals.get(&self.disk.disk_id).ok_or_else(|| {
+        let expected_tail = self.plan.tails.get(&self.disk.disk_id).ok_or_else(|| {
             Error::new(ErrorCode::RecoveryRequired, "metadata member has no admitted writer anchor; recover it before certifying its retained closure")
         })?;
-        let expected_tail = writer.records().last().map(|(_, hash)| hash.clone());
-        let mut reader =
-            JournalFrameReader::new(BufReader::new(open_regular(&log_path(self.disk))?));
+        // No BufReader read-ahead: only the explicit one-byte probe may read beyond the captured frontier.
+        let mut reader = JournalFrameReader::new(open_regular(&log_path(self.disk))?);
         let mut previous_snapshot = None;
         let mut published_sequence = 0;
         let mut last_frame = None;
         let mut frames = 0;
         loop {
-            self.cancellation.checkpoint()?;
-            let Some((record, frame_hash)) = reader.next_record()? else {
+            (self.observe)(0)?;
+            if !self.plan.verify_eof && &last_frame == expected_tail {
+                break;
+            }
+            let Some((record, frame_hash)) = reader.next_record_observed(self.observe)? else {
                 break;
             };
             if frames == MAX_JOURNAL_FRAMES {
@@ -117,7 +130,7 @@ impl MemberScan<'_> {
             }
             frames += 1;
             self.report.journal_frames_verified += 1;
-            if record.sequence > self.engine.state.sequence {
+            if record.sequence > self.plan.state.sequence {
                 self.report.unpublished_journal_records += 1;
             } else if record.record_type == RecordType::Publication {
                 if record.sequence <= published_sequence {
@@ -137,6 +150,7 @@ impl MemberScan<'_> {
                 published_sequence = record.sequence;
             }
             last_frame = Some(frame_hash);
+            (self.progress)(self.report);
         }
         if reader.torn_tail {
             return Err(Error::new(
@@ -144,36 +158,37 @@ impl MemberScan<'_> {
                 "journal contains a torn tail",
             ));
         }
-        if previous_snapshot != self.engine.snapshot
-            || published_sequence != self.engine.state.sequence
+        if previous_snapshot != self.plan.snapshot || published_sequence != self.plan.state.sequence
         {
             return Err(Error::new(
                 ErrorCode::LogCorrupt,
                 "journal publication prefix differs from the admitted snapshot",
             ));
         }
-        if last_frame != expected_tail {
+        if &last_frame != expected_tail {
             return Err(Error::new(
                 ErrorCode::LogCorrupt,
                 "journal tail differs from the admitted writer",
             ));
         }
-        Ok(std::mem::take(&mut self.unavailable))
+        let extra = !self.plan.verify_eof && reader.probe_extra_observed(self.observe)?;
+        Ok((std::mem::take(&mut self.unavailable), extra))
     }
 
     fn publication(&mut self, record: &Record, frame_hash: &str) -> Result<Candidate> {
         let candidate: Candidate = self.object("candidate", &record.candidate_hash)?;
-        self.engine.verify_candidate_membership(&candidate)?;
-        if candidate.pool_id != self.engine.config.pool_id || candidate.sequence != record.sequence
-        {
+        self.plan.config.verify_candidate_membership(&candidate)?;
+        if candidate.pool_id != self.plan.config.pool_id || candidate.sequence != record.sequence {
             return Err(Error::new(
                 ErrorCode::PublicationInvalid,
                 "candidate pool or sequence differs from its journal",
             ));
         }
         let publication: Publication = self.object("publication", &record.object_hash)?;
-        let seal: PublicationSeal =
-            read_json(&publication_seal_path(self.disk, &record.candidate_hash))?;
+        let seal: PublicationSeal = read_json_observed(
+            &publication_seal_path(self.disk, &record.candidate_hash),
+            self.observe,
+        )?;
         verify_publication_seal(&candidate, &publication, &seal)?;
         let local = seal
             .receipts
@@ -198,15 +213,10 @@ impl MemberScan<'_> {
         let finalize_hash = object_hash("finalize", &publication.finalize)?;
         let _: Finalize = self.object("finalize", &finalize_hash)?;
         self.snapshot(&candidate.snapshot_hash, candidate.sequence)?;
-        for (id, hash) in &candidate.history_manifest_hashes {
-            self.history(hash, id)?;
-        }
-        if candidate.sequence == self.engine.state.sequence
-            && candidate
-                .history_manifest_hashes
-                .keys()
-                .ne(self.engine.state.histories.keys())
-        {
+        candidate.history_roots.validate()?;
+        let current = candidate.sequence == self.plan.state.sequence;
+        let histories = self.catalog_node(&candidate.history_roots, "", current)?;
+        if current && histories != self.plan.state.histories.len() {
             return Err(Error::new(
                 ErrorCode::ObjectCorrupt,
                 "current candidate history coverage differs from admitted State",
@@ -226,10 +236,10 @@ impl MemberScan<'_> {
             let id = &evidence.version.version_id;
             // Only the exact currently admitted descriptor/route can consume a
             // historical exception. A later complete publication clears it.
-            if self.engine.state.versions.get(id) != Some(&evidence.version) {
+            if self.plan.state.versions.get(id) != Some(&evidence.version) {
                 continue;
             }
-            let placement = &self.engine.state.placements[id];
+            let placement = &self.plan.state.placements[id];
             for slot in &evidence.placement.route_slot_ids {
                 if !placement.route_slot_ids.contains(slot) {
                     continue;
@@ -251,11 +261,18 @@ impl MemberScan<'_> {
         hash: &str,
     ) -> Result<T> {
         self.admit_object()?;
-        let value = load_object(self.disk, kind, hash).map_err(|error| {
-            error.context(
-                ErrorCode::ObjectCorrupt,
-                format!("{kind}/{hash} failed integrity scrub"),
-            )
+        let value = load_object_observed(self.disk, kind, hash, self.observe).map_err(|error| {
+            if matches!(
+                error.code(),
+                ErrorCode::OperationAborted | ErrorCode::ResourceLimit
+            ) {
+                error
+            } else {
+                error.context(
+                    ErrorCode::ObjectCorrupt,
+                    format!("{kind}/{hash} failed integrity scrub"),
+                )
+            }
         })?;
         self.report.metadata_objects_verified += 1;
         Ok(value)
@@ -267,18 +284,26 @@ impl MemberScan<'_> {
         hash: &str,
     ) -> Result<AuthenticatedMetadataObject> {
         self.admit_object()?;
-        let object = load_authenticated_object(self.disk, kind, hash).map_err(|error| {
-            error.context(
-                ErrorCode::ObjectCorrupt,
-                format!("{kind}/{hash} failed integrity scrub"),
-            )
-        })?;
+        let object = load_authenticated_object_observed(self.disk, kind, hash, self.observe)
+            .map_err(|error| {
+                if matches!(
+                    error.code(),
+                    ErrorCode::OperationAborted | ErrorCode::ResourceLimit
+                ) {
+                    error
+                } else {
+                    error.context(
+                        ErrorCode::ObjectCorrupt,
+                        format!("{kind}/{hash} failed integrity scrub"),
+                    )
+                }
+            })?;
         self.report.metadata_objects_verified += 1;
         Ok(object)
     }
 
     fn admit_object(&mut self) -> Result<()> {
-        self.cancellation.checkpoint()?;
+        (self.observe)(0)?;
         if self.loaded_objects == MAX_VERIFIED_OBJECTS {
             return Err(Error::new(
                 ErrorCode::ResourceLimit,
@@ -297,10 +322,20 @@ impl MemberScan<'_> {
         let snapshot: Snapshot = self.object("snapshot", hash)?;
         validate_snapshot_schema(&snapshot)?;
         same_sequence(snapshot.sequence, expected_sequence)?;
-        for hashes in snapshot.pages.values() {
-            for hash in hashes {
-                self.page(hash)?;
-            }
+        for reference in snapshot
+            .maps
+            .values()
+            .chain(std::iter::once(&snapshot.events))
+        {
+            self.history_node(reference, "")?;
+        }
+        let auth = (
+            "state-control-auth",
+            snapshot.control_auth.hash().to_owned(),
+        );
+        if !self.verified.contains_key(&auth) {
+            self.graph_object("state-control-auth", snapshot.control_auth.hash())?;
+            self.verified.insert(auth, Shape::ControlAuth);
         }
         self.verified
             .insert(address, Shape::Snapshot(snapshot.sequence));
@@ -312,10 +347,36 @@ impl MemberScan<'_> {
         if !self.verified.contains_key(&address) {
             let object = self.graph_object("state-page", hash)?;
             let summary = PageShape::read(&object)?;
-            self.verified.insert(address.clone(), Shape::Page(summary));
+            // A page can be referenced in multiple roles (including the shared
+            // empty leaf). Classify possible catalog bindings during its one
+            // physical read; a non-catalog business map is not a parse failure.
+            let catalog = object
+                .value()
+                .as_object()
+                .expect("invariant: PageShape admits a map")
+                .iter()
+                .map(|(id, value)| {
+                    Ok((
+                        id.clone(),
+                        crate::history_package::catalog_entry(id, value)?.to_owned(),
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()
+                .ok();
+            if let Some(entries) = &catalog {
+                if entries.len() > MAX_VERIFIED_OBJECTS - self.catalog_bindings {
+                    return Err(Error::new(
+                        ErrorCode::ResourceLimit,
+                        "integrity scrub catalog binding budget exhausted",
+                    ));
+                }
+                self.catalog_bindings += entries.len();
+            }
+            self.verified
+                .insert(address.clone(), Shape::Page { summary, catalog });
         }
-        let Some(Shape::Page(summary)) = self.verified.get(&address) else {
-            unreachable!("invariant: state-page addresses contain page summaries");
+        let Some(Shape::Page { summary, .. }) = self.verified.get(&address) else {
+            unreachable!("invariant: state-page addresses contain page summaries")
         };
         Ok(summary)
     }
@@ -345,23 +406,96 @@ impl MemberScan<'_> {
         Ok(())
     }
 
+    fn index(&mut self, reference: &Reference, prefix: &str) -> Result<(MetadataIndex, bool)> {
+        let address = ("metadata-index", reference.hash().to_owned());
+        if let Some(Shape::Index { node, complete }) = self.verified.get(&address) {
+            same_prefix(&node.prefix, prefix)?;
+            return Ok((node.clone(), *complete));
+        }
+        let node = decode_index(&self.graph_object("metadata-index", reference.hash())?)?;
+        same_prefix(&node.prefix, prefix)?;
+        self.verified.insert(
+            address,
+            Shape::Index {
+                node: node.clone(),
+                complete: false,
+            },
+        );
+        Ok((node, false))
+    }
+    fn complete_index(&mut self, hash: &str) {
+        let Some(Shape::Index { complete, .. }) =
+            self.verified.get_mut(&("metadata-index", hash.to_owned()))
+        else {
+            unreachable!("invariant: traversed index has a decoded cache entry")
+        };
+        *complete = true;
+    }
     fn history_node(&mut self, reference: &Reference, prefix: &str) -> Result<()> {
-        self.cancellation.checkpoint()?;
-        // References are parsed and validated by the one history graph decoder.
+        (self.observe)(0)?;
         match reference.kind() {
             ReferenceKind::Page => self.page(reference.hash())?.validate_at(prefix),
             ReferenceKind::Index => {
-                let address = ("history-index", reference.hash().to_owned());
-                if let Some(Shape::Index(found)) = self.verified.get(&address) {
-                    return same_prefix(found, prefix);
+                let (index, complete) = self.index(reference, prefix)?;
+                if !complete {
+                    for (digit, child) in index.children {
+                        self.history_node(&child, &format!("{prefix}{digit}"))?;
+                    }
+                    self.complete_index(reference.hash());
                 }
-                let index = decode_index(&self.graph_object("history-index", reference.hash())?)?;
-                same_prefix(&index.prefix, prefix)?;
-                for (digit, child) in &index.children {
-                    self.history_node(child, &format!("{prefix}{digit}"))?;
-                }
-                self.verified.insert(address, Shape::Index(index.prefix));
                 Ok(())
+            }
+        }
+    }
+    fn catalog_node(
+        &mut self,
+        reference: &Reference,
+        prefix: &str,
+        current: bool,
+    ) -> Result<usize> {
+        (self.observe)(0)?;
+        match reference.kind() {
+            ReferenceKind::Page => {
+                let address = ("state-page", reference.hash().to_owned());
+                self.page(reference.hash())?.validate_at(prefix)?;
+                let Some(Shape::Page { catalog, .. }) = self.verified.get(&address) else {
+                    unreachable!("invariant: catalog page was checked")
+                };
+                let entries = catalog.as_ref().ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::ObjectCorrupt,
+                        "referenced state-page is not a valid history catalog",
+                    )
+                })?;
+                // At most 128 typed bindings; no complete manifest/State cache.
+                let entries = entries.clone();
+                for (id, hash) in &entries {
+                    if current && !self.plan.state.histories.contains_key(id) {
+                        return Err(Error::new(
+                            ErrorCode::ObjectCorrupt,
+                            "current catalog contains an unadmitted history",
+                        ));
+                    }
+                    self.history(hash, id)?;
+                }
+                Ok(entries.len())
+            }
+            ReferenceKind::Index => {
+                let (index, _) = self.index(reference, prefix)?;
+                let mut count = 0usize;
+                for (digit, child) in index.children {
+                    count = count
+                        .checked_add(self.catalog_node(
+                            &child,
+                            &format!("{prefix}{digit}"),
+                            current,
+                        )?)
+                        .ok_or_else(|| {
+                            Error::new(ErrorCode::ResourceLimit, "history catalog count overflow")
+                        })?;
+                }
+                self.complete_index(reference.hash());
+                Ok(count)
             }
         }
     }
@@ -397,23 +531,16 @@ fn same_prefix(actual: &str, expected: &str) -> Result<()> {
     Ok(())
 }
 
-fn verify_saved_membership(engine: &Engine, disk: &DiskConfig) -> Result<()> {
-    let saved = ValidatedConfig::try_from(read_json::<Config>(
+fn verify_saved_membership(
+    plan: &IntegrityScrubPlan,
+    disk: &DiskConfig,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<()> {
+    let saved = ValidatedConfig::try_from(read_json_observed::<Config>(
         &disk.root.join("metadata/pool-membership/config.json"),
+        observe,
     )?)?;
-    fn identity(member: &DiskConfig) -> (&str, &str, u64) {
-        (&member.disk_id, &member.slot_id, member.binding_generation)
-    }
-    let expected: std::collections::BTreeSet<_> =
-        engine.config.metadata_members().map(identity).collect();
-    let actual: std::collections::BTreeSet<_> = saved.metadata_members().map(identity).collect();
-    if saved.pool_id != engine.config.pool_id || actual != expected {
-        return Err(Error::new(
-            ErrorCode::PublicationInvalid,
-            "saved metadata membership differs from admitted configuration",
-        ));
-    }
-    Ok(())
+    plan.config.verify_saved_metadata_membership(&saved)
 }
 
 #[cfg(test)]

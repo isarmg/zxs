@@ -10,7 +10,7 @@ fn first_occurrence_keeps_domains_order_and_collision_rejection() {
     let page_hash = page.hash.clone();
     let root = object("history-manifest", json!({"child": &page_hash}));
     let root_hash = root.hash.clone();
-    let other_domain = object("history-index", json!({}));
+    let other_domain = object("metadata-index", json!({}));
     let other_hash = other_domain.hash.clone();
     let unique = unique_prepared_objects(vec![
         page,
@@ -38,7 +38,12 @@ fn install_and_check_roots(objects: &[PreparedMetadataObject], members: &[DiskCo
         if object.kind() == "history-manifest" {
             for member in members {
                 // Each root is already complete when installed, not just at batch end.
-                bound_history_graph(std::slice::from_ref(member), &object.hash).unwrap();
+                bound_history_graph_observed(
+                    std::slice::from_ref(member),
+                    &object.hash,
+                    &mut |_| {},
+                )
+                .unwrap();
             }
         }
     }
@@ -66,12 +71,12 @@ fn real_histories_share_one_empty_page_and_rebuild_exact_roots() {
     }
     let state = engine.state();
     let (roots, objects) = prepare_history_manifests(state, MAX_METADATA).unwrap();
-    assert_eq!(roots.len(), 3);
+    assert_eq!(state.histories.len(), 3);
     let mut logical_count = 0;
     for id in state.histories.keys() {
         let manifest = HistoryManifest::from_state(state, id).unwrap();
         let (hash, graph) = graph::prepare(&manifest, MAX_METADATA).unwrap();
-        assert_eq!(hash, roots[id]);
+        assert_eq!(hash, roots.catalog_binding(id).unwrap().hash);
         logical_count += graph.len();
     }
     assert!(objects.len() < logical_count);

@@ -54,7 +54,7 @@ impl Engine {
     ) -> Result<Option<PathBuf>> {
         for slot in &placement.route_slot_ids {
             let disk = self.disk(slot)?;
-            validate_seal(&self.config, disk)?;
+            self.metadata_integrity.validate_seal(&self.config, disk)?;
             let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
             let source = crate::container_storage::content_path(&directory, version)?;
             if matching(&source, version)? {
@@ -100,7 +100,7 @@ impl Engine {
             }
         }
         for disk in &self.config.disks {
-            validate_seal(&self.config, disk)?;
+            self.metadata_integrity.validate_seal(&self.config, disk)?;
             let quarantine = disk.root.join("quarantine");
             let entries = match fs::read_dir(&quarantine) {
                 Ok(entries) => entries,
@@ -134,7 +134,7 @@ impl Engine {
             let mut damaged = Vec::new();
             for slot in &evidence.placement.route_slot_ids {
                 let disk = self.disk(slot)?;
-                validate_seal(&self.config, disk)?;
+                self.metadata_integrity.validate_seal(&self.config, disk)?;
                 let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
                 let intact = read_json::<FileVersion>(&directory.join("version.json"))
                     .is_ok_and(|stored| stored == *version)

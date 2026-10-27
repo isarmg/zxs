@@ -299,3 +299,48 @@ fn recovery_worker_panic_and_poison_keep_concrete_sources_without_panicking_drai
         assert_eq!(backend.inner.state.is_poisoned(), poison_state);
     }
 }
+
+#[test]
+fn concurrent_management_drains_wait_for_recovery_worker_exit() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (backend, _) = open_service(
+        &temporary.path().join("system"),
+        &temporary.path().join("management"),
+    )
+    .unwrap();
+    let (entry, entered) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let inner = Arc::clone(&backend.inner);
+    backend.inner.recovering.store(true, Ordering::SeqCst);
+    *backend.inner.recovery_worker.lock().unwrap() = Some(std::thread::spawn(move || {
+        inner.run_recovery(move |_| {
+            entry.send(()).unwrap();
+            released.recv_timeout(DEADLINE).unwrap();
+            Ok(())
+        });
+    }));
+    entered.recv_timeout(DEADLINE).unwrap();
+    let (enter, entered) = mpsc::channel();
+    let (finish, finished) = mpsc::channel();
+    let drains = (0..2)
+        .map(|_| {
+            let backend = Arc::clone(&backend);
+            let enter = enter.clone();
+            let finish = finish.clone();
+            std::thread::spawn(move || {
+                enter.send(()).unwrap();
+                finish.send(backend.drain_management()).unwrap();
+            })
+        })
+        .collect::<Vec<_>>();
+    entered.recv_timeout(DEADLINE).unwrap();
+    entered.recv_timeout(DEADLINE).unwrap();
+    let early = finished.recv_timeout(Duration::from_millis(100));
+    release.send(()).unwrap();
+    assert!(matches!(early, Err(mpsc::RecvTimeoutError::Timeout)));
+    for drain in drains {
+        finished.recv_timeout(DEADLINE).unwrap().unwrap();
+        drain.join().unwrap();
+    }
+    assert!(!backend.inner.recovering.load(Ordering::SeqCst));
+}

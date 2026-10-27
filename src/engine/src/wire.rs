@@ -160,9 +160,14 @@ impl Engine {
         let mut healthy = 0;
         for slot in &p.route_slot_ids {
             let d = self.disk(slot)?;
-            if validate_seal(&self.config, d).is_ok() {
+            if let Ok(identity) = self.metadata_integrity.validate_seal(&self.config, d) {
+                let metadata = d.metadata_member.then(|| {
+                    self.metadata_integrity
+                        .read_context(&self.config, &identity)
+                });
                 let dir = version_dir(d, &v.history_tree_id, version);
-                if crate::journal::verify_local_publication(&dir, v).is_ok()
+                if crate::journal::verify_local_publication_in_context(&dir, v, metadata.as_ref())
+                    .is_ok()
                     && verify_payload(&dir, v).is_ok()
                 {
                     healthy += 1;

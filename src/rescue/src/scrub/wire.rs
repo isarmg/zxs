@@ -9,6 +9,8 @@ use storage_engine::{
 #[derive(Serialize)]
 #[serialization(tag = "state", rename_all = "snake_case")]
 enum Outcome<'a> {
+    Running,
+    Expired,
     CompleteSuccess,
     PartialFailure,
     Cancelled,
@@ -66,6 +68,8 @@ impl<'a> From<&'a IntegrityScrubReport> for Report<'a> {
         } = report;
         let healthy = report.is_healthy();
         let outcome = match completion {
+            IntegrityScrubCompletion::Running => Outcome::Running,
+            IntegrityScrubCompletion::Superseded => Outcome::Expired,
             IntegrityScrubCompletion::Complete if healthy => Outcome::CompleteSuccess,
             IntegrityScrubCompletion::Complete => Outcome::PartialFailure,
             IntegrityScrubCompletion::Cancelled => Outcome::Cancelled,

@@ -174,26 +174,108 @@ pub(crate) fn read_bytes(path: &Path, maximum: usize) -> Result<Vec<u8>> {
     read_file_bytes(open_regular(path)?, maximum)
 }
 /// Apply the same metadata bound to an already validated, held regular file.
-pub(crate) fn read_file_bytes(mut f: File, maximum: usize) -> Result<Vec<u8>> {
-    let size = f.metadata()?.len();
-    if size > maximum as u64 {
+pub(crate) fn read_file_bytes(mut file: File, maximum: usize) -> Result<Vec<u8>> {
+    if file.metadata()?.len() > maximum as u64 {
         return Err(Error::new(
-            storage_contract::ErrorCode::ResourceLimit,
+            ErrorCode::ResourceLimit,
             "metadata input exceeds limit",
         ));
     }
-    let mut out = Vec::new();
-    (&mut f).take(maximum as u64 + 1).read_to_end(&mut out)?;
-    if out.len() > maximum {
+    let mut output = Vec::new();
+    (&mut file)
+        .take(maximum as u64 + 1)
+        .read_to_end(&mut output)?;
+    if output.len() > maximum {
         return Err(Error::new(
-            storage_contract::ErrorCode::ResourceLimit,
+            ErrorCode::ResourceLimit,
             "metadata grew beyond limit",
         ));
     }
-    Ok(out)
+    Ok(output)
 }
+
+/// Account actual successful reads in bounded bursts; zero is a cancellation checkpoint.
+pub(crate) fn read_observed_fill(
+    reader: &mut impl Read,
+    output: &mut [u8],
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<usize> {
+    read_fill_with_limit(reader, output, 64 * 1024, observe)
+}
+
+/// Share the exact EOF/error behavior without imposing scrub pacing on normal readers.
+pub(crate) fn read_fill_with_limit(
+    reader: &mut impl Read,
+    output: &mut [u8],
+    maximum_read: usize,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<usize> {
+    let mut filled = 0;
+    while filled < output.len() {
+        observe(0)?;
+        let end = filled + (output.len() - filled).min(maximum_read);
+        let count = match reader.read(&mut output[filled..end]) {
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if count == 0 {
+            break;
+        }
+        filled += count;
+        observe(count)?;
+    }
+    Ok(filled)
+}
+
+pub(crate) fn read_file_bytes_observed(
+    mut file: File,
+    maximum: usize,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<Vec<u8>> {
+    if file.metadata()?.len() > maximum as u64 {
+        return Err(Error::new(
+            ErrorCode::ResourceLimit,
+            "metadata input exceeds limit",
+        ));
+    }
+    let mut output = Vec::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let remaining = (maximum + 1 - output.len()).min(buffer.len());
+        let count = read_observed_fill(&mut file, &mut buffer[..remaining], observe)?;
+        output.extend_from_slice(&buffer[..count]);
+        if output.len() > maximum {
+            return Err(Error::new(
+                ErrorCode::ResourceLimit,
+                "metadata grew beyond limit",
+            ));
+        }
+        if count < remaining {
+            break;
+        }
+    }
+    Ok(output)
+}
+
+pub(crate) fn read_bytes_observed(
+    path: &Path,
+    maximum: usize,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<Vec<u8>> {
+    observe(0)?;
+    read_file_bytes_observed(open_regular(path)?, maximum, observe)
+}
+
 pub(crate) fn read_json<T: data_serialization::de::DeserializeOwned>(path: &Path) -> Result<T> {
     decode_strict(&read_bytes(path, MAX_METADATA)?).map_err(Into::into)
+}
+
+pub(crate) fn read_json_observed<T: data_serialization::de::DeserializeOwned>(
+    path: &Path,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<T> {
+    decode_strict(&read_bytes_observed(path, MAX_METADATA, observe)?).map_err(Into::into)
 }
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8], replace: bool) -> Result<()> {
     let path = absolute_path(path)?;
@@ -515,13 +597,32 @@ pub(crate) fn open_payload(
     version: &FileVersion,
 ) -> Result<(File, ChecksumManifest)> {
     let checks = read_bytes(&directory.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
-    if blake3::hash(&checks).to_hex().as_str() != version.checksum_manifest_hash {
+    let manifest = decode_checksum_manifest(&checks, version)?;
+    let file = open_payload_file(directory, version)?;
+    Ok((file, manifest))
+}
+
+pub(crate) fn read_checksum_manifest(
+    directory: &Path,
+    version: &FileVersion,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<ChecksumManifest> {
+    let checks = read_bytes_observed(
+        &directory.join("checksums.bin"),
+        MAX_CHECKSUM_MANIFEST,
+        observe,
+    )?;
+    decode_checksum_manifest(&checks, version)
+}
+
+fn decode_checksum_manifest(checks: &[u8], version: &FileVersion) -> Result<ChecksumManifest> {
+    if blake3::hash(checks).to_hex().as_str() != version.checksum_manifest_hash {
         return Err(Error::new(
             storage_contract::ErrorCode::ChecksumMismatch,
             "checksum manifest digest differs",
         ));
     }
-    let manifest = ChecksumManifest::decode(&checks)?;
+    let manifest = ChecksumManifest::decode(checks)?;
     if manifest.logical_size != version.logical_size
         || manifest.chunk_bytes != version.checksum_chunk_bytes
     {
@@ -530,59 +631,96 @@ pub(crate) fn open_payload(
             "checksum header differs from version",
         ));
     }
-    let file = open_regular(&crate::container_storage::content_path(directory, version)?)?;
+    Ok(manifest)
+}
+
+pub(crate) fn open_payload_file(directory: &Path, version: &FileVersion) -> Result<File> {
+    open_payload_file_observed(directory, version, &mut |_| Ok(()))
+}
+
+pub(crate) fn open_payload_file_observed(
+    directory: &Path,
+    version: &FileVersion,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<File> {
+    let file = open_regular(&crate::container_storage::content_path_observed(
+        directory, version, observe,
+    )?)?;
     if file.metadata()?.len() != version.logical_size {
         return Err(Error::new(
             storage_contract::ErrorCode::ChecksumMismatch,
             "payload length differs",
         ));
     }
-    Ok((file, manifest))
+    Ok(file)
 }
 
 pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Result<File> {
-    verify_payload_held_with(directory, version, || Ok(()))
+    let (file, manifest) = open_payload(directory, version)?;
+    verify_open_payload(file, manifest, version, usize::MAX, &mut |_| Ok(()))
 }
 
 /// Checkpoints never stand in for byte verification; scrub uses them to stop
 /// between bounded chunks while ordinary readers retain the same full proof.
+#[cfg(test)]
 pub(crate) fn verify_payload_held_with(
     directory: &Path,
     version: &FileVersion,
     mut checkpoint: impl FnMut() -> Result<()>,
 ) -> Result<File> {
     checkpoint()?;
-    let (mut file, manifest) = open_payload(directory, version)?;
+    let (file, manifest) = open_payload(directory, version)?;
+    verify_open_payload_observed(file, manifest, version, &mut |_| checkpoint())
+}
+
+pub(crate) fn verify_open_payload_observed(
+    file: File,
+    manifest: ChecksumManifest,
+    version: &FileVersion,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<File> {
+    verify_open_payload(file, manifest, version, 64 * 1024, observe)
+}
+
+fn verify_open_payload(
+    mut file: File,
+    manifest: ChecksumManifest,
+    version: &FileVersion,
+    maximum_read: usize,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<File> {
     let mut full = blake3::Hasher::new();
-    let mut buf = vec![0u8; manifest.chunk_bytes as usize];
+    let mut buffer = vec![0u8; manifest.chunk_bytes as usize];
     let mut remaining = manifest.logical_size;
     for expected in manifest.chunks {
-        checkpoint()?;
-        let n = remaining.min(buf.len() as u64) as usize;
-        file.read_exact(&mut buf[..n])?;
-        if blake3::hash(&buf[..n]).as_bytes() != &expected {
+        let size = remaining.min(buffer.len() as u64) as usize;
+        if read_fill_with_limit(&mut file, &mut buffer[..size], maximum_read, observe)? != size {
+            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
+        }
+        if blake3::hash(&buffer[..size]).as_bytes() != &expected {
             return Err(Error::new(
-                storage_contract::ErrorCode::ChecksumMismatch,
+                ErrorCode::ChecksumMismatch,
                 "payload chunk differs",
             ));
         }
-        full.update(&buf[..n]);
-        remaining -= n as u64;
+        full.update(&buffer[..size]);
+        remaining -= size as u64;
     }
-    let mut extra = [0u8; 1];
-    if file.read(&mut extra)? != 0 || file.metadata()?.len() != version.logical_size {
+    if read_fill_with_limit(&mut file, &mut [0u8; 1], maximum_read, observe)? != 0
+        || file.metadata()?.len() != version.logical_size
+    {
         return Err(Error::new(
-            storage_contract::ErrorCode::ChecksumMismatch,
+            ErrorCode::ChecksumMismatch,
             "payload length changed during verification",
         ));
     }
     if ContentHash::from_digest(full.finalize()) != version.content_hash {
         return Err(Error::new(
-            storage_contract::ErrorCode::ChecksumMismatch,
+            ErrorCode::ChecksumMismatch,
             "complete payload hash differs",
         ));
     }
-    checkpoint()?;
+    observe(0)?;
     Ok(file)
 }
 /// Byte verification held only until this preparation installs/syncs that inode.
@@ -796,8 +934,21 @@ pub(crate) fn disk_unavailable(disk: &DiskConfig) -> Result<bool> {
 }
 
 pub(crate) fn validate_seal(config: &ValidatedConfig, disk: &DiskConfig) -> Result<DiskSeal> {
-    let stored: DiskSeal = read_json(&disk.root.join("disk.json"))?;
+    validate_seal_observed(config, disk, &mut |_| Ok(()))
+}
+
+pub(crate) fn validate_seal_observed(
+    config: &ValidatedConfig,
+    disk: &DiskConfig,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<DiskSeal> {
+    let stored: DiskSeal = read_json_observed(&disk.root.join("disk.json"), observe)?;
     let live = identity(config, disk)?;
+    validate_stored_seal(&stored, &live)?;
+    Ok(live)
+}
+
+pub(crate) fn validate_stored_seal(stored: &DiskSeal, live: &DiskSeal) -> Result<()> {
     if stored.pool_id != live.pool_id
         || stored.disk_id != live.disk_id
         || stored.slot_id != live.slot_id
@@ -809,10 +960,10 @@ pub(crate) fn validate_seal(config: &ValidatedConfig, disk: &DiskConfig) -> Resu
     {
         return Err(Error::new(
             storage_contract::ErrorCode::DiskIdentityMismatch,
-            format!("disk {} identity changed", disk.slot_id),
+            format!("disk {} identity changed", live.slot_id),
         ));
     }
-    Ok(live)
+    Ok(())
 }
 pub(crate) fn available(root: &Path) -> Result<u64> {
     let s = rustix::fs::statvfs(root).map_err(std::io::Error::from)?;
@@ -820,7 +971,18 @@ pub(crate) fn available(root: &Path) -> Result<u64> {
 }
 
 pub fn offline_check(root: &Path) -> Result<CheckReport> {
-    let _seal: DiskSeal = read_json(&root.join("disk.json"))?;
+    offline_check_in_context(root, None)
+}
+
+pub(crate) fn offline_check_in_context(
+    root: &Path,
+    metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
+) -> Result<CheckReport> {
+    let loaded = read_json(&root.join("disk.json"));
+    let _seal: DiskSeal = match metadata {
+        Some(metadata) => metadata.seal(loaded)?,
+        None => loaded?,
+    };
     let mut report = CheckReport {
         checked_versions: 0,
         healthy_replicas: 0,
@@ -855,12 +1017,16 @@ pub fn offline_check(root: &Path) -> Result<CheckReport> {
                 let version: FileVersion = read_json(&directory.join("version.json"))?;
                 if let Some(file) = open_optional_regular(&directory.join("purged.json"))? {
                     let tombstone = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
-                    crate::journal::verify_tombstone_content(&directory, &version, &tombstone)?;
+                    crate::journal::verify_tombstone_content_in_context(
+                        &directory, &version, &tombstone, metadata,
+                    )?;
                     return Ok(true);
                 }
                 validate_id(&version.version_id, "ver")?;
                 name_policy::validate_name(&version.creation_name)?;
-                crate::journal::verify_local_publication(&directory, &version)?;
+                crate::journal::verify_local_publication_in_context(
+                    &directory, &version, metadata,
+                )?;
                 verify_payload(&directory, &version)?;
                 Ok(false)
             })();

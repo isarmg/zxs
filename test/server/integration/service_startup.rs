@@ -400,3 +400,30 @@ fn repeated_normal_daemon_stops_release_same_address_and_socket() {
         );
     }
 }
+
+#[test]
+fn incoherent_scrub_host_policy_fails_before_creating_management_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("system");
+    let output = Command::new(env!("CARGO_BIN_EXE_zxs"))
+        .arg("--root")
+        .arg(&root)
+        .args([
+            "--scrub-interval-seconds",
+            "2",
+            "--scrub-max-age-seconds",
+            "1",
+        ])
+        .env_remove("TOKIO_WORKER_THREADS")
+        .env_remove("RUST_LOG")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    // The daemon reports its typed outer error with Debug, preserving the
+    // invalid values rather than this error's Display description.
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(diagnostic.contains("InvalidScrubPolicy"), "{output:?}");
+    assert!(diagnostic.contains("interval_seconds: 2"), "{output:?}");
+    assert!(diagnostic.contains("max_age_seconds: 1"), "{output:?}");
+    assert!(!root.exists());
+}

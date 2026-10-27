@@ -304,7 +304,7 @@ impl Engine {
         }
         for (slot, bytes) in &per_slot {
             let disk = self.disk(slot)?;
-            validate_seal(&self.config, disk)?;
+            self.metadata_integrity.validate_seal(&self.config, disk)?;
             let capacity = disk
                 .capacity_bytes
                 .map(|limit| limit.saturating_sub(self.used_bytes(slot)))

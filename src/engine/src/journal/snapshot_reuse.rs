@@ -1,136 +1,24 @@
-//! Exact canonical-byte reuse, not a parsed-object or filesystem-stamp cache.
+//! Full exact dependency reads and immutable barriers remain until the scrub gate.
 use super::*;
-
-// An optimization budget, not an admission or disk-format limit. Larger roots
-// simply use complete preparation next time. No page bytes are retained here.
-const MAX_REUSE_DESCRIPTOR_BYTES: usize = 8 * 1024 * 1024;
-
 impl SnapshotReuse {
     pub(crate) fn matches_snapshot(&self, hash: &str) -> bool {
         self.hash == hash
     }
 }
 impl PreparedSnapshot {
-    pub(crate) fn reuse_basis(&self) -> Option<SnapshotReuse> {
-        let root = self
-            .objects
-            .last()
-            .expect("invariant: prepared snapshot ends with its root");
-        assert_eq!(
-            root.kind, "snapshot",
-            "invariant: prepared snapshot ends with its root"
-        );
-        if root.bytes.len() > MAX_REUSE_DESCRIPTOR_BYTES {
-            return None;
-        }
-        Some(SnapshotReuse {
+    pub(crate) fn reuse_basis(&self) -> SnapshotReuse {
+        self.root();
+        SnapshotReuse {
             descriptor: self.descriptor.clone(),
             hash: self.hash.clone(),
-            event_tail_start: self.event_tail_start,
-            page_maxima: self
-                .fields
-                .iter()
-                .map(|(field, plan)| (field.clone(), plan.max_page_bytes))
-                .collect(),
-        })
-    }
-    /// Frozen fresh bytes and verified reused bytes share one bounded visitor.
-    /// Only the requested field is reconstructed if no healthy source exists.
-    /// Callback failures (including collision/sync failure) never enter fallback.
-    pub(crate) fn visit_field_pages(
-        &self,
-        field: &str,
-        members: &[DiskConfig],
-        state: &State,
-        mut visit: impl FnMut(&str, &[u8]) -> Result<()>,
-    ) -> Result<()> {
-        let Some(plan) = self.fields.get(field) else {
-            assert!(
-                !self.descriptor.pages.contains_key(field),
-                "invariant: every snapshot field has an installation plan"
-            );
-            return Ok(());
-        };
-        let expected = self
-            .descriptor
-            .pages
-            .get(field)
-            .expect("invariant: every snapshot field plan has bound references");
-        assert_eq!(
-            plan.reused_pages + plan.objects.len(),
-            expected.len(),
-            "invariant: prepared and published pages match their references"
-        );
-        for (first_missing, hash) in expected.iter().enumerate() {
-            if first_missing >= plan.reused_pages {
-                let object = &self.objects[plan.objects.start + first_missing - plan.reused_pages];
-                assert_eq!(
-                    object.kind, "state-page",
-                    "invariant: field objects are state pages"
-                );
-                assert_eq!(
-                    &object.hash, hash,
-                    "invariant: prepared page matches its reference"
-                );
-                visit(hash, &object.bytes)?;
-                continue;
-            }
-            match read_published_page(members, hash, plan.max_page_bytes.min(self.maximum)) {
-                Ok(bytes) => visit(hash, &bytes)?,
-                Err(_) => {
-                    // Reconstruct once and verify the entire original sequence,
-                    // but never repeat successful callbacks for the prefix.
-                    // This invocation already completed their exact barriers.
-                    let mut index = 0;
-                    snapshot::reconstruct_field(state, field, self.maximum, |object| {
-                        if expected.get(index) != Some(&object.hash) {
-                            return Err(invalid_reconstruction());
-                        }
-                        let current = index;
-                        index += 1;
-                        observe_buffer(object.bytes.len());
-                        if current < first_missing {
-                            Ok(())
-                        } else {
-                            visit(&object.hash, &object.bytes)
-                        }
-                    })?;
-                    if index != expected.len() {
-                        return Err(invalid_reconstruction());
-                    }
-                    return Ok(());
-                }
-            }
+            fields: self.fields.clone(),
+            auth_bytes: self.auth_bytes,
         }
-        Ok(())
     }
-    pub(crate) fn store(&self, members: &[DiskConfig], state: &State) -> Result<String> {
-        self.store_with(members, state, |disk, hash, bytes| {
-            write_object_bytes(disk, "state-page", hash, bytes)
-        })
+    pub(crate) fn content_state_budget(&self) -> Option<usize> {
+        self.fields["content_states"].maximum_tombstone_tail()
     }
-    fn store_with(
-        &self,
-        members: &[DiskConfig],
-        state: &State,
-        mut page: impl FnMut(&DiskConfig, &str, &[u8]) -> Result<()>,
-    ) -> Result<String> {
-        for field in self.fields.keys() {
-            self.visit_field_pages(field, members, state, |hash, bytes| {
-                if !members.is_empty() && bytes.len() > MAX_METADATA {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::ResourceLimit,
-                        "serialized metadata exceeds reader limit",
-                    ));
-                }
-                for disk in members {
-                    page(disk, hash, bytes)?;
-                }
-                Ok(())
-            })?;
-        }
-        // A root cannot become durable before every exact page has completed
-        // its per-member file and directory barriers, including reused pages.
+    fn root(&self) -> &PreparedMetadataObject {
         let root = self
             .objects
             .last()
@@ -141,68 +29,184 @@ impl PreparedSnapshot {
         );
         assert_eq!(
             root.hash, self.hash,
-            "invariant: prepared snapshot root matches its hash"
+            "invariant: prepared snapshot root hash matches"
         );
-        root.store(members)?;
+        root
+    }
+    pub(crate) fn store(&self, members: &[DiskConfig], state: &State) -> Result<String> {
+        self.store_with(members, state, |disk, kind, hash, bytes| {
+            write_object_bytes(disk, kind, hash, bytes)
+        })
+    }
+    fn store_with(
+        &self,
+        members: &[DiskConfig],
+        state: &State,
+        mut install: impl FnMut(&DiskConfig, &str, &str, &[u8]) -> Result<()>,
+    ) -> Result<String> {
+        let root = self.root();
+        assert_eq!(
+            self.fields.len(),
+            self.descriptor.maps.len() + 1,
+            "invariant: every snapshot field has an installation plan"
+        );
+        let prepared = self
+            .objects
+            .iter()
+            .map(|object| ((object.kind, object.hash.as_str()), object))
+            .collect::<BTreeMap<_, _>>();
+        // This bounded, invocation-local set records completed barriers only;
+        // exhaustion repeats work rather than dropping verification.
+        let mut installed = BTreeSet::new();
+        let mut fault = |error: &Error| {
+            if let Some(integrity) = &self.metadata_integrity {
+                integrity.fault(error);
+            }
+        };
+        for (field, root) in &self.fields {
+            let mut rebuilt = None;
+            root.visit(&mut |reference, maximum| {
+                let kind = reference.kind().domain();
+                let hash = reference.hash();
+                let address = (kind, hash.to_owned());
+                if installed.contains(&address) {
+                    return Ok(());
+                }
+                if let Some(object) = prepared.get(&(kind, hash)) {
+                    for disk in members {
+                        install(disk, object.kind, &object.hash, &object.bytes)?;
+                    }
+                    if installed.len() < 16_384 {
+                        installed.insert(address);
+                    }
+                    return Ok(());
+                }
+                let bytes = match read_published_object(
+                    members,
+                    kind,
+                    hash,
+                    maximum.min(self.maximum),
+                    &mut fault,
+                ) {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        if rebuilt.is_none() {
+                            let (candidate, objects) =
+                                snapshot::reconstruct_field(state, field, self.maximum)?;
+                            if candidate.reference() != root.reference() {
+                                return Err(invalid_reconstruction());
+                            }
+                            rebuilt = Some(
+                                objects
+                                    .into_iter()
+                                    .map(|object| {
+                                        ((object.kind, object.hash.clone()), object.bytes)
+                                    })
+                                    .collect::<BTreeMap<_, _>>(),
+                            );
+                        }
+                        rebuilt
+                            .as_ref()
+                            .expect("invariant: failed source reconstructed once")
+                            .get(&(kind, hash.to_owned()))
+                            .expect("invariant: exact reconstructed root covers every dependency")
+                            .clone()
+                    }
+                };
+                for disk in members {
+                    install(disk, kind, hash, &bytes)?;
+                }
+                if installed.len() < 16_384 {
+                    installed.insert(address);
+                }
+                Ok(())
+            })?;
+        }
+        let hash = self.descriptor.control_auth.hash();
+        if let Some(object) = prepared.get(&("state-control-auth", hash)) {
+            for disk in members {
+                install(disk, object.kind, &object.hash, &object.bytes)?;
+            }
+        } else {
+            let bytes = match read_published_object(
+                members,
+                "state-control-auth",
+                hash,
+                self.auth_bytes.min(self.maximum),
+                &mut fault,
+            ) {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    let object = PreparedMetadataObject::new(
+                        "state-control-auth",
+                        &state.control_auth,
+                        self.maximum,
+                    )?;
+                    if object.hash != hash {
+                        return Err(invalid_reconstruction());
+                    }
+                    object.bytes
+                }
+            };
+            for disk in members {
+                install(disk, "state-control-auth", hash, &bytes)?;
+            }
+        }
+        for disk in members {
+            install(disk, root.kind, &root.hash, &root.bytes)?;
+        }
         Ok(self.hash.clone())
     }
 }
 fn invalid_reconstruction() -> Error {
     Error::new(
-        storage_contract::ErrorCode::ObjectCorrupt,
-        "reconstructed snapshot field differs from its exact bound references",
+        ErrorCode::ObjectCorrupt,
+        "reconstructed snapshot graph differs from its exact bound root",
     )
 }
-
-fn read_published_page(members: &[DiskConfig], hash: &str, maximum: usize) -> Result<Vec<u8>> {
-    let mut first_error = None;
+fn read_published_object(
+    members: &[DiskConfig],
+    kind: &str,
+    hash: &str,
+    maximum: usize,
+    fault: &mut impl FnMut(&Error),
+) -> Result<Vec<u8>> {
+    let mut first = None;
     for disk in members {
-        let loaded = (|| {
-            let bytes =
-                object_storage::read_object_bytes_bounded(disk, "state-page", hash, maximum)?;
-            observe_buffer(bytes.len());
-            // encode_hashed_object("state-page", page) hashes exactly these
-            // canonical bytes after this domain prefix. Expected hashes here
-            // originate in a successful same-process publication, never in a
-            // generic semantic-hash load or an untrusted restart cache. Under
-            // that provenance, raw digest equality proves byte identity with
-            // the original already-valid JSON; parsing would add no evidence.
+        let result = (|| {
+            let bytes = object_storage::read_object_bytes_bounded(disk, kind, hash, maximum)?;
+            #[cfg(test)]
+            REUSED_OBJECT_PEAK_BYTES.with(|peak| peak.set(peak.get().max(bytes.len())));
+            // Provenance is exact current-process encoder output, not a generic
+            // on-disk semantic hash. Raw equality proves those canonical bytes.
             let mut digest = blake3::Hasher::new();
-            digest.update(b"zxs:state-page\0");
+            digest.update(b"zxs:");
+            digest.update(kind.as_bytes());
+            digest.update(b"\0");
             digest.update(&bytes);
             if digest.finalize().to_hex().as_str() != hash {
                 return Err(Error::new(
-                    storage_contract::ErrorCode::ObjectCorrupt,
-                    "published snapshot page bytes differ",
+                    ErrorCode::ObjectCorrupt,
+                    "published metadata bytes differ",
                 ));
             }
             Ok(bytes)
         })();
-        match loaded {
+        match result {
             Ok(bytes) => return Ok(bytes),
             Err(error) => {
-                first_error.get_or_insert(error);
+                fault(&error);
+                first.get_or_insert(error);
             }
         }
     }
-    Err(first_error.unwrap_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::ObjectCorrupt,
-            "published snapshot page has no source",
-        )
+    Err(first.unwrap_or_else(|| {
+        Error::new(ErrorCode::ObjectCorrupt, "published metadata has no source")
     }))
 }
-#[inline]
-fn observe_buffer(bytes: usize) {
-    #[cfg(test)]
-    REUSED_PAGE_PEAK_BYTES.with(|peak| peak.set(peak.get().max(bytes)));
-    #[cfg(not(test))]
-    let _ = bytes;
-}
+
 #[cfg(test)]
-thread_local! {
-    pub(super) static REUSED_PAGE_PEAK_BYTES: std::cell::Cell<usize> = const {std::cell::Cell::new(0)};
-}
+thread_local! { static REUSED_OBJECT_PEAK_BYTES:std::cell::Cell<usize>=const{std::cell::Cell::new(0)}; }
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/journal/snapshot_reuse_tests.rs"]
 mod tests;

@@ -231,7 +231,7 @@ async fn blocked_replication_never_blocks_login_and_queued_sessions_revalidate()
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let held_engine = engine.clone();
     let hold = std::thread::spawn(move || {
-        held_engine.test_with_engine_locked(|| {
+        held_engine.test_with_engine_locked(|_| {
             held_tx.send(()).unwrap();
             release_rx.recv().unwrap();
         })
@@ -898,6 +898,7 @@ async fn preset_web_setup_is_lazy_digest_bound_and_preserves_custom_configuratio
             ]),
             allow_development_setup: true,
             retained_workspace_limits: None,
+            scrub_policy: crate::integrity_scrub::IntegrityScrubPolicy::default(),
         },
     )
     .unwrap();

@@ -1,229 +1,109 @@
-//! Page-at-a-time encoding and exact unchanged-field references.
+//! Typed dirty keys feed the shared canonical radix. Every map has a fixed root.
 use super::*;
+use crate::metadata_map::{Encoder, MapRoot, ProofMeasure, RootFormat};
+use std::{borrow::Cow, collections::BTreeSet};
+use storage_contract::{MapChanges, SequenceChanges};
 
-// One schema drives preparation and fallback field dispatch. Exhaustive State
-// matching below makes new fields a compile-time classification obligation.
 macro_rules! state_map_fields {
     ($consumer:ident) => {
         $consumer! {
-            required {
-                repositories, histories, branches, commits, versions, placements,
-                merge_links, history_boundaries, content_states, operations, plans,
-                placement_rules, protection_policies, operation_principals,
-            }
-            optional {
-                file_selections, directory_branches, directory_trees, file_write_origins,
-                file_contexts, file_path_nodes, file_metadata_nodes, file_branch_merges,
-                file_branch_aliases, file_node_parents, file_path_notes,
-                directory_tree_selections, file_locations, file_backup_paths,
-                file_backup_policies, directory_selections, file_notes, version_notes, file_names,
-            }
+            repositories,histories,branches,commits,versions,placements,merge_links,
+            history_boundaries,content_states,operations,plans,placement_rules,
+            protection_policies,operation_principals,file_selections,directory_branches,
+            directory_trees,file_write_origins,file_contexts,file_path_nodes,file_metadata_nodes,
+            file_branch_merges,file_branch_aliases,file_node_parents,file_path_notes,
+            directory_tree_selections,file_locations,file_backup_paths,file_backup_policies,
+            directory_selections,file_notes,version_notes,file_names,
         }
     };
 }
-
-#[cfg(test)]
-struct CountedPage<'a, K, V> {
-    field: &'a str,
-    page: &'a BTreeMap<K, V>,
+/// Heterogeneous State key domains share the same radix implementation. The
+/// aggregate retains their types instead of parsing serialized leaf keys on reuse.
+#[derive(Clone)]
+pub(super) enum FieldRoot {
+    Text(MapRoot),
+    Operations(MapRoot<OperationId>),
+    Events(MapRoot<usize>),
 }
-#[cfg(test)]
-impl<K: Serialize, V: Serialize> Serialize for CountedPage<'_, K, V> {
-    fn serialize<S: data_serialization::Serializer>(
+macro_rules! field_root {
+    ($value:expr, $root:ident => $expression:expr) => {
+        match $value {
+            FieldRoot::Text($root) => $expression,
+            FieldRoot::Operations($root) => $expression,
+            FieldRoot::Events($root) => $expression,
+        }
+    };
+}
+impl FieldRoot {
+    pub(super) fn reference(&self) -> &crate::metadata_map::Reference {
+        field_root!(self, root => root.reference())
+    }
+    pub(super) fn maximum_object_bytes(&self) -> usize {
+        field_root!(self, root => root.maximum_object_bytes())
+    }
+    pub(super) fn maximum_tombstone_tail(&self) -> Option<usize> {
+        field_root!(self, root => root.maximum_tombstone_tail())
+    }
+    pub(super) fn visit(
         &self,
-        serializer: S,
-    ) -> std::result::Result<S::Ok, S::Error> {
-        SNAPSHOT_FIELD_SERIALIZATIONS.with(|counts| {
-            *counts
-                .borrow_mut()
-                .entry(self.field.to_owned())
-                .or_default() += 1;
-        });
-        self.page.serialize(serializer)
+        visit: &mut impl FnMut(&crate::metadata_map::Reference, usize) -> Result<()>,
+    ) -> Result<()> {
+        field_root!(self, root => root.visit(visit))
+    }
+    fn text(&self) -> &MapRoot {
+        let Self::Text(root) = self else {
+            unreachable!("invariant: field declaration preserves its String key domain")
+        };
+        root
+    }
+    fn operations(&self) -> &MapRoot<OperationId> {
+        let Self::Operations(root) = self else {
+            unreachable!("invariant: operation fields preserve typed identifiers")
+        };
+        root
+    }
+    fn events(&self) -> &MapRoot<usize> {
+        let Self::Events(root) = self else {
+            unreachable!("invariant: event field preserves typed ordinals")
+        };
+        root
     }
 }
-
-trait SnapshotKey {
-    fn partition_hash(&self) -> blake3::Hash;
+struct Builder {
+    encoder: Encoder,
+    fields: BTreeMap<String, FieldRoot>,
 }
-impl SnapshotKey for String {
-    fn partition_hash(&self) -> blake3::Hash {
-        blake3::hash(self.as_bytes())
-    }
-}
-impl SnapshotKey for OperationId {
-    fn partition_hash(&self) -> blake3::Hash {
-        blake3::hash(self.to_string().as_bytes())
-    }
-}
-impl<T: SnapshotKey> SnapshotKey for &T {
-    fn partition_hash(&self) -> blake3::Hash {
-        (*self).partition_hash()
-    }
-}
-
-/// The sole typed map partitioner. The callback never retains the borrowed
-/// entry map, and fallback installation can discard each encoded page in turn.
-fn encode_map<K: SnapshotKey + Ord + Serialize, V: Serialize>(
-    field: &str,
-    entries: impl IntoIterator<Item = (K, V)>,
-    maximum: usize,
-    mut emit: impl FnMut(PreparedMetadataObject, usize) -> Result<()>,
-) -> Result<()> {
-    let mut page = BTreeMap::new();
-    let mut flush = |page: &mut BTreeMap<K, V>| -> Result<()> {
-        #[cfg(test)]
-        let value = CountedPage { field, page };
-        #[cfg(not(test))]
-        let value = &*page;
-        #[cfg(not(test))]
-        let _ = field;
-        emit(
-            PreparedMetadataObject::new("state-page", &value, maximum)?,
-            page.len(),
-        )?;
-        page.clear();
-        Ok(())
-    };
-    for (key, value) in entries {
-        let boundary = key.partition_hash().as_bytes()[0] & 31 == 0;
-        if !page.is_empty() && (page.len() == STATE_PAGE_ENTRIES || boundary) {
-            flush(&mut page)?;
-        }
-        page.insert(key, value);
-        #[cfg(test)]
-        SNAPSHOT_PEAK_PAGE_ENTRIES.with(|peak| peak.set(peak.get().max(page.len())));
-    }
-    if !page.is_empty() {
-        flush(&mut page)?;
-    }
-    Ok(())
-}
-
-struct SnapshotBuilder {
-    maximum: usize,
-    pages: BTreeMap<String, Vec<String>>,
-    objects: Vec<PreparedMetadataObject>,
-    fields: BTreeMap<String, SnapshotFieldPlan>,
-}
-impl SnapshotBuilder {
-    fn map<K: SnapshotKey + Ord + Serialize, V: Serialize>(
+impl Builder {
+    fn map<'a, K: Ord + Clone + 'a, V: 'a>(
         &mut self,
         field: &str,
-        entries: impl IntoIterator<Item = (K, V)>,
-    ) -> Result<()> {
-        let start = self.objects.len();
-        let mut max_page_bytes = 0;
-        let mut hashes = Vec::new();
-        encode_map(field, entries, self.maximum, |object, _| {
-            max_page_bytes = max_page_bytes.max(object.bytes.len());
-            hashes.push(object.hash.clone());
-            self.objects.push(object);
-            Ok(())
-        })?;
-        self.fields.insert(
-            field.to_owned(),
-            SnapshotFieldPlan {
-                reused_pages: 0,
-                objects: start..self.objects.len(),
-                max_page_bytes,
-            },
-        );
-        self.pages.insert(field.to_owned(), hashes);
-        Ok(())
-    }
-    /// Append preserves every completed page. Re-encode the former tail page
-    /// with the suffix so hash-anchor and forced-size boundaries stay identical.
-    fn events(
-        &mut self,
-        state: &State,
-        previous: Option<(&State, &SnapshotReuse)>,
-    ) -> Result<usize> {
-        let previous =
-            previous.map(|(before, basis)| (basis, state.events.changes_since(&before.events)));
-        let (start, mut max_page_bytes) = match previous {
-            Some((basis, storage_contract::SequenceChanges::Append { start })) => {
-                assert!(
-                    self.reuse("events", basis)?,
-                    "invariant: snapshot basis contains events"
-                );
-                if state.events.len() == start {
-                    return Ok(basis.event_tail_start);
-                }
-                self.pages
-                    .get_mut("events")
-                    .expect("invariant: reused events have pages")
-                    .pop();
-                (basis.event_tail_start, basis.page_maxima["events"])
-            }
-            Some((_, storage_contract::SequenceChanges::All)) | None => {
-                self.pages.insert("events".into(), Vec::new());
-                (0, 0)
-            }
+        entries: impl Iterator<Item = (&'a K, &'a V)>,
+        previous: Option<(MapChanges<K>, &MapRoot<K>)>,
+        get: impl Fn(&K) -> Option<&'a V>,
+        encode: impl Fn(&V) -> Result<json_codec::Value>,
+        key_text: &impl Fn(&K) -> Cow<'_, str>,
+    ) -> Result<MapRoot<K>> {
+        let measure = if field == "content_states" {
+            ProofMeasure::ContentStates
+        } else {
+            ProofMeasure::Plain
         };
-        let object_start = self.objects.len();
-        let hashes = self
-            .pages
-            .get_mut("events")
-            .expect("invariant: events have a page list");
-        let reused_pages = hashes.len();
-        let mut offset = start;
-        let mut tail_start = start;
-        encode_map(
-            "events",
-            state.events[start..]
-                .iter()
-                .enumerate()
-                .map(|(index, event)| (format!("{:020}", start + index), event)),
-            self.maximum,
-            |object, count| {
-                tail_start = offset;
-                offset += count;
-                max_page_bytes = max_page_bytes.max(object.bytes.len());
-                hashes.push(object.hash.clone());
-                self.objects.push(object);
-                Ok(())
-            },
-        )?;
-        self.fields.insert(
-            "events".into(),
-            SnapshotFieldPlan {
-                reused_pages,
-                objects: object_start..self.objects.len(),
-                max_page_bytes,
-            },
-        );
-        Ok(tail_start)
-    }
-    fn reuse(&mut self, field: &str, basis: &SnapshotReuse) -> Result<bool> {
-        let (Some(pages), Some(&max_page_bytes)) = (
-            basis.descriptor.pages.get(field),
-            basis.page_maxima.get(field),
-        ) else {
-            return Ok(false);
-        };
-        if max_page_bytes > self.maximum {
-            return Err(Error::new(
-                storage_contract::ErrorCode::ResourceLimit,
-                format!(
-                    "serialized metadata exceeds {} byte reader limit",
-                    self.maximum
-                ),
-            ));
+        match previous {
+            Some((MapChanges::Keys(keys), basis)) => {
+                self.encoder
+                    .update_typed(basis, (*keys).clone(), measure, key_text, |key| {
+                        get(key).map(&encode).transpose()
+                    })
+            }
+            Some((MapChanges::All, _)) | None => {
+                let entries = entries
+                    .map(|(key, value)| Ok((key.clone(), encode(value)?)))
+                    .collect::<Result<Vec<_>>>()?;
+                self.encoder.map_typed(entries, measure, key_text)
+            }
         }
-        self.pages.insert(field.to_owned(), pages.clone());
-        self.fields.insert(
-            field.to_owned(),
-            SnapshotFieldPlan {
-                reused_pages: pages.len(),
-                objects: self.objects.len()..self.objects.len(),
-                max_page_bytes,
-            },
-        );
-        Ok(true)
     }
 }
-
 pub(super) fn prepare(state: &State, maximum: usize) -> Result<PreparedSnapshot> {
     prepare_inner(state, maximum, None)
 }
@@ -243,121 +123,287 @@ fn prepare_inner(
     maximum: usize,
     previous: Option<(&State, &SnapshotReuse)>,
 ) -> Result<PreparedSnapshot> {
-    #[cfg(test)]
-    SNAPSHOT_PEAK_PAGE_ENTRIES.with(|peak| peak.set(0));
-    let mut builder = SnapshotBuilder {
-        maximum,
-        pages: BTreeMap::new(),
-        objects: Vec::new(),
+    let mut builder = Builder {
+        encoder: Encoder::new(maximum),
         fields: BTreeMap::new(),
     };
-    macro_rules! map_fields {
-        (required { $($required:ident,)* } optional { $($optional:ident,)* }) => {{
-            let State {
-                sequence: _, business_generation: _, topology_generation: _, control_auth: _, events: _,
-                directory_selection_generations: _, file_selection_generations: _,
-                $($required,)* $($optional,)*
-            } = state;
-            $(if !match previous {
-                Some((before, basis)) if $required.changes_since(&before.$required).is_empty() => builder.reuse(stringify!($required), basis)?,
-                _ => false,
-            } { builder.map(stringify!($required), $required.iter())?; })*
-            $(if !$optional.is_empty() && !match previous {
-                Some((before, basis)) if $optional.changes_since(&before.$optional).is_empty() => builder.reuse(stringify!($optional), basis)?,
-                _ => false,
-            } { builder.map(stringify!($optional), $optional.iter())?; })*
+    macro_rules! typed_field {
+        ($field:ident, $variant:ident, $access:ident, $text:expr) => {{
+            let root = builder.map(
+                stringify!($field),
+                state.$field.iter(),
+                previous.map(|(before, basis)| {
+                    (
+                        state.$field.changes_since(&before.$field),
+                        basis.fields[stringify!($field)].$access(),
+                    )
+                }),
+                |key| state.$field.get(key),
+                |value| encode_value(stringify!($field), value),
+                $text,
+            )?;
+            builder
+                .fields
+                .insert(stringify!($field).into(), FieldRoot::$variant(root));
         }};
     }
-    state_map_fields!(map_fields);
-    macro_rules! string_counter_map {
+    macro_rules! field {
+        (operations) => {
+            typed_field!(operations, Operations, operations, &|key: &OperationId| {
+                Cow::Owned(key.to_string())
+            })
+        };
+        (operation_principals) => {
+            typed_field!(
+                operation_principals,
+                Operations,
+                operations,
+                &|key: &OperationId| Cow::Owned(key.to_string())
+            )
+        };
         ($field:ident) => {
-            if !state.$field.is_empty()
-                && !match previous {
-                    Some((before, basis))
-                        if state.$field.changes_since(&before.$field).is_empty() =>
-                    {
-                        builder.reuse(stringify!($field), basis)?
-                    }
-                    _ => false,
-                }
-            {
-                builder.map(
-                    stringify!($field),
-                    state
-                        .$field
-                        .iter()
-                        .map(|(key, value)| (key, value.to_string())),
-                )?;
-            }
+            typed_field!($field, Text, text, &|key: &String| Cow::Borrowed(
+                key.as_str()
+            ))
         };
     }
-    string_counter_map!(directory_selection_generations);
-    string_counter_map!(file_selection_generations);
-    let event_tail_start = builder.events(state, previous)?;
-    let mut scalars = json_codec::Map::new();
-    scalars.insert("sequence".into(), state.sequence.to_string().into());
-    scalars.insert(
-        "business_generation".into(),
-        state.business_generation.to_string().into(),
-    );
-    scalars.insert(
-        "topology_generation".into(),
-        state.topology_generation.to_string().into(),
-    );
-    if let Some(json_codec::Value::Object(map)) = &state.control_auth {
-        builder.map("control_auth", map.iter())?;
-    } else {
-        scalars.insert(
-            "control_auth".into(),
-            json_codec::to_value(&state.control_auth)?,
-        );
+    macro_rules! fields {
+        ($($field:ident,)*) => {{
+            let State { sequence:_, business_generation:_, topology_generation:_, control_auth:_, events:_, directory_selection_generations:_, file_selection_generations:_, $($field:_,)* } = state;
+            $(field!($field);)*
+        }};
     }
-    let descriptor = Snapshot {
-        sequence: state.sequence,
-        pages: builder.pages,
-        scalars,
+    state_map_fields!(fields);
+    macro_rules! counters { ($($field:ident),*) => { $(
+        let root = builder.map(stringify!($field), state.$field.iter(),
+            previous.map(|(before,basis)| (state.$field.changes_since(&before.$field), basis.fields[stringify!($field)].text())),
+            |key| state.$field.get(key), |value| encode_value(stringify!($field), &value.to_string()),
+            &|key: &String| Cow::Borrowed(key.as_str()))?;
+        builder.fields.insert(stringify!($field).into(), FieldRoot::Text(root));
+    )* }; }
+    counters!(directory_selection_generations, file_selection_generations);
+    fn ordinal(index: &usize) -> Cow<'_, str> {
+        Cow::Owned(format!("{index:020}"))
+    }
+    let events =
+        match previous.map(|(before, basis)| (state.events.changes_since(&before.events), basis)) {
+            Some((SequenceChanges::Append { start }, basis)) => builder.encoder.update_typed(
+                basis.fields["events"].events(),
+                (start..state.events.len()).collect::<BTreeSet<_>>(),
+                ProofMeasure::Plain,
+                &ordinal,
+                |index| {
+                    state
+                        .events
+                        .get(*index)
+                        .map(|event| encode_value("events", event))
+                        .transpose()
+                },
+            )?,
+            Some((SequenceChanges::All, _)) | None => builder.encoder.map_typed(
+                state
+                    .events
+                    .iter()
+                    .enumerate()
+                    .map(|(index, event)| Ok((index, encode_value("events", event)?)))
+                    .collect::<Result<Vec<_>>>()?,
+                ProofMeasure::Plain,
+                &ordinal,
+            )?,
+        };
+    let maps = builder
+        .fields
+        .iter()
+        .map(|(field, root)| (field.clone(), root.reference().clone()))
+        .collect::<BTreeMap<_, _>>();
+    let events_reference = events.reference().clone();
+    builder
+        .fields
+        .insert("events".into(), FieldRoot::Events(events));
+    let (control_auth, auth_bytes) = match previous {
+        Some((before, basis)) if state.control_auth == before.control_auth => {
+            (basis.descriptor.control_auth.clone(), basis.auth_bytes)
+        }
+        _ => {
+            let object = PreparedMetadataObject::new(
+                "state-control-auth",
+                &state.control_auth,
+                maximum.min(MAX_METADATA),
+            )?;
+            let reference = ControlAuthReference {
+                kind: ControlAuthKind::StateControlAuth,
+                hash: object.hash.clone(),
+            };
+            let bytes = object.bytes.len();
+            builder.encoder.prepared(object);
+            (reference, bytes)
+        }
     };
-    let root = PreparedMetadataObject::new("snapshot", &descriptor, maximum)?;
-    let hash = root.hash.clone();
-    builder.objects.push(root);
+    let descriptor = Snapshot {
+        format: RootFormat::RadixMapRoots,
+        sequence: state.sequence,
+        business_generation: state.business_generation,
+        topology_generation: state.topology_generation,
+        maps,
+        events: events_reference,
+        control_auth,
+    };
+    finish(builder, descriptor, auth_bytes, maximum)
+}
+fn finish(
+    mut builder: Builder,
+    descriptor: Snapshot,
+    auth_bytes: usize,
+    maximum: usize,
+) -> Result<PreparedSnapshot> {
+    let largest = builder
+        .fields
+        .values()
+        .map(FieldRoot::maximum_object_bytes)
+        .max()
+        .unwrap_or(0)
+        .max(auth_bytes);
+    if largest > maximum {
+        return Err(Error::new(
+            ErrorCode::ResourceLimit,
+            "reused metadata exceeds the reader budget",
+        ));
+    }
+    let hash = builder.encoder.object("snapshot", &descriptor)?;
     Ok(PreparedSnapshot {
+        metadata_integrity: None,
         descriptor,
         hash,
-        objects: builder.objects,
+        objects: builder.encoder.finish(),
         fields: builder.fields,
-        event_tail_start,
+        auth_bytes,
         maximum,
     })
 }
-
-/// Reconstruct only one field, keeping the original typed wire rules. The
-/// caller binds every emitted page to the already published reference sequence.
+fn encode_value<T: Serialize>(field: &str, value: &T) -> Result<json_codec::Value> {
+    #[cfg(test)]
+    SNAPSHOT_FIELD_SERIALIZATIONS.with(|counts| {
+        *counts.borrow_mut().entry(field.into()).or_default() += 1;
+    });
+    #[cfg(not(test))]
+    let _ = field;
+    Ok(json_codec::to_value(value)?)
+}
+/// Rare source-loss fallback: reconstruct one exact bound field, never substitute
+/// another graph or catch an installation/collision failure as a source failure.
 pub(super) fn reconstruct_field(
     state: &State,
     field: &str,
     maximum: usize,
-    mut emit: impl FnMut(PreparedMetadataObject) -> Result<()>,
-) -> Result<()> {
-    let emit = |object, _| emit(object);
-    macro_rules! dispatch {
-        (required { $($required:ident,)* } optional { $($optional:ident,)* }) => {
-            match field {
-                $(stringify!($required) => encode_map(field,state.$required.iter(),maximum,emit),)*
-                $(stringify!($optional) => encode_map(field,state.$optional.iter(),maximum,emit),)*
-                "directory_selection_generations" => encode_map(field,state.directory_selection_generations.iter().map(|(k,v)|(k,v.to_string())),maximum,emit),
-                "file_selection_generations" => encode_map(field,state.file_selection_generations.iter().map(|(k,v)|(k,v.to_string())),maximum,emit),
-                "events" => encode_map(field, state.events.iter().enumerate().map(|(index, event)| (format!("{index:020}"), event)), maximum, emit),
-                _ => Err(Error::new(storage_contract::ErrorCode::StateInvalid,"snapshot field is not eligible for reference reconstruction")),
-            }
-        };
-    }
-    state_map_fields!(dispatch)
+) -> Result<(MapRoot, Vec<PreparedMetadataObject>)> {
+    let mut encoder = Encoder::new(maximum);
+    macro_rules! dispatch {($($name:ident,)*)=>{match field {
+        $(stringify!($name)=>state.$name.iter().map(|(k,v)|Ok((k.to_string(),encode_value(field,v)?))).collect::<Result<json_codec::Map<_,_>>>()?,)*
+        "directory_selection_generations"=>state.directory_selection_generations.iter().map(|(k,v)|Ok((k.clone(),encode_value(field,&v.to_string())?))).collect::<Result<_>>()?,
+        "file_selection_generations"=>state.file_selection_generations.iter().map(|(k,v)|Ok((k.clone(),encode_value(field,&v.to_string())?))).collect::<Result<_>>()?,
+        "events"=>state.events.iter().enumerate().map(|(i,event)|Ok((format!("{i:020}"),encode_value(field,event)?))).collect::<Result<_>>()?,
+        _=>unreachable!("invariant: snapshot fields use the exhaustive State schema"),
+    }};}
+    let map = state_map_fields!(dispatch);
+    let measure = if field == "content_states" {
+        ProofMeasure::ContentStates
+    } else {
+        ProofMeasure::Plain
+    };
+    let root = encoder.map_root(map, measure)?;
+    Ok((root, encoder.finish()))
 }
-
+pub(crate) fn validate_schema(snapshot: &Snapshot) -> Result<()> {
+    macro_rules! check {($($field:ident,)*)=>{{
+        let fields=[$(stringify!($field),)*"directory_selection_generations","file_selection_generations"];
+        if snapshot.maps.len()!=fields.len() || fields.iter().any(|field|!snapshot.maps.contains_key(*field)) {
+            return Err(Error::new(ErrorCode::ObjectCorrupt,"snapshot map schema differs"));
+        }
+    }};}
+    state_map_fields!(check);
+    for reference in snapshot
+        .maps
+        .values()
+        .chain(std::iter::once(&snapshot.events))
+    {
+        reference.validate()?;
+    }
+    snapshot.control_auth.validate()
+}
+/// Independent logical serializer oracle, not the typed dirty-field adapter.
+#[cfg(test)]
+pub(super) fn prepare_reference(state: &State, maximum: usize) -> Result<PreparedSnapshot> {
+    let json_codec::Value::Object(mut logical) = json_codec::to_value(state)? else {
+        panic!("State is a map")
+    };
+    let mut builder = Builder {
+        encoder: Encoder::new(maximum),
+        fields: BTreeMap::new(),
+    };
+    macro_rules! fields {($($field:ident,)*) => {for field in [$(stringify!($field),)* "directory_selection_generations", "file_selection_generations"] {
+        let value = logical.remove(field).unwrap_or_else(|| json_codec::json!({}));
+        let root = if matches!(field, "operations" | "operation_principals") {
+            let map: BTreeMap<OperationId,json_codec::Value> = json_codec::from_value(value)?;
+            FieldRoot::Operations(builder.encoder.map_typed(map, ProofMeasure::Plain, &|key: &OperationId| Cow::Owned(key.to_string()))?)
+        } else {
+            let json_codec::Value::Object(map) = value else { panic!("State field is a map") };
+            let measure = if field == "content_states" { ProofMeasure::ContentStates } else { ProofMeasure::Plain };
+            FieldRoot::Text(builder.encoder.map_root(map, measure)?)
+        };
+        builder.fields.insert(field.into(), root);
+    }};}
+    state_map_fields!(fields);
+    let events = logical
+        .remove("events")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (i, v.clone()))
+        .collect::<Vec<_>>();
+    let events = builder
+        .encoder
+        .map_typed(events, ProofMeasure::Plain, &|index: &usize| {
+            Cow::Owned(format!("{index:020}"))
+        })?;
+    let events_reference = events.reference().clone();
+    let maps = builder
+        .fields
+        .iter()
+        .map(|(f, r)| (f.clone(), r.reference().clone()))
+        .collect();
+    builder
+        .fields
+        .insert("events".into(), FieldRoot::Events(events));
+    let auth = logical.remove("control_auth").unwrap();
+    let auth_bytes = canonical_json_value(&auth)?.len();
+    let hash = builder.encoder.object("state-control-auth", &auth)?;
+    for field in ["sequence", "business_generation", "topology_generation"] {
+        logical.remove(field);
+    }
+    assert!(logical.is_empty());
+    finish(
+        builder,
+        Snapshot {
+            format: RootFormat::RadixMapRoots,
+            sequence: state.sequence,
+            business_generation: state.business_generation,
+            topology_generation: state.topology_generation,
+            maps,
+            events: events_reference,
+            control_auth: ControlAuthReference {
+                kind: ControlAuthKind::StateControlAuth,
+                hash,
+            },
+        },
+        auth_bytes,
+        maximum,
+    )
+}
 #[cfg(test)]
 thread_local! {
-    pub(super) static SNAPSHOT_PEAK_PAGE_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    pub(super) static SNAPSHOT_FIELD_SERIALIZATIONS: std::cell::RefCell<BTreeMap<String,usize>> = const { std::cell::RefCell::new(BTreeMap::new()) };
+    pub(super) static SNAPSHOT_FIELD_SERIALIZATIONS:std::cell::RefCell<BTreeMap<String,usize>>=const{std::cell::RefCell::new(BTreeMap::new())};
 }
 #[cfg(test)]
 pub(super) fn take_encoding_counts() -> BTreeMap<String, usize> {
@@ -367,52 +413,3 @@ pub(super) fn take_encoding_counts() -> BTreeMap<String, usize> {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/journal/event_append_tests.rs"]
 mod event_append_tests;
-/// Check the current writer schema without reconstructing every historical State.
-/// The caller still authenticates the exact root and every referenced page.
-pub(crate) fn validate_schema(snapshot: &Snapshot) -> Result<()> {
-    #[derive(Deserialize)]
-    #[serialization(deny_unknown_fields)]
-    struct Header {
-        #[serialization(with = "storage_contract::u64_string")]
-        sequence: u64,
-        #[serialization(rename = "business_generation", with = "storage_contract::u64_string")]
-        _business_generation: u64,
-        #[serialization(rename = "topology_generation", with = "storage_contract::u64_string")]
-        _topology_generation: u64,
-        #[serialization(rename = "control_auth")]
-        _control_auth: Option<json_codec::Value>,
-    }
-    let Header {
-        sequence,
-        _business_generation: _,
-        _topology_generation: _,
-        _control_auth: _,
-    } = json_codec::from_value(json_codec::Value::Object(snapshot.scalars.clone()))?;
-    if sequence != snapshot.sequence
-        || snapshot.pages.contains_key("control_auth")
-            == snapshot.scalars.contains_key("control_auth")
-        || !snapshot.pages.contains_key("events")
-    {
-        return Err(Error::new(
-            ErrorCode::ObjectCorrupt,
-            "snapshot scalar/page layout differs",
-        ));
-    }
-    macro_rules! check_fields {
-        (required { $($required:ident,)* } optional { $($optional:ident,)* }) => {
-            if [$(stringify!($required),)*].iter().any(|field| !snapshot.pages.contains_key(*field)) {
-                return Err(Error::new(ErrorCode::ObjectCorrupt, "snapshot required field is absent"));
-            }
-            for field in snapshot.pages.keys() {
-                match field.as_str() {
-                    $(stringify!($required) |)* $(stringify!($optional) |)*
-                    "directory_selection_generations" | "file_selection_generations" |
-                    "events" | "control_auth" => (),
-                    _ => return Err(Error::new(ErrorCode::ObjectCorrupt, "snapshot contains an unknown field")),
-                }
-            }
-        };
-    }
-    state_map_fields!(check_fields);
-    Ok(())
-}

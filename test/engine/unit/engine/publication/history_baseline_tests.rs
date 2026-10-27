@@ -27,12 +27,7 @@ fn history_baseline_requires_exact_state_allocation_snapshot_sequence_and_config
     let temp = tempfile::tempdir().unwrap();
     let mut engine = engine(temp.path());
     let base = engine.published_state_base.clone().unwrap();
-    assert!(
-        base.snapshot_basis
-            .as_ref()
-            .unwrap()
-            .matches_snapshot(&base.snapshot)
-    );
+    assert!(base.snapshot_basis.matches_snapshot(&base.snapshot));
     assert!(base.matches(&engine.planning_context(), &config_hash(&engine)));
     assert!(!base.matches(&engine.planning_context(), "wrong config hash"));
     let saved = engine.snapshot.take();
@@ -62,8 +57,6 @@ fn history_baseline_requires_exact_state_allocation_snapshot_sequence_and_config
     assert!(
         published
             .snapshot_basis
-            .as_ref()
-            .unwrap()
             .matches_snapshot(engine.snapshot.as_deref().unwrap())
     );
     let root = engine.root.clone();
@@ -135,4 +128,183 @@ fn post_publication_index_failure_does_not_mint_a_new_reuse_receipt() {
         engine.published_state_base.as_ref().unwrap()
     ));
     assert!(!base.matches(&engine.planning_context(), &config_hash(&engine)));
+}
+
+#[test]
+fn old_writer_observer_revokes_every_later_receipt_without_reviving_an_old_epoch() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(temp.path());
+    let old_observer = Arc::clone(&engine.metadata_integrity);
+    engine
+        .persist_auth_state(json!({"auth":"second"}), "alice", OperationId::generate())
+        .unwrap();
+    let second = engine.published_state_base.clone().unwrap();
+    assert!(second.matches(&engine.planning_context(), &config_hash(&engine)));
+    old_observer.invalidate();
+    assert!(!second.matches(&engine.planning_context(), &config_hash(&engine)));
+    // A new complete publication can establish its current dependencies again,
+    // but does not detach the shared observer held by old read plans.
+    engine
+        .persist_auth_state(json!({"auth":"third"}), "alice", OperationId::generate())
+        .unwrap();
+    let third = engine.published_state_base.clone().unwrap();
+    assert!(third.matches(&engine.planning_context(), &config_hash(&engine)));
+    old_observer.invalidate();
+    assert!(!third.matches(&engine.planning_context(), &config_hash(&engine)));
+    assert!(!second.matches(&engine.planning_context(), &config_hash(&engine)));
+}
+
+#[test]
+fn healthy_history_fallback_still_revokes_the_failed_member_publication_provenance() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(temp.path());
+    let base = engine.published_state_base.clone().unwrap();
+    let history = engine.state.histories.keys().next().unwrap();
+    let hash = &base.roots.catalog_binding(history).unwrap().hash;
+    let member = engine.members()[0].clone();
+    let path = object_path(&member, "history-manifest", hash);
+    std::fs::remove_file(&path).unwrap();
+    engine
+        .persist_auth_state(json!({"auth":"fallback"}), "alice", OperationId::generate())
+        .unwrap();
+    assert!(
+        path.is_file(),
+        "the unchanged full installation still restores exact bytes"
+    );
+    assert!(
+        engine.published_state_base.is_none(),
+        "successful fallback must not hide its observed member fault"
+    );
+    assert!(!base.matches(&engine.planning_context(), &config_hash(&engine)));
+    engine
+        .persist_auth_state(
+            json!({"auth":"readmitted"}),
+            "alice",
+            OperationId::generate(),
+        )
+        .unwrap();
+    assert!(
+        engine
+            .published_state_base
+            .as_ref()
+            .unwrap()
+            .matches(&engine.planning_context(), &config_hash(&engine))
+    );
+}
+
+#[test]
+fn attempted_recovery_revokes_provenance_before_replay_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(temp.path());
+    let base = engine.published_state_base.clone().unwrap();
+    // Recovery is entered on a fresh replay owner in production. A live tail is
+    // deliberately not a valid replay prefix; even this failed attempt must
+    // revoke prior provenance before any disk observation or replay failure.
+    let error = engine
+        .recover_mode(crate::engine::recovery::RecoveryMode::PreservePending)
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::LogFork);
+    assert!(engine.published_state_base.is_none());
+    assert!(!base.matches(&engine.planning_context(), &config_hash(&engine)));
+}
+
+#[test]
+fn exact_snapshot_reconstruction_reports_missing_sources_before_restoring_all_copies() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(temp.path());
+    let members = engine.members();
+    let snapshot: Snapshot =
+        load_object(&members[0], "snapshot", engine.snapshot.as_deref().unwrap()).unwrap();
+    let addresses = map_addresses(&members[0], &snapshot.maps["repositories"]);
+    let paths: Vec<_> = members
+        .iter()
+        .flat_map(|member| {
+            addresses
+                .iter()
+                .map(move |(kind, hash)| object_path(member, kind, hash))
+        })
+        .collect();
+    assert!(!paths.is_empty());
+    for path in &paths {
+        std::fs::remove_file(path).unwrap();
+    }
+    engine
+        .persist_auth_state(
+            json!({"auth":"exact reconstruction"}),
+            "alice",
+            OperationId::generate(),
+        )
+        .unwrap();
+    assert!(paths.iter().all(|path| path.is_file()));
+    assert!(engine.published_state_base.is_none());
+}
+
+#[test]
+fn detached_publication_rejects_faults_observed_after_full_preparation_before_any_decision() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(temp.path());
+    let mut next = engine.state().clone();
+    next.sequence = engine.next_slot;
+    let result = engine.state.operations.values().next().unwrap().clone();
+    let detached = engine
+        .prepare_publication(next, Vec::new(), result, MAX_METADATA)
+        .unwrap();
+    let sequence = engine.state.sequence;
+    let slot = engine.next_slot;
+    let journals: Vec<_> = engine
+        .members()
+        .iter()
+        .map(|member| std::fs::read(log_path(member)).unwrap())
+        .collect();
+    engine.metadata_integrity.invalidate();
+    assert_eq!(
+        engine.decide_publication(detached).unwrap_err().code(),
+        ErrorCode::PreparationStale
+    );
+    assert_eq!(engine.state.sequence, sequence);
+    assert_eq!(engine.next_slot, slot);
+    for (member, before) in engine.members().iter().zip(journals) {
+        assert_eq!(std::fs::read(log_path(member)).unwrap(), before);
+    }
+}
+
+#[test]
+fn a_real_source_exceeding_its_bound_revokes_provenance_without_remapping_resource_limit() {
+    let temp = tempfile::tempdir().unwrap();
+    let engine = engine(temp.path());
+    let base = engine.published_state_base.clone().unwrap();
+    let history = engine.state.histories.keys().next().unwrap();
+    let hash = &base.roots.catalog_binding(history).unwrap().hash;
+    let member = &engine.members()[0];
+    let path = object_path(member, "history-manifest", hash);
+    let mut bytes = std::fs::read(&path).unwrap();
+    let admitted_length = bytes.len();
+    bytes.push(b' ');
+    std::fs::write(&path, bytes).unwrap();
+    let error = crate::disk::read_bytes(&path, admitted_length).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ResourceLimit);
+    engine.metadata_integrity.fault(&error);
+    assert!(!base.matches(&engine.planning_context(), &config_hash(&engine)));
+    assert_eq!(
+        error.code(),
+        ErrorCode::ResourceLimit,
+        "fault notification preserves the concrete source error"
+    );
+}
+
+#[test]
+fn workspace_identity_observation_revokes_a_current_publication_receipt() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(temp.path());
+    let branch = engine.state.branches.keys().next().unwrap().clone();
+    let workspace = engine.create_workspace(&branch, "alice").unwrap();
+    let base = engine.published_state_base.clone().unwrap();
+    let plan = engine.planning_context();
+    let repository = plan.repository_for_branch(&workspace.branch_id).unwrap();
+    let disk = plan.disk(&repository.primary_slot_id).unwrap();
+    assert!(disk.metadata_member);
+    std::fs::remove_file(disk.root.join("disk.json")).unwrap();
+    assert!(plan.workspace_data_directory(&workspace).is_err());
+    assert!(!base.matches(&engine.planning_context(), &config_hash(&engine)));
+    assert!(!engine.blocked);
 }
