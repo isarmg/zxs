@@ -465,3 +465,23 @@ fn scrub_cannot_turn_a_failed_open_into_a_healthy_report() {
     assert!(output.stdout.is_empty());
     assert!(!root.exists());
 }
+
+#[test]
+fn scrub_help_describes_offline_scan_without_opening_pool() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+        .current_dir(directory.path())
+        .args(["scrub", "--help"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        help.contains(
+            "Scan retained publication metadata and required full copies; stop ZXS first"
+        )
+    );
+    assert!(help.contains("Usage: zxs-rescue scrub [OPTIONS]"));
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+}
