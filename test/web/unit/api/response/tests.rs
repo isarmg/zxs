@@ -73,6 +73,26 @@ fn json_errors_keep_actual_status_code_retryability_and_request_id() {
 }
 
 #[test]
+fn published_reconciliation_error_is_uncertain_without_inviting_mutation_retry() {
+    let bytes = br#"{"error":{"code":"RECOVERY_REQUIRED","message":"operation original is already published; retain the original operation","retryable":false,"request_id":"published-request"}}"#;
+    let error = decode(503, bytes).unwrap_err();
+    assert_eq!(error.status, 503);
+    assert_eq!(error.code, storage_contract::ErrorCode::RecoveryRequired);
+    assert!(!error.retryable);
+    assert!(error.mutation_outcome_unknown());
+    assert_eq!(error.request_id.as_deref(), Some("published-request"));
+    assert!(error.message.contains("original is already published"));
+
+    let rejected = decode(
+        400,
+        br#"{"error":{"code":"UNSAFE_PATH","message":"unsafe path","retryable":false}}"#,
+    )
+    .unwrap_err();
+    assert_eq!(rejected.code, storage_contract::ErrorCode::UnsafePath);
+    assert!(!rejected.mutation_outcome_unknown());
+}
+
+#[test]
 fn empty_http_errors_keep_their_status() {
     let error = decode(404, b"").unwrap_err();
     assert_eq!(error.status, 404);

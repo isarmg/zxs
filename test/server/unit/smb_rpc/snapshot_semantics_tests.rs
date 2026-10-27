@@ -65,6 +65,14 @@ impl Backend for NamespaceAfterWorkspace {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.inner.operation(identity, operation_id)
     }
+    fn require_native_workspace_commit_completion(
+        &self,
+        identity: &Identity,
+        command: crate::CommitWorkspace,
+    ) -> Result<(), ApiError> {
+        self.inner
+            .require_native_workspace_commit_completion(identity, command)
+    }
     fn commit_workspace(
         &self,
         identity: &Identity,

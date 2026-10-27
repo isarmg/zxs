@@ -2,8 +2,17 @@
 use std::borrow::Cow;
 use storage_contract::ErrorCode;
 
+mod published;
+pub use published::{
+    PublishedRecoveryReconciliation, PublishedWorkspaceReconciliation, RecoveryReconciliationStage,
+};
+
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
+    #[error(transparent)]
+    PublishedWorkspaceReconciliation(Box<PublishedWorkspaceReconciliation>),
+    #[error(transparent)]
+    PublishedRecoveryReconciliation(Box<PublishedRecoveryReconciliation>),
     #[error("IO_ERROR: system clock precedes the Unix epoch: {0}")]
     Clock(#[from] std::time::SystemTimeError),
     #[error("IO_ERROR: system clock is outside the UTC timestamp range: {0}")]
@@ -64,6 +73,8 @@ impl Error {
     }
     pub fn retryable(self) -> Self {
         match self {
+            published @ (Self::PublishedWorkspaceReconciliation(_)
+            | Self::PublishedRecoveryReconciliation(_)) => published,
             Self::Contract(source) => Self::Contract(source.retryable()),
             Self::Cleanup { operation, cleanup } => Self::Cleanup {
                 operation: Box::new(operation.retryable()),
@@ -106,7 +117,9 @@ impl Error {
             Self::Contract(source) => source.is_retryable(),
             Self::Cleanup { operation, .. } => operation.is_retryable(),
             Self::Context { retryable, .. } => *retryable,
-            Self::Checkpoint(_)
+            Self::PublishedWorkspaceReconciliation(_)
+            | Self::PublishedRecoveryReconciliation(_)
+            | Self::Checkpoint(_)
             | Self::Clock(_)
             | Self::ClockRange(_)
             | Self::Filesystem(_)
@@ -124,6 +137,8 @@ impl Error {
     }
     pub fn code(&self) -> ErrorCode {
         match self {
+            Self::PublishedWorkspaceReconciliation(_)
+            | Self::PublishedRecoveryReconciliation(_) => ErrorCode::RecoveryRequired,
             Self::Contract(source) => source.code(),
             Self::Cleanup { operation, .. } => operation.code(),
             Self::Context { code, .. } => *code,
@@ -142,6 +157,8 @@ impl Error {
     }
     pub fn message(&self) -> Cow<'_, str> {
         match self {
+            Self::PublishedWorkspaceReconciliation(error) => error.message().into(),
+            Self::PublishedRecoveryReconciliation(error) => error.message().into(),
             Self::Contract(source) => source.message(),
             Self::Cleanup { operation, cleanup } => {
                 format!("{}; cleanup failed: {cleanup}", operation.message()).into()
@@ -179,6 +196,32 @@ impl Error {
             Self::Integer(source) => source.to_string().into(),
             Self::IntegerRange(source) => source.to_string().into(),
             Self::PathEncoding(path) => format!("directory name is not UTF-8: {path:?}").into(),
+        }
+    }
+
+    /// Known publication is separate from completion of the local service work.
+    /// This receipt is response data, not authorization or permission to unblock writes.
+    pub fn published_result(&self) -> Option<&crate::OperationResult> {
+        match self {
+            Self::PublishedWorkspaceReconciliation(error) => Some(error.result()),
+            Self::PublishedRecoveryReconciliation(error) => Some(error.result()),
+            Self::Context { source, .. } => source.published_result(),
+            Self::Cleanup { operation, .. } => operation.published_result(),
+            Self::Clock(_)
+            | Self::ClockRange(_)
+            | Self::Checkpoint(_)
+            | Self::Contract(_)
+            | Self::Filesystem(_)
+            | Self::Sqlite(_)
+            | Self::Database(_)
+            | Self::Payload(_)
+            | Self::Timestamp(_)
+            | Self::DateFormat(_)
+            | Self::TimestampRange(_)
+            | Self::Digest(_)
+            | Self::Integer(_)
+            | Self::IntegerRange(_)
+            | Self::PathEncoding(_) => None,
         }
     }
 }

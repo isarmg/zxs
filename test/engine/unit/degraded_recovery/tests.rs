@@ -505,6 +505,7 @@ fn degraded_recovery_rejects_unverifiable_snapshot_before_reprotect() {
 
 #[test]
 fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
+    use std::error::Error as _;
     for fail_index in [true, false] {
         let (temp, engine, operation, candidate) = fixture("after_accept_2");
         lose(&engine, &candidate, true);
@@ -512,7 +513,7 @@ fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
         let root = temp.path().join("state");
         let mut engine = Engine::open_for_recovery(&root).unwrap();
         let plan = engine
-            .prepare_degraded_recovery(operation, "alice", "permanent loss")
+            .prepare_degraded_recovery(operation, "recovery-admin", "permanent loss")
             .unwrap();
         let obstruction = if fail_index {
             let path = root.join("index.sqlite");
@@ -526,11 +527,61 @@ fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
             path
         };
         let error = engine
-            .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", true)
+            .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "recovery-admin", true)
             .unwrap_err();
-        if fail_index {
-            assert_eq!(error.code(), storage_contract::ErrorCode::UnsafePath);
+        assert_eq!(error.code(), storage_contract::ErrorCode::RecoveryRequired);
+        assert!(!error.is_retryable());
+        let Error::PublishedRecoveryReconciliation(context) = &error else {
+            panic!("published recovery context was lost: {error}")
+        };
+        assert_eq!(context.recovery_id(), plan.recovery_id);
+        assert_eq!(context.plan_digest(), plan.digest);
+        assert_eq!(context.principal(), plan.principal);
+        assert_eq!(
+            engine.operation_owner(operation).unwrap().as_deref(),
+            Some("alice")
+        );
+        assert_eq!(context.isolation_generation(), plan.isolation_generation);
+        assert_eq!(
+            context.stage(),
+            if fail_index {
+                RecoveryReconciliationStage::IndexRebuild
+            } else {
+                RecoveryReconciliationStage::WorkspaceReconciliation
+            }
+        );
+        assert_eq!(error.published_result(), Some(context.result()));
+        assert_eq!(context.result(), &engine.state().operations[&operation]);
+        assert_eq!(
+            context.result().protection_at_publish,
+            ProtectionAtPublish::BelowTarget
+        );
+        assert_eq!(context.result().request_digest, candidate.request_digest);
+        let source = context.source().unwrap().downcast_ref::<Error>().unwrap();
+        assert_eq!(
+            source.code(),
+            if fail_index {
+                ErrorCode::UnsafePath
+            } else {
+                ErrorCode::RecoveryRequired
+            }
+        );
+        if !fail_index {
+            assert_eq!(
+                source
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<Error>()
+                    .unwrap()
+                    .code(),
+                ErrorCode::InvalidJson
+            );
         }
+        // zxs-rescue's outer error formatter uses this native Display, not the
+        // generic offline HTTP diagnostic that previously hid publication.
+        assert!(error.to_string().contains("is already published"));
+        assert!(error.to_string().contains(&operation.to_string()));
+        assert!(error.to_string().contains(&source.to_string()));
         assert!(
             engine.is_read_only(),
             "failed reconciliation must retain the write fence"
@@ -554,11 +605,24 @@ fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
         );
         // Idempotent result lookup must not reopen writes either.
         engine
-            .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", true)
+            .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "recovery-admin", true)
             .unwrap();
         assert!(engine.is_read_only());
+        let denied = engine
+            .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", true)
+            .unwrap_err();
+        assert_eq!(denied.code(), ErrorCode::PermissionDenied);
+        assert!(denied.published_result().is_none());
         let expected = engine.state().clone();
         drop(engine);
+        assert!(
+            Engine::open(&root).is_err(),
+            "published evidence does not relax strict startup"
+        );
+        assert!(
+            Engine::open_for_recovery(&root).is_err(),
+            "offline reopen still requires local reconciliation"
+        );
         fs::remove_dir_all(&obstruction).unwrap();
         let engine = Engine::open(&root).unwrap();
         assert!(!engine.is_read_only());

@@ -7,6 +7,7 @@ fn contextual_io_preserves_origin_and_explicit_retry_policy() {
         .context(ErrorCode::RecoveryRequired, "cannot read recovery evidence")
         .retryable();
     assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+    assert!(error.published_result().is_none());
     assert_eq!(error.message(), "cannot read recovery evidence");
     assert!(error.is_retryable());
     let origin = error.source().unwrap().source().unwrap();
@@ -46,6 +47,7 @@ fn filesystem_context_keeps_durability_and_path_status_policy() {
             std::io::Error::from_raw_os_error(raw),
         ));
         assert_eq!(error.code(), expected);
+        assert!(error.published_result().is_none());
         let filesystem = error.source().unwrap();
         assert!(filesystem.is::<platform_io::fs_safety::Error>());
         assert_eq!(

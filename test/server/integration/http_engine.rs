@@ -36,6 +36,10 @@ mod plan_lookup;
 mod projection_failure;
 #[path = "http_engine/published_index_outcome.rs"]
 mod published_index_outcome;
+#[path = "http_engine/published_reconciliation.rs"]
+mod published_reconciliation;
+#[path = "../unit/published_reconciliation_failure.rs"]
+mod published_reconciliation_failure;
 #[path = "http_engine/strict_objects.rs"]
 mod strict_objects;
 #[path = "http_engine/upload_status.rs"]

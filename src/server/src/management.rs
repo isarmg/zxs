@@ -672,6 +672,15 @@ impl Backend for ManagementBackend {
     ) -> Result<storage_contract::Workspace, crate::ApiError> {
         self.inner.backend()?.workspace(identity, workspace)
     }
+    fn require_native_workspace_commit_completion(
+        &self,
+        identity: &Identity,
+        command: crate::CommitWorkspace,
+    ) -> Result<(), ApiError> {
+        self.inner
+            .backend()?
+            .require_native_workspace_commit_completion(identity, command)
+    }
     fn published_upload_status(
         &self,
         identity: &crate::auth::Identity,
