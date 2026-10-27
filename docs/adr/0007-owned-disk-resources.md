@@ -31,7 +31,7 @@
 
 内部复制使用显式 `ReadSource`：调用方/历史包输入按命名路径准入，盘内来源由生产者携带 `Arc<DiskHandle>`。公开 `stage_file` / upload 的 `source: &Path` 始终是外部输入，即使字符串位于某个配置盘根之下，也不猜成旧盘资源。持久化 `StagedFile` 仅在其特定 workspace namespace 的解码边界恢复 owner，并在 journal 恢复后另核 authoritative primary；重新打开来源时仍校验原有大小/内容摘要，不能靠保留旧 File 跳过来源变更检查。
 
-immutable 相同字节快路径也在 held parent 上以 `openat2` 的 `NO_XDEV` 打开 leaf，并对同一 File 读字节、执行同步，不能跨入启动前已 bind mount 的普通 leaf。隔离 user/mount namespace 的两个回归需 runner 提供 util-linux 且允许 namespace 内挂载；默认忽略，必须显式运行，权限或命令失败不当作成功。源码交付不代表这些回归或真实 Btrfs 硬件已经运行通过。
+immutable 相同字节快路径也在 held parent 上以 `openat2` 的 `NO_XDEV` 打开 leaf，并对同一 File 读字节、执行同步，不能跨入启动前已 bind mount 的普通 leaf。隔离 user/mount namespace 的两个回归需临时 Linux runner 提供 util-linux 和非交互 sudo；仅 exact 测试子进程经 `sudo -n` 提权并创建独立 namespace，Cargo 与整个 suite 不提权。子进程使用清空后的环境，仅显式传入这两项测试的递归 marker，不继承 `LD_PRELOAD` 等变量；不改宿主安全配置、不访问真实数据盘。默认忽略，CI/release 的 workspace suite 显式运行，权限或命令失败不当作成功。这些工具只为测试所需，不是生产依赖；源码交付不代表这些回归或真实 Btrfs 硬件已经运行通过。
 
 ## 替代方案
 

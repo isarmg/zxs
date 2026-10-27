@@ -114,10 +114,13 @@ HistoryManifest 的 `commits` 与 `directory_trees` 也使用同一逻辑记录�
 CI 和 release 共用的 workspace suite 还显式运行两个默认 ignored 的
 `disk::admission_tests`：`immutable_existing_bind_leaf_is_rejected_before_read_or_sync`
 与 `cold_device_admission_does_not_borrow_a_replacement_mount_identity`。测试环境需要
-util-linux 的 `unshare`、`mount`、`umount`，允许无特权用户创建 user/mount namespace，
-并允许该 namespace 内的 bind/tmpfs 挂载及 lazy unmount。测试不改宿主安全设置、
-不使用 sudo、不把 EPERM 当跳过；能力不足会使 suite 真实失败。
-这些工具和 namespace 能力仅为回归环境要求，生产功能不依赖它们。
+`/usr/bin` 下的 util-linux `unshare`、`mount`、`umount`，以及允许非交互调用的
+`sudo` 和 `env`。普通构建与整个 suite 仍以 runner 用户运行；只有这两个 exact
+测试的子进程通过 `sudo -n -- /usr/bin/env -i` 启动独立 user/mount namespace，
+执行临时目录内的 bind/tmpfs 挂载及 lazy unmount。清空子进程环境后仅显式传入
+对应测试的递归 marker，不继承 `LD_PRELOAD` 等变量，也不保存或输出凭据。
+测试不改宿主安全设置、不访问真实数据盘、不把 sudo/namespace/挂载失败当跳过。
+这些工具和权限仅为回归环境要求，生产功能不依赖它们。
 
 
 ```sh

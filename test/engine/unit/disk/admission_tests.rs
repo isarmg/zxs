@@ -89,8 +89,13 @@ fn isolated_mount_namespace(name: &str, exercise: impl FnOnce()) {
         exercise();
         return;
     }
-    let status = Command::new("unshare")
+    // Only this exact libtest child is elevated, with no inherited environment.
+    // Pass the recursion marker after sudo's environment reset.
+    let status = Command::new("/usr/bin/sudo")
+        .args(["-n", "--", "/usr/bin/env", "-i"])
+        .arg(format!("{CHILD}={name}"))
         .args([
+            "/usr/bin/unshare",
             "--user",
             "--map-root-user",
             "--mount",
@@ -99,7 +104,6 @@ fn isolated_mount_namespace(name: &str, exercise: impl FnOnce()) {
         ])
         .arg(std::env::current_exe().unwrap())
         .args(["--ignored", "--exact", name, "--nocapture"])
-        .env(CHILD, name)
         .status()
         .unwrap();
     assert!(
@@ -109,7 +113,7 @@ fn isolated_mount_namespace(name: &str, exercise: impl FnOnce()) {
 }
 
 fn mount(arguments: &[&str], source: &Path, destination: &Path) {
-    let status = Command::new("mount")
+    let status = Command::new("/usr/bin/mount")
         .args(arguments)
         .arg(source)
         .arg(destination)
@@ -119,7 +123,7 @@ fn mount(arguments: &[&str], source: &Path, destination: &Path) {
 }
 
 #[test]
-#[ignore = "requires util-linux and permitted isolated user/mount namespaces"]
+#[ignore = "requires non-interactive sudo and util-linux for an isolated user/mount test child"]
 fn immutable_existing_bind_leaf_is_rejected_before_read_or_sync() {
     isolated_mount_namespace(
         "disk::admission_tests::immutable_existing_bind_leaf_is_rejected_before_read_or_sync",
@@ -153,7 +157,7 @@ fn immutable_existing_bind_leaf_is_rejected_before_read_or_sync() {
 }
 
 #[test]
-#[ignore = "requires util-linux and permitted isolated user/mount namespaces"]
+#[ignore = "requires non-interactive sudo and util-linux for an isolated user/mount test child"]
 fn cold_device_admission_does_not_borrow_a_replacement_mount_identity() {
     isolated_mount_namespace(
         "disk::admission_tests::cold_device_admission_does_not_borrow_a_replacement_mount_identity",
@@ -177,7 +181,7 @@ fn cold_device_admission_does_not_borrow_a_replacement_mount_identity() {
             let root = DiskRoot::open(&address).unwrap();
             let held_directory = root.directory(&address).unwrap();
             let held_id = mount_identity(&held_directory).unwrap();
-            let status = Command::new("umount")
+            let status = Command::new("/usr/bin/umount")
                 .arg("--lazy")
                 .arg(&address)
                 .status()
