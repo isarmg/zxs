@@ -1,4 +1,62 @@
 use super::*;
+
+// Frozen R29 (6da614ccb133b3f036f0be52d815d11519d06f76) owned schema.
+// Keep this independent of LocalPublication's new Serialize delegation.
+mod r29_local_publication {
+    use super::*;
+
+    #[derive(data_serialization::Serialize)]
+    struct LocalPublication {
+        candidate: Candidate,
+        publication: Publication,
+        commit_proof: CommitProof,
+        publication_receipts: Vec<Receipt>,
+    }
+
+    pub(super) fn encode(local: &super::LocalPublication, maximum: usize) -> Result<Vec<u8>> {
+        encode_metadata(
+            &LocalPublication {
+                candidate: local.candidate.clone(),
+                publication: local.publication.clone(),
+                commit_proof: local.commit_proof.clone(),
+                publication_receipts: local.publication_receipts.clone(),
+            },
+            maximum,
+        )
+    }
+}
+
+fn assert_local_publication_encoding(local: &LocalPublication) -> Vec<u8> {
+    let expected = r29_local_publication::encode(local, MAX_METADATA).unwrap();
+    let view = LocalPublicationRef {
+        candidate: &local.candidate,
+        publication: &local.publication,
+        commit_proof: &local.commit_proof,
+        publication_receipts: &local.publication_receipts,
+    };
+    assert_eq!(canonical_json(&view).unwrap(), expected);
+    assert_eq!(canonical_json(local).unwrap(), expected);
+    for maximum in [expected.len(), expected.len() + 1] {
+        assert_eq!(encode_metadata(&view, maximum).unwrap(), expected);
+        assert_eq!(encode_metadata(local, maximum).unwrap(), expected);
+    }
+    let maximum = expected.len() - 1;
+    let old_error = r29_local_publication::encode(local, maximum).unwrap_err();
+    for new_error in [
+        encode_metadata(&view, maximum).unwrap_err(),
+        encode_metadata(local, maximum).unwrap_err(),
+    ] {
+        assert_eq!(new_error.code(), old_error.code());
+        assert_eq!(new_error.to_string(), old_error.to_string());
+    }
+    let decoded: LocalPublication = decode_strict(&expected).unwrap();
+    assert_eq!(
+        r29_local_publication::encode(&decoded, MAX_METADATA).unwrap(),
+        expected
+    );
+    expected
+}
+
 fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let temp = tempfile::tempdir().unwrap();
     let config = Config::development([
@@ -168,7 +226,11 @@ fn actual_publication_and_local_proofs_fit_the_exact_preflight_boundary() {
                 &version.version.version_id,
             );
             actual.push(fs_bytes(&dir.join("commit-proof.json")).len());
-            actual.push(fs_bytes(&dir.join("publication-proof.json")).len());
+            let bytes = fs_bytes(&dir.join("publication-proof.json"));
+            let local: LocalPublication = decode_strict(&bytes).unwrap();
+            assert_eq!(assert_local_publication_encoding(&local), bytes);
+            verify_local_publication(&dir, &version.version).unwrap();
+            actual.push(bytes.len());
         }
     }
     assert_eq!(largest, *actual.iter().max().unwrap());
@@ -219,6 +281,117 @@ fn save(engine: &mut Engine, branch: &str, bytes: &[u8]) -> String {
         .unwrap();
     engine.list_tree(branch).unwrap()[0].version_id.clone()
 }
+
+#[test]
+fn local_publication_borrowed_schema_preserves_encoding_and_reader_policy() {
+    let (_temp, mut engine, repo) = fixture();
+    let id = save(&mut engine, &repo.main_branch_id, b"schema bytes");
+    let version = &engine.state.versions[&id];
+    let slot = &engine.state.placements[&id].route_slot_ids[0];
+    let directory = version_dir(engine.disk(slot).unwrap(), &version.history_tree_id, &id);
+    let mut local: LocalPublication = read_json(&directory.join("publication-proof.json")).unwrap();
+    let expected = assert_local_publication_encoding(&local);
+    let mut raw: json_codec::Value = decode_strict(&expected).unwrap();
+    raw["additional_local_field"] = json_codec::json!(true);
+    let accepted: LocalPublication = decode_strict(&canonical_json(&raw).unwrap()).unwrap();
+    assert_eq!(assert_local_publication_encoding(&accepted), expected);
+    raw["candidate"]["additional_candidate_field"] = json_codec::json!(true);
+    assert!(decode_strict::<LocalPublication>(&canonical_json(&raw).unwrap()).is_err());
+    let duplicate = [b"{\"candidate\":null,".as_slice(), &expected[1..]].concat();
+    assert!(decode_strict::<LocalPublication>(&duplicate).is_err());
+
+    // Codec-only variants of a real proof: these are never persisted or treated
+    // as valid receipts. Preserve original serde attributes and nested escaping.
+    local.candidate.sequence = u64::MAX;
+    local.publication.result.sequence = u64::MAX;
+    local.publication.result.result = json_codec::json!({
+        "\u{10000}": ["目录\n\"\\", null, true],
+        "\u{e000}": "UTF-16 key order",
+    });
+    assert_local_publication_encoding(&local);
+    local.candidate.history_manifest_hashes.clear();
+    local.candidate.previous_snapshot = None;
+    assert_local_publication_encoding(&local);
+}
+
+#[test]
+fn local_publication_borrowed_encoding_keeps_invalid_json_before_size_error() {
+    let (_temp, mut engine, repo) = fixture();
+    let id = save(&mut engine, &repo.main_branch_id, b"error boundary bytes");
+    let version = &engine.state.versions[&id];
+    let slot = &engine.state.placements[&id].route_slot_ids[0];
+    let directory = version_dir(engine.disk(slot).unwrap(), &version.history_tree_id, &id);
+    let mut local: LocalPublication = read_json(&directory.join("publication-proof.json")).unwrap();
+    for invalid in [json_codec::json!(1.5), json_codec::json!(u64::MAX)] {
+        local.publication.result.result = invalid;
+        let view = LocalPublicationRef {
+            candidate: &local.candidate,
+            publication: &local.publication,
+            commit_proof: &local.commit_proof,
+            publication_receipts: &local.publication_receipts,
+        };
+        for maximum in [0, MAX_METADATA] {
+            let old_error = r29_local_publication::encode(&local, maximum).unwrap_err();
+            assert_ne!(old_error.code(), storage_contract::ErrorCode::ResourceLimit);
+            for new_error in [
+                encode_metadata(&view, maximum).unwrap_err(),
+                encode_metadata(&local, maximum).unwrap_err(),
+            ] {
+                assert_eq!(new_error.code(), old_error.code());
+                assert_eq!(new_error.to_string(), old_error.to_string());
+                assert_eq!(
+                    std::error::Error::source(&new_error).map(ToString::to_string),
+                    std::error::Error::source(&old_error).map(ToString::to_string),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn recovery_rebuilds_each_local_publication_with_the_original_owned_bytes() {
+    for corrupt in [false, true] {
+        let (_temp, mut engine, repo) = fixture();
+        let id = save(&mut engine, &repo.main_branch_id, b"recovery bytes");
+        let version = engine.state.versions[&id].clone();
+        let paths = engine.state.placements[&id]
+            .route_slot_ids
+            .iter()
+            .map(|slot| {
+                let directory =
+                    version_dir(engine.disk(slot).unwrap(), &version.history_tree_id, &id);
+                let path = directory.join("publication-proof.json");
+                let local: LocalPublication = read_json(&path).unwrap();
+                let expected = assert_local_publication_encoding(&local);
+                assert_eq!(fs_bytes(&path), expected);
+                (directory, path, expected)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), 3);
+        let root = engine.root.clone();
+        drop(engine);
+        for (_, path, _) in &paths {
+            if corrupt {
+                std::fs::write(path, b"corrupt local proof").unwrap();
+            } else {
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+        let recovered = Engine::open(&root).unwrap();
+        for (directory, path, expected) in &paths {
+            assert_eq!(fs_bytes(path), *expected);
+            let local: LocalPublication = read_json(path).unwrap();
+            assert_eq!(assert_local_publication_encoding(&local), *expected);
+            verify_local_publication(directory, &version).unwrap();
+        }
+        drop(recovered);
+        let _reopened = Engine::open(&root).unwrap();
+        for (_, path, expected) in &paths {
+            assert_eq!(fs_bytes(path), *expected);
+        }
+    }
+}
+
 #[test]
 fn metadata_only_package_and_purge_tombstone_combinations_are_preflighted() {
     let (_temp, mut engine, repo) = fixture();

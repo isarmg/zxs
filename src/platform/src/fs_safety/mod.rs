@@ -252,7 +252,7 @@ pub fn sync_directory(path: &Path) -> Result<(), Error> {
 fn temporary_name() -> Result<String, Error> {
     let mut bytes = [0u8; 16];
     system_entropy::fill(&mut bytes).map_err(Error::Randomness)?;
-    let nonce: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    let nonce = crate::lower_hex(&bytes);
     Ok(format!(".state-atomic-{nonce}.tmp"))
 }
 

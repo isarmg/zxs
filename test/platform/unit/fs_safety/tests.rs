@@ -1,4 +1,45 @@
 use super::*;
+
+#[test]
+fn lower_hex_preserves_fixed_vectors() {
+    assert_eq!(crate::lower_hex(&[]), "");
+    assert_eq!(
+        crate::lower_hex(&[0x00, 0x01, 0x0f, 0x10, 0x7f, 0x80, 0xfe, 0xff]),
+        "00010f107f80feff"
+    );
+    assert_eq!(
+        crate::lower_hex(&[0; 16]),
+        "00000000000000000000000000000000"
+    );
+}
+
+#[test]
+fn lower_hex_matches_previous_format_for_every_byte() {
+    let bytes: Vec<u8> = (0..=u8::MAX).collect();
+    let previous: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    assert_eq!(crate::lower_hex(&bytes), previous);
+}
+
+#[test]
+fn temporary_name_retains_its_exact_hex_shape() {
+    let name = temporary_name().unwrap();
+    assert_eq!(name.len(), 50);
+    let nonce = name
+        .strip_prefix(".state-atomic-")
+        .unwrap()
+        .strip_suffix(".tmp")
+        .unwrap();
+    assert_eq!(nonce.len(), 32);
+    assert!(
+        nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    );
+    assert!(AtomicFile::is_temporary_name(
+        &EntryName::new(name).unwrap()
+    ));
+}
+
 #[cfg(unix)]
 #[test]
 fn open_existing_never_creates_or_repairs_a_directory() {

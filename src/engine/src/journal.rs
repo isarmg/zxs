@@ -1046,12 +1046,41 @@ pub(crate) fn verify_publication_seal(
     }
     Ok(())
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub(crate) struct LocalPublication {
     pub candidate: Candidate,
     pub publication: Publication,
     pub commit_proof: CommitProof,
     pub publication_receipts: Vec<Receipt>,
+}
+/// One serialization schema for owned reads and borrowed publication writes.
+#[derive(Serialize)]
+#[serialization(rename = "LocalPublication")]
+pub(crate) struct LocalPublicationRef<'a> {
+    pub candidate: &'a Candidate,
+    pub publication: &'a Publication,
+    pub commit_proof: &'a CommitProof,
+    pub publication_receipts: &'a [Receipt],
+}
+impl Serialize for LocalPublication {
+    fn serialize<S: data_serialization::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        let Self {
+            candidate,
+            publication,
+            commit_proof,
+            publication_receipts,
+        } = self;
+        LocalPublicationRef {
+            candidate,
+            publication,
+            commit_proof,
+            publication_receipts,
+        }
+        .serialize(serializer)
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]

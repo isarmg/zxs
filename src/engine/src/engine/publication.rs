@@ -311,11 +311,11 @@ impl Engine {
                 repair_local_proof(&proof_dir.join("commit-proof.json"), &proof)?;
                 repair_local_proof(
                     &proof_dir.join("publication-proof.json"),
-                    &LocalPublication {
-                        candidate: c.clone(),
-                        publication: publication.clone(),
-                        commit_proof: proof,
-                        publication_receipts: publication_receipts.clone(),
+                    &LocalPublicationRef {
+                        candidate: c,
+                        publication: &publication,
+                        commit_proof: &proof,
+                        publication_receipts: &publication_receipts,
                     },
                 )?;
             }
@@ -495,11 +495,11 @@ impl Engine {
                 let proof = read_json(&proof_dir.join("commit-proof.json"))?;
                 write_json(
                     &proof_dir.join("publication-proof.json"),
-                    &LocalPublication {
-                        candidate: c.clone(),
-                        publication: publication.clone(),
-                        commit_proof: proof,
-                        publication_receipts: publication_receipts.clone(),
+                    &LocalPublicationRef {
+                        candidate: c,
+                        publication: &publication,
+                        commit_proof: &proof,
+                        publication_receipts: &publication_receipts,
                     },
                     false,
                 )?;

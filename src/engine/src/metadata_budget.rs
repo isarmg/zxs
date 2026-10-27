@@ -315,11 +315,11 @@ fn preflight_inner(
 
     for proof in proofs {
         check(encode_metadata(
-            &LocalPublication {
-                candidate: candidate.clone(),
-                publication: publication.clone(),
-                commit_proof: proof,
-                publication_receipts: publication_receipts.clone(),
+            &LocalPublicationRef {
+                candidate,
+                publication: &publication,
+                commit_proof: &proof,
+                publication_receipts: &publication_receipts,
             },
             maximum,
         )?);
