@@ -2,6 +2,37 @@ use super::*;
 use std::process::Command;
 
 #[test]
+fn typed_parent_io_handles_root_children_and_missing_nested_directories() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let root = DiskRoot::open(temporary.path()).unwrap();
+    root.private_dir(temporary.path()).unwrap();
+    assert!(matches!(
+        root.write_atomic(temporary.path(), b"not a child", false),
+        Err(Error::Filesystem(
+            platform_io::fs_safety::Error::UnsafeRelativePath(_)
+        ))
+    ));
+    for relative in ["root-child", "missing/nested/leaf"] {
+        let path = temporary.path().join(relative);
+        root.write_atomic(&path, b"owned", false).unwrap();
+        assert_eq!(root.read_bytes(&path, 5).unwrap(), b"owned");
+        assert!(root.open_optional_regular(&path).unwrap().is_some());
+        assert!(root.optional_metadata(&path).unwrap().unwrap().is_file());
+        root.remove_file(&path).unwrap();
+        assert!(root.open_optional_regular(&path).unwrap().is_none());
+    }
+    assert_eq!(
+        fs::metadata(temporary.path().join("missing/nested"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o700
+    );
+}
+
+#[test]
 fn immutable_existing_bytes_keep_collision_and_leaf_absence_semantics() {
     let temporary = tempfile::tempdir().unwrap();
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();

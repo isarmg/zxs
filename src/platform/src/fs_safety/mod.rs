@@ -71,6 +71,23 @@ impl RelativePath {
     pub fn as_path(&self) -> &Path {
         &self.0
     }
+
+    /// Split an admitted path without re-validating its canonical components.
+    /// `None` means the entry is directly below the held root, not an empty path.
+    pub fn split_parent(&self) -> (Option<Self>, EntryName) {
+        let parent = self
+            .0
+            .parent()
+            .expect("invariant: a nonempty normal relative path has a parent");
+        let name = self
+            .0
+            .file_name()
+            .expect("invariant: a nonempty normal relative path has a final entry");
+        (
+            (!parent.as_os_str().is_empty()).then(|| Self(parent.to_path_buf())),
+            EntryName(PathBuf::from(name)),
+        )
+    }
 }
 
 #[derive(Debug)]

@@ -84,24 +84,18 @@ fn workspace_evidence_distinguishes_absent_leaf_and_parent_from_json_damage() {
         root.path().join("absent/record.json"),
     ] {
         assert!(
-            read_workspace_evidence::<json_codec::Value>(
-                held.open_regular(&path).map(Some),
-                &mut damage
-            )
-            .unwrap()
-            .is_none()
+            read_workspace_evidence::<json_codec::Value>(held.open_regular(&path), &mut damage)
+                .unwrap()
+                .is_none()
         );
         assert!(damage.is_none());
     }
     let path = root.path().join("record.json");
     fs::write(&path, b"{").unwrap();
     assert!(
-        read_workspace_evidence::<json_codec::Value>(
-            held.open_regular(&path).map(Some),
-            &mut damage
-        )
-        .unwrap()
-        .is_none()
+        read_workspace_evidence::<json_codec::Value>(held.open_regular(&path), &mut damage)
+            .unwrap()
+            .is_none()
     );
     assert!(matches!(
         damage,
@@ -109,11 +103,8 @@ fn workspace_evidence_distinguishes_absent_leaf_and_parent_from_json_damage() {
     ));
     fs::write(&path, b"{\"healthy\":true}").unwrap();
     assert_eq!(
-        read_workspace_evidence::<json_codec::Value>(
-            held.open_regular(&path).map(Some),
-            &mut damage
-        )
-        .unwrap(),
+        read_workspace_evidence::<json_codec::Value>(held.open_regular(&path), &mut damage)
+            .unwrap(),
         Some(json!({"healthy":true}))
     );
 }

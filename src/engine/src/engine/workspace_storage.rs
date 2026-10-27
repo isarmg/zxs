@@ -63,7 +63,7 @@ impl Engine {
         let mut damage = None;
         for directory in directories {
             let Some(body) = read_workspace_evidence::<json_codec::Value>(
-                directory.join("wire-request.json").open().map(Some),
+                directory.join("wire-request.json").open(),
                 &mut damage,
             )?
             else {
@@ -160,7 +160,7 @@ impl Engine {
             let mut damage = None;
             for path in &paths {
                 if let Some(workspace) =
-                    read_workspace_evidence::<Workspace>(path.open().map(Some), &mut damage)?
+                    read_workspace_evidence::<Workspace>(path.open(), &mut damage)?
                 {
                     self.validate_workspace_mirror(&id, path.path(), &workspace, authoritative)?;
                     healthy.push(workspace);
@@ -377,7 +377,7 @@ impl Engine {
         let mut damage = None;
         for directory in &directories {
             let Some(request) = read_workspace_evidence::<CommitRequest>(
-                directory.join("commit-request.json").open().map(Some),
+                directory.join("commit-request.json").open(),
                 &mut damage,
             )?
             else {
@@ -457,7 +457,7 @@ impl Engine {
         let mut damage = None;
         for directory in &directories {
             let Some(request) = read_workspace_evidence::<CommitRequest>(
-                directory.join("commit-request.json").open().map(Some),
+                directory.join("commit-request.json").open(),
                 &mut damage,
             )?
             else {
@@ -654,7 +654,7 @@ impl crate::engine::PlanningContext<'_> {
         let mut damage = None;
         for directory in self.workspace_evidence_directories(workspace)? {
             match read_workspace_evidence::<CommitRequest>(
-                directory.join("commit-request.json").open().map(Some),
+                directory.join("commit-request.json").open(),
                 &mut damage,
             )? {
                 Some(saved) if canonical_json(&saved)? == expected => return Ok(()),
@@ -756,14 +756,10 @@ impl<'a> crate::engine::PlanningContext<'a> {
 // These bounded redundant files may be absent or contain a torn JSON mirror.
 // I/O/permission failures are not evidence of absence or recoverable corruption.
 fn read_workspace_evidence<T: data_serialization::de::DeserializeOwned>(
-    file: Result<Option<fs::File>>,
+    file: Result<fs::File>,
     damage: &mut Option<Error>,
 ) -> Result<Option<T>> {
-    let bytes = match file {
-        Ok(None) => return Ok(None),
-        Ok(Some(file)) => read_file_bytes(file, MAX_METADATA),
-        Err(error) => Err(error),
-    };
+    let bytes = file.and_then(|file| read_file_bytes(file, MAX_METADATA));
     match bytes.and_then(|bytes| decode_strict(&bytes).map_err(Into::into)) {
         Ok(value) => Ok(Some(value)),
         Err(Error::Filesystem(platform_io::fs_safety::Error::Io(source)))

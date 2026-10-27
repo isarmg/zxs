@@ -459,7 +459,7 @@ impl Engine {
                             let staged = workspace.as_ref()
                                 .and_then(|workspace| workspace.files.get(item))
                                 .expect("invariant: staged entries were composed from this workspace");
-                            (engine.staged_source(workspace.as_ref().expect("invariant: staged entry has a workspace"), staged)?, staged.base_version_id.clone().into_iter().collect::<Vec<_>>(), staged.content_hash, staged.size)
+                            (engine.planning_context().staged_source(workspace.as_ref().expect("invariant: staged entry has a workspace"), staged)?, staged.base_version_id.clone().into_iter().collect::<Vec<_>>(), staged.content_hash, staged.size)
                         } else {
                             pending_file_versions.insert(entry.file_id.clone(), entry.version_id.clone());
                             continue;

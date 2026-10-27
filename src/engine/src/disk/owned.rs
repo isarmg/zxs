@@ -36,7 +36,15 @@ impl DiskRoot {
 
     fn open_directory(&self, path: &Path) -> Result<File> {
         if path == self.path {
-            return Ok(File::from(
+            self.open_relative_directory(None)
+        } else {
+            self.open_relative_directory(Some(&self.relative(path)?))
+        }
+    }
+
+    fn open_relative_directory(&self, path: Option<&RelativePath>) -> Result<File> {
+        match path {
+            None => Ok(File::from(
                 rustix::fs::openat(
                     self.directory.directory(),
                     ".",
@@ -46,11 +54,9 @@ impl DiskRoot {
                     rustix::fs::Mode::empty(),
                 )
                 .map_err(std::io::Error::from)?,
-            ));
+            )),
+            Some(path) => self.directory.open_directory(path).map_err(fs_error),
         }
-        self.directory
-            .open_directory(&self.relative(path)?)
-            .map_err(fs_error)
     }
 
     pub(crate) fn directory(&self, path: &Path) -> Result<File> {
@@ -131,16 +137,8 @@ impl DiskRoot {
     }
 
     fn parent(&self, path: &Path) -> Result<(File, EntryName)> {
-        self.relative(path)?;
-        let parent = path
-            .parent()
-            .expect("invariant: a relative child has a parent");
-        let name = EntryName::new(
-            path.file_name()
-                .expect("invariant: a relative child has a name"),
-        )
-        .map_err(fs_error)?;
-        Ok((self.open_directory(parent)?, name))
+        let (parent, name) = self.relative(path)?.split_parent();
+        Ok((self.open_relative_directory(parent.as_ref())?, name))
     }
 
     pub(crate) fn read_bytes(&self, path: &Path, maximum: usize) -> Result<Vec<u8>> {
@@ -173,25 +171,24 @@ impl DiskRoot {
         if path == self.path {
             return Ok(());
         }
-        self.relative(path)?;
-        let parent_path = path
-            .parent()
-            .expect("invariant: a relative child has a parent");
-        let parent = match self.open_directory(parent_path) {
+        self.private_relative_dir(Some(&self.relative(path)?))
+    }
+
+    fn private_relative_dir(&self, path: Option<&RelativePath>) -> Result<()> {
+        let Some(path) = path else {
+            return Ok(());
+        };
+        let (parent_path, name) = path.split_parent();
+        let parent = match self.open_relative_directory(parent_path.as_ref()) {
             Ok(parent) => parent,
             Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
                 if error.kind() == std::io::ErrorKind::NotFound =>
             {
-                self.private_dir(parent_path)?;
-                self.open_directory(parent_path)?
+                self.private_relative_dir(parent_path.as_ref())?;
+                self.open_relative_directory(parent_path.as_ref())?
             }
             Err(error) => return Err(error),
         };
-        let name = EntryName::new(
-            path.file_name()
-                .expect("invariant: a relative child has a name"),
-        )
-        .map_err(fs_error)?;
         let created = match rustix::fs::mkdirat(
             &parent,
             name.as_os_str(),
@@ -216,8 +213,8 @@ impl DiskRoot {
             )
             .map_err(std::io::Error::from)?,
         );
-        let directory =
-            PrivateDirectory::from_directory(directory, path.to_path_buf()).map_err(fs_error)?;
+        let directory = PrivateDirectory::from_directory(directory, self.path.join(path.as_path()))
+            .map_err(fs_error)?;
         if created {
             directory.sync().map_err(fs_error)?;
             parent.sync_all()?;
@@ -226,15 +223,13 @@ impl DiskRoot {
     }
 
     pub(crate) fn write_atomic(&self, path: &Path, bytes: &[u8], replace: bool) -> Result<()> {
-        self.relative(path)?;
-        let parent = path
-            .parent()
-            .expect("invariant: a relative child has a parent");
-        self.private_dir(parent)?;
-        let directory = self.private_directory(parent)?;
-        let name = EntryName::new(
-            path.file_name()
-                .expect("invariant: a relative child has a name"),
+        let (parent, name) = self.relative(path)?.split_parent();
+        self.private_relative_dir(parent.as_ref())?;
+        let directory = PrivateDirectory::from_directory(
+            self.open_relative_directory(parent.as_ref())?,
+            path.parent()
+                .expect("invariant: a relative child has a parent")
+                .to_path_buf(),
         )
         .map_err(fs_error)?;
         write_atomic_in(&directory, &name, bytes, replace)

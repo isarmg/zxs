@@ -567,9 +567,10 @@ impl Engine {
                 if !*admitted {
                     continue;
                 }
-                let Some(handle) = self.disk_resources.available(d) else {
-                    continue;
-                };
+                let handle = self
+                    .disk_resources
+                    .available(d)
+                    .expect("invariant: an admitted cleanup slot retains its disk handle");
                 let root = &handle.root;
                 let dir = version_dir(d, &v.history_tree_id, id);
                 match root.directory(&dir) {

@@ -277,17 +277,13 @@ fn named_containers(
                 "container namespace contains a non-directory or symbolic link",
             ));
         }
-        let name = entry
-            .as_os_str()
-            .to_os_string()
-            .into_string()
-            .map_err(|name| {
-                Error::PathEncoding(name).context(
-                    ErrorCode::ContainerLayoutInvalid,
-                    "container directory name is not UTF-8",
-                )
-            })?;
-        name_policy::validate_name(&name)?;
+        let name = entry.as_os_str().to_str().ok_or_else(|| {
+            Error::PathEncoding(entry.as_os_str().to_owned()).context(
+                ErrorCode::ContainerLayoutInvalid,
+                "container directory name is not UTF-8",
+            )
+        })?;
+        name_policy::validate_name(name)?;
         disk.directory(&path)?;
         if marker_matches_at(disk, &path.join(OWNER_MARKER), file_id, observe)? {
             reject_unsupported_container(disk, &path)?;
@@ -344,17 +340,13 @@ fn container_at(
                 "stable file directory contains a non-directory or symbolic link",
             ));
         }
-        let name = entry
-            .as_os_str()
-            .to_os_string()
-            .into_string()
-            .map_err(|name| {
-                Error::PathEncoding(name).context(
-                    ErrorCode::ContainerLayoutInvalid,
-                    "container directory name is not UTF-8",
-                )
-            })?;
-        name_policy::validate_name(&name)?;
+        let name = entry.as_os_str().to_str().ok_or_else(|| {
+            Error::PathEncoding(entry.as_os_str().to_owned()).context(
+                ErrorCode::ContainerLayoutInvalid,
+                "container directory name is not UTF-8",
+            )
+        })?;
+        name_policy::validate_name(name)?;
         disk.directory(&path)?;
         if name == "namespace"
             && marker_matches_at(disk, &path.join(NAMESPACE_MARKER), file_id, observe)?

@@ -1,6 +1,7 @@
 //! Verified replicas, read leases, offline export and disk observations.
 use super::provenance::MetadataReadContext;
 use super::{Engine, OpenedContent, ReadLease, ReadSource};
+use crate::journal::verify_local_publication_in_context;
 use crate::{disk::*, *};
 use std::path::Path;
 use std::{io::Read, path::PathBuf, sync::Arc};

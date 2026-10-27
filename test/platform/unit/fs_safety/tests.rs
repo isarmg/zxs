@@ -1,6 +1,39 @@
 use super::*;
 
 #[test]
+fn admitted_relative_paths_split_into_typed_parents_and_entries() {
+    for (input, parent, name) in [
+        ("entry", None, "entry"),
+        ("one/two/leaf", Some("one/two"), "leaf"),
+        ("目录/名字", Some("目录"), "名字"),
+    ] {
+        let path = RelativePath::new(input).unwrap();
+        let (actual_parent, actual_name) = path.split_parent();
+        assert_eq!(
+            actual_parent,
+            parent.map(|path| RelativePath::new(path).unwrap())
+        );
+        assert_eq!(actual_name, EntryName::new(name).unwrap());
+    }
+    let long_name = "x".repeat(300);
+    let path = RelativePath::new(format!("parent/{long_name}")).unwrap();
+    assert_eq!(path.split_parent().1.as_os_str(), OsStr::new(&long_name));
+    for invalid in ["", "/entry", ".", "parent/../entry", "a//b", "a/./b", "a/"] {
+        assert!(RelativePath::new(invalid).is_err(), "{invalid:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn splitting_an_admitted_path_preserves_non_utf8_entry_bytes() {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let path = PathBuf::from(std::ffi::OsString::from_vec(b"parent/\xff".to_vec()));
+    let (parent, name) = RelativePath::new(path).unwrap().split_parent();
+    assert_eq!(parent.unwrap().as_path(), Path::new("parent"));
+    assert_eq!(name.as_os_str().as_bytes(), b"\xff");
+}
+
+#[test]
 fn lower_hex_preserves_fixed_vectors() {
     assert_eq!(crate::lower_hex(&[]), "");
     assert_eq!(

@@ -234,8 +234,9 @@ pub(crate) fn list_object_hashes_at(
     };
     for entry in root.entries(&directory)? {
         let entry = entry?;
-        let name = entry.as_os_str().to_owned().into_string().map_err(|name| {
-            Error::PathEncoding(name).context(ErrorCode::ObjectCorrupt, "invalid object name")
+        let name = entry.as_os_str().to_str().ok_or_else(|| {
+            Error::PathEncoding(entry.as_os_str().to_owned())
+                .context(ErrorCode::ObjectCorrupt, "invalid object name")
         })?;
         if name.len() == 2
             && name
@@ -247,7 +248,7 @@ pub(crate) fn list_object_hashes_at(
             for child in root.entries(&shard)? {
                 let child = child?;
                 let hash = inventory_hash(root, &shard.join(child.as_path()))?;
-                if !hash.starts_with(&name) {
+                if !hash.starts_with(name) {
                     return Err(Error::new(
                         storage_contract::ErrorCode::ObjectCorrupt,
                         "object is in the wrong shard",
