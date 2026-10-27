@@ -122,9 +122,16 @@ pub(crate) struct NodeProjection<'a> {
 
 impl<'a> NodeProjection<'a> {
     pub(crate) fn new(state: &'a State) -> Self {
+        Self::from_merge_events(state, state.file_branch_merges.values())
+    }
+
+    pub(crate) fn from_merge_events(
+        state: &'a State,
+        events: impl IntoIterator<Item = &'a FileBranchMerge>,
+    ) -> Self {
         let mut merges = std::collections::BTreeMap::<_, Vec<_>>::new();
         // Preserve the original map iteration order within each result node.
-        for event in state.file_branch_merges.values() {
+        for event in events {
             #[cfg(test)]
             MERGE_EVENT_VISITS.set(MERGE_EVENT_VISITS.get() + 1);
             merges

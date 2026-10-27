@@ -3365,14 +3365,17 @@ fn real_branch_rename_uses_precise_projection_and_matches_complete_graph_bytes()
             storage_contract::OperationId::generate(),
         )
         .unwrap();
-    let owners = super::delta::DerivedOwners::from_state(&before);
-    let delta = super::delta::ProjectionDelta::between(&before, engine.state(), &owners)
+    let owners = crate::state_projection::DerivedOwners::from_state(&before);
+    let delta = crate::state_projection::ProjectionDelta::between(&before, engine.state(), &owners)
         .unwrap()
         .expect("the real rename retains an exact history projection write set");
     assert_eq!(delta.histories.len(), 1);
     let edits = &delta.histories[&repo.history_tree_id];
     assert_eq!(edits.maps.len(), 1);
-    assert_eq!(edits.maps[&super::delta::Field::Branches].len(), 1);
+    assert_eq!(
+        edits.maps[&crate::state_projection::Field::Branches].len(),
+        1
+    );
     let (expected, objects) = prepare_history_manifests(engine.state(), MAX_METADATA).unwrap();
     let disk = &engine.config.disks[0];
     let scanned = scan(disk).unwrap();
@@ -3401,8 +3404,8 @@ fn real_branch_rename_uses_precise_projection_and_matches_complete_graph_bytes()
 #[test]
 fn real_save_metadata_and_backup_policy_writes_keep_general_projection_deltas() {
     fn precise(before: &State, after: &State, history: &str) {
-        let owners = super::delta::DerivedOwners::from_state(before);
-        let delta = super::delta::ProjectionDelta::between(before, after, &owners)
+        let owners = crate::state_projection::DerivedOwners::from_state(before);
+        let delta = crate::state_projection::ProjectionDelta::between(before, after, &owners)
             .unwrap()
             .expect("ordinary saves and metadata writes have exact map provenance");
         assert_eq!(
@@ -3413,7 +3416,10 @@ fn real_save_metadata_and_backup_policy_writes_keep_general_projection_deltas() 
                 .collect::<Vec<_>>(),
             vec![history]
         );
-        assert_eq!(delta.owners, super::delta::DerivedOwners::from_state(after));
+        assert_eq!(
+            delta.owners,
+            crate::state_projection::DerivedOwners::from_state(after)
+        );
     }
     let temp = tempfile::tempdir().unwrap();
     let mut engine = initialize(temp.path());

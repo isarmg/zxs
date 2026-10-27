@@ -1,7 +1,24 @@
-use super::super::{HistoryManifest, graph, history_changes_oracle_tests::dependency_fixture};
-use super::*;
-use crate::{canonical_json, disk::MAX_METADATA, journal::AuthenticatedMetadataObject};
-use json_codec::json;
+use super::{HistoryManifest, graph, history_changes_oracle_tests::dependency_fixture};
+use crate::state_projection::{DerivedOwners, Field, ProjectionDelta};
+use crate::{State, canonical_json, disk::MAX_METADATA, journal::AuthenticatedMetadataObject};
+use json_codec::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
+
+// Independent input coverage, not an export of the production field schema.
+macro_rules! projected_fields {
+    ($consumer:ident) => {
+        $consumer! {
+            branches, file_selections, directory_branches, directory_trees,
+            file_write_origins, file_contexts, file_path_nodes, file_metadata_nodes,
+            file_branch_merges, file_branch_aliases, file_node_parents, file_path_notes,
+            directory_tree_selections, file_locations, file_backup_paths,
+            file_backup_policies, directory_selections, directory_selection_generations,
+            file_selection_generations, file_notes, version_notes, file_names, commits,
+            versions, placements, merge_links, history_boundaries, content_states,
+            placement_rules, protection_policies,
+        }
+    };
+}
 
 fn cloned<T: Clone>(value: &T) -> T {
     value.clone()
@@ -138,7 +155,7 @@ fn every_projection_map_insert_delete_and_same_value_write_matches_full_oracle()
     let before = dependency_fixture();
     let index = DerivedOwners::from_state(&before);
     macro_rules! exercise {
-        ($($field:ident => $variant:ident, $owner:ident, $name:literal;)*) => { $(
+        ($($field:ident,)*) => { $(
             for key in before.$field.keys() {
                 let mut after = candidate(&before);
                 after.$field.remove(key);
@@ -148,11 +165,11 @@ fn every_projection_map_insert_delete_and_same_value_write_matches_full_oracle()
                 compare(&after, &restored, &removed_index);
                 let mut same = candidate(&before);
                 same.$field.insert(key.clone(), cloned(&before.$field[key]));
-                assert!(ProjectionDelta::between(&before, &same, &index).unwrap().unwrap().histories.is_empty(), $name);
+                assert!(ProjectionDelta::between(&before, &same, &index).unwrap().unwrap().histories.is_empty(), stringify!($field));
             }
         )* };
     }
-    projection_maps!(exercise);
+    projected_fields!(exercise);
 }
 
 #[test]
@@ -237,8 +254,7 @@ fn deleting_one_of_multiple_references_retains_ownership_until_the_last_referenc
         index = compare(&before, &after, &index);
         before = after;
     }
-    assert!(index.files.owners("shared-file").is_empty());
-    assert!(index.directories.owners("shared-directory").is_empty());
+    assert!(index.file_histories("shared-file").next().is_none());
 }
 
 #[test]
@@ -298,20 +314,8 @@ fn repeated_precise_generations_preserve_reverse_indices_and_untouched_history_s
         .unwrap();
     assert_eq!(delta.histories.len(), 1);
     assert_eq!(delta.histories["h1"].maps.len(), 1);
-    assert!(
-        delta
-            .owners
-            .history_rows
-            .shares_storage_with(&index.history_rows)
-    );
-    assert!(delta.owners.files.0.shares_storage_with(&index.files.0));
-    assert!(
-        delta
-            .owners
-            .directories
-            .0
-            .shares_storage_with(&index.directories.0)
-    );
+    // Storage-sharing assertions live beside the private derived relation
+    // implementation; this module retains the independent full graph oracle.
 }
 
 #[test]
@@ -332,13 +336,13 @@ fn exact_empty_and_control_writes_are_ignored_but_all_foreign_and_overflow_are_e
             .is_empty()
     );
     macro_rules! unknown {
-        ($($field:ident => $variant:ident, $owner:ident, $name:literal;)*) => { $(
+        ($($field:ident,)*) => { $(
             let mut after = candidate(&before);
             after.$field = Default::default();
-            assert!(ProjectionDelta::between(&before, &after, &index).unwrap().is_none(), $name);
+            assert!(ProjectionDelta::between(&before, &after, &index).unwrap().is_none(), stringify!($field));
         )* };
     }
-    projection_maps!(unknown);
+    projected_fields!(unknown);
     let mut after = candidate(&before);
     after.branches.values_mut().next().unwrap().name = "unknown mutable iterator".into();
     assert!(
@@ -380,25 +384,6 @@ fn stable_history_and_directory_head_writes_do_not_rebuild_dependency_membership
     let delta = ProjectionDelta::between(&before, &after, &index)
         .unwrap()
         .unwrap();
-    assert!(
-        delta
-            .owners
-            .repository_rows
-            .shares_storage_with(&index.repository_rows)
-    );
-    assert!(
-        delta
-            .owners
-            .history_rows
-            .shares_storage_with(&index.history_rows)
-    );
-    assert!(
-        delta
-            .owners
-            .directory_trees
-            .0
-            .shares_storage_with(&index.directory_trees.0)
-    );
     assert_eq!(delta.histories["h1"].maps.len(), 2);
     assert_eq!(delta.histories["h2"].maps.len(), 2);
     compare(&before, &after, &index);

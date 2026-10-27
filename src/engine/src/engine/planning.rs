@@ -187,7 +187,12 @@ impl<'a> PlanningContext<'a> {
         // mutation still owns an independent next State until publication.
         let mut next = self.state.as_ref().clone();
         next.begin_tracking();
-        crate::container_storage::capture_names(&mut next);
+        if !self
+            .published_state_base
+            .is_some_and(|base| base.names_captured_for(self.state))
+        {
+            crate::container_storage::capture_names(&mut next);
+        }
         next.sequence = self.next_slot;
         if !kind.starts_with("auth.") {
             next.business_generation =
@@ -203,7 +208,7 @@ impl<'a> PlanningContext<'a> {
         let timestamp = crate::business::now()?;
         let mut prepared = Vec::new();
         let mut result = change(self, &mut next, &mut prepared)?;
-        crate::container_storage::capture_names(&mut next);
+        crate::container_storage::capture_changed_names(self.state, &mut next);
         result["timestamp"] = json_codec::json!(timestamp.to_string());
         if let Some(branch_id) = result
             .get("branch_id")

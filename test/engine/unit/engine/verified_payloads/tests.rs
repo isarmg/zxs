@@ -647,8 +647,8 @@ fn name_projection_preparation_reports_shared_identity_faults_at_the_source() {
     assert!(
         crate::container_storage::prepare_names(
             &engine.config,
-            engine.state(),
-            &next,
+            &crate::state_projection::ProjectionTransition::new(engine.state(), &next, None)
+                .unwrap(),
             MAX_METADATA,
             Some(&engine.metadata_integrity),
         )

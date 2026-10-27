@@ -19,6 +19,7 @@
 | `business/namespace/draft.rs` | 工作区提交内的临时路径索引与保序条目草稿，不用于读取或持久缓存 |
 | `business/ancestry.rs` | 基于子节点索引的提交后代查询，供拆分与历史包校验复用 |
 | `journal.rs` / `metadata_budget.rs` | 哈希对象、日志帧、证明与实际序列化大小限制 |
+| `state_projection.rs` / `state_projection/` | history 与容器共同消费的 State 派生成员及精确写集闭包，不是编码或持久化权威 |
 | `container_storage.rs` | 普通版本文件、真实容器改名、继承引用缓存与格式准入 |
 | `historical_save.rs` / `maintenance.rs` | 历史另存分支、计划、清理与历史拆分 |
 | `history_package.rs` | 历史包证明、精确图对象选择与修复、离线校验、导出及恢复导入 |

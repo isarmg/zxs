@@ -34,6 +34,22 @@ container.json 的 inherited_branches 记录来源、可见 version_id、空 own
 
 实现直接复用本项目的 `disk::{private_dir, existing_private_dir, open_regular, write_json, sync_dir}` 与 `platform-io` 安全文件系统原语；没有复制兄弟仓库的存储协议或脚本。依赖 `rustix` 和 `time` 的真实包名保留。
 
+<a id="name-capture-lineage"></a>
+
+## 命名捕获的发布谱系与增量边界
+
+捕获不变量是：每个 repository 当前 main HEAD 的文件都有 `file_names` 和 `file_locations` 两个 key。它只证明覆盖，不把两个值重新设为当前 alias，也不替代历史清单的路径／名称一致性验证。完整捕获按 repository key 顺序、随后按原 `Commit.entries` 顺序分别补齐两个字段，已有值各自保留。
+
+生产 `MutationPlan::Prepared` 只有 `planning::plan_new_mutation` 一个构造点，所有普通及 detached 发布入口都消费这份已经完成捕获的候选。`PublishedStateBase` 只在决定、状态安装和索引更新成功后构造；其 `Weak<State>` 与当前不可变 State allocation 相同，因而也证明该 State 的命名覆盖。此处不需要新增 marker、缓存、config hash 或磁盘健康检查；图复用和决定点的配置、epoch、成员及 I/O 验证保持原状。
+
+冷启动、恢复或 allocation 不匹配时，planner 仍在业务 closure **之前**对自己的 next State 做一次完整捕获。`begin_tracking` 先执行，因此补齐值进入本次写集；不会修改现有快照 hash 绑定的 State。仅在 closure 之后捕获会让分支切换、删除或重命名丢失原物理归属，所以不能删除冷前置步骤。
+
+当前真实身份写入方只有完整／增量捕获、namespace 显式 insert、workspace／batch 的 entry insert、restore 的 extend 和 split 的 insert；它们保留两个 map 的已有 key。基于这个私有调用契约，未变化的 main HEAD 在 closure 后仍然覆盖。`capture_changed_names` 从 repositories、branches、commits 的精确写集确定前后相关 repository，再比较真实 main HEAD；同 ID commit 被替换也必须处理。只遍历受影响的当前 HEAD，按原全量顺序补齐新缺项；非 main 分支和纯备注／认证写入不遍历 namespace entries。没有为不存在的身份删除入口增加反向缓存；将来若引入这种真实写入，必须同时改变此调用契约及其测试。
+
+`MapChanges::All`、foreign replacement 和写集上限溢出保留完整后置捕获。恢复不会从磁盘反序列化发布收据；`Arc::make_mut` 的本地 plan 写入同样使旧 Weak allocation 失效。独立全量 oracle 在根 `test/`，覆盖首 alias、独立缺字段、main 重绑、同 ID commit、更改／移除／重加 namespace、多代及 All／foreign／overflow；真实发布与 RawState 准入测试另行覆盖 receipt allocation 和冷前置捕获。
+
+精确 warm 路径成本为写集 key 查找加受影响 main HEAD 的实际 entries 大小 S，不扫描无关 repository 的 entries N。没有拆分大 Commit，也不声称消除 State clone、名字容器首写、其他 projection 或 I/O 的全量成本。此切片的源码审阅不代表测试已运行；验证以绑定提交的 GitHub 门禁结果为准。
+
 ## 备份路径与保护证明
 
 主盘仍按 `file_locations[file_id]` 定位。用户配置备份规则后，备份槽按 `file_backup_paths[file_id][slot_id]` 定位：用户给定的独立前缀，加配置根下的相对路径。单文件规则的相对路径为配置时的文件名。该路径随稳定文件身份保存；主盘文件或父目录移动、改名、切换历史视图时均不重算，显式修改备份配置才更新。新增文件沿用所在目录有效规则，已有子目录或文件的独立规则不会被父规则覆盖。
@@ -49,3 +65,9 @@ container.json 的 inherited_branches 记录来源、可见 version_id、空 own
 发布准备先用实际 JSON 编码器检查每个 container.json 的读取大小限制，并用单个匿名暂存文件保存编码结果，避免同时保留所有文件与副本的缓存字节。决定后才进行物理名称变更和原子缓存替换；目录重命名、文件写入与同步错误仍会传播，不因 cache_only 标记而被忽略。缓存格式不变，超过单对象限制的新事务在 ACCEPT 前拒绝。
 
 已经验证的 Publication 允许名称/缓存修补跳过不存在或权限安全且完全为空的副本根目录。这既包括历史发布重放，也包括通过恢复计划及正文保护验证后新构造的退化恢复发布；仍可从健康正文副本读取历史。现存但身份错误或不安全的根目录不会被当作离线跳过。普通新候选和普通未完成候选不使用此修补模式，必需副本数量及落盘证明条件不变；退化恢复仍须通过其独立的恢复验证。缺失副本也会使旧检查点覆盖失效并回退到权威日志重放。
+
+## 派生成员选择
+
+名称准备消费中立 `state_projection` 的同一 State-bound transition，与 history 编码共享版本成员及 owner 生命周期，不自行维护第二份跨发布缓存。文件版本按 file→history→version ID 选择；位置是旧／新全部版本 route 的并集，PURGED/MIGRATED 与旧位置不被遗漏。pending branches、路径／元数据节点、merge events、文件级 contexts 与 alias-source keys 按真实成员选择；所有描述符值仍读 State。
+
+实际容器存在后才创建 call-local 描述符与标签 memo，按 history 复用副本无关内容，保留原排序、精确 JSON 字节和逐对象大小准入。冷／恢复／All 输入一次重建关系，外部完整验证与 post-decision 物理应用边界不变。该源码切片不改变格式、哈希、正文、目录安全或 fsync；也不宣称消除 SharedRecords 的 BTreeMap 首写复制成本。独立根 test 已补 membership/byte/I/O oracle，执行结果以 GitHub 门禁为准；本地未运行编译、测试或性能测量。

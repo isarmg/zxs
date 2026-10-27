@@ -24,6 +24,7 @@ mod metadata_map;
 mod protection;
 mod publication_evidence;
 mod repair;
+mod state_projection;
 mod wire;
 pub use business::{
     FileBranchMergeRequest, FileNodeProjectionRequest, FileNodeSummary, FileNodeTagsUpdateRequest,

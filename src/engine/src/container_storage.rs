@@ -1,6 +1,8 @@
 //! Ordinary version files in one renameable directory per stable file identity.
 use crate::{disk::*, *};
 mod changes;
+mod projection;
+use crate::state_projection::{ProjectionTransition, StateProjection};
 use changes::changed_files;
 use date_time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use json_codec::json;
@@ -554,19 +556,29 @@ pub(crate) fn capture_names(state: &mut State) {
     } = state;
     let entries = repositories
         .values()
-        .map(|repository| {
-            branches
-                .get(&repository.main_branch_id)
-                .expect("invariant: every repository has its main branch")
-        })
-        .map(|branch| {
-            commits
-                .get(&branch.head_commit_id)
-                .expect("invariant: every branch has its head commit")
-        })
-        .flat_map(|commit| &commit.entries)
-        .filter(|entry| entry.kind == NamespaceEntryKind::File);
-    for entry in entries {
+        .flat_map(|repository| &main_head(repository, branches, commits).entries);
+    capture_entry_names(entries, file_names, file_locations);
+}
+
+fn main_head<'a>(
+    repository: &Repository,
+    branches: &'a storage_contract::TrackedMap<Branch>,
+    commits: &'a storage_contract::TrackedRecords<Commit>,
+) -> &'a Commit {
+    let branch = branches
+        .get(&repository.main_branch_id)
+        .expect("invariant: every repository has its main branch");
+    commits
+        .get(&branch.head_commit_id)
+        .expect("invariant: every branch has its head commit")
+}
+
+fn capture_entry_names<'a>(
+    entries: impl Iterator<Item = &'a Entry>,
+    file_names: &mut storage_contract::TrackedMap<String>,
+    file_locations: &mut storage_contract::TrackedMap<String>,
+) {
+    for entry in entries.filter(|entry| entry.kind == NamespaceEntryKind::File) {
         if !file_names.contains_key(&entry.file_id) {
             file_names.insert(entry.file_id.clone(), entry.name().to_owned());
         }
@@ -574,6 +586,84 @@ pub(crate) fn capture_names(state: &mut State) {
             file_locations.insert(entry.file_id.clone(), entry.path().to_owned());
         }
     }
+}
+
+/// The planner captured every previous main HEAD before invoking its private
+/// mutation closure. Business writers retain identity keys; only explicit
+/// namespace edits replace their values. Unchanged heads therefore need no scan.
+pub(crate) fn capture_changed_names(previous: &State, next: &mut State) {
+    let Some(repositories) = changed_namespace_repositories(previous, next) else {
+        capture_names(next);
+        return;
+    };
+    let State {
+        repositories: current,
+        branches,
+        commits,
+        file_names,
+        file_locations,
+        ..
+    } = next;
+    // Preserve the full capture's repository order and each commit's entry order.
+    let entries = repositories
+        .iter()
+        .map(|id| &current[id])
+        .flat_map(|repository| &main_head(repository, branches, commits).entries);
+    capture_entry_names(entries, file_names, file_locations);
+}
+
+fn changed_namespace_repositories(previous: &State, next: &State) -> Option<BTreeSet<String>> {
+    use storage_contract::MapChanges;
+    let MapChanges::Keys(repositories) = next.repositories.changes_since(&previous.repositories)
+    else {
+        return None;
+    };
+    let MapChanges::Keys(branches) = next.branches.changes_since(&previous.branches) else {
+        return None;
+    };
+    let MapChanges::Keys(commits) = next.commits.changes_since(&previous.commits) else {
+        return None;
+    };
+    let mut repositories = repositories.as_ref().clone();
+    for state in [previous, next] {
+        for branch in branches.iter().filter_map(|id| state.branches.get(id)) {
+            let repository = namespace_repository(state, &branch.history_tree_id);
+            if repository.main_branch_id == branch.branch_id {
+                repositories.insert(repository.repository_id.clone());
+            }
+        }
+        for commit in commits.iter().filter_map(|id| state.commits.get(id)) {
+            let repository = namespace_repository(state, &commit.history_tree_id);
+            let head = main_head(repository, &state.branches, &state.commits);
+            if head.commit_id == commit.commit_id {
+                repositories.insert(repository.repository_id.clone());
+            }
+        }
+    }
+    repositories.retain(|id| {
+        let Some(repository) = next.repositories.get(id) else {
+            return false;
+        };
+        let head = main_head(repository, &next.branches, &next.commits);
+        let previous_head = previous
+            .repositories
+            .get(id)
+            .map(|repository| main_head(repository, &previous.branches, &previous.commits));
+        previous_head.is_none_or(|previous| previous.commit_id != head.commit_id)
+            || commits.contains(&head.commit_id)
+    });
+    Some(repositories)
+}
+
+fn namespace_repository<'a>(state: &'a State, history: &str) -> &'a Repository {
+    let history = state
+        .histories
+        .get(history)
+        .expect("invariant: every branch and commit belongs to its history");
+    state
+        .repositories
+        .get(&history.repository_id)
+        .expect("invariant: every history has its repository")
 }
 
 fn synchronize_location(
@@ -804,7 +894,8 @@ pub(crate) fn synchronize_names(
     previous: &State,
     next: &State,
 ) -> Result<()> {
-    prepare_names(config, previous, next, MAX_METADATA, None)?.apply(config)
+    let projection = ProjectionTransition::new(previous, next, None)?;
+    prepare_names(config, &projection, MAX_METADATA, None)?.apply(config)
 }
 
 /// A verified Publication authorizes repair that skips unavailable replicas.
@@ -816,41 +907,39 @@ pub(crate) fn repair_historical_names(
     next: &State,
     metadata: &crate::engine::provenance::MetadataIntegrity,
 ) -> Result<()> {
-    prepare_names_inner(config, previous, next, MAX_METADATA, true, Some(metadata))?.apply(config)
+    let projection = ProjectionTransition::new(previous, next, None)?;
+    prepare_names_inner(config, &projection, MAX_METADATA, true, Some(metadata))?.apply(config)
 }
 
 pub(crate) fn prepare_names(
     config: &ValidatedConfig,
-    previous: &State,
-    next: &State,
+    projection: &ProjectionTransition<'_>,
     maximum: usize,
     metadata: Option<&crate::engine::provenance::MetadataIntegrity>,
 ) -> Result<PreparedNames> {
-    prepare_names_inner(config, previous, next, maximum, false, metadata)
+    prepare_names_inner(config, projection, maximum, false, metadata)
 }
 
 fn projection_locations(
-    previous: &State,
-    next: &State,
+    previous: StateProjection<'_>,
+    next: StateProjection<'_>,
     file: &str,
-) -> Result<BTreeSet<(String, String)>> {
+) -> BTreeSet<(String, String)> {
     let mut locations = BTreeSet::new();
-    for (state, version) in previous
-        .versions
-        .values()
-        .map(|version| (previous, version))
-        .chain(next.versions.values().map(|version| (next, version)))
-        .filter(|(_, version)| version.file_id == file)
-    {
-        let placement = state
-            .placements
-            .get(&version.version_id)
-            .expect("invariant: every admitted version has a placement");
-        for slot in &placement.route_slot_ids {
-            locations.insert((slot.clone(), version.history_tree_id.clone()));
+    for view in [previous, next] {
+        for key in view.owners().versions(file) {
+            let version = &view.state().versions[key];
+            let placement = view
+                .state()
+                .placements
+                .get(&version.version_id)
+                .expect("invariant: every admitted version has a placement");
+            for slot in &placement.route_slot_ids {
+                locations.insert((slot.clone(), version.history_tree_id.clone()));
+            }
         }
     }
-    Ok(locations)
+    locations
 }
 
 fn projection_path<'a>(
@@ -888,10 +977,12 @@ fn validate_new_projection_path(location: Option<&String>) -> Result<()> {
 
 /// Pure new-candidate admission, before copying any payload. Use the exact same
 /// routed projections as cache preparation, not unused backup bindings.
-pub(crate) fn validate_new_projection_paths(previous: &State, next: &State) -> Result<()> {
-    for file in changed_files(previous, next) {
-        for (slot, _) in projection_locations(previous, next, &file)? {
-            validate_new_projection_path(projection_path(next, &file, &slot).0)?;
+pub(crate) fn validate_new_projection_paths(projection: &ProjectionTransition<'_>) -> Result<()> {
+    let previous = projection.previous();
+    let next = projection.next();
+    for file in changed_files(previous.state(), next.state()) {
+        for (slot, _) in projection_locations(previous, next, &file) {
+            validate_new_projection_path(projection_path(next.state(), &file, &slot).0)?;
         }
     }
     Ok(())
@@ -899,34 +990,22 @@ pub(crate) fn validate_new_projection_paths(previous: &State, next: &State) -> R
 
 fn prepare_names_inner(
     config: &ValidatedConfig,
-    previous: &State,
-    next: &State,
+    projection: &ProjectionTransition<'_>,
     maximum: usize,
     historical: bool,
     metadata: Option<&crate::engine::provenance::MetadataIntegrity>,
 ) -> Result<PreparedNames> {
+    let previous = projection.previous();
+    let view = projection.next();
+    let next = view.state();
     let mut cache: Option<PreparedNameCache> = None;
-    let mut node_projection = crate::business::file_nodes::NodeProjection::new(next);
-    for file in changed_files(previous, next) {
-        validate_id(&file, "file")?;
-        let versions = next
-            .versions
-            .values()
-            .filter(|version| version.file_id == file)
-            .collect::<Vec<_>>();
-        let pending = next
-            .branches
-            .values()
-            .filter_map(|branch| {
-                branch
-                    .pending_file_versions
-                    .get(&file)
-                    .map(|source| (branch, source))
-            })
-            .collect::<Vec<_>>();
-        let locations = projection_locations(previous, next, &file)?;
-        // Replica-independent version records are built once per file/history.
-        let mut records_by_history = BTreeMap::new();
+    for file in changed_files(previous.state(), next) {
+        let locations = projection_locations(previous, view, &file);
+        let mut description = None;
+        let mut encoded_histories = BTreeMap::new();
+        // No merge traversal or tag memo is built until an actual container
+        // descriptor needs it. Every cache lives only within this frozen file.
+        let mut node_projection = None;
         for (slot, history_id) in locations {
             let disk = config
                 .disks
@@ -946,11 +1025,6 @@ fn prepare_names_inner(
                 Some(metadata) => metadata.validate_seal(config, disk)?,
                 None => validate_seal(config, disk)?,
             };
-            let pending_here = pending
-                .iter()
-                .copied()
-                .filter(|(branch, _)| branch.history_tree_id == history_id)
-                .collect::<Vec<_>>();
             let (physical_location, physical_name) = projection_path(next, &file, &slot);
             // Other new-candidate callers retain the same admission boundary.
             // Published decisions use existing layout checks, not new-name rules.
@@ -967,49 +1041,38 @@ fn prepare_names_inner(
                 .ok_or_else(|| invalid("container directory name is not UTF-8"))?;
             let name = physical_name.unwrap_or(current_name);
             name_policy::validate_name(name)?;
-            let records = records_by_history
-                .entry(history_id.clone())
-                .or_insert_with(|| {
-                    let mut records = versions.iter().filter(|version| version.history_tree_id == history_id).map(|version| {
-                        json!({"version_id":version.version_id,"parent_node_ids":node_projection.parents(&version.version_id),"tags":node_projection.tags(&version.version_id),"storage_name":version.storage_name,"created_at":version.created_at,"size":version.logical_size.to_string(),"content_hash":version.content_hash,"note":next.version_notes.get(&version.version_id).map(String::as_str).unwrap_or(""),"content_state":next.content_states.get(&version.version_id)})
-                    }).collect::<Vec<_>>();
-                    records.sort_by(|a, b| {
-                        a["storage_name"]
-                            .as_str()
-                            .cmp(&b["storage_name"].as_str())
-                            .then_with(|| a["version_id"].as_str().cmp(&b["version_id"].as_str()))
-                    });
-                    records
-                });
-            let inherited = pending_here
-                .iter()
-                .map(|(branch, source)| {
-                    json!({"branch_id":branch.branch_id,"name":branch.name,"state":branch.state,"source_node_id":branch.file_node_id.as_ref().unwrap_or(source),"source_version_id":source,"version_id":source,"own_version_id":null,"inherited":true,"materialized":false})
-                })
-                .collect::<Vec<_>>();
-            let contexts = next
-                .file_contexts
-                .iter()
-                .filter(|(_, context)| {
-                    next.branches
-                        .get(&context.branch_id)
-                        .and_then(|branch| branch.file_id.as_ref())
-                        == Some(&file)
-                })
-                .collect::<std::collections::BTreeMap<_, _>>();
-            let mut nodes = next
-                .file_path_nodes
-                .values()
-                .filter(|node| node.file_id == file && node.history_tree_id == history_id)
-                .collect::<Vec<_>>();
-            nodes.sort_by(|a, b| {
-                a.sequence
-                    .cmp(&b.sequence)
-                    .then_with(|| a.node_id.cmp(&b.node_id))
+            let description =
+                description.get_or_insert_with(|| projection::FileDescription::new(view, &file));
+            let nodes = node_projection.get_or_insert_with(|| {
+                let events = view
+                    .owners()
+                    .file_rows(&file)
+                    .into_iter()
+                    .flat_map(|rows| rows.merges.keys())
+                    .map(|key| &next.file_branch_merges[key]);
+                crate::business::file_nodes::NodeProjection::from_merge_events(next, events)
             });
-            let path_nodes = nodes.into_iter().map(|node| json!({"node":node,"tags":node_projection.tags(&node.node_id),"note":next.file_path_notes.get(&node.node_id).map(String::as_str).unwrap_or("")})).collect::<Vec<_>>();
+            let descriptor = encoded_histories
+                .entry(history_id.clone())
+                .or_insert_with(|| description.encode_history(&history_id, next, nodes));
             let bytes = encode_metadata(
-                &json!({"cache_only":true,"file_id":file,"history_tree_id":history_id,"name":name,"location":physical_location,"primary_location":next.file_locations.get(&file),"backup_policy_id":next.file_backup_policies.get(&file),"metadata_nodes":next.file_metadata_nodes.values().filter(|node|node.file_id==file&&node.history_tree_id==history_id).map(|node|json!({"node":node,"note":next.file_path_notes.get(&node.node_id).map(String::as_str).unwrap_or("")})).collect::<Vec<_>>(),"branch_merges":next.file_branch_merges.values().filter(|event|event.file_id==file&&event.history_tree_id==history_id).collect::<Vec<_>>(),"branch_aliases":next.file_branch_aliases.iter().filter(|(source,_)|next.branches.get(*source).is_some_and(|branch|branch.file_id.as_deref()==Some(file.as_str()))).collect::<BTreeMap<_,_>>(),"note":next.file_notes.get(&file).map(String::as_str).unwrap_or(""),"path_contexts":contexts,"path_nodes":path_nodes,"versions":records,"inherited_branches":inherited}),
+                &json!({
+                    "cache_only": true,
+                    "file_id": file,
+                    "history_tree_id": history_id,
+                    "name": name,
+                    "location": physical_location,
+                    "primary_location": next.file_locations.get(&file),
+                    "backup_policy_id": next.file_backup_policies.get(&file),
+                    "metadata_nodes": descriptor.metadata,
+                    "branch_merges": descriptor.merges,
+                    "branch_aliases": description.aliases,
+                    "note": next.file_notes.get(&file).map(String::as_str).unwrap_or(""),
+                    "path_contexts": description.contexts,
+                    "path_nodes": descriptor.paths,
+                    "versions": descriptor.versions,
+                    "inherited_branches": descriptor.inherited,
+                }),
                 maximum,
             )?;
             let staged = match &mut cache {
@@ -1044,8 +1107,16 @@ fn prepare_names_inner(
 mod tests;
 
 #[cfg(test)]
+#[path = "../../../test/engine/unit/container_storage/name_capture.rs"]
+mod name_capture_tests;
+
+#[cfg(test)]
 #[path = "../../../test/engine/unit/container_storage/projection_path_tests.rs"]
 mod projection_path_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/container_storage/indexed_projection_tests.rs"]
+mod indexed_projection_tests;
 
 fn version_time(time: std::time::SystemTime) -> Result<OffsetDateTime> {
     let seconds = time.duration_since(std::time::UNIX_EPOCH)?.as_secs();

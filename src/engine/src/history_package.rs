@@ -6,9 +6,13 @@ use json_codec::json;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/history_package/changes.rs"]
 mod changes;
-mod delta;
-pub(crate) use delta::DerivedOwners;
+#[cfg(test)]
+use crate::state_projection::DerivedOwners;
+use crate::state_projection::ProjectionTransition;
 mod graph;
+#[cfg(test)]
+#[path = "../../../test/engine/unit/history_package/delta/tests.rs"]
+mod projection_delta_tests;
 pub(crate) use graph::decode_history_root;
 mod manifest;
 mod state_read;
@@ -112,35 +116,26 @@ pub(crate) fn prepare_history_manifests_incremental(
     maximum: usize,
 ) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
     let owners = DerivedOwners::from_state(before);
-    let (catalog, objects, _) = prepare_history_manifests_incremental_observed(
-        before,
-        after,
+    let mut projection = ProjectionTransition::new(before, after, Some(&owners))?;
+    prepare_history_manifests_incremental_observed(
+        &mut projection,
         previous,
-        &owners,
         members,
         maximum,
         &mut |_| {},
-    )?;
-    Ok((catalog, objects))
+    )
 }
 
 pub(crate) fn prepare_history_manifests_incremental_observed(
-    before: &State,
-    after: &State,
+    projection: &mut ProjectionTransition<'_>,
     previous: &crate::metadata_map::MapRoot,
-    owners: &DerivedOwners,
     members: &[DiskConfig],
     maximum: usize,
     fault: &mut impl FnMut(&Error),
-) -> Result<(
-    crate::metadata_map::MapRoot,
-    Vec<PreparedMetadataObject>,
-    DerivedOwners,
-)> {
+) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
     prepare_history_incremental(
-        before,
-        after,
-        HistoryBaseline::Revalidate(previous, owners),
+        projection,
+        HistoryBaseline::Revalidate(previous),
         members,
         maximum,
         fault,
@@ -148,20 +143,14 @@ pub(crate) fn prepare_history_manifests_incremental_observed(
 }
 
 pub(crate) fn prepare_history_manifests_reusing_published(
-    before: &State,
-    after: &State,
+    projection: &mut ProjectionTransition<'_>,
     reuse: &crate::engine::PublishedDependencyReuse,
     members: &[DiskConfig],
     maximum: usize,
     fault: &mut impl FnMut(&Error),
-) -> Result<(
-    crate::metadata_map::MapRoot,
-    Vec<PreparedMetadataObject>,
-    DerivedOwners,
-)> {
+) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
     prepare_history_incremental(
-        before,
-        after,
+        projection,
         HistoryBaseline::Published(reuse),
         members,
         maximum,
@@ -170,36 +159,30 @@ pub(crate) fn prepare_history_manifests_reusing_published(
 }
 
 enum HistoryBaseline<'a> {
-    Revalidate(&'a crate::metadata_map::MapRoot, &'a DerivedOwners),
+    Revalidate(&'a crate::metadata_map::MapRoot),
     Published(&'a crate::engine::PublishedDependencyReuse),
 }
 
 fn prepare_history_incremental(
-    before: &State,
-    after: &State,
+    projection: &mut ProjectionTransition<'_>,
     baseline: HistoryBaseline<'_>,
     members: &[DiskConfig],
     maximum: usize,
     fault: &mut impl FnMut(&Error),
-) -> Result<(
-    crate::metadata_map::MapRoot,
-    Vec<PreparedMetadataObject>,
-    DerivedOwners,
-)> {
-    let (previous, owners) = match &baseline {
-        HistoryBaseline::Revalidate(previous, owners) => (*previous, *owners),
+) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
+    let previous = match &baseline {
+        HistoryBaseline::Revalidate(previous) => *previous,
         HistoryBaseline::Published(reuse) => reuse.history_basis(),
     };
     let reuse_published = matches!(baseline, HistoryBaseline::Published(_));
-    let Some(delta::ProjectionDelta {
-        owners,
-        mut histories,
-    }) = delta::ProjectionDelta::between(before, after, owners)?
-    else {
-        // An actual unknown mutable escape/foreign replacement loses the exact
-        // write-set proof. Cold complete admission remains the explicit path.
-        let (catalog, objects) = prepare_history_manifests(after, maximum)?;
-        return Ok((catalog, objects, DerivedOwners::from_state(after)));
+    let edits = projection.take_history_edits();
+    let view = projection.next();
+    let after = view.state();
+    let owners = view.owners();
+    let Some(mut histories) = edits else {
+        // Cold/unknown lineage still performs complete logical admission. The
+        // same rebuilt membership remains available to container preparation.
+        return prepare_history_manifests(after, maximum);
     };
     let changed: BTreeSet<_> = histories.keys().cloned().collect();
     let mut bindings = BTreeMap::new();
@@ -249,7 +232,7 @@ fn prepare_history_incremental(
                 Err(_) => {
                     // Only source acquisition falls back. The fault observer has
                     // seen the failure; encoding/store/decision failures propagate.
-                    let rebuilt = graph::prepare_indexed(after, id, &owners, maximum)?;
+                    let rebuilt = graph::prepare_indexed(after, id, owners, maximum)?;
                     if edits.is_none() && rebuilt.0 != old.hash {
                         return Err(Error::new(
                             ErrorCode::ObjectCorrupt,
@@ -260,7 +243,7 @@ fn prepare_history_incremental(
                 }
             },
             None => Some(with_history_maximum(graph::prepare_indexed(
-                after, id, &owners, maximum,
+                after, id, owners, maximum,
             )?)),
         };
         if let Some((hash, graph, maximum_object_bytes)) = prepared {
@@ -295,7 +278,7 @@ fn prepare_history_incremental(
         // Fresh encoder output is never subtracted by digest, even if an older
         // root named identical bytes. All such objects still get real barriers.
         objects.extend(created);
-        return Ok((catalog, unique_prepared_objects(objects)?, owners));
+        return Ok((catalog, unique_prepared_objects(objects)?));
     }
     let mut fresh = created
         .into_iter()
@@ -317,7 +300,7 @@ fn prepare_history_incremental(
         objects.push(object);
         Ok(())
     })?;
-    Ok((catalog, unique_prepared_objects(objects)?, owners))
+    Ok((catalog, unique_prepared_objects(objects)?))
 }
 
 fn with_history_maximum(

@@ -22,13 +22,20 @@ pub(super) struct PublishedStateBase {
     config: super::ValidatedConfig,
     roots: crate::metadata_map::MapRoot,
     snapshot_basis: SnapshotReuse,
-    history_owners: crate::history_package::DerivedOwners,
+    history_owners: crate::state_projection::DerivedOwners,
 }
 impl PublishedStateBase {
+    /// Every production publication starts with the planner's completed name
+    /// capture. This pure State property needs only the same immutable allocation,
+    /// not the disk/configuration authority required for graph reuse below.
+    pub(super) fn names_captured_for(&self, state: &std::sync::Arc<State>) -> bool {
+        self.state.ptr_eq(&std::sync::Arc::downgrade(state))
+    }
+
     fn matches(&self, engine: &crate::engine::PlanningContext<'_>, config_hash: &str) -> bool {
         !engine.blocked
             && self.metadata_epoch.matches(engine.metadata_integrity)
-            && self.state.ptr_eq(&std::sync::Arc::downgrade(engine.state))
+            && self.names_captured_for(engine.state)
             && engine.snapshot.as_deref() == Some(self.snapshot.as_str())
             && engine.state.sequence == self.sequence
             && self.config_hash == config_hash
@@ -68,13 +75,8 @@ impl PublishedDependencyReuse {
             && self.coverage.matches(context)
     }
 
-    pub(crate) fn history_basis(
-        &self,
-    ) -> (
-        &crate::metadata_map::MapRoot,
-        &crate::history_package::DerivedOwners,
-    ) {
-        (&self.base.roots, &self.base.history_owners)
+    pub(crate) fn history_basis(&self) -> &crate::metadata_map::MapRoot {
+        &self.base.roots
     }
 }
 
@@ -96,7 +98,7 @@ pub(crate) struct DetachedPublication {
     config_hash: String,
     snapshot_basis: SnapshotReuse,
     history_basis: crate::metadata_map::MapRoot,
-    history_owners: crate::history_package::DerivedOwners,
+    history_owners: crate::state_projection::DerivedOwners,
 }
 
 enum Completion<'a> {
@@ -463,13 +465,16 @@ impl Engine {
         self.verify_candidate_membership(c)?;
         let names = match names {
             Some(names) => names,
-            None => crate::container_storage::prepare_names(
-                &self.config,
-                &self.state,
-                next,
-                MAX_METADATA,
-                Some(&self.metadata_integrity),
-            )?,
+            None => {
+                let projection =
+                    crate::state_projection::ProjectionTransition::new(&self.state, next, None)?;
+                crate::container_storage::prepare_names(
+                    &self.config,
+                    &projection,
+                    MAX_METADATA,
+                    Some(&self.metadata_integrity),
+                )?
+            }
         };
         let members = self.members();
         let mut accepts = Vec::new();
@@ -901,41 +906,39 @@ impl crate::engine::PlanningContext<'_> {
             prepare_snapshot(&next, maximum)?.hash,
             "incremental snapshot differs from full encoding"
         );
-        let (history_basis, manifests, history_owners) = if let Some(reuse) = &reused_dependencies {
+        // Snapshot work does not extend an earlier metadata epoch's authority.
+        let history_baseline = self
+            .published_state_base
+            .as_ref()
+            .filter(|base| base.matches(self, &config_hash));
+        // Membership is derived from immutable State, not disk graph authority.
+        let owners = self
+            .published_state_base
+            .as_ref()
+            .filter(|base| base.names_captured_for(self.state))
+            .map(|base| &base.history_owners);
+        let mut projection =
+            crate::state_projection::ProjectionTransition::new(self.state, &next, owners)?;
+        let (history_basis, manifests) = if let Some(reuse) = &reused_dependencies {
             crate::history_package::prepare_history_manifests_reusing_published(
-                self.state,
-                &next,
+                &mut projection,
                 reuse,
                 &members,
                 maximum,
                 &mut |error| self.metadata_integrity.fault(error),
             )?
         } else {
-            match self
-                .published_state_base
-                .as_ref()
-                .filter(|base| base.matches(self, &config_hash))
-            {
+            match history_baseline {
                 Some(base) => {
                     crate::history_package::prepare_history_manifests_incremental_observed(
-                        self.state,
-                        &next,
+                        &mut projection,
                         &base.roots,
-                        &base.history_owners,
                         &members,
                         maximum,
                         &mut |error| self.metadata_integrity.fault(error),
                     )?
                 }
-                None => {
-                    let (roots, objects) =
-                        crate::history_package::prepare_history_manifests(&next, maximum)?;
-                    (
-                        roots,
-                        objects,
-                        crate::history_package::DerivedOwners::from_state(&next),
-                    )
-                }
+                None => crate::history_package::prepare_history_manifests(&next, maximum)?,
             }
         };
         // The full implementation remains an independent oracle in every
@@ -975,7 +978,7 @@ impl crate::engine::PlanningContext<'_> {
             maximum,
             Some((&snapshot, &history_basis)),
         )?;
-        crate::container_storage::validate_new_projection_paths(self.state, &next)?;
+        crate::container_storage::validate_new_projection_paths(&projection)?;
         let preparation = PayloadPreparation::new(
             self.config,
             &candidate,
@@ -987,8 +990,7 @@ impl crate::engine::PlanningContext<'_> {
         // exists yet. Encode its complete projection before ACCEPT can be written.
         let names = crate::container_storage::prepare_names(
             self.config,
-            self.state,
-            &next,
+            &projection,
             cache_maximum,
             Some(self.metadata_integrity),
         )?;
@@ -1019,6 +1021,7 @@ impl crate::engine::PlanningContext<'_> {
             )
             .retryable());
         }
+        let history_owners = projection.into_owners();
         Ok(DetachedPublication {
             next,
             candidate,

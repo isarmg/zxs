@@ -607,15 +607,21 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
         .insert(file.clone(), ".ZXS-NAMESPACE.JSON".into());
 
     assert!(matches!(
-        prepare_names(&config, &previous, &published, MAX_METADATA, None),
+        prepare_names(&config, &ProjectionTransition::new(&previous, &published, None).unwrap(), MAX_METADATA, None),
         Err(error) if error.code() == storage_contract::ErrorCode::NameCollision
     ));
     // The same physical spelling is valid for replay of an immutable decision.
     // This is the existing publication phase boundary, not a second disk format.
-    prepare_names_inner(&config, &previous, &published, MAX_METADATA, true, None)
-        .unwrap()
-        .apply(&config)
-        .unwrap();
+    prepare_names_inner(
+        &config,
+        &ProjectionTransition::new(&previous, &published, None).unwrap(),
+        MAX_METADATA,
+        true,
+        None,
+    )
+    .unwrap()
+    .apply(&config)
+    .unwrap();
     let body = content_path(&directory, &item).unwrap();
     assert_eq!(fs::metadata(&body).unwrap().ino(), inode);
     assert_eq!(fs::read(&body).unwrap(), b"body");
@@ -629,7 +635,7 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
         .insert(file.clone(), NAMESPACE_MARKER.into());
     assert!(
         matches!(
-            prepare_names(&config, &published, &renamed, MAX_METADATA, None),
+            prepare_names(&config, &ProjectionTransition::new(&published, &renamed, None).unwrap(), MAX_METADATA, None),
             Err(error) if error.code() == storage_contract::ErrorCode::NameCollision
         ),
         "case-only changes are new admissions, not publication replay"
@@ -644,7 +650,7 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
     write_json(&marker, &new_id("file"), true).unwrap();
     let evidence = fs::read(&marker).unwrap();
     assert!(matches!(
-        prepare_names_inner(&config, &previous, &published, MAX_METADATA, true, None),
+        prepare_names_inner(&config, &ProjectionTransition::new(&previous, &published, None).unwrap(), MAX_METADATA, true, None),
         Err(error) if error.code() == storage_contract::ErrorCode::ContainerLayoutInvalid
     ));
     assert_eq!(
@@ -904,8 +910,14 @@ fn empty_name_projection_has_no_staging_file() {
         .insert(new_id("file"), "no physical container".into());
     for next in [&previous, &metadata_only] {
         for historical in [false, true] {
-            let prepared =
-                prepare_names_inner(&config, &previous, next, 0, historical, None).unwrap();
+            let prepared = prepare_names_inner(
+                &config,
+                &ProjectionTransition::new(&previous, next, None).unwrap(),
+                0,
+                historical,
+                None,
+            )
+            .unwrap();
             assert!(
                 prepared.cache.is_none(),
                 "empty projections must not allocate staging"

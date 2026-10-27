@@ -1,4 +1,4 @@
-//! Exact history projection closure over transaction-local map writes.
+//! Shared State-derived membership and exact projection closure over map writes.
 //!
 //! The owner index is derived only from State. Its publication lifetime is bound
 //! by PublishedStateBase, never by SQLite, sequence equality or a graph hash.
@@ -6,6 +6,8 @@ use crate::{Result, State};
 use json_codec::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::{ContentState, MapChanges, NamespaceEntryKind, SharedRecords};
+mod files;
+pub(crate) use files::FileRows;
 
 // One schema drives State coverage, row lookup, membership, and graph field names.
 macro_rules! projection_maps {
@@ -105,7 +107,7 @@ macro_rules! owner_for {
             .map(|version| version.history_tree_id.as_str()))
     };
     (file, $state:ident, $index:ident, $key:ident, $field:ident) => {
-        $index.files.owners($key)
+        $index.file_histories($key).cloned().collect()
     };
     (directory, $state:ident, $index:ident, $key:ident, $field:ident) => {
         $index.directories.owners($key)
@@ -348,18 +350,24 @@ impl Rows {
     }
 }
 
+/// Exact file/history/version membership, shared by both projections.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct FileVersions(SharedRecords<SharedRecords<SharedRecords<()>>>);
+
 /// Rebuildable dependency counts and projected row membership; no business data.
 /// All unbounded containers use the same SharedRecords API as State records.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct DerivedOwners {
     repositories: References,
-    files: References,
+    files: FileVersions,
     directories: References,
     selected_files: References,
     selected_directories: References,
     directory_trees: References,
     repository_rows: SharedRecords<Rows>,
     history_rows: SharedRecords<Rows>,
+    file_rows: SharedRecords<FileRows>,
+    branch_contexts: SharedRecords<SharedRecords<()>>,
 }
 
 #[derive(Clone, Default)]
@@ -412,6 +420,81 @@ pub(super) struct ProjectionDelta {
     pub(super) histories: BTreeMap<String, HistoryEdits>,
 }
 
+/// One immutable candidate transition supplies both history and physical-name
+/// projections. Only the publication owner may retain `next` after success.
+pub(crate) struct ProjectionTransition<'a> {
+    before: &'a State,
+    after: &'a State,
+    previous: std::borrow::Cow<'a, DerivedOwners>,
+    next: DerivedOwners,
+    history_edits: Option<BTreeMap<String, HistoryEdits>>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct StateProjection<'a> {
+    state: &'a State,
+    owners: &'a DerivedOwners,
+}
+
+impl<'a> StateProjection<'a> {
+    pub(crate) fn state(self) -> &'a State {
+        self.state
+    }
+    pub(crate) fn owners(self) -> &'a DerivedOwners {
+        self.owners
+    }
+}
+
+impl<'a> ProjectionTransition<'a> {
+    pub(crate) fn new(
+        before: &'a State,
+        after: &'a State,
+        baseline: Option<&'a DerivedOwners>,
+    ) -> Result<Self> {
+        let previous = match baseline {
+            Some(index) => std::borrow::Cow::Borrowed(index),
+            None => std::borrow::Cow::Owned(DerivedOwners::from_state(before)),
+        };
+        let delta = match baseline {
+            Some(index) => ProjectionDelta::between(before, after, index)?,
+            None => None,
+        };
+        let (next, history_edits) = match delta {
+            Some(delta) => (delta.owners, Some(delta.histories)),
+            None => (DerivedOwners::from_state(after), None),
+        };
+        Ok(Self {
+            before,
+            after,
+            previous,
+            next,
+            history_edits,
+        })
+    }
+
+    pub(crate) fn previous(&self) -> StateProjection<'_> {
+        StateProjection {
+            state: self.before,
+            owners: &self.previous,
+        }
+    }
+
+    pub(crate) fn next(&self) -> StateProjection<'_> {
+        StateProjection {
+            state: self.after,
+            owners: &self.next,
+        }
+    }
+
+    pub(crate) fn take_history_edits(&mut self) -> Option<BTreeMap<String, HistoryEdits>> {
+        self.history_edits.take()
+    }
+
+    pub(crate) fn into_owners(self) -> DerivedOwners {
+        self.next
+    }
+}
+
 impl DerivedOwners {
     pub(crate) fn from_state(state: &State) -> Self {
         let mut index = Self::default();
@@ -423,8 +506,10 @@ impl DerivedOwners {
                 .directories
                 .add(&history.repository_id, &history.history_tree_id);
         }
-        for version in state.versions.values() {
-            index.files.add(&version.file_id, &version.history_tree_id);
+        for (key, version) in state.versions.iter() {
+            index
+                .files
+                .add(&version.file_id, &version.history_tree_id, key);
         }
         for commit in state.commits.values() {
             index.commit_directories(commit, true);
@@ -453,6 +538,7 @@ impl DerivedOwners {
                 }
             });
         }
+        index.build_file_rows(state);
         index
     }
     pub(super) fn rows(&self, history: &str) -> Option<&Rows> {
@@ -553,6 +639,7 @@ impl ProjectionDelta {
         let mut affected = writes.clone();
         let mut owners = index.clone();
         owners.update_dependencies(before, after, &writes, &mut affected);
+        owners.update_file_rows(before, after, index, &writes);
         let mut histories = BTreeMap::<String, HistoryEdits>::new();
         for key in &writes.histories {
             if before.histories.get(key) != after.histories.get(key) {
@@ -738,12 +825,12 @@ impl DerivedOwners {
                 .map(|v| (v.file_id.as_str(), v.history_tree_id.as_str()));
             if previous != next {
                 if let Some((file, history)) = previous
-                    && self.files.remove(file, history)
+                    && self.files.remove(file, history, key)
                 {
                     affected.file(file);
                 }
                 if let Some((file, history)) = next
-                    && self.files.add(file, history)
+                    && self.files.add(file, history, key)
                 {
                     affected.file(file);
                 }
@@ -831,5 +918,5 @@ impl DerivedOwners {
 }
 
 #[cfg(test)]
-#[path = "../../../../test/engine/unit/history_package/delta/tests.rs"]
-mod tests;
+#[path = "../../../test/engine/unit/state_projection/container_membership_tests.rs"]
+mod container_membership_tests;

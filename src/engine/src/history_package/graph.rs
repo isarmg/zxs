@@ -10,7 +10,7 @@ use data_serialization::{Deserialize, Serialize};
 use json_codec::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::delta::{DerivedOwners, Field, HistoryEdits};
+use crate::state_projection::{DerivedOwners, Field, HistoryEdits};
 
 #[derive(Deserialize, Serialize)]
 #[serialization(deny_unknown_fields)]

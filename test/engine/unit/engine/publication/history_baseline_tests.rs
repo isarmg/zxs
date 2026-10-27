@@ -22,6 +22,126 @@ fn config_hash(engine: &Engine) -> String {
     object_hash("publication-config", &engine.config).unwrap()
 }
 
+fn save_capture_file(engine: &mut Engine) -> String {
+    let branch = engine
+        .state
+        .repositories
+        .values()
+        .next()
+        .unwrap()
+        .main_branch_id
+        .clone();
+    let workspace = engine.create_workspace(&branch, "alice").unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "folder/original.txt", b"body")
+        .unwrap();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: OperationId::generate(),
+            principal: "alice".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: "capture fixture".into(),
+            request_digest: None,
+        })
+        .unwrap();
+    engine.state.file_names.keys().next().unwrap().clone()
+}
+
+#[test]
+fn name_capture_receipt_is_bound_only_to_its_immutable_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(temp.path());
+    let file = save_capture_file(&mut engine);
+    let base = engine.published_state_base.clone().unwrap();
+    assert_eq!(engine.state.file_locations[&file], "folder/original.txt");
+    assert!(base.names_captured_for(&engine.state));
+
+    // Disk metadata authority can be revoked without changing logical coverage.
+    engine.metadata_integrity.invalidate();
+    assert!(!base.matches(&engine.planning_context(), &config_hash(&engine)));
+    assert!(base.names_captured_for(&engine.state));
+    engine.config = ValidatedConfig::try_from(engine.config().clone()).unwrap();
+    engine.snapshot = None;
+    assert!(base.names_captured_for(&engine.state));
+    assert_eq!(
+        base.history_owners,
+        crate::state_projection::DerivedOwners::from_state(&engine.state)
+    );
+    let mut next = engine.state().clone();
+    next.file_notes.insert(file.clone(), "changed note".into());
+    let mut projection = crate::state_projection::ProjectionTransition::new(
+        &engine.state,
+        &next,
+        Some(&base.history_owners),
+    )
+    .unwrap();
+    assert!(!projection.take_history_edits().unwrap().is_empty());
+    assert_eq!(
+        projection.into_owners(),
+        crate::state_projection::DerivedOwners::from_state(&next)
+    );
+
+    let equal_state = Arc::new(engine.state().clone());
+    assert!(!base.names_captured_for(&equal_state));
+    // Even a harmless private plan-map edit detaches the allocation from Weak.
+    Arc::make_mut(&mut engine.state).plans.clear();
+    assert!(!base.names_captured_for(&engine.state));
+}
+
+#[test]
+fn cold_planning_captures_admitted_missing_fields_before_the_business_closure() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(temp.path());
+    let file = save_capture_file(&mut engine);
+    let published = canonical_json(engine.state()).unwrap();
+    for retain_name in [false, true] {
+        let mut raw = engine.state().clone();
+        raw.file_locations.remove(&file);
+        if !retain_name {
+            raw.file_names.remove(&file);
+        }
+        let decoded: crate::history_package::RawState =
+            json_codec::from_slice(&canonical_json(&raw).unwrap()).unwrap();
+        let admitted = Arc::new(State::try_from(decoded).unwrap());
+        let old_receipt = engine.published_state_base.as_ref().unwrap();
+        assert!(!old_receipt.names_captured_for(&admitted));
+        let mut context = engine.planning_context();
+        context.state = &admitted;
+        // Deliberately retain the old receipt: allocation identity, not a caller
+        // clearing the Option, must select the cold pre-capture boundary.
+        let plan = context
+            .plan_new_mutation(
+                "auth.capture-test",
+                "alice",
+                OperationId::generate(),
+                "capture-test".into(),
+                |_, next, _| {
+                    assert_eq!(next.file_names[&file], "original.txt");
+                    assert_eq!(next.file_locations[&file], "folder/original.txt");
+                    Ok(json!({}))
+                },
+            )
+            .unwrap();
+        let crate::engine::MutationPlan::Prepared { next, .. } = plan else {
+            panic!("new operation must produce a candidate");
+        };
+        assert_eq!(next.file_locations[&file], "folder/original.txt");
+        assert!(!admitted.file_locations.contains_key(&file));
+        assert_eq!(canonical_json(engine.state()).unwrap(), published);
+        let storage_contract::MapChanges::Keys(locations) =
+            next.file_locations.changes_since(&admitted.file_locations)
+        else {
+            panic!("cold capture must stay in the candidate write set");
+        };
+        assert_eq!(
+            locations.as_ref(),
+            &std::collections::BTreeSet::from([file.clone()])
+        );
+    }
+}
+
 #[test]
 fn history_baseline_requires_exact_state_allocation_snapshot_sequence_and_configuration() {
     let temp = tempfile::tempdir().unwrap();
