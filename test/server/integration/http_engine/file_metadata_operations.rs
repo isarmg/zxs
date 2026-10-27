@@ -175,6 +175,30 @@ async fn file_selection_replays_after_its_branch_is_merged_and_path_is_renamed()
     let left = branch(&app, &token, file, base, "left").await;
     let right = branch(&app, &token, file, base, "right").await;
     let route = format!("/api/file-manager/files/{file}/select");
+    let unchanged = history(&app, &token, file).await;
+    for body in [
+        json!({"branch_id":right,"repository_id":repo,"operation_id":new_id("op")}),
+        json!({"branch_id":right,"path":"report.txt","operation_id":new_id("op")}),
+        json!({"branch_id":right,"repository_id":null,"path":null,"operation_id":new_id("op")}),
+        json!({"branch_id":right,"repository_id":repo,"path":"","operation_id":new_id("op")}),
+        json!({"branch_id":right,"repository_id":repo,"path":"../report.txt","operation_id":new_id("op")}),
+        json!({"branch_id":right,"repository_id":repo,"path":"Cafe\u{301}","operation_id":new_id("op")}),
+        json!({"branch_id":right,"operation_id":"bad"}),
+        json!({"branch_id":right,"operation_id":new_id("op"),"file_id":"other"}),
+        json!({"branch_id":right,"operation_id":new_id("op"),"unknown":0}),
+    ] {
+        assert_eq!(
+            send(&app, Some(&token), "POST", &route, Some(body)).await.0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(history(&app, &token, file).await, unchanged);
+    }
+    assert_eq!(
+        send(&app, None, "POST", &route, Some(json!({"path":null})))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
     let mut selections = Vec::new();
     for scoped in [false, true] {
         let mut request = json!({"branch_id":right,"operation_id":new_id("op")});
@@ -183,6 +207,33 @@ async fn file_selection_replays_after_its_branch_is_merged_and_path_is_renamed()
             request["path"] = "report.txt".into();
         }
         let original = success(&app, &token, "POST", &route, Some(request.clone())).await;
+        let mut canonical = json!({"file_id":file,"branch_id":right});
+        if scoped {
+            canonical["repository_id"] = repo.into();
+            canonical["path"] = "report.txt".into();
+        }
+        assert_eq!(
+            original["request_digest"],
+            storage_contract::object_hash(
+                "request",
+                &json!({"kind":"file.branch.select","principal":"admin","body":canonical})
+            )
+            .unwrap()
+        );
+        let mut changed_context = request.clone();
+        if scoped {
+            changed_context
+                .as_object_mut()
+                .unwrap()
+                .remove("repository_id");
+            changed_context.as_object_mut().unwrap().remove("path");
+        } else {
+            changed_context["repository_id"] = repo.into();
+            changed_context["path"] = "report.txt".into();
+        }
+        let (status, error) = send(&app, Some(&token), "POST", &route, Some(changed_context)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(error["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
         selections.push((request, original));
     }
     success(
@@ -197,8 +248,21 @@ async fn file_selection_replays_after_its_branch_is_merged_and_path_is_renamed()
     )
     .await;
     manager_namespace(&app, &token, "rename", "report.txt", Some("renamed.txt")).await;
+    drop(app);
+    let system = root.path().join("system");
+    let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
+    let auth = backend.open_auth(&system).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let revoked = revoked_session(&app).await;
     let before = history(&app, &token, file).await;
     for (request, original) in selections {
+        assert_eq!(
+            send(&app, Some(&revoked), "POST", &route, Some(request.clone()))
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
         let replay = success(&app, &token, "POST", &route, Some(request.clone())).await;
         for field in [
             "operation_id",

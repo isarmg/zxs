@@ -82,7 +82,7 @@ fn normalized_directory_rename_and_file_branch_keep_parent_closure_after_restart
         .create_file_branch(
             &file.file_id,
             &file.version_id,
-            "Draft",
+            &storage_contract::BranchName::parse("Draft").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -454,7 +454,13 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
     let versions = engine.state().versions.len();
     let operation = storage_contract::OperationId::generate();
     let branch = engine
-        .create_file_branch(&one.file_id, &one.version_id, "draft", "admin", operation)
+        .create_file_branch(
+            &one.file_id,
+            &one.version_id,
+            &storage_contract::BranchName::parse("draft").unwrap(),
+            "admin",
+            operation,
+        )
         .unwrap();
     let branch_id = branch.result["branch_id"].as_str().unwrap().to_string();
     assert_eq!(
@@ -601,7 +607,7 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
             .create_file_branch(
                 &one.file_id,
                 &two.version_id,
-                "wrong file",
+                &storage_contract::BranchName::parse("wrong file").unwrap(),
                 "admin",
                 storage_contract::OperationId::generate()
             )
@@ -649,7 +655,7 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
         .set_file_note(
             &one.file_id,
             None,
-            "file container note",
+            &storage_contract::Note::parse("file container note".into()).unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -658,7 +664,7 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
         .set_file_note(
             &one.file_id,
             Some(&one.version_id),
-            "original version note",
+            &storage_contract::Note::parse("original version note".into()).unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -712,7 +718,7 @@ fn directory_writes_update_only_the_selected_file_branch() {
         .create_file_branch(
             &file.file_id,
             &file.version_id,
-            "experiment",
+            &storage_contract::BranchName::parse("experiment").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -942,7 +948,7 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
         .create_file_branch(
             &b.file_id,
             &b.version_id,
-            "taken",
+            &storage_contract::BranchName::parse("taken").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -2319,7 +2325,7 @@ fn pending_first_write_keeps_selected_ancestry_and_creates_a_real_empty_version(
         .create_file_branch(
             &source.file_id,
             &source.version_id,
-            "old source branch",
+            &storage_contract::BranchName::parse("old source branch").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -2377,7 +2383,7 @@ fn first_write_identical_to_source_is_not_an_unwritten_or_shared_version() {
             .create_file_branch(
                 &source.file_id,
                 &source.version_id,
-                "identical",
+                &storage_contract::BranchName::parse("identical").unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )
@@ -2414,7 +2420,7 @@ fn pending_range_write_edits_parent_before_publishing_its_own_complete_version()
         .create_file_branch(
             &source.file_id,
             &source.version_id,
-            "range",
+            &storage_contract::BranchName::parse("range").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -2467,7 +2473,7 @@ fn switching_pending_destinations_fences_old_directory_writes_with_same_source()
         .create_file_branch(
             &source.file_id,
             &source.version_id,
-            "first",
+            &storage_contract::BranchName::parse("first").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -2478,7 +2484,7 @@ fn switching_pending_destinations_fences_old_directory_writes_with_same_source()
         .create_file_branch(
             &source.file_id,
             &source.version_id,
-            "second",
+            &storage_contract::BranchName::parse("second").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )

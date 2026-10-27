@@ -8,7 +8,7 @@ fn fork(pool: &mut Pool, file: &str, node: &str, name: &str) -> String {
             file,
             &version,
             node,
-            name,
+            &storage_contract::BranchName::parse(name).unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -22,7 +22,7 @@ fn choose(pool: &mut Pool, file: &str, branch: &str, path: &str) {
     pool.engine
         .select_file_branch_at(
             &pool.repo.repository_id,
-            path,
+            &name_policy::PortablePath::parse(path).unwrap(),
             file,
             branch,
             "admin",
@@ -380,5 +380,55 @@ fn a_frozen_parent_derives_its_own_changed_child_without_following_the_childs_ne
                 .directory_trees
                 .contains_key(&reference.tree_id)
         )
+    });
+}
+
+#[test]
+fn renamed_branch_receipt_replays_after_merge_but_new_alias_mutations_are_read_only() {
+    let mut p = Pool::new();
+    p.save("report.txt", b"body");
+    let base = p.current_entry("report.txt");
+    let left = fork(&mut p, &base.file_id, &base.version_id, "left");
+    let right = fork(&mut p, &base.file_id, &base.version_id, "right");
+    let name = storage_contract::BranchName::parse("Reviewed").unwrap();
+    let operation = storage_contract::OperationId::generate();
+    let renamed = p
+        .engine
+        .rename_file_branch(&base.file_id, &right, &name, "admin", operation)
+        .unwrap();
+    let request = inputs(&p, &[&left, &right]);
+    p.engine
+        .merge_file_branches(storage_engine::FileBranchMergeRequest {
+            file_id: &base.file_id,
+            inputs: &request,
+            chosen_node_id: &base.version_id,
+            surviving_branch_id: &left,
+            location: None,
+            principal: "admin",
+            operation_id: storage_contract::OperationId::generate(),
+        })
+        .unwrap();
+    let before = p.engine.state().clone();
+    assert_eq!(
+        p.engine
+            .rename_file_branch(&base.file_id, &right, &name, "admin", operation)
+            .unwrap(),
+        renamed
+    );
+    let error = p
+        .engine
+        .rename_file_branch(
+            &base.file_id,
+            &right,
+            &name,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::BranchNotActive);
+    assert_eq!(p.engine.state(), &before);
+    p.reopen(|recovered| {
+        assert_eq!(recovered.state().branches[&right].name, "Reviewed");
+        assert_eq!(recovered.state().file_branch_aliases[&right], left);
     });
 }

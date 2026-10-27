@@ -268,6 +268,46 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.create_branch(identity, request)
     }
+    fn create_file_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.create_file_branch(identity, request)
+    }
+    fn update_note(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateNote,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.update_note(identity, request)
+    }
+    fn namespace_batch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::NamespaceBatch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.namespace_batch(identity, request)
+    }
+    fn select_file_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::SelectFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.select_file_branch(identity, request)
+    }
+    fn rename_file_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::RenameFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.rename_file_branch(identity, request)
+    }
     fn mutate_disk_directory(
         &self,
         identity: &crate::auth::Identity,
@@ -670,6 +710,15 @@ enum Request {
     DirectorySelection,
     SelectDefaultDirectoryBranch,
     RenameDirectoryBranch,
+    CreateFileBranch,
+    CreateFileBranchFromNode,
+    FileNote,
+    VersionNote,
+    NodeNote,
+    NamespaceBatch,
+    SelectFileBranch,
+    SelectFileBranchAt,
+    RenameFileBranch,
     DiskDirectoryCreate,
     DiskDirectorySelect,
     InitializeDirectoryScope,
@@ -701,6 +750,112 @@ impl Request {
         let identity = &fixture.identity;
         let workspace = &fixture.workspace.workspace_id;
         match self {
+            Self::NamespaceBatch => backend
+                .namespace_batch(
+                    identity,
+                    crate::NamespaceBatch {
+                        slot_id: "missing".into(),
+                        request: storage_contract::DirectoryNamespaceBatch {
+                            kind: storage_contract::DirectoryBatchKind::Delete,
+                            items: vec![],
+                        },
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::SelectFileBranch => backend
+                .select_file_branch(
+                    identity,
+                    crate::SelectFileBranch {
+                        file_id: "missing".into(),
+                        branch_id: "missing".into(),
+                        location: None,
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::SelectFileBranchAt => backend
+                .select_file_branch(
+                    identity,
+                    crate::SelectFileBranch {
+                        file_id: "missing".into(),
+                        branch_id: "missing".into(),
+                        location: Some(crate::FileSelectionLocation {
+                            repository_id: "repository".into(),
+                            path: name_policy::PortablePath::parse("Café/file.txt").unwrap(),
+                        }),
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::FileNote => backend
+                .update_note(
+                    identity,
+                    crate::UpdateNote {
+                        target: crate::NoteTarget::File("file".into()),
+                        note: storage_contract::Note::parse("".into()).unwrap(),
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::VersionNote => backend
+                .update_note(
+                    identity,
+                    crate::UpdateNote {
+                        target: crate::NoteTarget::Version("version".into()),
+                        note: storage_contract::Note::parse("".into()).unwrap(),
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::NodeNote => backend
+                .update_note(
+                    identity,
+                    crate::UpdateNote {
+                        target: crate::NoteTarget::Node {
+                            file: "file".into(),
+                            node: "node".into(),
+                        },
+                        note: storage_contract::Note::parse("".into()).unwrap(),
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::RenameFileBranch => backend
+                .rename_file_branch(
+                    identity,
+                    crate::RenameFileBranch {
+                        file_id: "missing".into(),
+                        branch_id: "missing".into(),
+                        name: storage_contract::BranchName::parse("Side").unwrap(),
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::CreateFileBranch => backend
+                .create_file_branch(
+                    identity,
+                    crate::CreateFileBranch {
+                        file_id: "missing".into(),
+                        source_version_id: "missing".into(),
+                        source_node_id: None,
+                        name: storage_contract::BranchName::parse("Side").unwrap(),
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::CreateFileBranchFromNode => backend
+                .create_file_branch(
+                    identity,
+                    crate::CreateFileBranch {
+                        file_id: "missing".into(),
+                        source_version_id: "missing".into(),
+                        source_node_id: Some("missing".into()),
+                        name: storage_contract::BranchName::parse("Side").unwrap(),
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
             Self::Operation => backend.operation(identity, fixture.operation).map(|_| ()),
             Self::CommitWorkspace => backend
                 .commit_workspace(
@@ -1112,6 +1267,15 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                     .unwrap();
             }
             let requests = vec![
+                Request::NamespaceBatch,
+                Request::SelectFileBranch,
+                Request::SelectFileBranchAt,
+                Request::FileNote,
+                Request::VersionNote,
+                Request::NodeNote,
+                Request::CreateFileBranch,
+                Request::CreateFileBranchFromNode,
+                Request::RenameFileBranch,
                 Request::Operation,
                 Request::CommitWorkspace,
                 Request::Metadata,
@@ -1335,6 +1499,15 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::DirectorySelection,
         Request::SelectDefaultDirectoryBranch,
         Request::RenameDirectoryBranch,
+        Request::CreateFileBranch,
+        Request::CreateFileBranchFromNode,
+        Request::FileNote,
+        Request::VersionNote,
+        Request::NodeNote,
+        Request::NamespaceBatch,
+        Request::SelectFileBranch,
+        Request::SelectFileBranchAt,
+        Request::RenameFileBranch,
         Request::DiskDirectoryCreate,
         Request::DiskDirectorySelect,
         Request::InitializeDirectoryScope,

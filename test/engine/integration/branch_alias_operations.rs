@@ -358,7 +358,7 @@ fn selected_aliases(p: &mut Pool) -> (String, String, Entry) {
         .create_file_branch(
             &original.file_id,
             &original.version_id,
-            "explicit draft",
+            &storage_contract::BranchName::parse("explicit draft").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -370,7 +370,7 @@ fn selected_aliases(p: &mut Pool) -> (String, String, Entry) {
     p.engine
         .select_file_branch_at(
             &p.repo.repository_id,
-            "b/report.txt",
+            &name_policy::PortablePath::parse("b/report.txt").unwrap(),
             &original.file_id,
             &draft,
             "admin",
@@ -420,7 +420,7 @@ fn archive_respects_each_selected_alias_and_preserves_closed_branch_head() {
     p.engine
         .select_file_branch_at(
             &p.repo.repository_id,
-            "b/report.txt",
+            &name_policy::PortablePath::parse("b/report.txt").unwrap(),
             &original.file_id,
             &a.branch_id,
             "admin",
@@ -616,7 +616,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
         .rename_file_branch(
             &original.file_id,
             &branch.branch_id,
-            "客户主稿",
+            &storage_contract::BranchName::parse("客户主稿").unwrap(),
             "admin",
             operation,
         )
@@ -628,7 +628,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
             .rename_file_branch(
                 &original.file_id,
                 &branch.branch_id,
-                "客户主稿",
+                &storage_contract::BranchName::parse("客户主稿").unwrap(),
                 "admin",
                 operation
             )
@@ -651,25 +651,12 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
     for (id, head) in &heads {
         assert_eq!(&p.engine.state().directory_branches[id].head_tree_id, head);
     }
-    for invalid in ["x".repeat(129), "文".repeat(43), "bad\nname".into()] {
-        assert!(
-            p.engine
-                .rename_file_branch(
-                    &original.file_id,
-                    &branch.branch_id,
-                    &invalid,
-                    "admin",
-                    storage_contract::OperationId::generate()
-                )
-                .is_err()
-        );
-    }
     let collision = p
         .engine
         .rename_file_branch(
             &original.file_id,
             &branch.branch_id,
-            "EXPLICIT DRAFT",
+            &storage_contract::BranchName::parse("EXPLICIT DRAFT").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -680,7 +667,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
         .rename_file_branch(
             &original.file_id,
             &branch.branch_id,
-            "Missing actor",
+            &storage_contract::BranchName::parse("Missing actor").unwrap(),
             "",
             storage_contract::OperationId::generate(),
         )
@@ -691,7 +678,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
         .rename_file_branch(
             &new_id("file"),
             &branch.branch_id,
-            "Wrong file",
+            &storage_contract::BranchName::parse("Wrong file").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -706,7 +693,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
         .rename_file_branch(
             &original.file_id,
             &branch.branch_id,
-            &boundary,
+            &storage_contract::BranchName::parse(&boundary).unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -1169,4 +1156,42 @@ fn batch_deletion_facts_cover_active_and_inactive_alias_scopes_without_move_dele
         assert_eq!(p.entry(&root, "b/report.txt").file_id, original.file_id);
         assert_eq!(p.bytes(&original.version_id), b"original");
     }
+}
+
+#[test]
+fn inherited_first_write_truncates_a_multibyte_collision_label_and_reopens() {
+    let mut p = Pool::new();
+    p.save("docs/report.txt", b"source");
+    let source = p.current_entry("docs/report.txt");
+    let origin = format!("{}ab", "文".repeat(42));
+    p.register("docs", &origin);
+    p.engine
+        .create_file_branch(
+            &source.file_id,
+            &source.version_id,
+            &storage_contract::BranchName::parse(&origin).unwrap(),
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    p.select("docs", &origin);
+    p.save("docs/report.txt", b"first own body");
+    let context = p
+        .engine
+        .file_context(&p.repo.repository_id, "docs/report.txt")
+        .unwrap();
+    let expected = format!("{}-1", "文".repeat(42));
+    assert_eq!(expected.len(), 128);
+    assert_eq!(p.engine.state().branches[&context.branch_id].name, expected);
+    let own = p.current_entry("docs/report.txt");
+    assert_ne!(own.version_id, source.version_id);
+    assert_eq!(p.bytes(&own.version_id), b"first own body");
+    p.reopen(|recovered| {
+        assert_eq!(
+            recovered.state().branches[&context.branch_id].name,
+            expected
+        );
+        storage_contract::BranchName::parse(&recovered.state().branches[&context.branch_id].name)
+            .unwrap();
+    });
 }

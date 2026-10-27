@@ -247,6 +247,41 @@ impl Backend for MonitorBackend {
     ) -> Result<crate::BranchSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn create_file_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn update_note(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdateNote,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn namespace_batch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::NamespaceBatch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn select_file_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::SelectFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn rename_file_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::RenameFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn mutate_disk_directory(
         &self,
         _identity: &crate::auth::Identity,

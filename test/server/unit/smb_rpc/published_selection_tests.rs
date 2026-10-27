@@ -61,19 +61,31 @@ fn select_same_version_draft(shared: &Shared, branch: &str, path: &str) -> Entry
         .unwrap();
     let created = shared
         .backend
-        .call(
-            crate::BackendAction::FileManagerBranch,
+        .create_file_branch(
             identity,
-            json!({
-                "file_id":entry.file_id,"source_version_id":entry.version_id,
-                "name":"same version draft","operation_id":new_id("op")
-            }),
+            crate::CreateFileBranch {
+                file_id: entry.file_id.clone(),
+                source_version_id: entry.version_id.clone(),
+                source_node_id: None,
+                name: storage_contract::BranchName::parse("same version draft").unwrap(),
+                operation_id: storage_contract::OperationId::generate(),
+            },
         )
+        .and_then(crate::operation_wire::operation_wire)
         .unwrap();
     assert_eq!(created["result"]["materialized"], false);
-    shared.backend.call(crate::BackendAction::FileManagerSelect, identity, json!({
-        "file_id":entry.file_id,"branch_id":created["result"]["branch_id"],"operation_id":new_id("op")
-    })).unwrap();
+    shared
+        .backend
+        .select_file_branch(
+            identity,
+            crate::SelectFileBranch {
+                file_id: entry.file_id.clone(),
+                branch_id: created["result"]["branch_id"].as_str().unwrap().into(),
+                location: None,
+                operation_id: storage_contract::OperationId::generate(),
+            },
+        )
+        .unwrap();
     entry
 }
 

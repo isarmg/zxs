@@ -62,7 +62,7 @@ fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
             .create_file_branch(
                 &original.file_id,
                 &original.version_id,
-                "selected draft",
+                &storage_contract::BranchName::parse("selected draft").unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )
@@ -130,7 +130,7 @@ fn inherited_range_fences_selection_and_preserves_parent_bytes() {
         .create_file_branch(
             &original.file_id,
             &original.version_id,
-            "pending",
+            &storage_contract::BranchName::parse("pending").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -259,7 +259,7 @@ fn selected_file_materialization_replaces_a_split_main_placeholder() {
         .create_file_branch(
             &placeholder.file_id,
             &source,
-            "actual",
+            &storage_contract::BranchName::parse("actual").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )

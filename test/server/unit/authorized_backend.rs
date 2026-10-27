@@ -460,6 +460,75 @@ impl Backend for RecordingBackend {
         self.record("create_branch",Some(identity),json!({"repository_id":request.repository_id,"source_commit_id":request.source_commit_id,"name":request.name.as_str(),"key":request.name.key(),"operation_id":request.operation_id}))?;
         Ok(recorded_branch())
     }
+    fn create_file_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record(
+            "create_file_branch",
+            Some(identity),
+            json!({"file_id":request.file_id,"source_version_id":request.source_version_id,"source_node_id":request.source_node_id,"name":request.name.as_str(),"key":request.name.key(),"operation_id":request.operation_id}),
+        )?;
+        Ok(recorded_operation(
+            request.operation_id,
+            "create_file_branch",
+        ))
+    }
+    fn update_note(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateNote,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record(
+            "update_note",
+            Some(identity),
+            json!({"target":format!("{:?}",request.target),"note":request.note.as_str(),"operation_id":request.operation_id}),
+        )?;
+        Ok(recorded_operation(request.operation_id, "update_note"))
+    }
+    fn namespace_batch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::NamespaceBatch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record(
+            "namespace_batch",
+            Some(identity),
+            json!({"slot_id":request.slot_id,"request":request.request,"operation_id":request.operation_id}),
+        )?;
+        Ok(recorded_operation(request.operation_id, "namespace_batch"))
+    }
+    fn select_file_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::SelectFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record(
+            "select_file_branch",
+            Some(identity),
+            json!({"file_id":request.file_id,"branch_id":request.branch_id,"location":request.location.as_ref().map(|location|json!({"repository_id":location.repository_id,"path":location.path.as_str(),"key":location.path.key()})),"operation_id":request.operation_id}),
+        )?;
+        Ok(recorded_operation(
+            request.operation_id,
+            "select_file_branch",
+        ))
+    }
+    fn rename_file_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::RenameFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record(
+            "rename_file_branch",
+            Some(identity),
+            json!({"file_id":request.file_id,"branch_id":request.branch_id,"name":request.name.as_str(),"key":request.name.key(),"operation_id":request.operation_id}),
+        )?;
+        Ok(recorded_operation(
+            request.operation_id,
+            "rename_file_branch",
+        ))
+    }
     fn mutate_disk_directory(
         &self,
         identity: &crate::auth::Identity,
@@ -1202,6 +1271,33 @@ impl Fixture {
                     json!({"returned_by":"create_branch"})
                 })
             }),
+            ("create_file_branch", {
+                backend.create_file_branch(identity,crate::CreateFileBranch {file_id:"file".into(),source_version_id:"version".into(),source_node_id:None,name:storage_contract::BranchName::parse("Café").unwrap(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"create_file_branch"));json!({"returned_by":"create_file_branch"})})
+            }),
+            ("create_file_branch", {
+                backend.create_file_branch(identity,crate::CreateFileBranch {file_id:"file".into(),source_version_id:"version".into(),source_node_id:Some("node".into()),name:storage_contract::BranchName::parse("Café").unwrap(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"create_file_branch"));json!({"returned_by":"create_file_branch"})})
+            }),
+            ("update_note", {
+                backend.update_note(identity,crate::UpdateNote {target:crate::NoteTarget::File("file".into()),note:storage_contract::Note::parse("".into()).unwrap(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"update_note"));json!({"returned_by":"update_note"})})
+            }),
+            ("update_note", {
+                backend.update_note(identity,crate::UpdateNote {target:crate::NoteTarget::Version("version".into()),note:storage_contract::Note::parse("".into()).unwrap(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"update_note"));json!({"returned_by":"update_note"})})
+            }),
+            ("update_note", {
+                backend.update_note(identity,crate::UpdateNote {target:crate::NoteTarget::Node {file:"file".into(),node:"node".into()},note:storage_contract::Note::parse("".into()).unwrap(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"update_note"));json!({"returned_by":"update_note"})})
+            }),
+            ("namespace_batch", {
+                backend.namespace_batch(identity,crate::NamespaceBatch {slot_id:"P01".into(),request:storage_contract::DirectoryNamespaceBatch {kind:storage_contract::DirectoryBatchKind::Delete,items:vec![]},operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"namespace_batch"));json!({"returned_by":"namespace_batch"})})
+            }),
+            ("select_file_branch", {
+                backend.select_file_branch(identity,crate::SelectFileBranch {file_id:"file".into(),branch_id:"branch".into(),location:None,operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"select_file_branch"));json!({"returned_by":"select_file_branch"})})
+            }),
+            ("select_file_branch", {
+                backend.select_file_branch(identity,crate::SelectFileBranch {file_id:"file".into(),branch_id:"branch".into(),location:Some(crate::FileSelectionLocation {repository_id:"repository".into(),path:name_policy::PortablePath::parse("Café/file.txt").unwrap()}),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"select_file_branch"));json!({"returned_by":"select_file_branch"})})
+            }),
+            ("rename_file_branch", {
+                backend.rename_file_branch(identity,crate::RenameFileBranch {file_id:"file".into(),branch_id:"branch".into(),name:storage_contract::BranchName::parse("Café").unwrap(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"rename_file_branch"));json!({"returned_by":"rename_file_branch"})})
+            }),
             ("mutate_disk_directory", {
                 backend.mutate_disk_directory(identity,crate::MutateDiskDirectory {slot_id:"P01".into(),path:Some(name_policy::LookupPath::parse("Café").unwrap()),name:storage_contract::BranchName::parse("Side").unwrap(),operation_id,action:crate::DiskDirectoryAction::Create}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"mutate_disk_directory"));json!({"returned_by":"mutate_disk_directory"})})
             }),
@@ -1642,6 +1738,15 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"history_tree_id":"history","source_branch_id":"source_branch","source_commit_id":"source_commit","target_branch_id":"target_branch","target_commit_id":"target_commit","operation_id":"op_00000000000000000000000000000000"}),
         json!({"name":"Café","key":"café","primary_slot_id":"P01","target_copies":3,"operation_id":"op_00000000000000000000000000000000"}),
         json!({"repository_id":"repository","source_commit_id":"source","name":"Café","key":"café","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"file_id":"file","source_version_id":"version","source_node_id":null,"name":"Café","key":"café","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"file_id":"file","source_version_id":"version","source_node_id":"node","name":"Café","key":"café","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"target":"File(\"file\")","note":"","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"target":"Version(\"version\")","note":"","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"target":"Node { file: \"file\", node: \"node\" }","note":"","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"slot_id":"P01","request":{"kind":"delete","items":[]},"operation_id":"op_00000000000000000000000000000000"}),
+        json!({"file_id":"file","branch_id":"branch","location":null,"operation_id":"op_00000000000000000000000000000000"}),
+        json!({"file_id":"file","branch_id":"branch","location":{"repository_id":"repository","path":"Café/file.txt","key":"café/file.txt"},"operation_id":"op_00000000000000000000000000000000"}),
+        json!({"file_id":"file","branch_id":"branch","name":"Café","key":"café","operation_id":"op_00000000000000000000000000000000"}),
         json!({"slot_id":"P01","path":"Café","name":"Side","action":"Create","operation_id":"op_00000000000000000000000000000000"}),
         json!({"slot_id":"P01","path":"Café","name":"Side","action":"Select","operation_id":"op_00000000000000000000000000000000"}),
         json!({"repository_id":"repository","path":"Café","operation_id":"op_00000000000000000000000000000000"}),

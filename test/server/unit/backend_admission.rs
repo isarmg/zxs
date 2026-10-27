@@ -308,6 +308,46 @@ impl Backend for BackendProbe {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
+    fn create_file_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn update_note(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdateNote,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn namespace_batch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::NamespaceBatch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn select_file_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::SelectFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn rename_file_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::RenameFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn mutate_disk_directory(
         &self,
         _identity: &crate::auth::Identity,
@@ -810,8 +850,21 @@ async fn workspace_request(app: Router, method: &str, path: &str) -> Response {
         json!({"branch_id":"branch","enabled":false,"expected_history_generation":"1","operation_id":"op_00000000000000000000000000000000"})
     } else if path.ends_with("/merge-links") {
         json!({"source_branch_id":"source","source_commit_id":"source_commit","target_branch_id":"target","target_commit_id":"target_commit","operation_id":"op_00000000000000000000000000000000"})
+    } else if (method == "POST" && path.ends_with("/metadata"))
+        || (method == "PATCH" && path.contains("/nodes/"))
+    {
+        json!({"note":"","operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "POST" && path.ends_with("/select") {
+        json!({"branch_id":"branch","operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "POST" && path.ends_with("/namespace-batch") {
+        json!({"kind":"delete","items":[],"operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST" && path == "/api/repositories" {
         json!({"name":"Repository","primary_slot_id":"P01","target_copies":3,"operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "POST"
+        && path.starts_with("/api/file-manager/files/")
+        && path.ends_with("/branches")
+    {
+        json!({"source_version_id":"version","name":"Side","operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST" && path.ends_with("/branches") {
         json!({"source_commit_id":"source","name":"Side","operation_id":"op_00000000000000000000000000000000"})
     } else if path.starts_with("/api/file-manager/disks/")
@@ -822,7 +875,10 @@ async fn workspace_request(app: Router, method: &str, path: &str) -> Response {
         json!({"path":"","operation_id":"op_00000000000000000000000000000000"})
     } else if path.ends_with("/archive") {
         json!({"operation_id":"op_00000000000000000000000000000000"})
-    } else if method == "PATCH" && path.contains("/directory-branches/") {
+    } else if method == "PATCH"
+        && (path.contains("/directory-branches/")
+            || (path.starts_with("/api/file-manager/files/") && path.contains("/branches/")))
+    {
         json!({"name":"renamed","operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST" && path.ends_with("/directory-branches") {
         json!({"path":"","sources":[],"entries":[]})
@@ -858,6 +914,13 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
         ("GET", "/api/branches/branch/tree?commit_id=commit"),
         ("GET", "/api/repositories/repository"),
         ("GET", "/api/branches/branch"),
+        ("POST", "/api/file-manager/files/file/metadata"),
+        ("POST", "/api/file-manager/versions/version/metadata"),
+        ("PATCH", "/api/file-manager/files/file/nodes/node"),
+        ("POST", "/api/file-manager/disks/P01/namespace-batch"),
+        ("POST", "/api/file-manager/files/file/select"),
+        ("POST", "/api/file-manager/files/file/branches"),
+        ("PATCH", "/api/file-manager/files/file/branches/branch"),
         ("POST", "/api/file-manager/disks/P01/directory-branches"),
         ("POST", "/api/file-manager/disks/P01/directory-select"),
         ("POST", "/api/repositories/repo/directory-scopes"),

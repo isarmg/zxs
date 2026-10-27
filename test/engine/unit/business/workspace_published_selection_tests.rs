@@ -75,7 +75,7 @@ fn published_new_file_context_fences_same_version_branch_switch() {
             .create_file_branch(
                 &source.file_id,
                 &source.version_id,
-                "same version draft",
+                &storage_contract::BranchName::parse("same version draft").unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )
@@ -145,7 +145,7 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
         .create_file_branch(
             &source.file_id,
             &source.version_id,
-            "first write",
+            &storage_contract::BranchName::parse("first write").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -194,7 +194,7 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
         .create_file_branch(
             &current.file_id,
             &current.version_id,
-            "round trip",
+            &storage_contract::BranchName::parse("round trip").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -326,7 +326,7 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
             .create_file_branch(
                 &source.file_id,
                 &source.version_id,
-                "later draft",
+                &storage_contract::BranchName::parse("later draft").unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )

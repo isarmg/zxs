@@ -17,11 +17,7 @@ use crate::CreateBranch;
 
 use crate::CreateMergeLink;
 
-pub struct NamespaceBatch {
-    pub slot_id: String,
-    pub request: storage_contract::DirectoryNamespaceBatch,
-    pub operation_id: storage_contract::OperationId,
-}
+use crate::NamespaceBatch;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serialization(deny_unknown_fields)]

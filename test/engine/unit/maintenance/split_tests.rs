@@ -393,7 +393,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
         .create_file_branch(
             &source.file_id,
             &source.version_id,
-            "shared",
+            &storage_contract::BranchName::parse("shared").unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -757,7 +757,7 @@ fn selected_inherited_file_pins_source_through_directory_main_until_materialized
         .create_file_branch(
             &old.file_id,
             &old.version_id,
-            "pending",
+            &storage_contract::BranchName::parse("pending").unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )

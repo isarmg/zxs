@@ -533,6 +533,41 @@ impl Backend for PanickingBackend {
     ) -> Result<crate::BranchSnapshot, crate::ApiError> {
         panic!("private create branch panic detail")
     }
+    fn create_file_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn update_note(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdateNote,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn namespace_batch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::NamespaceBatch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn select_file_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::SelectFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn rename_file_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::RenameFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
     fn mutate_disk_directory(
         &self,
         _identity: &crate::auth::Identity,
@@ -802,6 +837,61 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
             "POST",
             "/api/repositories/repo/directory-scopes",
             Some(json!({"path":"","operation_id":"op_00000000000000000000000000000000"})),
+        ),
+        (
+            "POST",
+            "/api/file-manager/files/file/metadata",
+            Some(json!({"note":"","operation_id":"op_00000000000000000000000000000000"})),
+        ),
+        (
+            "POST",
+            "/api/file-manager/versions/version/metadata",
+            Some(json!({"note":"","operation_id":"op_00000000000000000000000000000000"})),
+        ),
+        (
+            "PATCH",
+            "/api/file-manager/files/file/nodes/node",
+            Some(json!({"note":"","operation_id":"op_00000000000000000000000000000000"})),
+        ),
+        (
+            "POST",
+            "/api/file-manager/disks/P01/namespace-batch",
+            Some(
+                json!({"kind":"delete","items":[],"operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "POST",
+            "/api/file-manager/files/file/select",
+            Some(
+                json!({"branch_id":"branch","operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "POST",
+            "/api/file-manager/files/file/select",
+            Some(
+                json!({"branch_id":"branch","repository_id":"repo","path":"file.txt","operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "POST",
+            "/api/file-manager/files/file/branches",
+            Some(
+                json!({"source_version_id":"version","name":"Side","operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "POST",
+            "/api/file-manager/files/file/branches",
+            Some(
+                json!({"source_version_id":"version","source_node_id":"node","name":"Side","operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "PATCH",
+            "/api/file-manager/files/file/branches/branch",
+            Some(json!({"name":"Side","operation_id":"op_00000000000000000000000000000000"})),
         ),
         (
             "POST",

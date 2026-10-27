@@ -3569,8 +3569,17 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
     let body = json!({"name":"客户主稿","operation_id":new_id("op")});
     let result = success(&app, &admin, "PATCH", &route, Some(body.clone())).await;
     assert_eq!(result["result"]["name"], "客户主稿");
+    assert_eq!(result["operation_kind"], "file.branch.rename");
+    let digest=storage_contract::object_hash("request",&json!({"kind":"file.branch.rename","principal":"admin","body":{"file_id":id,"branch_id":branch,"name":"客户主稿"}})).unwrap();
+    assert_eq!(result["request_digest"], digest);
+    let mut conflicting = body.clone();
+    conflicting["name"] = "Other".into();
+    let (status, conflict) = send(&app, Some(&admin), "PATCH", &route, Some(conflicting)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(conflict["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
+
     assert_eq!(
-        success(&app, &admin, "PATCH", &route, Some(body)).await["result"],
+        success(&app, &admin, "PATCH", &route, Some(body.clone())).await["result"],
         result["result"]
     );
     let after = success(
@@ -3628,17 +3637,46 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
         StatusCode::BAD_REQUEST
     );
 
+    for invalid in [
+        json!({"name":"x".repeat(129),"operation_id":new_id("op")}),
+        json!({"name":"bad\nname","operation_id":new_id("op")}),
+        json!({"name":"Cafe\u{301}","operation_id":new_id("op")}),
+        json!({"name":"Side","operation_id":"bad"}),
+        json!({"name":"Side","operation_id":new_id("op"),"unknown":0}),
+        json!({"name":"Side","operation_id":new_id("op"),"file_id":"other"}),
+        json!({"name":"Side","operation_id":new_id("op"),"branch_id":"other"}),
+        json!({"operation_id":new_id("op")}),
+    ] {
+        assert_eq!(
+            send(&app, Some(&admin), "PATCH", &route, Some(invalid))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            success(
+                &app,
+                &admin,
+                "GET",
+                &format!("/api/file-manager/files/{id}/history"),
+                None
+            )
+            .await,
+            after
+        );
+    }
+    assert_eq!(
+        send(&app, None, "PATCH", &route, Some(json!({"name":null})))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+
     let revoked = revoked_session(&app).await;
     assert_eq!(
-        send(
-            &app,
-            Some(&revoked),
-            "PATCH",
-            &route,
-            Some(json!({"name":"denied","operation_id":new_id("op")}))
-        )
-        .await
-        .0,
+        send(&app, Some(&revoked), "PATCH", &route, Some(body.clone()))
+            .await
+            .0,
         StatusCode::UNAUTHORIZED
     );
     let audit = success(&app, &admin, "GET", "/api/file-manager/history", None).await;
@@ -3650,6 +3688,55 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
             .any(|event| event["action"] == "file.branch.rename"
                 && event["branch_id"] == branch
                 && event["message"] == "客户主稿")
+    );
+    let unchanged = success(
+        &app,
+        &admin,
+        "PATCH",
+        &route,
+        Some(json!({"name":"客户主稿","operation_id":new_id("op")})),
+    )
+    .await;
+    assert_eq!(unchanged["result"]["no_change"], true);
+    success(
+        &app,
+        &admin,
+        "PATCH",
+        &route,
+        Some(json!({"name":"New label","operation_id":new_id("op")})),
+    )
+    .await;
+    drop(app);
+    let system = root.path().join("system");
+    let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
+    let auth = backend.open_auth(&system).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let admin = login(&app, "admin", "integration-test-password").await;
+    let replay = success(&app, &admin, "PATCH", &route, Some(body)).await;
+    for key in [
+        "operation_id",
+        "operation_kind",
+        "request_digest",
+        "publication_sequence",
+        "result",
+        "protection_at_publish",
+    ] {
+        assert_eq!(replay[key], result[key], "{key}");
+    }
+    let current = success(
+        &app,
+        &admin,
+        "GET",
+        &format!("/api/file-manager/files/{id}/history"),
+        None,
+    )
+    .await;
+    assert!(
+        current["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["branch_id"] == branch && item["name"] == "New label")
     );
 }
 
@@ -4428,4 +4515,262 @@ async fn typed_disk_directory_rejects_raw_errors_before_lazy_root_and_keeps_repl
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(response["error"]["code"], "UNAUTHORIZED");
+}
+
+#[tokio::test]
+async fn typed_file_branch_sources_keep_distinct_permanent_receipts() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    manager_upload(&app, &token, "report.txt", b"frozen source").await;
+    let listing = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks/P01/entries",
+        None,
+    )
+    .await;
+    let entry = &listing["entries"][0];
+    let file = entry["file_id"].as_str().unwrap();
+    let version = entry["version_id"].as_str().unwrap();
+    let route = format!("/api/file-manager/files/{file}/branches");
+    let before = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/file-manager/files/{file}/history"),
+        None,
+    )
+    .await;
+    for node in [Value::Null, json!(""), json!(false), json!([])] {
+        assert_eq!(send(&app,Some(&token),"POST",&route,Some(json!({"source_version_id":version,"source_node_id":node,"name":"Side","operation_id":new_id("op")}))).await.0,StatusCode::BAD_REQUEST);
+        assert_eq!(
+            success(
+                &app,
+                &token,
+                "GET",
+                &format!("/api/file-manager/files/{file}/history"),
+                None
+            )
+            .await,
+            before
+        );
+    }
+    let mut receipts = Vec::new();
+    for (name, node) in [("Version source", None), ("Node source", Some(version))] {
+        let mut body = json!({"source_version_id":version,"name":name,"operation_id":new_id("op")});
+        let mut canonical = json!({"file_id":file,"source_version_id":version,"name":name});
+        if let Some(node) = node {
+            body["source_node_id"] = node.into();
+            canonical["source_node_id"] = node.into();
+        }
+        let created = success(&app, &token, "POST", &route, Some(body.clone())).await;
+        assert_eq!(
+            created["request_digest"],
+            storage_contract::object_hash(
+                "request",
+                &json!({"kind":"file.branch.create","principal":"admin","body":canonical})
+            )
+            .unwrap()
+        );
+        assert_eq!(created["result"]["content_state"], "PENDING");
+        assert_eq!(created["result"]["materialized"], false);
+        assert_eq!(created["result"]["selected"], false);
+        let mut changed = body.clone();
+        if node.is_some() {
+            changed.as_object_mut().unwrap().remove("source_node_id");
+        } else {
+            changed["source_node_id"] = version.into();
+        }
+        let (status, error) = send(&app, Some(&token), "POST", &route, Some(changed)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(error["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
+        receipts.push((body, created));
+    }
+    let revoked = revoked_session(&app).await;
+    assert_eq!(
+        send(
+            &app,
+            Some(&revoked),
+            "POST",
+            &route,
+            Some(receipts[0].0.clone())
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(version_bytes(&app, &token, version).await, b"frozen source");
+    drop(app);
+    let system = root.path().join("system");
+    let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
+    let auth = backend.open_auth(&system).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let token = login(&app, "admin", "integration-test-password").await;
+    for (body, created) in receipts {
+        let replay = success(&app, &token, "POST", &route, Some(body)).await;
+        for key in [
+            "operation_id",
+            "request_digest",
+            "publication_sequence",
+            "result",
+        ] {
+            assert_eq!(replay[key], created[key], "{key}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn typed_notes_reject_absence_and_null_but_clear_and_replay_each_real_map() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    manager_upload(&app, &token, "report.txt", b"body").await;
+    manager_namespace(&app, &token, "rename", "report.txt", Some("renamed.txt")).await;
+    let listing = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks/P01/entries",
+        None,
+    )
+    .await;
+    let file = listing["entries"][0]["file_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let version = listing["entries"][0]["version_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let history_route = format!("/api/file-manager/files/{file}/history");
+    let history = success(&app, &token, "GET", &history_route, None).await;
+    let node = history["node_id"].as_str().unwrap().to_owned();
+    assert!(node.starts_with("fnode_"));
+    let mut receipts = Vec::new();
+    for (method, route, kind, id_key, canonical) in [
+        (
+            "POST",
+            format!("/api/file-manager/files/{file}/metadata"),
+            "file.metadata",
+            "file_id",
+            json!({"file_id":file,"version_id":null,"note":""}),
+        ),
+        (
+            "POST",
+            format!("/api/file-manager/versions/{version}/metadata"),
+            "version.metadata",
+            "version_id",
+            json!({"file_id":file,"version_id":version,"note":""}),
+        ),
+        (
+            "PATCH",
+            format!("/api/file-manager/files/{file}/nodes/{node}"),
+            "file.path.metadata",
+            "node_id",
+            json!({"file_id":file,"node_id":node,"note":""}),
+        ),
+    ] {
+        let note = "  Cafe\u{301}  ";
+        let written = success(
+            &app,
+            &token,
+            method,
+            &route,
+            Some(json!({"note":note,"operation_id":new_id("op")})),
+        )
+        .await;
+        assert_eq!(written["result"]["note"], note);
+        let before = success(&app, &token, "GET", &history_route, None).await;
+        let mut mismatch = json!({"note":"","operation_id":new_id("op")});
+        mismatch[id_key] = "other".into();
+        for invalid in [
+            json!({"operation_id":new_id("op")}),
+            json!({"note":null,"operation_id":new_id("op")}),
+            json!({"note":false,"operation_id":new_id("op")}),
+            json!({"note":"x".repeat(129),"operation_id":new_id("op")}),
+            json!({"note":"bad\ntext","operation_id":new_id("op")}),
+            json!({"note":"","operation_id":"bad"}),
+            json!({"note":"","operation_id":new_id("op"),"unknown":0}),
+            mismatch,
+        ] {
+            assert_eq!(
+                send(&app, Some(&token), method, &route, Some(invalid))
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST
+            );
+            assert_eq!(
+                success(&app, &token, "GET", &history_route, None).await,
+                before
+            );
+        }
+        assert_eq!(
+            send(&app, None, method, &route, Some(json!({"note":null})))
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        let clear = json!({"note":"","operation_id":new_id("op")});
+        let cleared = success(&app, &token, method, &route, Some(clear.clone())).await;
+        assert_eq!(cleared["result"]["note"], "");
+        assert_eq!(
+            cleared["request_digest"],
+            storage_contract::object_hash(
+                "request",
+                &json!({"kind":kind,"principal":"admin","body":canonical})
+            )
+            .unwrap()
+        );
+        let mut conflict = clear.clone();
+        conflict["note"] = "other".into();
+        let (status, error) = send(&app, Some(&token), method, &route, Some(conflict)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(error["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
+        receipts.push((method, route, clear, cleared));
+    }
+    drop(app);
+    let system = root.path().join("system");
+    let engine = reopen_after_router_drop(&system).await;
+    assert!(!engine.state().file_notes.contains_key(&file));
+    assert!(!engine.state().version_notes.contains_key(&version));
+    assert!(!engine.state().file_path_notes.contains_key(&node));
+    let backend = Arc::new(EngineBackend::new(engine));
+    let auth = backend.open_auth(&system).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let revoked = revoked_session(&app).await;
+    for (method, route, clear, original) in receipts {
+        success(
+            &app,
+            &token,
+            method,
+            &route,
+            Some(json!({"note":"later","operation_id":new_id("op")})),
+        )
+        .await;
+        assert_eq!(
+            send(&app, Some(&revoked), method, &route, Some(clear.clone()))
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        let replay = success(&app, &token, method, &route, Some(clear)).await;
+        for key in [
+            "operation_id",
+            "operation_kind",
+            "request_digest",
+            "publication_sequence",
+            "result",
+        ] {
+            assert_eq!(replay[key], original[key], "{key}");
+        }
+    }
+    assert_eq!(version_bytes(&app, &token, &version).await, b"body");
+    drop(app);
+    let engine = reopen_after_router_drop(&system).await;
+    assert_eq!(engine.state().file_notes[&file], "later");
+    assert_eq!(engine.state().version_notes[&version], "later");
+    assert_eq!(engine.state().file_path_notes[&node], "later");
 }

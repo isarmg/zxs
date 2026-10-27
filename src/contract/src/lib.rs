@@ -32,7 +32,7 @@ pub use api_path::validate_api_path;
 pub use encoding::*;
 pub use model::*;
 pub use shared_records::SharedRecords;
-pub use text::{MAX_FILE_TAGS, MAX_NOTE_BYTES, MAX_TAG_BYTES, validate_note, validate_tag};
+pub use text::{MAX_FILE_TAGS, MAX_NOTE_BYTES, MAX_TAG_BYTES, Note, validate_note, validate_tag};
 pub use workspace_capacity::*;
 
 pub type Result<T> = std::result::Result<T, Error>;

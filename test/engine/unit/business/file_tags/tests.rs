@@ -273,7 +273,7 @@ fn pending_file_labels_preserve_first_write_and_batches_keep_branch_snapshots_in
         .create_file_branch(
             &file.file_id,
             &file.version_id,
-            "review",
+            &storage_contract::BranchName::parse("review").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )

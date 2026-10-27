@@ -337,17 +337,34 @@ fn destination_scope_reads_disambiguate_reused_directory_paths_by_identity() {
         .find(|entry| entry["path"] == "target")
         .unwrap();
     let old_directory = target["entry_id"].clone();
-    let rename = json!({"slot_id":"P01","operation_id":storage_engine::new_id("op"),"kind":"rename","items":[{
-        "source":{"directory_branch_id":root_scope["directory_branch_id"],"expected_tree_id":root_scope["head_tree_id"],"path":"target","entry_id":target["entry_id"]},
-        "target":{"directory_branch_id":root_scope["directory_branch_id"],"expected_tree_id":root_scope["head_tree_id"],"path":"archive"}
-    }]});
-    call(
-        &mut engine,
-        &identity,
-        BackendAction::FileManagerNamespaceBatch,
-        rename,
-    )
-    .unwrap();
+    Application::new(&mut engine, &identity)
+        .namespace_batch(crate::NamespaceBatch {
+            slot_id: "P01".into(),
+            operation_id: storage_contract::OperationId::generate(),
+            request: storage_contract::DirectoryNamespaceBatch {
+                kind: storage_contract::DirectoryBatchKind::Rename,
+                items: vec![storage_contract::DirectoryNamespaceItem {
+                    source: storage_contract::DirectoryNamespaceSource {
+                        directory_branch_id: root_scope["directory_branch_id"]
+                            .as_str()
+                            .unwrap()
+                            .into(),
+                        expected_tree_id: root_scope["head_tree_id"].as_str().unwrap().into(),
+                        path: "target".into(),
+                        entry_id: target["entry_id"].as_str().unwrap().into(),
+                    },
+                    target: Some(storage_contract::DirectoryNamespaceTarget {
+                        directory_branch_id: root_scope["directory_branch_id"]
+                            .as_str()
+                            .unwrap()
+                            .into(),
+                        expected_tree_id: root_scope["head_tree_id"].as_str().unwrap().into(),
+                        path: "archive".into(),
+                    }),
+                }],
+            },
+        })
+        .unwrap();
     call(&mut engine, &identity, BackendAction::FileManagerNamespace, json!({"slot_id":"P01","operation_id":storage_engine::new_id("op"),"kind":"mkdir","path":"target"})).unwrap();
     let fresh = directory_mutation(&mut engine, &identity, crate::DiskDirectoryAction::Create, json!({"slot_id":"P01","operation_id":storage_engine::new_id("op"),"path":"target","name":"fresh"})).unwrap();
     let fresh_branch = fresh["result"]["directory_branch_id"].as_str().unwrap();

@@ -765,6 +765,24 @@ pub(crate) fn unwritten_source_at<'a>(
     .map(|entry| entry.version_id.as_str())
 }
 
+// Persisted directory labels are admitted as NFC portable branch names. A nonzero
+// ASCII suffix follows a UTF-8 prefix and keeps the result within 128 bytes.
+fn fork_name(origin_name: &str, number: u64) -> (String, String) {
+    let suffix = if number == 0 {
+        String::new()
+    } else {
+        format!("-{number}")
+    };
+    let limit = 128 - suffix.len();
+    let mut end = origin_name.len().min(limit);
+    while !origin_name.is_char_boundary(end) {
+        end -= 1;
+    }
+    let name = format!("{}{suffix}", &origin_name[..end]);
+    let key = name_policy::lookup_key(&name);
+    (name, key)
+}
+
 /// Fork inherited file intent only at the first actual save. An explicit file
 /// selection removes the intent and continues the selected public branch.
 pub(crate) fn prepare_file_write(
@@ -814,27 +832,16 @@ pub(crate) fn prepare_file_write(
         })?
         .name
         .clone();
-    let unique = |name: &str| {
+    let unique = |key: &str| {
         !state.branches.values().any(|b| {
-            b.file_id.as_deref() == Some(file_id)
-                && name_policy::lookup_key(&b.name) == name_policy::lookup_key(name)
+            b.file_id.as_deref() == Some(file_id) && name_policy::lookup_key(&b.name) == key
         })
     };
     let mut number = 0u64;
-    let name = loop {
-        let suffix = if number == 0 {
-            String::new()
-        } else {
-            format!("-{number}")
-        };
-        let limit = 128 - suffix.len();
-        let mut end = origin_name.len().min(limit);
-        while !origin_name.is_char_boundary(end) {
-            end -= 1;
-        }
-        let candidate = format!("{}{suffix}", &origin_name[..end]);
-        if name_policy::lookup_key(&candidate) != "main" && unique(&candidate) {
-            break candidate;
+    let (name, name_key) = loop {
+        let (candidate, key) = fork_name(&origin_name, number);
+        if key != "main" && unique(&key) {
+            break (candidate, key);
         }
         number = number.checked_add(1).ok_or_else(|| {
             Error::new(
@@ -846,9 +853,12 @@ pub(crate) fn prepare_file_write(
     let result = file::create_file_branch_change(
         engine,
         state,
-        file_id,
-        &original.version_id,
-        &name,
+        file::FileBranchCreation {
+            file_id,
+            source_version: &original.version_id,
+            name: &name,
+            name_key: &name_key,
+        },
         principal,
         operation,
     )?;
@@ -1487,3 +1497,7 @@ impl Engine {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/business/directory_corruption_tests.rs"]
 mod corruption_tests;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/business/directory_fork_names.rs"]
+mod fork_names;

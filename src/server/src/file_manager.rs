@@ -55,7 +55,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/file-manager/disks/{slot}/namespace", post(namespace))
         .route(
             "/api/file-manager/disks/{slot}/namespace-batch",
-            post(namespace_batch),
+            post(http_namespace_batch::submit),
         )
         .route(
             "/api/file-manager/disks/{slot}/directory-branches",
@@ -66,12 +66,18 @@ pub(crate) fn routes() -> Router<AppState> {
             post(http_disk_directory::select),
         )
         .route("/api/file-manager/files/{file}/history", get(file_history))
-        .route("/api/file-manager/files/{file}/branches", post(branch))
+        .route(
+            "/api/file-manager/files/{file}/branches",
+            post(http_create_file_branch::create),
+        )
         .route(
             "/api/file-manager/files/{file}/branches/{branch}",
-            patch(rename_file_branch),
+            patch(http_rename_file_branch::rename),
         )
-        .route("/api/file-manager/files/{file}/select", post(select))
+        .route(
+            "/api/file-manager/files/{file}/select",
+            post(http_file_selection::select),
+        )
         .route("/api/file-manager/files/{file}/merge", post(merge))
         .route("/api/file-manager/files/{file}/tags", post(tags))
         .route(
@@ -80,16 +86,16 @@ pub(crate) fn routes() -> Router<AppState> {
         )
         .route(
             "/api/file-manager/files/{file}/nodes/{node}",
-            patch(node_note),
+            patch(http_note::node),
         )
         .route("/api/file-manager/history", get(history))
         .route(
             "/api/file-manager/files/{file}/metadata",
-            post(file_metadata),
+            post(http_note::file),
         )
         .route(
             "/api/file-manager/versions/{version}/metadata",
-            post(version_metadata),
+            post(http_note::version),
         )
 }
 async fn disks(
@@ -130,45 +136,6 @@ id_post_handler!(
     crate::BackendAction::FileManagerNamespace,
     "slot_id"
 );
-id_post_handler!(
-    namespace_batch,
-    crate::BackendAction::FileManagerNamespaceBatch,
-    "slot_id"
-);
-id_post_handler!(branch, crate::BackendAction::FileManagerBranch, "file_id");
-async fn rename_file_branch(
-    State(state): State<AppState>,
-    http_routing::Extension(identity): http_routing::Extension<Identity>,
-    ApiPath((file, branch)): ApiPath<(String, String)>,
-    request: Request,
-) -> Result<Json<Value>, ApiError> {
-    let input = with_id(json_body(request).await?, "file_id", file)?;
-    let input = with_id(input, "branch_id", branch)?;
-    call(
-        state,
-        identity,
-        crate::BackendAction::FileManagerRenameBranch,
-        input,
-    )
-    .await
-}
-async fn node_note(
-    State(state): State<AppState>,
-    http_routing::Extension(identity): http_routing::Extension<Identity>,
-    ApiPath((file, node)): ApiPath<(String, String)>,
-    request: Request,
-) -> Result<Json<Value>, ApiError> {
-    let input = with_id(json_body(request).await?, "file_id", file)?;
-    let input = with_id(input, "node_id", node)?;
-    call(
-        state,
-        identity,
-        crate::BackendAction::FileManagerNodeNote,
-        input,
-    )
-    .await
-}
-id_post_handler!(select, crate::BackendAction::FileManagerSelect, "file_id");
 id_post_handler!(merge, crate::BackendAction::FileManagerMerge, "file_id");
 id_post_handler!(tags, crate::BackendAction::FileManagerTags, "file_id");
 read_handler!(
@@ -180,14 +147,4 @@ id_post_handler!(
     configure_backups,
     crate::BackendAction::FileManagerConfigureBackups,
     "repository_id"
-);
-id_post_handler!(
-    file_metadata,
-    crate::BackendAction::FileManagerFileMetadata,
-    "file_id"
-);
-id_post_handler!(
-    version_metadata,
-    crate::BackendAction::FileManagerVersionMetadata,
-    "version_id"
 );

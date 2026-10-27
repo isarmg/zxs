@@ -440,7 +440,7 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
         .create_file_branch(
             &original.file_id,
             &original.version_id,
-            "pending-view",
+            &storage_contract::BranchName::parse("pending-view").unwrap(),
             "owner",
             storage_contract::OperationId::generate(),
         )

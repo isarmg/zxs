@@ -27,7 +27,22 @@ mod web_assets;
 
 mod backend_action;
 mod backend_archive;
+mod backend_create_file_branch;
 mod backend_directory_scope;
+mod http_create_file_branch;
+pub use backend_create_file_branch::CreateFileBranch;
+mod backend_note;
+mod http_note;
+pub use backend_note::{NoteTarget, UpdateNote};
+mod backend_namespace_batch;
+mod http_namespace_batch;
+pub use backend_namespace_batch::NamespaceBatch;
+mod backend_file_selection;
+mod http_file_selection;
+pub use backend_file_selection::{FileSelectionLocation, SelectFileBranch};
+mod backend_rename_file_branch;
+mod http_rename_file_branch;
+pub use backend_rename_file_branch::RenameFileBranch;
 mod backend_disk_directory;
 mod http_disk_directory;
 pub use backend_disk_directory::{DiskDirectoryAction, MutateDiskDirectory};
@@ -413,6 +428,31 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         request: CreateBranch,
     ) -> Result<BranchSnapshot, ApiError>;
+    fn create_file_branch(
+        &self,
+        identity: &Identity,
+        request: CreateFileBranch,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn update_note(
+        &self,
+        identity: &Identity,
+        request: UpdateNote,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn namespace_batch(
+        &self,
+        identity: &Identity,
+        request: NamespaceBatch,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn select_file_branch(
+        &self,
+        identity: &Identity,
+        request: SelectFileBranch,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn rename_file_branch(
+        &self,
+        identity: &Identity,
+        request: RenameFileBranch,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
     fn mutate_disk_directory(
         &self,
         identity: &Identity,
@@ -825,6 +865,45 @@ impl Backend for AuthorizedBackend {
     ) -> Result<crate::BranchSnapshot, crate::ApiError> {
         self.backend
             .create_branch(&self.current(identity)?, request)
+    }
+    fn create_file_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .create_file_branch(&self.current(identity)?, request)
+    }
+    fn update_note(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateNote,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend.update_note(&self.current(identity)?, request)
+    }
+    fn namespace_batch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::NamespaceBatch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .namespace_batch(&self.current(identity)?, request)
+    }
+    fn select_file_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::SelectFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .select_file_branch(&self.current(identity)?, request)
+    }
+    fn rename_file_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::RenameFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .rename_file_branch(&self.current(identity)?, request)
     }
     fn mutate_disk_directory(
         &self,

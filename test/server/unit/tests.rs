@@ -247,6 +247,41 @@ impl Backend for TestBackend {
     ) -> Result<crate::BranchSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn create_file_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn update_note(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdateNote,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn namespace_batch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::NamespaceBatch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn select_file_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::SelectFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn rename_file_branch(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::RenameFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn mutate_disk_directory(
         &self,
         _identity: &crate::auth::Identity,
@@ -1302,6 +1337,41 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             request: crate::CreateBranch,
         ) -> Result<crate::BranchSnapshot, crate::ApiError> {
             self.delegate.create_branch(identity, request)
+        }
+        fn create_file_branch(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::CreateFileBranch,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.create_file_branch(identity, request)
+        }
+        fn update_note(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::UpdateNote,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.update_note(identity, request)
+        }
+        fn namespace_batch(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::NamespaceBatch,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.namespace_batch(identity, request)
+        }
+        fn select_file_branch(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::SelectFileBranch,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.select_file_branch(identity, request)
+        }
+        fn rename_file_branch(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::RenameFileBranch,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.rename_file_branch(identity, request)
         }
         fn mutate_disk_directory(
             &self,

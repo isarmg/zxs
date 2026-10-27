@@ -355,6 +355,41 @@ impl Backend for LostCommitReply {
     ) -> Result<crate::BranchSnapshot, crate::ApiError> {
         self.inner.create_branch(identity, request)
     }
+    fn create_file_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.create_file_branch(identity, request)
+    }
+    fn update_note(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateNote,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.update_note(identity, request)
+    }
+    fn namespace_batch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::NamespaceBatch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.namespace_batch(identity, request)
+    }
+    fn select_file_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::SelectFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.select_file_branch(identity, request)
+    }
+    fn rename_file_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::RenameFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.rename_file_branch(identity, request)
+    }
     fn mutate_disk_directory(
         &self,
         identity: &crate::auth::Identity,
@@ -738,12 +773,32 @@ fn select_pending_file(shared: &Shared, branch: &str) -> String {
         .find(|entry| entry["path"] == "report.txt")
         .unwrap();
     let file = entry["file_id"].as_str().unwrap().to_owned();
-    let created = shared.backend.call(crate::BackendAction::FileManagerBranch, identity, json!({
-        "file_id":file,"source_version_id":entry["version_id"],"name":"draft","operation_id":new_id("op")
-    })).unwrap();
-    shared.backend.call(crate::BackendAction::FileManagerSelect, identity, json!({
-        "file_id":file,"branch_id":created["result"]["branch_id"],"operation_id":new_id("op")
-    })).unwrap();
+    let created = shared
+        .backend
+        .create_file_branch(
+            identity,
+            crate::CreateFileBranch {
+                file_id: file.clone(),
+                source_version_id: entry["version_id"].as_str().unwrap().into(),
+                source_node_id: None,
+                name: storage_contract::BranchName::parse("draft").unwrap(),
+                operation_id: storage_contract::OperationId::generate(),
+            },
+        )
+        .and_then(crate::operation_wire::operation_wire)
+        .unwrap();
+    shared
+        .backend
+        .select_file_branch(
+            identity,
+            crate::SelectFileBranch {
+                file_id: file.clone(),
+                branch_id: created["result"]["branch_id"].as_str().unwrap().into(),
+                location: None,
+                operation_id: storage_contract::OperationId::generate(),
+            },
+        )
+        .unwrap();
     file
 }
 

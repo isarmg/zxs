@@ -470,12 +470,13 @@ fn backend_mutations_and_lazy_root_creation_invalidate_before_following_reads() 
     let (_root, backend, repo, entry) = backend_fixture();
     backend.repositories_snapshot(&caller()).unwrap();
     backend
-        .call(
-            FileManagerFileMetadata,
+        .update_note(
             &caller(),
-            json!({
-                "file_id":entry.file_id,"note":"updated","operation_id":new_id("op")
-            }),
+            crate::UpdateNote {
+                target: crate::NoteTarget::File(entry.file_id.clone()),
+                note: storage_contract::Note::parse("updated".into()).unwrap(),
+                operation_id: storage_contract::OperationId::generate(),
+            },
         )
         .unwrap();
     assert!(backend.engine.lock().unwrap().admission.get().is_none());

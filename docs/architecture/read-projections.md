@@ -410,3 +410,37 @@ EngineBackend 在同锁 current 身份后进入真实目录命令。虚拟仓库
 核心 create_directory_branches / select_directory_branches 接收 LookupPath 和 BranchName，只重查当前资源/选择/配额/正文可读性等动态条件。创建时仅需要 history ID 而不复制整个 Repository；已有目录选择和按名称选择不为取得目录 ID 复制 entries，首次物化复用已捕获共享 Commit。新名称 key 在碰撞/查找循环外已缓存，现有名称记录仍按当前存储模型计算 key。原 directory.branches.create/select 的 kind/principal/repository/path/name 展示字符串摘要、永久 receipt、scope 生成、同步顺序、操作健康观察包与文件正文检查不变；不承诺持久化全增量或吞吐提升。
 
 无效裸 JSON 的原惰性根回归迁到真实 parser 和 HTTP 路由，逐次比较数据盘字节及仓库列表；合法内核/SMB夹具调用 typed backend，授权、两种动作的排队撤权、取消容量与 panic 边界均有对应调用。既有目录选择预算、部分选择、冲突、损坏正文和重启回归保留，不使用只改测试期望来放行不完整选择。
+
+### 文件分支公开名称修改
+
+PATCH file-manager/files/{file}/branches/{branch} 在 HTTP 边界绑定路径身份、拒绝未知字段并解析 RenameFileBranch；BranchName 保存原展示名称与碰撞 key，OperationId 只解析一次。空 name 仍先拒绝，非空 name 的 operation 格式失败仍先于名称政策错误；保留该路由 operation 的 INVALID_REQUEST/source 与名称的具体错误码。移除 FileManagerRenameBranch action，所有真实 Backend 实现提供 required rename_file_branch，不再在核心分发 JSON。
+
+合法命令在同一 Engine 锁内按 current 身份、file_repo 当前资源准入、原 mutate/永久 receipt 的顺序执行。静态格式失败已移到 HTTP 阻塞任务内，先于排队后的当前身份和资源检查；中间件认证仍先于 body。核心只接收 BranchName，不重复验证或每个候选重复折叠新名称；既有存储名称仍按原模型计算 key。当前分支属于文件、未迁移、活动且非合并别名以及同文件名称碰撞仍为动态检查。canonical file.branch.rename 的展示字符串摘要、no_change、原历史树标识与 operation_wire 健康观察包不变。
+
+不新增锁、索引、缓存、fsync 或格式迁移；碰撞查找仍扫描分支，元数据修改不创建内容节点。HTTP 回归覆盖独立摘要、同 ID 冲突、重启后重放旧 receipt 不覆盖新名称、格式拒绝不改变文件历史、128 字节边界与原内容/目录节点；动态撤权、授权参数透传、取消后槽位归属和 panic 隔离走新方法。直接核心的非法字符串用例迁到真实 HTTP parser/路由，核心合法夹具先构造约束类型。
+
+### 版本来源与显式节点来源的文件分支创建
+
+POST file-manager/files/{file}/branches 解析 CreateFileBranch：已绑定的 file ID、必填 source_version_id、可选但显式提供时必须非空字符串的 source_node_id、BranchName 和 OperationId。两个真实来源调用分别保留 file.branch.create 摘要中的 source_node_id 省略/存在形状，不变成统一 null；核心只接收已验证名称，pending冻结来源、未物化/未选中的结果、source node归属、main/casefold碰撞和当前file/repository准入不变。静态字段验证在bounded HTTP任务，合法命令仍同锁current→file_repo→mutate/receipt。新请求与原receipt不合并，operation_wire保持原健康观察包。
+
+共享核心创建实现也由目录首次实际保存的惰性fork调用。该内部路径从已准入的目录分支名称生成UTF-8前缀和十进制后缀，不重新parse内部生成名称。实际借用 FileBranchCreation 带file/version/display/key，两个外部入口复用BranchName缓存key，内部候选每次只计算一次key并供碰撞及创建使用，不增加持久格式。
+
+内部生成条件：原目录分支名在创建/改名的BranchName边界以及history manifest读取时受同一名称政策约束（含NFC与128 UTF-8字节）。零后缀保留完整原名；非零u64十进制后缀最多21 ASCII字节，保留至少107字节预算的字符边界前缀，因此非空且总长不超过128。前缀不引入新字符，连字符/数字合法，末尾数字消除截断处空格/点的尾部问题；原首字符仍不为空格。若前缀保留首个点，保留原合法设备名stem；否则尾部连字符数字使整体不等于设备保留名。NFC字符串的码点前缀保持NFC，ASCII连字符阻断跨边界组合。main属于业务保留名，由候选循环和创建碰撞检查排除，不由名称字符规则宣称排除。独立生成测试覆盖128字节、中文截断、重音字符、内嵌空格/点、COM10、main和u64最大后缀；这不是把任意裸结构视为外部输入证明。
+
+### 文件、版本与节点备注
+
+三个真实备注目标共用 Note 的128 UTF-8字节/无control规则：空串是明确清除，空格和NFD文本仍是合法原样文本，不应用BranchName的NFC或非空要求。HTTP file/version metadata使用原POST，node使用原PATCH；缺失note、null和非字符串一律拒绝，不能默认空串。读取note字符串后先解析operation，再验证内容政策，保留原静态错误顺序和来源。解析直接消费外部String，核心只接收&Note，不重复validate；持久化读取仍使用原validate_note。
+
+UpdateNote的真实三变体NoteTarget排除file/version/node可选字段的无效组合，不合并三个map或operation kind。EngineBackend同锁current后，file和node走file_repo，version先查当前version并从记录取得file ID、再file_repo。file.metadata摘要仍含version_id:null，version.metadata仍绑定file/version，file.path.metadata仍绑定file/node；空串分别移除各自map的key。节点备注仍支持路径节点和metadata节点。OperationResult在HTTP应用原operation_wire；精确旧清除receipt的重放不得清除后来的新备注。
+
+只有三个核心测试使用的旧set_file_path_note转发入口已迁到set_file_node_note并删除；Rust client同名方法是实际HTTP客户端接口，保持不变。没有新增persist格式、锁、同步阶段、通用DTO框架或缓存。HTTP回归逐目标验证缺失/null/格式/path身份失败保持历史不变、清除后重启三个map确实无key、旧清除receipt重放不删除later备注及撤权拒绝重放。全量验证结果独立记录，不把类型迁移视作全仓达标。
+
+### 带位置和无位置的文件分支选择
+
+SelectFileBranch真实命令用Option<FileSelectionLocation>区分无位置选择和明确repository/path；HTTP必须同时提供两个字段，缺一、null、空字段拒绝，文件路径按原PortablePath创建拼写规则保持NFC/格式错误码。先读取branch/operation再做路径内容政策解析，原非空非法operation优先于非法path。已绑定file ID不重复校验。合法命令同锁current→file_repo；有位置时保持仓库身份比较，再调用对应核心方法，不在两个入口之间JSON自调用。
+
+核心select_file_branch_at接收&PortablePath，复用key查找当前file/path；publish_selected_file_at的另一个真实workspace调用方原本就持有PortablePath，因而共享helper直接接收该类型。选择key来自显式path或当前Entry缓存key，不再复制selected_path后重算key；file_locations中的持久display引用仍在需要匹配时计算一次key。保留原缺省位置优先级与实际错误，不新增缓存或索引。
+
+两个file.branch.select摘要仍分别为file/branch与repository/path/file/branch，缺省位置不编码成null。永久receipt先于当前path、活动branch与正文使用检查，HTTP current身份和file/repository准入仍先于receipt；改名、merge、重启后原请求仍重放，但新请求仍检查当前规则。非pending分支继续valid_replica，pending分支继续冻结来源例外，不因为本次typing增加正文读取；原目录/上下文发布、世代、预算与同步顺序不变。
+
+新增真实pending回归先移除旧source的全部实际副本，分别执行带位置和无位置选择，再重启重放，证明冻结pending来源未被强行要求新副本；既有非pending不可读正文测试同时验证两入口失败且State不变。HTTP覆盖成对字段、格式/身份失败不改历史、独立两种摘要及形状冲突、merge/rename/reopen后的重放和新请求只读拒绝；授权、两个位置形状的排队撤权、取消容量与panic隔离走新方法。没有改变正文丢失后的读取失败事实，也不宣称pending引用本身提供可读正文。

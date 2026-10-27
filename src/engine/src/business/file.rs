@@ -154,7 +154,7 @@ pub(crate) fn publish_selected_file(
 pub(crate) fn publish_selected_file_at(
     state: &mut State,
     branch_id: &str,
-    path: Option<&str>,
+    path: Option<&name_policy::PortablePath>,
     principal: &str,
     operation: OperationId,
 ) -> Result<String> {
@@ -218,27 +218,24 @@ pub(crate) fn publish_selected_file_at(
                 "directory head missing",
             )
         })?;
-    let selected_path = path
-        .map(str::to_owned)
+    let selected_key = path
+        .map(name_policy::PortablePath::key)
         .or_else(|| {
-            state
-                .file_locations
-                .get(file_id)
-                .filter(|p| {
-                    let key = name_policy::path_key(p);
-                    current
-                        .entries
-                        .iter()
-                        .any(|e| e.file_id == file_id && e.lookup_key() == key)
-                })
-                .cloned()
+            state.file_locations.get(file_id).and_then(|path| {
+                let key = name_policy::path_key(path);
+                current
+                    .entries
+                    .iter()
+                    .find(|entry| entry.file_id == file_id && entry.lookup_key() == key)
+                    .map(|entry| entry.lookup_key())
+            })
         })
         .or_else(|| {
             current
                 .entries
                 .iter()
-                .find(|e| e.file_id == file_id && e.kind == NamespaceEntryKind::File)
-                .map(|e| e.path().to_owned())
+                .find(|entry| entry.file_id == file_id && entry.kind == NamespaceEntryKind::File)
+                .map(|entry| entry.lookup_key())
         })
         .ok_or_else(|| {
             Error::new(
@@ -246,8 +243,7 @@ pub(crate) fn publish_selected_file_at(
                 "file is absent from current composition",
             )
         })?;
-    let selected_key = name_policy::path_key(&selected_path);
-    let context = directory::context_at_key(state, &repository.repository_id, &selected_key);
+    let context = directory::context_at_key(state, &repository.repository_id, selected_key);
     let inherited = context.as_ref().is_some_and(|c| c.inherited_from.is_some());
     state.file_write_origins.remove(file_id);
     let already_selected = context.as_ref().is_some_and(|c| c.branch_id == branch_id);
@@ -322,7 +318,7 @@ pub(crate) fn publish_selected_file_at(
         .file_selections
         .insert(file_id.into(), branch_id.into());
     state.file_contexts.insert(
-        directory::context_key_from_key(&repository.repository_id, &selected_key),
+        directory::context_key_from_key(&repository.repository_id, selected_key),
         FileContext {
             node_id: branch.file_node_id.clone(),
             selection_generation: context
@@ -441,15 +437,26 @@ pub(crate) fn ensure_shared_file_branch(
     })
 }
 
+pub(crate) struct FileBranchCreation<'a> {
+    pub file_id: &'a str,
+    pub source_version: &'a str,
+    pub name: &'a str,
+    pub name_key: &'a str,
+}
+
 pub(crate) fn create_file_branch_change(
     engine: &crate::engine::PlanningContext<'_>,
     state: &mut State,
-    file_id: &str,
-    source_version: &str,
-    name: &str,
+    source: FileBranchCreation<'_>,
     principal: &str,
     operation: OperationId,
 ) -> Result<json_codec::Value> {
+    let FileBranchCreation {
+        file_id,
+        source_version,
+        name,
+        name_key,
+    } = source;
     let source = state
         .versions
         .get(source_version)
@@ -500,10 +507,9 @@ pub(crate) fn create_file_branch_change(
                 "file no longer exists in this directory",
             )
         })?;
-    if name_policy::lookup_key(name) == "main"
+    if name_key == "main"
         || state.branches.values().any(|b| {
-            b.file_id.as_deref() == Some(file_id)
-                && name_policy::lookup_key(&b.name) == name_policy::lookup_key(name)
+            b.file_id.as_deref() == Some(file_id) && name_policy::lookup_key(&b.name) == name_key
         })
     {
         return Err(Error::new(
@@ -571,11 +577,11 @@ impl Engine {
         &mut self,
         file_id: &str,
         version_id: Option<&str>,
-        note: &str,
+        note: &storage_contract::Note,
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        validate_note(note)?;
+        let note = note.as_str();
         self.mutate(
             if version_id.is_some() {
                 "version.metadata"
@@ -648,23 +654,25 @@ impl Engine {
         &mut self,
         file_id: &str,
         source_version: &str,
-        name: &str,
+        name: &storage_contract::BranchName,
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        super::validate_branch_name(name)?;
         self.mutate(
             "file.branch.create",
             principal,
             operation,
-            json!({"file_id":file_id,"source_version_id":source_version,"name":name}),
+            json!({"file_id":file_id,"source_version_id":source_version,"name":name.as_str()}),
             |engine, state, _| {
                 create_file_branch_change(
                     &engine.planning_context(),
                     state,
-                    file_id,
-                    source_version,
-                    name,
+                    FileBranchCreation {
+                        file_id,
+                        source_version,
+                        name: name.as_str(),
+                        name_key: name.key(),
+                    },
                     principal,
                     operation,
                 )
@@ -675,16 +683,15 @@ impl Engine {
     pub fn select_file_branch_at(
         &mut self,
         repository: &str,
-        path: &str,
+        path: &name_policy::PortablePath,
         file_id: &str,
         branch_id: &str,
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        name_policy::validate_path(path)?;
         self.mutate(
             "file.branch.select", principal, operation,
-            json!({"repository_id":repository,"path":path,"file_id":file_id,"branch_id":branch_id}),
+            json!({"repository_id":repository,"path":path.as_str(),"file_id":file_id,"branch_id":branch_id}),
             |engine, state, _| {
                 let repo = state.repositories.get(repository)
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::RepositoryNotFound, "repository missing"))?;
@@ -694,7 +701,7 @@ impl Engine {
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "repository main branch missing"))?;
                 let current = state.commits.get(&main.head_commit_id)
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "repository head missing"))?;
-                if !find_unordered(&current.entries, path).is_some_and(|e| e.kind == NamespaceEntryKind::File && e.file_id == file_id) {
+                if !find_unordered_key(&current.entries, path.key()).is_some_and(|e| e.kind == NamespaceEntryKind::File && e.file_id == file_id) {
                     return Err(Error::new(storage_contract::ErrorCode::FileNotFound, "file/path identity differs"));
                 }
                 let branch = state.branches.get(branch_id).cloned()
@@ -714,7 +721,7 @@ impl Engine {
                     engine.valid_replica(&selected.version_id)?;
                 }
                 let commit = publish_selected_file_at(state, branch_id, Some(path), principal, operation)?;
-                Ok(json!({"file_id":file_id,"branch_id":branch_id,"commit_id":commit,"history_tree_id":branch.history_tree_id,"path":path}))
+                Ok(json!({"file_id":file_id,"branch_id":branch_id,"commit_id":commit,"history_tree_id":branch.history_tree_id,"path":path.as_str()}))
             },
         )
     }

@@ -161,34 +161,22 @@ fn path_node_note_and_new_branch_are_metadata_and_preserve_the_named_source_node
         .unwrap();
     let trees = e.state().directory_trees.len();
     let versions = e.state().versions.len();
-    e.set_file_path_note(
+    e.set_file_node_note(
         &file.file_id,
         &node,
-        "rename note",
+        &storage_contract::Note::parse("rename note".into()).unwrap(),
         "admin",
         storage_contract::OperationId::generate(),
     )
     .unwrap();
     assert_eq!(e.state().directory_trees.len(), trees);
     assert_eq!(e.state().versions.len(), versions);
-    assert_eq!(
-        e.set_file_path_note(
-            &file.file_id,
-            &node,
-            &"x".repeat(129),
-            "admin",
-            storage_contract::OperationId::generate()
-        )
-        .unwrap_err()
-        .code(),
-        storage_contract::ErrorCode::InvalidRequest
-    );
     let branch = e
         .create_file_branch_from_node(
             &file.file_id,
             &file.version_id,
             &node,
-            "from rename",
+            &storage_contract::BranchName::parse("from rename").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -199,7 +187,7 @@ fn path_node_note_and_new_branch_are_metadata_and_preserve_the_named_source_node
         .to_owned();
     e.select_file_branch_at(
         &r.repository_id,
-        "b.txt",
+        &name_policy::PortablePath::parse("b.txt").unwrap(),
         &file.file_id,
         &branch,
         "admin",
@@ -229,7 +217,7 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
         .create_file_branch(
             &original.file_id,
             &original.version_id,
-            "other",
+            &storage_contract::BranchName::parse("other").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -240,7 +228,7 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
         .to_owned();
     e.select_file_branch_at(
         &r.repository_id,
-        "a.txt",
+        &name_policy::PortablePath::parse("a.txt").unwrap(),
         &original.file_id,
         &branch,
         "admin",
@@ -268,7 +256,7 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
     assert_eq!(
         e.select_file_branch_at(
             &r.repository_id,
-            "a.txt",
+            &name_policy::PortablePath::parse("a.txt").unwrap(),
             &original.file_id,
             &original_branch,
             "admin",
@@ -282,5 +270,82 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
     assert_eq!(
         e.file_context(&r.repository_id, "a.txt").unwrap().branch_id,
         branch
+    );
+}
+
+#[test]
+fn pending_selection_preserves_frozen_source_even_when_source_replicas_are_missing() {
+    let (root, mut engine, repo) = setup();
+    save(&mut engine, &repo, "file.txt", b"frozen source");
+    let source = entries(&engine, &repo)["file.txt"].clone();
+    let pending = engine
+        .create_file_branch(
+            &source.file_id,
+            &source.version_id,
+            &storage_contract::BranchName::parse("pending").unwrap(),
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap()
+        .result["branch_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    save(&mut engine, &repo, "file.txt", b"current body");
+    loop {
+        match engine.valid_replica(&source.version_id) {
+            Ok((path, _)) => std::fs::remove_file(path).unwrap(),
+            Err(error) if error.code() == storage_contract::ErrorCode::ContentUnavailable => break,
+            Err(error) => panic!("unexpected replica failure: {error}"),
+        }
+    }
+    let path = name_policy::PortablePath::parse("file.txt").unwrap();
+    let operation = storage_contract::OperationId::generate();
+    let selected = engine
+        .select_file_branch_at(
+            &repo.repository_id,
+            &path,
+            &source.file_id,
+            &pending,
+            "admin",
+            operation,
+        )
+        .unwrap();
+    engine
+        .select_file_branch(
+            &source.file_id,
+            &pending,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    assert_eq!(
+        engine.state().branches[&pending].pending_file_versions[&source.file_id],
+        source.version_id
+    );
+    assert_eq!(
+        engine
+            .file_context(&repo.repository_id, "file.txt")
+            .unwrap()
+            .branch_id,
+        pending
+    );
+    drop(engine);
+    let mut recovered = Engine::open(&root.path().join("system")).unwrap();
+    let replay = recovered
+        .select_file_branch_at(
+            &repo.repository_id,
+            &path,
+            &source.file_id,
+            &pending,
+            "admin",
+            operation,
+        )
+        .unwrap();
+    assert_eq!(replay.result, selected.result);
+    assert_eq!(replay.request_digest, selected.request_digest);
+    assert_eq!(
+        recovered.state().branches[&pending].pending_file_versions[&source.file_id],
+        source.version_id
     );
 }

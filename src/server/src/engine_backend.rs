@@ -771,6 +771,164 @@ impl Backend for EngineBackend {
         let branch = Application::new(&mut engine, &current).create_branch(request)?;
         Ok(branch::capture_owned(engine.state(), branch))
     }
+    fn create_file_branch(
+        &self,
+        identity: &Identity,
+        request: crate::CreateFileBranch,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        file_manager::file_repo(&engine, &request.file_id)?;
+        match request.source_node_id.as_deref() {
+            Some(node) => engine.create_file_branch_from_node(
+                &request.file_id,
+                &request.source_version_id,
+                node,
+                &request.name,
+                &current.principal,
+                request.operation_id,
+            ),
+            None => engine.create_file_branch(
+                &request.file_id,
+                &request.source_version_id,
+                &request.name,
+                &current.principal,
+                request.operation_id,
+            ),
+        }
+        .map_err(error)
+    }
+    fn update_note(
+        &self,
+        identity: &Identity,
+        request: crate::UpdateNote,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        match request.target {
+            crate::NoteTarget::File(file) => {
+                file_manager::file_repo(&engine, &file)?;
+                engine.set_file_note(
+                    &file,
+                    None,
+                    &request.note,
+                    &current.principal,
+                    request.operation_id,
+                )
+            }
+            crate::NoteTarget::Version(version) => {
+                let file = engine
+                    .state()
+                    .versions
+                    .get(&version)
+                    .ok_or_else(|| {
+                        ApiError::new(
+                            ::http::StatusCode::NOT_FOUND,
+                            storage_contract::ErrorCode::VersionNotFound,
+                            "version not found",
+                        )
+                    })?
+                    .file_id
+                    .clone();
+                file_manager::file_repo(&engine, &file)?;
+                engine.set_file_note(
+                    &file,
+                    Some(&version),
+                    &request.note,
+                    &current.principal,
+                    request.operation_id,
+                )
+            }
+            crate::NoteTarget::Node { file, node } => {
+                file_manager::file_repo(&engine, &file)?;
+                engine.set_file_node_note(
+                    &file,
+                    &node,
+                    &request.note,
+                    &current.principal,
+                    request.operation_id,
+                )
+            }
+        }
+        .map_err(error)
+    }
+    fn namespace_batch(
+        &self,
+        identity: &Identity,
+        request: crate::NamespaceBatch,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        application::Application::new(&mut engine, &current).namespace_batch(request)
+    }
+    fn select_file_branch(
+        &self,
+        identity: &Identity,
+        request: crate::SelectFileBranch,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        let repository = file_manager::file_repo(&engine, &request.file_id)?;
+        match request.location {
+            Some(location) => {
+                if location.repository_id != repository.repository_id {
+                    return Err(ApiError::new(
+                        ::http::StatusCode::NOT_FOUND,
+                        storage_contract::ErrorCode::FileNotFound,
+                        "file is not in this repository",
+                    ));
+                }
+                engine.select_file_branch_at(
+                    &location.repository_id,
+                    &location.path,
+                    &request.file_id,
+                    &request.branch_id,
+                    &current.principal,
+                    request.operation_id,
+                )
+            }
+            None => engine.select_file_branch(
+                &request.file_id,
+                &request.branch_id,
+                &current.principal,
+                request.operation_id,
+            ),
+        }
+        .map_err(error)
+    }
+    fn rename_file_branch(
+        &self,
+        identity: &Identity,
+        request: crate::RenameFileBranch,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        file_manager::file_repo(&engine, &request.file_id)?;
+        engine
+            .rename_file_branch(
+                &request.file_id,
+                &request.branch_id,
+                &request.name,
+                &current.principal,
+                request.operation_id,
+            )
+            .map_err(error)
+    }
     fn mutate_disk_directory(
         &self,
         identity: &Identity,
@@ -1223,17 +1381,10 @@ impl Backend for EngineBackend {
             | crate::BackendAction::FileManagerHistory => {
                 file_manager::read(&engine, action, input)
             }
-            crate::BackendAction::FileManagerBranch
-            | crate::BackendAction::FileManagerConfigureBackups
-            | crate::BackendAction::FileManagerFileMetadata
+            crate::BackendAction::FileManagerConfigureBackups
             | crate::BackendAction::FileManagerMerge
             | crate::BackendAction::FileManagerNamespace
-            | crate::BackendAction::FileManagerNamespaceBatch
-            | crate::BackendAction::FileManagerNodeNote
-            | crate::BackendAction::FileManagerRenameBranch
-            | crate::BackendAction::FileManagerSelect
             | crate::BackendAction::FileManagerTags
-            | crate::BackendAction::FileManagerVersionMetadata
             | crate::BackendAction::FileManagerWriteSession => {
                 file_manager::call(&mut engine, identity, action, input)
             }

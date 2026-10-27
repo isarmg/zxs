@@ -19,6 +19,19 @@ pub fn validate_tag(tag: &str) -> Result<()> {
     Ok(())
 }
 
+/// Parsed user metadata; the empty value is an explicit clear command.
+#[derive(Debug)]
+pub struct Note(String);
+impl Note {
+    pub fn parse(value: String) -> Result<Self> {
+        validate_note(&value)?;
+        Ok(Self(value))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Empty notes clear existing metadata. The limit counts UTF-8 bytes, and
 /// control characters (including line breaks) are not part of the current format.
 pub fn validate_note(note: &str) -> Result<()> {

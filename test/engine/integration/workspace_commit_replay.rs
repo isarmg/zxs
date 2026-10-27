@@ -767,7 +767,7 @@ fn partial_workspace_completion_uses_original_published_file_contexts() {
                 .create_file_branch(
                     &entry.file_id,
                     &entry.version_id,
-                    "later selection",
+                    &storage_contract::BranchName::parse("later selection").unwrap(),
                     "admin",
                     storage_contract::OperationId::generate(),
                 )

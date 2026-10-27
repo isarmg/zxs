@@ -42,7 +42,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry, String) {
         .create_file_branch(
             &entry.file_id,
             &entry.version_id,
-            "draft",
+            &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
             storage_contract::OperationId::generate(),
         )
@@ -458,7 +458,7 @@ fn missing_file_nodes_and_bodies_return_errors_without_publication() {
                 &entry.file_id,
                 "missing",
                 &head,
-                "broken source",
+                &storage_contract::BranchName::parse("broken source").unwrap(),
                 "admin",
                 storage_contract::OperationId::generate(),
             )

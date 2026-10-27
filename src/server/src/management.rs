@@ -809,6 +809,41 @@ impl Backend for ManagementBackend {
     ) -> Result<crate::BranchSnapshot, crate::ApiError> {
         self.inner.backend()?.create_branch(identity, request)
     }
+    fn create_file_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.backend()?.create_file_branch(identity, request)
+    }
+    fn update_note(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateNote,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.backend()?.update_note(identity, request)
+    }
+    fn namespace_batch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::NamespaceBatch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.backend()?.namespace_batch(identity, request)
+    }
+    fn select_file_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::SelectFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.backend()?.select_file_branch(identity, request)
+    }
+    fn rename_file_branch(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::RenameFileBranch,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.backend()?.rename_file_branch(identity, request)
+    }
     fn mutate_disk_directory(
         &self,
         identity: &crate::auth::Identity,

@@ -1128,10 +1128,10 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
     assert_eq!(engine.state.file_path_nodes[&node].previous_path, "a/g.txt");
     assert_eq!(engine.state.file_path_nodes[&node].path, "b/g.txt");
     engine
-        .set_file_path_note(
+        .set_file_node_note(
             &old.file_id,
             &node,
-            "目录改名，正文未变",
+            &storage_contract::Note::parse("目录改名，正文未变".into()).unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -1270,7 +1270,7 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
         .create_file_branch(
             &original.file_id,
             &original.version_id,
-            "shared",
+            &storage_contract::BranchName::parse("shared").unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -1612,7 +1612,7 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
         .create_file_branch(
             &file.file_id,
             &file.version_id,
-            "draft",
+            &storage_contract::BranchName::parse("draft").unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -2309,7 +2309,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
         .set_file_node_note(
             &entry.file_id,
             &tagged,
-            "tag note",
+            &storage_contract::Note::parse("tag note".into()).unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -2319,7 +2319,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
             &entry.file_id,
             &entry.version_id,
             &tagged,
-            "left",
+            &storage_contract::BranchName::parse("left").unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -2333,7 +2333,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
             &entry.file_id,
             &entry.version_id,
             &tagged,
-            "right",
+            &storage_contract::BranchName::parse("right").unwrap(),
             "alice",
             storage_contract::OperationId::generate(),
         )
@@ -3189,7 +3189,7 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
             .create_file_branch(
                 &entry.file_id,
                 &entry.version_id,
-                name,
+                &storage_contract::BranchName::parse(name).unwrap(),
                 "alice",
                 storage_contract::OperationId::generate(),
             )

@@ -7,16 +7,15 @@ impl Engine {
         &mut self,
         file_id: &str,
         branch_id: &str,
-        name: &str,
+        name: &storage_contract::BranchName,
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        validate_branch_name(name)?;
         self.mutate(
             "file.branch.rename",
             principal,
             operation,
-            json!({"file_id":file_id,"branch_id":branch_id,"name":name}),
+            json!({"file_id":file_id,"branch_id":branch_id,"name":name.as_str()}),
             |engine, state, _| {
                 let current = state.branches.get(branch_id)
                     .filter(|branch| branch.file_id.as_deref()==Some(file_id)&&branch.state!=BranchState::Migrated)
@@ -28,15 +27,15 @@ impl Engine {
                 }
                 if state.branches.values().any(|branch|branch.file_id.as_deref()==Some(file_id)
                     && branch.branch_id!=branch_id
-                    && name_policy::lookup_key(&branch.name)==name_policy::lookup_key(name)) {
+                    && name_policy::lookup_key(&branch.name)==name.key()) {
                     return Err(Error::new(storage_contract::ErrorCode::NameCollision,"a public branch of this file already uses that name"));
                 }
                 let previous=current.name.clone();
-                if previous!=name {
-                    state.branches.get_mut(branch_id).expect("checked branch").name=name.into();
+                if previous!=name.as_str() {
+                    state.branches.get_mut(branch_id).expect("invariant: the selected branch remains in this mutation candidate").name=name.as_str().into();
                 }
                 Ok(json!({"file_id":file_id,"branch_id":branch_id,"history_tree_id":repository.history_tree_id,
-                    "previous_name":previous,"name":name,"no_change":previous==name}))
+                    "previous_name":previous,"name":name.as_str(),"no_change":previous==name.as_str()}))
             },
         )
     }

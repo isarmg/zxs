@@ -110,26 +110,15 @@ pub(crate) fn operation_nodes(state: &State, operation: OperationId) -> Vec<Stri
 }
 
 impl Engine {
-    /// Compatibility entry point for the original path-node API.
-    pub fn set_file_path_note(
-        &mut self,
-        file: &str,
-        node: &str,
-        note: &str,
-        principal: &str,
-        operation: OperationId,
-    ) -> Result<OperationResult> {
-        self.set_file_node_note(file, node, note, principal, operation)
-    }
     pub fn set_file_node_note(
         &mut self,
         file: &str,
         node: &str,
-        note: &str,
+        note: &storage_contract::Note,
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        validate_note(note)?;
+        let note = note.as_str();
         self.mutate(
             "file.path.metadata",
             principal,
@@ -169,24 +158,21 @@ impl Engine {
         file: &str,
         version: &str,
         node: &str,
-        name: &str,
+        name: &storage_contract::BranchName,
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        validate_branch_name(name)?;
         self.mutate(
             "file.branch.create",
             principal,
             operation,
-            json!({"file_id":file,"source_version_id":version,"source_node_id":node,"name":name}),
+            json!({"file_id":file,"source_version_id":version,"source_node_id":node,"name":name.as_str()}),
             |engine, state, _| {
                 source_node(state, file, version, node)?;
                 let mut result = file::create_file_branch_change(
                     &engine.planning_context(),
                     state,
-                    file,
-                    version,
-                    name,
+                    file::FileBranchCreation {file_id:file,source_version:version,name:name.as_str(),name_key:name.key()},
                     principal,
                     operation,
                 )?;
