@@ -250,19 +250,24 @@ impl Content {
             return Ok(self);
         };
         loop {
-            if verify_content_file(&mut self.file, manifest, self.size, &self.hash).is_ok() {
-                self.checksum_manifest = None;
-                self.fallback_files.clear();
-                return Ok(self);
+            match verify_content_file(&mut self.file, manifest, self.size, &self.hash) {
+                Ok(()) => {
+                    self.checksum_manifest = None;
+                    self.fallback_files.clear();
+                    return Ok(self);
+                }
+                Err(error) => {
+                    let Some(next) = self.fallback_files.pop() else {
+                        return Err(ApiError::new(
+                            ::http::StatusCode::SERVICE_UNAVAILABLE,
+                            storage_contract::ErrorCode::ContentUnavailable,
+                            "no fully verified content replica is available",
+                        )
+                        .with_source(error));
+                    };
+                    self.file = next;
+                }
             }
-            let Some(next) = self.fallback_files.pop() else {
-                return Err(ApiError::new(
-                    ::http::StatusCode::SERVICE_UNAVAILABLE,
-                    storage_contract::ErrorCode::ContentUnavailable,
-                    "no fully verified content replica is available",
-                ));
-            };
-            self.file = next;
         }
     }
 }

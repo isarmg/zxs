@@ -374,6 +374,161 @@ fn content(lease: Arc<AtomicUsize>) -> Content {
     }
 }
 
+fn payload_file(bytes: &[u8]) -> std::fs::File {
+    let mut file = tempfile::tempfile().unwrap();
+    std::io::Write::write_all(&mut file, bytes).unwrap();
+    file
+}
+
+fn write_only_payload(bytes: &[u8]) -> std::fs::File {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("payload");
+    std::fs::write(&path, bytes).unwrap();
+    std::fs::OpenOptions::new().write(true).open(path).unwrap()
+}
+
+fn content_to_verify(
+    bytes: &[u8],
+    file: std::fs::File,
+    fallback_files: Vec<std::fs::File>,
+    lease: Arc<AtomicUsize>,
+) -> Content {
+    Content {
+        checksum_manifest: Some(manifest(bytes)),
+        fallback_files,
+        file,
+        size: bytes.len() as u64,
+        hash: blake3::hash(bytes).to_hex().to_string(),
+        lease: Box::new(ReadLease(lease)),
+        download_name: Some("payload".into()),
+    }
+}
+
+fn fully_verified_failure(content: Content) -> std::io::Error {
+    let error = match content.fully_verified() {
+        Ok(_) => panic!("invalid replicas must not expose a descriptor"),
+        Err(error) => error,
+    };
+    assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error.code, storage_contract::ErrorCode::ContentUnavailable);
+    assert_eq!(
+        error.message,
+        "no fully verified content replica is available"
+    );
+    assert!(error.retryable);
+    assert!(std::error::Error::source(&error).is_some());
+    assert!(
+        json_codec::to_value(&error)
+            .unwrap()
+            .get("source")
+            .is_none()
+    );
+    let crate::http_boundary::ApiErrorSource::Io(source) = *error.source.unwrap() else {
+        panic!("full verification must preserve its concrete IO source");
+    };
+    source
+}
+
+#[test]
+fn fully_verified_all_corrupt_replicas_preserve_source_and_release_lease() {
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let source = fully_verified_failure(content_to_verify(
+        b"old",
+        payload_file(b"bad"),
+        vec![payload_file(b"bad"), payload_file(b"bad")],
+        dropped.clone(),
+    ));
+    assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(source.to_string(), "content verification failed");
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn fully_verified_preserves_real_file_read_error() {
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let mut file = write_only_payload(b"old");
+    let expected = file.read(&mut [0]).unwrap_err();
+    assert!(expected.raw_os_error().is_some());
+    let source =
+        fully_verified_failure(content_to_verify(b"old", file, Vec::new(), dropped.clone()));
+    assert_eq!(source.kind(), expected.kind());
+    assert_eq!(source.raw_os_error(), expected.raw_os_error());
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn fully_verified_healthy_fallback_preserves_content_and_lease() {
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let mut content = content_to_verify(
+        b"old",
+        payload_file(b"bad"),
+        vec![payload_file(b"bad"), payload_file(b"old")],
+        dropped.clone(),
+    )
+    .fully_verified()
+    .unwrap();
+    assert!(content.checksum_manifest.is_none());
+    assert!(content.fallback_files.is_empty());
+    assert_eq!(content.file.stream_position().unwrap(), 0);
+    assert_eq!(content.size, 3);
+    assert_eq!(content.hash, blake3::hash(b"old").to_hex().as_str());
+    assert_eq!(content.download_name.as_deref(), Some("payload"));
+    assert_eq!(dropped.load(Ordering::SeqCst), 0);
+    let mut bytes = Vec::new();
+    content.file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"old");
+    drop(content);
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn fully_verified_preserves_the_last_failure_in_pop_order() {
+    for last_is_io in [false, true] {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let mut file = write_only_payload(b"old");
+        let expected = file.read(&mut [0]).unwrap_err();
+        let fallbacks = if last_is_io {
+            vec![file, payload_file(b"bad")]
+        } else {
+            vec![payload_file(b"bad"), file]
+        };
+        let source = fully_verified_failure(content_to_verify(
+            b"old",
+            payload_file(b"bad"),
+            fallbacks,
+            dropped.clone(),
+        ));
+        if last_is_io {
+            assert_eq!(source.kind(), expected.kind());
+            assert_eq!(source.raw_os_error(), expected.raw_os_error());
+        } else {
+            assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+            assert_eq!(source.raw_os_error(), None);
+        }
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[test]
+fn fully_verified_without_manifest_preserves_the_existing_content() {
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let mut content = content(dropped.clone());
+    content.fallback_files.push(payload_file(b"unused"));
+    content.file.seek(SeekFrom::Start(4)).unwrap();
+    let mut content = content.fully_verified().unwrap();
+    assert!(content.checksum_manifest.is_none());
+    assert_eq!(content.fallback_files.len(), 1);
+    assert_eq!(content.file.stream_position().unwrap(), 4);
+    assert_eq!(content.size, 10);
+    assert_eq!(content.hash, "hash");
+    assert_eq!(dropped.load(Ordering::SeqCst), 0);
+    let mut bytes = Vec::new();
+    content.file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"456789");
+    drop(content);
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+}
+
 #[tokio::test]
 async fn verified_stream_preserves_lease_and_admission_until_consumption_or_drop() {
     for consume in [true, false] {
