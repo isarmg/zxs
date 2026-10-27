@@ -282,6 +282,28 @@ impl Backend for TestBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn listing(
+        &self,
+        _identity: &crate::auth::Identity,
+        request: crate::ReadListing,
+    ) -> Result<crate::ListingSnapshot, crate::ApiError> {
+        Ok(crate::ListingSnapshot {
+            slot_id: request.slot_id().into(),
+            path: request.path().into(),
+            backup: false,
+            entries: vec![],
+            selected_entry: None,
+            context: None,
+            directory_file_count: 0,
+            directory_branches: vec![],
+            directory_branches_supported: true,
+            default_branch_scope: false,
+            total_entries: 0,
+            snapshot: "fixture".into(),
+            previous_cursor: None,
+            next_cursor: None,
+        })
+    }
     fn mutate_disk_directory(
         &self,
         _identity: &crate::auth::Identity,
@@ -354,6 +376,13 @@ impl Backend for TestBackend {
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn file_history_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadFileHistory,
+    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn file_history(
         &self,
         _identity: &crate::auth::Identity,
@@ -379,6 +408,12 @@ impl Backend for TestBackend {
         _identity: &crate::auth::Identity,
         _after: u64,
     ) -> Result<crate::EventPage, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn activity_history(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
     fn history_graph(
@@ -1373,6 +1408,13 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         ) -> Result<storage_contract::OperationResult, crate::ApiError> {
             self.delegate.rename_file_branch(identity, request)
         }
+        fn listing(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::ReadListing,
+        ) -> Result<crate::ListingSnapshot, crate::ApiError> {
+            self.delegate.listing(identity, request)
+        }
         fn mutate_disk_directory(
             &self,
             identity: &crate::auth::Identity,
@@ -1431,6 +1473,13 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             self.delegate
                 .default_directory_branch(identity, repository_id)
         }
+        fn file_history_snapshot(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::ReadFileHistory,
+        ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+            self.delegate.file_history_snapshot(identity, request)
+        }
         fn file_history(
             &self,
             identity: &crate::auth::Identity,
@@ -1457,6 +1506,12 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             after: u64,
         ) -> Result<crate::EventPage, crate::ApiError> {
             self.delegate.event_page(identity, after)
+        }
+        fn activity_history(
+            &self,
+            identity: &crate::auth::Identity,
+        ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
+            self.delegate.activity_history(identity)
         }
         fn history_graph(
             &self,
@@ -1964,5 +2019,57 @@ pub(crate) fn disk_directory_request(
         name: storage_contract::BranchName::parse(value["name"].as_str().unwrap()).unwrap(),
         operation_id: value["operation_id"].as_str().unwrap().parse().unwrap(),
         action,
+    }
+}
+
+#[tokio::test]
+async fn listing_http_boundary_preserves_root_shape_and_rejects_invalid_queries() {
+    let root = private_tempdir();
+    let app = application(root.path());
+    let (_, _, cookie) = authenticated(&app).await;
+    for (query, expected) in [
+        ("", StatusCode::OK),
+        ("?path=Cafe%CC%81&limit=500", StatusCode::OK),
+        ("?extra=1", StatusCode::BAD_REQUEST),
+        ("?limit=0", StatusCode::BAD_REQUEST),
+        ("?limit=501", StatusCode::BAD_REQUEST),
+        ("?path=../bad", StatusCode::BAD_REQUEST),
+        ("?selected_path=item", StatusCode::BAD_REQUEST),
+        ("?cursor=gg", StatusCode::BAD_REQUEST),
+        ("?path=a&%70ath=b", StatusCode::BAD_REQUEST),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/file-manager/disks/P01/entries{query}"))
+                    .header(header::COOKIE, &cookie)
+                    .header(header::HOST, "127.0.0.1:7400")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{query}");
+        let body: Value = json_codec::from_slice(
+            &http_routing::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        if expected == StatusCode::OK {
+            assert_eq!(body["slot_id"], "P01");
+            assert_eq!(body["total_entries"], "0");
+            assert_eq!(body["directory_file_count"], "0");
+            assert!(body["selected_entry"].is_null());
+            assert!(body["context"].is_null());
+            assert!(body.get("backup").is_none());
+            assert_eq!(body["writable"], true);
+            assert_eq!(body["snapshot"], "fixture");
+            assert_eq!(
+                body["path"],
+                if query.is_empty() { "" } else { "Cafe\u{301}" }
+            );
+        }
     }
 }

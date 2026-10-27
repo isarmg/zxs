@@ -529,6 +529,33 @@ impl Backend for RecordingBackend {
             "rename_file_branch",
         ))
     }
+    fn listing(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadListing,
+    ) -> Result<crate::ListingSnapshot, crate::ApiError> {
+        self.record(
+            "listing",
+            Some(identity),
+            json!({"slot_id":request.slot_id(),"path":request.path(),"limit":request.limit(),"query":request.query(),"cursor":request.cursor().is_some(),"selected":request.selected()}),
+        )?;
+        Ok(crate::ListingSnapshot {
+            slot_id: request.slot_id().into(),
+            path: request.path().into(),
+            backup: false,
+            entries: vec![],
+            selected_entry: None,
+            context: None,
+            directory_file_count: 0,
+            directory_branches: vec![],
+            directory_branches_supported: false,
+            default_branch_scope: false,
+            total_entries: 0,
+            snapshot: "listing-snapshot".into(),
+            previous_cursor: None,
+            next_cursor: None,
+        })
+    }
     fn mutate_disk_directory(
         &self,
         identity: &crate::auth::Identity,
@@ -635,6 +662,30 @@ impl Backend for RecordingBackend {
             directory_branches: vec![],
         })
     }
+    fn file_history_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadFileHistory,
+    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+        self.record(
+            "file_history_snapshot",
+            Some(identity),
+            json!({"file_id": request.file_id(), "location": request.location().map(|(repository_id, path)| json!({"repository_id":repository_id,"path":path.as_str(),"key":path.key()}))}),
+        )?;
+        Ok(crate::FileHistorySnapshot {
+            file_id: request.file_id().into(),
+            repository_id: "repo".into(),
+            path: None,
+            note: String::new(),
+            current_node_id: None,
+            selected_branch_id: None,
+            versions: vec![],
+            nodes: vec![],
+            branches: vec![],
+            merges: vec![],
+            content: None,
+        })
+    }
     fn file_history(
         &self,
         identity: &crate::auth::Identity,
@@ -688,6 +739,13 @@ impl Backend for RecordingBackend {
             events: vec![],
             next_cursor: after,
         })
+    }
+    fn activity_history(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
+        self.record("activity_history", Some(identity), json!({}))?;
+        Ok(crate::ActivityHistorySnapshot { events: vec![] })
     }
     fn history_graph(
         &self,
@@ -1364,6 +1422,7 @@ impl Fixture {
                     json!({"returned_by":"directory_selection"})
                 })
             }),
+            ("listing", backend.listing(identity, crate::ReadListing::parse("P01".into(), [("path".into(), "Folder".into())].into()).unwrap()).map(|snapshot| { assert_eq!(snapshot.path, "Folder"); json!({"returned_by":"listing"}) })),
             ("directory_scopes",backend.directory_scopes(identity,crate::ReadDirectoryScopes {repository_id:"repository",filter:&crate::DirectoryBranchFilter::Directory(name_policy::LookupPath::parse("Folder").unwrap()),projection:crate::DirectoryBranchProjection::Summary}).map(|snapshot|{assert_eq!(snapshot.repository_id,"repository");assert!(matches!(snapshot.branches,crate::DirectoryScopeRows::Summary(rows) if rows.is_empty()));json!({"returned_by":"directory_scopes"})})),
             (
                 "default_directory_branch",
@@ -1375,6 +1434,23 @@ impl Fixture {
                         assert_eq!(snapshot.selected.unwrap().name, "selected");
                         assert!(snapshot.directory_branches.is_empty());
                         json!({"returned_by":"default_directory_branch"})
+                    }),
+            ),
+            (
+                "file_history_snapshot",
+                backend
+                    .file_history_snapshot(
+                        identity,
+                        crate::ReadFileHistory::parse(
+                            "file".into(),
+                            Some("repository".into()),
+                            Some("Café/report.txt".into()),
+                        ).unwrap(),
+                    )
+                    .map(|snapshot| {
+                        assert_eq!(snapshot.file_id, "file");
+                        assert!(snapshot.path.is_none());
+                        json!({"returned_by":"file_history_snapshot"})
                     }),
             ),
             (
@@ -1400,6 +1476,13 @@ impl Fixture {
                         assert_eq!(placement.binding_generations["P01"], 23);
                         json!({"returned_by":"placement_snapshot"})
                     }),
+            ),
+            (
+                "activity_history",
+                backend.activity_history(identity).map(|history| {
+                    assert!(history.events.is_empty());
+                    json!({"returned_by":"activity_history"})
+                }),
             ),
             (
                 "event_page",
@@ -1754,11 +1837,14 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"repository_id":"repository","directory_branch_id":"directory","name":"Café","key":"café","operation_id":"op_00000000000000000000000000000000"}),
         json!({"repository_id":"repository","directory_branch_id":"directory","operation_id":"op_00000000000000000000000000000000"}),
         json!({"repository_id":"repository","key":"folder","sources":1,"entries":1}),
+        json!({"slot_id":"P01","path":"Folder","limit":200,"query":"","cursor":false,"selected":null}),
         json!({"repository_id":"repository","key":"folder","summary":true}),
         json!({"repository_id":"repository"}),
+        json!({"file_id":"file","location":{"repository_id":"repository","path":"Café/report.txt","key":"café/report.txt"}}),
         json!({"file_id":"file"}),
         Value::Null,
         json!({"version_id":"version"}),
+        json!({}),
         json!({"after":"17"}),
         json!({"history_tree_id":"history"}),
         json!({"commit_id":"commit"}),

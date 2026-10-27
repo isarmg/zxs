@@ -137,9 +137,9 @@ pub struct ContentDispositionSnapshot {
     pub source_version_id: Option<String>,
     pub stored_state: Option<ContentState>,
 }
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub(crate) struct ContentDispositionResponse {
-    version_id: Option<String>,
+    pub(crate) version_id: Option<String>,
     materialized: bool,
     inherited: bool,
     own_version_id: Option<String>,

@@ -1,11 +1,11 @@
 //! History query validation through the authenticated backend dispatch.
 use super::*;
-use crate::{Backend, BackendAction, auth::AuthStore, engine_backend::EngineBackend};
+use crate::{Backend, auth::AuthStore, engine_backend::EngineBackend};
 use std::sync::Arc;
 use storage_engine::{CommitRequest, Config, new_id};
 
 #[test]
-fn history_query_rejects_unknown_fields_without_changing_context_or_admission() {
+fn history_context_preserves_projection_and_current_admission() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
@@ -44,7 +44,22 @@ fn history_query_rejects_unknown_fields_without_changing_context_or_admission() 
         .unwrap()
         .token;
     let identity = auth.authenticate(&token).unwrap();
-    let read = |input| backend.call(BackendAction::FileManagerFileHistory, &identity, input);
+    let read = |input: Value| {
+        let query = input.get("query");
+        let request = crate::ReadFileHistory::parse(
+            input["file_id"].as_str().unwrap().into(),
+            query
+                .and_then(|q| q.get("repository_id"))
+                .map(|v| v.as_str().unwrap().into()),
+            query
+                .and_then(|q| q.get("path"))
+                .map(|v| v.as_str().unwrap().into()),
+        )?;
+        backend
+            .file_history_snapshot(&identity, request)
+            .map(crate::backend_file_history::FileHistoryResponse::from)
+            .map(|response| json_codec::to_value(response).unwrap())
+    };
     let plain = json!({"file_id":entry.file_id});
     let expected = read(plain.clone()).unwrap();
     let context = json!({"repository_id":repo.repository_id,"path":"report.txt"});
@@ -58,20 +73,6 @@ fn history_query_rejects_unknown_fields_without_changing_context_or_admission() 
     assert_eq!(expected["current_node_id"], entry.version_id);
     assert_eq!(expected["path"], "report.txt");
 
-    for field in ["limit", "cursor", "repositoryId", "Path"] {
-        for mut query in [json!({}), context.clone()] {
-            query[field] = "unused".into();
-            let input = json!({"file_id":entry.file_id,"query":query});
-            let error = read(input.clone()).unwrap_err();
-            assert_eq!(error.status, http::StatusCode::BAD_REQUEST, "{input}");
-            assert_eq!(
-                error.code,
-                storage_contract::ErrorCode::InvalidRequest,
-                "{input}"
-            );
-            assert_eq!(error.message, format!("unknown field {field}"));
-        }
-    }
     for query in [
         json!({"repository_id":repo.repository_id}),
         json!({"path":"report.txt"}),
@@ -95,7 +96,7 @@ fn history_query_rejects_unknown_fields_without_changing_context_or_admission() 
     assert_eq!(read(plain).unwrap(), expected);
 
     auth.logout(&token).unwrap();
-    let error = read(json!({"file_id":entry.file_id,"query":{"limit":"1"}})).unwrap_err();
+    let error = read(json!({"file_id":entry.file_id})).unwrap_err();
     assert_eq!(error.status, http::StatusCode::UNAUTHORIZED);
     assert_eq!(error.code, storage_contract::ErrorCode::Unauthorized);
 }

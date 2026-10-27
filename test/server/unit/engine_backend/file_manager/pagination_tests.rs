@@ -3,14 +3,29 @@
 //! only retained candidates and response size are bounded by the page limit.
 use super::*;
 
+use crate::backend_listing::DEFAULT_LIMIT;
 const LIMIT: usize = 200;
+fn with_snapshot(
+    input: &Value,
+    slot: &str,
+    path: &str,
+    snapshot: String,
+) -> Result<PageRequest, ApiError> {
+    let mut query: BTreeMap<String, String> = input
+        .get("query")
+        .map(|query| json_codec::from_value(query.clone()).map_err(ApiError::invalid_source))
+        .transpose()?
+        .unwrap_or_default();
+    query.insert("path".into(), path.into());
+    PageRequest::with_snapshot(crate::ReadListing::parse(slot.into(), query)?, snapshot)
+}
 
 fn request(cursor: Option<&str>, query: &str) -> PageRequest {
     let mut input = json!({"query":{"limit":LIMIT.to_string(),"query":query}});
     if let Some(cursor) = cursor {
         input["query"]["cursor"] = cursor.into();
     }
-    PageRequest::with_snapshot(&input, "P01", "docs", "synthetic-snapshot".into()).unwrap()
+    with_snapshot(&input, "P01", "docs", "synthetic-snapshot".into()).unwrap()
 }
 
 fn key(index: usize) -> SortKey {
@@ -91,7 +106,10 @@ fn synthetic_large_directories_bound_retained_candidates_and_response_bytes() {
                 })
                 .collect();
             let mut response = json!({"entries":entries});
-            page.metadata(&mut response);
+            response["total_entries"] = page.total.to_string().into();
+            response["snapshot"] = page.snapshot.clone().into();
+            response["previous_cursor"] = page.previous.clone().into();
+            response["next_cursor"] = page.next.clone().into();
             let bytes = json_codec::to_vec(&response).unwrap().len();
             // Bound applies to this fixed-width fixture, not arbitrary path
             // lengths or all possible real-world metadata payloads.
@@ -125,22 +143,17 @@ fn filtering_precedes_paging_and_counts_all_matching_metadata() {
 fn cursor_is_rejected_after_snapshot_or_request_context_changes() {
     let cursor = select(1_000, request(None, "")).next.unwrap();
     let input = json!({"query":{"limit":"200","cursor":cursor}});
-    let stale = PageRequest::with_snapshot(&input, "P01", "docs", "different-snapshot".into())
+    let stale = with_snapshot(&input, "P01", "docs", "different-snapshot".into())
         .err()
         .unwrap();
     assert_eq!(stale.code, storage_contract::ErrorCode::ListingChanged);
     for (slot, path) in [("P02", "docs"), ("P01", "other")] {
-        assert!(
-            PageRequest::with_snapshot(&input, slot, path, "synthetic-snapshot".into()).is_err()
-        );
+        assert!(with_snapshot(&input, slot, path, "synthetic-snapshot".into()).is_err());
     }
     for (field, value) in [("query", "changed"), ("limit", "100")] {
         let mut changed = input.clone();
         changed["query"][field] = value.into();
-        assert!(
-            PageRequest::with_snapshot(&changed, "P01", "docs", "synthetic-snapshot".into())
-                .is_err()
-        );
+        assert!(with_snapshot(&changed, "P01", "docs", "synthetic-snapshot".into()).is_err());
     }
 }
 
@@ -154,7 +167,7 @@ fn malformed_cursors_limits_and_queries_are_rejected_without_panicking() {
         "a".repeat(MAX_CURSOR_BYTES + 2),
     ] {
         let input = json!({"query":{"cursor":cursor}});
-        assert!(PageRequest::with_snapshot(&input, "P01", "docs", "snapshot".into()).is_err());
+        assert!(with_snapshot(&input, "P01", "docs", "snapshot".into()).is_err());
     }
     for limit in [
         json!("0"),
@@ -165,7 +178,7 @@ fn malformed_cursors_limits_and_queries_are_rejected_without_panicking() {
         json!(null),
     ] {
         assert!(
-            PageRequest::with_snapshot(
+            with_snapshot(
                 &json!({"query":{"limit":limit}}),
                 "P01",
                 "docs",
@@ -175,7 +188,7 @@ fn malformed_cursors_limits_and_queries_are_rejected_without_panicking() {
         );
     }
     assert!(
-        PageRequest::with_snapshot(
+        with_snapshot(
             &json!({"query":{"query":"x".repeat(1025)}}),
             "P01",
             "docs",
@@ -184,7 +197,7 @@ fn malformed_cursors_limits_and_queries_are_rejected_without_panicking() {
         .is_err()
     );
     assert_eq!(
-        PageRequest::with_snapshot(&json!({}), "P01", "docs", "snapshot".into())
+        with_snapshot(&json!({}), "P01", "docs", "snapshot".into())
             .unwrap()
             .limit,
         DEFAULT_LIMIT
@@ -230,4 +243,35 @@ fn empty_exact_and_partial_final_pages_have_consistent_boundaries() {
         }
         assert_eq!(seen, (0..size).collect::<Vec<_>>());
     }
+}
+
+#[test]
+fn cursor_preserves_request_fingerprint_and_rejects_tampered_sort_components() {
+    let original = request(None, "");
+    let cursor = original.cursor(&key(10), false).unwrap();
+    let bytes = cursor
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+        .collect::<Vec<_>>();
+    let mut parsed: Value = json_codec::from_slice(&bytes).unwrap();
+    let request_digest = blake3::hash(&json_codec::to_vec(&json!({"slot":"P01","path":"docs","query":"","limit":200,"order":"directory-lowercase-normalized-name-path-identity","unicode":name_policy::UNICODE_VERSION,"lowercase_unicode":std::char::UNICODE_VERSION})).unwrap()).to_hex().to_string();
+    assert_eq!(parsed["request"], request_digest);
+    parsed["key"]["folded"] = "tampered".into();
+    let tampered = json_codec::to_vec(&parsed)
+        .unwrap()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let input = json!({"query":{"cursor":tampered}});
+    let error = with_snapshot(&input, "P01", "docs", "synthetic-snapshot".into())
+        .err()
+        .unwrap();
+    assert_eq!(error.message, "cursor sort key is invalid");
+    let stale = with_snapshot(&input, "P01", "docs", "new-snapshot".into())
+        .err()
+        .unwrap();
+    assert_eq!(stale.code, storage_contract::ErrorCode::ListingChanged);
 }

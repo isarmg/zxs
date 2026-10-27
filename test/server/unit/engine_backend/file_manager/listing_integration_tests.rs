@@ -1,6 +1,23 @@
 use super::*;
 use storage_engine::{CommitRequest, Config, new_id};
 
+pub(super) fn listing_json(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
+    let mut query: BTreeMap<String, String> = input
+        .get("query")
+        .map(|query| json_codec::from_value(query.clone()).map_err(ApiError::invalid_source))
+        .transpose()?
+        .unwrap_or_default();
+    if let Some(path) = input.get("path") {
+        query.insert(
+            "path".into(),
+            json_codec::from_value(path.clone()).map_err(ApiError::invalid_source)?,
+        );
+    }
+    let request = crate::ReadListing::parse(input["slot_id"].as_str().unwrap().into(), query)?;
+    let snapshot = listing::entries(engine, request)?;
+    Ok(json_codec::to_value(crate::backend_listing::ListingResponse::from(snapshot)).unwrap())
+}
+
 #[test]
 fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independent() {
     let root = tempfile::tempdir().unwrap();
@@ -46,8 +63,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
         })
         .unwrap();
     for (slot, path) in [("P01", "Files"), ("B01", "P01/Files")] {
-        let all =
-            listing::entries(&engine, &json!({"slot_id":slot,"query":{"path":path}})).unwrap();
+        let all = listing_json(&engine, &json!({"slot_id":slot,"query":{"path":path}})).unwrap();
         let selected = all["entries"]
             .as_array()
             .unwrap()
@@ -55,7 +71,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
             .find(|entry| entry["name"] == "zeta.txt")
             .unwrap();
         LISTED_ENTRY_PROJECTIONS.set(0);
-        let first=listing::entries(&engine,&json!({"slot_id":slot,"query":{"path":path,"limit":"2","selected_path":selected["path"],"selected_entry_id":selected["entry_id"]}})).unwrap();
+        let first=listing_json(&engine,&json!({"slot_id":slot,"query":{"path":path,"limit":"2","selected_path":selected["path"],"selected_entry_id":selected["entry_id"]}})).unwrap();
         assert_eq!(first["entries"].as_array().unwrap().len(), 2);
         assert_eq!(first["total_entries"], "6");
         assert_eq!(first["directory_file_count"], "6");
@@ -63,23 +79,23 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
         assert!(LISTED_ENTRY_PROJECTIONS.get() <= 3);
         assert_eq!(first["entries"][0]["kind"], "directory");
         let query = json!({"slot_id":slot,"query":{"path":path,"limit":"2","query":"alpha","selected_path":selected["path"],"selected_entry_id":selected["entry_id"]}});
-        let filtered = listing::entries(&engine, &query).unwrap();
+        let filtered = listing_json(&engine, &query).unwrap();
         assert_eq!(filtered["total_entries"], "1");
         assert_eq!(filtered["selected_entry"], *selected);
         let mut missing = query.clone();
         missing["query"]["selected_entry_id"] = new_id("entry").into();
-        assert!(listing::entries(&engine, &missing).unwrap()["selected_entry"].is_null());
+        assert!(listing_json(&engine, &missing).unwrap()["selected_entry"].is_null());
         let mut malformed = query;
         malformed["query"]
             .as_object_mut()
             .unwrap()
             .remove("selected_path");
         assert_eq!(
-            listing::entries(&engine, &malformed).unwrap_err().status,
+            listing_json(&engine, &malformed).unwrap_err().status,
             http::StatusCode::BAD_REQUEST
         );
-        let next=listing::entries(&engine,&json!({"slot_id":slot,"query":{"path":path,"limit":"2","cursor":first["next_cursor"]}})).unwrap();
-        let back=listing::entries(&engine,&json!({"slot_id":slot,"query":{"path":path,"limit":"2","cursor":next["previous_cursor"]}})).unwrap();
+        let next=listing_json(&engine,&json!({"slot_id":slot,"query":{"path":path,"limit":"2","cursor":first["next_cursor"]}})).unwrap();
+        let back=listing_json(&engine,&json!({"slot_id":slot,"query":{"path":path,"limit":"2","cursor":next["previous_cursor"]}})).unwrap();
         assert_eq!(back["entries"], first["entries"]);
         assert_eq!(back["snapshot"], first["snapshot"]);
     }
@@ -92,7 +108,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
         )
         .unwrap();
     let initial =
-        listing::entries(&engine, &json!({"slot_id":"P01","query":{"path":"Files"}})).unwrap();
+        listing_json(&engine, &json!({"slot_id":"P01","query":{"path":"Files"}})).unwrap();
     let branch = initial["directory_branches"]
         .as_array()
         .unwrap()
@@ -185,13 +201,163 @@ fn selected_display_path_may_include_a_repository_prefix_beyond_stored_path_limi
             request_digest: None,
         })
         .unwrap();
-    let first = listing::entries(
+    let first = listing_json(
         &engine,
         &json!({"slot_id":"P01","query":{"path":"Repository"}}),
     )
     .unwrap();
     let selected = &first["entries"][0];
     assert!(selected["path"].as_str().unwrap().len() > 200);
-    let response=listing::entries(&engine,&json!({"slot_id":"P01","query":{"path":"Repository","selected_path":selected["path"],"selected_entry_id":selected["entry_id"]}})).unwrap();
+    let response=listing_json(&engine,&json!({"slot_id":"P01","query":{"path":"Repository","selected_path":selected["path"],"selected_entry_id":selected["entry_id"]}})).unwrap();
     assert_eq!(response["selected_entry"], *selected);
+}
+
+#[test]
+fn virtual_root_snapshots_outlive_engine_and_generation_invalidates_cursors_without_creating_root()
+{
+    let root = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([root.path().join("d1")]),
+    )
+    .unwrap();
+    let empty = listing_json(&engine, &json!({"slot_id":"P01"})).unwrap();
+    assert_eq!(empty["entries"], json!([]));
+    assert!(empty["context"].is_null());
+    assert!(engine.state().repositories.is_empty());
+    for name in ["Alpha", "Beta", "Gamma"] {
+        engine
+            .create_repository(
+                &storage_contract::RepositoryName::parse(name).unwrap(),
+                "P01",
+                1,
+                "owner",
+                storage_contract::OperationId::generate(),
+            )
+            .unwrap();
+    }
+    let first = listing_json(&engine, &json!({"slot_id":"P01","query":{"limit":"1"}})).unwrap();
+    let expected_snapshot=blake3::hash(&json_codec::to_vec(&json!({"configuration":engine.config(),"generation":engine.state().business_generation.to_string()})).unwrap()).to_hex().to_string();
+    assert_eq!(first["snapshot"], expected_snapshot);
+    assert_eq!(first["entries"][0]["name"], "Alpha");
+    assert_eq!(first["total_entries"], "3");
+    assert_eq!(first["directory_branches_supported"], false);
+    let row = &first["entries"][0];
+    assert_eq!(row.as_object().unwrap().len(), 7);
+    assert!(row.get("note").is_none());
+    assert!(row.get("container").is_none());
+    assert!(first["context"].is_null());
+    assert!(
+        engine
+            .state()
+            .repositories
+            .values()
+            .all(|repo| !repo.file_manager_root)
+    );
+    let cursor = first["next_cursor"].as_str().unwrap();
+    engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Delta").unwrap(),
+            "P01",
+            1,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let stale = listing_json(
+        &engine,
+        &json!({"slot_id":"P01","query":{"limit":"1","cursor":cursor}}),
+    )
+    .unwrap_err();
+    assert_eq!(stale.code, storage_contract::ErrorCode::ListingChanged);
+    let snapshot = listing::entries(
+        &engine,
+        crate::ReadListing::parse("P01".into(), Default::default()).unwrap(),
+    )
+    .unwrap();
+    drop(engine);
+    let wire =
+        json_codec::to_value(crate::backend_listing::ListingResponse::from(snapshot)).unwrap();
+    assert_eq!(
+        wire["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["Alpha", "Beta", "Delta", "Gamma"]
+    );
+}
+
+#[test]
+fn backup_deleted_file_retains_historical_namespace_without_fabricated_current_context() {
+    let root = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([
+            root.path().join("d1"),
+            root.path().join("d2"),
+            root.path().join("d3"),
+        ]),
+    )
+    .unwrap();
+    let repo = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Files").unwrap(),
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "owner")
+        .unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "lost.txt", b"body")
+        .unwrap();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: storage_contract::OperationId::generate(),
+            principal: "owner".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: "backup history fixture".into(),
+            request_digest: None,
+        })
+        .unwrap();
+    let entry = engine.list_tree_ref(&repo.main_branch_id).unwrap()[0].clone();
+    engine
+        .file_namespace(
+            &repo.repository_id,
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Delete,
+                "lost.txt",
+                None,
+            )
+            .unwrap(),
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let listing = listing_json(
+        &engine,
+        &json!({"slot_id":"B01","query":{"path":"P01/Files"}}),
+    )
+    .unwrap();
+    assert_eq!(listing["backup"], true);
+    assert_eq!(listing["writable"], false);
+    assert_eq!(listing["directory_branches"], json!([]));
+    assert!(listing["context"].is_null());
+    let row = &listing["entries"][0];
+    assert_eq!(row["entry_id"], entry.file_id);
+    assert_eq!(row["file_id"], entry.file_id);
+    assert_eq!(row["version_id"], entry.version_id);
+    assert_eq!(row["node_id"], entry.version_id);
+    assert_eq!(row["size"], "4");
+    assert_eq!(row["historical_only"], true);
+    assert_eq!(row["read_only"], true);
+    assert!(row["repository_path"].is_null());
+    assert!(row["selected_branch_id"].is_null());
 }

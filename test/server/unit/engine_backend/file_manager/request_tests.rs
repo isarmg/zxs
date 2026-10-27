@@ -517,8 +517,11 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                 named_name.into(),
                 format!("{root_name}/root-only"),
             ] {
-                let failure =
-                    listing::entries(&engine, &json!({"slot_id":"P01","path":path})).unwrap_err();
+                let failure = super::listing_integration_tests::listing_json(
+                    &engine,
+                    &json!({"slot_id":"P01","path":path}),
+                )
+                .unwrap_err();
                 assert_eq!(
                     (failure.status, failure.code),
                     (
@@ -579,7 +582,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                     .unwrap()
                     .is_empty()
             );
-            let other = listing::entries(
+            let other = super::listing_integration_tests::listing_json(
                 &engine,
                 &json!({"slot_id":"P01","path":format!("{root_name}-other")}),
             )
@@ -599,7 +602,11 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                     storage_contract::OperationId::generate(),
                 )
                 .unwrap();
-            let listing = listing::entries(&engine, &json!({"slot_id":"P01","path":""})).unwrap();
+            let listing = super::listing_integration_tests::listing_json(
+                &engine,
+                &json!({"slot_id":"P01","path":""}),
+            )
+            .unwrap();
             let listed = listing["entries"].as_array().unwrap();
             let keys = listed
                 .iter()

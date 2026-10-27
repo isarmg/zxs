@@ -125,8 +125,17 @@ fn file_history_matches_preprojection_graph_json() {
         "graph fixture",
     );
     let before = json_codec::to_vec(engine.state()).unwrap();
-    let mut actual = super::super::file_history(&engine, &json!({"file_id": first.file_id}))
-        .unwrap()["nodes"]
+    let mut actual = storage_contract::strict_json(
+        &json_codec::to_vec(&crate::backend_file_history::FileHistoryResponse::from(
+            super::super::file_history(
+                &engine,
+                crate::ReadFileHistory::parse(first.file_id.clone(), None, None).unwrap(),
+            )
+            .unwrap(),
+        ))
+        .unwrap(),
+    )
+    .unwrap()["nodes"]
         .clone();
     normalized(
         &mut actual,
@@ -165,6 +174,27 @@ fn summary_consumption_retains_overlapping_rows() {
     assert!(summaries.is_empty());
 }
 
+fn projected_version(id: &str, sequence: u64) -> HistoryVersion {
+    HistoryVersion {
+        data: std::sync::Arc::new(crate::backend_file_history::HistoryVersionData {
+            version_id: id.into(),
+            file_id: "file".into(),
+            source_version_ids: vec![],
+            branch_id: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            message: String::new(),
+            size: 0,
+            content_state: None,
+            content_hash: storage_contract::ContentHash::from_digest(blake3::hash(b"")),
+            note: String::new(),
+            download_name: "file.txt".into(),
+            storage_name: "stored".into(),
+        }),
+        sequence,
+        current: false,
+    }
+}
+
 #[test]
 fn history_propagates_projection_error_instead_of_inventing_empty_graph() {
     let root = crate::tests::private_tempdir();
@@ -173,12 +203,7 @@ fn history_propagates_projection_error_instead_of_inventing_empty_graph() {
         Config::development([root.path().join("disk")]),
     )
     .unwrap();
-    let versions = [HistoryVersion {
-        id: "missing",
-        sequence: 10,
-        download_name: "file.txt",
-        wire: json!({}),
-    }];
+    let versions = [projected_version("missing", 10)];
     let error = unified_history(
         &engine,
         "file",
@@ -228,12 +253,7 @@ fn display_order_retains_full_typed_sequences_and_id_ties() {
         (&third.version_id, u64::MAX),
         (&second.version_id, 10),
     ]
-    .map(|(id, sequence)| HistoryVersion {
-        id,
-        sequence,
-        download_name: "file.txt",
-        wire: json!({}),
-    });
+    .map(|(id, sequence)| projected_version(id, sequence));
     let nodes = unified_history(
         &engine,
         &first.file_id,
@@ -243,6 +263,8 @@ fn display_order_retains_full_typed_sequences_and_id_ties() {
         Some(&first.version_id),
     )
     .unwrap();
+    let nodes = storage_contract::strict_json(&json_codec::to_vec(&nodes).unwrap()).unwrap();
+    let nodes = nodes.as_array().unwrap();
     let mut ties = [&first.version_id, &second.version_id];
     ties.sort();
     assert_eq!(
@@ -256,4 +278,73 @@ fn display_order_retains_full_typed_sequences_and_id_ties() {
     for node in nodes {
         assert_eq!(node["current"], node["node_id"] == first.version_id);
     }
+}
+
+#[test]
+fn typed_history_owns_only_projection_and_keeps_detached_files_readable() {
+    let root = crate::tests::private_tempdir();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([root.path().join("disk")]),
+    )
+    .unwrap();
+    let repo = engine
+        .create_disk_root("P01", "owner", storage_contract::OperationId::generate())
+        .unwrap();
+    let entry = save(
+        &mut engine,
+        &repo.main_branch_id,
+        "report.txt",
+        b"body",
+        "created",
+    );
+    let request = || crate::ReadFileHistory::parse(entry.file_id.clone(), None, None).unwrap();
+    let attached = super::super::file_history(&engine, request()).unwrap();
+    let HistoryNode::Content { version, .. } = &attached.nodes[0] else {
+        panic!("content-only history must expose a content node")
+    };
+    assert!(Arc::ptr_eq(&attached.versions[0].data, &version.data));
+    assert_eq!(attached.versions[0].data.size, 4);
+    engine
+        .file_namespace(
+            &repo.repository_id,
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Delete,
+                "report.txt",
+                None,
+            )
+            .unwrap(),
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let detached = super::super::file_history(&engine, request()).unwrap();
+    assert!(detached.path.is_none());
+    assert!(detached.current_node_id.is_none());
+    assert!(detached.content.is_none());
+    assert_eq!(detached.note, "");
+    assert_eq!(detached.versions[0].data.note, "");
+    assert!(!detached.versions[0].current);
+    drop(engine);
+    let attached = storage_contract::strict_json(
+        &json_codec::to_vec(&crate::backend_file_history::FileHistoryResponse::from(
+            attached,
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let detached = storage_contract::strict_json(
+        &json_codec::to_vec(&crate::backend_file_history::FileHistoryResponse::from(
+            detached,
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(attached["path"], "report.txt");
+    assert_eq!(attached["versions"][0]["size"], "4");
+    assert!(detached["path"].is_null());
+    assert!(detached["node_id"].is_null());
+    assert!(detached.get("version_id").is_none());
+    assert!(detached.get("content_state").is_none());
+    assert_eq!(detached["versions"][0]["version_id"], entry.version_id);
 }

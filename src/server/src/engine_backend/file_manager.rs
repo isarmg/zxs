@@ -1,31 +1,15 @@
 //! File browsing reuses bounded directory-first ordering and controlled relative
 //! paths; published content remains managed by the storage transaction engine.
 use super::*;
-mod activity;
+pub(super) mod activity;
 mod backup_namespace;
 mod history_nodes;
-mod listing;
+pub(super) mod listing;
 mod operations;
 mod pagination;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Present stored UTC seconds in the same whole-second UTC form as body
-/// versions. This changes the read projection, never the persisted timestamp.
-fn utc_timestamp(seconds: u64) -> Result<String, ApiError> {
-    let invalid = || {
-        ApiError::new(
-            ::http::StatusCode::INTERNAL_SERVER_ERROR,
-            storage_contract::ErrorCode::StateInvalid,
-            "history timestamp is invalid",
-        )
-    };
-    date_time::OffsetDateTime::from_unix_timestamp(
-        i64::try_from(seconds).map_err(|source| invalid().with_source(source))?,
-    )
-    .map_err(|source| invalid().with_source(source))?
-    .format(&date_time::format_description::well_known::Rfc3339)
-    .map_err(|source| invalid().with_source(source))
-}
+use crate::backend_activity::utc_timestamp;
 
 fn query<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
     input
@@ -34,12 +18,6 @@ fn query<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
         .and_then(Value::as_str)
 }
 fn path(input: &Value) -> Result<&str, ApiError> {
-    checked_path(input, false)
-}
-fn lookup_path(input: &Value) -> Result<&str, ApiError> {
-    checked_path(input, true)
-}
-fn checked_path(input: &Value, lookup: bool) -> Result<&str, ApiError> {
     // An omitted path denotes the root, but an explicit malformed value must
     // never silently select it (especially for branch and backup mutations).
     let supplied = input
@@ -54,12 +32,7 @@ fn checked_path(input: &Value, lookup: bool) -> Result<&str, ApiError> {
         .transpose()?
         .unwrap_or("");
     if !value.is_empty() {
-        if lookup {
-            name_policy::validate_lookup_path(value)
-        } else {
-            name_policy::validate_path(value)
-        }
-        .map_err(ApiError::invalid_source)?;
+        name_policy::validate_path(value).map_err(ApiError::invalid_source)?;
     }
     Ok(value)
 }
@@ -270,50 +243,26 @@ fn listed_current_entry(
     repo: &Repository,
     index: usize,
     prefix: &str,
-) -> Result<Value, ApiError> {
+) -> Result<crate::ListingEntry, ApiError> {
+    use crate::{ListingEntry, ListingLocation, ListingVersion};
     #[cfg(test)]
     LISTED_ENTRY_PROJECTIONS.set(LISTED_ENTRY_PROJECTIONS.get() + 1);
-    let entry = engine
-        .list_tree_ref(&repo.main_branch_id)
-        .map_err(error)?
-        .get(index)
-        .ok_or_else(|| {
-            ApiError::new(
-                ::http::StatusCode::INTERNAL_SERVER_ERROR,
-                storage_contract::ErrorCode::StateInvalid,
-                "listing entry index is invalid",
-            )
-        })?;
+    let entry = &engine.list_tree_ref(&repo.main_branch_id).map_err(error)?[index];
     let display = if prefix.is_empty() {
         entry.path().to_owned()
     } else {
         format!("{prefix}/{}", entry.path)
     };
     let context = engine.file_context_for_current_entry(&repo.repository_id, entry);
-    let mut response = json!({"entry_id":entry.entry_id,"name":entry.name(),"path":display,"kind":entry.kind,
-        "repository_id":repo.repository_id,"repository_path":entry.path,
-        "container":entry.kind == storage_contract::NamespaceEntryKind::File,"size":entry.size.to_string(),"file_id":entry.file_id,
-        "version_id":entry.version_id,"selected_branch_id":context.as_ref().map(|context|context.branch_id.clone()).or_else(||engine.state().file_selections.get(&entry.file_id).cloned())});
-    if entry.kind == storage_contract::NamespaceEntryKind::File {
-        response["read_only"] = context
-            .as_ref()
-            .is_some_and(|context| {
-                context.inherited_from.is_none()
-                    && engine
-                        .state()
-                        .branches
-                        .get(&context.branch_id)
-                        .is_some_and(|branch| branch.state != storage_contract::BranchState::Active)
-            })
-            .into();
-        response["node_id"] = context
-            .as_ref()
-            .and_then(|context| context.node_id.clone())
-            .unwrap_or_else(|| entry.version_id.clone())
-            .into();
-        response.as_object_mut().unwrap().extend(
-            content_wire(
-                engine,
+    let (version, node_id, read_only) = match entry.kind {
+        storage_contract::NamespaceEntryKind::Directory => (
+            ListingVersion::Directory(entry.version_id.clone()),
+            None,
+            None,
+        ),
+        storage_contract::NamespaceEntryKind::File => {
+            let content = super::branch::capture_content(
+                engine.state(),
                 Some(&entry.version_id),
                 super::wire::current_entry_source_at_index(
                     engine,
@@ -321,36 +270,76 @@ fn listed_current_entry(
                     index,
                     context.as_deref(),
                 ),
+            );
+            let node = context
+                .as_ref()
+                .and_then(|context| context.node_id.clone())
+                .unwrap_or_else(|| entry.version_id.clone());
+            let read_only = context.as_ref().is_some_and(|context| {
+                context.inherited_from.is_none()
+                    && engine
+                        .state()
+                        .branches
+                        .get(&context.branch_id)
+                        .is_some_and(|branch| branch.state != storage_contract::BranchState::Active)
+            });
+            (
+                ListingVersion::File {
+                    content,
+                    backup_version: None,
+                },
+                Some(node),
+                Some(read_only),
             )
-            .as_object()
-            .unwrap()
-            .clone(),
-        );
-    }
-    Ok(response)
+        }
+    };
+    Ok(ListingEntry {
+        entry_id: entry.entry_id.clone(),
+        name: entry.name().into(),
+        path: display,
+        kind: entry.kind,
+        size: entry.size,
+        file_id: entry.file_id.clone(),
+        version,
+        location: Some(ListingLocation {
+            repository_id: repo.repository_id.clone(),
+            repository_path: Some(entry.path().into()),
+            container: entry.kind == storage_contract::NamespaceEntryKind::File,
+            selected_branch_id: context
+                .as_ref()
+                .map(|context| context.branch_id.clone())
+                .or_else(|| engine.state().file_selections.get(&entry.file_id).cloned()),
+        }),
+        note: Some(
+            engine
+                .state()
+                .file_notes
+                .get(&entry.file_id)
+                .cloned()
+                .unwrap_or_default(),
+        ),
+        node_id,
+        read_only,
+        backup: false,
+        historical_only: None,
+    })
 }
-fn directory(name: &str, display: &str, id: &str) -> Value {
-    json!({"entry_id":id,"name":name,"path":display,"kind":"directory","size":"0","file_id":"","version_id":""})
-}
-
-/// Read frozen branch scopes without changing the shared SMB/default selection.
-/// A historical branch may retain a directory that is absent from the current
-/// projection, so scope discovery must use stable directory identities.
-fn scoped_directory_branches<'a>(
-    engine: &'a Engine,
-    repo: &str,
-    requested_path: Option<&str>,
-) -> Result<Vec<&'a storage_contract::DirectoryBranch>, ApiError> {
-    let repository = repository(engine, repo)?;
-    if let Some(path) = requested_path.filter(|path| !path.is_empty()) {
-        name_policy::validate_lookup_path(path).map_err(ApiError::invalid_source)?;
+fn directory(name: &str, display: &str, id: &str) -> crate::ListingEntry {
+    crate::ListingEntry {
+        entry_id: id.into(),
+        name: name.into(),
+        path: display.into(),
+        kind: storage_contract::NamespaceEntryKind::Directory,
+        size: 0,
+        file_id: String::new(),
+        version: crate::ListingVersion::Directory(String::new()),
+        location: None,
+        note: None,
+        node_id: None,
+        read_only: None,
+        backup: false,
+        historical_only: None,
     }
-    let requested_key = requested_path.map(name_policy::path_key);
-    Ok(super::directory_scopes::matching(
-        engine.state(),
-        repository,
-        requested_key.as_deref(),
-    ))
 }
 
 fn root_has_virtual_directories(engine: &Engine, slot: &str) -> bool {
@@ -361,27 +350,18 @@ fn root_has_virtual_directories(engine: &Engine, slot: &str) -> bool {
         .any(|repo| repo.primary_slot_id == slot && !repo.file_manager_root)
 }
 
-fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
-    let file = field(input, "file_id")?;
+pub(super) fn file_history(
+    engine: &Engine,
+    request: crate::ReadFileHistory,
+) -> Result<crate::FileHistorySnapshot, ApiError> {
+    use crate::backend_file_history::{HistoryBranch, HistoryVersion, HistoryVersionData};
+    let file = request.file_id();
     let repo = file_repo(engine, file)?;
-    if let Some(query) = input.get("query") {
-        keys(query, &["repository_id", "path"])?;
-    }
     let state = engine.state();
-    let requested_repo = query(input, "repository_id");
-    let requested_path = query(input, "path");
-    if requested_repo.is_some() != requested_path.is_some() {
-        return Err(ApiError::invalid(
-            "repository_id and path must be supplied together",
-        ));
-    }
-    if let Some(path) = requested_path {
-        name_policy::validate_lookup_path(path).map_err(ApiError::invalid_source)?;
-    }
     let tree = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
     let entries = tree.entries();
-    let current = if let Some(path) = requested_path {
-        if requested_repo != Some(repo.repository_id.as_str()) {
+    let current = if let Some((repository_id, path)) = request.location() {
+        if repository_id != repo.repository_id {
             return Err(ApiError::new(
                 ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::FileNotFound,
@@ -389,12 +369,11 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
             ));
         }
         Some(
-            tree.get(path)
+            tree.get_key(path.key())
                 .filter(|entry| {
                     entry.kind == storage_contract::NamespaceEntryKind::File
                         && entry.file_id == file
                 })
-                .cloned()
                 .ok_or_else(|| {
                     ApiError::new(
                         ::http::StatusCode::NOT_FOUND,
@@ -408,8 +387,7 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
             .file_locations
             .get(file)
             .and_then(|path| tree.get(path).filter(|entry| entry.file_id == file))
-            .cloned()
-            .or_else(|| entries.iter().find(|entry| entry.file_id == file).cloned())
+            .or_else(|| entries.iter().find(|entry| entry.file_id == file))
     };
     let context = current
         .as_ref()
@@ -430,12 +408,11 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
     let branches = file_branches
         .iter()
         .filter(|branch| branch.state != storage_contract::BranchState::Migrated)
-        .map(|branch| {
-            let mut response = branch_wire(engine, branch)?;
-            response["current"] = (selected.as_deref() == Some(branch.branch_id.as_str())).into();
-            Ok(response)
+        .map(|branch| HistoryBranch {
+            branch: super::branch::capture(state, branch),
+            current: selected.as_deref() == Some(branch.branch_id.as_str()),
         })
-        .collect::<Result<Vec<_>, ApiError>>()?;
+        .collect();
     let history = engine
         .file_history(file)
         .map_err(error)?
@@ -477,37 +454,54 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
             }
         }
     }
-    let mut versions = history.iter().map(|version| {
-        // Only recorded earlier content edges in this visible file are exposed.
-        // Response order and directory commit neighbors never invent ancestry.
-        let mut seen = BTreeSet::new();
-        let source_version_ids = version.source_version_ids.iter().filter(|id| {
-            visible.get(id.as_str()).is_some_and(|parent| {
-                parent.file_id == file && parent.version_sequence < version.version_sequence
-            }) && seen.insert(id.as_str())
-        }).collect::<Vec<_>>();
-        let commit = first_commits.get(version.version_id.as_str()).copied();
-        let download_name = current.as_ref().map(|entry| entry.name())
-            .or_else(|| state.file_names.get(file).map(String::as_str))
-            .unwrap_or(&version.creation_name);
-        history_nodes::HistoryVersion {
-            id: &version.version_id,
-            sequence: version.version_sequence,
-            download_name,
-            wire: json!({
-            "version_id":version.version_id,"file_id":file,"source_version_ids":source_version_ids,
-            "branch_id":heads.get(version.version_id.as_str()),"created_at":version.created_at,
-            "message":commit.map(|commit| commit.message.as_str()).unwrap_or(""),
-            "size":version.logical_size.to_string(),"sequence":version.version_sequence.to_string(),
-            "current":current.as_ref().is_some_and(|entry| entry.version_id == version.version_id),
-            "content_state":state.content_states.get(&version.version_id).map(storage_contract::ContentState::as_str).unwrap_or("LIVE"),
-            "content_hash":version.content_hash,
-            "note":state.version_notes.get(&version.version_id).map(String::as_str).unwrap_or(""),
-            "download_name":download_name,
-            "storage_name":version.storage_name
-        }),
-        }
-    }).collect::<Vec<_>>();
+    let mut versions = history
+        .iter()
+        .map(|version| {
+            let mut seen = BTreeSet::new();
+            let source_version_ids = version
+                .source_version_ids
+                .iter()
+                .filter(|id| {
+                    visible.get(id.as_str()).is_some_and(|parent| {
+                        parent.file_id == file && parent.version_sequence < version.version_sequence
+                    }) && seen.insert(id.as_str())
+                })
+                .cloned()
+                .collect();
+            let commit = first_commits.get(version.version_id.as_str()).copied();
+            let download_name = current
+                .as_ref()
+                .map(|entry| entry.name())
+                .or_else(|| state.file_names.get(file).map(String::as_str))
+                .unwrap_or(&version.creation_name);
+            HistoryVersion {
+                sequence: version.version_sequence,
+                current: current
+                    .as_ref()
+                    .is_some_and(|entry| entry.version_id == version.version_id),
+                data: Arc::new(HistoryVersionData {
+                    version_id: version.version_id.clone(),
+                    file_id: file.into(),
+                    source_version_ids,
+                    branch_id: heads
+                        .get(version.version_id.as_str())
+                        .map(|id| (*id).to_owned()),
+                    created_at: version.created_at.clone(),
+                    message: commit.map_or("", |commit| commit.message.as_str()).into(),
+                    size: version.logical_size,
+                    content_state: state.content_states.get(&version.version_id).copied(),
+                    content_hash: version.content_hash,
+                    note: state
+                        .version_notes
+                        .get(&version.version_id)
+                        .cloned()
+                        .unwrap_or_default(),
+                    download_name: download_name.into(),
+                    storage_name: version.storage_name.clone(),
+                }),
+            }
+        })
+        .collect::<Vec<_>>();
     versions.reverse();
     let nodes = history_nodes::unified_history(
         engine,
@@ -517,28 +511,31 @@ fn file_history(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
         &first_commits,
         current_node.as_deref(),
     )?;
-    let versions = versions
-        .into_iter()
-        .map(|version| version.wire)
-        .collect::<Vec<_>>();
-    let mut response = json!({"file_id":file,"repository_id":repo.repository_id,"path":current.as_ref().map(|entry| &entry.path),
-        "note":state.file_notes.get(file).map(String::as_str).unwrap_or(""),
-        "node_id":current_node,"current_node_id":current_node,
-        "selected_branch_id":selected,"versions":versions,"nodes":nodes,"branches":branches,
-        "merges":state.file_branch_merges.values().filter(|merge|merge.file_id==file && merge.history_tree_id==repo.history_tree_id).collect::<Vec<_>>()});
-    if let Some(entry) = &current {
-        response.as_object_mut().unwrap().extend(
-            content_wire(
-                engine,
-                Some(&entry.version_id),
-                current_entry_source(engine, &repo.main_branch_id, entry),
-            )
-            .as_object()
-            .unwrap()
-            .clone(),
-        );
-    }
-    Ok(response)
+    let content = current.as_ref().map(|entry| {
+        super::branch::capture_content(
+            state,
+            Some(&entry.version_id),
+            current_entry_source(engine, &repo.main_branch_id, entry),
+        )
+    });
+    Ok(crate::FileHistorySnapshot {
+        file_id: file.into(),
+        repository_id: repo.repository_id.clone(),
+        path: current.as_ref().map(|entry| entry.path.to_string()),
+        note: state.file_notes.get(file).cloned().unwrap_or_default(),
+        current_node_id: current_node,
+        selected_branch_id: selected,
+        versions,
+        nodes,
+        branches,
+        merges: state
+            .file_branch_merges
+            .values()
+            .filter(|merge| merge.file_id == file && merge.history_tree_id == repo.history_tree_id)
+            .cloned()
+            .collect(),
+        content,
+    })
 }
 
 /// Read handlers cannot obtain mutable Engine access or create lazy disk roots.
@@ -548,9 +545,6 @@ pub(super) fn read(
     input: Value,
 ) -> Result<Value, ApiError> {
     match action {
-        crate::BackendAction::FileManagerEntries => listing::entries(engine, &input),
-        crate::BackendAction::FileManagerFileHistory => file_history(engine, &input),
-        crate::BackendAction::FileManagerHistory => activity::read(engine),
         crate::BackendAction::FileManagerBackupConfiguration => {
             let repo = field(&input, "repository_id")?;
             repository(engine, repo)?;

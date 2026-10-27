@@ -323,6 +323,13 @@ impl Backend for NamespaceAfterWorkspace {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.rename_file_branch(identity, request)
     }
+    fn listing(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadListing,
+    ) -> Result<crate::ListingSnapshot, crate::ApiError> {
+        self.inner.listing(identity, request)
+    }
     fn mutate_disk_directory(
         &self,
         identity: &crate::auth::Identity,
@@ -380,6 +387,13 @@ impl Backend for NamespaceAfterWorkspace {
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         self.inner.default_directory_branch(identity, repository_id)
     }
+    fn file_history_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadFileHistory,
+    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+        self.inner.file_history_snapshot(identity, request)
+    }
     fn file_history(
         &self,
         identity: &crate::auth::Identity,
@@ -406,6 +420,12 @@ impl Backend for NamespaceAfterWorkspace {
         after: u64,
     ) -> Result<crate::EventPage, crate::ApiError> {
         self.inner.event_page(identity, after)
+    }
+    fn activity_history(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
+        self.inner.activity_history(identity)
     }
     fn history_graph(
         &self,

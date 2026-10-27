@@ -25,6 +25,11 @@ pub use transfer_limits::TransferLimits;
 mod uploads;
 mod web_assets;
 
+mod backend_file_history;
+pub use backend_file_history::{
+    ContentNodeKind, FileHistorySnapshot, HistoryBranch, HistoryNode, HistoryRevision,
+    HistoryVersion, HistoryVersionData, ReadFileHistory, RenameNodeKind, RevisionKind,
+};
 mod backend_action;
 mod backend_archive;
 mod backend_create_file_branch;
@@ -43,6 +48,12 @@ pub use backend_file_selection::{FileSelectionLocation, SelectFileBranch};
 mod backend_rename_file_branch;
 mod http_rename_file_branch;
 pub use backend_rename_file_branch::RenameFileBranch;
+mod backend_listing;
+mod http_listing;
+pub use backend_listing::{
+    ListingContext, ListingCursor, ListingEntry, ListingLocation, ListingSnapshot, ListingVersion,
+    ReadListing,
+};
 mod backend_disk_directory;
 mod http_disk_directory;
 pub use backend_disk_directory::{DiskDirectoryAction, MutateDiskDirectory};
@@ -73,6 +84,10 @@ mod http_protection;
 use http_protection::{placement_rule, policy, update_placement_rule, update_policy};
 mod backend_storage_metadata;
 pub use backend_storage_metadata::{TopologySlot, TopologySnapshot};
+mod backend_activity;
+pub use backend_activity::{
+    ActivityDetailSnapshot, ActivityEventSnapshot, ActivityHistorySnapshot,
+};
 mod backend_events;
 pub use backend_events::EventPage;
 mod backend_graph;
@@ -453,6 +468,11 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         request: RenameFileBranch,
     ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn listing(
+        &self,
+        identity: &Identity,
+        request: ReadListing,
+    ) -> Result<ListingSnapshot, ApiError>;
     fn mutate_disk_directory(
         &self,
         identity: &Identity,
@@ -493,6 +513,11 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         repository_id: &str,
     ) -> Result<DefaultDirectoryBranchSnapshot, ApiError>;
+    fn file_history_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadFileHistory,
+    ) -> Result<crate::FileHistorySnapshot, crate::ApiError>;
     fn file_history(
         &self,
         identity: &Identity,
@@ -505,6 +530,7 @@ pub trait Backend: Send + Sync {
         version: &str,
     ) -> Result<storage_contract::Placement, ApiError>;
     fn event_page(&self, identity: &Identity, after: u64) -> Result<EventPage, ApiError>;
+    fn activity_history(&self, identity: &Identity) -> Result<ActivityHistorySnapshot, ApiError>;
     fn history_graph(
         &self,
         identity: &Identity,
@@ -905,6 +931,13 @@ impl Backend for AuthorizedBackend {
         self.backend
             .rename_file_branch(&self.current(identity)?, request)
     }
+    fn listing(
+        &self,
+        identity: &Identity,
+        request: ReadListing,
+    ) -> Result<ListingSnapshot, ApiError> {
+        self.backend.listing(&self.current(identity)?, request)
+    }
     fn mutate_disk_directory(
         &self,
         identity: &crate::auth::Identity,
@@ -969,6 +1002,14 @@ impl Backend for AuthorizedBackend {
         self.backend
             .default_directory_branch(&self.current(identity)?, repository_id)
     }
+    fn file_history_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadFileHistory,
+    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+        self.backend
+            .file_history_snapshot(&self.current(identity)?, request)
+    }
     fn file_history(
         &self,
         identity: &crate::auth::Identity,
@@ -996,6 +1037,12 @@ impl Backend for AuthorizedBackend {
         after: u64,
     ) -> Result<crate::EventPage, crate::ApiError> {
         self.backend.event_page(&self.current(identity)?, after)
+    }
+    fn activity_history(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
+        self.backend.activity_history(&self.current(identity)?)
     }
     fn history_graph(
         &self,

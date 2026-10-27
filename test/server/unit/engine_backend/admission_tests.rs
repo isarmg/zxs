@@ -267,23 +267,12 @@ fn backend_fixture() -> (
     )
 }
 
-fn read_requests(
-    repo: &storage_contract::Repository,
-    entry: &storage_contract::Entry,
-) -> Vec<(crate::BackendAction, Value)> {
+fn read_requests(repo: &storage_contract::Repository) -> Vec<(crate::BackendAction, Value)> {
     use crate::BackendAction::*;
-    vec![
-        (
-            FileManagerEntries,
-            json!({"slot_id":"P01","path":repo.name}),
-        ),
-        (FileManagerHistory, json!({})),
-        (FileManagerFileHistory, json!({"file_id":entry.file_id})),
-        (
-            FileManagerBackupConfiguration,
-            json!({"repository_id":repo.repository_id}),
-        ),
-    ]
+    vec![(
+        FileManagerBackupConfiguration,
+        json!({"repository_id":repo.repository_id}),
+    )]
 }
 
 #[test]
@@ -291,11 +280,21 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
     use crate::Backend;
     let (_root, backend, repo, entry) = backend_fixture();
     for _ in 0..3 {
-        for (action, input) in read_requests(&repo, &entry) {
+        for (action, input) in read_requests(&repo) {
             backend.call(action, &caller(), input).unwrap();
         }
+        backend.activity_history(&caller()).unwrap();
+        backend
+            .listing(&caller(), listing_request("P01", &repo.name))
+            .unwrap();
         backend.repositories_snapshot(&caller()).unwrap();
         backend.file_history(&caller(), &entry.file_id).unwrap();
+        backend
+            .file_history_snapshot(
+                &caller(),
+                crate::ReadFileHistory::parse(entry.file_id.clone(), None, None).unwrap(),
+            )
+            .unwrap();
         backend
             .tree_snapshot(
                 &caller(),
@@ -342,7 +341,26 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
             .status,
         401
     );
-    for (action, input) in read_requests(&repo, &entry) {
+    assert_eq!(
+        backend
+            .file_history_snapshot(
+                &caller(),
+                crate::ReadFileHistory::parse(entry.file_id.clone(), None, None).unwrap()
+            )
+            .unwrap_err()
+            .status,
+        401
+    );
+    assert_eq!(backend.activity_history(&caller()).unwrap_err().status, 401);
+    assert_eq!(
+        backend
+            .listing(&caller(), listing_request("P01", &repo.name))
+            .err()
+            .unwrap()
+            .status,
+        401
+    );
+    for (action, input) in read_requests(&repo) {
         assert_eq!(
             backend.call(action, &caller(), input).unwrap_err().status,
             401
@@ -396,19 +414,22 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
     let (_root, backend, repo, entry) = backend_fixture();
     let before = json_codec::to_value(backend.engine.lock().unwrap().state()).unwrap();
     for _ in 0..3 {
-        for (action, input) in [
-            (
-                FileManagerEntries,
-                json!({"slot_id":"P01","path":"missing"}),
-            ),
-            (FileManagerEntries, json!({"slot_id":"missing","path":""})),
-            (
-                FileManagerBackupConfiguration,
-                json!({"repository_id":"missing"}),
-            ),
-        ] {
-            assert!(backend.call(action, &caller(), input).is_err());
+        for (slot, path) in [("P01", "missing"), ("missing", "")] {
+            assert!(
+                backend
+                    .listing(&caller(), listing_request(slot, path))
+                    .is_err()
+            );
         }
+        assert!(
+            backend
+                .call(
+                    FileManagerBackupConfiguration,
+                    &caller(),
+                    json!({"repository_id":"missing"})
+                )
+                .is_err()
+        );
         assert!(
             backend
                 .tree_snapshot(
@@ -446,7 +467,15 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
                 .code,
             storage_contract::ErrorCode::Unauthorized
         );
-        for (action, input) in read_requests(&repo, &entry) {
+        assert_eq!(
+            backend
+                .listing(&caller(), listing_request("P01", &repo.name))
+                .err()
+                .unwrap()
+                .code,
+            storage_contract::ErrorCode::Unauthorized
+        );
+        for (action, input) in read_requests(&repo) {
             assert_eq!(
                 backend.call(action, &caller(), input).unwrap_err().code,
                 storage_contract::ErrorCode::Unauthorized
@@ -527,11 +556,7 @@ fn backend_mutations_and_lazy_root_creation_invalidate_before_following_reads() 
             .any(|r| r.file_manager_root)
     );
     backend
-        .call(
-            FileManagerEntries,
-            &caller(),
-            json!({"slot_id":"P01","path":"new-folder"}),
-        )
+        .listing(&caller(), listing_request("P01", "new-folder"))
         .unwrap();
     assert_eq!(
         backend
@@ -563,52 +588,67 @@ fn protected_snapshot_refresh_preserves_the_internal_smb_binding_constraint() {
 
 #[test]
 fn file_manager_borrowed_tree_reads_preserve_listing_and_path_context() {
-    use crate::{Backend, BackendAction};
+    use crate::Backend;
     let (_root, backend, repo, entry) = backend_fixture();
     let listing = backend
-        .call(
-            BackendAction::FileManagerEntries,
-            &caller(),
-            json!({"slot_id":"P01","path":repo.name}),
-        )
+        .listing(&caller(), listing_request("P01", &repo.name))
         .unwrap();
+    let listing =
+        json_codec::to_value(crate::backend_listing::ListingResponse::from(listing)).unwrap();
     assert_eq!(listing["entries"].as_array().unwrap().len(), 1);
     assert_eq!(listing["entries"][0]["entry_id"], entry.entry_id);
     assert_eq!(listing["entries"][0]["repository_path"], entry.path());
     let history = backend
-        .call(
-            BackendAction::FileManagerFileHistory,
+        .file_history_snapshot(
             &caller(),
-            json!({"file_id":entry.file_id}),
+            crate::ReadFileHistory::parse(entry.file_id.clone(), None, None).unwrap(),
         )
+        .map(crate::backend_file_history::FileHistoryResponse::from)
+        .map(|response| json_codec::to_value(response).unwrap())
         .unwrap();
     let contextual = backend
-        .call(
-            BackendAction::FileManagerFileHistory,
+        .file_history_snapshot(
             &caller(),
-            json!({"file_id":entry.file_id,"query":{"repository_id":repo.repository_id,"path":entry.path}}),
+            crate::ReadFileHistory::parse(
+                entry.file_id.clone(),
+                Some(repo.repository_id.clone()),
+                Some(entry.path.to_string()),
+            )
+            .unwrap(),
         )
+        .map(crate::backend_file_history::FileHistoryResponse::from)
+        .map(|response| json_codec::to_value(response).unwrap())
         .unwrap();
     assert_eq!(contextual, history);
     assert_eq!(history["path"], entry.path());
     assert_eq!(history["versions"].as_array().unwrap().len(), 1);
     let missing = backend
-        .call(
-            BackendAction::FileManagerFileHistory,
+        .file_history_snapshot(
             &caller(),
-            json!({"file_id":entry.file_id,"query":{"repository_id":repo.repository_id,"path":"missing.txt"}}),
+            crate::ReadFileHistory::parse(
+                entry.file_id.clone(),
+                Some(repo.repository_id.clone()),
+                Some("missing.txt".into()),
+            )
+            .unwrap(),
         )
+        .map(crate::backend_file_history::FileHistoryResponse::from)
+        .map(|response| json_codec::to_value(response).unwrap())
         .unwrap_err();
     assert_eq!(missing.code, storage_contract::ErrorCode::FileNotFound);
     let missing_directory = backend
-        .call(
-            BackendAction::FileManagerEntries,
+        .listing(
             &caller(),
-            json!({"slot_id":"P01","path":format!("{}/missing",repo.name)}),
+            listing_request("P01", &format!("{}/missing", repo.name)),
         )
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert_eq!(
         missing_directory.code,
         storage_contract::ErrorCode::DirectoryNotFound
     );
+}
+
+fn listing_request(slot: &str, path: &str) -> crate::ReadListing {
+    crate::ReadListing::parse(slot.into(), [("path".into(), path.into())].into()).unwrap()
 }

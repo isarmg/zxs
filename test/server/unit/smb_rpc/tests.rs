@@ -390,6 +390,13 @@ impl Backend for LostCommitReply {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.rename_file_branch(identity, request)
     }
+    fn listing(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadListing,
+    ) -> Result<crate::ListingSnapshot, crate::ApiError> {
+        self.inner.listing(identity, request)
+    }
     fn mutate_disk_directory(
         &self,
         identity: &crate::auth::Identity,
@@ -447,6 +454,13 @@ impl Backend for LostCommitReply {
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         self.inner.default_directory_branch(identity, repository_id)
     }
+    fn file_history_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadFileHistory,
+    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+        self.inner.file_history_snapshot(identity, request)
+    }
     fn file_history(
         &self,
         identity: &crate::auth::Identity,
@@ -473,6 +487,12 @@ impl Backend for LostCommitReply {
         after: u64,
     ) -> Result<crate::EventPage, crate::ApiError> {
         self.inner.event_page(identity, after)
+    }
+    fn activity_history(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
+        self.inner.activity_history(identity)
     }
     fn history_graph(
         &self,
@@ -1252,11 +1272,12 @@ fn unwritten_branch_reads_parent_and_materializes_only_on_dirty_save() {
     let history = || {
         shared
             .backend
-            .call(
-                crate::BackendAction::FileManagerFileHistory,
+            .file_history_snapshot(
                 &identity(&shared),
-                json!({"file_id":file}),
+                crate::ReadFileHistory::parse(file.clone(), None, None).unwrap(),
             )
+            .map(crate::backend_file_history::FileHistoryResponse::from)
+            .map(|response| json_codec::to_value(response).unwrap())
             .unwrap()
     };
     let before = history();
@@ -1341,11 +1362,12 @@ fn explicit_truncation_materializes_an_empty_pending_branch() {
     session.close(opened.handle, false).unwrap();
     let history = shared
         .backend
-        .call(
-            crate::BackendAction::FileManagerFileHistory,
+        .file_history_snapshot(
             &identity(&shared),
-            json!({"file_id":file}),
+            crate::ReadFileHistory::parse(file.clone(), None, None).unwrap(),
         )
+        .map(crate::backend_file_history::FileHistoryResponse::from)
+        .map(|response| json_codec::to_value(response).unwrap())
         .unwrap();
     assert_eq!(history["versions"].as_array().unwrap().len(), 2);
     let current = history["versions"]

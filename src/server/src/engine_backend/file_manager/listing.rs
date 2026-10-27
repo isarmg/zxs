@@ -1,6 +1,7 @@
 //! Current primary-disk directory enumeration and bounded wire projection.
-use super::pagination::{PageRequest, PageSelector, SortKey};
+use super::pagination::{PageRequest, PageSelector};
 use super::*;
+use crate::backend_listing::SortKey;
 
 #[derive(Clone)]
 enum Candidate<'a> {
@@ -11,10 +12,14 @@ enum Candidate<'a> {
     },
 }
 
-pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
-    let slot = field(input, "slot_id")?;
-    let value = lookup_path(input)?;
-    let request = PageRequest::parse(engine, input, slot, value)?;
+pub(crate) fn entries(
+    engine: &Engine,
+    input: crate::ReadListing,
+) -> Result<crate::ListingSnapshot, ApiError> {
+    let slot_id = input.slot_id().to_owned();
+    let path = input.path().to_owned();
+    let request = PageRequest::parse(engine, input)?;
+    let (slot, value) = (slot_id.as_str(), path.as_str());
     if disk(engine, slot)?.level != 1 {
         return backup_namespace::entries(engine, slot, value, request);
     }
@@ -34,7 +39,7 @@ pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError>
         }
     }
     let resolved = resolve_read(engine, slot, value);
-    let mut context = Value::Null;
+    let mut context = None;
     let mut directory_file_count = 0;
     let mut directory_branches = Vec::new();
     let mut default_branch_scope = false;
@@ -71,10 +76,10 @@ pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError>
         }
         if directory_branches_supported {
             directory_branches =
-                scoped_directory_branches(engine, &repo.repository_id, Some(within))?
+                super::super::directory_scopes::matching(engine.state(), repo, Some(&within_key))
                     .into_iter()
                     .map(|branch| {
-                        branch_summary(
+                        crate::DirectoryBranchChoice::capture(
                             branch,
                             engine
                                 .state()
@@ -122,7 +127,12 @@ pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError>
             );
         }
         let branch = &engine.state().branches[&repo.main_branch_id];
-        context = json!({"repository_id":repo.repository_id,"repository_path":within,"branch_id":repo.main_branch_id,"base_head":branch.head_commit_id});
+        context = Some(crate::ListingContext {
+            repository_id: repo.repository_id.clone(),
+            repository_path: (*within).into(),
+            branch_id: repo.main_branch_id.clone(),
+            base_head: branch.head_commit_id.clone(),
+        });
     }
     let page = page.finish()?;
     let project = |candidate: &Candidate<'_>| match candidate {
@@ -136,19 +146,7 @@ pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError>
             } else {
                 &repo.name
             };
-            let mut value = listed_current_entry(engine, repo, *index, prefix)?;
-            value["note"] = engine
-                .state()
-                .file_notes
-                .get(
-                    value["file_id"]
-                        .as_str()
-                        .expect("invariant: listed entries have a file identity"),
-                )
-                .cloned()
-                .unwrap_or_default()
-                .into();
-            Ok(value)
+            listed_current_entry(engine, repo, *index, prefix)
         }
     };
     let values = page
@@ -157,20 +155,24 @@ pub(super) fn entries(engine: &Engine, input: &Value) -> Result<Value, ApiError>
         .map(project)
         .collect::<Result<Vec<_>, ApiError>>()?;
     let selected_entry = page.selected.as_ref().map(project).transpose()?;
-    let mut response = json!({"slot_id":slot,"path":value,"writable":true,"entries":values,"selected_entry":selected_entry,"context":context,"directory_file_count":directory_file_count.to_string(),"directory_branches":directory_branches,"directory_branches_supported":directory_branches_supported,"default_branch_scope":default_branch_scope});
-    page.metadata(&mut response);
-    Ok(response)
+    Ok(crate::ListingSnapshot {
+        slot_id,
+        path,
+        backup: false,
+        entries: values,
+        selected_entry,
+        context,
+        directory_file_count,
+        directory_branches,
+        directory_branches_supported,
+        default_branch_scope,
+        total_entries: page.total,
+        snapshot: page.snapshot,
+        previous_cursor: page.previous,
+        next_cursor: page.next,
+    })
 }
 
-/// Compact branch choices never serialize descendant entries or context maps.
-/// Branch count itself is not paginated by the file-entry cursor.
-pub(super) fn branch_summary(branch: &storage_contract::DirectoryBranch, current: bool) -> Value {
-    json!({"directory_branch_id":branch.directory_branch_id,"repository_id":branch.repository_id,
-        "directory_id":branch.directory_id,"name":branch.name,"parent_branch_id":branch.parent_branch_id,
-        "head_tree_id":branch.head_tree_id,"commit_id":branch.commit_id,"path":branch.path,
-        "materialized":branch.materialized,"current":current,"sequence":branch.sequence.to_string(),
-        "file_count":branch.entries.iter().filter(|entry|entry.kind == storage_contract::NamespaceEntryKind::File).count().to_string()})
-}
 #[cfg(test)]
 #[path = "../../../../../test/server/unit/engine_backend/file_manager/listing_tests.rs"]
 mod tests;

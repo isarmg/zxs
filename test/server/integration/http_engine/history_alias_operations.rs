@@ -338,6 +338,14 @@ async fn workspace_history_keeps_repeated_removal_of_same_path() {
     .await;
     let events = operation_events(&app, &token, &operation, &file).await;
     assert_paths(&events, "delete", &["b/first.txt", "b/first.txt"]);
+    let ids = events
+        .iter()
+        .filter(|event| event["action"] == "delete")
+        .map(|event| event["event_id"].as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.iter().any(|id| id.ends_with(":delete:0")));
+    assert!(ids.iter().any(|id| id.ends_with(":delete:1")));
     let reread = operation_events(&app, &token, &operation, &file).await;
     assert_eq!(
         events, reread,
@@ -356,4 +364,47 @@ async fn namespace_batch_history_records_single_alias_deletion_once() {
         let events = operation_events(&app, &token, &deleted, &file).await;
         assert_paths(&events, "delete", &[path]);
     }
+}
+
+#[tokio::test]
+async fn activity_typed_route_retains_query_authentication_and_wire_order() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    manager_upload(&app, &token, "activity.txt", b"activity body").await;
+    let route = "/api/file-manager/history";
+    let current = success(&app, &token, "GET", route, None).await;
+    let with_query = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/history?unused=value",
+        None,
+    )
+    .await;
+    assert_eq!(current, with_query);
+    assert_eq!(current["limit"], 200);
+    let events = current["events"].as_array().unwrap();
+    assert!(!events.is_empty());
+    let keys = events
+        .iter()
+        .map(|event| {
+            assert!(event["timestamp"].as_str().unwrap().ends_with('Z'));
+            assert!(event["slot_id"].is_string());
+            assert!(event["path"].is_string());
+            assert!(event["action"].is_string());
+            assert!(event["principal"].is_string());
+            assert!(event["file_id"].is_string());
+            assert!(event["message"].is_string());
+            (
+                std::cmp::Reverse(event["sequence"].as_str().unwrap().parse::<u64>().unwrap()),
+                event["event_id"].as_str().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(keys.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(
+        send(&app, None, "GET", route, None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
 }

@@ -22,10 +22,7 @@ mod operations;
 mod read_projection;
 mod wire;
 pub(crate) use wire::error;
-use wire::{
-    branch_wire, content_wire, current_entry_source, encode, field, keys, operation,
-    operation_wire, sanitized,
-};
+use wire::{current_entry_source, encode, field, keys, operation, operation_wire, sanitized};
 
 pub(crate) fn report_recovery_warnings(engine: &mut Engine) {
     let warnings = engine.take_recovery_warnings();
@@ -929,6 +926,18 @@ impl Backend for EngineBackend {
             )
             .map_err(error)
     }
+    fn listing(
+        &self,
+        identity: &Identity,
+        request: crate::ReadListing,
+    ) -> Result<crate::ListingSnapshot, ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::listing::entries(&engine, request)
+    }
     fn mutate_disk_directory(
         &self,
         identity: &Identity,
@@ -1077,6 +1086,18 @@ impl Backend for EngineBackend {
             ),
         })
     }
+    fn file_history_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadFileHistory,
+    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::file_history(&engine, request)
+    }
     fn file_history(
         &self,
         identity: &crate::auth::Identity,
@@ -1154,6 +1175,14 @@ impl Backend for EngineBackend {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         capture_event_page(&engine.state().events, engine.state().sequence, after)
+    }
+    fn activity_history(
+        &self,
+        identity: &Identity,
+    ) -> Result<crate::ActivityHistorySnapshot, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::activity::read(&engine)
     }
     fn history_graph(
         &self,
@@ -1375,10 +1404,7 @@ impl Backend for EngineBackend {
         let current = current_protected_identity(&engine, identity)?;
         let identity = &current;
         match action {
-            crate::BackendAction::FileManagerBackupConfiguration
-            | crate::BackendAction::FileManagerEntries
-            | crate::BackendAction::FileManagerFileHistory
-            | crate::BackendAction::FileManagerHistory => {
+            crate::BackendAction::FileManagerBackupConfiguration => {
                 file_manager::read(&engine, action, input)
             }
             crate::BackendAction::FileManagerConfigureBackups

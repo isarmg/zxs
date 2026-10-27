@@ -1,6 +1,28 @@
-use super::{HISTORY_LIMIT, history_sequence_may_fit, record_event, utc_event_timestamp};
+use super::{
+    HISTORY_LIMIT, PendingDetail, PendingEvent, Timestamp, history_sequence_may_fit,
+    receipt_timestamp, record_event,
+};
+use crate::backend_activity::{
+    ActivityDetailSnapshot, ActivityHistoryResponse, ActivityHistorySnapshot,
+};
 use json_codec::{Value, json};
 use std::{cmp::Reverse, collections::BTreeMap};
+
+fn pending<'a>(message: &str) -> PendingEvent<'a> {
+    PendingEvent {
+        timestamp: Timestamp::Receipt(None),
+        slot_id: "P01".into(),
+        path: String::new(),
+        action: "future.persisted.action".into(),
+        principal: Some("owner".into()),
+        file_id: String::new(),
+        message: message.into(),
+        detail: PendingDetail::Captured(ActivityDetailSnapshot::Plain { version_id: None }),
+    }
+}
+fn wire(snapshot: ActivityHistorySnapshot) -> Value {
+    json_codec::to_value(ActivityHistoryResponse::try_from(snapshot).unwrap()).unwrap()
+}
 
 fn project_history_sources(
     sources: &[(u64, Vec<String>)],
@@ -14,10 +36,27 @@ fn project_history_sources(
         }
         for id in ids {
             projected += 1;
-            record_event(&mut events, *sequence, id.clone(), json!({"source":source}));
+            record_event(
+                &mut events,
+                *sequence,
+                id.clone(),
+                pending(&source.to_string()),
+            );
         }
     }
-    (events, projected)
+    (
+        events
+            .into_iter()
+            .map(|((Reverse(sequence), id), event)| {
+                let key = (Reverse(sequence), id.clone());
+                let row = wire(ActivityHistorySnapshot {
+                    events: vec![event.finish(sequence, id).unwrap()],
+                });
+                (key, row["events"][0].clone())
+            })
+            .collect(),
+        projected,
+    )
 }
 
 #[test]
@@ -25,20 +64,20 @@ fn history_sequence_cutoff_waits_for_distinct_rows_and_keeps_ties() {
     let mut events = BTreeMap::new();
     assert!(history_sequence_may_fit(&events, 0));
     for _ in 0..250 {
-        record_event(&mut events, 5, "duplicate".into(), json!({}));
+        record_event(&mut events, 5, "duplicate".into(), pending(""));
     }
     assert_eq!(events.len(), 1);
     for id in 0..198 {
-        record_event(&mut events, 10, id.to_string(), json!({}));
+        record_event(&mut events, 10, id.to_string(), pending(""));
     }
     assert_eq!(events.len(), HISTORY_LIMIT - 1);
     assert!(history_sequence_may_fit(&events, 0));
-    record_event(&mut events, 10, "last".into(), json!({}));
+    record_event(&mut events, 10, "last".into(), pending(""));
     assert_eq!(events.len(), HISTORY_LIMIT);
     assert!(!history_sequence_may_fit(&events, 4));
     assert!(history_sequence_may_fit(&events, 5));
     assert!(history_sequence_may_fit(&events, u64::MAX));
-    record_event(&mut events, u64::MAX, "newest".into(), json!({}));
+    record_event(&mut events, u64::MAX, "newest".into(), pending(""));
     assert!(!history_sequence_may_fit(&events, 5));
     assert!(history_sequence_may_fit(&events, 10));
 }
@@ -112,14 +151,21 @@ fn utc_history_projection_formats_seconds_and_preserves_missing_times() {
         (0, "1970-01-01T00:00:00Z"),
         (1_792_803_600, "2026-10-24T01:00:00Z"),
     ] {
-        let mut event = json!({"timestamp":seconds.to_string(),"event_id":"original"});
-        utc_event_timestamp(&mut event).unwrap();
-        assert_eq!(event, json!({"timestamp":expected,"event_id":"original"}));
+        let mut event = pending("");
+        let raw = json!(seconds.to_string());
+        event.timestamp = Timestamp::Receipt(Some(&raw));
+        let row = wire(ActivityHistorySnapshot {
+            events: vec![event.finish(1, "original".into()).unwrap()],
+        });
+        assert_eq!(row["events"][0]["timestamp"], expected);
     }
-    for mut event in [json!({"timestamp":null}), json!({"event_id":"missing"})] {
-        let before = event.clone();
-        utc_event_timestamp(&mut event).unwrap();
-        assert_eq!(event, before);
+    for timestamp in [None, Some(&Value::Null)] {
+        let mut event = pending("");
+        event.timestamp = Timestamp::Receipt(timestamp);
+        let row = wire(ActivityHistorySnapshot {
+            events: vec![event.finish(1, "original".into()).unwrap()],
+        });
+        assert!(row["events"][0]["timestamp"].is_null());
     }
 }
 
@@ -173,7 +219,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
         .unwrap()
         .timestamp;
     let deletion_rows = |engine: &Engine| {
-        super::read(engine).unwrap()["events"]
+        wire(super::read(engine).unwrap())["events"]
             .as_array()
             .unwrap()
             .iter()
@@ -186,7 +232,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
     assert_eq!(before[0]["path"], "Audit/transient");
     assert_eq!(
         before[0]["timestamp"],
-        super::utc_timestamp(timestamp).unwrap()
+        crate::backend_activity::utc_timestamp(timestamp).unwrap()
     );
     assert_eq!(before[0]["file_id"], "");
     assert!(before[0]["version_id"].is_null());
@@ -213,4 +259,54 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
     assert!(!restored.state().operations.contains_key(&operation_id));
     assert!(restored.state().versions.is_empty());
     assert_eq!(deletion_rows(&restored), before);
+}
+
+#[test]
+fn malformed_receipt_fields_are_errors_only_for_retained_rows() {
+    use std::error::Error;
+    for timestamp in [
+        json!(17),
+        json!("not-decimal"),
+        json!("18446744073709551616"),
+    ] {
+        let error = receipt_timestamp(Some(&timestamp)).unwrap_err();
+        assert_eq!(error.code, storage_contract::ErrorCode::StateInvalid);
+        assert!(error.source().is_some());
+    }
+    let malformed_detail = json!({"node_id":17});
+    let mut row = pending("");
+    row.detail = PendingDetail::FileOperation {
+        version_id: None,
+        receipt: &malformed_detail,
+    };
+    assert_eq!(
+        row.finish(1, "retained".into()).unwrap_err().code,
+        storage_contract::ErrorCode::StateInvalid
+    );
+    let mut old = pending("");
+    let malformed = json!(false);
+    old.timestamp = Timestamp::Receipt(Some(&malformed));
+    let mut events = BTreeMap::new();
+    record_event(&mut events, 1, "malformed-old-row".into(), old);
+    for id in 0..HISTORY_LIMIT {
+        record_event(&mut events, 2, id.to_string(), pending(""));
+    }
+    let retained = events
+        .into_iter()
+        .map(|((Reverse(sequence), id), event)| event.finish(sequence, id))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(retained.len(), HISTORY_LIMIT);
+    let error = super::optional_field::<String>(Some(&json!(17))).unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::StateInvalid);
+    assert!(error.source().is_some());
+    assert_eq!(super::optional_field::<String>(None).unwrap(), None);
+    assert_eq!(
+        super::optional_field::<String>(Some(&Value::Null)).unwrap(),
+        None
+    );
+    assert_eq!(
+        super::optional_field::<u64>(Some(&json!(3))).unwrap(),
+        Some(3)
+    );
 }

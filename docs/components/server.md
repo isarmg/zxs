@@ -16,7 +16,7 @@ Axum HTTP 服务、持久会话认证及受保护的 Samba 本机桥接。业务
 | `transfer` / `uploads` | HTTP 内容流/范围/读租约；上传进度的有界读取与持久化 |
 | `web_assets` | 静态资源准入和 ETag，保留 `/api` API 命名空间 |
 | `engine_backend` / `file_manager` | 核心业务约束、业务动作和文件管理响应适配 |
-| `engine_backend/file_manager/activity` | 以只读 `&Engine` 汇总提交、文件元数据操作、目录分支操作、备份配置、路径节点及目录树六类活动；按序号降序和事件 ID 保留最新 200 行，仅在响应中规范化 UTC 时间 |
+| `engine_backend/file_manager/activity`、`backend_activity` | 在当前授权锁内捕获提交、文件元数据操作、目录分支操作、备份配置、路径节点及目录树六类活动的 typed 快照；按序号降序和事件 ID 保留最新 200 行，锁外转换 DTO/UTC 时间 |
 | `telemetry` | 有界可重建的主机采样和历史，不参与存储提交真相 |
 | `smb_rpc` | 本机 Samba 会话、句柄与工作区发布，不创建账户或仓库权限 |
 
@@ -228,3 +228,39 @@ HTTP spool 必须由服务身份拥有且权限为 `0700`；现有目录不会�
 ### 已提交鉴权快照
 
 HTTP token 检查、授权后端和 managed 引擎准入读取[已提交鉴权快照](../architecture/auth-committed-snapshots.md)，不等待凭据写序列的 fsync。读写请求仍在引擎锁后复核当前会话，保留注销、改密、到期及不确定权威故障关闭；密码哈希与持久写仍有各自的有界阻塞任务准入。
+
+### 文件历史类型化读边界
+
+`GET /api/file-manager/files/{file}/history` 通过 `ReadFileHistory` 和
+`Backend::file_history_snapshot` 读取，不再进入字符串／JSON action dispatcher。
+HTTP query 只接收 `repository_id`、`path`；二者成对解析，路径使用允许规范等价拼写的
+`LookupPath`，核心查询复用其 key。未知字段及静态格式错误在获得阻塞槽后、调用 Backend
+前拒绝；中间件仍先认证，合法请求在 AuthorizedBackend 和 Engine 锁内重新检查当前授权。
+阻塞任务独立持有准入许可和认证所有者，HTTP future 取消不提前释放其所需资源。
+此静态错误优先级不同于旧 dispatcher 在查询字段前先查询文件的顺序。
+
+锁内只收集该文件的投影：版本数字保持 `u64`，内容节点与版本行共享不可变
+`Arc<HistoryVersionData>`，不再 clone／修改 JSON 对象。分支复用 `BranchSnapshot`，
+当前正文复用 `ContentDispositionSnapshot`；merge 映射没有共享记录句柄，因此只复制
+选中的 merge，并在响应层显式列出字段。锁外构造响应及序列化，整数文本编码仅属于 wire。
+当前条目保持借用，不复制整个 namespace／State。现有文件历史排序、首次 commit 扫描、
+节点路径 memoization 与图边过滤算法不变，未引入跨请求缓存或新的同步／fsync。
+
+无当前路径、无备注、未选分支、历史版本无首次 commit 均保留原有缺省语义：
+路径／选择为 null、备注／message 为空串、无当前路径不输出当前正文属性。
+稀疏 content-state 缺席的展示值仍为 `LIVE`，显式状态仍使用其原 token。
+版本按原次序倒序，统一节点按 sequence 降序及 node ID 定序；不以展示顺序创造 ancestry。
+这是读模型迁移，不改变持久化 `Commit.kind`、事务格式、内容读取证明或授权规则。
+
+测试入口：`backend_file_history` 的无 core wire／query 单测、
+`file_manager::history_nodes` 的固定图与脱离当前 namespace 场景、真实 HTTP `history_query`、
+`authorized_backend` 的参数／结果／错误转发、排队撤权四路与无凭据矩阵，以及阻塞 panic／
+取消槽位测试。源代码接线不等于这些测试已经执行；执行结果由对应验证提交记录。
+
+### 活动历史投影边界
+
+`GET /api/file-manager/history` 直接调用 `Backend::activity_history`，不经过 JSON action 分派。HTTP 仍解析 query，但不以额外 query 字段改变业务结果；当前凭据复核在排队后的 Backend/Engine 准入发生。阻塞任务只持有 Backend、认证所有者和准入许可，取消 HTTP future 不提前释放后台工作所需资源。
+
+快照保留数值 sequence/UTC 秒和明确的行详情类型；响应边界再将 sequence 编为十进制文本、时间编为 UTC。开放的持久 `kind`/action 仍是字符串，不按当前观察值封闭。提交删除事件仍以 commit ID、删除 ordinal 区分重复路径；同序号按 event ID 排序，最多 200 行，不增加跨事务缓存。
+
+`OperationResult.result` 仍是持久化开放 JSON：活动投影只解析所消费的可选 timestamp、ID、复制数字段；缺失/null 保持缺失，格式错误返回保留来源的 `STATE_INVALID`，不使用默认值或 panic。此项明确收紧了畸形持久 receipt 字段的响应行为，正常 wire 不变；被最新 200 行淘汰的候选不因其字段错误使查询失败。备份 receipt 缺失必要 history identity 同样作为持久状态错误。现有合法缺省（未找到当前路径、备注/名称缺失、无操作所有者、已不存在目录分支等）保持原投影规则。快照只复制实际响应所需数据；正文状态复用已有 typed content 投影，最终 JSON 只在 HTTP 序列化发生。

@@ -308,6 +308,14 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.rename_file_branch(identity, request)
     }
+    fn listing(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadListing,
+    ) -> Result<crate::ListingSnapshot, crate::ApiError> {
+        self.enter();
+        self.inner.listing(identity, request)
+    }
     fn mutate_disk_directory(
         &self,
         identity: &crate::auth::Identity,
@@ -373,6 +381,14 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.default_directory_branch(identity, repository_id)
     }
+    fn file_history_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadFileHistory,
+    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+        self.enter();
+        self.inner.file_history_snapshot(identity, request)
+    }
     fn file_history(
         &self,
         identity: &crate::auth::Identity,
@@ -403,6 +419,13 @@ impl Backend for PausedBackend {
     ) -> Result<crate::EventPage, crate::ApiError> {
         self.enter();
         self.inner.event_page(identity, after)
+    }
+    fn activity_history(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
+        self.enter();
+        self.inner.activity_history(identity)
     }
     fn history_graph(
         &self,
@@ -703,9 +726,12 @@ enum Request {
     CommitSnapshot,
     HistoryGraph,
     EventPage,
+    ActivityHistorySnapshot,
     TopologySnapshot,
     FileHistory,
+    FileHistorySnapshot,
     DefaultDirectoryBranch,
+    Listing,
     DirectoryScopes,
     DirectorySelection,
     SelectDefaultDirectoryBranch,
@@ -1061,6 +1087,12 @@ impl Request {
                 .unwrap();
                 backend.directory_selection(identity, request).map(|_| ())
             }
+            Self::Listing => backend
+                .listing(
+                    identity,
+                    crate::ReadListing::parse("missing-slot".into(), Default::default()).unwrap(),
+                )
+                .map(|_| ()),
             Self::DirectoryScopes => {
                 let request = crate::ReadDirectoryScopes {
                     repository_id: "missing-repository",
@@ -1145,11 +1177,18 @@ impl Request {
                     },
                 )
                 .map(|_| ()),
+            Self::FileHistorySnapshot => backend
+                .file_history_snapshot(
+                    identity,
+                    crate::ReadFileHistory::parse("missing-file".into(), None, None).unwrap(),
+                )
+                .map(|_| ()),
             Self::FileHistory => backend.file_history(identity, "missing-file").map(|_| ()),
             Self::TopologySnapshot => backend.topology_snapshot(identity).map(|_| ()),
             Self::PlacementSnapshot => backend
                 .placement_snapshot(identity, &fixture.version)
                 .map(|_| ()),
+            Self::ActivityHistorySnapshot => backend.activity_history(identity).map(|_| ()),
             Self::EventPage => backend.event_page(identity, u64::MAX).map(|_| ()),
             Self::HistoryGraph => backend
                 .history_graph(identity, &fixture.repo.history_tree_id)
@@ -1307,6 +1346,7 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::CommitSnapshot,
                 Request::HistoryGraph,
                 Request::FileHistory,
+                Request::FileHistorySnapshot,
                 Request::DiskDirectorySelect,
                 Request::DiskDirectoryCreate,
                 Request::InitializeDirectoryScope,
@@ -1314,11 +1354,13 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::CreateBranch,
                 Request::ArchiveBranch,
                 Request::RenameDirectoryBranch,
+                Request::Listing,
                 Request::DirectoryScopes,
                 Request::DirectorySelection,
                 Request::SelectDefaultDirectoryBranch,
                 Request::DefaultDirectoryBranch,
                 Request::EventPage,
+                Request::ActivityHistorySnapshot,
                 Request::TopologySnapshot,
                 Request::CompareCommits,
                 Request::ProtectionPolicy,
@@ -1492,9 +1534,12 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::CommitSnapshot,
         Request::HistoryGraph,
         Request::EventPage,
+        Request::ActivityHistorySnapshot,
         Request::TopologySnapshot,
         Request::FileHistory,
+        Request::FileHistorySnapshot,
         Request::DefaultDirectoryBranch,
+        Request::Listing,
         Request::DirectoryScopes,
         Request::DirectorySelection,
         Request::SelectDefaultDirectoryBranch,

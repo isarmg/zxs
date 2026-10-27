@@ -590,6 +590,13 @@ impl crate::Backend for RetainedGenerationBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn listing(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadListing,
+    ) -> Result<crate::ListingSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn mutate_disk_directory(
         &self,
         _identity: &crate::auth::Identity,
@@ -646,6 +653,13 @@ impl crate::Backend for RetainedGenerationBackend {
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn file_history_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadFileHistory,
+    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn file_history(
         &self,
         _identity: &crate::auth::Identity,
@@ -671,6 +685,12 @@ impl crate::Backend for RetainedGenerationBackend {
         _identity: &crate::auth::Identity,
         _after: u64,
     ) -> Result<crate::EventPage, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn activity_history(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
     fn history_graph(

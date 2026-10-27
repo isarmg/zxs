@@ -12,9 +12,6 @@ macro_rules! actions {
 actions! {
     FileManagerBackupConfiguration,
     FileManagerConfigureBackups,
-    FileManagerEntries,
-    FileManagerFileHistory,
-    FileManagerHistory,
     FileManagerMerge,
     FileManagerNamespace,
     FileManagerTags,

@@ -1,16 +1,5 @@
 //! Path-oriented file manager routes over controlled disk namespaces.
 use crate::*;
-macro_rules! list_handler {
-    ($name:ident, $action:expr) => {
-        async fn $name(
-            State(state): State<AppState>,
-            http_routing::Extension(identity): http_routing::Extension<Identity>,
-            ApiQuery(query): ApiQuery<BTreeMap<String, String>>,
-        ) -> Result<Json<Value>, ApiError> {
-            call(state, identity, $action, json!({"query": query})).await
-        }
-    };
-}
 macro_rules! read_handler {
     ($name:ident, $action:expr, $key:literal) => {
         async fn $name(
@@ -47,7 +36,10 @@ macro_rules! id_post_handler {
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/file-manager/disks", get(disks))
-        .route("/api/file-manager/disks/{slot}/entries", get(entries))
+        .route(
+            "/api/file-manager/disks/{slot}/entries",
+            get(http_listing::read),
+        )
         .route(
             "/api/file-manager/disks/{slot}/write-sessions",
             post(write_session),
@@ -119,13 +111,62 @@ async fn disks(
     .map_err(ApiError::join)?
     .map(Json)
 }
-list_handler!(history, crate::BackendAction::FileManagerHistory);
-read_handler!(entries, crate::BackendAction::FileManagerEntries, "slot_id");
-read_handler!(
-    file_history,
-    crate::BackendAction::FileManagerFileHistory,
-    "file_id"
-);
+async fn history(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<backend_activity::ActivityHistoryResponse>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    let backend = state.backend;
+    let auth_owner = state.auth;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let _auth_owner = auth_owner;
+        backend
+            .activity_history(&identity)
+            .and_then(backend_activity::ActivityHistoryResponse::try_from)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
+async fn file_history(
+    State(state): State<AppState>,
+    http_routing::Extension(identity): http_routing::Extension<Identity>,
+    ApiPath(file): ApiPath<String>,
+    ApiQuery(mut query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Json<backend_file_history::FileHistoryResponse>, ApiError> {
+    let permit = state
+        .backend_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    let backend = state.backend;
+    let auth_owner = state.auth;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let _auth_owner = auth_owner;
+        if let Some(key) = query
+            .keys()
+            .find(|key| !matches!(key.as_str(), "repository_id" | "path"))
+        {
+            return Err(ApiError::invalid(format!("unknown field {key}")));
+        }
+        let request =
+            ReadFileHistory::parse(file, query.remove("repository_id"), query.remove("path"))?;
+        backend
+            .file_history_snapshot(&identity, request)
+            .map(backend_file_history::FileHistoryResponse::from)
+    })
+    .await
+    .map_err(ApiError::join)?
+    .map(Json)
+}
+
 id_post_handler!(
     write_session,
     crate::BackendAction::FileManagerWriteSession,

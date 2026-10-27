@@ -38,7 +38,12 @@ fn one_branch_summary_does_not_serialize_its_growing_entry_graph() {
             materialized: true,
             sequence: 42,
         };
-        let summary = branch_summary(&branch, true);
+        let summary = json_codec::to_value(
+            crate::backend_directory_scopes::DirectoryChoiceRecord::from(
+                crate::DirectoryBranchChoice::capture(&branch, true),
+            ),
+        )
+        .unwrap();
         assert_eq!(summary["directory_branch_id"], "branch-fixture");
         assert_eq!(summary["file_count"], size.to_string());
         assert_eq!(summary["current"], true);

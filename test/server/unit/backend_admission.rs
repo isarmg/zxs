@@ -348,6 +348,14 @@ impl Backend for BackendProbe {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
+    fn listing(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadListing,
+    ) -> Result<crate::ListingSnapshot, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn mutate_disk_directory(
         &self,
         _identity: &crate::auth::Identity,
@@ -412,6 +420,14 @@ impl Backend for BackendProbe {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
+    fn file_history_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadFileHistory,
+    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn file_history(
         &self,
         _identity: &crate::auth::Identity,
@@ -440,6 +456,13 @@ impl Backend for BackendProbe {
         _identity: &crate::auth::Identity,
         _after: u64,
     ) -> Result<crate::EventPage, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn activity_history(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
@@ -914,6 +937,7 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
         ("GET", "/api/branches/branch/tree?commit_id=commit"),
         ("GET", "/api/repositories/repository"),
         ("GET", "/api/branches/branch"),
+        ("GET", "/api/file-manager/files/file/history"),
         ("POST", "/api/file-manager/files/file/metadata"),
         ("POST", "/api/file-manager/versions/version/metadata"),
         ("PATCH", "/api/file-manager/files/file/nodes/node"),
@@ -931,6 +955,7 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
         ("GET", "/api/commits/commit"),
         ("GET", "/api/history-trees/history/graph"),
         ("GET", "/api/events?after=17"),
+        ("GET", "/api/file-manager/history?ignored=true"),
         ("GET", "/api/backup-topologies/default"),
         ("GET", "/api/files/file/history"),
         ("GET", "/api/repositories/repository/default-branch"),
@@ -947,6 +972,7 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
         ("PUT", "/api/repositories/repository/default-branch"),
         ("GET", "/api/admin/disks"),
         ("GET", "/api/file-manager/disks"),
+        ("GET", "/api/file-manager/disks/P01/entries"),
         ("GET", "/api/admin/check"),
         ("POST", "/api/compare"),
         ("GET", "/api/policies/policy"),
@@ -1067,5 +1093,64 @@ fn probe_capacity() -> storage_contract::WorkspaceCapacity {
         principal: scope,
         warning: storage_contract::CapacityWarning::Ok,
         automatic_retirement: false,
+    }
+}
+
+#[tokio::test]
+async fn typed_read_models_hold_auth_owner_until_cancelled_worker_finishes() {
+    for path in [
+        "/api/file-manager/files/file/history",
+        "/api/file-manager/history",
+        "/api/file-manager/disks/P01/entries",
+    ] {
+        let root = crate::tests::private_tempdir();
+        let gate = Arc::new(Gate {
+            open: Mutex::new(false),
+            changed: Condvar::new(),
+            started: tokio::sync::Semaphore::new(0),
+            calls: AtomicUsize::new(0),
+            finished: tokio::sync::Semaphore::new(0),
+        });
+        let _release = Release(gate.clone());
+        let backend = Arc::new(BackendProbe {
+            blocked: BlockedEndpoint::Backend,
+            gate: gate.clone(),
+            outcome: 0,
+            auth: Mutex::new(None),
+        });
+        let mut auth = AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
+        let token = auth.login("admin", "a-long-test-password").unwrap().token;
+        let app = router(backend.clone(), auth, ServerConfig::loopback(root.path())).unwrap();
+        let owner = backend.auth.lock().unwrap().take().unwrap();
+        let weak = Arc::downgrade(&owner);
+        drop(owner);
+        let job = tokio::spawn(
+            app.oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            ),
+        );
+        tokio::time::timeout(Duration::from_secs(5), gate.started.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        job.abort();
+        assert!(job.await.unwrap_err().is_cancelled());
+        assert!(
+            weak.upgrade().is_some(),
+            "{path}: worker must retain authentication owner"
+        );
+        gate.release();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while weak.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
     }
 }

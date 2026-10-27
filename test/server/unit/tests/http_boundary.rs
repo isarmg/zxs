@@ -568,6 +568,13 @@ impl Backend for PanickingBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         panic!("private directory scope panic detail")
     }
+    fn listing(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadListing,
+    ) -> Result<crate::ListingSnapshot, crate::ApiError> {
+        panic!("private listing panic detail")
+    }
     fn mutate_disk_directory(
         &self,
         _identity: &crate::auth::Identity,
@@ -624,6 +631,13 @@ impl Backend for PanickingBackend {
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         panic!("private default directory branch panic detail")
     }
+    fn file_history_snapshot(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadFileHistory,
+    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+        panic!("private file history panic detail")
+    }
     fn file_history(
         &self,
         _identity: &crate::auth::Identity,
@@ -650,6 +664,12 @@ impl Backend for PanickingBackend {
         _after: u64,
     ) -> Result<crate::EventPage, crate::ApiError> {
         panic!("private event page panic detail")
+    }
+    fn activity_history(
+        &self,
+        _identity: &crate::auth::Identity,
+    ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
+        panic!("private activity history panic detail")
     }
     fn history_graph(
         &self,
@@ -801,6 +821,7 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
     .unwrap();
     let (token, _, _) = authenticated(&app).await;
     for (method, path, body) in [
+        ("GET", "/api/file-manager/files/file/history", None),
         ("GET", "/api/capabilities", None),
         ("GET", "/readyz", None),
         ("GET", "/api/workspaces/capacity", None),
@@ -906,6 +927,7 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         ("GET", "/api/commits/commit", None),
         ("GET", "/api/history-trees/history/graph", None),
         ("GET", "/api/events?after=17", None),
+        ("GET", "/api/file-manager/history?ignored=true", None),
         ("GET", "/api/backup-topologies/default", None),
         ("GET", "/api/files/file/history", None),
         ("GET", "/api/repositories/repository/default-branch", None),
@@ -938,6 +960,7 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         ),
         ("GET", "/api/admin/disks", None),
         ("GET", "/api/file-manager/disks", None),
+        ("GET", "/api/file-manager/disks/P01/entries", None),
         ("GET", "/api/admin/check", None),
         (
             "POST",

@@ -1,7 +1,8 @@
 //! Logical backup namespace validation stays global so paging cannot hide path
 //! conflicts. Only lightweight nodes are retained; wire metadata is page-local.
-use super::pagination::{PageRequest, PageSelector, SortKey};
+use super::pagination::{PageRequest, PageSelector};
 use super::*;
+use crate::backend_listing::SortKey;
 use storage_engine::{Entry, FileVersion};
 
 fn available_on(engine: &Engine, slot: &str, version: &str) -> bool {
@@ -136,9 +137,12 @@ fn default_backup_path(
         format!("{}/{}/{relative}", repo.primary_slot_id, repo.name)
     }
 }
-fn project(engine: &Engine, slot: &str, node: &Node<'_>) -> Result<Value, ApiError> {
+fn project(engine: &Engine, slot: &str, node: &Node<'_>) -> Result<crate::ListingEntry, ApiError> {
     let display = node.display();
-    let name = display.rsplit('/').next().unwrap_or(display);
+    let name = display
+        .rsplit('/')
+        .next()
+        .expect("invariant: split has at least one element");
     let mut entry = match node {
         Node::Directory { .. } => directory(name, display, &node.identity(slot)),
         Node::File {
@@ -147,40 +151,70 @@ fn project(engine: &Engine, slot: &str, node: &Node<'_>) -> Result<Value, ApiErr
             version,
             ..
         } => {
-            // Resolve context against the actual current entry, never a frozen
-            // copy with a substituted version. Historical content is overlaid
-            // only after that validated projection.
+            // Resolve against the current entry before overlaying historical content.
             let mut value = if let Some((index, _)) = current {
-                listed_current_entry(engine, repo, *index, "")?
+                let mut entry = listed_current_entry(engine, repo, *index, "")?;
+                entry.path = display.into();
+                entry.name = name.into();
+                entry
             } else {
-                json!({"entry_id":version.file_id,"kind":"file","repository_id":repo.repository_id,"repository_path":null,"container":true,"file_id":version.file_id,"selected_branch_id":null})
+                crate::ListingEntry {
+                    entry_id: version.file_id.clone(),
+                    name: name.into(),
+                    path: display.into(),
+                    kind: storage_contract::NamespaceEntryKind::File,
+                    size: version.logical_size,
+                    file_id: version.file_id.clone(),
+                    version: crate::ListingVersion::File {
+                        content: super::super::branch::capture_content(
+                            engine.state(),
+                            Some(&version.version_id),
+                            None,
+                        ),
+                        backup_version: None,
+                    },
+                    location: Some(crate::ListingLocation {
+                        repository_id: repo.repository_id.clone(),
+                        repository_path: None,
+                        container: true,
+                        selected_branch_id: None,
+                    }),
+                    note: Some(
+                        engine
+                            .state()
+                            .file_notes
+                            .get(&version.file_id)
+                            .cloned()
+                            .unwrap_or_default(),
+                    ),
+                    node_id: Some(version.version_id.clone()),
+                    read_only: None,
+                    backup: false,
+                    historical_only: None,
+                }
             };
-            if !current.is_some_and(|(_, entry)| entry.version_id == version.version_id) {
-                value["node_id"] = version.version_id.clone().into();
-                value.as_object_mut().expect("file wire object").extend(
-                    content_wire(engine, Some(&version.version_id), None)
-                        .as_object()
-                        .expect("content wire object")
-                        .clone(),
-                );
+            if current.is_some_and(|(_, entry)| entry.version_id != version.version_id) {
+                value.node_id = Some(version.version_id.clone());
+                value.version = crate::ListingVersion::File {
+                    content: super::super::branch::capture_content(
+                        engine.state(),
+                        Some(&version.version_id),
+                        None,
+                    ),
+                    backup_version: None,
+                };
             }
-            value["size"] = version.logical_size.to_string().into();
-            value["version_id"] = version.version_id.clone().into();
-            value["note"] = engine
-                .state()
-                .file_notes
-                .get(&version.file_id)
-                .cloned()
-                .unwrap_or_default()
-                .into();
-            value["historical_only"] = current.is_none().into();
+            let crate::ListingVersion::File { backup_version, .. } = &mut value.version else {
+                unreachable!("invariant: backup file candidates project file content");
+            };
+            *backup_version = Some(version.version_id.clone());
+            value.size = version.logical_size;
+            value.historical_only = Some(current.is_none());
             value
         }
     };
-    entry["path"] = display.into();
-    entry["name"] = name.into();
-    entry["read_only"] = true.into();
-    entry["backup"] = true.into();
+    entry.read_only = Some(true);
+    entry.backup = true;
     Ok(entry)
 }
 
@@ -189,7 +223,7 @@ pub(super) fn entries(
     slot: &str,
     path: &str,
     request: PageRequest,
-) -> Result<Value, ApiError> {
+) -> Result<crate::ListingSnapshot, ApiError> {
     let repositories = engine
         .state()
         .repositories
@@ -313,7 +347,20 @@ pub(super) fn entries(
         .selected
         .map(|node| project(engine, slot, node))
         .transpose()?;
-    let mut response = json!({"slot_id":slot,"path":path,"backup":true,"writable":false,"entries":values,"selected_entry":selected_entry,"context":null,"directory_file_count":file_count.to_string(),"directory_branches":[],"directory_branches_supported":false,"default_branch_scope":false});
-    page.metadata(&mut response);
-    Ok(response)
+    Ok(crate::ListingSnapshot {
+        slot_id: slot.into(),
+        path: path.into(),
+        backup: true,
+        entries: values,
+        selected_entry,
+        context: None,
+        directory_file_count: file_count,
+        directory_branches: Vec::new(),
+        directory_branches_supported: false,
+        default_branch_scope: false,
+        total_entries: page.total,
+        snapshot: page.snapshot,
+        previous_cursor: page.previous,
+        next_cursor: page.next,
+    })
 }

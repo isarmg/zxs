@@ -1,5 +1,4 @@
 use super::*;
-use crate::BackendAction;
 use storage_contract::{CommitRequest, Config, FileTagTarget};
 
 #[test]
@@ -85,7 +84,17 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
         })
         .unwrap();
     let before = json_codec::to_value(engine.state()).unwrap();
-    let history = file_history(&engine, &json!({"file_id":entry.file_id})).unwrap();
+    let history = storage_contract::strict_json(
+        &json_codec::to_vec(&crate::backend_file_history::FileHistoryResponse::from(
+            file_history(
+                &engine,
+                crate::ReadFileHistory::parse(entry.file_id.clone(), None, None).unwrap(),
+            )
+            .unwrap(),
+        ))
+        .unwrap(),
+    )
+    .unwrap();
     let nodes = history["nodes"].as_array().unwrap();
     for kind in ["content", "rename", "tags"] {
         assert!(nodes.iter().any(|node| node["kind"] == kind));
@@ -102,7 +111,11 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
         assert_eq!(expected.len(), 20);
         assert!(expected.ends_with('Z'));
     }
-    let activity = read(&engine, BackendAction::FileManagerHistory, json!({})).unwrap();
+    let snapshot = activity::read(&engine).unwrap();
+    let activity = json_codec::to_value(
+        crate::backend_activity::ActivityHistoryResponse::try_from(snapshot).unwrap(),
+    )
+    .unwrap();
     let events = activity["events"].as_array().unwrap();
     assert!(!events.is_empty());
     assert!(events.iter().all(|event| {
@@ -111,4 +124,28 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
             .is_some_and(|time| time.len() == 20 && time.ends_with('Z'))
     }));
     assert_eq!(json_codec::to_value(engine.state()).unwrap(), before);
+    let snapshot = activity::read(&engine).unwrap();
+    engine
+        .set_file_note(
+            &entry.file_id,
+            None,
+            &storage_contract::Note::parse("later note".into()).unwrap(),
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let pinned = json_codec::to_value(
+        crate::backend_activity::ActivityHistoryResponse::try_from(snapshot).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        pinned, activity,
+        "snapshot is owned and does not observe later publication"
+    );
+    let next = activity::read(&engine).unwrap();
+    assert!(
+        next.events
+            .iter()
+            .any(|event| event.action == "file.metadata")
+    );
 }

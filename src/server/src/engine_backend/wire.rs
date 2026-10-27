@@ -33,24 +33,6 @@ pub(super) fn stored_version_content_state(
         .copied()
         .unwrap_or(storage_contract::ContentState::Available)
 }
-/// Response ownership is independent from the version currently visible in a
-/// branch. An unwritten branch reads its parent's immutable version.
-pub(super) fn content_wire(engine: &Engine, visible: Option<&str>, source: Option<&str>) -> Value {
-    json_codec::to_value(crate::backend_branch::ContentDispositionResponse::from(
-        super::branch::capture_content(engine.state(), visible, source),
-    ))
-    .expect("invariant: internal content response serialization succeeds")
-}
-
-pub(super) fn branch_wire(
-    engine: &Engine,
-    branch: &storage_contract::Branch,
-) -> Result<Value, ApiError> {
-    encode(crate::backend_branch::BranchResponse::from(
-        super::branch::capture(engine.state(), branch),
-    ))
-}
-
 enum CurrentContext<'a> {
     Lookup,
     // A missing context has already been resolved; do not search again.

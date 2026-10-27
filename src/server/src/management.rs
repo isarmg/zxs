@@ -844,6 +844,13 @@ impl Backend for ManagementBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.backend()?.rename_file_branch(identity, request)
     }
+    fn listing(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadListing,
+    ) -> Result<crate::ListingSnapshot, crate::ApiError> {
+        self.inner.backend()?.listing(identity, request)
+    }
     fn mutate_disk_directory(
         &self,
         identity: &crate::auth::Identity,
@@ -910,6 +917,15 @@ impl Backend for ManagementBackend {
             .backend()?
             .default_directory_branch(identity, repository_id)
     }
+    fn file_history_snapshot(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadFileHistory,
+    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+        self.inner
+            .backend()?
+            .file_history_snapshot(identity, request)
+    }
     fn file_history(
         &self,
         identity: &crate::auth::Identity,
@@ -936,6 +952,12 @@ impl Backend for ManagementBackend {
         after: u64,
     ) -> Result<crate::EventPage, crate::ApiError> {
         self.inner.backend()?.event_page(identity, after)
+    }
+    fn activity_history(
+        &self,
+        identity: &crate::auth::Identity,
+    ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
+        self.inner.backend()?.activity_history(identity)
     }
     fn history_graph(
         &self,
