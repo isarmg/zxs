@@ -11,6 +11,15 @@ use std::{
 
 mod unix;
 
+/// Whether a private payload must be newly created or already exist.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PayloadOpenMode {
+    /// Exclusively create a new payload, failing if its name already exists.
+    CreateNew,
+    /// Open an existing payload without creating or truncating it.
+    Existing,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RelativePath(PathBuf);
 
@@ -81,15 +90,19 @@ impl PrivateDirectory {
     pub fn open_trusted(path: impl AsRef<Path>) -> Result<Self, Error> {
         unix::trusted_private_directory(path.as_ref(), false)
     }
-    /// Open a private single-link payload relative to this held directory.
-    pub fn open_payload(&self, name: &EntryName, create: bool) -> Result<File, Error> {
-        unix::open_payload(self, name, create)
+    /// Open a private single-link payload for reading and writing, without
+    /// truncation, relative to this held directory. Filesystem failures retain
+    /// their I/O source; unsafe file types, links and permissions are rejected.
+    pub fn open_payload(&self, name: &EntryName, mode: PayloadOpenMode) -> Result<File, Error> {
+        unix::open_payload(self, name, mode)
     }
     /// Detect replacement without ever using the replacement as the payload.
     pub fn verify_payload(&self, name: &EntryName, held: &File) -> Result<(), Error> {
         use std::os::unix::fs::MetadataExt;
         self.verify_identity()?;
-        let named = self.open_payload(name, false)?.metadata()?;
+        let named = self
+            .open_payload(name, PayloadOpenMode::Existing)?
+            .metadata()?;
         let held = held.metadata()?;
         if named.dev() != held.dev() || named.ino() != held.ino() {
             return Err(Error::IdentityChanged(self.path.join(name.as_path())));

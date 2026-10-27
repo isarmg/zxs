@@ -16,7 +16,8 @@ fn staging_guard_preserves_unpublished_bytes_until_and_after_last_job() {
     let budget = test_budget(root.path());
     let path = root.path().join("unpublished.data");
     let reservation = budget.reserve("alice", "unpublished.data", 10).unwrap();
-    let guard = StagedFile::open_budgeted(path.clone(), false, reservation).unwrap();
+    let guard =
+        StagedFile::open_budgeted(path.clone(), PayloadOpenMode::CreateNew, reservation).unwrap();
     let running_job = guard.clone();
     drop(guard);
     assert!(budget.reserve("alice", "unpublished.data", 10).is_err());
@@ -27,6 +28,56 @@ fn staging_guard_preserves_unpublished_bytes_until_and_after_last_job() {
 }
 
 #[test]
+fn staged_payload_modes_preserve_retry_bytes_and_open_error_sources() {
+    use crate::http_boundary::ApiErrorSource;
+    use platform_io::fs_safety::Error;
+
+    let root = private_tempdir();
+    let budget = test_budget(root.path());
+    let path = root.path().join("retry.data");
+    let reservation = budget.reserve("alice", "retry.data", 6).unwrap();
+    let staged =
+        StagedFile::open_budgeted(path.clone(), PayloadOpenMode::CreateNew, reservation).unwrap();
+    staged.write(b"abc").unwrap();
+    staged.sync().unwrap();
+    drop(staged);
+
+    let reservation = budget.reserve("alice", "retry.data", 6).unwrap();
+    let error = StagedFile::open_budgeted(path.clone(), PayloadOpenMode::CreateNew, reservation)
+        .err()
+        .unwrap();
+    assert_eq!(error.code, storage_contract::ErrorCode::UploadStateInvalid);
+    assert!(matches!(
+        error.source.as_deref(),
+        Some(ApiErrorSource::Filesystem(Error::Io(source)))
+            if source.kind() == std::io::ErrorKind::AlreadyExists
+    ));
+    assert_eq!(fs::read(&path).unwrap(), b"abc");
+
+    let reservation = budget.reserve("alice", "retry.data", 6).unwrap();
+    let retry =
+        StagedFile::open_budgeted(path.clone(), PayloadOpenMode::Existing, reservation).unwrap();
+    retry.write(b"def").unwrap();
+    retry.sync().unwrap();
+    drop(retry);
+    assert_eq!(fs::read(&path).unwrap(), b"abcdef");
+
+    let missing = root.path().join("missing.data");
+    let reservation = budget.reserve("alice", "missing.data", 6).unwrap();
+    let error = StagedFile::open_budgeted(missing.clone(), PayloadOpenMode::Existing, reservation)
+        .err()
+        .unwrap();
+    assert_eq!(error.code, storage_contract::ErrorCode::UploadStateInvalid);
+    assert!(matches!(
+        error.source.as_deref(),
+        Some(ApiErrorSource::Filesystem(Error::Io(source)))
+            if source.kind() == std::io::ErrorKind::NotFound
+    ));
+    assert!(!missing.exists());
+    assert!(root.path().join("missing.data.owner.json").is_file());
+}
+
+#[test]
 fn failed_atomic_staged_progress_retains_bytes_and_blocks_admission_until_inventory() {
     let root = private_tempdir();
     let previous = root.path().join("previous.data");
@@ -34,7 +85,8 @@ fn failed_atomic_staged_progress_retains_bytes_and_blocks_admission_until_invent
     let budget = test_budget(root.path());
     let path = root.path().join("new.data");
     let reservation = budget.reserve("alice", "new.data", 9).unwrap();
-    let guard = StagedFile::open_budgeted(path.clone(), false, reservation).unwrap();
+    let guard =
+        StagedFile::open_budgeted(path.clone(), PayloadOpenMode::CreateNew, reservation).unwrap();
     guard.write(b"new bytes").unwrap();
     guard.sync().unwrap();
     let record = UploadRecord {
@@ -161,8 +213,12 @@ fn replaced_http_payload_or_parent_cannot_be_submitted() {
         fs::set_permissions(&spool, fs::Permissions::from_mode(0o700)).unwrap();
         let budget = test_budget(&spool);
         let reservation = budget.reserve("alice", "upload.data", 8).unwrap();
-        let staged =
-            StagedFile::open_budgeted(spool.join("upload.data"), false, reservation).unwrap();
+        let staged = StagedFile::open_budgeted(
+            spool.join("upload.data"),
+            PayloadOpenMode::CreateNew,
+            reservation,
+        )
+        .unwrap();
         staged.write(b"original").unwrap();
         if swap_parent {
             fs::rename(&spool, root.path().join("moved")).unwrap();

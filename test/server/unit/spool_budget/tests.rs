@@ -1,5 +1,6 @@
 use super::*;
 use crate::uploads::{self, StagedFile};
+use platform_io::fs_safety::PayloadOpenMode;
 
 fn limits(account: u64, total: u64) -> SpoolLimits {
     SpoolLimits {
@@ -12,7 +13,12 @@ fn retained(budget: &Arc<SpoolBudget>, principal: &str, name: &str, declared: u6
     let reservation = budget
         .reserve_with_available(principal, name, declared, u64::MAX)
         .unwrap();
-    let staged = StagedFile::open_budgeted(budget.root.join(name), false, reservation).unwrap();
+    let staged = StagedFile::open_budgeted(
+        budget.root.join(name),
+        PayloadOpenMode::CreateNew,
+        reservation,
+    )
+    .unwrap();
     staged.write(bytes).unwrap();
     staged.sync().unwrap();
 }
@@ -291,8 +297,12 @@ fn rejected_batch_headroom_preserves_actual_tail_and_verified_retry_accounting()
     let reservation = budget
         .reserve_with_available("alice", "batch.data", size, u64::MAX)
         .unwrap();
-    let staged =
-        StagedFile::open_budgeted(root.path().join("batch.data"), true, reservation).unwrap();
+    let staged = StagedFile::open_budgeted(
+        root.path().join("batch.data"),
+        PayloadOpenMode::Existing,
+        reservation,
+    )
+    .unwrap();
     assert_eq!(staged.write(&batch).unwrap_err().status, 429);
     assert_eq!(fs::read(root.path().join("batch.data")).unwrap(), b"abcdef");
     let unchanged = uploads::load(root.path(), "ws", "item").unwrap().unwrap();
@@ -307,8 +317,12 @@ fn rejected_batch_headroom_preserves_actual_tail_and_verified_retry_accounting()
 
     let budget = SpoolBudget::recover(root.path(), limits(quota, quota)).unwrap();
     let reservation = budget.reserve("alice", "batch.data", size).unwrap();
-    let staged =
-        StagedFile::open_budgeted(root.path().join("batch.data"), true, reservation).unwrap();
+    let staged = StagedFile::open_budgeted(
+        root.path().join("batch.data"),
+        PayloadOpenMode::Existing,
+        reservation,
+    )
+    .unwrap();
     let mut prefix = uploads::ExistingPrefix::open(root.path(), &unchanged)
         .unwrap()
         .unwrap();

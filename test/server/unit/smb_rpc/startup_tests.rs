@@ -61,7 +61,7 @@ async fn startup_rejects_nonprivate_and_aliased_directories_before_binding() {
 
 #[test]
 fn durable_spool_and_accounting_survive_runtime_directory_removal() {
-    use platform_io::fs_safety::{EntryName, PrivateDirectory};
+    use platform_io::fs_safety::{EntryName, PayloadOpenMode, PrivateDirectory};
     let root = tempfile::tempdir().unwrap();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let runtime = root.path().join("run/zxs");
@@ -86,7 +86,7 @@ fn durable_spool_and_accounting_survive_runtime_directory_removal() {
         ("retained.work.json", b"unconfirmed operation".as_slice()),
     ] {
         let mut file = directory
-            .open_payload(&EntryName::new(name).unwrap(), true)
+            .open_payload(&EntryName::new(name).unwrap(), PayloadOpenMode::CreateNew)
             .unwrap();
         file.write_all(bytes).unwrap();
         file.sync_all().unwrap();

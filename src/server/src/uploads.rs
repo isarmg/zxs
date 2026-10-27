@@ -1,7 +1,7 @@
 //! Durable full-upload staging. Interrupted uploads remain attributable and queryable.
 use crate::ApiError;
 use data_serialization::{Deserialize, Serialize};
-use platform_io::fs_safety::{EntryName, PrivateDirectory};
+use platform_io::fs_safety::{EntryName, PayloadOpenMode, PrivateDirectory};
 use std::{
     fs,
     io::{Read, Seek, Write},
@@ -119,7 +119,7 @@ pub(crate) struct StagedFile {
 impl StagedFile {
     pub fn open_budgeted(
         path: PathBuf,
-        retry: bool,
+        mode: PayloadOpenMode,
         reservation: crate::spool_budget::Reservation,
     ) -> Result<std::sync::Arc<Self>, ApiError> {
         reservation.persist_owner()?;
@@ -135,7 +135,7 @@ impl StagedFile {
         )
         .map_err(crate::upload_fs_error)?;
         let mut writer = directory
-            .open_payload(&name, !retry)
+            .open_payload(&name, mode)
             .map_err(crate::upload_fs_error)?;
         writer
             .seek(std::io::SeekFrom::End(0))
@@ -339,7 +339,7 @@ impl ExistingPrefix {
         let directory = PrivateDirectory::open_trusted(root).map_err(crate::upload_fs_error)?;
         let name = EntryName::new(&record.data_file).map_err(crate::upload_fs_error)?;
         let file = directory
-            .open_payload(&name, false)
+            .open_payload(&name, PayloadOpenMode::Existing)
             .map_err(crate::upload_fs_error)?;
         let length = file.metadata().map_err(ApiError::io)?.len();
         if length < record.persisted_bytes || length > record.logical_size {

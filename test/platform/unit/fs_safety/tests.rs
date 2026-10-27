@@ -199,23 +199,175 @@ fn trusted_spool_rejects_replaceable_ancestry_without_repairing_permissions() {
 
 #[cfg(unix)]
 #[test]
-fn trusted_spool_payloads_remain_anchored_and_replacements_are_rejected() {
+fn payload_open_modes_create_exclusively_and_preserve_existing_bytes() {
+    use std::io::{Read, Write};
+    use std::os::unix::fs::MetadataExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::create(root.path().join("private")).unwrap();
+    let name = EntryName::new("data").unwrap();
+    assert!(matches!(
+        directory.open_payload(&name, PayloadOpenMode::Existing),
+        Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound
+    ));
+    assert!(!directory.path().join("data").exists());
+
+    let mut created = directory
+        .open_payload(&name, PayloadOpenMode::CreateNew)
+        .unwrap();
+    created.write_all(b"original").unwrap();
+    let original = created.metadata().unwrap();
+    assert_eq!(original.mode() & 0o7777, 0o600);
+    assert_eq!(original.nlink(), 1);
+    assert!(matches!(
+        directory.open_payload(&name, PayloadOpenMode::CreateNew),
+        Err(Error::Io(error)) if error.kind() == io::ErrorKind::AlreadyExists
+    ));
+
+    let mut existing = directory
+        .open_payload(&name, PayloadOpenMode::Existing)
+        .unwrap();
+    let reopened = existing.metadata().unwrap();
+    assert_eq!(reopened.dev(), original.dev());
+    assert_eq!(reopened.ino(), original.ino());
+    assert_eq!(reopened.len(), 8);
+    assert_eq!(reopened.mode(), original.mode());
+    let mut bytes = Vec::new();
+    existing.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"original");
+    existing.write_all(b" tail").unwrap();
+    assert_eq!(
+        fs::read(directory.path().join("data")).unwrap(),
+        b"original tail"
+    );
+
+    let empty = EntryName::new("empty").unwrap();
+    directory
+        .open_payload(&empty, PayloadOpenMode::CreateNew)
+        .unwrap();
+    assert_eq!(
+        directory
+            .open_payload(&empty, PayloadOpenMode::Existing)
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn payload_open_modes_preserve_link_and_permission_error_order() {
     use std::io::Write;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let root = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::create(root.path().join("private")).unwrap();
+    let target = EntryName::new("target").unwrap();
+    let target_path = directory.path().join("target");
+    directory
+        .open_payload(&target, PayloadOpenMode::CreateNew)
+        .unwrap()
+        .write_all(b"retained")
+        .unwrap();
+    let symbolic = EntryName::new("symbolic").unwrap();
+    symlink("target", directory.path().join("symbolic")).unwrap();
+    assert!(matches!(
+        directory.open_payload(&symbolic, PayloadOpenMode::CreateNew),
+        Err(Error::Io(error)) if error.kind() == io::ErrorKind::AlreadyExists
+    ));
+    assert!(matches!(
+        directory.open_payload(&symbolic, PayloadOpenMode::Existing),
+        Err(Error::Io(error)) if error.raw_os_error() == Some(libc::ELOOP)
+    ));
+
+    let alias = directory.path().join("alias");
+    fs::hard_link(&target_path, &alias).unwrap();
+    fs::set_permissions(&target_path, fs::Permissions::from_mode(0o640)).unwrap();
+    assert!(matches!(
+        directory.open_payload(&target, PayloadOpenMode::CreateNew),
+        Err(Error::Io(error)) if error.kind() == io::ErrorKind::AlreadyExists
+    ));
+    assert!(matches!(
+        directory.open_payload(&target, PayloadOpenMode::Existing),
+        Err(Error::UnsafeFileType(_))
+    ));
+    fs::remove_file(alias).unwrap();
+    assert!(matches!(
+        directory.open_payload(&target, PayloadOpenMode::Existing),
+        Err(Error::UnsafePermissions(_))
+    ));
+    assert_eq!(
+        fs::metadata(&target_path).unwrap().permissions().mode() & 0o7777,
+        0o640
+    );
+    assert_eq!(fs::read(target_path).unwrap(), b"retained");
+}
+
+#[cfg(unix)]
+#[test]
+fn payload_create_new_has_one_winner_for_concurrent_creators() {
+    use std::io::Write;
+    use std::sync::Barrier;
+
+    let root = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::create(root.path().join("private")).unwrap();
+    let name = EntryName::new("data").unwrap();
+    let barrier = Barrier::new(2);
+    let (first, second) = std::thread::scope(|scope| {
+        let worker = scope.spawn(|| {
+            barrier.wait();
+            directory.open_payload(&name, PayloadOpenMode::CreateNew)
+        });
+        barrier.wait();
+        let second = directory.open_payload(&name, PayloadOpenMode::CreateNew);
+        (worker.join().unwrap(), second)
+    });
+    let mut winner = match (first, second) {
+        (Ok(file), Err(Error::Io(error))) | (Err(Error::Io(error)), Ok(file)) => {
+            assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+            file
+        }
+        result => panic!("expected one exclusive creator: {result:?}"),
+    };
+    winner.write_all(b"winner").unwrap();
+    assert_eq!(fs::read(directory.path().join("data")).unwrap(), b"winner");
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn trusted_spool_payloads_remain_anchored_and_replacements_are_rejected() {
+    use std::io::{Read, Write};
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("private");
     let held = PrivateDirectory::create_trusted(&path).unwrap();
     let name = EntryName::new("data").unwrap();
-    let mut file = held.open_payload(&name, true).unwrap();
+    let mut file = held
+        .open_payload(&name, PayloadOpenMode::CreateNew)
+        .unwrap();
     file.write_all(b"original").unwrap();
     fs::rename(path.join("data"), path.join("old")).unwrap();
-    let mut replacement = held.open_payload(&name, true).unwrap();
+    let mut replacement = held
+        .open_payload(&name, PayloadOpenMode::CreateNew)
+        .unwrap();
     replacement.write_all(b"replacement").unwrap();
     assert!(held.verify_payload(&name, &file).is_err());
     fs::rename(&path, root.path().join("moved")).unwrap();
     PrivateDirectory::create_trusted(&path).unwrap();
     assert!(held.verify_identity().is_err());
-    held.open_payload(&EntryName::new("anchored").unwrap(), true)
+    let mut bytes = Vec::new();
+    held.open_payload(&name, PayloadOpenMode::Existing)
+        .unwrap()
+        .read_to_end(&mut bytes)
         .unwrap();
+    assert_eq!(bytes, b"replacement");
+    held.open_payload(
+        &EntryName::new("anchored").unwrap(),
+        PayloadOpenMode::CreateNew,
+    )
+    .unwrap();
     assert!(root.path().join("moved/anchored").exists());
     assert!(!path.join("anchored").exists());
 }

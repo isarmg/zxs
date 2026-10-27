@@ -152,14 +152,14 @@ impl Session {
                         "the file changed while its write handle was opening; reopen it",
                     ));
                 }
-                use platform_io::fs_safety::{EntryName, PrivateDirectory};
+                use platform_io::fs_safety::{EntryName, PayloadOpenMode, PrivateDirectory};
                 let directory = PrivateDirectory::open_trusted(&self.shared.spool)
                     .map_err(crate::upload_fs_error)?;
                 let name =
                     EntryName::new(format!("{}-{}", workspace.workspace_id, new_id("upload")))
                         .map_err(crate::upload_fs_error)?;
                 let mut file = directory
-                    .open_payload(&name, true)
+                    .open_payload(&name, PayloadOpenMode::CreateNew)
                     .map_err(crate::upload_fs_error)?;
                 let source = directory.path().join(name.as_path());
                 pending_source = Some(source.clone());

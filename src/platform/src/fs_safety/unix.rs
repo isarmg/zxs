@@ -1,7 +1,7 @@
 //! Portable Unix descriptor-relative primitives; intentionally does not need openat2.
 use super::{
-    AdvisoryLock, EntryName, Error, FileEntry, InventoryLimits, PrivateDirectory, RelativePath,
-    temporary_name,
+    AdvisoryLock, EntryName, Error, FileEntry, InventoryLimits, PayloadOpenMode, PrivateDirectory,
+    RelativePath, temporary_name,
 };
 use rustix::{
     fd::{AsFd, OwnedFd},
@@ -677,12 +677,16 @@ pub(super) fn trusted_private_directory(
 pub(super) fn open_payload(
     directory: &PrivateDirectory,
     name: &EntryName,
-    create: bool,
+    mode: PayloadOpenMode,
 ) -> Result<File, Error> {
-    let mut flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK;
-    if create {
-        flags |= OFlags::CREATE | OFlags::EXCL;
-    }
+    let flags = OFlags::RDWR
+        | OFlags::CLOEXEC
+        | OFlags::NOFOLLOW
+        | OFlags::NONBLOCK
+        | match mode {
+            PayloadOpenMode::CreateNew => OFlags::CREATE | OFlags::EXCL,
+            PayloadOpenMode::Existing => OFlags::empty(),
+        };
     let file = File::from(
         openat(
             &directory.directory,

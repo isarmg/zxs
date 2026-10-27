@@ -20,6 +20,7 @@ use http_routing::{
     response::{IntoResponse, Response},
 };
 use json_codec::{Value, json};
+use platform_io::fs_safety::PayloadOpenMode;
 use std::{
     io::{Read, Seek, SeekFrom},
     sync::{
@@ -332,11 +333,14 @@ async fn upload_inner(
     let retry = previous
         .as_ref()
         .filter(|previous| previous.generation == generation);
-    let data_file = match retry {
-        Some(previous) => previous.data_file.clone(),
-        None => format!(
-            "upload-{}.data",
-            authentication::random_token().map_err(ApiError::invalid_source)?
+    let (data_file, mode) = match retry {
+        Some(previous) => (previous.data_file.clone(), PayloadOpenMode::Existing),
+        None => (
+            format!(
+                "upload-{}.data",
+                authentication::random_token().map_err(ApiError::invalid_source)?
+            ),
+            PayloadOpenMode::CreateNew,
         ),
     };
     let path = spool.join(&data_file);
@@ -345,11 +349,10 @@ async fn upload_inner(
     let budget = state.http_spool()?;
     let principal = identity.principal.clone();
     let name = data_file.clone();
-    let retry = retry.is_some();
     let staged_file = tokio::task::spawn_blocking(move || {
         let _admission = create_admission;
         let reservation = budget.reserve(&principal, &name, expected_length)?;
-        uploads::StagedFile::open_budgeted(create_path, retry, reservation)
+        uploads::StagedFile::open_budgeted(create_path, mode, reservation)
     })
     .await
     .map_err(ApiError::join)??;
