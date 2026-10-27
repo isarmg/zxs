@@ -167,6 +167,120 @@ impl Fixture {
 }
 
 #[test]
+fn published_recovery_reconciliation_keeps_known_publication_in_management_errors() {
+    use storage_engine::{Error, RecoveryReconciliationStage};
+    for fail_index in [true, false] {
+        let fixture = Fixture::new("recovery_commit");
+        let identity = {
+            let mut auth = fixture.auth.lock().unwrap();
+            let token = auth.login("admin", PASSWORD).unwrap().token;
+            auth.authenticate(&token).unwrap()
+        };
+        let data = fixture.backend.inner.data_root.clone();
+        let recovery_id = fixture.input["recovery_id"].as_str().unwrap();
+        let plan_path = data
+            .join("recovery-plans")
+            .join(format!("{recovery_id}.json"));
+        let plan_before = fs::read(&plan_path).unwrap();
+        let plan: storage_engine::RecoveryPlan = json_codec::from_slice(&plan_before).unwrap();
+        let obstruction = if fail_index {
+            data.join("index.sqlite")
+        } else {
+            data.join("workspaces").join("broken-workspace")
+        };
+        let blocked_path = obstruction.clone();
+        crate::setup_recovery::after_next_recovery_open(move || {
+            if fail_index {
+                fs::remove_file(&blocked_path).unwrap();
+                fs::create_dir(&blocked_path).unwrap();
+            } else {
+                fs::create_dir(&blocked_path).unwrap();
+                fs::write(blocked_path.join("workspace.json"), b"{}").unwrap();
+            }
+        });
+        let error = fixture
+            .backend
+            .setup_operation(
+                "recovery_commit",
+                fixture.input.clone(),
+                None,
+                Some(&identity),
+            )
+            .unwrap_err();
+        assert_eq!(error.status, ::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(error.code, storage_contract::ErrorCode::RecoveryRequired);
+        assert!(!error.retryable);
+        let Some(crate::http_boundary::ApiErrorSource::Engine(
+            Error::PublishedRecoveryReconciliation(context),
+        )) = error.source.as_deref()
+        else {
+            panic!("management lost the precise post-publication recovery context");
+        };
+        assert_eq!(context.recovery_id(), recovery_id);
+        assert_eq!(
+            context.plan_digest(),
+            fixture.input["digest"].as_str().unwrap()
+        );
+        assert_eq!(context.principal(), identity.principal);
+        assert_eq!(context.isolation_generation(), plan.isolation_generation);
+        assert_eq!(
+            context.stage(),
+            if fail_index {
+                RecoveryReconciliationStage::IndexRebuild
+            } else {
+                RecoveryReconciliationStage::WorkspaceReconciliation
+            }
+        );
+        let receipt = context.result();
+        assert_eq!(receipt.operation_id, plan.operation_id);
+        assert_eq!(
+            receipt.commit_state,
+            storage_contract::CommitState::PublishedDegraded
+        );
+        assert_eq!(
+            receipt.protection_at_publish,
+            storage_contract::ProtectionAtPublish::BelowTarget
+        );
+        assert!(error.message.contains("already published"));
+        assert!(error.message.contains(&receipt.operation_id.to_string()));
+        assert!(!error.message.contains(data.to_str().unwrap()));
+        let wire = json_codec::to_vec(&json!({"error": &error})).unwrap();
+        let decoded = storage_contract::client_protocol::decode_response(503, &wire).unwrap_err();
+        assert!(storage_contract::client_protocol::mutation_outcome_unknown(
+            decoded.status
+        ));
+        assert!(!decoded.retryable);
+        assert_eq!(decoded.message, error.message);
+        assert_eq!(
+            decoded.request_id.as_deref(),
+            Some(error.request_id.as_str())
+        );
+        assert_eq!(fs::read(&plan_path).unwrap(), plan_before);
+
+        // This contextual response does not turn operation queries into an
+        // offline evidence reader, nor relax startup while the obstruction remains.
+        assert!(Engine::open(&data).is_err());
+        assert!(Engine::open_for_recovery(&data).is_err());
+        if !fail_index {
+            fs::remove_file(obstruction.join("workspace.json")).unwrap();
+        }
+        fs::remove_dir(&obstruction).unwrap();
+        let reopened = Engine::open(&data).unwrap();
+        let published = reopened.operation(receipt.operation_id).unwrap();
+        assert_eq!(published.commit_state, receipt.commit_state);
+        assert_eq!(
+            published.protection_at_publish,
+            receipt.protection_at_publish
+        );
+        assert_eq!(published.request_digest, receipt.request_digest);
+        assert_eq!(published.sequence, receipt.sequence);
+        assert_eq!(fs::read(plan_path).unwrap(), plan_before);
+        fixture.backend.stop_management();
+        fixture.backend.drain_management().unwrap();
+    }
+}
+
+#[test]
 fn offline_recovery_revalidates_after_open_before_new_plan_or_publication() {
     for action in ["recovery_preview", "recovery_commit"] {
         for change_password in [false, true] {

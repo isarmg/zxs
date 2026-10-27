@@ -33,6 +33,8 @@ mod directory_tests;
 mod namespace_tests;
 #[path = "../projection_failure.rs"]
 mod projection_failure;
+#[path = "../published_reconciliation_failure.rs"]
+mod published_reconciliation_failure;
 #[path = "published_selection_tests.rs"]
 mod published_selection_tests;
 #[path = "reconciliation_tests.rs"]
@@ -70,6 +72,14 @@ impl Backend for LostCommitReply {
         operation_id: storage_contract::OperationId,
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.inner.operation(identity, operation_id)
+    }
+    fn require_native_workspace_commit_completion(
+        &self,
+        identity: &Identity,
+        command: crate::CommitWorkspace,
+    ) -> Result<(), ApiError> {
+        self.inner
+            .require_native_workspace_commit_completion(identity, command)
     }
     fn commit_workspace(
         &self,

@@ -350,6 +350,16 @@ pub trait Backend: Send + Sync {
         command: CommitWorkspace,
     ) -> Result<storage_contract::OperationResult, ApiError>;
 
+    /// Require the original native save's terminal workspace reconciliation.
+    /// A published receipt alone does not authorize SMB source cleanup.
+    fn require_native_workspace_commit_completion(
+        &self,
+        _identity: &Identity,
+        _command: CommitWorkspace,
+    ) -> Result<(), ApiError> {
+        Err(ApiError::unsupported())
+    }
+
     fn setup_operation(
         &self,
         _action: &'static str,
@@ -855,6 +865,14 @@ impl Backend for AuthorizedBackend {
         workspace: &str,
     ) -> Result<storage_contract::Workspace, crate::ApiError> {
         self.backend.workspace(&self.current(identity)?, workspace)
+    }
+    fn require_native_workspace_commit_completion(
+        &self,
+        identity: &Identity,
+        command: CommitWorkspace,
+    ) -> Result<(), ApiError> {
+        self.backend
+            .require_native_workspace_commit_completion(&self.current(identity)?, command)
     }
     fn published_upload_status(
         &self,

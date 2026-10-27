@@ -915,8 +915,28 @@ impl Engine {
         // This explicit recovery still requires complete local reconciliation
         // before releasing its write fence. It is not ordinary publication's
         // optional index maintenance; workspace evidence must be reconciled too.
-        self.rebuild_index()?;
-        self.load_workspaces()?;
+        if let Err(source) = self.rebuild_index() {
+            self.blocked = true;
+            return Err(Error::PublishedRecoveryReconciliation(Box::new(
+                PublishedRecoveryReconciliation::new(
+                    result,
+                    &plan,
+                    RecoveryReconciliationStage::IndexRebuild,
+                    source,
+                ),
+            )));
+        }
+        if let Err(source) = self.load_workspaces() {
+            self.blocked = true;
+            return Err(Error::PublishedRecoveryReconciliation(Box::new(
+                PublishedRecoveryReconciliation::new(
+                    result,
+                    &plan,
+                    RecoveryReconciliationStage::WorkspaceReconciliation,
+                    source,
+                ),
+            )));
+        }
         self.blocked = false;
         self.operation(result.operation_id)
     }

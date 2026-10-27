@@ -419,6 +419,41 @@ impl Backend for EngineBackend {
         workspace_authorize(&engine, &current, workspace).cloned()
     }
 
+    fn require_native_workspace_commit_completion(
+        &self,
+        identity: &Identity,
+        command: crate::CommitWorkspace,
+    ) -> Result<(), ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        workspace_authorize(&engine, &current, &command.workspace_id)?;
+        let original = storage_contract::CommitRequest {
+            workspace_id: command.workspace_id,
+            operation_id: command.operation_id,
+            principal: current.principal,
+            expected_head: command.expected_head,
+            fencing_token: command.fencing_token,
+            message: command.message,
+            request_digest: command.request_digest,
+        };
+        if engine
+            .native_workspace_commit_completed(&original)
+            .map_err(error)?
+        {
+            return Ok(());
+        }
+        let mut error = ApiError::new(
+            ::http::StatusCode::SERVICE_UNAVAILABLE,
+            storage_contract::ErrorCode::RecoveryRequired,
+            format!(
+                "operation {} is already published; its original workspace binding and completion require reconciliation; retain the original SMB work",
+                original.operation_id
+            ),
+        );
+        error.retryable = false;
+        Err(error)
+    }
+
     fn published_upload_status(
         &self,
         identity: &Identity,

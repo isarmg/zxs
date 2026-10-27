@@ -28,6 +28,8 @@ pub(crate) mod provenance;
 mod publication;
 pub(crate) use publication::{DetachedPublication, PublishedDependencyReuse};
 mod workspace_commit;
+#[cfg(test)]
+pub(crate) use workspace_commit::native_workspace_commit_completed;
 pub use workspace_commit::{PreparedWorkspaceCommit, WorkspaceCommitPreparation};
 mod reads;
 pub use reads::{ContentReadPlan, RangeContent, WorkspaceReadPlan};

@@ -1,5 +1,6 @@
 //! Published workspaces retain the destination of files absent from their base.
 use super::*;
+use crate::engine::native_workspace_commit_completed;
 
 fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let temporary = tempfile::tempdir().unwrap();
@@ -287,10 +288,9 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
         } else {
             engine.commit_workspace(request.clone())
         };
-        assert_eq!(
-            result.unwrap_err().code(),
-            storage_contract::ErrorCode::InDoubt
-        );
+        let error = result.unwrap_err();
+        assert_eq!(error.code(), storage_contract::ErrorCode::InDoubt);
+        assert!(error.published_result().is_none());
         assert_eq!(
             manifests.clone().map(|path| std::fs::read(path).unwrap()),
             original_manifests
@@ -386,4 +386,323 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
 fn public_envelope(body: json_codec::Value) -> storage_contract::PublicCommitEnvelope {
     let workspace = body["workspace_id"].as_str().unwrap().to_owned();
     storage_contract::PublicCommitEnvelope::parse(&workspace, body).unwrap()
+}
+
+#[test]
+fn published_workspace_completion_errors_keep_receipt_source_and_write_fence() {
+    use std::error::Error as _;
+
+    // The budget failure occurs before persist_workspace enters its I/O closure.
+    for failed_stage in ["budget", "primary", "system"] {
+        let (temporary, mut engine, repo) = fixture();
+        let workspace = engine
+            .create_workspace(&repo.main_branch_id, "admin")
+            .unwrap();
+        engine
+            .stage_bytes(&workspace.workspace_id, "saved.txt", b"published bytes")
+            .unwrap();
+        let request = CommitRequest {
+            workspace_id: workspace.workspace_id.clone(),
+            operation_id: OperationId::generate(),
+            principal: "admin".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: "original request".into(),
+            request_digest: None,
+        };
+        let plan = engine
+            .plan_workspace_commit_inner(request.clone(), None)
+            .unwrap();
+        engine.persist_workspace_commit_request(&plan).unwrap();
+        let MutationPlan::Prepared {
+            next,
+            prepared,
+            result,
+        } = plan.mutation
+        else {
+            panic!("invariant: first submission prepares a new publication")
+        };
+        engine.persist(*next, prepared, result.clone()).unwrap();
+        let before = engine.workspace(&request.workspace_id).unwrap();
+        let directories = [
+            engine.workspace_data_directory(&before).unwrap(),
+            engine.root().join("workspaces").join(&request.workspace_id),
+        ];
+        let requests = directories
+            .clone()
+            .map(|path| std::fs::read(path.join("commit-request.json")).unwrap());
+        let saved_config = engine.config.clone();
+        let obstruction = if failed_stage == "budget" {
+            let mut config = engine.config().clone();
+            config.max_retained_workspace_metadata_bytes = 1;
+            engine.config = ValidatedConfig::try_from(config).unwrap();
+            None
+        } else {
+            let path = directories[usize::from(failed_stage == "system")].join("workspace.json");
+            let retained = path.with_extension("retained");
+            std::fs::rename(&path, &retained).unwrap();
+            std::fs::create_dir(&path).unwrap();
+            Some((path, retained))
+        };
+        assert!(!engine.is_read_only());
+        let error = engine
+            .complete_workspace_commit(plan.workspace, result.clone())
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+        assert!(!error.is_retryable());
+        assert_eq!(error.published_result(), Some(&result));
+        assert!(error.to_string().contains("is already published"));
+        assert!(
+            error
+                .to_string()
+                .contains(&request.operation_id.to_string())
+        );
+        let Error::PublishedWorkspaceReconciliation(context) = &error else {
+            panic!("published completion context was lost: {error}")
+        };
+        assert_eq!(context.workspace_id(), request.workspace_id);
+        assert_eq!(context.principal(), request.principal);
+        let source = context.source().unwrap().downcast_ref::<Error>().unwrap();
+        assert_eq!(
+            source.code(),
+            if failed_stage == "budget" {
+                ErrorCode::ResourceLimit
+            } else {
+                ErrorCode::UnsafePath
+            }
+        );
+        assert!(engine.is_read_only());
+        assert_eq!(
+            canonical_json(&engine.workspace(&request.workspace_id).unwrap()).unwrap(),
+            canonical_json(&before).unwrap()
+        );
+        assert_eq!(engine.operation(request.operation_id).unwrap(), result);
+        assert!(
+            !native_workspace_commit_completed(&before, &request, &result).unwrap(),
+            "the permanent receipt does not complete terminal workspace mirrors"
+        );
+        assert_eq!(engine.commit_workspace(request.clone()).unwrap(), result);
+        assert!(
+            engine.is_read_only(),
+            "receipt replay is not local reconciliation"
+        );
+        assert_eq!(
+            engine
+                .create_workspace(&repo.main_branch_id, "admin")
+                .unwrap_err()
+                .code(),
+            ErrorCode::RecoveryRequired
+        );
+        assert_eq!(
+            directories.map(|path| std::fs::read(path.join("commit-request.json")).unwrap()),
+            requests
+        );
+        for file in before.files.values() {
+            assert_eq!(
+                std::fs::read(&file.source_path).unwrap(),
+                b"published bytes"
+            );
+        }
+        if let Some((path, retained)) = obstruction {
+            std::fs::remove_dir(&path).unwrap();
+            std::fs::rename(retained, path).unwrap();
+        }
+        engine.config = saved_config;
+        drop(engine);
+        let engine = Engine::open(&temporary.path().join("system")).unwrap();
+        assert!(!engine.is_read_only());
+        assert_eq!(engine.operation(request.operation_id).unwrap(), result);
+        assert_eq!(
+            engine.workspace(&request.workspace_id).unwrap().state,
+            WorkspaceState::Committed
+        );
+        assert!(
+            native_workspace_commit_completed(
+                engine.workspace_ref(&request.workspace_id).unwrap(),
+                &request,
+                &result,
+            )
+            .unwrap()
+        );
+    }
+}
+
+#[test]
+fn native_workspace_completion_requires_bound_terminal_fence_not_global_readiness() {
+    let (temporary, mut engine, repo) = fixture();
+    let workspace = save(&mut engine, &repo.main_branch_id, b"original");
+    let request: CommitRequest = json_codec::from_slice(
+        &std::fs::read(
+            temporary
+                .path()
+                .join("system/workspaces")
+                .join(&workspace.workspace_id)
+                .join("commit-request.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let receipt = engine.operation(request.operation_id).unwrap();
+    assert!(native_workspace_commit_completed(&workspace, &request, &receipt).unwrap());
+    assert!(engine.native_workspace_commit_completed(&request).unwrap());
+    engine.blocked = true;
+    assert!(engine.native_workspace_commit_completed(&request).unwrap());
+    engine.blocked = false;
+    let mut foreign = request.clone();
+    foreign.principal = "other-actor".into();
+    assert_eq!(
+        engine
+            .native_workspace_commit_completed(&foreign)
+            .unwrap_err()
+            .code(),
+        ErrorCode::PermissionDenied
+    );
+    let mut absent = request.clone();
+    absent.operation_id = OperationId::generate();
+    assert_eq!(
+        engine
+            .native_workspace_commit_completed(&absent)
+            .unwrap_err()
+            .code(),
+        ErrorCode::OperationNotFound
+    );
+
+    for (state, fence, expected) in [
+        (WorkspaceState::Open, request.fencing_token, false),
+        (WorkspaceState::Sealed, request.fencing_token, false),
+        (WorkspaceState::Committed, request.fencing_token, false),
+        (WorkspaceState::Committed, request.fencing_token + 1, true),
+        (WorkspaceState::Committed, request.fencing_token + 2, false),
+        (WorkspaceState::Aborted, request.fencing_token + 1, false),
+        (WorkspaceState::Aborted, request.fencing_token + 2, true),
+        (WorkspaceState::Aborted, request.fencing_token + 3, true),
+    ] {
+        let mut observed = workspace.clone();
+        observed.state = state;
+        observed.fencing_token = fence;
+        assert_eq!(
+            native_workspace_commit_completed(&observed, &request, &receipt).unwrap(),
+            expected,
+            "{state:?} at {fence}"
+        );
+    }
+    for field in [
+        "operation",
+        "workspace",
+        "principal",
+        "base",
+        "fence",
+        "message",
+        "digest",
+    ] {
+        let mut changed = request.clone();
+        match field {
+            "operation" => changed.operation_id = OperationId::generate(),
+            "workspace" => changed.workspace_id = "other-workspace".into(),
+            "principal" => changed.principal = "other-actor".into(),
+            "base" => changed.expected_head = "other-base".into(),
+            "fence" => changed.fencing_token += 1,
+            "message" => changed.message = "other-message".into(),
+            "digest" => changed.request_digest = Some("other-digest".into()),
+            _ => unreachable!(),
+        }
+        assert!(!native_workspace_commit_completed(&workspace, &changed, &receipt).unwrap());
+    }
+    for field in ["kind", "branch", "digest", "state"] {
+        let mut changed = receipt.clone();
+        match field {
+            "kind" => changed.kind = "other-kind".into(),
+            "branch" => changed.branch_id = Some("other-branch".into()),
+            "digest" => changed.request_digest = "other-digest".into(),
+            "state" => changed.commit_state = CommitState::InDoubt,
+            _ => unreachable!(),
+        }
+        assert!(!native_workspace_commit_completed(&workspace, &request, &changed).unwrap());
+    }
+    let mut changed = workspace.clone();
+    changed.files.values_mut().next().unwrap().size += 1;
+    assert!(!native_workspace_commit_completed(&changed, &request, &receipt).unwrap());
+
+    for fence in [u64::MAX - 1, u64::MAX] {
+        let mut original = request.clone();
+        original.fencing_token = fence;
+        let mut published = receipt.clone();
+        published.request_digest = native_commit_digest(&workspace, &original).unwrap();
+        let mut observed = workspace.clone();
+        observed.state = WorkspaceState::Aborted;
+        observed.fencing_token = u64::MAX;
+        assert!(!native_workspace_commit_completed(&observed, &original, &published).unwrap());
+        observed.state = WorkspaceState::Committed;
+        assert_eq!(
+            native_workspace_commit_completed(&observed, &original, &published).unwrap(),
+            fence == u64::MAX - 1
+        );
+    }
+    for _ in 0..2 {
+        engine
+            .abort_workspace(&workspace.workspace_id, "admin")
+            .unwrap();
+        assert!(
+            native_workspace_commit_completed(
+                engine.workspace_ref(&workspace.workspace_id).unwrap(),
+                &request,
+                &receipt,
+            )
+            .unwrap()
+        );
+    }
+    drop(engine);
+    let engine = Engine::open(&temporary.path().join("system")).unwrap();
+    assert!(
+        native_workspace_commit_completed(
+            engine.workspace_ref(&workspace.workspace_id).unwrap(),
+            &request,
+            &receipt,
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn published_workspace_context_preserves_concrete_io_and_native_diagnostics() {
+    use std::error::Error as _;
+
+    let (_temporary, mut engine, repo) = fixture();
+    let workspace = save(&mut engine, &repo.main_branch_id, b"original");
+    let result = engine
+        .state()
+        .operations
+        .values()
+        .find(|result| result.kind == "workspace.commit")
+        .unwrap();
+    for raw in [5, 20, 28] {
+        let source = Error::Filesystem(platform_io::fs_safety::Error::Io(
+            std::io::Error::from_raw_os_error(raw),
+        ));
+        let source_code = source.code();
+        let error = Error::PublishedWorkspaceReconciliation(Box::new(
+            PublishedWorkspaceReconciliation::new(result.clone(), &workspace, source),
+        ));
+        assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+        assert_eq!(error.published_result(), Some(result));
+        let Error::PublishedWorkspaceReconciliation(context) = &error else {
+            unreachable!()
+        };
+        let source = context.source().unwrap().downcast_ref::<Error>().unwrap();
+        assert_eq!(source.code(), source_code);
+        assert_eq!(
+            source
+                .source()
+                .unwrap()
+                .source()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .raw_os_error(),
+            Some(raw)
+        );
+        assert!(error.to_string().contains("is already published"));
+        assert!(error.to_string().contains(&source.to_string()));
+        assert!(!error.message().contains(&source.to_string()));
+    }
 }

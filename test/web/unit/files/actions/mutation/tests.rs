@@ -100,6 +100,35 @@ fn failed_editor_requests_record_only_their_original_outcome() {
 }
 
 #[test]
+fn published_reconciliation_failure_keeps_the_original_operation_pending() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State::default());
+        record_failure(
+            state,
+            "published-original",
+            api::Error {
+                status: 503,
+                code: storage_contract::ErrorCode::RecoveryRequired,
+                message: "operation published-original is already published; retain the original operation".into(),
+                retryable: false,
+                request_id: Some("published-request".into()),
+                source: None,
+            },
+        );
+        state.with_untracked(|s| {
+            assert_eq!(s.files.operations.len(), 1);
+            assert_eq!(s.files.operations[0].id(), "published-original");
+            assert_eq!(s.files.operations[0].status(), SaveStatus::Unknown);
+            assert!(super::super::pending(s));
+            assert_eq!(s.errors.len(), 1);
+            assert_eq!(s.errors[0].request_id.as_deref(), Some("published-request"));
+            assert!(s.errors[0].message.contains("already published"));
+            assert_eq!(s.notice, crate::files::model::publication_notice(SaveStatus::Unknown));
+        });
+    });
+}
+
+#[test]
 fn blocked_actions_do_not_clone_unrelated_state_snapshots() {
     Owner::new().with(|| {
         let state = RwSignal::new(State::default());

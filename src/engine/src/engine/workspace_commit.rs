@@ -81,6 +81,30 @@ pub struct PreparedWorkspaceCommit {
 }
 
 impl Engine {
+    /// Inspect this original native save's local completion without I/O.
+    /// The server must still authorize the current identity and workspace.
+    /// Missing publications and foreign operation owners remain explicit errors.
+    pub fn native_workspace_commit_completed(&self, request: &CommitRequest) -> Result<bool> {
+        let workspace = self.workspace_ref(&request.workspace_id)?;
+        let operation = self
+            .state
+            .operations
+            .get(&request.operation_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::OperationNotFound,
+                    "published workspace operation is absent",
+                )
+            })?;
+        if self.state.operation_principals.get(&request.operation_id) != Some(&request.principal) {
+            return Err(Error::new(
+                ErrorCode::PermissionDenied,
+                "operation belongs to another principal",
+            ));
+        }
+        native_workspace_commit_completed(workspace, request, operation)
+    }
+
     /// Structural binding also used during restart. Account authentication is
     /// the server boundary; recovery still completes an accepted publication.
     pub(crate) fn workspace_request_matches_operation(
@@ -345,19 +369,62 @@ impl super::PlanningContext<'_> {
             .operations
             .get(&request.operation_id)
             .is_some_and(|operation| {
-                operation.kind == "workspace.commit"
-                    && workspace.workspace_id == request.workspace_id
-                    && workspace.principal == request.principal
-                    && workspace.base_head == request.expected_head
-                    && operation.branch_id.as_deref() == Some(workspace.branch_id.as_str())
+                workspace_request_matches_result(workspace, request, operation)
                     && self.state.operation_principals.get(&request.operation_id)
                         == Some(&request.principal)
-                    && request
-                        .request_digest
-                        .as_deref()
-                        .is_none_or(|digest| digest == operation.request_digest)
             })
     }
+}
+
+fn workspace_request_matches_result(
+    workspace: &Workspace,
+    request: &CommitRequest,
+    operation: &OperationResult,
+) -> bool {
+    operation.operation_id == request.operation_id
+        && operation.kind == "workspace.commit"
+        && workspace.workspace_id == request.workspace_id
+        && workspace.principal == request.principal
+        && workspace.base_head == request.expected_head
+        && operation.branch_id.as_deref() == Some(workspace.branch_id.as_str())
+        && request
+            .request_digest
+            .as_deref()
+            .is_none_or(|digest| digest == operation.request_digest)
+}
+
+/// Inspect completion of an original native workspace save without I/O.
+///
+/// Callers must obtain the workspace and receipt through current authenticated
+/// reads; this predicate is not authorization or global service readiness.
+/// The retained request and frozen manifest must bind the original publication.
+/// Errors preserve failures computing that native request digest.
+pub(crate) fn native_workspace_commit_completed(
+    workspace: &Workspace,
+    request: &CommitRequest,
+    operation: &OperationResult,
+) -> Result<bool> {
+    if !workspace_request_matches_result(workspace, request, operation)
+        || !matches!(
+            operation.commit_state,
+            CommitState::Published | CommitState::PublishedDegraded
+        )
+        || crate::business::native_commit_digest(workspace, request)? != operation.request_digest
+    {
+        return Ok(false);
+    }
+    let Some(completed_fence) = request.fencing_token.checked_add(1) else {
+        return Ok(false);
+    };
+    Ok(match workspace.state {
+        WorkspaceState::Committed => workspace.fencing_token == completed_fence,
+        // Explicitly closing a completed save is supported, including repeated
+        // aborts. A prepublication abort advances only to F+1 and is not proof.
+        WorkspaceState::Aborted => completed_fence
+            .checked_add(1)
+            .is_some_and(|closed_fence| workspace.fencing_token >= closed_fence),
+        WorkspaceState::Open | WorkspaceState::Sealed => false,
+    })
 }
 
 impl super::PlanningContext<'_> {

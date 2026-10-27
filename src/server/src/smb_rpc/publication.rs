@@ -97,6 +97,17 @@ pub(super) fn finish_publication(
     writer: &mut Writer,
     result: storage_contract::OperationResult,
 ) -> Result<Value, ApiError> {
+    shared.backend.require_native_workspace_commit_completion(
+        identity,
+        crate::CommitWorkspace {
+            workspace_id: writer.workspace.workspace_id.clone(),
+            operation_id: writer.operation_id,
+            expected_head: writer.workspace.base_head.clone(),
+            fencing_token: writer.workspace.fencing_token,
+            message: "SMB full-file save".into(),
+            request_digest: None,
+        },
+    )?;
     writer.last_head = result
         .commit_id
         .clone()

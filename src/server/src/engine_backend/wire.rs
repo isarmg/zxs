@@ -9,6 +9,19 @@ pub(crate) fn error(error: storage_engine::Error) -> ApiError {
 
 /// Borrowed HTTP projection for retained reports; diagnostic sources stay local.
 pub(crate) fn error_response(error: &storage_engine::Error) -> ApiError {
+    if let Some(published) = error.published_result() {
+        let mut mapped = ApiError::new(
+            ::http::StatusCode::SERVICE_UNAVAILABLE,
+            storage_contract::ErrorCode::RecoveryRequired,
+            format!(
+                "operation {} is already published; local reconciliation is required and writes remain blocked; retain the original operation instead of submitting a new one",
+                published.operation_id
+            ),
+        );
+        // This is not an invitation to repeat the already published mutation.
+        mapped.retryable = false;
+        return mapped;
+    }
     let code = super::error_registry::public_code(error.code());
     let status = super::error_registry::status(code);
     if status == ::http::StatusCode::INTERNAL_SERVER_ERROR {
