@@ -61,12 +61,13 @@ strace output, test stdout/stderr, elapsed traced runtime and journal/directory
 syscall counts. Traced elapsed time is not an untraced throughput benchmark.
 
 The local executor denies `PTRACE_TRACEME`/`PTRACE_SETOPTIONS`; no local syscall
-reduction is claimed. The dedicated `journal-measurement.yml` workflow runs on
-pushes to `verify/owned-journal-*` (and manual dispatch), builds the fixed baseline
-and candidate in separate targets, and uploads
-`owned-journal-syscalls-<candidate SHA>`. It does not add a baseline rebuild to
-ordinary main pushes. CI trace results must be reviewed before making measured
-performance claims.
+reduction is claimed. The one-off `journal-measurement.yml` workflow has been
+retired after its comparison completed. Its fixed baseline and candidate builds,
+raw traces and `owned-journal-syscalls-<candidate SHA>` artifact remain in the
+[completed comparison](https://github.com/isarmg/zxs/actions/runs/40264837864).
+The measurement script and fixture remain available for explicit reproduction;
+ordinary CI and releases do not rebuild this historical baseline. Historical
+results do not establish the performance of later revisions.
 
 ## Local results
 

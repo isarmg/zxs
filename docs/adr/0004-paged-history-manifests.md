@@ -44,7 +44,8 @@
 | --- | --- |
 | [history_package.rs](../../src/engine/src/history_package.rs) | `PackageProof`、大小预检、准确图对象的读取与修复、离线校验、导出和恢复导入；协调逻辑校验与图编解码 |
 | [manifest.rs](../../src/engine/src/history_package/manifest.rs) | `HistoryManifest` 的历史域 State 投影与逻辑闭包校验；不执行存储 I/O，不改变序列化字段与校验顺序 |
-| [graph.rs](../../src/engine/src/history_package/graph.rs) | 严格分页根、索引与叶页的确定性编码和解析；校验图形状、引用闭包和分路约束 |
+| [graph.rs](../../src/engine/src/history_package/graph.rs) | 严格分页历史根及固定字段 schema；衔接逻辑清单与共享映射编解码，不复制 radix 算法 |
+| [metadata_map.rs](../../src/engine/src/metadata_map.rs) | 当前 `state-page`／`history-index` 映射的确定性分区、引用校验与依赖顺序；不决定历史投影或根 schema |
 | [publication.rs](../../src/engine/src/engine/publication.rs) | 准备完整图、冻结准确根、依赖先于决定落盘；不在构造候选后更换根 |
 | [recovery.rs](../../src/engine/src/engine/recovery.rs)、[degraded_recovery.rs](../../src/engine/src/degraded_recovery.rs) | 按准确绑定图修复，不调用当前编码器重新生成全部清单；修复去重以对象域和哈希共同为键 |
 | [publication_evidence.rs](../../src/engine/src/publication_evidence.rs) | 逐依赖、跨可信成员的只读哈希验证，不要求单个成员拥有完整图 |
@@ -54,6 +55,8 @@
 仅分页后，State 克隆、快照全量遍历、各历史投影构造、索引差分和现存对象碰撞校验仍可能是 O(total) CPU/I/O；保存全部准备字节也仍消耗与图规模相关的内存。结构共享降低新增落盘字节，不等于端到端 O(delta)。
 
 增量投影尚未实现。任何减少全量工作的实现仍须覆盖版本、文件、分支、目录、选择项、路径节点、仓库策略与移动/删除/拆分的归属变化，并与全量逻辑模型逐项等价。派生状态须由权威证据重建，不能把 SQLite 变为依据；不能因复用页面而省略必要完整性检查。
+
+[ADR 0005](0005-incremental-publication-integrity.md)已批准将未变依赖的历史耐久事实与当前健康分开负责，但尚未启用普通写入的旧依赖免读。必须先通过真实完整巡检、持久 State/写集、有界根及故障测试门禁；本 ADR 的准确根、读取/恢复/导入导出验证和无好副本失败规则不变。
 
 当前仍保留单个大型实体（尤其 `Commit.entries`）、候选中的全部历史根映射、快照根引用和组合证明的上限。分页不解除这些限制，也不代表无限历史容量。
 

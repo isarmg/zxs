@@ -20,6 +20,7 @@ mod journal;
 pub use journal::JournalFault;
 mod maintenance;
 mod metadata_budget;
+mod metadata_map;
 mod protection;
 mod publication_evidence;
 mod repair;

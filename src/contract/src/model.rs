@@ -1121,16 +1121,16 @@ pub struct State {
     pub merge_links: crate::TrackedMap<MergeLink>,
     pub history_boundaries: crate::TrackedMap<HistoryBoundary>,
     pub content_states: crate::TrackedMap<ContentState>,
-    pub operations: crate::Tracked<BTreeMap<crate::OperationId, OperationResult>>,
+    pub operations: crate::TrackedOperations<OperationResult>,
     pub plans: crate::TrackedMap<Plan>,
     pub placement_rules: crate::TrackedMap<PlacementRule>,
     pub protection_policies: crate::TrackedMap<ProtectionPolicy>,
     /// Audit and idempotency owners of published operations, not user accounts.
-    pub operation_principals: crate::Tracked<BTreeMap<crate::OperationId, String>>,
+    pub operation_principals: crate::TrackedOperations<String>,
     /// Private authentication control state; never expose State as a public API DTO.
     #[serialization(default)]
     pub control_auth: Option<json_codec::Value>,
-    pub events: Vec<Event>,
+    pub events: crate::TrackedEvents,
     #[serialization(with = "crate::u64_string")]
     pub topology_generation: u64,
 }
@@ -1142,7 +1142,7 @@ impl State {
             business_generation: _,
             topology_generation: _,
             control_auth: _,
-            events: _,
+            events,
             repositories,
             histories,
             branches,
@@ -1179,6 +1179,7 @@ impl State {
             protection_policies,
             operation_principals,
         } = self;
+        events.begin_tracking();
         repositories.begin_tracking();
         histories.begin_tracking();
         branches.begin_tracking();

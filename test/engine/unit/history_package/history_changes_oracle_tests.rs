@@ -638,7 +638,7 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
 }
 
 #[test]
-fn typed_operation_map_inserts_are_history_independent_even_with_all_tracking() {
+fn typed_operation_map_inserts_are_history_independent_with_exact_tracking() {
     let before = dependency_fixture();
     let id = OperationId::generate();
     assert_changes(&before, &[], |after| {
@@ -659,15 +659,16 @@ fn typed_operation_map_inserts_are_history_independent_even_with_all_tracking() 
             },
         );
         after.operation_principals.insert(id, "author".into());
-        assert!(matches!(
+        for changes in [
             after.operations.changes_since(&before.operations),
-            MapChanges::All
-        ));
-        assert!(matches!(
             after
                 .operation_principals
                 .changes_since(&before.operation_principals),
-            MapChanges::All
-        ));
+        ] {
+            let MapChanges::Keys(keys) = changes else {
+                panic!("normal operation insert must retain its exact typed write set");
+            };
+            assert_eq!(keys.iter().copied().collect::<Vec<_>>(), vec![id]);
+        }
     });
 }

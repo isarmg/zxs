@@ -660,10 +660,12 @@ pub(crate) struct SnapshotReuse {
     descriptor: Snapshot,
     hash: String,
     page_maxima: BTreeMap<String, usize>,
+    event_tail_start: usize,
 }
 struct SnapshotFieldPlan {
-    /// None means exact references to previously published canonical pages.
-    objects: Option<std::ops::Range<usize>>,
+    /// The published prefix is followed by this exact range of newly encoded pages.
+    reused_pages: usize,
+    objects: std::ops::Range<usize>,
     max_page_bytes: usize,
 }
 pub(crate) struct PreparedSnapshot {
@@ -671,6 +673,7 @@ pub(crate) struct PreparedSnapshot {
     pub(crate) hash: String,
     objects: Vec<PreparedMetadataObject>,
     fields: BTreeMap<String, SnapshotFieldPlan>,
+    event_tail_start: usize,
     maximum: usize,
 }
 #[path = "journal/snapshot.rs"]
@@ -703,6 +706,7 @@ fn prepare_snapshot_reference(state: &State, maximum: usize) -> Result<PreparedS
     let mut scalars = json_codec::Map::new();
     let mut objects = Vec::new();
     let mut fields = BTreeMap::new();
+    let mut event_tail_start = 0;
     for (field, value) in obj {
         // Event indexes are fixed-width, so lexical order is chronological.
         // Reuse ordinary object pages: dependency repair and historical proofs
@@ -720,7 +724,12 @@ fn prepare_snapshot_reference(state: &State, maximum: usize) -> Result<PreparedS
             let start = objects.len();
             let mut max_page_bytes = 0;
             let mut hashes = Vec::new();
+            let mut entries = 0;
             for page in state_pages(map) {
+                if field == "events" {
+                    event_tail_start = entries;
+                    entries += page.len();
+                }
                 let object = PreparedMetadataObject::new("state-page", &page, maximum)?;
                 max_page_bytes = max_page_bytes.max(object.bytes.len());
                 hashes.push(object.hash.clone());
@@ -729,7 +738,8 @@ fn prepare_snapshot_reference(state: &State, maximum: usize) -> Result<PreparedS
             fields.insert(
                 field.clone(),
                 SnapshotFieldPlan {
-                    objects: Some(start..objects.len()),
+                    reused_pages: 0,
+                    objects: start..objects.len(),
                     max_page_bytes,
                 },
             );
@@ -751,6 +761,7 @@ fn prepare_snapshot_reference(state: &State, maximum: usize) -> Result<PreparedS
         hash,
         objects,
         fields,
+        event_tail_start,
         maximum,
     })
 }

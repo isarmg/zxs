@@ -59,16 +59,8 @@ class PayloadProvenanceTests(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 MODULE.source_overlay(Path("baseline"))
 
-    def test_measurement_job_restricts_dispatch_and_keeps_provenance_before_measurement(self):
-        workflow = (ROOT / ".github/workflows/payload-measurement.yml").read_text()
-        self.assertIn("  measure:\n    if: startsWith(github.ref, 'refs/heads/verify/payload-copy-')\n", workflow)
-        self.assertIn("  workflow_dispatch:", workflow)
-        self.assertIn('git worktree add --detach "$baseline" 9552cf36910b6b644d97d149f692e5c6e2cee841', workflow)
-        self.assertNotIn("recovery/tests.rs", workflow)
+    def test_payload_provenance_covers_the_shared_measurement_fixture(self):
         self.assertEqual(MODULE.FIXTURES, ("test/engine/unit/engine/payload_measurement.rs",))
-        self.assertLess(workflow.index("name: Record source and binary provenance"), workflow.index("name: Compare untraced"))
-        self.assertIn("path: payload-measurement/", workflow)
-        self.assertIn("if: always()", workflow)
 
 
 if __name__ == "__main__":

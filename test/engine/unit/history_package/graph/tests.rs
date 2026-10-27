@@ -3,8 +3,18 @@ use crate::{
     Config,
     journal::{load_object, object_path},
 };
-use crate::{encode_hashed_object, object_hash};
+use crate::{canonical_json, disk::MAX_METADATA, encode_hashed_object, object_hash};
 use json_codec::json;
+use std::collections::{BTreeMap, BTreeSet};
+
+// Independent current-format expectations, not implementation visibility.
+const PAGE_ENTRIES: usize = 128;
+const PAGE_TARGET_BYTES: usize = 64 * 1024;
+const RADIX_DEPTH: usize = 64;
+
+fn key_route(key: &str) -> String {
+    blake3::hash(key.as_bytes()).to_hex().to_string()
+}
 
 type ResolvedGraph = (HistoryManifest, Vec<(String, String, Value)>);
 
@@ -174,12 +184,13 @@ fn deterministic_bounded_graph_preserves_logical_wire_rules() {
                     .collect::<BTreeSet<_>>(),
                 BTreeSet::from(["children", "prefix"])
             );
-            let index: HistoryIndex = json_codec::from_value(value).unwrap();
-            assert!(index.children.len() <= 16);
-            for reference in index.children.values() {
-                assert!(
-                    seen.contains(&(reference.kind.domain().to_owned(), reference.hash.clone()))
-                );
+            let children = value["children"].as_object().unwrap();
+            assert!(children.len() <= 16);
+            for reference in children.values() {
+                assert!(seen.contains(&(
+                    reference["kind"].as_str().unwrap().to_owned(),
+                    reference["hash"].as_str().unwrap().to_owned(),
+                )));
             }
         }
     }

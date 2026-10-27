@@ -671,3 +671,33 @@ fn incremental_snapshot_callback_errors_are_not_retried_as_source_failures() {
         assert_eq!(counts.get("file_notes").copied().unwrap_or(0) > 0, missing);
     }
 }
+
+#[test]
+fn operation_identity_writes_remain_typed_through_snapshot_preparation() {
+    let before = populated_state();
+    let temp = tempfile::tempdir().unwrap();
+    let config = config(temp.path());
+    let basis = baseline(&before, &config.disks);
+    let mut after = before.clone();
+    after.begin_tracking();
+    let id = "op_ffffffffffffffffffffffffffffffff".parse().unwrap();
+    let mut receipt = before.operations.values().next().unwrap().clone();
+    receipt.operation_id = id;
+    after.operations.insert(id, receipt);
+    after.operation_principals.insert(id, "new owner".into());
+    for changes in [
+        after.operations.changes_since(&before.operations),
+        after
+            .operation_principals
+            .changes_since(&before.operation_principals),
+    ] {
+        let MapChanges::Keys(keys) = changes else {
+            panic!("normal receipt insertion lost its typed write set");
+        };
+        assert_eq!(keys.iter().copied().collect::<Vec<_>>(), vec![id]);
+    }
+    let (actual, counts) = incremental(&before, &after, &basis, &config.disks);
+    assert!(counts["operations"] > 0);
+    assert!(counts["operation_principals"] > 0);
+    assert_complete_byte_oracle(&actual, &after, &config.disks);
+}

@@ -68,7 +68,7 @@ fn encode_map<K: SnapshotKey + Ord + Serialize, V: Serialize>(
     field: &str,
     entries: impl IntoIterator<Item = (K, V)>,
     maximum: usize,
-    mut emit: impl FnMut(PreparedMetadataObject) -> Result<()>,
+    mut emit: impl FnMut(PreparedMetadataObject, usize) -> Result<()>,
 ) -> Result<()> {
     let mut page = BTreeMap::new();
     let mut flush = |page: &mut BTreeMap<K, V>| -> Result<()> {
@@ -78,7 +78,10 @@ fn encode_map<K: SnapshotKey + Ord + Serialize, V: Serialize>(
         let value = &*page;
         #[cfg(not(test))]
         let _ = field;
-        emit(PreparedMetadataObject::new("state-page", &value, maximum)?)?;
+        emit(
+            PreparedMetadataObject::new("state-page", &value, maximum)?,
+            page.len(),
+        )?;
         page.clear();
         Ok(())
     };
@@ -112,7 +115,7 @@ impl SnapshotBuilder {
         let start = self.objects.len();
         let mut max_page_bytes = 0;
         let mut hashes = Vec::new();
-        encode_map(field, entries, self.maximum, |object| {
+        encode_map(field, entries, self.maximum, |object, _| {
             max_page_bytes = max_page_bytes.max(object.bytes.len());
             hashes.push(object.hash.clone());
             self.objects.push(object);
@@ -121,12 +124,76 @@ impl SnapshotBuilder {
         self.fields.insert(
             field.to_owned(),
             SnapshotFieldPlan {
-                objects: Some(start..self.objects.len()),
+                reused_pages: 0,
+                objects: start..self.objects.len(),
                 max_page_bytes,
             },
         );
         self.pages.insert(field.to_owned(), hashes);
         Ok(())
+    }
+    /// Append preserves every completed page. Re-encode the former tail page
+    /// with the suffix so hash-anchor and forced-size boundaries stay identical.
+    fn events(
+        &mut self,
+        state: &State,
+        previous: Option<(&State, &SnapshotReuse)>,
+    ) -> Result<usize> {
+        let previous =
+            previous.map(|(before, basis)| (basis, state.events.changes_since(&before.events)));
+        let (start, mut max_page_bytes) = match previous {
+            Some((basis, storage_contract::SequenceChanges::Append { start })) => {
+                assert!(
+                    self.reuse("events", basis)?,
+                    "invariant: snapshot basis contains events"
+                );
+                if state.events.len() == start {
+                    return Ok(basis.event_tail_start);
+                }
+                self.pages
+                    .get_mut("events")
+                    .expect("invariant: reused events have pages")
+                    .pop();
+                (basis.event_tail_start, basis.page_maxima["events"])
+            }
+            Some((_, storage_contract::SequenceChanges::All)) | None => {
+                self.pages.insert("events".into(), Vec::new());
+                (0, 0)
+            }
+        };
+        let object_start = self.objects.len();
+        let hashes = self
+            .pages
+            .get_mut("events")
+            .expect("invariant: events have a page list");
+        let reused_pages = hashes.len();
+        let mut offset = start;
+        let mut tail_start = start;
+        encode_map(
+            "events",
+            state.events[start..]
+                .iter()
+                .enumerate()
+                .map(|(index, event)| (format!("{:020}", start + index), event)),
+            self.maximum,
+            |object, count| {
+                tail_start = offset;
+                offset += count;
+                max_page_bytes = max_page_bytes.max(object.bytes.len());
+                hashes.push(object.hash.clone());
+                self.objects.push(object);
+                Ok(())
+            },
+        )?;
+        self.fields.insert(
+            "events".into(),
+            SnapshotFieldPlan {
+                reused_pages,
+                objects: object_start..self.objects.len(),
+                max_page_bytes,
+            },
+        );
+        Ok(tail_start)
     }
     fn reuse(&mut self, field: &str, basis: &SnapshotReuse) -> Result<bool> {
         let (Some(pages), Some(&max_page_bytes)) = (
@@ -148,7 +215,8 @@ impl SnapshotBuilder {
         self.fields.insert(
             field.to_owned(),
             SnapshotFieldPlan {
-                objects: None,
+                reused_pages: pages.len(),
+                objects: self.objects.len()..self.objects.len(),
                 max_page_bytes,
             },
         );
@@ -225,14 +293,7 @@ fn prepare_inner(
     }
     string_counter_map!(directory_selection_generations);
     string_counter_map!(file_selection_generations);
-    builder.map(
-        "events",
-        state
-            .events
-            .iter()
-            .enumerate()
-            .map(|(index, event)| (format!("{index:020}"), event)),
-    )?;
+    let event_tail_start = builder.events(state, previous)?;
     let mut scalars = json_codec::Map::new();
     scalars.insert("sequence".into(), state.sequence.to_string().into());
     scalars.insert(
@@ -264,6 +325,7 @@ fn prepare_inner(
         hash,
         objects: builder.objects,
         fields: builder.fields,
+        event_tail_start,
         maximum,
     })
 }
@@ -274,8 +336,9 @@ pub(super) fn reconstruct_field(
     state: &State,
     field: &str,
     maximum: usize,
-    emit: impl FnMut(PreparedMetadataObject) -> Result<()>,
+    mut emit: impl FnMut(PreparedMetadataObject) -> Result<()>,
 ) -> Result<()> {
+    let emit = |object, _| emit(object);
     macro_rules! dispatch {
         (required { $($required:ident,)* } optional { $($optional:ident,)* }) => {
             match field {
@@ -283,6 +346,7 @@ pub(super) fn reconstruct_field(
                 $(stringify!($optional) => encode_map(field,state.$optional.iter(),maximum,emit),)*
                 "directory_selection_generations" => encode_map(field,state.directory_selection_generations.iter().map(|(k,v)|(k,v.to_string())),maximum,emit),
                 "file_selection_generations" => encode_map(field,state.file_selection_generations.iter().map(|(k,v)|(k,v.to_string())),maximum,emit),
+                "events" => encode_map(field, state.events.iter().enumerate().map(|(index, event)| (format!("{index:020}"), event)), maximum, emit),
                 _ => Err(Error::new(storage_contract::ErrorCode::StateInvalid,"snapshot field is not eligible for reference reconstruction")),
             }
         };
@@ -299,3 +363,7 @@ thread_local! {
 pub(super) fn take_encoding_counts() -> BTreeMap<String, usize> {
     SNAPSHOT_FIELD_SERIALIZATIONS.with(|counts| std::mem::take(&mut *counts.borrow_mut()))
 }
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/journal/event_append_tests.rs"]
+mod event_append_tests;

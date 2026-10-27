@@ -95,22 +95,22 @@ sample count and `ZXS_PAYLOAD_MEASUREMENT_BYTES` selects the common payload size
 The test samples `/proc/self/io`, `/proc/self/status` and `Instant` only within
 its own code; production has no measurement hooks or counters.
 
-Local ptrace is unavailable. Exact syscall evidence remains pending the dedicated
-`payload-measurement.yml` workflow on `verify/payload-copy-*`. A job-level ref
-guard applies equally to pushes and manual dispatch, excluding main and other
-branches.
-The workflow checks successful payload reads of **6 → 3 passes** for preparation
-and **2 → 1** for export, with unchanged **3 / 1 write passes**. It also retains
-raw fsync/rename syscall counts and traces in
-`payload-copy-comparison-<candidate SHA>`. The tracer resolves ordinary body,
-staged-body and temporary-output descriptors and rejects incomplete marker pairs;
-its parser is independently tested. Before measurement, the artifact also records
-`provenance.json`: actual baseline/candidate commits, the payload fixture hash
-in each source tree, Rust/Cargo verbose versions and both executable SHA256 hashes.
-`baseline-overlay.patch` includes tracked and untracked baseline fixture changes;
-its SHA256 is bound by the manifest. Raw traces, per-round logs, build logs and
-JSON results remain in the same artifact. Ordinary main pushes and manual
-dispatches on main do not rebuild the measurement baseline.
+Local ptrace is unavailable. The one-off `payload-measurement.yml` workflow has
+been retired after the [completed comparison](https://github.com/isarmg/zxs/actions/runs/40266410579).
+Its `payload-copy-comparison-<candidate SHA>` artifact retains the raw traces,
+per-round logs, build logs and JSON results. The comparison checked successful
+payload reads of **6 → 3 passes** for preparation and **2 → 1** for export, with
+unchanged **3 / 1 write passes**; these are historical measurements, not claims
+about arbitrary later revisions.
+
+The retained tracer resolves ordinary body, staged-body and temporary-output
+descriptors and rejects incomplete marker pairs; its parser is independently
+tested. `tools/perf-check/payload-provenance.py BASELINE CANDIDATE OUTPUT` records
+actual source commits, the shared fixture hashes, Rust/Cargo verbose versions
+and both executable SHA256 hashes before measurement. `baseline-overlay.patch`
+includes tracked and untracked baseline fixture changes and is bound by its
+SHA256 in the manifest. The scripts and fixture remain available for explicit
+reproduction; normal CI and releases do not rebuild the old baseline.
 
 ## 已有副本准备阶段的单次验证
 

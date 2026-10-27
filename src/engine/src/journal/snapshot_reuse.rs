@@ -26,6 +26,7 @@ impl PreparedSnapshot {
         Some(SnapshotReuse {
             descriptor: self.descriptor.clone(),
             hash: self.hash.clone(),
+            event_tail_start: self.event_tail_start,
             page_maxima: self
                 .fields
                 .iter()
@@ -55,13 +56,14 @@ impl PreparedSnapshot {
             .pages
             .get(field)
             .expect("invariant: every snapshot field plan has bound references");
-        if let Some(range) = &plan.objects {
-            assert_eq!(
-                range.len(),
-                expected.len(),
-                "invariant: prepared page count matches its references"
-            );
-            for (object, hash) in self.objects[range.clone()].iter().zip(expected) {
+        assert_eq!(
+            plan.reused_pages + plan.objects.len(),
+            expected.len(),
+            "invariant: prepared and published pages match their references"
+        );
+        for (first_missing, hash) in expected.iter().enumerate() {
+            if first_missing >= plan.reused_pages {
+                let object = &self.objects[plan.objects.start + first_missing - plan.reused_pages];
                 assert_eq!(
                     object.kind, "state-page",
                     "invariant: field objects are state pages"
@@ -71,10 +73,8 @@ impl PreparedSnapshot {
                     "invariant: prepared page matches its reference"
                 );
                 visit(hash, &object.bytes)?;
+                continue;
             }
-            return Ok(());
-        }
-        for (first_missing, hash) in expected.iter().enumerate() {
             match read_published_page(members, hash, plan.max_page_bytes.min(self.maximum)) {
                 Ok(bytes) => visit(hash, &bytes)?,
                 Err(_) => {
