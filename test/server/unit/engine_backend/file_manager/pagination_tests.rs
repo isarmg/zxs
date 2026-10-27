@@ -225,6 +225,58 @@ fn total_sort_key_retains_equal_folded_names_and_aliases() {
 }
 
 #[test]
+fn admitted_entry_sort_keys_reuse_component_keys_without_changing_order_or_cursors() {
+    let paths = [
+        "UPPER.txt",
+        "Café/Straße.txt",
+        "Straße/ẞ.txt",
+        "Σ/ς.txt",
+        "İ/İ.txt",
+        "Å/Éclair.txt",
+        "가/项目.txt",
+    ];
+    for kind in [
+        storage_contract::NamespaceEntryKind::Directory,
+        storage_contract::NamespaceEntryKind::File,
+    ] {
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for path in paths {
+            let entry = storage_contract::Entry {
+                entry_id: format!("entry-{path}"),
+                path: name_policy::PortablePath::parse(path).unwrap(),
+                kind,
+                file_id: "file".into(),
+                version_id: "version".into(),
+                size: 0,
+            };
+            for display in [path.to_owned(), format!("Repository/{path}")] {
+                let key = SortKey::for_entry(&entry, &display);
+                let original = SortKey::new(
+                    kind == storage_contract::NamespaceEntryKind::Directory,
+                    entry.name(),
+                    &display,
+                    &entry.entry_id,
+                );
+                assert_eq!(key, original);
+                let encoded = request(None, "").cursor(&key, false).unwrap();
+                let decoded = request(Some(&encoded), "");
+                assert_eq!(decoded.cursor.unwrap().key, original);
+                actual.push(key);
+                expected.push(original);
+            }
+        }
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected);
+    }
+    assert_ne!(
+        "Straße.txt".to_lowercase(),
+        name_policy::lookup_key("Straße.txt")
+    );
+}
+
+#[test]
 fn empty_exact_and_partial_final_pages_have_consistent_boundaries() {
     for size in [0, 1, LIMIT - 1, LIMIT, LIMIT + 1, LIMIT * 2 + 1] {
         let mut cursor = None;

@@ -1,7 +1,7 @@
 use super::*;
 use storage_engine::{CommitRequest, Config, new_id};
 
-pub(super) fn listing_json(engine: &Engine, input: &Value) -> Result<Value, ApiError> {
+pub(super) fn listing_json(engine: &AdmissionEngine, input: &Value) -> Result<Value, ApiError> {
     let mut query: BTreeMap<String, String> = input
         .get("query")
         .map(|query| json_codec::from_value(query.clone()).map_err(ApiError::invalid_source))
@@ -26,7 +26,8 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
         root.path().join("d2"),
         root.path().join("d3"),
     ]);
-    let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
+    let mut engine =
+        AdmissionEngine::new(Engine::initialize(&root.path().join("system"), config).unwrap());
     let repo = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("Files").unwrap(),
@@ -169,11 +170,12 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
 #[test]
 fn selected_display_path_may_include_a_repository_prefix_beyond_stored_path_limit() {
     let root = tempfile::tempdir().unwrap();
-    let mut engine = Engine::initialize(
+    let engine = Engine::initialize(
         &root.path().join("system"),
         Config::development([root.path().join("d1")]),
     )
     .unwrap();
+    let mut engine = AdmissionEngine::new(engine);
     let repo = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("Repository").unwrap(),
@@ -216,11 +218,12 @@ fn selected_display_path_may_include_a_repository_prefix_beyond_stored_path_limi
 fn virtual_root_snapshots_outlive_engine_and_generation_invalidates_cursors_without_creating_root()
 {
     let root = tempfile::tempdir().unwrap();
-    let mut engine = Engine::initialize(
+    let engine = Engine::initialize(
         &root.path().join("system"),
         Config::development([root.path().join("d1")]),
     )
     .unwrap();
+    let mut engine = AdmissionEngine::new(engine);
     let empty = listing_json(&engine, &json!({"slot_id":"P01"})).unwrap();
     assert_eq!(empty["entries"], json!([]));
     assert!(empty["context"].is_null());
@@ -292,7 +295,7 @@ fn virtual_root_snapshots_outlive_engine_and_generation_invalidates_cursors_with
 #[test]
 fn backup_deleted_file_retains_historical_namespace_without_fabricated_current_context() {
     let root = tempfile::tempdir().unwrap();
-    let mut engine = Engine::initialize(
+    let engine = Engine::initialize(
         &root.path().join("system"),
         Config::development([
             root.path().join("d1"),
@@ -301,6 +304,7 @@ fn backup_deleted_file_retains_historical_namespace_without_fabricated_current_c
         ]),
     )
     .unwrap();
+    let mut engine = AdmissionEngine::new(engine);
     let repo = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("Files").unwrap(),

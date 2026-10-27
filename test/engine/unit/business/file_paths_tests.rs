@@ -42,6 +42,111 @@ fn rename(e: &mut Engine, r: &Repository, from: &str, to: &str) -> OperationResu
     )
     .unwrap()
 }
+
+#[test]
+fn path_node_receipts_are_ordered_isolated_and_replayed_after_later_renames() {
+    let (temporary, mut engine, repo) = setup();
+    save(&mut engine, &repo, "folder/z.txt", b"Z");
+    save(&mut engine, &repo, "folder/a.txt", b"A");
+    rename(&mut engine, &repo, "folder", "first");
+    let operation = OperationId::generate();
+    let change =
+        NamespaceOperation::parse(NamespaceOperationKind::Rename, "first", Some("second")).unwrap();
+    let receipt = engine
+        .file_namespace(&repo.repository_id, change.clone(), "admin", operation)
+        .unwrap();
+    let expected = engine
+        .state()
+        .file_path_nodes
+        .values()
+        .filter(|node| node.operation_id == operation)
+        .map(|node| node.node_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(expected.len(), 2);
+    assert_eq!(receipt.result["file_node_ids"], json_codec::json!(expected));
+    rename(&mut engine, &repo, "second", "third");
+    assert_eq!(engine.state().file_path_nodes.len(), 6);
+    for reopened in [false, true] {
+        if reopened {
+            drop(engine);
+            engine = Engine::open(&temporary.path().join("system")).unwrap();
+        }
+        let before = canonical_json(engine.state()).unwrap();
+        let replay = engine
+            .file_namespace(&repo.repository_id, change.clone(), "admin", operation)
+            .unwrap();
+        assert_eq!(replay.result, receipt.result);
+        assert_eq!(replay.request_digest, receipt.request_digest);
+        assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    }
+}
+
+#[test]
+fn workspace_path_node_receipt_is_exact_ordered_and_replayed_after_restart() {
+    let (temporary, mut engine, repo) = setup();
+    save(&mut engine, &repo, "folder/z.txt", b"Z");
+    save(&mut engine, &repo, "folder/a.txt", b"A");
+    rename(&mut engine, &repo, "folder", "first");
+    let older_nodes = engine.state().file_path_nodes.clone();
+    assert_eq!(older_nodes.len(), 2);
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    engine
+        .namespace_operation(
+            &workspace.workspace_id,
+            NamespaceOperation::parse(NamespaceOperationKind::Rename, "first", Some("second"))
+                .unwrap(),
+        )
+        .unwrap();
+    let operation = OperationId::generate();
+    let request = CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: operation,
+        principal: "admin".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "workspace rename receipt".into(),
+        request_digest: None,
+    };
+    let receipt = engine.commit_workspace(request.clone()).unwrap();
+    let expected = engine
+        .state()
+        .file_path_nodes
+        .values()
+        .filter(|node| node.operation_id == operation && node.sequence == receipt.sequence)
+        .map(|node| node.node_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(expected.len(), 2);
+    assert!(expected.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(receipt.result["file_node_ids"], json_codec::json!(expected));
+    assert!(older_nodes.values().all(|node| {
+        node.operation_id != operation
+            && node.sequence < receipt.sequence
+            && !expected.contains(&node.node_id)
+    }));
+    rename(&mut engine, &repo, "second", "third");
+    assert!(
+        engine
+            .state()
+            .file_path_nodes
+            .values()
+            .any(|node| { node.operation_id != operation && node.sequence > receipt.sequence })
+    );
+    for reopened in [false, true] {
+        if reopened {
+            drop(engine);
+            engine = Engine::open(&temporary.path().join("system")).unwrap();
+        }
+        let before = canonical_json(engine.state()).unwrap();
+        let replay = engine.commit_workspace(request.clone()).unwrap();
+        assert_eq!(replay.result, receipt.result);
+        assert_eq!(replay.request_digest, receipt.request_digest);
+        assert_eq!(replay.sequence, receipt.sequence);
+        assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    }
+}
+
 #[test]
 fn folder_and_file_rename_append_path_nodes_reusing_bodies_then_write_follows_the_path_node() {
     let (t, mut e, r) = setup();

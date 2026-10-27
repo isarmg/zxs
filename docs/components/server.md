@@ -77,6 +77,10 @@ HTTP 监听地址必须是回环地址。对外部署由同机反向代理终止
 
 后台主机采样使用服务内部只读观测能力，在引擎锁内捕获 `DiskObservationPlan`、锁外查询磁盘，不伪造管理员或发布业务状态。监控容量来自身份校验后的真实采样；未知值保持空值。此能力不能从 HTTP/SMB 请求构造，系统状态及历史响应仍需当前有效管理员会话。
 
+目录分页的 `snapshot` 摘要由持有 Engine 的 `AdmissionEngine` 惰性保存一份；配置与已发布业务代数不能通过共享 Engine 引用修改，任何 `DerefMut` 在交出可变引用前清空摘要，包括失败操作、认证发布和整个 Engine 替换。后续首读按原 JSON 字节重新散列；仅认证发布仍得到相同摘要，不把有效游标误报为业务变化。每次请求仍先复核当前管理员，再校验游标的查询、快照与排序字段；该摘要不是授权凭据，也不缓存页面、配置权威或磁盘健康。请求摘要和游标编码保持原格式，不增加过期时间或旧格式分支。
+
+主盘条目的排序键直接借用已准入 `PortablePath` 的末级规范化键再复制到页候选；路径按组件独立规范化，因此与 `lookup_key(entry.name())` 一致。Unicode 小写字段仍单独计算，不能用完整 case folding 代替小写排序／搜索；仓库显示名和备份逻辑路径仍沿用原计算。外来游标继续重新计算并核对其排序字段，不能因内部路径已准入而跳过输入校验。资源和剩余扫描成本见[目录分页预算](../19-capacity-and-performance.md#s19-04)。
+
 公开 `/readyz` 不需要版本放置账本或磁盘容量：锁内捕获共享不可变配置、mode、sequence 和成员计数，锁外只逐个校验配置中的 metadata member 当前 seal/设备身份，不采样 `statvfs`、不扫描非 metadata 盘及历史 placements。配置准入时建立私有成员索引；配置克隆只共享 `Arc`，root rebinding 使用 copy-on-write 保留旧快照，成员关系不变。捕获为 O(1)，探测随 metadata 成员数增长，与历史量无关；这不是吞吐实测结论，也不是在线状态缓存。
 
 只读恢复仍返回 503 `RECOVERY_REQUIRED`；任一配置 metadata member 不可用仍返回 503 `METADATA_UNAVAILABLE`，现在保留首个失败的内部 source，公开消息不暴露本机路径。没有 metadata member 的配置仍在输入边界拒绝。非 metadata 盘离线不改变 ready 的判断（此前也只统计 metadata 的 online）；移除无消费者的容量采样不改变判定。正常响应 mode、sequence、storage/member counts 和 Management 状态语义不变。此观测不是写入许可，写侧仍在实际使用/提交处校验实时身份及完整性。

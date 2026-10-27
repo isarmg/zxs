@@ -8,10 +8,7 @@ pub(crate) fn selected_file_branch<'a>(
     file_id: &str,
 ) -> Option<&'a Branch> {
     let branch = state.branches.get(branch_id)?;
-    if state
-        .repositories
-        .values()
-        .any(|repo| repo.main_branch_id == branch_id)
+    if repository::main_for_branch(state, branch_id).is_some()
         && let Some(selected) = state.file_selections.get(file_id)
     {
         return state.branches.get(selected);

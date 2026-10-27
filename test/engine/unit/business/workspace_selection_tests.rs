@@ -462,3 +462,72 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
         assert_eq!(canonical_json(engine.state()).unwrap(), before);
     }
 }
+
+#[test]
+fn workspace_first_writes_clear_only_written_pending_file_identities() {
+    let (_temporary, mut engine, repo) = fixture();
+    let source = engine.state().branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    let branch = engine
+        .create_branch(
+            &source,
+            &storage_contract::BranchName::parse("pending").unwrap(),
+            "admin",
+            OperationId::generate(),
+        )
+        .unwrap();
+    assert!(repository::main_for_branch(engine.state(), &branch.branch_id).is_none());
+    let workspace = engine.create_workspace(&branch.branch_id, "admin").unwrap();
+    let source = &engine.state().commits[&workspace.base_head];
+    let written = find_unordered(&source.entries, "Folder/Child/file.txt")
+        .unwrap()
+        .clone();
+    let retained = find_unordered(&source.entries, "Folderish/file.txt")
+        .unwrap()
+        .clone();
+    assert_eq!(source.pending_file_versions.len(), 2);
+    // Even identical bytes must materialize inherited first-write intent.
+    engine
+        .stage_bytes(&workspace.workspace_id, written.path(), b"original")
+        .unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "New.txt", b"new")
+        .unwrap();
+    let before = canonical_json(engine.state()).unwrap();
+    let plan = engine
+        .plan_workspace_commit_inner(
+            CommitRequest {
+                workspace_id: workspace.workspace_id,
+                operation_id: OperationId::generate(),
+                principal: "admin".into(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: "first writes".into(),
+                request_digest: None,
+            },
+            None,
+        )
+        .unwrap();
+    let MutationPlan::Prepared { next, result, .. } = plan.mutation else {
+        panic!("first writes must produce a candidate");
+    };
+    let commit = &next.commits[result.commit_id.as_ref().unwrap()];
+    let expected = BTreeMap::from([(retained.file_id.clone(), retained.version_id.clone())]);
+    assert_eq!(commit.pending_file_versions, expected);
+    assert_eq!(
+        next.branches[&branch.branch_id].pending_file_versions,
+        expected
+    );
+    let materialized = find_unordered(&commit.entries, written.path()).unwrap();
+    assert_eq!(materialized.file_id, written.file_id);
+    assert_ne!(materialized.version_id, written.version_id);
+    assert_eq!(
+        find_unordered(&commit.entries, retained.path())
+            .unwrap()
+            .version_id,
+        retained.version_id
+    );
+    assert!(find_unordered(&commit.entries, "New.txt").is_some());
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+}

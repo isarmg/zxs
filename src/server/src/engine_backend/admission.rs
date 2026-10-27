@@ -1,9 +1,9 @@
-//! A mutex-owned engine and its validated, non-authoritative admission projection.
+//! A mutex-owned engine and its non-authoritative read projections.
 //!
-//! Engine mutations invalidate the protected snapshot projection. Managed servers
-//! instead revalidate the current system authority after acquiring the engine
-//! lock. Lock order is engine -> short auth read; managed auth writes never
-//! acquire the engine mutex and replicate only through a detached worker.
+//! Engine mutations invalidate the protected snapshot and listing projections.
+//! Managed servers instead revalidate the current system authority after acquiring
+//! the engine lock. Lock order is engine -> short auth read; managed auth writes
+//! never acquire the engine mutex and replicate only through a detached worker.
 use crate::{
     ApiError,
     auth::{AdmissionSnapshot, Identity},
@@ -18,6 +18,7 @@ pub(super) struct AdmissionEngine {
     engine: Engine,
     managed_auth: Option<crate::auth::AuthReader>,
     admission: OnceLock<Result<Option<AdmissionSnapshot>, std::sync::Arc<ApiError>>>,
+    listing_snapshot: OnceLock<String>,
     #[cfg(test)]
     validations: std::sync::atomic::AtomicUsize,
 }
@@ -28,6 +29,7 @@ impl AdmissionEngine {
             engine,
             managed_auth: None,
             admission: OnceLock::new(),
+            listing_snapshot: OnceLock::new(),
             #[cfg(test)]
             validations: std::sync::atomic::AtomicUsize::new(0),
         }
@@ -36,6 +38,20 @@ impl AdmissionEngine {
     pub(super) fn set_management_auth(&mut self, auth: crate::auth::AuthReader) {
         self.managed_auth = Some(auth);
     }
+
+    /// Config and business state cannot change through a shared Engine borrow.
+    /// DerefMut clears this projection before mutation or whole-engine replacement.
+    pub(super) fn listing_snapshot(&self) -> &str {
+        self.listing_snapshot.get_or_init(|| {
+            let bytes = json_codec::to_vec(&json_codec::json!({
+                "configuration": self.engine.config(),
+                "generation": self.engine.state().business_generation.to_string(),
+            }))
+            .expect("invariant: internal JSON serialization succeeds");
+            blake3::hash(&bytes).to_hex().to_string()
+        })
+    }
+
     pub(super) fn identity(&self, caller: &Identity) -> Result<Identity, ApiError> {
         if let Some(auth) = &self.managed_auth {
             return auth.revalidate_identity(caller);
@@ -71,6 +87,7 @@ impl Deref for AdmissionEngine {
 impl DerefMut for AdmissionEngine {
     fn deref_mut(&mut self) -> &mut Engine {
         self.admission.take();
+        self.listing_snapshot.take();
         &mut self.engine
     }
 }

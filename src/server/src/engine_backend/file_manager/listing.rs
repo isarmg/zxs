@@ -12,8 +12,8 @@ enum Candidate<'a> {
     },
 }
 
-pub(crate) fn entries(
-    engine: &Engine,
+pub(in crate::engine_backend) fn entries(
+    engine: &AdmissionEngine,
     input: crate::ReadListing,
 ) -> Result<crate::ListingSnapshot, ApiError> {
     let slot_id = input.slot_id().to_owned();
@@ -114,12 +114,7 @@ pub(crate) fn entries(
                 format!("{}/{}", repo.name, entry.path)
             };
             page.consider(
-                SortKey::new(
-                    entry.kind == storage_contract::NamespaceEntryKind::Directory,
-                    entry.name(),
-                    &display,
-                    &entry.entry_id,
-                ),
+                SortKey::for_entry(entry, &display),
                 Candidate::Entry {
                     repository: repo,
                     index,

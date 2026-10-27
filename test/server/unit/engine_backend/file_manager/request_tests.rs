@@ -284,7 +284,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
         ] {
             let temporary = tempfile::tempdir().unwrap();
             let disks = temporary.path().join("disks");
-            let mut engine = Engine::initialize(
+            let engine = Engine::initialize(
                 &temporary.path().join("system"),
                 storage_engine::Config::development([
                     disks.join("one"),
@@ -293,6 +293,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                 ]),
             )
             .unwrap();
+            let mut engine = AdmissionEngine::new(engine);
             let create_named = |engine: &mut Engine| {
                 engine
                     .create_repository(

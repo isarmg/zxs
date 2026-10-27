@@ -112,6 +112,13 @@ fn repository_creation_replay_returns_original_binding_after_changes_and_reopen(
             storage_contract::OperationId::generate(),
         )
         .unwrap();
+    let old_state = engine.state().clone();
+    assert_eq!(
+        main_for_branch(&old_state, &original.main_branch_id),
+        Some(&original)
+    );
+    assert!(main_for_branch(&old_state, &side.branch_id).is_none());
+    assert!(main_for_branch(&old_state, "missing-branch").is_none());
     engine
         .set_smb_binding(
             &original.repository_id,
@@ -131,6 +138,16 @@ fn repository_creation_replay_returns_original_binding_after_changes_and_reopen(
             drop(engine);
             engine = Engine::open(&root.path().join("system")).unwrap();
         }
+        assert!(main_for_branch(engine.state(), &original.main_branch_id).is_none());
+        assert_eq!(
+            main_for_branch(engine.state(), &side.branch_id),
+            engine.state().repositories.get(&original.repository_id)
+        );
+        assert_eq!(
+            main_for_branch(&old_state, &original.main_branch_id),
+            Some(&original)
+        );
+        assert!(main_for_branch(&old_state, &side.branch_id).is_none());
         let before = canonical_json(engine.state()).unwrap();
         assert_eq!(
             engine

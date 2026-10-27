@@ -18,6 +18,25 @@ pub(crate) struct SortKey {
 }
 impl SortKey {
     #[cfg(feature = "core")]
+    pub(crate) fn for_entry(entry: &storage_contract::Entry, display_path: &str) -> Self {
+        Self {
+            file: entry.kind == storage_contract::NamespaceEntryKind::File,
+            folded: entry.name().to_lowercase(),
+            // PortablePath normalizes each component independently; the last
+            // cached component is exactly lookup_key(name), not lowercase(name).
+            normalized: entry
+                .lookup_key()
+                .rsplit('/')
+                .next()
+                .expect("invariant: a portable path has a component")
+                .into(),
+            name: entry.name().into(),
+            path: display_path.into(),
+            identity: entry.entry_id.clone(),
+        }
+    }
+
+    #[cfg(feature = "core")]
     pub(crate) fn new(directory: bool, name: &str, path: &str, identity: &str) -> Self {
         Self {
             file: !directory,

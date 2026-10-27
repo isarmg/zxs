@@ -230,6 +230,84 @@ fn item(e: &Engine, src: &str, path: &str, dst: Option<(&str, &str)>) -> Directo
         }),
     }
 }
+
+#[test]
+fn batch_move_path_node_receipt_is_exact_ordered_and_replayed_after_restart() {
+    let (temporary, mut engine, repo) = fixture();
+    save(&mut engine, &repo, "a/z.txt", b"Z");
+    save(&mut engine, &repo, "a/a.txt", b"A");
+    save(&mut engine, &repo, "b/keep.txt", b"keep");
+    engine
+        .file_namespace(
+            &repo.repository_id,
+            NamespaceOperation::parse(NamespaceOperationKind::Rename, "a", Some("source")).unwrap(),
+            "admin",
+            OperationId::generate(),
+        )
+        .unwrap();
+    let older_nodes = engine.state().file_path_nodes.clone();
+    assert_eq!(older_nodes.len(), 2);
+    let source = create(&mut engine, &repo, "source", "source branch");
+    let target = create(&mut engine, &repo, "b", "target branch");
+    select(&mut engine, &repo, "source", "source branch");
+    select(&mut engine, &repo, "b", "target branch");
+    let request = DirectoryNamespaceBatch {
+        kind: DirectoryBatchKind::Move,
+        items: vec![
+            item(&engine, &source, "source/z.txt", Some((&target, "b/z.txt"))),
+            item(&engine, &source, "source/a.txt", Some((&target, "b/a.txt"))),
+        ],
+    };
+    let operation = OperationId::generate();
+    let receipt = engine
+        .directory_namespace_batch(&repo.repository_id, &request, "admin", operation)
+        .unwrap();
+    let expected = engine
+        .state()
+        .file_path_nodes
+        .values()
+        .filter(|node| node.operation_id == operation && node.sequence == receipt.sequence)
+        .map(|node| node.node_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(expected.len(), 2);
+    assert!(expected.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(receipt.result["file_node_ids"], json_codec::json!(expected));
+    assert!(older_nodes.values().all(|node| {
+        node.operation_id != operation
+            && node.sequence < receipt.sequence
+            && !expected.contains(&node.node_id)
+    }));
+    engine
+        .file_namespace(
+            &repo.repository_id,
+            NamespaceOperation::parse(NamespaceOperationKind::Rename, "b", Some("later")).unwrap(),
+            "admin",
+            OperationId::generate(),
+        )
+        .unwrap();
+    assert!(
+        engine
+            .state()
+            .file_path_nodes
+            .values()
+            .any(|node| { node.operation_id != operation && node.sequence > receipt.sequence })
+    );
+    for reopened in [false, true] {
+        if reopened {
+            drop(engine);
+            engine = Engine::open(&temporary.path().join("system")).unwrap();
+        }
+        let before = canonical_json(engine.state()).unwrap();
+        let replay = engine
+            .directory_namespace_batch(&repo.repository_id, &request, "admin", operation)
+            .unwrap();
+        assert_eq!(replay.result, receipt.result);
+        assert_eq!(replay.request_digest, receipt.request_digest);
+        assert_eq!(replay.sequence, receipt.sequence);
+        assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    }
+}
+
 #[test]
 fn move_transfers_following_but_retains_unselected_frozen_alias_and_identity() {
     let (t, mut e, r) = fixture();

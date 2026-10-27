@@ -10,11 +10,11 @@ pub(super) struct PageRequest {
     selected: Option<(String, String)>,
 }
 impl PageRequest {
-    pub(super) fn parse(engine: &Engine, input: crate::ReadListing) -> Result<Self, ApiError> {
-        let snapshot = blake3::hash(&json_codec::to_vec(&json!({
-            "configuration":engine.config(), "generation":engine.state().business_generation.to_string()
-        })).expect("invariant: internal JSON serialization succeeds")).to_hex().to_string();
-        Self::with_snapshot(input, snapshot)
+    pub(super) fn parse(
+        engine: &AdmissionEngine,
+        input: crate::ReadListing,
+    ) -> Result<Self, ApiError> {
+        Self::with_snapshot(input, engine.listing_snapshot().into())
     }
     pub(super) fn with_snapshot(
         input: crate::ReadListing,

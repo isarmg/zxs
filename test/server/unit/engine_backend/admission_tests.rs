@@ -87,6 +87,64 @@ fn all_mutable_access_invalidates_before_a_borrow_can_change_or_replace_engine()
 }
 
 #[test]
+fn listing_snapshot_reuses_storage_until_mutable_engine_access() {
+    let (_root, mut engine) = fixture();
+    let expected = blake3::hash(
+        &json_codec::to_vec(&json!({
+            "configuration": engine.config(),
+            "generation": engine.state().business_generation.to_string(),
+        }))
+        .unwrap(),
+    )
+    .to_hex()
+    .to_string();
+    let first = engine.listing_snapshot();
+    assert_eq!(first, expected);
+    for _ in 0..100 {
+        assert!(std::ptr::eq(first, engine.listing_snapshot()));
+    }
+    let _mutable_engine: &mut Engine = &mut engine;
+    assert!(engine.listing_snapshot.get().is_none());
+    assert_eq!(engine.listing_snapshot(), expected);
+}
+
+#[test]
+fn listing_snapshot_tracks_business_changes_but_not_auth_publications() {
+    let (_root, mut engine) = fixture();
+    let before = engine.listing_snapshot().to_owned();
+    publish(&mut engine, snapshot(0));
+    assert!(engine.listing_snapshot.get().is_none());
+    assert_eq!(engine.listing_snapshot(), before);
+    engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Files").unwrap(),
+            "P01",
+            1,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    assert!(engine.listing_snapshot.get().is_none());
+    assert_ne!(engine.listing_snapshot(), before);
+}
+
+#[test]
+fn listing_snapshot_rebinds_configuration_after_whole_engine_replacement() {
+    let (_root, mut engine) = fixture();
+    let (_other_root, other) = fixture();
+    assert_eq!(
+        engine.state().business_generation,
+        other.state().business_generation
+    );
+    let before = engine.listing_snapshot().to_owned();
+    let expected = other.listing_snapshot().to_owned();
+    assert_ne!(before, expected);
+    *engine = other.engine;
+    assert!(engine.listing_snapshot.get().is_none());
+    assert_eq!(engine.listing_snapshot(), expected);
+}
+
+#[test]
 fn absent_and_replaced_principals_fail_without_trusting_the_caller() {
     let (_root, mut engine) = fixture();
     publish(&mut engine, snapshot(0));

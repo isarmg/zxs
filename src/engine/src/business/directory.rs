@@ -96,11 +96,7 @@ pub(crate) fn branch_context_at_key(
     key: &str,
 ) -> Option<FileContext> {
     let branch = state.branches.get(namespace)?;
-    if let Some(repo) = state
-        .repositories
-        .values()
-        .find(|r| r.main_branch_id == namespace)
-    {
+    if let Some(repo) = repository::main_for_branch(state, namespace) {
         context_at_key(state, &repo.repository_id, key)
     } else {
         Some(FileContext {
@@ -794,11 +790,8 @@ pub(crate) fn prepare_file_write(
     principal: &str,
     operation: OperationId,
 ) -> Result<()> {
-    let Some(repository) = state
-        .repositories
-        .values()
-        .find(|r| r.main_branch_id == branch)
-        .map(|r| r.repository_id.clone())
+    let Some(repository) =
+        repository::main_for_branch(state, branch).map(|r| r.repository_id.clone())
     else {
         return Ok(());
     };

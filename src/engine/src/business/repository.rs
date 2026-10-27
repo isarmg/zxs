@@ -1,6 +1,22 @@
 //! Repository ownership and explicit SMB binding.
 use crate::*;
 use json_codec::json;
+
+/// Follow admitted State ownership; a side/file branch is not a main namespace.
+/// Candidate mutations preserve these links, including explicit SMB rebinding.
+pub(super) fn main_for_branch<'a>(state: &'a State, branch: &str) -> Option<&'a Repository> {
+    let branch = state.branches.get(branch)?;
+    let history = state
+        .histories
+        .get(&branch.history_tree_id)
+        .expect("invariant: admitted branch belongs to an existing history");
+    let repository = state
+        .repositories
+        .get(&history.repository_id)
+        .expect("invariant: admitted history belongs to an existing repository");
+    (repository.main_branch_id == branch.branch_id).then_some(repository)
+}
+
 impl Engine {
     /// Rebind an SMB share only after the manager explicitly selects a live
     /// branch. A history split never invokes this operation implicitly.

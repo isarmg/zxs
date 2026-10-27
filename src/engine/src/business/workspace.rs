@@ -414,10 +414,7 @@ fn validate_file_context(
             "selected file branch is not active; select a writable branch",
         ));
     }
-    let repo = state
-        .repositories
-        .values()
-        .find(|r| r.main_branch_id == workspace.branch_id);
+    let repo = repository::main_for_branch(state, &workspace.branch_id);
     let captured = repo.and_then(|r| {
         workspace
             .selected_file_contexts
@@ -469,11 +466,10 @@ impl Engine {
         // records their published destination. The current entry supplies only
         // its identity; the saved context still decides whether it is writable.
         if entry.is_none()
-            && self.state.repositories.values().any(|repo| {
-                repo.main_branch_id == workspace.branch_id
-                    && workspace
-                        .selected_file_contexts
-                        .contains_key(&directory::context_key_from_key(&repo.repository_id, key))
+            && repository::main_for_branch(&self.state, &workspace.branch_id).is_some_and(|repo| {
+                workspace
+                    .selected_file_contexts
+                    .contains_key(&directory::context_key_from_key(&repo.repository_id, key))
             })
         {
             entry = Some(
@@ -541,11 +537,7 @@ impl Engine {
             base_head: branch.head_commit_id.clone(),
             fencing_token: self.next_slot,
             files: BTreeMap::new(),
-            selected_file_contexts: self
-                .state
-                .repositories
-                .values()
-                .find(|r| r.main_branch_id == branch_id)
+            selected_file_contexts: repository::main_for_branch(&self.state, branch_id)
                 .map(|r| {
                     head.entries
                         .iter()
@@ -1196,11 +1188,7 @@ impl Engine {
     }
     /// Keep ordinary completion and restart reconstruction on one definition.
     pub(crate) fn refresh_workspace_contexts(state: &State, completed: &mut Workspace) {
-        if let Some(repo) = state
-            .repositories
-            .values()
-            .find(|repo| repo.main_branch_id == completed.branch_id)
-        {
+        if let Some(repo) = repository::main_for_branch(state, &completed.branch_id) {
             for file in completed.files.values() {
                 if let Some(context) =
                     directory::context_at_key(state, &repo.repository_id, file.path.key())
@@ -1543,7 +1531,7 @@ impl crate::engine::PlanningContext<'_> {
                     }
                 }
                 let commit_id = new_id("commit");
-                let mut written_files = Vec::new();
+                let mut written_files = std::collections::BTreeSet::new();
                 let mut written_paths = Vec::new();
                 for file in w.files.values() {
                     let existing = draft.get_key(file.path.key()).cloned();
@@ -1584,13 +1572,17 @@ impl crate::engine::PlanningContext<'_> {
                         file_paths::source_node(state,&file_id,source_ids.first().map(String::as_str).unwrap_or(""),node)?;
                         state.file_node_parents.insert(version.version_id.clone(),vec![node.clone()]);
                     }
-                    if let Some(repo)=state.repositories.values().find(|r|r.main_branch_id==w.branch_id)&& let Some(context)=state.file_contexts.get_mut(&directory::context_key_from_key(&repo.repository_id, location.key())){context.node_id=None;}
+                    if repo.main_branch_id == w.branch_id
+                        && let Some(context) = state.file_contexts.get_mut(&directory::context_key_from_key(&repo.repository_id, location.key()))
+                    {
+                        context.node_id = None;
+                    }
                     let location = location.clone();
                     let entry = Entry { entry_id: existing.as_ref().map(|entry| entry.entry_id.clone()).unwrap_or_else(|| file.item_id.clone()), path: location, kind: NamespaceEntryKind::File, file_id: file_id.clone(), version_id: version.version_id, size: version.logical_size };
                     draft.replace(entry);
                     state.file_locations.entry(file_id.clone()).or_insert_with(||path.to_owned());
                     state.file_names.entry(file_id.clone()).or_insert_with(||path.rsplit('/').next().unwrap_or("").into());
-                    written_files.push(file_id);
+                    written_files.insert(file_id);
                 }
                 let mut entries = draft.into_entries();
                 let renamed_directories=directory::prepare_renamed_directories(state,&repo.repository_id,&current.entries,&w.namespace_operations)?;
