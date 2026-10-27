@@ -67,12 +67,15 @@ fn moved_file_configuration_remains_readable_when_current_chain_is_shorter() {
     let read = engine
         .backup_configuration(&repo.repository_id, "moved.txt")
         .unwrap();
-    assert_eq!(read["target_copies"], 3);
-    assert_eq!(read["max_copies"], 2);
-    assert_eq!(read["route_slot_ids"], json!([]));
-    assert_eq!(read["available_route_slot_ids"], json!(["P02", "B02"]));
+    assert_eq!(read.target_copies, 3);
+    assert_eq!(read.max_copies, 2);
+    assert_eq!(json_codec::json!(read.route_slot_ids), json!([]));
     assert_eq!(
-        read["backup_routes"],
+        json_codec::json!(read.available_route_slot_ids),
+        json!(["P02", "B02"])
+    );
+    assert_eq!(
+        json_codec::json!(read.backup_routes),
         json!([["P01", "B01", "C01"], ["P02", "B02"]])
     );
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
@@ -103,11 +106,14 @@ fn directory_configuration_includes_child_future_placement_chain() {
         .backup_configuration(&repo.repository_id, "docs")
         .unwrap();
     assert_eq!(
-        read["backup_routes"],
+        json_codec::json!(read.backup_routes),
         json!([["P01", "B01", "C01"], ["P02", "B02"]])
     );
-    assert_eq!(read["max_copies"], 2);
-    assert_eq!(read["backup_slot_ids"], json!(["B01", "B02", "C01"]));
+    assert_eq!(read.max_copies, 2);
+    assert_eq!(
+        json_codec::json!(read.backup_slot_ids),
+        json!(["B01", "B02", "C01"])
+    );
 }
 
 #[test]
@@ -175,9 +181,12 @@ fn directory_routes_exclude_files_with_independent_backup_settings() {
     let read = engine
         .backup_configuration(&repo.repository_id, "docs")
         .unwrap();
-    assert_eq!(read["backup_routes"], json!([["P01", "B01", "C01"]]));
-    assert_eq!(read["max_copies"], 3);
-    assert_eq!(read["file_count"], "0");
+    assert_eq!(
+        json_codec::json!(read.backup_routes),
+        json!([["P01", "B01", "C01"]])
+    );
+    assert_eq!(read.max_copies, 3);
+    assert_eq!(read.file_count, 0);
     engine
         .configure_backups(BackupConfigurationRequest {
             repository_id: &repo.repository_id,

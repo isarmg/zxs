@@ -6,8 +6,7 @@
 //! presentation/redaction belongs to the transport adapter.
 use super::{error, repo_for_branch, repo_for_history, repository, workspace_authorize};
 use crate::{ApiError, auth::Identity};
-use data_serialization::Deserialize;
-use storage_engine::{CommitRequest, Engine, FileLocation};
+use storage_engine::{CommitRequest, Engine};
 
 use crate::CommitWorkspace;
 
@@ -19,23 +18,9 @@ use crate::CreateMergeLink;
 
 use crate::NamespaceBatch;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub struct CommitPlan {
-    pub plan_id: String,
-    pub operation_id: String,
-    pub plan_digest: String,
-}
+use crate::CommitPlan;
 
-pub struct MergeFileBranches {
-    pub file_id: String,
-    pub inputs: Vec<storage_contract::FileMergeInput>,
-    pub chosen_node_id: String,
-    pub surviving_branch_id: String,
-    pub confirmed: bool,
-    pub location: Option<FileLocation>,
-    pub operation_id: storage_contract::OperationId,
-}
+use crate::MergeFileBranches;
 
 /// This service borrows a locked engine. It has no transport, JSON dispatch, or
 /// caller-supplied principal; the authenticated identity is bound at creation.
@@ -347,10 +332,7 @@ impl<'a> Application<'a> {
             .commit_plan(
                 &command.plan_id,
                 &self.identity.principal,
-                command
-                    .operation_id
-                    .parse::<storage_contract::OperationId>()
-                    .map_err(|source| error(source.into()))?,
+                command.operation_id?,
             )
             .map_err(error)
     }

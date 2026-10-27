@@ -83,10 +83,10 @@ fn generic_policy_collisions_follow_the_current_directory_or_file_scope_path() {
         let read = engine
             .backup_configuration(&repo.repository_id, destination)
             .unwrap();
-        assert_eq!(read["policy_id"], scoped);
-        assert_eq!(read["effective_policy_id"], scoped);
-        assert_eq!(read["target_copies"], 2);
-        assert_eq!(read["backup_prefixes"]["B01"], "backup");
+        assert_eq!(read.policy_id.as_deref().unwrap(), scoped);
+        assert_eq!(read.effective_policy_id.as_deref().unwrap(), scoped);
+        assert_eq!(read.target_copies, 2);
+        assert_eq!(read.backup_prefixes["B01"], "backup");
         let written = save(&mut engine, &repo, write_path, b"after");
         assert_eq!(
             engine.state.placements[&written.version_id].target_copies,
@@ -122,11 +122,14 @@ fn renamed_stable_scope_wins_equal_depth_in_either_creation_and_id_order() {
             let read = engine
                 .backup_configuration(&repo.repository_id, "renamed")
                 .unwrap();
-            assert_eq!(read["policy_id"], scoped);
-            assert_eq!(read["effective_policy_id"], scoped);
-            assert_eq!(read["target_copies"], 2);
-            assert_eq!(read["backup_prefixes"]["B01"], "backup");
-            assert_eq!(read["route_slot_ids"], json!(["P01", "B01"]));
+            assert_eq!(read.policy_id.as_deref().unwrap(), scoped);
+            assert_eq!(read.effective_policy_id.as_deref().unwrap(), scoped);
+            assert_eq!(read.target_copies, 2);
+            assert_eq!(read.backup_prefixes["B01"], "backup");
+            assert_eq!(
+                json_codec::json!(read.route_slot_ids),
+                json!(["P01", "B01"])
+            );
             let added = save(&mut engine, &repo, "renamed/new.txt", b"new");
             assert_eq!(engine.state.placements[&added.version_id].target_copies, 2);
             assert_eq!(engine.state.file_backup_policies[&added.file_id], scoped);
@@ -141,8 +144,8 @@ fn renamed_stable_scope_wins_equal_depth_in_either_creation_and_id_order() {
             let read = engine
                 .backup_configuration(&repo.repository_id, "renamed/child")
                 .unwrap();
-            assert_eq!(read["effective_policy_id"], child_policy);
-            assert_eq!(read["target_copies"], 3);
+            assert_eq!(read.effective_policy_id.as_deref().unwrap(), child_policy);
+            assert_eq!(read.target_copies, 3);
             assert_eq!(configure_scope(&mut engine, &repo, "renamed", 2, 1), scoped);
             assert_eq!(engine.state.placements[&child.version_id].target_copies, 3);
             assert_eq!(
@@ -184,13 +187,10 @@ fn root_scope_adopts_existing_path_rule_and_rejects_parallel_rules() {
         let read = engine
             .backup_configuration(&repo.repository_id, "")
             .unwrap();
-        assert_eq!(read["policy_id"], scoped);
-        assert_eq!(read["effective_policy_id"], scoped);
-        assert_eq!(
-            read["generation"],
-            (u64::from(generic_first) + 1).to_string()
-        );
-        assert_eq!(read["target_copies"], 2);
+        assert_eq!(read.policy_id.as_deref().unwrap(), scoped);
+        assert_eq!(read.effective_policy_id.as_deref().unwrap(), scoped);
+        assert_eq!(read.generation, u64::from(generic_first) + 1);
+        assert_eq!(read.target_copies, 2);
         let added = save(&mut engine, &repo, "root.txt", b"new root file");
         assert_eq!(engine.state.placements[&added.version_id].target_copies, 2);
         assert_eq!(engine.state.file_backup_policies[&added.file_id], scoped);
@@ -221,17 +221,17 @@ fn exact_path_rule_does_not_hide_effective_file_binding_or_retained_settings() {
         let read = engine
             .backup_configuration(&repo.repository_id, "moved.txt")
             .unwrap();
-        assert_eq!(read["policy_id"], path_policy_id);
-        assert_eq!(read["generation"], "1");
+        assert_eq!(read.policy_id.as_deref().unwrap(), path_policy_id);
+        assert_eq!(read.generation, 1);
         assert_eq!(
-            read["effective_policy_id"],
+            read.effective_policy_id.as_deref().unwrap(),
             engine.state.file_backup_policies[&file.file_id]
         );
-        assert_eq!(read["effective_generation"], "1");
-        assert_eq!(read["inherited"], !retained);
-        assert_eq!(read["target_copies"], 1);
-        assert_eq!(read["backup_prefixes"], json!({}));
-        assert_eq!(read["route_slot_ids"], json!(["P01"]));
+        assert_eq!(read.effective_generation, 1);
+        assert_eq!(read.inherited, !retained);
+        assert_eq!(read.target_copies, 1);
+        assert_eq!(json_codec::json!(read.backup_prefixes), json!({}));
+        assert_eq!(json_codec::json!(read.route_slot_ids), json!(["P01"]));
         let updated = save(&mut engine, &repo, "moved.txt", b"still one copy");
         assert_eq!(
             engine.state.placements[&updated.version_id].target_copies,
@@ -245,8 +245,8 @@ fn exact_path_rule_does_not_hide_effective_file_binding_or_retained_settings() {
     let read = engine
         .backup_configuration(&repo.repository_id, "moved.txt")
         .unwrap();
-    assert_eq!(read["effective_policy_id"], path_policy_id);
-    assert_eq!(read["generation"], "2");
-    assert_eq!(read["inherited"], false);
-    assert_eq!(read["target_copies"], 2);
+    assert_eq!(read.effective_policy_id.as_deref().unwrap(), path_policy_id);
+    assert_eq!(read.generation, 2);
+    assert!(!read.inherited);
+    assert_eq!(read.target_copies, 2);
 }

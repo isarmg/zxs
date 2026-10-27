@@ -349,3 +349,76 @@ fn pending_selection_preserves_frozen_source_even_when_source_replicas_are_missi
         source.version_id
     );
 }
+
+#[test]
+fn file_merge_requires_readable_chosen_body_but_receipt_replay_does_not() {
+    for publish_first in [false, true] {
+        let (_root, mut engine, repo) = setup();
+        save(&mut engine, &repo, "file.txt", b"chosen source");
+        let source = entries(&engine, &repo)["file.txt"].clone();
+        let branches = ["left", "right"].map(|name| {
+            engine
+                .create_file_branch(
+                    &source.file_id,
+                    &source.version_id,
+                    &storage_contract::BranchName::parse(name).unwrap(),
+                    "admin",
+                    storage_contract::OperationId::generate(),
+                )
+                .unwrap()
+                .result["branch_id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        });
+        let inputs = branches
+            .iter()
+            .map(|branch| storage_contract::FileMergeInput {
+                branch_id: branch.clone(),
+                expected_node_id: source.version_id.clone(),
+            })
+            .collect::<Vec<_>>();
+        let operation = storage_contract::OperationId::generate();
+        let request = |operation_id| crate::FileBranchMergeRequest {
+            file_id: &source.file_id,
+            inputs: &inputs,
+            chosen_node_id: &source.version_id,
+            surviving_branch_id: &branches[0],
+            location: None,
+            principal: "admin",
+            operation_id,
+        };
+        let receipt = if publish_first {
+            Some(engine.merge_file_branches(request(operation)).unwrap())
+        } else {
+            None
+        };
+        loop {
+            match engine.valid_replica(&source.version_id) {
+                Ok((path, _)) => std::fs::remove_file(path).unwrap(),
+                Err(error) if error.code() == storage_contract::ErrorCode::ContentUnavailable => {
+                    break;
+                }
+                Err(error) => panic!("unexpected replica failure: {error}"),
+            }
+        }
+        let before = crate::canonical_json(engine.state()).unwrap();
+        assert_eq!(
+            engine
+                .merge_file_branches(request(storage_contract::OperationId::generate()))
+                .unwrap_err()
+                .code(),
+            storage_contract::ErrorCode::ContentUnavailable
+        );
+        if let Some(receipt) = receipt {
+            assert_eq!(
+                engine
+                    .merge_file_branches(request(operation))
+                    .unwrap()
+                    .result,
+                receipt.result
+            );
+        }
+        assert_eq!(crate::canonical_json(engine.state()).unwrap(), before);
+    }
+}

@@ -31,6 +31,9 @@ pub use backend_file_history::{
     HistoryVersion, HistoryVersionData, ReadFileHistory, RenameNodeKind, RevisionKind,
 };
 mod backend_action;
+mod backend_backup_configuration;
+mod http_backup_configuration;
+pub use backend_backup_configuration::{ConfigureBackups, ReadBackupConfiguration};
 mod backend_archive;
 mod backend_create_file_branch;
 mod backend_directory_scope;
@@ -39,6 +42,24 @@ pub use backend_create_file_branch::CreateFileBranch;
 mod backend_note;
 mod http_note;
 pub use backend_note::{NoteTarget, UpdateNote};
+mod backend_file_merge;
+mod http_file_merge;
+pub use backend_file_merge::MergeFileBranches;
+mod backend_file_tags;
+mod http_file_metadata;
+mod http_file_tags;
+pub use backend_file_tags::UpdateFileNodeTags;
+mod backend_disk_mkdir;
+mod http_disk_mkdir;
+pub use backend_disk_mkdir::CreateDiskDirectory;
+mod backend_disk_write_session;
+mod http_disk_write_session;
+pub use backend_disk_write_session::{
+    CreateDiskWriteSession, DiskWriteSession, WriteSessionBranchId,
+};
+mod backend_plan;
+mod http_plan;
+pub use backend_plan::{CancelPlan, CommitPlan};
 mod backend_namespace_batch;
 mod http_namespace_batch;
 pub use backend_namespace_batch::NamespaceBatch;
@@ -452,6 +473,51 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
         request: UpdateNote,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn merge_file_branches(
+        &self,
+        identity: &Identity,
+        request: MergeFileBranches,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn update_file_node_tags(
+        &self,
+        identity: &Identity,
+        request: UpdateFileNodeTags,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn create_disk_directory(
+        &self,
+        identity: &Identity,
+        request: CreateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn create_disk_write_session(
+        &self,
+        identity: &Identity,
+        request: CreateDiskWriteSession,
+    ) -> Result<crate::DiskWriteSession, ApiError>;
+    fn backup_configuration(
+        &self,
+        identity: &Identity,
+        request: ReadBackupConfiguration,
+    ) -> Result<storage_contract::BackupConfigurationSnapshot, ApiError>;
+    fn configure_backups(
+        &self,
+        identity: &Identity,
+        request: ConfigureBackups,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    fn plan(&self, identity: &Identity, plan: &str) -> Result<storage_contract::Plan, ApiError>;
+    /// The outer error belongs to the HTTP keys phase, after current admission.
+    /// A successful envelope may still carry an operation error for the later
+    /// plan/owner/history phase; only a successful OperationId reaches the engine.
+    fn cancel_plan(
+        &self,
+        identity: &Identity,
+        request: Result<CancelPlan, crate::ApiError>,
+    ) -> Result<storage_contract::OperationResult, ApiError>;
+    /// Required text/key errors follow current identity; operation format errors follow plan admission.
+    fn commit_plan(
+        &self,
+        identity: &Identity,
+        request: Result<CommitPlan, ApiError>,
     ) -> Result<storage_contract::OperationResult, ApiError>;
     fn namespace_batch(
         &self,
@@ -906,6 +972,71 @@ impl Backend for AuthorizedBackend {
         request: crate::UpdateNote,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.backend.update_note(&self.current(identity)?, request)
+    }
+    fn merge_file_branches(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::MergeFileBranches,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .merge_file_branches(&self.current(identity)?, request)
+    }
+    fn update_file_node_tags(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateFileNodeTags,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .update_file_node_tags(&self.current(identity)?, request)
+    }
+    fn create_disk_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.backend
+            .create_disk_directory(&self.current(identity)?, request)
+    }
+    fn create_disk_write_session(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateDiskWriteSession,
+    ) -> Result<crate::DiskWriteSession, crate::ApiError> {
+        self.backend
+            .create_disk_write_session(&self.current(identity)?, request)
+    }
+    fn backup_configuration(
+        &self,
+        identity: &Identity,
+        request: ReadBackupConfiguration,
+    ) -> Result<storage_contract::BackupConfigurationSnapshot, ApiError> {
+        self.backend
+            .backup_configuration(&self.current(identity)?, request)
+    }
+    fn configure_backups(
+        &self,
+        identity: &Identity,
+        request: ConfigureBackups,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend
+            .configure_backups(&self.current(identity)?, request)
+    }
+    fn plan(&self, identity: &Identity, plan: &str) -> Result<storage_contract::Plan, ApiError> {
+        self.backend.plan(&self.current(identity)?, plan)
+    }
+    fn cancel_plan(
+        &self,
+        identity: &Identity,
+        request: Result<CancelPlan, crate::ApiError>,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend.cancel_plan(&self.current(identity)?, request)
+    }
+    fn commit_plan(
+        &self,
+        identity: &Identity,
+        request: Result<CommitPlan, ApiError>,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend.commit_plan(&self.current(identity)?, request)
     }
     fn namespace_batch(
         &self,
@@ -1619,9 +1750,9 @@ fn router_shared(
             "/api/history-trees/{history}/historical-save-plans",
             post(historical_save_plan),
         )
-        .route("/api/plans/{plan}/commit", post(plan_commit))
-        .route("/api/plans/{plan}", get(plan_info))
-        .route("/api/plans/{plan}/cancel", post(plan_cancel))
+        .route("/api/plans/{plan}/commit", post(http_plan::commit))
+        .route("/api/plans/{plan}", get(http_plan::info))
+        .route("/api/plans/{plan}/cancel", post(http_plan::cancel))
         .route("/api/admin/disks", get(disks).post(register_disk))
         .route("/api/admin/check", get(check))
         .route("/api/backup-topologies/default", get(topology))
@@ -1838,20 +1969,6 @@ fn with_id(mut body: Value, key: &str, id: String) -> Result<Value, ApiError> {
     Ok(body)
 }
 
-macro_rules! read_handler {
-    ($name:ident, $action:expr, $key:literal) => {
-        async fn $name(
-            State(state): State<AppState>,
-            http_routing::Extension(identity): http_routing::Extension<Identity>,
-            ApiPath(id): ApiPath<String>,
-            ApiQuery(query): ApiQuery<BTreeMap<String, String>>,
-        ) -> Result<Json<Value>, ApiError> {
-            let mut input = json!({"query": query});
-            input[$key] = id.into();
-            call(state, identity, $action, input).await
-        }
-    };
-}
 macro_rules! post_handler {
     ($name:ident, $action:expr) => {
         async fn $name(
@@ -2227,8 +2344,6 @@ async fn topology(
     .map(Json)
 }
 
-read_handler!(plan_info, crate::BackendAction::Plan, "plan_id");
-
 post_handler!(register_disk, crate::BackendAction::RegisterDisk);
 
 id_post_handler!(
@@ -2246,9 +2361,6 @@ id_post_handler!(
     crate::BackendAction::HistoricalSavePlan,
     "history_tree_id"
 );
-
-id_post_handler!(plan_commit, crate::BackendAction::PlanCommit, "plan_id");
-id_post_handler!(plan_cancel, crate::BackendAction::PlanCancel, "plan_id");
 
 async fn management_status(State(state): State<AppState>) -> Json<Value> {
     // Never wait on password verification or credential publication on a Tokio

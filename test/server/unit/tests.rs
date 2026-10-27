@@ -261,6 +261,69 @@ impl Backend for TestBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn merge_file_branches(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::MergeFileBranches,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn update_file_node_tags(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdateFileNodeTags,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn create_disk_directory(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn create_disk_write_session(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateDiskWriteSession,
+    ) -> Result<crate::DiskWriteSession, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn backup_configuration(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadBackupConfiguration,
+    ) -> Result<storage_contract::BackupConfigurationSnapshot, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn configure_backups(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ConfigureBackups,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn plan(
+        &self,
+        _identity: &crate::auth::Identity,
+        _plan: &str,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn cancel_plan(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::CancelPlan, crate::ApiError>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn commit_plan(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::CommitPlan, crate::ApiError>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn namespace_batch(
         &self,
         _identity: &crate::auth::Identity,
@@ -1386,6 +1449,69 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             request: crate::UpdateNote,
         ) -> Result<storage_contract::OperationResult, crate::ApiError> {
             self.delegate.update_note(identity, request)
+        }
+        fn merge_file_branches(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::MergeFileBranches,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.merge_file_branches(identity, request)
+        }
+        fn update_file_node_tags(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::UpdateFileNodeTags,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.update_file_node_tags(identity, request)
+        }
+        fn create_disk_directory(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::CreateDiskDirectory,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.create_disk_directory(identity, request)
+        }
+        fn create_disk_write_session(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::CreateDiskWriteSession,
+        ) -> Result<crate::DiskWriteSession, crate::ApiError> {
+            self.delegate.create_disk_write_session(identity, request)
+        }
+        fn backup_configuration(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::ReadBackupConfiguration,
+        ) -> Result<storage_contract::BackupConfigurationSnapshot, crate::ApiError> {
+            self.delegate.backup_configuration(identity, request)
+        }
+        fn configure_backups(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::ConfigureBackups,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.configure_backups(identity, request)
+        }
+        fn plan(
+            &self,
+            identity: &crate::auth::Identity,
+            plan: &str,
+        ) -> Result<storage_contract::Plan, crate::ApiError> {
+            self.delegate.plan(identity, plan)
+        }
+        fn cancel_plan(
+            &self,
+            identity: &crate::auth::Identity,
+            request: Result<crate::CancelPlan, crate::ApiError>,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.cancel_plan(identity, request)
+        }
+        fn commit_plan(
+            &self,
+            identity: &crate::auth::Identity,
+            request: Result<crate::CommitPlan, crate::ApiError>,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.commit_plan(identity, request)
         }
         fn namespace_batch(
             &self,

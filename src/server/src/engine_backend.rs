@@ -22,7 +22,7 @@ mod operations;
 mod read_projection;
 mod wire;
 pub(crate) use wire::error;
-use wire::{current_entry_source, encode, field, keys, operation, operation_wire, sanitized};
+use wire::{current_entry_source, encode, field, keys};
 
 pub(crate) fn report_recovery_warnings(engine: &mut Engine) {
     let warnings = engine.take_recovery_warnings();
@@ -855,6 +855,110 @@ impl Backend for EngineBackend {
         }
         .map_err(error)
     }
+    fn merge_file_branches(
+        &self,
+        identity: &Identity,
+        request: crate::MergeFileBranches,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        application::Application::new(&mut engine, &current).merge_file_branches(request)
+    }
+    fn update_file_node_tags(
+        &self,
+        identity: &Identity,
+        request: crate::UpdateFileNodeTags,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        application::Application::new(&mut engine, &current).authorize_file(&request.file_id)?;
+        engine
+            .update_file_node_tags(storage_engine::FileNodeTagsUpdateRequest {
+                file_id: &request.file_id,
+                targets: &request.targets,
+                add: &request.add,
+                remove: &request.remove,
+                location: request.location.as_ref(),
+                principal: &current.principal,
+                operation_id: request.operation_id,
+            })
+            .map_err(error)
+    }
+    fn create_disk_directory(
+        &self,
+        identity: &Identity,
+        request: crate::CreateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        file_manager::mkdir(&mut engine, &current, request)
+    }
+    fn create_disk_write_session(
+        &self,
+        identity: &Identity,
+        request: crate::CreateDiskWriteSession,
+    ) -> Result<crate::DiskWriteSession, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        file_manager::write_session(&mut engine, &current, request)
+    }
+    fn backup_configuration(
+        &self,
+        identity: &Identity,
+        request: crate::ReadBackupConfiguration,
+    ) -> Result<storage_contract::BackupConfigurationSnapshot, ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        repository(&engine, &request.repository_id)?;
+        engine
+            .backup_configuration(&request.repository_id, &request.path)
+            .map_err(error)
+    }
+    fn configure_backups(
+        &self,
+        identity: &Identity,
+        request: crate::ConfigureBackups,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        repository(&engine, &request.repository_id)?;
+        engine
+            .configure_backups_scoped(storage_engine::ScopedBackupConfigurationRequest {
+                repository_id: &request.repository_id,
+                path: &request.path,
+                expected_scope_id: Some(&request.expected_scope_id),
+                target_copies: request.target_copies,
+                backup_prefixes: &request.backup_prefixes,
+                expected_generation: request.expected_generation,
+                principal: &current.principal,
+                operation_id: request.operation_id,
+            })
+            .map_err(|failure| match failure.code() {
+                storage_contract::ErrorCode::RouteIncomplete
+                | storage_contract::ErrorCode::ScopeChanged => {
+                    ApiError::conflict(failure.code(), &failure.message()).with_source(failure)
+                }
+                _ => error(failure),
+            })
+    }
     fn namespace_batch(
         &self,
         identity: &Identity,
@@ -1394,6 +1498,47 @@ impl Backend for EngineBackend {
             .map(|index| snapshot.entries[index].clone()))
     }
 
+    fn plan(&self, identity: &Identity, plan_id: &str) -> Result<storage_contract::Plan, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        let identity = current_protected_identity(&engine, identity)?;
+        let plan = engine.plan(plan_id).map_err(error)?;
+        if plan.principal != identity.principal {
+            return Err(ApiError::forbidden());
+        }
+        repo_for_history(&engine, field(&plan.input, "history_tree_id")?)?;
+        Ok(plan)
+    }
+    fn cancel_plan(
+        &self,
+        identity: &Identity,
+        request: Result<crate::CancelPlan, crate::ApiError>,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self.engine.lock().expect("service state lock poisoned");
+        let identity = current_protected_identity(&engine, identity)?;
+        let request = request?;
+        let plan = engine.plan(&request.plan_id).map_err(error)?;
+        if plan.principal != identity.principal {
+            return Err(ApiError::forbidden());
+        }
+        repo_for_history(&engine, field(&plan.input, "history_tree_id")?)?;
+        engine
+            .cancel_plan(&request.plan_id, &identity.principal, request.operation_id?)
+            .map_err(error)
+    }
+
+    fn commit_plan(
+        &self,
+        identity: &Identity,
+        request: Result<crate::CommitPlan, ApiError>,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let identity = current_protected_identity(&engine, identity)?;
+        Application::new(&mut engine, &identity).commit_plan(request?)
+    }
+
     fn call(
         &self,
         action: crate::BackendAction,
@@ -1404,41 +1549,6 @@ impl Backend for EngineBackend {
         let current = current_protected_identity(&engine, identity)?;
         let identity = &current;
         match action {
-            crate::BackendAction::FileManagerBackupConfiguration => {
-                file_manager::read(&engine, action, input)
-            }
-            crate::BackendAction::FileManagerConfigureBackups
-            | crate::BackendAction::FileManagerMerge
-            | crate::BackendAction::FileManagerNamespace
-            | crate::BackendAction::FileManagerTags
-            | crate::BackendAction::FileManagerWriteSession => {
-                file_manager::call(&mut engine, identity, action, input)
-            }
-            crate::BackendAction::Plan => {
-                let plan = engine.plan(field(&input, "plan_id")?).map_err(error)?;
-                if plan.principal != identity.principal {
-                    return Err(ApiError::forbidden());
-                }
-                repo_for_history(&engine, field(&plan.input, "history_tree_id")?)?;
-                encode(plan)
-            }
-            crate::BackendAction::PlanCancel => {
-                keys(&input, &["plan_id", "operation_id"])?;
-                let plan = engine.plan(field(&input, "plan_id")?).map_err(error)?;
-                if plan.principal != identity.principal {
-                    return Err(ApiError::forbidden());
-                }
-                repo_for_history(&engine, field(&plan.input, "history_tree_id")?)?;
-                encode(
-                    engine
-                        .cancel_plan(
-                            field(&input, "plan_id")?,
-                            &identity.principal,
-                            operation(&input)?,
-                        )
-                        .map_err(error)?,
-                )
-            }
             crate::BackendAction::HistoricalSavePlan => {
                 keys(
                     &input,
@@ -1493,13 +1603,6 @@ impl Backend for EngineBackend {
                         )
                         .map_err(error)?,
                 )
-            }
-            crate::BackendAction::PlanCommit => {
-                for key in ["plan_id", "operation_id", "plan_digest"] {
-                    field(&input, key)?;
-                }
-                let command = json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-                encode(Application::new(&mut engine, identity).commit_plan(command)?)
             }
             crate::BackendAction::RegisterDisk => Err(ApiError::new(
                 ::http::StatusCode::CONFLICT,

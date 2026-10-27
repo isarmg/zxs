@@ -159,9 +159,8 @@ fn backup_paths_backfill_all_versions_and_survive_primary_moves_and_new_writes()
     let read = engine
         .backup_configuration(&repo.repository_id, "moved/deep/renamed.txt")
         .unwrap();
-    assert_eq!(read["inherited"], true);
-    assert_eq!(read["generation"], "0");
-    assert!(read.get("can_manage").is_none());
+    assert!(read.inherited);
+    assert_eq!(read.generation, 0);
     engine
         .configure_backups(crate::BackupConfigurationRequest {
             repository_id: &repo.repository_id,
@@ -519,11 +518,14 @@ fn configuration_exposes_all_historical_primary_chains_before_collecting_prefixe
         .backup_configuration(&repo.repository_id, "a.txt")
         .unwrap();
     assert_eq!(
-        read["backup_routes"],
+        json_codec::json!(read.backup_routes),
         json!([["P01", "B01", "C01"], ["P02", "B02"]])
     );
-    assert_eq!(read["backup_slot_ids"], json!(["B01", "B02", "C01"]));
-    assert_eq!(read["max_copies"], 2);
+    assert_eq!(
+        json_codec::json!(read.backup_slot_ids),
+        json!(["B01", "B02", "C01"])
+    );
+    assert_eq!(read.max_copies, 2);
     let before = canonical_json(engine.state()).unwrap();
     assert_eq!(
         engine
@@ -647,8 +649,8 @@ fn top_level_backup_policy_overrides_root_regardless_of_policy_id_order() {
         let read = engine
             .backup_configuration(&repo.repository_id, "docs")
             .unwrap();
-        assert_eq!(read["effective_policy_id"], child_policy);
-        assert_eq!(read["target_copies"], 3);
+        assert_eq!(read.effective_policy_id.as_deref().unwrap(), child_policy);
+        assert_eq!(read.target_copies, 3);
         drop(engine);
         let mut engine = Engine::open(&temp.path().join("state")).unwrap();
         let after = save(&mut engine, &repo, "docs/after.txt", b"after reopen");
@@ -759,8 +761,8 @@ fn one_copy_scoped_policy_binds_new_files_and_survives_moves_and_reopen() {
     let read = engine
         .backup_configuration(&repo.repository_id, "destination/after.txt")
         .unwrap();
-    assert_eq!(read["effective_policy_id"], policy_id);
-    assert_eq!(read["target_copies"], 1);
+    assert_eq!(read.effective_policy_id.as_deref().unwrap(), policy_id);
+    assert_eq!(read.target_copies, 1);
 }
 
 #[test]

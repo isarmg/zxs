@@ -18,7 +18,7 @@ mod repository;
 mod workspace;
 pub(crate) use ancestry::descendant_commits;
 pub use file_nodes::{FileNodeProjectionRequest, FileNodeSummary};
-pub use file_requests::{FileBranchMergeRequest, FileLocation, FileNodeTagsUpdateRequest};
+pub use file_requests::{FileBranchMergeRequest, FileNodeTagsUpdateRequest};
 pub use namespace::NamespaceTree;
 pub(crate) use namespace::{
     apply_namespace, apply_workspace_namespace, deletion_record, ensure_parents, find_unordered,

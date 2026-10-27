@@ -302,6 +302,69 @@ impl Backend for NamespaceAfterWorkspace {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.update_note(identity, request)
     }
+    fn merge_file_branches(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::MergeFileBranches,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.merge_file_branches(identity, request)
+    }
+    fn update_file_node_tags(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateFileNodeTags,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.update_file_node_tags(identity, request)
+    }
+    fn create_disk_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.create_disk_directory(identity, request)
+    }
+    fn create_disk_write_session(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateDiskWriteSession,
+    ) -> Result<crate::DiskWriteSession, crate::ApiError> {
+        self.inner.create_disk_write_session(identity, request)
+    }
+    fn backup_configuration(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadBackupConfiguration,
+    ) -> Result<storage_contract::BackupConfigurationSnapshot, crate::ApiError> {
+        self.inner.backup_configuration(identity, request)
+    }
+    fn configure_backups(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ConfigureBackups,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.configure_backups(identity, request)
+    }
+    fn plan(
+        &self,
+        identity: &crate::auth::Identity,
+        plan: &str,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.inner.plan(identity, plan)
+    }
+    fn cancel_plan(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::CancelPlan, crate::ApiError>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.cancel_plan(identity, request)
+    }
+    fn commit_plan(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::CommitPlan, crate::ApiError>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.commit_plan(identity, request)
+    }
     fn namespace_batch(
         &self,
         identity: &crate::auth::Identity,

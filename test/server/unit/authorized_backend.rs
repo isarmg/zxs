@@ -71,6 +71,18 @@ fn upload_arguments(workspace: &str, item: &str, path: &str, source: &UploadSour
         "fd": source.file.as_raw_fd(), "size": source.size, "hash": source.hash})
 }
 
+fn recorded_plan(id: &str) -> storage_contract::Plan {
+    storage_contract::Plan {
+        plan_id: id.into(),
+        kind: "purge".into(),
+        principal: "admin".into(),
+        expected_sequence: u64::MAX,
+        digest: "digest".into(),
+        input: json!({"history_tree_id":"history"}),
+        state: storage_contract::PlanState::Ready,
+    }
+}
+
 fn recorded_operation(
     operation_id: storage_contract::OperationId,
     method: &str,
@@ -87,6 +99,30 @@ fn recorded_operation(
         request_digest: "digest".into(),
         sequence: 7,
         result: json!({"returned_by":method}),
+    }
+}
+
+fn recorded_backup_configuration() -> storage_contract::BackupConfigurationSnapshot {
+    storage_contract::BackupConfigurationSnapshot {
+        scope: storage_contract::BackupScope {
+            id: "scope".into(),
+            kind: storage_contract::NamespaceEntryKind::Directory,
+            path: "docs".into(),
+        },
+        policy_id: None,
+        effective_policy_id: Some("parent".into()),
+        generation: 0,
+        effective_generation: 7,
+        inherited: true,
+        target_copies: 2,
+        backup_prefixes: BTreeMap::from([("B01".into(), "backup".into())]),
+        route_slot_ids: vec!["P01".into(), "B01".into()],
+        available_route_slot_ids: vec!["P01".into(), "B01".into()],
+        backup_routes: vec![vec!["P01".into(), "B01".into()]],
+        backup_slot_ids: std::collections::BTreeSet::from(["B01".into()]),
+        max_copies: 2,
+        file_count: 3,
+        backup_paths: BTreeMap::new(),
     }
 }
 
@@ -486,6 +522,142 @@ impl Backend for RecordingBackend {
             json!({"target":format!("{:?}",request.target),"note":request.note.as_str(),"operation_id":request.operation_id}),
         )?;
         Ok(recorded_operation(request.operation_id, "update_note"))
+    }
+    fn merge_file_branches(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::MergeFileBranches,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record(
+            "merge_file_branches",
+            Some(identity),
+            json!({"file_id":request.file_id,"inputs":request.inputs,"chosen_node_id":request.chosen_node_id,"surviving_branch_id":request.surviving_branch_id,"confirmed":request.confirmed,"location":request.location,"operation_id":request.operation_id}),
+        )?;
+        Ok(recorded_operation(
+            request.operation_id,
+            "merge_file_branches",
+        ))
+    }
+    fn update_file_node_tags(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateFileNodeTags,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record(
+            "update_file_node_tags",
+            Some(identity),
+            json!({"file_id":request.file_id,"targets":request.targets,"add":request.add,"remove":request.remove,"location":request.location,"operation_id":request.operation_id}),
+        )?;
+        Ok(recorded_operation(
+            request.operation_id,
+            "update_file_node_tags",
+        ))
+    }
+    fn create_disk_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record(
+            "create_disk_directory",
+            Some(identity),
+            json!({"slot_id":request.slot_id,"path":request.path.as_str(),"key":request.path.key(),"operation_id":request.operation_id}),
+        )?;
+        Ok(recorded_operation(
+            request.operation_id,
+            "create_disk_directory",
+        ))
+    }
+    fn create_disk_write_session(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateDiskWriteSession,
+    ) -> Result<crate::DiskWriteSession, crate::ApiError> {
+        self.record(
+            "create_disk_write_session",
+            Some(identity),
+            json!({"slot_id":request.slot_id,"path":request.path.as_str(),"key":request.path.key(),"branch_id":request.branch_id.as_ref().map(crate::WriteSessionBranchId::as_str)}),
+        )?;
+        Ok(crate::DiskWriteSession {
+            workspace: storage_contract::Workspace {
+                workspace_id: "disk-workspace".into(),
+                purpose: storage_contract::WorkspacePurpose::Normal,
+                branch_id: "namespace-branch".into(),
+                principal: identity.principal.clone(),
+                base_head: "head".into(),
+                fencing_token: 11,
+                files: BTreeMap::new(),
+                selected_file_branches: BTreeMap::new(),
+                selected_file_contexts: BTreeMap::new(),
+                selected_directory_branches: BTreeMap::new(),
+                directory_selection_generations: BTreeMap::new(),
+                file_selection_generations: BTreeMap::new(),
+                namespace_operations: Vec::new(),
+                created_at: 10,
+                state: storage_contract::WorkspaceState::Open,
+            },
+            relative_path: "file.txt".into(),
+            display_path: request.path.into_string(),
+        })
+    }
+    fn backup_configuration(
+        &self,
+        identity: &Identity,
+        request: crate::ReadBackupConfiguration,
+    ) -> Result<storage_contract::BackupConfigurationSnapshot, ApiError> {
+        self.record(
+            "backup_configuration",
+            Some(identity),
+            json!({"repository_id":request.repository_id,"path":request.path}),
+        )?;
+        Ok(recorded_backup_configuration())
+    }
+    fn configure_backups(
+        &self,
+        identity: &Identity,
+        request: crate::ConfigureBackups,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.record("configure_backups", Some(identity), json!({"repository_id":request.repository_id,"path":request.path,"target_copies":request.target_copies,"backup_prefixes":request.backup_prefixes,"expected_generation":request.expected_generation,"expected_scope_id":request.expected_scope_id,"operation_id":request.operation_id}))?;
+        Ok(recorded_operation(
+            request.operation_id,
+            "configure_backups",
+        ))
+    }
+    fn plan(
+        &self,
+        identity: &crate::auth::Identity,
+        plan: &str,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.record("plan", Some(identity), json!({"plan_id":plan}))?;
+        Ok(recorded_plan(plan))
+    }
+    fn cancel_plan(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::CancelPlan, crate::ApiError>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        let request = request?;
+        let operation_id = request.operation_id?;
+        self.record(
+            "cancel_plan",
+            Some(identity),
+            json!({"plan_id":request.plan_id,"operation_id":operation_id}),
+        )?;
+        Ok(recorded_operation(operation_id, "cancel_plan"))
+    }
+    fn commit_plan(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::CommitPlan, crate::ApiError>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        let request = request?;
+        let operation_id = request.operation_id?;
+        self.record(
+            "commit_plan",
+            Some(identity),
+            json!({"plan_id":request.plan_id,"plan_digest":request.plan_digest,"operation_id":operation_id}),
+        )?;
+        Ok(recorded_operation(operation_id, "commit_plan"))
     }
     fn namespace_batch(
         &self,
@@ -1344,6 +1516,22 @@ impl Fixture {
             ("update_note", {
                 backend.update_note(identity,crate::UpdateNote {target:crate::NoteTarget::Node {file:"file".into(),node:"node".into()},note:storage_contract::Note::parse("".into()).unwrap(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"update_note"));json!({"returned_by":"update_note"})})
             }),
+            ("merge_file_branches", {backend.merge_file_branches(identity,crate::MergeFileBranches {file_id:"file".into(),inputs:vec![storage_contract::FileMergeInput {branch_id:"branch".into(),expected_node_id:"head".into()}],chosen_node_id:"chosen".into(),surviving_branch_id:"branch".into(),confirmed:true,location:None,operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"merge_file_branches"));json!({"returned_by":"merge_file_branches"})})}),
+            ("merge_file_branches", {backend.merge_file_branches(identity,crate::MergeFileBranches {file_id:"file".into(),inputs:vec![storage_contract::FileMergeInput {branch_id:"branch".into(),expected_node_id:"head".into()}],chosen_node_id:"chosen".into(),surviving_branch_id:"branch".into(),confirmed:true,location:Some(storage_contract::FileLocation {repository_id:"repo".into(),path:"file.txt".into()}),operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"merge_file_branches"));json!({"returned_by":"merge_file_branches"})})}),
+            ("update_file_node_tags", {backend.update_file_node_tags(identity,crate::UpdateFileNodeTags {file_id:"file".into(),targets:vec![storage_contract::FileTagTarget {branch_id:"branch".into(),expected_node_id:"head".into(),source_node_id:"source".into()}],add:vec!["added".into()],remove:vec!["removed".into()],location:None,operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"update_file_node_tags"));json!({"returned_by":"update_file_node_tags"})})}),
+            ("update_file_node_tags", {backend.update_file_node_tags(identity,crate::UpdateFileNodeTags {file_id:"file".into(),targets:vec![storage_contract::FileTagTarget {branch_id:"branch".into(),expected_node_id:"head".into(),source_node_id:"source".into()}],add:vec!["added".into()],remove:vec!["removed".into()],location:Some(storage_contract::FileLocation {repository_id:"repo".into(),path:"file.txt".into()}),operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"update_file_node_tags"));json!({"returned_by":"update_file_node_tags"})})}),
+            ("create_disk_directory", {backend.create_disk_directory(identity,crate::CreateDiskDirectory {slot_id:"P01".into(),path:name_policy::PortablePath::parse("Café/folder").unwrap(),operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"create_disk_directory"));json!({"returned_by":"create_disk_directory"})})}),
+            ("create_disk_write_session", {backend.create_disk_write_session(identity,crate::CreateDiskWriteSession {slot_id:"P01".into(),path:name_policy::PortablePath::parse("Café/file.txt").unwrap(),branch_id:None}).map(|session|{assert_eq!(session.workspace.workspace_id,"disk-workspace");assert_eq!(session.relative_path,"file.txt");assert_eq!(session.display_path,"Café/file.txt");json!({"returned_by":"create_disk_write_session"})})}),
+            ("create_disk_write_session", {backend.create_disk_write_session(identity,crate::CreateDiskWriteSession {slot_id:"P01".into(),path:name_policy::PortablePath::parse("Café/file.txt").unwrap(),branch_id:Some("br_00000000000000000000000000000000".to_owned().try_into().unwrap())}).map(|session|{assert_eq!(session.workspace.workspace_id,"disk-workspace");assert_eq!(session.relative_path,"file.txt");assert_eq!(session.display_path,"Café/file.txt");json!({"returned_by":"create_disk_write_session"})})}),
+            ("backup_configuration", {
+                backend.backup_configuration(identity, crate::ReadBackupConfiguration {repository_id:"repository".into(),path:"docs".into()}).map(|result| {assert_eq!(result,recorded_backup_configuration());json!({"returned_by":"backup_configuration"})})
+            }),
+            ("configure_backups", {
+                backend.configure_backups(identity,crate::ConfigureBackups {repository_id:"repository".into(),path:"docs".into(),target_copies:2,backup_prefixes:BTreeMap::from([("B01".into(),"backup".into())]),expected_generation:7,expected_scope_id:"scope".into(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"configure_backups"));json!({"returned_by":"configure_backups"})})
+            }),
+            ("plan", backend.plan(identity,"plan").map(|plan| { assert_eq!(plan,recorded_plan("plan")); json!({"returned_by":"plan"}) })),
+            ("cancel_plan", backend.cancel_plan(identity,Ok(crate::CancelPlan {plan_id:"plan".into(),operation_id:Ok(operation_id)})).map(|operation| { assert_eq!(operation,recorded_operation(operation_id,"cancel_plan")); json!({"returned_by":"cancel_plan"}) })),
+            ("commit_plan", backend.commit_plan(identity,Ok(crate::CommitPlan {plan_id:"plan".into(),plan_digest:"digest".into(),operation_id:Ok(operation_id)})).map(|operation| { assert_eq!(operation,recorded_operation(operation_id,"commit_plan")); json!({"returned_by":"commit_plan"}) })),
             ("namespace_batch", {
                 backend.namespace_batch(identity,crate::NamespaceBatch {slot_id:"P01".into(),request:storage_contract::DirectoryNamespaceBatch {kind:storage_contract::DirectoryBatchKind::Delete,items:vec![]},operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"namespace_batch"));json!({"returned_by":"namespace_batch"})})
             }),
@@ -1682,7 +1870,7 @@ impl Fixture {
             ),
             (
                 "call",
-                backend.call(BackendAction::Plan, identity, json!({"probe": 7})),
+                backend.call(BackendAction::PurgePlan, identity, json!({"probe": 7})),
             ),
             (
                 "upload",
@@ -1826,6 +2014,18 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"target":"File(\"file\")","note":"","operation_id":"op_00000000000000000000000000000000"}),
         json!({"target":"Version(\"version\")","note":"","operation_id":"op_00000000000000000000000000000000"}),
         json!({"target":"Node { file: \"file\", node: \"node\" }","note":"","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"file_id":"file","inputs":[{"branch_id":"branch","expected_node_id":"head"}],"chosen_node_id":"chosen","surviving_branch_id":"branch","confirmed":true,"location":null,"operation_id":"op_00000000000000000000000000000000"}),
+        json!({"file_id":"file","inputs":[{"branch_id":"branch","expected_node_id":"head"}],"chosen_node_id":"chosen","surviving_branch_id":"branch","confirmed":true,"location":{"repository_id":"repo","path":"file.txt"},"operation_id":"op_00000000000000000000000000000000"}),
+        json!({"file_id":"file","targets":[{"branch_id":"branch","expected_node_id":"head","source_node_id":"source"}],"add":["added"],"remove":["removed"],"location":null,"operation_id":"op_00000000000000000000000000000000"}),
+        json!({"file_id":"file","targets":[{"branch_id":"branch","expected_node_id":"head","source_node_id":"source"}],"add":["added"],"remove":["removed"],"location":{"repository_id":"repo","path":"file.txt"},"operation_id":"op_00000000000000000000000000000000"}),
+        json!({"slot_id":"P01","path":"Café/folder","key":"café/folder","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"slot_id":"P01","path":"Café/file.txt","key":"café/file.txt","branch_id":null}),
+        json!({"slot_id":"P01","path":"Café/file.txt","key":"café/file.txt","branch_id":"br_00000000000000000000000000000000"}),
+        json!({"repository_id":"repository","path":"docs"}),
+        json!({"repository_id":"repository","path":"docs","target_copies":2,"backup_prefixes":{"B01":"backup"},"expected_generation":7,"expected_scope_id":"scope","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"plan_id":"plan"}),
+        json!({"plan_id":"plan","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"plan_id":"plan","plan_digest":"digest","operation_id":"op_00000000000000000000000000000000"}),
         json!({"slot_id":"P01","request":{"kind":"delete","items":[]},"operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","branch_id":"branch","location":null,"operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","branch_id":"branch","location":{"repository_id":"repository","path":"Café/file.txt","key":"café/file.txt"},"operation_id":"op_00000000000000000000000000000000"}),
@@ -1863,7 +2063,7 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"branch":"branch","entry_id":"branch"}),
         json!({"branch":"branch","path":"File.txt","key":"file.txt"}),
         json!({"branch":"branch","commit":"commit","path":"File.txt","key":"file.txt"}),
-        json!({"action": format!("{:?}", BackendAction::Plan), "input": {"probe": 7}}),
+        json!({"action": format!("{:?}", BackendAction::PurgePlan), "input": {"probe": 7}}),
         upload,
         generation,
         json!({"version": "version-content"}),

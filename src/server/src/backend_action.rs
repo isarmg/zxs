@@ -10,16 +10,7 @@ macro_rules! actions {
     };
 }
 actions! {
-    FileManagerBackupConfiguration,
-    FileManagerConfigureBackups,
-    FileManagerMerge,
-    FileManagerNamespace,
-    FileManagerTags,
-    FileManagerWriteSession,
     HistoricalSavePlan,
-    Plan,
-    PlanCancel,
-    PlanCommit,
     PurgePlan,
     RegisterDisk,
     SplitPlan,

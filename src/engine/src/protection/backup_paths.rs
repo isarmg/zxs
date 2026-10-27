@@ -4,7 +4,6 @@ use crate::{
     business::{find_unordered, now},
     engine::Prepared,
 };
-use json_codec::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Backup placement for a path, fenced by the current policy generation.
@@ -456,7 +455,11 @@ pub(crate) fn apply_backup_paths(
 }
 
 impl Engine {
-    pub fn backup_configuration(&self, repository: &str, path: &str) -> Result<Value> {
+    pub fn backup_configuration(
+        &self,
+        repository: &str,
+        path: &str,
+    ) -> Result<storage_contract::BackupConfigurationSnapshot> {
         let mut scope = source_scope(&self.state, repository, path)?;
         let exact = exact_policy(&self.state, repository, &scope);
         let effective = effective_policy(
@@ -494,8 +497,12 @@ impl Engine {
             .iter()
             .find(|route| route.first() == Some(&primary))
             .cloned()
-            .expect("default primary chain is included");
-        let maximum = routes.iter().map(Vec::len).min().unwrap_or(1);
+            .expect("invariant: default primary chain is included");
+        let maximum = routes
+            .iter()
+            .map(Vec::len)
+            .min()
+            .expect("invariant: routes include the default primary chain");
         let requested_route = match self.route(&primary, copies) {
             Ok(route) => route,
             Err(error) if error.code() == storage_contract::ErrorCode::RouteIncomplete => {
@@ -508,9 +515,38 @@ impl Engine {
             .flat_map(|route| route.iter().skip(1))
             .cloned()
             .collect::<BTreeSet<_>>();
-        Ok(
-            json!({"scope":{"id":scope.id,"kind":scope.kind,"path":scope.path},"policy_id":exact.map(|policy|&policy.policy_id),"effective_policy_id":effective.map(|policy|&policy.policy_id),"generation":exact.map_or(0,|policy|policy.generation).to_string(),"effective_generation":effective.map_or(0,|policy|policy.generation).to_string(),"inherited":inherited,"target_copies":copies,"backup_prefixes":effective.map(|policy|policy.backup_prefixes.clone()).unwrap_or_default(),"route_slot_ids":requested_route,"available_route_slot_ids":available_route,"backup_routes":routes,"backup_slot_ids":backup_slots,"max_copies":maximum,"file_count":scope.files.len().to_string(),"backup_paths":if scope.kind == NamespaceEntryKind::File{self.state.file_backup_paths.get(&scope.id).cloned().unwrap_or_default()}else{BTreeMap::new()}}),
-        )
+        let backup_paths = if scope.kind == NamespaceEntryKind::File {
+            self.state
+                .file_backup_paths
+                .get(&scope.id)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            BTreeMap::new()
+        };
+        Ok(storage_contract::BackupConfigurationSnapshot {
+            scope: storage_contract::BackupScope {
+                id: scope.id,
+                kind: scope.kind,
+                path: scope.path,
+            },
+            policy_id: exact.map(|policy| policy.policy_id.clone()),
+            effective_policy_id: effective.map(|policy| policy.policy_id.clone()),
+            generation: exact.map_or(0, |policy| policy.generation),
+            effective_generation: effective.map_or(0, |policy| policy.generation),
+            inherited,
+            target_copies: copies,
+            backup_prefixes: effective
+                .map(|policy| policy.backup_prefixes.clone())
+                .unwrap_or_default(),
+            route_slot_ids: requested_route,
+            available_route_slot_ids: available_route,
+            backup_routes: routes,
+            backup_slot_ids: backup_slots,
+            max_copies: maximum,
+            file_count: scope.files.len() as u64,
+            backup_paths,
+        })
     }
 
     pub fn configure_backups(

@@ -251,11 +251,6 @@ pub(super) fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, ApiError
         .filter(|v| !v.is_empty())
         .ok_or_else(|| ApiError::invalid(format!("missing string field {key}")))
 }
-pub(super) fn operation(input: &Value) -> Result<storage_contract::OperationId, ApiError> {
-    field(input, "operation_id")?
-        .parse::<storage_contract::OperationId>()
-        .map_err(|source| error(source.into()))
-}
 pub(super) fn keys(input: &Value, allowed: &[&str]) -> Result<(), ApiError> {
     let object = input
         .as_object()
@@ -265,28 +260,6 @@ pub(super) fn keys(input: &Value, allowed: &[&str]) -> Result<(), ApiError> {
     }
     Ok(())
 }
-pub(super) fn sanitized<T: Serialize>(value: T) -> Result<Value, ApiError> {
-    let mut value = encode(value)?;
-    redact(&mut value);
-    Ok(value)
-}
-fn redact(value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            object.remove("source_path");
-            for value in object.values_mut() {
-                redact(value);
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                redact(value);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-    }
-}
-pub(super) use crate::operation_wire::operation_wire;
 
 #[cfg(test)]
 #[path = "../../../../test/server/unit/engine_backend/wire_tests.rs"]

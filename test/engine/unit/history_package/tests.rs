@@ -151,8 +151,8 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
         let configuration = restored
             .backup_configuration(&repo.repository_id, path)
             .unwrap();
-        assert_eq!(configuration["target_copies"], 2);
-        assert_eq!(configuration["backup_prefixes"]["B01"], "chosen-backup");
+        assert_eq!(configuration.target_copies, 2);
+        assert_eq!(configuration.backup_prefixes["B01"], "chosen-backup");
         let file_path = if path.is_empty() {
             "file.txt"
         } else {
@@ -186,7 +186,8 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
         assert_eq!(
             restored
                 .backup_configuration(&repo.repository_id, path)
-                .unwrap()["backup_prefixes"]["B01"],
+                .unwrap()
+                .backup_prefixes["B01"],
             "chosen-backup"
         );
 
@@ -203,8 +204,8 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
         let configuration = reduced
             .backup_configuration(&repo.repository_id, path)
             .unwrap();
-        assert_eq!(configuration["target_copies"], 1);
-        assert_eq!(configuration["backup_prefixes"], json!({}));
+        assert_eq!(configuration.target_copies, 1);
+        assert_eq!(json_codec::json!(configuration.backup_prefixes), json!({}));
 
         for (name, copies, renamed) in [("expanded", 3, false), ("renamed", 2, true)] {
             let root = temp.path().join(name);
@@ -305,7 +306,7 @@ fn restore_backup_prefixes_preserve_evidenced_positions_and_reject_identity_coll
             } else {
                 json!({"C01":"first-tier", "B01":"second-tier"})
             };
-            assert_eq!(configuration["backup_prefixes"], expected);
+            assert_eq!(json_codec::json!(configuration.backup_prefixes), expected);
         }
     }
 }

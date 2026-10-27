@@ -324,6 +324,78 @@ impl Backend for BackendProbe {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
+    fn merge_file_branches(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::MergeFileBranches,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn plan(
+        &self,
+        _identity: &crate::auth::Identity,
+        _plan: &str,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn cancel_plan(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::CancelPlan, crate::ApiError>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn backup_configuration(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadBackupConfiguration,
+    ) -> Result<storage_contract::BackupConfigurationSnapshot, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn configure_backups(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ConfigureBackups,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn commit_plan(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::CommitPlan, crate::ApiError>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn update_file_node_tags(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdateFileNodeTags,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn create_disk_directory(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn create_disk_write_session(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateDiskWriteSession,
+    ) -> Result<crate::DiskWriteSession, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn namespace_batch(
         &self,
         _identity: &crate::auth::Identity,
@@ -860,8 +932,8 @@ async fn upload_status_retains_read_admission_after_cancellation() {
     );
 }
 
-async fn workspace_request(app: Router, method: &str, path: &str) -> Response {
-    let body = if path == "/api/workspaces" {
+fn workspace_body(method: &str, path: &str) -> Value {
+    if path == "/api/workspaces" {
         json!({"branch_id":"branch"})
     } else if method == "PUT" && path.starts_with("/api/policies/") {
         json!({"repository_id":"repository","path_prefix":"Folder","target_copies":3,"expected_generation":"0","operation_id":"op_00000000000000000000000000000000"})
@@ -879,8 +951,22 @@ async fn workspace_request(app: Router, method: &str, path: &str) -> Response {
         json!({"note":"","operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST" && path.ends_with("/select") {
         json!({"branch_id":"branch","operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "PUT" && path.ends_with("/backup-configuration") {
+        json!({"path":"","target_copies":2,"backup_prefixes":{"B01":"backup"},"expected_generation":"0","expected_scope_id":"scope","operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "POST" && path.starts_with("/api/plans/") && path.ends_with("/commit") {
+        json!({"operation_id":"op_00000000000000000000000000000000","plan_digest":"digest"})
+    } else if method == "POST" && path.ends_with("/cancel") {
+        json!({"operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST" && path.ends_with("/namespace-batch") {
         json!({"kind":"delete","items":[],"operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "POST" && path.ends_with("/merge") {
+        json!({"inputs":[],"chosen_node_id":"node","surviving_branch_id":"branch","confirmed":true,"operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "POST" && path.ends_with("/tags") {
+        json!({"targets":[],"add":[],"remove":[],"operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "POST" && path == "/api/file-manager/disks/P01/namespace" {
+        json!({"kind":"mkdir","path":"folder","operation_id":"op_00000000000000000000000000000000"})
+    } else if method == "POST" && path == "/api/file-manager/disks/P01/write-sessions" {
+        json!({"path":"file.txt"})
     } else if method == "POST" && path == "/api/repositories" {
         json!({"name":"Repository","primary_slot_id":"P01","target_copies":3,"operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST"
@@ -915,7 +1001,11 @@ async fn workspace_request(app: Router, method: &str, path: &str) -> Response {
         json!({"workspace_id":"workspace","operation_id":"op_00000000000000000000000000000000","repository_id":"repo","branch_id":"branch","expected_head":"head","fencing_token":"1","message":"","requested_protection":"strict","file_placement":{},"expected_topology_generation":"1","sealed_manifest_hash":"manifest","request_digest":"digest"})
     } else {
         json!({})
-    };
+    }
+}
+
+async fn workspace_request(app: Router, method: &str, path: &str) -> Response {
+    let body = workspace_body(method, path);
     app.oneshot(
         Request::builder()
             .method(method)
@@ -941,6 +1031,15 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
         ("POST", "/api/file-manager/files/file/metadata"),
         ("POST", "/api/file-manager/versions/version/metadata"),
         ("PATCH", "/api/file-manager/files/file/nodes/node"),
+        ("POST", "/api/file-manager/files/file/merge"),
+        ("POST", "/api/file-manager/files/file/tags"),
+        ("POST", "/api/file-manager/disks/P01/namespace"),
+        ("POST", "/api/file-manager/disks/P01/write-sessions"),
+        ("GET", "/api/repositories/repo/backup-configuration"),
+        ("PUT", "/api/repositories/repo/backup-configuration"),
+        ("GET", "/api/plans/plan"),
+        ("POST", "/api/plans/plan/cancel"),
+        ("POST", "/api/plans/plan/commit"),
         ("POST", "/api/file-manager/disks/P01/namespace-batch"),
         ("POST", "/api/file-manager/files/file/select"),
         ("POST", "/api/file-manager/files/file/branches"),
@@ -1097,11 +1196,20 @@ fn probe_capacity() -> storage_contract::WorkspaceCapacity {
 }
 
 #[tokio::test]
-async fn typed_read_models_hold_auth_owner_until_cancelled_worker_finishes() {
-    for path in [
-        "/api/file-manager/files/file/history",
-        "/api/file-manager/history",
-        "/api/file-manager/disks/P01/entries",
+async fn typed_jobs_hold_auth_owner_until_cancelled_worker_finishes() {
+    for (method, path) in [
+        ("GET", "/api/file-manager/files/file/history"),
+        ("GET", "/api/file-manager/history"),
+        ("GET", "/api/file-manager/disks/P01/entries"),
+        ("POST", "/api/file-manager/files/file/merge"),
+        ("POST", "/api/file-manager/files/file/tags"),
+        ("POST", "/api/file-manager/disks/P01/namespace"),
+        ("POST", "/api/file-manager/disks/P01/write-sessions"),
+        ("GET", "/api/repositories/repo/backup-configuration"),
+        ("PUT", "/api/repositories/repo/backup-configuration"),
+        ("GET", "/api/plans/plan"),
+        ("POST", "/api/plans/plan/cancel"),
+        ("POST", "/api/plans/plan/commit"),
     ] {
         let root = crate::tests::private_tempdir();
         let gate = Arc::new(Gate {
@@ -1127,9 +1235,13 @@ async fn typed_read_models_hold_auth_owner_until_cancelled_worker_finishes() {
         let job = tokio::spawn(
             app.oneshot(
                 Request::builder()
+                    .method(method)
                     .uri(path)
+                    .header("content-type", "application/json")
                     .header("authorization", format!("Bearer {token}"))
-                    .body(Body::empty())
+                    .body(Body::from(
+                        json_codec::to_vec(&workspace_body(method, path)).unwrap(),
+                    ))
                     .unwrap(),
             ),
         );

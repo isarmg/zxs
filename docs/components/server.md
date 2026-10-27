@@ -264,3 +264,14 @@ HTTP query 只接收 `repository_id`、`path`；二者成对解析，路径使�
 快照保留数值 sequence/UTC 秒和明确的行详情类型；响应边界再将 sequence 编为十进制文本、时间编为 UTC。开放的持久 `kind`/action 仍是字符串，不按当前观察值封闭。提交删除事件仍以 commit ID、删除 ordinal 区分重复路径；同序号按 event ID 排序，最多 200 行，不增加跨事务缓存。
 
 `OperationResult.result` 仍是持久化开放 JSON：活动投影只解析所消费的可选 timestamp、ID、复制数字段；缺失/null 保持缺失，格式错误返回保留来源的 `STATE_INVALID`，不使用默认值或 panic。此项明确收紧了畸形持久 receipt 字段的响应行为，正常 wire 不变；被最新 200 行淘汰的候选不因其字段错误使查询失败。备份 receipt 缺失必要 history identity 同样作为持久状态错误。现有合法缺省（未找到当前路径、备注/名称缺失、无操作所有者、已不存在目录分支等）保持原投影规则。快照只复制实际响应所需数据；正文状态复用已有 typed content 投影，最终 JSON 只在 HTTP 序列化发生。
+### 计划查询与取消的类型边界
+
+`GET /api/plans/{plan}` 与 `POST /api/plans/{plan}/cancel` 使用独立 typed Backend 方法，不经过通用 JSON action。GET 仍接收但不消费 query；输出保持 Plan 的 `expected_sequence` 十进制文本、原始 input 和状态。取消返回原始 `OperationResult` 永久收据，不转换为文件管理接口的 `operation_kind`／实时健康度信封。
+
+HTTP 一次解析 body、路径绑定和取消字段；为保持原错误优先级，携带解析结果而非伪造有效命令：当前身份准入后传播未知字段错误，计划加载、owner 和历史仓库准入后才传播 operation_id 的解析错误。成功的 operation_id 是约束类型，内部不再解析。阻塞任务持有并发许可和认证所有者，HTTP 等待取消不提前释放。
+
+计划磁盘文件仍是外部边界：受限读取、strict JSON、plan_id 与 input 摘要核验不变。当前 Plan/input 仍承担持久化表示，input 以及取消收据 result 保持不透明 Value；本次只分离实际 HTTP 投影和调用入口，不声称完成全部领域／持久化模型拆分，也不改变计划提交、cleanup 恢复或三类准备协议。
+
+计划提交也使用独立 typed Backend 方法。其阶段与取消不同：当前身份之后先拒绝缺失／非字符串／空的 operation_id、plan_digest，再拒绝未知字段；随后加载并验证计划、核对 owner、预览 digest（split 保留独立错误码）、历史仓库，最后传播 operation_id 格式错误。HTTP 解析结果只保留原阶段顺序，核心只收到成功 OperationId；没有进程内 JSON 组装后反序列化命令。
+
+Web 在用户明确确认预览后才构建提交请求；服务端以 plan_digest 绑定预览，并不接受 `confirmed` 字段。提交仍进入核心原流程：已发布的 purge／split receipt 不能证明物理清理完成，相同请求必须继续 cleanup；失败保留原收据和可重试的清理依据。重启恢复也执行原清理流程，不因为 typed 接口缓存计划、权限或返回已有收据而跳过磁盘检查。

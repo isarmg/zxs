@@ -4401,32 +4401,30 @@ async fn removed_account_and_grant_routes_cannot_create_a_second_identity() {
     );
 }
 
-#[tokio::test]
-async fn typed_disk_directory_rejects_raw_errors_before_lazy_root_and_keeps_replay() {
-    fn files(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
-        fn visit(
-            path: &Path,
-            output: &mut std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
-        ) {
-            for entry in std::fs::read_dir(path).unwrap() {
-                let entry = entry.unwrap();
-                if entry.file_type().unwrap().is_dir() {
-                    visit(&entry.path(), output);
-                } else {
-                    output.insert(entry.path(), std::fs::read(entry.path()).unwrap());
-                }
+fn manager_disk_files(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    fn visit(path: &Path, output: &mut std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>) {
+        for entry in std::fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                visit(&entry.path(), output);
+            } else {
+                output.insert(entry.path(), std::fs::read(entry.path()).unwrap());
             }
         }
-        let mut output = std::collections::BTreeMap::new();
-        for disk in ["d1", "d2", "d3"] {
-            visit(&root.join(disk), &mut output);
-        }
-        output
     }
+    let mut output = std::collections::BTreeMap::new();
+    for disk in ["d1", "d2", "d3"] {
+        visit(&root.join(disk), &mut output);
+    }
+    output
+}
+
+#[tokio::test]
+async fn typed_disk_directory_rejects_raw_errors_before_lazy_root_and_keeps_replay() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let before = files(root.path());
+    let before = manager_disk_files(root.path());
     let operation = storage_contract::OperationId::generate();
     for route in ["directory-branches", "directory-select"] {
         let endpoint = format!("/api/file-manager/disks/P01/{route}");
@@ -4447,7 +4445,7 @@ async fn typed_disk_directory_rejects_raw_errors_before_lazy_root_and_keeps_repl
                     .unwrap()
                     .is_empty()
             );
-            assert_eq!(files(root.path()), before);
+            assert_eq!(manager_disk_files(root.path()), before);
         }
     }
     for name in ["main", "MAIN"] {
@@ -4461,7 +4459,7 @@ async fn typed_disk_directory_rejects_raw_errors_before_lazy_root_and_keeps_repl
         .await;
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(response["error"]["code"], "NAME_COLLISION");
-        assert_eq!(files(root.path()), before);
+        assert_eq!(manager_disk_files(root.path()), before);
     }
     let created = success(
         &app,
@@ -4773,4 +4771,443 @@ async fn typed_notes_reject_absence_and_null_but_clear_and_replay_each_real_map(
     assert_eq!(engine.state().file_notes[&file], "later");
     assert_eq!(engine.state().version_notes[&version], "later");
     assert_eq!(engine.state().file_path_notes[&node], "later");
+}
+
+#[tokio::test]
+async fn disk_mkdir_rejects_raw_mutations_before_any_lazy_root_or_disk_write() {
+    for existing in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let app = application(root.path());
+        let token = login(&app, "admin", "integration-test-password").await;
+        if existing {
+            success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Existing","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+            success(
+                &app,
+                &token,
+                "POST",
+                "/api/file-manager/disks/P01/namespace",
+                Some(json!({"kind":"mkdir","path":"Existing/folder","operation_id":new_id("op")})),
+            )
+            .await;
+        }
+        let path = if existing {
+            "Existing/folder"
+        } else {
+            "folder"
+        };
+        let before = success(&app, &token, "GET", "/api/repositories", None).await;
+        let events = success(&app, &token, "GET", "/api/events", None).await;
+        let bytes = manager_disk_files(root.path());
+        let route = "/api/file-manager/disks/P01/namespace";
+        let operation = new_id("op");
+        for body in [
+            json!({"kind":"unknown","path":path,"operation_id":operation}),
+            json!({"kind":"mkdir","path":path}),
+            json!({"kind":"mkdir","path":path,"operation_id":"bad"}),
+            json!({"kind":"mkdir","path":null,"operation_id":operation}),
+            json!({"kind":"mkdir","path":123,"operation_id":operation}),
+            json!({"kind":"mkdir","path":"","operation_id":operation}),
+            json!({"kind":"mkdir","operation_id":operation}),
+            json!({"kind":"mkdir","path":"../escape","operation_id":operation}),
+            json!({"kind":"mkdir","path":"Cafe\u{301}","operation_id":operation}),
+            json!({"kind":"mkdir","path":path,"operation_id":operation,"unknown":true}),
+            json!({"kind":"rename","path":path,"destination":123,"operation_id":operation}),
+            json!({"kind":"rename","path":path,"operation_id":operation}),
+            json!({"kind":"rename","path":path,"destination":"../escape","operation_id":operation}),
+            json!({"kind":"delete","path":path,"operation_id":operation}),
+            json!({"kind":"delete_tree","path":path,"operation_id":operation}),
+        ] {
+            let (status, rejected) = send(&app, Some(&token), "POST", route, Some(body)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+            assert_eq!(rejected["error"]["code"], "INVALID_REQUEST");
+            assert_eq!(
+                success(&app, &token, "GET", "/api/repositories", None).await,
+                before
+            );
+            assert_eq!(
+                success(&app, &token, "GET", "/api/events", None).await,
+                events
+            );
+            assert_eq!(manager_disk_files(root.path()), bytes);
+        }
+    }
+}
+
+#[tokio::test]
+async fn disk_mkdir_keeps_pre_root_admission_and_resolved_receipts() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = Config::development([
+        root.path().join("d1"),
+        root.path().join("d2"),
+        root.path().join("d3"),
+    ]);
+    config.max_entries = 1;
+    let app = configured_application(root.path(), config);
+    let token = login(&app, "admin", "integration-test-password").await;
+    let before = manager_disk_files(root.path());
+    let route = "/api/file-manager/disks/P01/namespace";
+    let (status, rejected) = send(
+        &app,
+        Some(&token),
+        "POST",
+        route,
+        Some(json!({"kind":"mkdir","path":"one/two","operation_id":new_id("op")})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(rejected["error"]["code"], "RESOURCE_LIMIT_EXCEEDED");
+    assert_eq!(manager_disk_files(root.path()), before);
+    let used = new_id("op");
+    success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Existing","primary_slot_id":"P01","target_copies":1,"operation_id":used}))).await;
+    let before = manager_disk_files(root.path());
+    let (status, rejected) = send(
+        &app,
+        Some(&token),
+        "POST",
+        route,
+        Some(json!({"kind":"mkdir","path":"fresh","operation_id":used})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(rejected["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
+    assert_eq!(manager_disk_files(root.path()), before);
+    for path in ["Existing", "existing"] {
+        assert_eq!(
+            send(
+                &app,
+                Some(&token),
+                "POST",
+                route,
+                Some(json!({"kind":"mkdir","path":path,"operation_id":new_id("op")}))
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(manager_disk_files(root.path()), before);
+    }
+    let mut receipts = Vec::new();
+    for (display, relative) in [("Existing/Café", "Café"), ("root-folder", "root-folder")] {
+        let request = json!({"kind":"mkdir","path":display,"operation_id":new_id("op")});
+        let receipt = success(&app, &token, "POST", route, Some(request.clone())).await;
+        let entries = success(
+            &app,
+            &token,
+            "GET",
+            &format!(
+                "/api/file-manager/disks/P01/entries?{}",
+                url_encoding::form::Serializer::new(String::new())
+                    .append_pair("path", display)
+                    .finish()
+            ),
+            None,
+        )
+        .await;
+        let repo = entries["context"]["repository_id"].as_str().unwrap();
+        assert_eq!(receipt["request_digest"],storage_contract::object_hash("request",&json!({"kind":"file.namespace","principal":"admin","body":{"repository_id":repo,"change":{"kind":"mkdir","path":relative,"destination":null}}})).unwrap());
+        if display.starts_with("Existing/") {
+            let mut alias = request.clone();
+            alias["path"] = "EXISTING/Café".into();
+            receipts.push((alias, receipt.clone()));
+        }
+        receipts.push((request, receipt));
+    }
+    drop(app);
+    let system = root.path().join("system");
+    let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
+    let auth = backend.open_auth(&system).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let revoked = login(&app, "admin", "integration-test-password").await;
+    success(&app, &revoked, "POST", "/api/auth/logout", None).await;
+    // Snapshot after the intentional session-control publications, not before them.
+    success(&app, &token, "GET", "/api/events", None).await;
+    let before = manager_disk_files(root.path());
+    let (status, rejected) = send(
+        &app,
+        Some(&token),
+        "POST",
+        "/api/file-manager/disks/B01/namespace",
+        Some(json!({"kind":"mkdir","path":"fresh","operation_id":new_id("op")})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(rejected["error"]["code"], "DISK_READ_ONLY");
+    for (request, original) in receipts {
+        assert_eq!(
+            send(&app, Some(&revoked), "POST", route, Some(request.clone()))
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send(
+                &app,
+                Some(&token),
+                "POST",
+                "/api/file-manager/disks/B01/namespace",
+                Some(request.clone())
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+        let replay = success(&app, &token, "POST", route, Some(request)).await;
+        for field in [
+            "operation_id",
+            "request_digest",
+            "publication_sequence",
+            "result",
+        ] {
+            assert_eq!(replay[field], original[field], "{field}");
+        }
+        assert_eq!(manager_disk_files(root.path()), before);
+    }
+}
+
+#[tokio::test]
+async fn disk_write_sessions_parse_before_lazy_root_and_remain_fresh_workspaces() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let route = "/api/file-manager/disks/P01/write-sessions";
+    let repositories = success(&app, &token, "GET", "/api/repositories", None).await;
+    let events = success(&app, &token, "GET", "/api/events", None).await;
+    let bytes = manager_disk_files(root.path());
+    for body in [
+        json!({}),
+        json!({"path":null}),
+        json!({"path":123}),
+        json!({"path":""}),
+        json!({"path":"../escape"}),
+        json!({"path":"Cafe\u{301}"}),
+        json!({"path":"file.txt","branch_id":null}),
+        json!({"path":"file.txt","branch_id":123}),
+        json!({"path":"file.txt","branch_id":""}),
+        json!({"path":"file.txt","branch_id":"bad"}),
+        json!({"path":"file.txt","operation_id":new_id("op")}),
+        json!({"path":"file.txt","unknown":true}),
+        json!({"path":"file.txt","slot_id":"other"}),
+    ] {
+        let (status, rejected) = send(&app, Some(&token), "POST", route, Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+        assert_eq!(rejected["error"]["code"], "INVALID_REQUEST");
+        assert_eq!(
+            success(&app, &token, "GET", "/api/repositories", None).await,
+            repositories
+        );
+        assert_eq!(
+            success(&app, &token, "GET", "/api/events", None).await,
+            events
+        );
+        assert!(
+            manager_disk_files(root.path()) == bytes,
+            "invalid request changed disk bytes"
+        );
+    }
+    let (status, rejected) = send(
+        &app,
+        Some(&token),
+        "POST",
+        route,
+        Some(json!({"path":"file.txt","branch_id":new_id("br")})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(rejected["error"]["code"], "DIRECTORY_NOT_FOUND");
+    assert_eq!(
+        success(&app, &token, "GET", "/api/repositories", None).await,
+        repositories
+    );
+    assert!(
+        manager_disk_files(root.path()) == bytes,
+        "requesting a missing branch created a root"
+    );
+    assert_eq!(
+        send(
+            &app,
+            Some(&token),
+            "POST",
+            "/api/file-manager/disks/B01/write-sessions",
+            Some(json!({"path":"file.txt"}))
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert!(
+        manager_disk_files(root.path()) == bytes,
+        "backup request created a root"
+    );
+    success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Existing","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    let bytes = manager_disk_files(root.path());
+    assert_eq!(
+        send(
+            &app,
+            Some(&token),
+            "POST",
+            route,
+            Some(json!({"path":"existing"}))
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert!(
+        manager_disk_files(root.path()) == bytes,
+        "workspace over repository root changed disk bytes"
+    );
+    for (display, relative) in [
+        ("Existing/Café.txt", "Café.txt"),
+        ("root-file.txt", "root-file.txt"),
+    ] {
+        let request = json!({"path":display});
+        let first = success(&app, &token, "POST", route, Some(request.clone())).await;
+        let second = success(&app, &token, "POST", route, Some(request)).await;
+        assert_ne!(
+            first["workspace_id"], second["workspace_id"],
+            "this route has no idempotent replay contract"
+        );
+        for workspace in [first, second] {
+            assert_eq!(workspace["relative_path"], relative);
+            assert_eq!(workspace["display_path"], display);
+            assert_eq!(workspace["state"], "open");
+            assert!(workspace["fencing_token"].is_string());
+            assert!(workspace.get("operation_id").is_none());
+            assert!(workspace.get("request_digest").is_none());
+            assert!(workspace.get("result").is_none());
+            assert!(!workspace.to_string().contains("source_path"));
+            success(
+                &app,
+                &token,
+                "POST",
+                &format!(
+                    "/api/workspaces/{}/abort",
+                    workspace["workspace_id"].as_str().unwrap()
+                ),
+                Some(json!({})),
+            )
+            .await;
+        }
+    }
+    let revoked = login(&app, "admin", "integration-test-password").await;
+    success(&app, &revoked, "POST", "/api/auth/logout", None).await;
+    assert_eq!(
+        send(
+            &app,
+            Some(&revoked),
+            "POST",
+            route,
+            Some(json!({"path":"new-file.txt"}))
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn disk_write_session_tracks_inherited_selection_and_merged_aliases() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    manager_upload(&app, &token, "file.txt", b"frozen").await;
+    let listing = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks/P01/entries",
+        None,
+    )
+    .await;
+    let file = listing["entries"][0]["file_id"].as_str().unwrap();
+    let version = listing["entries"][0]["version_id"].as_str().unwrap();
+    let repo = listing["context"]["repository_id"].as_str().unwrap();
+    let mut branches = Vec::new();
+    for name in ["left", "right"] {
+        let branch = success(
+            &app,
+            &token,
+            "POST",
+            &format!("/api/file-manager/files/{file}/branches"),
+            Some(json!({"name":name,"source_version_id":version,"operation_id":new_id("op")})),
+        )
+        .await;
+        branches.push(branch["result"]["branch_id"].as_str().unwrap().to_owned());
+    }
+    let [left, right]: [String; 2] = branches.try_into().unwrap();
+    success(
+        &app,
+        &token,
+        "POST",
+        &format!("/api/file-manager/files/{file}/select"),
+        Some(json!({"branch_id":right,"operation_id":new_id("op")})),
+    )
+    .await;
+    let frozen = manager_directory_branch(&app, &token, "", "frozen").await;
+
+    success(
+        &app,
+        &token,
+        "PUT",
+        &format!("/api/repositories/{repo}/default-branch"),
+        Some(json!({"directory_branch_id":frozen,"operation_id":new_id("op")})),
+    )
+    .await;
+    let route = "/api/file-manager/disks/P01/write-sessions";
+    let (status, rejected) = send(
+        &app,
+        Some(&token),
+        "POST",
+        route,
+        Some(json!({"path":"file.txt","branch_id":left})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(rejected["error"]["code"], "FILE_BRANCH_CONFLICT");
+    let workspace = success(
+        &app,
+        &token,
+        "POST",
+        route,
+        Some(json!({"path":"file.txt","branch_id":right})),
+    )
+    .await;
+    let context = &workspace["selected_file_contexts"][format!("{repo}/file.txt")];
+    assert_eq!(context["branch_id"], right);
+    assert!(context["inherited_from"].is_string());
+    success(
+        &app,
+        &token,
+        "POST",
+        &format!(
+            "/api/workspaces/{}/abort",
+            workspace["workspace_id"].as_str().unwrap()
+        ),
+        Some(json!({})),
+    )
+    .await;
+    success(&app,&token,"POST",&format!("/api/file-manager/files/{file}/merge"),Some(json!({"inputs":[{"branch_id":left,"expected_node_id":version},{"branch_id":right,"expected_node_id":version}],"chosen_node_id":version,"surviving_branch_id":left,"confirmed":true,"operation_id":new_id("op")}))).await;
+    let (status, rejected) = send(
+        &app,
+        Some(&token),
+        "POST",
+        route,
+        Some(json!({"path":"file.txt","branch_id":right})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(rejected["error"]["code"], "FILE_BRANCH_CONFLICT");
+    let survivor = success(
+        &app,
+        &token,
+        "POST",
+        route,
+        Some(json!({"path":"file.txt","branch_id":left})),
+    )
+    .await;
+    assert_eq!(
+        survivor["selected_file_contexts"][format!("{repo}/file.txt")]["branch_id"],
+        left
+    );
 }

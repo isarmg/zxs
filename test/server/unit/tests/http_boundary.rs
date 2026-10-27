@@ -547,6 +547,69 @@ impl Backend for PanickingBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         panic!("private directory scope panic detail")
     }
+    fn merge_file_branches(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::MergeFileBranches,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn update_file_node_tags(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::UpdateFileNodeTags,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn create_disk_directory(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn create_disk_write_session(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::CreateDiskWriteSession,
+    ) -> Result<crate::DiskWriteSession, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn backup_configuration(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadBackupConfiguration,
+    ) -> Result<storage_contract::BackupConfigurationSnapshot, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn configure_backups(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ConfigureBackups,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn plan(
+        &self,
+        _identity: &crate::auth::Identity,
+        _plan: &str,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        panic!("private plan backend panic detail")
+    }
+    fn cancel_plan(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::CancelPlan, crate::ApiError>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private plan backend panic detail")
+    }
+    fn commit_plan(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::CommitPlan, crate::ApiError>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private plan backend panic detail")
+    }
     fn namespace_batch(
         &self,
         _identity: &crate::auth::Identity,
@@ -873,6 +936,53 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
             "PATCH",
             "/api/file-manager/files/file/nodes/node",
             Some(json!({"note":"","operation_id":"op_00000000000000000000000000000000"})),
+        ),
+        ("GET", "/api/repositories/repo/backup-configuration", None),
+        (
+            "PUT",
+            "/api/repositories/repo/backup-configuration",
+            Some(
+                json!({"path":"","target_copies":2,"backup_prefixes":{"B01":"backup"},"expected_generation":"0","expected_scope_id":"scope","operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "POST",
+            "/api/file-manager/files/file/merge",
+            Some(
+                json!({"inputs":[],"chosen_node_id":"node","surviving_branch_id":"branch","confirmed":true,"operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "POST",
+            "/api/file-manager/files/file/tags",
+            Some(
+                json!({"targets":[],"add":[],"remove":[],"operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "POST",
+            "/api/file-manager/disks/P01/namespace",
+            Some(
+                json!({"kind":"mkdir","path":"folder","operation_id":"op_00000000000000000000000000000000"}),
+            ),
+        ),
+        (
+            "POST",
+            "/api/file-manager/disks/P01/write-sessions",
+            Some(json!({"path":"file.txt"})),
+        ),
+        (
+            "POST",
+            "/api/plans/plan/commit",
+            Some(
+                json!({"operation_id":"op_00000000000000000000000000000000","plan_digest":"digest"}),
+            ),
+        ),
+        ("GET", "/api/plans/plan", None),
+        (
+            "POST",
+            "/api/plans/plan/cancel",
+            Some(json!({"operation_id":"op_00000000000000000000000000000000"})),
         ),
         (
             "POST",

@@ -1,4 +1,5 @@
 use super::*;
+use crate::operation_wire::operation_wire;
 use json_codec::json;
 use storage_contract::{
     CommitState, OperationResult, ProtectionAtPublish,

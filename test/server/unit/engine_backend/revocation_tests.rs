@@ -284,6 +284,78 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.update_note(identity, request)
     }
+    fn merge_file_branches(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::MergeFileBranches,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.merge_file_branches(identity, request)
+    }
+    fn update_file_node_tags(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::UpdateFileNodeTags,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.update_file_node_tags(identity, request)
+    }
+    fn create_disk_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateDiskDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.create_disk_directory(identity, request)
+    }
+    fn create_disk_write_session(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::CreateDiskWriteSession,
+    ) -> Result<crate::DiskWriteSession, crate::ApiError> {
+        self.enter();
+        self.inner.create_disk_write_session(identity, request)
+    }
+    fn backup_configuration(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadBackupConfiguration,
+    ) -> Result<storage_contract::BackupConfigurationSnapshot, crate::ApiError> {
+        self.enter();
+        self.inner.backup_configuration(identity, request)
+    }
+    fn configure_backups(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ConfigureBackups,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.configure_backups(identity, request)
+    }
+    fn plan(
+        &self,
+        identity: &crate::auth::Identity,
+        plan: &str,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.enter();
+        self.inner.plan(identity, plan)
+    }
+    fn cancel_plan(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::CancelPlan, crate::ApiError>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.cancel_plan(identity, request)
+    }
+    fn commit_plan(
+        &self,
+        identity: &crate::auth::Identity,
+        request: Result<crate::CommitPlan, crate::ApiError>,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.enter();
+        self.inner.commit_plan(identity, request)
+    }
     fn namespace_batch(
         &self,
         identity: &crate::auth::Identity,
@@ -741,6 +813,18 @@ enum Request {
     FileNote,
     VersionNote,
     NodeNote,
+    MergeFileBranches,
+    MergeFileBranchesAt,
+    FileNodeTags,
+    FileNodeTagsAt,
+    CreateDiskDirectory,
+    DiskWriteSession,
+    DiskWriteSessionOnBranch,
+    BackupConfiguration,
+    ConfigureBackups,
+    Plan,
+    PlanCancel,
+    PlanCommit,
     NamespaceBatch,
     SelectFileBranch,
     SelectFileBranchAt,
@@ -776,6 +860,49 @@ impl Request {
         let identity = &fixture.identity;
         let workspace = &fixture.workspace.workspace_id;
         match self {
+            Self::BackupConfiguration => backend
+                .backup_configuration(
+                    identity,
+                    crate::ReadBackupConfiguration {
+                        repository_id: "missing".into(),
+                        path: String::new(),
+                    },
+                )
+                .map(|_| ()),
+            Self::ConfigureBackups => backend
+                .configure_backups(
+                    identity,
+                    crate::ConfigureBackups {
+                        repository_id: "missing".into(),
+                        path: String::new(),
+                        target_copies: 2,
+                        backup_prefixes: std::collections::BTreeMap::new(),
+                        expected_generation: 0,
+                        expected_scope_id: "missing".into(),
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::Plan => backend.plan(identity, "missing").map(|_| ()),
+            Self::PlanCancel => backend
+                .cancel_plan(
+                    identity,
+                    Ok(crate::CancelPlan {
+                        plan_id: "missing".into(),
+                        operation_id: Ok(storage_contract::OperationId::generate()),
+                    }),
+                )
+                .map(|_| ()),
+            Self::PlanCommit => backend
+                .commit_plan(
+                    identity,
+                    Ok(crate::CommitPlan {
+                        plan_id: "missing".into(),
+                        plan_digest: "digest".into(),
+                        operation_id: Ok(storage_contract::OperationId::generate()),
+                    }),
+                )
+                .map(|_| ()),
             Self::NamespaceBatch => backend
                 .namespace_batch(
                     identity,
@@ -879,6 +1006,115 @@ impl Request {
                         source_node_id: Some("missing".into()),
                         name: storage_contract::BranchName::parse("Side").unwrap(),
                         operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::MergeFileBranches => backend
+                .merge_file_branches(
+                    identity,
+                    crate::MergeFileBranches {
+                        file_id: "file".into(),
+                        inputs: vec![storage_contract::FileMergeInput {
+                            branch_id: "branch".into(),
+                            expected_node_id: "head".into(),
+                        }],
+                        chosen_node_id: "chosen".into(),
+                        surviving_branch_id: "branch".into(),
+                        confirmed: true,
+                        location: None,
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::MergeFileBranchesAt => backend
+                .merge_file_branches(
+                    identity,
+                    crate::MergeFileBranches {
+                        file_id: "file".into(),
+                        inputs: vec![storage_contract::FileMergeInput {
+                            branch_id: "branch".into(),
+                            expected_node_id: "head".into(),
+                        }],
+                        chosen_node_id: "chosen".into(),
+                        surviving_branch_id: "branch".into(),
+                        confirmed: true,
+                        location: Some(storage_contract::FileLocation {
+                            repository_id: "repo".into(),
+                            path: "file.txt".into(),
+                        }),
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::FileNodeTags => backend
+                .update_file_node_tags(
+                    identity,
+                    crate::UpdateFileNodeTags {
+                        file_id: "file".into(),
+                        targets: vec![storage_contract::FileTagTarget {
+                            branch_id: "branch".into(),
+                            expected_node_id: "head".into(),
+                            source_node_id: "source".into(),
+                        }],
+                        add: vec!["added".into()],
+                        remove: vec!["removed".into()],
+                        location: None,
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::FileNodeTagsAt => backend
+                .update_file_node_tags(
+                    identity,
+                    crate::UpdateFileNodeTags {
+                        file_id: "file".into(),
+                        targets: vec![storage_contract::FileTagTarget {
+                            branch_id: "branch".into(),
+                            expected_node_id: "head".into(),
+                            source_node_id: "source".into(),
+                        }],
+                        add: vec!["added".into()],
+                        remove: vec!["removed".into()],
+                        location: Some(storage_contract::FileLocation {
+                            repository_id: "repo".into(),
+                            path: "file.txt".into(),
+                        }),
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::CreateDiskDirectory => backend
+                .create_disk_directory(
+                    identity,
+                    crate::CreateDiskDirectory {
+                        slot_id: "P01".into(),
+                        path: name_policy::PortablePath::parse("Café/folder").unwrap(),
+                        operation_id: storage_contract::OperationId::generate(),
+                    },
+                )
+                .map(|_| ()),
+            Self::DiskWriteSession => backend
+                .create_disk_write_session(
+                    identity,
+                    crate::CreateDiskWriteSession {
+                        slot_id: "P01".into(),
+                        path: name_policy::PortablePath::parse("Café/file.txt").unwrap(),
+                        branch_id: None,
+                    },
+                )
+                .map(|_| ()),
+            Self::DiskWriteSessionOnBranch => backend
+                .create_disk_write_session(
+                    identity,
+                    crate::CreateDiskWriteSession {
+                        slot_id: "P01".into(),
+                        path: name_policy::PortablePath::parse("Café/file.txt").unwrap(),
+                        branch_id: Some(
+                            "br_00000000000000000000000000000000"
+                                .to_owned()
+                                .try_into()
+                                .unwrap(),
+                        ),
                     },
                 )
                 .map(|_| ()),
@@ -1306,6 +1542,11 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                     .unwrap();
             }
             let requests = vec![
+                Request::BackupConfiguration,
+                Request::ConfigureBackups,
+                Request::Plan,
+                Request::PlanCancel,
+                Request::PlanCommit,
                 Request::NamespaceBatch,
                 Request::SelectFileBranch,
                 Request::SelectFileBranchAt,
@@ -1316,6 +1557,13 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::CreateFileBranchFromNode,
                 Request::RenameFileBranch,
                 Request::Operation,
+                Request::DiskWriteSessionOnBranch,
+                Request::DiskWriteSession,
+                Request::CreateDiskDirectory,
+                Request::FileNodeTagsAt,
+                Request::FileNodeTags,
+                Request::MergeFileBranchesAt,
+                Request::MergeFileBranches,
                 Request::CommitWorkspace,
                 Request::Metadata,
                 Request::Administrator,
@@ -1424,6 +1672,40 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                     "{revocation:?}: {request:?}"
                 );
             }
+            for request in [
+                Err(ApiError::invalid("unknown cancellation field")),
+                Ok(crate::CancelPlan {
+                    plan_id: "missing".into(),
+                    operation_id: Err(ApiError::invalid("invalid operation")),
+                }),
+            ] {
+                assert_eq!(
+                    fixture
+                        .backend
+                        .cancel_plan(&fixture.identity, request)
+                        .unwrap_err()
+                        .code,
+                    storage_contract::ErrorCode::Unauthorized,
+                    "{revocation:?}: current admission precedes both parse stages"
+                );
+            }
+            for request in [
+                Err(ApiError::invalid("missing commit fields")),
+                Ok(crate::CommitPlan {
+                    plan_id: "missing".into(),
+                    plan_digest: "digest".into(),
+                    operation_id: Err(ApiError::invalid("bad operation")),
+                }),
+            ] {
+                assert_eq!(
+                    fixture
+                        .backend
+                        .commit_plan(&fixture.identity, request)
+                        .unwrap_err()
+                        .code,
+                    storage_contract::ErrorCode::Unauthorized
+                );
+            }
             assert!(
                 fixture.snapshot() == before,
                 "rejected requests changed state, workspace or journals"
@@ -1506,6 +1788,13 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
     let before = fixture.snapshot();
     for request in [
         Request::Operation,
+        Request::DiskWriteSessionOnBranch,
+        Request::DiskWriteSession,
+        Request::CreateDiskDirectory,
+        Request::FileNodeTagsAt,
+        Request::FileNodeTags,
+        Request::MergeFileBranchesAt,
+        Request::MergeFileBranches,
         Request::CommitWorkspace,
         Request::SnapshotLookup,
         Request::Metadata,
@@ -1549,6 +1838,11 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::FileNote,
         Request::VersionNote,
         Request::NodeNote,
+        Request::BackupConfiguration,
+        Request::ConfigureBackups,
+        Request::Plan,
+        Request::PlanCancel,
+        Request::PlanCommit,
         Request::NamespaceBatch,
         Request::SelectFileBranch,
         Request::SelectFileBranchAt,

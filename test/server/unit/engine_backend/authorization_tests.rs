@@ -62,6 +62,13 @@ fn missing_credentials_do_not_admit_even_a_named_administrator() {
         );
     }
     for result in [
+        backend.plan(&caller, "missing").map(|_| ()),
+        backend
+            .commit_plan(&caller, Err(ApiError::invalid("missing fields")))
+            .map(|_| ()),
+        backend
+            .cancel_plan(&caller, Err(ApiError::invalid("unknown field")))
+            .map(|_| ()),
         backend.disk_status(&caller).map(|_| ()),
         backend.integrity_check(&caller).map(|_| ()),
     ] {
@@ -352,4 +359,276 @@ fn upload_system_clock_failure_is_server_error_with_source() {
             .unwrap()
             .is::<std::time::SystemTimeError>()
     );
+}
+
+#[test]
+fn typed_plan_cancel_keeps_owner_and_receipt_ordering() {
+    let root = crate::tests::private_tempdir();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        storage_engine::Config::development([root.path().join("disk")]),
+    )
+    .unwrap();
+    let identity = install_test_administrator(&mut engine, "admin");
+    let repo = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Plans").unwrap(),
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let source = engine
+        .state()
+        .branches
+        .get(&repo.main_branch_id)
+        .unwrap()
+        .head_commit_id
+        .clone();
+    let options = |name: &str| storage_engine::HistoricalSaveOptions {
+        source_commit_id: source.clone(),
+        name: name.into(),
+        workspace_id: None,
+        primary_slot_id: None,
+        target_copies: None,
+    };
+    let own = engine
+        .create_historical_save_plan(&repo.history_tree_id, options("Own"), "admin")
+        .unwrap();
+    let foreign = engine
+        .create_historical_save_plan(&repo.history_tree_id, options("Foreign"), "other")
+        .unwrap();
+    let second = engine
+        .create_historical_save_plan(&repo.history_tree_id, options("Second"), "admin")
+        .unwrap();
+    engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Generation advance").unwrap(),
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    assert!(engine.state().business_generation > own.expected_sequence);
+    let backend = EngineBackend::new(engine);
+    assert_eq!(backend.plan(&identity, &own.plan_id).unwrap(), own);
+    assert_eq!(
+        backend.plan(&identity, &foreign.plan_id).unwrap_err().code,
+        storage_contract::ErrorCode::Forbidden
+    );
+    let rejected_operation = || Err(ApiError::invalid("missing string field operation_id"));
+    assert_eq!(
+        backend
+            .cancel_plan(
+                &identity,
+                Ok(crate::CancelPlan {
+                    plan_id: foreign.plan_id.clone(),
+                    operation_id: rejected_operation()
+                })
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Forbidden
+    );
+    assert_eq!(
+        backend
+            .cancel_plan(
+                &identity,
+                Ok(crate::CancelPlan {
+                    plan_id: own.plan_id.clone(),
+                    operation_id: rejected_operation()
+                })
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::InvalidRequest
+    );
+    for (plan, digest, expected) in [
+        (&foreign, "wrong", storage_contract::ErrorCode::Forbidden),
+        (&own, "wrong", storage_contract::ErrorCode::PlanStale),
+        (
+            &own,
+            own.digest.as_str(),
+            storage_contract::ErrorCode::InvalidRequest,
+        ),
+    ] {
+        assert_eq!(
+            backend
+                .commit_plan(
+                    &identity,
+                    Ok(crate::CommitPlan {
+                        plan_id: plan.plan_id.clone(),
+                        plan_digest: digest.into(),
+                        operation_id: rejected_operation(),
+                    })
+                )
+                .unwrap_err()
+                .code,
+            expected
+        );
+    }
+    assert_eq!(
+        backend
+            .commit_plan(
+                &identity,
+                Ok(crate::CommitPlan {
+                    plan_id: own.plan_id.clone(),
+                    plan_digest: own.digest.clone(),
+                    operation_id: Ok(storage_contract::OperationId::generate()),
+                })
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::PlanStale
+    );
+    let operation = storage_contract::OperationId::generate();
+    let request = || {
+        Ok(crate::CancelPlan {
+            plan_id: own.plan_id.clone(),
+            operation_id: Ok(operation),
+        })
+    };
+    let result = backend.cancel_plan(&identity, request()).unwrap();
+    assert_eq!(backend.cancel_plan(&identity, request()).unwrap(), result);
+    assert_eq!(
+        backend
+            .cancel_plan(
+                &identity,
+                Ok(crate::CancelPlan {
+                    plan_id: second.plan_id,
+                    operation_id: Ok(operation)
+                })
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::IdempotencyKeyReused
+    );
+
+    assert_eq!(
+        backend.plan(&identity, &own.plan_id).unwrap().state,
+        storage_contract::PlanState::Cancelled
+    );
+    assert_eq!(
+        backend
+            .cancel_plan(
+                &identity,
+                Ok(crate::CancelPlan {
+                    plan_id: foreign.plan_id,
+                    operation_id: Ok(operation)
+                })
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Forbidden
+    );
+    assert_eq!(
+        backend
+            .cancel_plan(
+                &identity,
+                Ok(crate::CancelPlan {
+                    plan_id: own.plan_id,
+                    operation_id: Ok(storage_contract::OperationId::generate())
+                })
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::PlanClosed
+    );
+}
+
+#[test]
+fn typed_plan_disk_integrity_precedes_cancel_operation_errors_after_reopen() {
+    let root = crate::tests::private_tempdir();
+    let system = root.path().join("system");
+    let mut engine = Engine::initialize(
+        &system,
+        storage_engine::Config::development([root.path().join("disk")]),
+    )
+    .unwrap();
+    let identity = install_test_administrator(&mut engine, "admin");
+    let repo = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Disk plans").unwrap(),
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let source = engine
+        .state()
+        .branches
+        .get(&repo.main_branch_id)
+        .unwrap()
+        .head_commit_id
+        .clone();
+    let plan = engine
+        .create_historical_save_plan(
+            &repo.history_tree_id,
+            storage_engine::HistoricalSaveOptions {
+                source_commit_id: source,
+                name: "Prepared".into(),
+                workspace_id: None,
+                primary_slot_id: None,
+                target_copies: None,
+            },
+            "admin",
+        )
+        .unwrap();
+    drop(engine);
+    let path = system.join("plans").join(format!("{}.json", plan.plan_id));
+    let mut altered_input = plan.clone();
+    altered_input.input["history_tree_id"] = storage_engine::new_id("history").into();
+    let mut altered_identity = plan.clone();
+    altered_identity.plan_id = storage_engine::new_id("plan");
+    let mut missing_history = altered_input.clone();
+    missing_history.digest = storage_contract::object_hash("plan", &missing_history.input).unwrap();
+    for (altered, expected) in [
+        (altered_input, storage_contract::ErrorCode::PlanInvalid),
+        (altered_identity, storage_contract::ErrorCode::PlanInvalid),
+        (missing_history, storage_contract::ErrorCode::NotFound),
+    ] {
+        std::fs::write(&path, json_codec::to_vec(&altered).unwrap()).unwrap();
+        let backend = EngineBackend::new(Engine::open(&system).unwrap());
+        assert_eq!(
+            backend.plan(&identity, &plan.plan_id).unwrap_err().code,
+            expected
+        );
+        assert_eq!(
+            backend
+                .cancel_plan(
+                    &identity,
+                    Ok(crate::CancelPlan {
+                        plan_id: plan.plan_id.clone(),
+                        operation_id: Err(ApiError::invalid("bad operation"))
+                    })
+                )
+                .unwrap_err()
+                .code,
+            expected
+        );
+        assert_eq!(
+            backend
+                .commit_plan(
+                    &identity,
+                    Ok(crate::CommitPlan {
+                        plan_id: plan.plan_id.clone(),
+                        plan_digest: altered.digest.clone(),
+                        operation_id: Err(ApiError::invalid("bad operation")),
+                    })
+                )
+                .unwrap_err()
+                .code,
+            expected
+        );
+        assert_eq!(
+            backend
+                .cancel_plan(&identity, Err(ApiError::invalid("unknown field")))
+                .unwrap_err()
+                .code,
+            storage_contract::ErrorCode::InvalidRequest
+        );
+    }
 }

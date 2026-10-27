@@ -865,3 +865,88 @@ fn stage_namespace_wire(
 ) -> Result<storage_contract::Workspace, ApiError> {
     backend.stage_namespace(identity, crate::http_workspace::namespace_command(body)?)
 }
+
+#[test]
+fn typed_plan_commit_retains_published_failure_evidence_and_resumes_cleanup_on_reopen() {
+    let (root, mut engine, repo, owner) = fixture();
+    let save = |engine: &mut Engine, bytes: &[u8]| {
+        let workspace = engine
+            .create_workspace(&repo.main_branch_id, &owner.principal)
+            .unwrap();
+        engine
+            .stage_bytes(&workspace.workspace_id, "file.txt", bytes)
+            .unwrap();
+        engine
+            .commit_workspace(storage_engine::CommitRequest {
+                workspace_id: workspace.workspace_id,
+                operation_id: storage_contract::OperationId::generate(),
+                principal: owner.principal.clone(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: "cleanup recovery".into(),
+                request_digest: None,
+            })
+            .unwrap();
+    };
+    save(&mut engine, b"first");
+    let first = engine.list_tree(&repo.main_branch_id).unwrap()[0]
+        .version_id
+        .clone();
+    save(&mut engine, b"latest");
+    let plan = engine
+        .create_purge_plan(&repo.history_tree_id, vec![first.clone()], &owner.principal)
+        .unwrap();
+    let blocker = engine.config().disks[0]
+        .root
+        .join("histories")
+        .join(&repo.history_tree_id)
+        .join("versions")
+        .join(first)
+        .join("purged.json");
+    std::fs::create_dir(&blocker).unwrap();
+    let operation = storage_contract::OperationId::generate();
+    let request = || {
+        Ok(crate::CommitPlan {
+            plan_id: plan.plan_id.clone(),
+            plan_digest: plan.digest.clone(),
+            operation_id: Ok(operation),
+        })
+    };
+    let backend = EngineBackend::new(engine);
+    assert_eq!(
+        backend.commit_plan(&owner, request()).unwrap_err().code,
+        storage_contract::ErrorCode::UnsafePath
+    );
+    let (receipt, published) = {
+        let engine = backend.engine.lock().unwrap();
+        (
+            engine.operation(operation).unwrap(),
+            storage_contract::canonical_json(engine.state()).unwrap(),
+        )
+    };
+    assert_eq!(
+        receipt.commit_state,
+        storage_contract::CommitState::Published
+    );
+    assert_eq!(
+        backend.commit_plan(&owner, request()).unwrap_err().code,
+        storage_contract::ErrorCode::UnsafePath
+    );
+    drop(backend);
+    let system = root.path().join("system");
+    assert_eq!(
+        Engine::open(&system).err().unwrap().code(),
+        storage_contract::ErrorCode::UnsafePath
+    );
+    assert!(blocker.is_dir());
+    std::fs::remove_dir(&blocker).unwrap();
+    let backend = EngineBackend::new(Engine::open(&system).unwrap());
+    assert!(blocker.is_file());
+    let replay = backend.commit_plan(&owner, request()).unwrap();
+    assert_eq!(replay.result, receipt.result);
+    assert_eq!(replay.request_digest, receipt.request_digest);
+    assert_eq!(
+        storage_contract::canonical_json(backend.engine.lock().unwrap().state()).unwrap(),
+        published
+    );
+}

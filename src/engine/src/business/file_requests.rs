@@ -1,15 +1,7 @@
 //! Canonical metadata mutation requests, including optional namespace context.
 use crate::{Engine, Error, FileMergeInput, FileTagTarget, Result};
-use data_serialization::Serialize;
 use json_codec::{Value, json};
-use storage_contract::{NamespaceEntryKind, OperationId};
-
-/// Current namespace context is a mutation precondition, not stored graph data.
-#[derive(Debug, Clone, Serialize)]
-pub struct FileLocation {
-    pub repository_id: String,
-    pub path: String,
-}
+use storage_contract::{FileLocation, NamespaceEntryKind, OperationId};
 
 pub struct FileNodeTagsUpdateRequest<'a> {
     pub file_id: &'a str,

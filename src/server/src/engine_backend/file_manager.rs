@@ -5,37 +5,11 @@ pub(super) mod activity;
 mod backup_namespace;
 mod history_nodes;
 pub(super) mod listing;
-mod operations;
 mod pagination;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::backend_activity::utc_timestamp;
 
-fn query<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
-    input
-        .get("query")
-        .and_then(|q| q.get(key))
-        .and_then(Value::as_str)
-}
-fn path(input: &Value) -> Result<&str, ApiError> {
-    // An omitted path denotes the root, but an explicit malformed value must
-    // never silently select it (especially for branch and backup mutations).
-    let supplied = input
-        .get("path")
-        .or_else(|| input.get("query").and_then(|q| q.get("path")));
-    let value = supplied
-        .map(|value| {
-            value
-                .as_str()
-                .ok_or_else(|| ApiError::invalid("path must be a string"))
-        })
-        .transpose()?
-        .unwrap_or("");
-    if !value.is_empty() {
-        name_policy::validate_path(value).map_err(ApiError::invalid_source)?;
-    }
-    Ok(value)
-}
 fn disk<'a>(engine: &'a Engine, slot: &str) -> Result<&'a storage_engine::DiskConfig, ApiError> {
     engine
         .config()
@@ -538,24 +512,6 @@ pub(super) fn file_history(
     })
 }
 
-/// Read handlers cannot obtain mutable Engine access or create lazy disk roots.
-pub(super) fn read(
-    engine: &Engine,
-    action: crate::BackendAction,
-    input: Value,
-) -> Result<Value, ApiError> {
-    match action {
-        crate::BackendAction::FileManagerBackupConfiguration => {
-            let repo = field(&input, "repository_id")?;
-            repository(engine, repo)?;
-            engine
-                .backup_configuration(repo, query(&input, "path").unwrap_or(""))
-                .map_err(error)
-        }
-        _ => Err(ApiError::unsupported()),
-    }
-}
-
 pub(super) fn mutate_directory(
     engine: &mut Engine,
     identity: &Identity,
@@ -617,134 +573,113 @@ pub(super) fn mutate_directory(
     .map_err(error)
 }
 
-pub(super) fn call(
+pub(super) fn mkdir(
     engine: &mut Engine,
     identity: &Identity,
-    action: crate::BackendAction,
-    input: Value,
-) -> Result<Value, ApiError> {
-    match action {
-        crate::BackendAction::FileManagerMerge
-        | crate::BackendAction::FileManagerTags
-        | crate::BackendAction::FileManagerConfigureBackups => {
-            operations::call(engine, identity, action, &input)
-        }
-        crate::BackendAction::FileManagerWriteSession => {
-            keys(&input, &["slot_id", "path", "branch_id"])?;
-            let display = path(&input)?.to_string();
-            if display.is_empty() {
-                return Err(ApiError::invalid("file path required"));
-            }
-            let requested_branch = input
-                .get("branch_id")
-                .map(|_| field(&input, "branch_id"))
-                .transpose()?;
-            if let Some(branch) = requested_branch {
-                storage_contract::validate_id(branch, "br").map_err(ApiError::invalid_source)?;
-            }
-            // Selecting an existing branch cannot create a namespace as a side
-            // effect when neither that branch nor its file exists.
-            let access = if requested_branch.is_some() {
-                DiskAccess::Write
-            } else {
-                DiskAccess::Create
-            };
-            let (repo, relative) = resolve(
-                engine,
-                identity,
-                field(&input, "slot_id")?,
-                &display,
-                access,
-            )?;
-            if relative.is_empty() {
-                return Err(ApiError::invalid("cannot upload over a disk directory"));
-            }
-            let tree = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
-            let existing = tree.get(relative);
-            if let Some(context) =
-                existing.and_then(|entry| engine.file_context(&repo.repository_id, &entry.path))
-                && context.inherited_from.is_none()
-                && engine
-                    .state()
-                    .branches
-                    .get(&context.branch_id)
-                    .is_some_and(|branch| branch.state != storage_contract::BranchState::Active)
-            {
-                return Err(ApiError::conflict(
-                    storage_contract::ErrorCode::BranchNotActive,
-                    "the selected file branch is read-only; select an active branch before writing",
-                ));
-            }
-            if let Some(requested) = requested_branch {
-                let selected = existing
-                    .and_then(|entry| engine.file_context(&repo.repository_id, &entry.path))
-                    .map(|context| context.branch_id.clone())
-                    .or_else(|| {
-                        existing.and_then(|entry| {
-                            engine.state().file_selections.get(&entry.file_id).cloned()
-                        })
-                    });
-                if selected.as_deref() != Some(requested) {
-                    return Err(ApiError::conflict(
-                        storage_contract::ErrorCode::FileBranchConflict,
-                        "select this file branch before starting an upload",
-                    ));
-                }
-            }
-            // The namespace holds the directory composition's frozen version.
-            // A shared file branch may already have a newer HEAD in another view.
-            let workspace = engine
-                .create_workspace(&repo.main_branch_id, &identity.principal)
-                .map_err(error)?;
-            let mut response = sanitized(workspace)?;
-            response["relative_path"] = relative.into();
-            response["display_path"] = display.into();
-            Ok(response)
-        }
-        crate::BackendAction::FileManagerNamespace => {
-            keys(&input, &["slot_id", "kind", "path", "operation_id"])?;
-            let slot = field(&input, "slot_id")?;
-            let kind = field(&input, "kind")?;
-            if kind != "mkdir" {
-                return Err(ApiError::invalid(
-                    "only mkdir is supported; use identity-bound namespace-batch for existing entries",
-                ));
-            }
-            let operation = field(&input, "operation_id")?
-                .parse()
-                .map_err(ApiError::invalid_source)?;
-            let display = path(&input)?;
-            if display.is_empty() {
-                return Err(ApiError::invalid("disk namespace root cannot be changed"));
-            }
-            admit_root_operation(engine, slot, display, operation)?;
-            // An empty root needs one entry per requested directory component.
-            if needs_disk_root(engine, slot, display)
-                && display.split('/').count() > engine.config().max_entries
-            {
-                return Err(ApiError::limit("directory entry limit exceeded"));
-            }
-            let (repo, relative) = resolve(engine, identity, slot, display, DiskAccess::Create)?;
-            if relative.is_empty() {
-                return Err(ApiError::invalid("disk namespace root cannot be changed"));
-            }
-            let result = engine
-                .file_namespace(
-                    &repo.repository_id,
-                    NamespaceOperation::parse(
-                        storage_contract::NamespaceOperationKind::Mkdir,
-                        relative,
-                        None,
-                    )
-                    .map_err(|source| error(source.into()))?,
-                    &identity.principal,
-                    operation,
-                )
-                .map_err(error)?;
-            operation_wire(result)
-        }
-        _ => Err(ApiError::unsupported()),
+    command: crate::CreateDiskDirectory,
+) -> Result<storage_contract::OperationResult, ApiError> {
+    let crate::CreateDiskDirectory {
+        slot_id,
+        path,
+        operation_id,
+    } = command;
+    let needs_root = admit_root_operation(engine, &slot_id, path.as_str(), operation_id)?;
+    if needs_root && path.as_str().split('/').count() > engine.config().max_entries {
+        return Err(ApiError::limit("directory entry limit exceeded"));
     }
+    let (repo, _) = resolve(
+        engine,
+        identity,
+        &slot_id,
+        path.as_str(),
+        DiskAccess::Create,
+    )?;
+    let path = if repo.file_manager_root {
+        path
+    } else {
+        path.strip_components(1)
+            .ok_or_else(|| ApiError::invalid("disk namespace root cannot be changed"))?
+    };
+    engine
+        .file_namespace(
+            &repo.repository_id,
+            NamespaceOperation::Mkdir { path },
+            &identity.principal,
+            operation_id,
+        )
+        .map_err(error)
+}
+
+pub(super) fn write_session(
+    engine: &mut Engine,
+    identity: &Identity,
+    command: crate::CreateDiskWriteSession,
+) -> Result<crate::DiskWriteSession, ApiError> {
+    use std::borrow::Cow;
+    let crate::CreateDiskWriteSession {
+        slot_id,
+        path,
+        branch_id,
+    } = command;
+    let access = if branch_id.is_some() {
+        DiskAccess::Write
+    } else {
+        DiskAccess::Create
+    };
+    let (repo, _) = resolve(engine, identity, &slot_id, path.as_str(), access)?;
+    let relative = if repo.file_manager_root {
+        Cow::Borrowed(&path)
+    } else {
+        Cow::Owned(
+            path.strip_components(1)
+                .ok_or_else(|| ApiError::invalid("cannot upload over a disk directory"))?,
+        )
+    };
+    let tree = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
+    let existing = tree.get_key(relative.key());
+    let context = existing
+        .and_then(|entry| engine.file_context_for_current_entry(&repo.repository_id, entry));
+    if let Some(context) = context.as_ref()
+        && context.inherited_from.is_none()
+        && engine
+            .state()
+            .branches
+            .get(&context.branch_id)
+            .is_some_and(|branch| branch.state != storage_contract::BranchState::Active)
+    {
+        return Err(ApiError::conflict(
+            storage_contract::ErrorCode::BranchNotActive,
+            "the selected file branch is read-only; select an active branch before writing",
+        ));
+    }
+    if let Some(requested) = branch_id {
+        let selected = context
+            .as_ref()
+            .map(|context| context.branch_id.as_str())
+            .or_else(|| {
+                existing.and_then(|entry| {
+                    engine
+                        .state()
+                        .file_selections
+                        .get(&entry.file_id)
+                        .map(String::as_str)
+                })
+            });
+        if selected != Some(requested.as_str()) {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::FileBranchConflict,
+                "select this file branch before starting an upload",
+            ));
+        }
+    }
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, &identity.principal)
+        .map_err(error)?;
+    Ok(crate::DiskWriteSession {
+        workspace,
+        relative_path: relative.as_str().to_owned(),
+        display_path: path.into_string(),
+    })
 }
 
 #[cfg(test)]

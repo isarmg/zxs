@@ -62,9 +62,9 @@ fn source_reconfiguration_preserves_one_shared_snapshot_for_moved_files() {
         let read = engine
             .backup_configuration(&repo.repository_id, path)
             .unwrap();
-        assert_eq!(read["target_copies"], 2);
-        assert_eq!(read["inherited"], false);
-        assert_eq!(read["effective_policy_id"], retained);
+        assert_eq!(read.target_copies, 2);
+        assert!(!read.inherited);
+        assert_eq!(read.effective_policy_id.as_deref().unwrap(), retained);
         assert_eq!(engine.state.placements[&entry.version_id].target_copies, 2);
         assert_eq!(
             engine.state.file_backup_paths[&entry.file_id]["B01"],
@@ -121,7 +121,8 @@ fn source_reconfiguration_preserves_one_shared_snapshot_for_moved_files() {
     assert_eq!(
         engine
             .backup_configuration(&repo.repository_id, "first.txt")
-            .unwrap()["target_copies"],
+            .unwrap()
+            .target_copies,
         2
     );
     let updated = save(&mut engine, &repo, "second.txt", b"after reopen");
@@ -212,7 +213,10 @@ fn retained_settings_replay_once_and_restore_without_becoming_inherited() {
     assert_eq!(
         restored
             .backup_configuration(&repo.repository_id, "source")
-            .unwrap()["policy_id"],
+            .unwrap()
+            .policy_id
+            .as_deref()
+            .unwrap(),
         current
     );
     let added = save(&mut restored, &repo, "source/restored.txt", b"restored");
@@ -235,7 +239,7 @@ fn protection_policy_role_is_required_and_empty_current_rules_survive_pruning() 
     let mut value = json_codec::to_value(&engine.state.protection_policies[&current]).unwrap();
     value.as_object_mut().unwrap().remove("inheritable");
     assert!(json_codec::from_value::<ProtectionPolicy>(value.clone()).is_err());
-    value["inheritable"] = Value::Null;
+    value["inheritable"] = json_codec::Value::Null;
     assert!(json_codec::from_value::<ProtectionPolicy>(value).is_err());
     engine
         .file_namespace(
@@ -257,7 +261,10 @@ fn protection_policy_role_is_required_and_empty_current_rules_survive_pruning() 
     assert_eq!(
         engine
             .backup_configuration(&repo.repository_id, "empty")
-            .unwrap()["policy_id"],
+            .unwrap()
+            .policy_id
+            .as_deref()
+            .unwrap(),
         id
     );
 }

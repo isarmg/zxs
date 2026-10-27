@@ -267,25 +267,23 @@ fn backend_fixture() -> (
     )
 }
 
-fn read_requests(repo: &storage_contract::Repository) -> Vec<(crate::BackendAction, Value)> {
-    use crate::BackendAction::*;
-    vec![(
-        FileManagerBackupConfiguration,
-        json!({"repository_id":repo.repository_id}),
-    )]
-}
-
 #[test]
 fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_route() {
     use crate::Backend;
     let (_root, backend, repo, entry) = backend_fixture();
     for _ in 0..3 {
-        for (action, input) in read_requests(&repo) {
-            backend.call(action, &caller(), input).unwrap();
-        }
         backend.activity_history(&caller()).unwrap();
         backend
             .listing(&caller(), listing_request("P01", &repo.name))
+            .unwrap();
+        backend
+            .backup_configuration(
+                &caller(),
+                crate::ReadBackupConfiguration {
+                    repository_id: repo.repository_id.clone(),
+                    path: String::new(),
+                },
+            )
             .unwrap();
         backend.repositories_snapshot(&caller()).unwrap();
         backend.file_history(&caller(), &entry.file_id).unwrap();
@@ -336,6 +334,19 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
     );
     assert_eq!(
         backend
+            .backup_configuration(
+                &caller(),
+                crate::ReadBackupConfiguration {
+                    repository_id: repo.repository_id.clone(),
+                    path: String::new()
+                }
+            )
+            .unwrap_err()
+            .status,
+        401
+    );
+    assert_eq!(
+        backend
             .file_history(&caller(), &entry.file_id)
             .unwrap_err()
             .status,
@@ -360,12 +371,19 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
             .status,
         401
     );
-    for (action, input) in read_requests(&repo) {
-        assert_eq!(
-            backend.call(action, &caller(), input).unwrap_err().status,
-            401
-        );
-    }
+    assert_eq!(
+        backend
+            .backup_configuration(
+                &caller(),
+                crate::ReadBackupConfiguration {
+                    repository_id: repo.repository_id.clone(),
+                    path: String::new()
+                }
+            )
+            .unwrap_err()
+            .status,
+        401
+    );
     assert_eq!(
         backend
             .tree_snapshot(
@@ -410,10 +428,21 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
 
 #[test]
 fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
-    use crate::{Backend, BackendAction::*};
+    use crate::Backend;
     let (_root, backend, repo, entry) = backend_fixture();
     let before = json_codec::to_value(backend.engine.lock().unwrap().state()).unwrap();
     for _ in 0..3 {
+        assert!(
+            backend
+                .backup_configuration(
+                    &caller(),
+                    crate::ReadBackupConfiguration {
+                        repository_id: "missing".into(),
+                        path: String::new()
+                    }
+                )
+                .is_err()
+        );
         for (slot, path) in [("P01", "missing"), ("missing", "")] {
             assert!(
                 backend
@@ -421,15 +450,6 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
                     .is_err()
             );
         }
-        assert!(
-            backend
-                .call(
-                    FileManagerBackupConfiguration,
-                    &caller(),
-                    json!({"repository_id":"missing"})
-                )
-                .is_err()
-        );
         assert!(
             backend
                 .tree_snapshot(
@@ -475,12 +495,19 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
                 .code,
             storage_contract::ErrorCode::Unauthorized
         );
-        for (action, input) in read_requests(&repo) {
-            assert_eq!(
-                backend.call(action, &caller(), input).unwrap_err().code,
-                storage_contract::ErrorCode::Unauthorized
-            );
-        }
+        assert_eq!(
+            backend
+                .backup_configuration(
+                    &caller(),
+                    crate::ReadBackupConfiguration {
+                        repository_id: repo.repository_id.clone(),
+                        path: String::new()
+                    }
+                )
+                .unwrap_err()
+                .code,
+            storage_contract::ErrorCode::Unauthorized
+        );
     }
     assert_eq!(
         backend
@@ -495,7 +522,7 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
 
 #[test]
 fn backend_mutations_and_lazy_root_creation_invalidate_before_following_reads() {
-    use crate::{Backend, BackendAction::*};
+    use crate::Backend;
     let (_root, backend, repo, entry) = backend_fixture();
     backend.repositories_snapshot(&caller()).unwrap();
     backend
@@ -536,12 +563,13 @@ fn backend_mutations_and_lazy_root_creation_invalidate_before_following_reads() 
             .any(|r| r.file_manager_root)
     );
     backend
-        .call(
-            FileManagerNamespace,
+        .create_disk_directory(
             &caller(),
-            json!({
-                "slot_id":"P01","path":"new-folder","kind":"mkdir","operation_id":new_id("op")
-            }),
+            crate::CreateDiskDirectory {
+                slot_id: "P01".into(),
+                path: name_policy::PortablePath::parse("new-folder").unwrap(),
+                operation_id: storage_contract::OperationId::generate(),
+            },
         )
         .unwrap();
     assert!(backend.engine.lock().unwrap().admission.get().is_none());

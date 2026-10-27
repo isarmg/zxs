@@ -160,8 +160,8 @@ fn split_closes_source_policy_scopes_without_dropping_valid_empty_rules() {
         let configuration = engine
             .backup_configuration(&copied.repository_id, path)
             .unwrap();
-        assert_eq!(configuration["target_copies"], copies);
-        let policy = configuration["policy_id"].as_str().unwrap();
+        assert_eq!(configuration.target_copies, copies);
+        let policy = configuration.policy_id.as_deref().unwrap();
         assert!(engine.state.protection_policies[policy].inheritable);
     }
     assert_graph_closed(&engine, &repo.history_tree_id);
@@ -332,7 +332,8 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
         assert_eq!(
             engine
                 .backup_configuration(&copied.repository_id, &file.path)
-                .unwrap()["target_copies"],
+                .unwrap()
+                .target_copies,
             2
         );
         assert_eq!(
