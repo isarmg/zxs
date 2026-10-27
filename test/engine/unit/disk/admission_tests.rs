@@ -91,17 +91,12 @@ fn isolated_mount_namespace(name: &str, exercise: impl FnOnce()) {
     }
     // Only this exact libtest child is elevated, with no inherited environment.
     // Pass the recursion marker after sudo's environment reset.
+    // Keep sudo's user namespace: mapping only root into a new one loses access
+    // to private runner-owned build paths. A private mount namespace isolates mounts.
     let status = Command::new("/usr/bin/sudo")
         .args(["-n", "--", "/usr/bin/env", "-i"])
         .arg(format!("{CHILD}={name}"))
-        .args([
-            "/usr/bin/unshare",
-            "--user",
-            "--map-root-user",
-            "--mount",
-            "--propagation",
-            "private",
-        ])
+        .args(["/usr/bin/unshare", "--mount", "--propagation", "private"])
         .arg(std::env::current_exe().unwrap())
         .args(["--ignored", "--exact", name, "--nocapture"])
         .status()
@@ -123,7 +118,7 @@ fn mount(arguments: &[&str], source: &Path, destination: &Path) {
 }
 
 #[test]
-#[ignore = "requires non-interactive sudo and util-linux for an isolated user/mount test child"]
+#[ignore = "requires non-interactive sudo and util-linux for an isolated mount test child"]
 fn immutable_existing_bind_leaf_is_rejected_before_read_or_sync() {
     isolated_mount_namespace(
         "disk::admission_tests::immutable_existing_bind_leaf_is_rejected_before_read_or_sync",
@@ -157,7 +152,7 @@ fn immutable_existing_bind_leaf_is_rejected_before_read_or_sync() {
 }
 
 #[test]
-#[ignore = "requires non-interactive sudo and util-linux for an isolated user/mount test child"]
+#[ignore = "requires non-interactive sudo and util-linux for an isolated mount test child"]
 fn cold_device_admission_does_not_borrow_a_replacement_mount_identity() {
     isolated_mount_namespace(
         "disk::admission_tests::cold_device_admission_does_not_borrow_a_replacement_mount_identity",

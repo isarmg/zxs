@@ -50,7 +50,7 @@ case "${1:-}" in
       history_package::graph::tests::distributed_history_larger_than_real_reader_limit_roundtrips \
       -- --ignored --exact --test-threads=1
     # Cargo stays unprivileged; each exact test elevates only its isolated
-    # user/mount namespace child via sudo -n with a cleared child environment.
+    # mount namespace child via sudo -n with a cleared child environment.
     # Sudo, namespace or mount failures are failures, never permission-based skips.
     cargo test --locked --offline -p storage-engine --lib \
       disk::admission_tests::immutable_existing_bind_leaf_is_rejected_before_read_or_sync \
