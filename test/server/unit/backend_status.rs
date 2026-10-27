@@ -66,8 +66,11 @@ fn capabilities_keep_full_width_upload_limits_at_the_wire_boundary() {
 #[test]
 fn readiness_wire_preserves_managed_omission_and_engine_counts() {
     assert_eq!(
-        json_codec::to_value(ReadinessResponse::from(Readiness::Managed)).unwrap(),
-        json_codec::json!({"ready":true})
+        json_codec::to_value(ReadinessResponse::from(Readiness::Managed {
+            history_index: HistoryIndexStatus::Ready,
+        }))
+        .unwrap(),
+        json_codec::json!({"ready":true,"history_index":{"state":"ready"}})
     );
     for count in [1, 2, 3, 4] {
         let ready = Readiness::Engine(EngineReadiness {
@@ -75,10 +78,47 @@ fn readiness_wire_preserves_managed_omission_and_engine_counts() {
             sequence: u64::MAX,
             storage_disk_count: count,
             metadata_member_count: count,
+            history_index: HistoryIndexStatus::Ready,
         });
         assert_eq!(
             json_codec::to_value(ReadinessResponse::from(ready)).unwrap(),
-            json_codec::json!({"ready":true,"mode":"development","sequence":"18446744073709551615","storage_disk_count":count,"metadata_member_count":count,"metadata_redundancy":if count==1 {"none"} else {"multiple-copies"}})
+            json_codec::json!({"ready":true,"mode":"development","sequence":"18446744073709551615","storage_disk_count":count,"metadata_member_count":count,"metadata_redundancy":if count==1 {"none"} else {"multiple-copies"},"history_index":{"state":"ready"}})
+        );
+    }
+}
+
+#[test]
+fn readiness_keeps_index_availability_separate_from_authoritative_readiness() {
+    for (history_index, expected) in [
+        (
+            HistoryIndexStatus::Unbuilt,
+            json_codec::json!({"state":"unbuilt"}),
+        ),
+        (
+            HistoryIndexStatus::Unavailable {
+                code: storage_contract::ErrorCode::IndexRebuildFailed,
+            },
+            json_codec::json!({"state":"unavailable","code":"INDEX_REBUILD_FAILED"}),
+        ),
+    ] {
+        let ready = Readiness::Engine(EngineReadiness {
+            mode: storage_contract::Mode::Development,
+            sequence: 42,
+            storage_disk_count: 1,
+            metadata_member_count: 1,
+            history_index,
+        });
+        let response = json_codec::to_value(ReadinessResponse::from(ready)).unwrap();
+        assert_eq!(response["ready"], true);
+        assert_eq!(response["sequence"], "42");
+        assert_eq!(response["history_index"], expected);
+        assert_eq!(response.as_object().unwrap().len(), 7);
+        assert_eq!(
+            json_codec::to_value(ReadinessResponse::from(Readiness::Managed {
+                history_index
+            }))
+            .unwrap(),
+            json_codec::json!({"ready":true,"history_index":expected})
         );
     }
 }

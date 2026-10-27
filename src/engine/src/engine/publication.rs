@@ -290,11 +290,9 @@ impl Engine {
         }
         let previous = std::mem::replace(&mut self.state, std::sync::Arc::new(next));
         self.snapshot = Some(candidate.snapshot_hash.clone());
-        if let Err(error) = self.update_index(&previous) {
-            self.metadata_integrity.invalidate();
-            return Err(error);
-        }
-        // Do not install on partial publication or post-decision index failure.
+        self.update_index(&previous);
+        // Only the completed member publication establishes this proof. SQLite is
+        // a disposable accelerator, not a dependency of the authoritative closure.
         self.published_state_base = metadata_epoch.matches(&self.metadata_integrity).then(|| {
             std::sync::Arc::new(PublishedStateBase {
                 state: std::sync::Arc::downgrade(&self.state),

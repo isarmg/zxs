@@ -4,7 +4,7 @@
 
 ## 实际消费者与所有权
 
-`HistoryManifest::project_state` 保留为独立全量投影和冷准入路径；`from_state`、RawState、外部导入／恢复仍执行其逻辑验证。正常发布只有完整发布及索引成功后才把下一份 `DerivedOwners` 绑定到 `PublishedStateBase` 的精确 State allocation。索引只从该不可变 State 派生，因此后续纯成员关系复用只要求 allocation 相同；metadata epoch、配置或磁盘图权威失效不改变该纯值证明。等值的新 Arc、`Arc::make_mut` 脱离原 allocation、冷恢复均不能借旧索引。history roots、旧依赖省略及最终发布仍各自要求完整配置／epoch／原私有许可，不从成员索引取得磁盘授权。
+`HistoryManifest::project_state` 保留为独立全量投影和冷准入路径；`from_state`、RawState、外部导入／恢复仍执行其逻辑验证。正常发布只有完整权威发布且原 metadata epoch 有效后才把下一份 `DerivedOwners` 绑定到 `PublishedStateBase` 的精确 State allocation。索引只从该不可变 State 派生，因此后续纯成员关系复用只要求 allocation 相同；metadata epoch、配置或磁盘图权威失效不改变该纯值证明。等值的新 Arc、`Arc::make_mut` 脱离原 allocation、冷恢复均不能借旧索引。history roots、旧依赖省略及最终发布仍各自要求完整配置／epoch／原私有许可，不从成员索引取得磁盘授权。
 
 中立私有模块 `state_projection.rs` 的穷尽 State 解构和同一 `projection_maps!` 声明连接写集、行取值、owner 计算及 graph field 名：
 
@@ -56,7 +56,7 @@ radix tests 增加空 map、absent deletion、新路径、collapse、混合增�
 
 同一派生对象还维护容器实际需要的 file→pending branch、path node、metadata node、merge event、context key 与 alias source 成员；branch→context 是 branch.file_id 变更的精确反向依赖。pending 包括普通目录历史分支的 pending_file_versions；context 与 alias 保持文件级而非 history 级过滤，alias 取源分支归属。关系只保存 ID，实际字段仍从不可变 State 读取。
 
-`ProjectionTransition` 在 publication 准备边界生成一份前后关系，history 编码、路径准入与名称准备共同消费。沿用 PublishedStateBase 的 allocation/config/metadata epoch 绑定，以及决定完成和 SQLite 更新成功后的安装屏障。恢复从已验证 State 冷构建，不从 container.json 或 SQLite 恢复关系权威。All/foreign 继续完整语义准入；失败不发布派生对象。
+`ProjectionTransition` 在 publication 准备边界生成一份前后关系，history 编码、路径准入与名称准备共同消费。沿用 PublishedStateBase 的 allocation/config/metadata epoch 绑定，以及完整权威决定完成后的安装屏障；SQLite 更新失败只停用其独立候选加速器。恢复从已验证 State 冷构建，不从 container.json 或 SQLite 恢复关系权威。All/foreign 继续完整语义准入；失败不发布派生对象。
 
 容器位置仍并集旧／新全部版本的真实 routes，包括 PURGED/MIGRATED 与只存在于旧 State 的位置。实际容器存在后才构造 call-local 文件描述符和 NodeProjection；版本／路径排序、事件 ID 顺序、备份位置、单对象限额、匿名暂存、实际 bytes/hash/同步/重放均不改变。每个文件的 history 描述符只构造一次后供该 history 的各副本编码；标签 memo 不跨发布保存。
 

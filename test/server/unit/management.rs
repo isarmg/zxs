@@ -7,6 +7,70 @@ use http_routing::{
 };
 use json_codec::{Value, json};
 use service_stack::ServiceExt;
+#[path = "projection_failure.rs"]
+mod projection_failure;
+
+#[test]
+fn managed_readiness_exposes_real_index_failure_without_rejecting_published_operation() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("pool");
+    let management = root.path().join("management");
+    let mut engine = storage_engine::Engine::initialize(
+        &data,
+        storage_contract::Config::development([root.path().join("disk")]),
+    )
+    .unwrap();
+    let before = engine.state().sequence;
+    let operation = storage_contract::OperationId::generate();
+    let index = data.join("index.sqlite");
+    let projected_before = projection_failure::fail_projection(&index);
+    engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("published").unwrap(),
+            "P01",
+            1,
+            "admin",
+            operation,
+        )
+        .unwrap();
+    assert_eq!(engine.state().sequence, before + 1);
+    assert_eq!(
+        engine.state().operations[&operation].commit_state,
+        storage_contract::CommitState::Published
+    );
+    let receipt =
+        crate::operation_wire::operation_wire(engine.state().operations[&operation].clone())
+            .unwrap();
+    assert_eq!(
+        projection_failure::receipt_without_observation_time(&receipt)["commit_state"],
+        "PUBLISHED"
+    );
+    assert_eq!(
+        projection_failure::projection_sequence(&index),
+        projected_before
+    );
+    let (backend, _auth) = open_service(&data, &management).unwrap();
+    backend.inner.set(
+        Some(std::sync::Arc::new(
+            crate::engine_backend::EngineBackend::new(engine),
+        )),
+        crate::StorageState::Ready,
+    );
+    let ready = backend.ready().unwrap();
+    assert_eq!(
+        ready,
+        crate::Readiness::Managed {
+            history_index: crate::HistoryIndexStatus::Unavailable {
+                code: storage_contract::ErrorCode::IndexRebuildFailed,
+            },
+        }
+    );
+    assert_eq!(
+        json_codec::to_value(crate::backend_status::ReadinessResponse::from(ready)).unwrap(),
+        json!({"ready":true,"history_index":{"state":"unavailable","code":"INDEX_REBUILD_FAILED"}})
+    );
+}
+
 async fn request(
     app: &Router,
     path: &str,

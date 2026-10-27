@@ -59,6 +59,7 @@
       ],
       "build": [],
       "dev": [
+        "storage-client",
         "storage-engine"
       ]
     },

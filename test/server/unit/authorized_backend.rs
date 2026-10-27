@@ -366,7 +366,9 @@ impl Backend for RecordingBackend {
     }
     fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
         self.record("ready", None, Value::Null)?;
-        Ok(crate::Readiness::Managed)
+        Ok(crate::Readiness::Managed {
+            history_index: crate::HistoryIndexStatus::Ready,
+        })
     }
     fn workspace_capacity(
         &self,
@@ -2181,7 +2183,12 @@ fn public_probes_and_bootstrap_setup_keep_their_explicit_exceptions() {
         fixture.backend.capabilities().unwrap().max_upload_bytes(),
         42
     );
-    assert_eq!(fixture.backend.ready().unwrap(), crate::Readiness::Managed);
+    assert_eq!(
+        fixture.backend.ready().unwrap(),
+        crate::Readiness::Managed {
+            history_index: crate::HistoryIndexStatus::Ready,
+        }
+    );
     assert_eq!(
         fixture
             .backend

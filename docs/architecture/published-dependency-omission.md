@@ -6,14 +6,14 @@ source presence alone is not a passed gate.
 
 ## Authority and object origin
 
-Only complete required-member publication and index success create
+Only complete required-member publication with its still-valid metadata epoch creates
 `PublishedStateBase`. One detached preparation captures that exact receipt,
 State allocation, roots, sequence, validated configuration, continuous writer
 epoch, and its periodic owner's actual completed scrub receipt. Neither a public
 report nor an existing object name creates this authority. Reopen, recovery,
-member/binding change, uncertain publication/index failure, and observed shared
+member/binding change, uncertain authoritative publication, and observed shared
 metadata faults invalidate it. An embedded Engine without an actual periodic
-owner still takes the complete dependency path.
+owner still takes the complete dependency path. A failure in the disposable system-root SQLite index observes no required-member metadata and does not revoke this authority. It disables that accelerator, retains its specific cause, and leaves the completed publication and metadata epoch unchanged.
 
 A captured scrub receipt keeps its original start/max-age and completion/interval
 deadlines. A healthy refresh under the same owner does not cancel an unexpired

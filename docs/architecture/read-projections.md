@@ -143,7 +143,7 @@ StorageState 移到无 core 依赖的声明并由 management 重导出，原枚�
 
 ## Readiness 匿名入口与固定成员观察
 
-Backend::ready() 不接收身份；HTTP /readyz 与后台 observe_storage_once 直接消费 typed Readiness，不再创建 health/monitor 身份或借用 generic action 例外。Managed 成功只表达原 {ready:true}；Engine 成功携带 Mode、u64 sequence 与固定成员统计，HTTP 出口才输出字符串 sequence 和 metadata_redundancy。Ready action 删除后，AuthorizedBackend::call 和 EngineBackend::call 的每个剩余 action 都无条件走当前身份复核，匿名能力/就绪探针只存在于各自显式方法。
+Backend::ready() 不接收身份；HTTP /readyz 与后台 observe_storage_once 直接消费 typed Readiness，不再创建 health/monitor 身份或借用 generic action 例外。Managed 成功表达 `ready:true` 和当前 `history_index`；Engine 成功另携带 Mode、u64 sequence 与固定成员统计，HTTP 出口才输出字符串 sequence 和 metadata_redundancy。`history_index` 只有 `unbuilt`、`ready` 或带安全 code 的 `unavailable`，不输出内部 source。管理入口只读取同一 Engine 的类型化索引状态，不增加成员探测或文件 I/O、不另存一份健康真值；派生不可用不改变原可写 Ready 结论。Ready action 删除后，AuthorizedBackend::call 和 EngineBackend::call 的每个剩余 action 都无条件走当前身份复核，匿名能力/就绪探针只存在于各自显式方法。
 
 引擎保留 read-only拒绝→同锁捕获固定成员/配置/sequence与磁盘观察计划→解锁真实观察→全部配置元数据成员在线校验的顺序。返回值只是一次观察，不授予未来写入或缓存磁盘健康。后台仍持有同一 engine lease完成一次样本、更新时核对当前 backend Arc身份与 admitted状态、保留错误分类/observed_at/15秒过期逻辑；无成员多数表决或刷新间隔变更。
 

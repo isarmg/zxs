@@ -1380,6 +1380,8 @@ dependencies = [
  "rustix",
  "service-stack",
  "smb-protocol",
+ "sqlite-access",
+ "storage-client",
  "storage-contract",
  "storage-engine",
  "sysinfo",

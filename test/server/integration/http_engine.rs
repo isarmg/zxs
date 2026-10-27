@@ -32,6 +32,10 @@ mod optional_identities;
 mod paginated_listing;
 #[path = "http_engine/plan_lookup.rs"]
 mod plan_lookup;
+#[path = "../unit/projection_failure.rs"]
+mod projection_failure;
+#[path = "http_engine/published_index_outcome.rs"]
+mod published_index_outcome;
 #[path = "http_engine/strict_objects.rs"]
 mod strict_objects;
 #[path = "http_engine/upload_status.rs"]

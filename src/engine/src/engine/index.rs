@@ -9,7 +9,7 @@
 use super::Engine;
 use crate::*;
 use sqlite_access::{Connection, Executor, Row};
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 use storage_contract::{MapChanges, TrackedRecords};
 
 const HISTORY_INDEX_MIN_VERSIONS: usize = 300_000;
@@ -20,14 +20,88 @@ const HISTORY_TABLE: &str = "CREATE TABLE file_history_versions(version_id TEXT 
 const HISTORY_INDEX: &str = "CREATE INDEX file_history_lookup ON file_history_versions(file_id,version_sequence_key,version_id)";
 
 /// Trusted completeness evidence, never loaded from the disposable database.
+/// Ready is established by a complete rebuild and maintained under exclusive
+/// publication: its sequence matches State, or the previous State during update.
 #[derive(Default)]
 pub(super) struct QueryProof {
     sequence: u64,
     counts: BTreeMap<String, usize>,
-    healthy: bool,
-    writer: Option<IndexConnection>,
+    availability: IndexAvailability,
     #[cfg(test)]
     indexed_reads: usize,
+}
+
+/// Availability of the optional history accelerator, independent of publication.
+#[derive(Clone, Debug)]
+pub enum IndexHealth {
+    Unbuilt,
+    Ready { sequence: u64 },
+    Unavailable(Arc<IndexFailure>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexFailureStage {
+    Read,
+    Update,
+}
+
+/// The first failure retained until a complete rebuild succeeds.
+#[derive(Debug, error_definition::Error)]
+#[error("history index {stage:?} failed at sequence {sequence}: {source}")]
+pub struct IndexFailure {
+    stage: IndexFailureStage,
+    sequence: u64,
+    #[source]
+    source: Error,
+}
+impl IndexFailure {
+    pub fn stage(&self) -> IndexFailureStage {
+        self.stage
+    }
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+    pub fn cause(&self) -> &Error {
+        &self.source
+    }
+}
+
+#[derive(Default)]
+enum IndexAvailability {
+    #[default]
+    Unbuilt,
+    Ready(IndexConnection),
+    Unavailable(Arc<IndexFailure>),
+}
+
+impl QueryProof {
+    fn disable(&mut self, source: Error, stage: IndexFailureStage, sequence: u64) {
+        let source = match std::mem::take(&mut self.availability) {
+            IndexAvailability::Ready(mut writer) => match writer.close() {
+                Ok(()) => source,
+                Err(close) => preserve_close_failure(source, close.source),
+            },
+            IndexAvailability::Unbuilt => source,
+            IndexAvailability::Unavailable(_) => {
+                unreachable!("invariant: an unavailable index is never accessed")
+            }
+        };
+        let failure = Arc::new(IndexFailure {
+            stage,
+            sequence,
+            source,
+        });
+        // Stop using the optional projection and retain the concrete cause;
+        // application health reporting is separate from mutation receipts.
+        self.availability = IndexAvailability::Unavailable(failure);
+    }
+}
+
+fn preserve_close_failure(operation: Error, close: Error) -> Error {
+    Error::Cleanup {
+        operation: Box::new(operation),
+        cleanup: std::io::Error::other(close),
+    }
 }
 
 /// Only fields consumed by the candidate query participate in this delta.
@@ -114,6 +188,18 @@ struct ProjectionFailure {
     source: Error,
     corrupt: bool,
 }
+impl ProjectionFailure {
+    fn after_close(self, closed: std::result::Result<(), Self>) -> Self {
+        match closed {
+            Ok(()) => self,
+            Err(close) => Self {
+                source: preserve_close_failure(self.source, close.source),
+                corrupt: false,
+            },
+        }
+    }
+}
+
 impl From<sqlite_access::Error> for ProjectionFailure {
     fn from(error: sqlite_access::Error) -> Self {
         // Extended SQLite codes retain their primary error in the low byte.
@@ -154,8 +240,8 @@ impl From<ProjectionFailure> for Error {
     }
 }
 
-/// The engine owns the worker until rebuild, failure, or drop. FULL commit,
-/// not worker shutdown/checkpointing, is the publication acknowledgement.
+/// The engine owns the worker until rebuild, failure, or drop. FULL commit
+/// confirms this projection transaction, not authoritative publication.
 struct IndexConnection {
     connection: Option<sqlite_access::SqliteConnection>,
     file: std::fs::File,
@@ -169,30 +255,24 @@ impl IndexConnection {
         if let Err(error) = platform_io::sqlite::block_on_sqlite_connection(
             platform_io::sqlite::disable_checkpoint_on_close(&mut connection),
         ) {
-            platform_io::sqlite::block_on_sqlite_connection(connection.close()).map_err(
-                |error| ProjectionFailure {
-                    source: error.into(),
-                    corrupt: false,
-                },
-            )?;
+            let closed = platform_io::sqlite::block_on_sqlite_connection(connection.close())
+                .map_err(ProjectionFailure::from);
             return Err(ProjectionFailure {
                 source: sqlite_access::Error::Io(std::io::Error::other(error)).into(),
                 corrupt: false,
-            });
+            }
+            .after_close(closed));
         }
         let file = match crate::disk::open_regular(path) {
             Ok(file) => file,
             Err(error) => {
-                platform_io::sqlite::block_on_sqlite_connection(connection.close()).map_err(
-                    |error| ProjectionFailure {
-                        source: error.into(),
-                        corrupt: false,
-                    },
-                )?;
+                let closed = platform_io::sqlite::block_on_sqlite_connection(connection.close())
+                    .map_err(ProjectionFailure::from);
                 return Err(ProjectionFailure {
                     source: error,
                     corrupt: false,
-                });
+                }
+                .after_close(closed));
             }
         };
         Ok(Self {
@@ -268,10 +348,7 @@ impl IndexConnection {
             tx.commit().await.map_err(ProjectionFailure::from)?;
             Ok::<(), ProjectionFailure>(())
         });
-        if result.is_err() {
-            self.close()?;
-        }
-        result
+        result.map_err(|error| error.after_close(self.close()))
     }
 }
 
@@ -280,8 +357,8 @@ async fn check_projection_marker(
     expected_sequence: u64,
 ) -> std::result::Result<(), ProjectionFailure> {
     // This runs after durable publication. Never evaluate a cache-supplied
-    // view while checking the marker, even if a reader already disabled
-    // its candidate path; a definite error retains write blocking/recovery.
+    // view while checking the marker. Failure disables this projection, not
+    // the independently completed authoritative publication.
     let marker =
         sqlite_access::query("SELECT type,sql FROM sqlite_schema WHERE name='current_state'")
             .fetch_one(&mut *connection)
@@ -369,8 +446,11 @@ fn project_delta(
 ) -> Result<()> {
     let mut writer = IndexConnection::open(path, before.is_none()).map_err(Error::from)?;
     let result = writer.project(before, after, delta);
-    writer.close().map_err(Error::from)?;
-    result.map_err(Into::into)
+    let closed = writer.close();
+    match result {
+        Ok(()) => closed.map_err(Error::from),
+        Err(error) => Err(error.after_close(closed).into()),
+    }
 }
 
 // Move every journal before the main database. A partial quarantine must never
@@ -446,14 +526,32 @@ fn quarantine_corrupt_index(root: &Path) -> Result<()> {
 }
 
 impl Engine {
+    /// A cheap snapshot; neither availability nor sequence grants write admission.
+    pub fn index_health(&self) -> IndexHealth {
+        let proof = self
+            .history_query_proof
+            .lock()
+            .expect("invariant: history query proof lock poisoned");
+        match &proof.availability {
+            IndexAvailability::Unbuilt => IndexHealth::Unbuilt,
+            IndexAvailability::Ready(_) => IndexHealth::Ready {
+                sequence: proof.sequence,
+            },
+            IndexAvailability::Unavailable(failure) => {
+                IndexHealth::Unavailable(Arc::clone(failure))
+            }
+        }
+    }
+
     pub(crate) fn rebuild_index(&self) -> Result<()> {
         let mut proof = self
             .history_query_proof
             .lock()
             .expect("invariant: history query proof lock poisoned");
-        proof.healthy = false;
-        if let Some(mut writer) = proof.writer.take() {
-            writer.close().map_err(Error::from)?;
+        match std::mem::take(&mut proof.availability) {
+            IndexAvailability::Ready(mut writer) => writer.close().map_err(Error::from)?,
+            unavailable @ IndexAvailability::Unavailable(_) => proof.availability = unavailable,
+            IndexAvailability::Unbuilt => (),
         }
         let delta = HistoryDelta::between(None, &self.state.versions);
         checked_index_files(&self.root)?;
@@ -463,7 +561,7 @@ impl Engine {
             writer.project(None, &self.state, &delta)?;
             Ok::<_, ProjectionFailure>(writer)
         };
-        proof.writer = Some(match rebuild() {
+        let writer = match rebuild() {
             Ok(writer) => writer,
             Err(error) => {
                 if !error.corrupt {
@@ -473,66 +571,62 @@ impl Engine {
                 // Only recovered durable State supplies the replacement projection.
                 rebuild().map_err(Error::from)?
             }
-        });
+        };
         proof.counts.clear();
         for v in self.state.versions.values() {
             *proof.counts.entry(v.file_id.clone()).or_default() += 1;
         }
         proof.sequence = self.state.sequence;
-        proof.healthy = true;
+        proof.availability = IndexAvailability::Ready(writer);
         Ok(())
     }
-    pub(crate) fn update_index(&self, previous: &State) -> Result<()> {
-        let delta = HistoryDelta::between(Some(&previous.versions), &self.state.versions);
+
+    /// Maintain an optional projection after authoritative publication. Its failure
+    /// is retained in index_health, never returned as failure of the published write.
+    pub(crate) fn update_index(&self, previous: &State) {
         let mut proof = self
             .history_query_proof
             .lock()
             .expect("invariant: history query proof lock poisoned");
-        if let Err(error) = checked_index_files(&self.root) {
-            proof.healthy = false;
-            return Err(error);
+        match &proof.availability {
+            IndexAvailability::Unavailable(_) => return,
+            IndexAvailability::Unbuilt => {
+                unreachable!("invariant: engine admission builds its history index")
+            }
+            IndexAvailability::Ready(_) => (),
         }
+        let delta = HistoryDelta::between(Some(&previous.versions), &self.state.versions);
         let result = (|| {
-            let writer = proof.writer.as_mut().ok_or_else(|| {
-                Error::new(
-                    ErrorCode::IndexRebuildFailed,
-                    "index worker unavailable; reopen to rebuild",
-                )
-            })?;
+            checked_index_files(&self.root)?;
+            let IndexAvailability::Ready(writer) = &mut proof.availability else {
+                unreachable!("invariant: index availability is held by this mutex")
+            };
             writer.check_identity(&self.root.join("index.sqlite"))?;
             writer
                 .project(Some(previous), &self.state, &delta)
                 .map_err(Error::from)
         })();
-        if let Err(error) = result {
-            proof.healthy = false;
-            if let Some(mut writer) = proof.writer.take() {
-                writer.close().map_err(Error::from)?;
-            }
-            return Err(error);
+        if let Err(source) = result {
+            proof.disable(source, IndexFailureStage::Update, self.state.sequence);
+            return;
         }
-        if proof.healthy && proof.sequence == previous.sequence {
-            // Reuse the changed-version delta, including replacements/moves.
-            for id in delta.deletes.iter().chain(&delta.upserts) {
-                if let Some(old) = previous.versions.get(*id) {
-                    let count = proof
-                        .counts
-                        .get_mut(&old.file_id)
-                        .expect("trusted version count");
-                    *count -= 1;
-                    if *count == 0 {
-                        proof.counts.remove(&old.file_id);
-                    }
-                }
-                if let Some(new) = self.state.versions.get(*id) {
-                    *proof.counts.entry(new.file_id.clone()).or_default() += 1;
+        // Reuse the changed-version delta, including replacements/moves.
+        for id in delta.deletes.iter().chain(&delta.upserts) {
+            if let Some(old) = previous.versions.get(*id) {
+                let count = proof
+                    .counts
+                    .get_mut(&old.file_id)
+                    .expect("invariant: trusted version count includes the previous version");
+                *count -= 1;
+                if *count == 0 {
+                    proof.counts.remove(&old.file_id);
                 }
             }
-            proof.sequence = self.state.sequence;
-        } else {
-            proof.healthy = false;
+            if let Some(new) = self.state.versions.get(*id) {
+                *proof.counts.entry(new.file_id.clone()).or_default() += 1;
+            }
         }
-        Ok(())
+        proof.sequence = self.state.sequence;
     }
 
     pub(crate) fn history_index_is_selective(&self, file_id: &str) -> bool {
@@ -543,7 +637,7 @@ impl Engine {
                 .history_query_proof
                 .lock()
                 .expect("invariant: history query proof lock poisoned");
-            proof.healthy
+            matches!(proof.availability, IndexAvailability::Ready(_))
                 && proof.counts.get(file_id).copied().unwrap_or(0) <= HISTORY_INDEX_MAX_CANDIDATES
         }
     }
@@ -554,11 +648,11 @@ impl Engine {
             .history_query_proof
             .lock()
             .expect("invariant: history query proof lock poisoned");
-        if !proof.healthy || proof.sequence != self.state.sequence {
+        if !matches!(proof.availability, IndexAvailability::Ready(_)) {
             return None;
         }
-        if checked_index_files(&self.root).is_err() {
-            proof.healthy = false;
+        if let Err(source) = checked_index_files(&self.root) {
+            proof.disable(source, IndexFailureStage::Read, self.state.sequence);
             return None;
         }
         let expected = proof.counts.get(file_id).copied().unwrap_or(0);
@@ -612,7 +706,8 @@ impl Engine {
             let closed = c.close().await.map_err(ProjectionFailure::from);
             match (result, closed) {
                 (Ok(v), Ok(())) => Ok(v),
-                (Err(e), _) | (_, Err(e)) => Err(e),
+                (Err(error), closed) => Err(error.after_close(closed)),
+                (Ok(_), Err(error)) => Err(error),
             }
         });
         match result {
@@ -623,8 +718,8 @@ impl Engine {
                 }
                 Some(versions)
             }
-            Err(_) => {
-                proof.healthy = false;
+            Err(error) => {
+                proof.disable(error.into(), IndexFailureStage::Read, self.state.sequence);
                 None
             }
         }

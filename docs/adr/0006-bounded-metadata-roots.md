@@ -44,7 +44,7 @@ history投影目前仅支持已存在且history/file归属稳定的分支值更�
 
 本次仍实读并认证所有旧依赖，随后按准确可达闭包向全部成员验存；已有同hash对象仍比较真实bytes并执行原文件/目录同步。缺源后的重建只在当前可信State及准确根相同的既有边界内使用，不能授权恢复、导出或导入从SQLite/任意State重定根。
 
-驻留MapRoot与发布谱系均不证明对象当前健康。已知缺失/损坏使相关发布沿用失效；未决决定、恢复、换成员、配置/基线不匹配及索引失败等边界继续按原协议处理。没有启用 PublishedGraphEpoch 跳读，没有删除碰撞比较、fsync、全成员发布或成功后索引确认。新编码对象恰好同hash存在也不是已完成屏障的证明。
+驻留MapRoot与发布谱系均不证明对象当前健康。已知缺失/损坏使相关发布沿用失效；未决决定、恢复、换成员、配置/基线不匹配等权威边界继续按原协议处理；纯 SQLite 索引失败只停用派生加速，不改变完整发布结果或 metadata epoch。没有启用 PublishedGraphEpoch 跳读，没有删除碰撞比较、fsync 或全成员发布。新编码对象恰好同hash存在也不是已完成屏障的证明。
 
 所以这次只关闭平面根和预算扫描中的指定成本，不宣称整体 O(delta)、更快吞吐或更低延迟。history全投影、State容器、全旧图读验/安装、恢复和暂存字节仍可能随总量增长；应分别测编码、读取、分配、同步与端到端时间。
 
@@ -60,7 +60,7 @@ history投影目前仅支持已存在且history/file归属稳定的分支值更�
 2. 独立full oracle与路径更新：随机插删、同值、128项与64 KiB split/collapse、OperationId文本、append/All及未知谱系；不把oracle放生产热路径。
 3. 证明与预算：真实所有候选路径编码的max对照精确摘要，空目录、单叶、65节点边界；hash/route/extra/truncated篡改拒绝，预算超限先于正文复制与决定。
 4. 完整consumer：普通/降级恢复、checkpoint、跨成员缺失页、独立包导出/离线检查/导入、墓碑及操作点读；无好副本失败与保留文件。
-5. 原持久化屏障：同hash已有对象、故障重试、文件/目录sync、ACCEPT/FINALIZE/PUBLICATION/封印及索引失败；不签发虚假的新谱系。
+5. 原持久化屏障：同hash已有对象、故障重试、文件/目录sync、ACCEPT/FINALIZE/PUBLICATION/封印的权威失败与独立索引失败分别验证；前者不签发新谱系，后者保留真实成功谱系及可观察的索引不可用。
 6. 全门禁、规模测量与物理设备验收分列：源码/静态schema、编译、单元回归不互相替代，未执行不能写成通过。
 
 关联：[盘格式](../08-full-storage-and-disk-format.md#s08-07)、[事务恢复](../10-transactions-and-recovery.md)、[容量成本](../19-capacity-and-performance.md)、[操作手册](../25-operation-manual.md)。

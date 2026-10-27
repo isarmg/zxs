@@ -35,6 +35,18 @@ pub(crate) fn report_recovery_warnings(engine: &mut Engine) {
     }
 }
 
+fn history_index_status(health: storage_engine::IndexHealth) -> crate::HistoryIndexStatus {
+    match health {
+        storage_engine::IndexHealth::Unbuilt => crate::HistoryIndexStatus::Unbuilt,
+        storage_engine::IndexHealth::Ready { .. } => crate::HistoryIndexStatus::Ready,
+        storage_engine::IndexHealth::Unavailable(failure) => {
+            crate::HistoryIndexStatus::Unavailable {
+                code: failure.cause().code(),
+            }
+        }
+    }
+}
+
 pub struct EngineBackend {
     engine: Mutex<AdmissionEngine>,
     #[cfg(test)]
@@ -83,6 +95,12 @@ impl EngineBackend {
             )
             .map_err(error)
     }
+    /// Current optional-index state only; no member probe, State clone, or file I/O.
+    pub(crate) fn history_index_status(&self) -> crate::HistoryIndexStatus {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        history_index_status(engine.index_health())
+    }
+
     pub(crate) fn read_only(&self) -> Result<bool, ApiError> {
         Ok(self
             .engine
@@ -530,6 +548,7 @@ impl Backend for EngineBackend {
         let storage_disks = engine.config().disks.len();
         let mode = engine.config().mode.clone();
         let sequence = engine.state().sequence;
+        let history_index = history_index_status(engine.index_health());
         drop(engine);
         probe.verify().map_err(|source| {
             ApiError::new(
@@ -544,6 +563,7 @@ impl Backend for EngineBackend {
             sequence,
             storage_disk_count: storage_disks,
             metadata_member_count: configured_members,
+            history_index,
         }))
     }
     fn workspace_capacity(

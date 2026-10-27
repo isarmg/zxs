@@ -228,26 +228,55 @@ fn preparation_and_indeterminate_failure_never_advance_the_baseline() {
 }
 
 #[test]
-fn post_publication_index_failure_does_not_mint_a_new_reuse_receipt() {
+fn derived_index_failure_preserves_completed_member_authority_not_future_failures() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = engine(temp.path());
     let base = engine.published_state_base.clone().unwrap();
+    let epoch = engine.metadata_integrity.capture();
     let index = engine.root.join("index.sqlite");
     std::fs::rename(&index, engine.root.join("saved-index.sqlite")).unwrap();
     std::fs::create_dir(&index).unwrap();
     let operation = storage_contract::OperationId::generate();
-    assert!(
-        engine
-            .persist_auth_state(json!({"auth":"published"}), "alice", operation)
-            .is_err()
-    );
-    assert!(engine.blocked);
+    engine
+        .persist_auth_state(json!({"auth":"published"}), "alice", operation)
+        .unwrap();
+    assert!(!engine.blocked);
     assert!(engine.state.operations.contains_key(&operation));
+    assert!(epoch.matches(&engine.metadata_integrity));
+    let current = engine.published_state_base.clone().unwrap();
+    assert!(!Arc::ptr_eq(&base, &current));
+    assert!(current.matches(&engine.planning_context(), &config_hash(&engine)));
+    let crate::IndexHealth::Unavailable(first) = engine.index_health() else {
+        panic!("expected retained index failure");
+    };
+    engine
+        .persist_auth_state(json!({"auth":"later"}), "alice", OperationId::generate())
+        .unwrap();
+    let crate::IndexHealth::Unavailable(later) = engine.index_health() else {
+        panic!("expected same unavailable index");
+    };
+    assert!(Arc::ptr_eq(&first, &later));
+    assert!(epoch.matches(&engine.metadata_integrity));
+    let current = engine.published_state_base.clone().unwrap();
+    assert!(current.matches(&engine.planning_context(), &config_hash(&engine)));
+
+    // Disabling the disposable accelerator does not weaken the actual decision barrier.
+    engine.inject_fault_once("after_accept_1");
+    let error = engine
+        .persist_auth_state(
+            json!({"auth":"uncertain"}),
+            "alice",
+            OperationId::generate(),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::InDoubt);
+    assert!(engine.blocked);
+    assert!(!epoch.matches(&engine.metadata_integrity));
     assert!(Arc::ptr_eq(
-        &base,
+        &current,
         engine.published_state_base.as_ref().unwrap()
     ));
-    assert!(!base.matches(&engine.planning_context(), &config_hash(&engine)));
+    assert!(!current.matches(&engine.planning_context(), &config_hash(&engine)));
 }
 
 #[test]
@@ -427,4 +456,37 @@ fn workspace_identity_observation_revokes_a_current_publication_receipt() {
     assert!(plan.workspace_data_directory(&workspace).is_err());
     assert!(!base.matches(&engine.planning_context(), &config_hash(&engine)));
     assert!(!engine.blocked);
+}
+
+#[test]
+fn index_read_failure_does_not_revoke_member_metadata_epoch() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(temp.path());
+    let base = engine.published_state_base.clone().unwrap();
+    let epoch = engine.metadata_integrity.capture();
+    let index = engine.root.join("index.sqlite");
+    std::fs::rename(&index, engine.root.join("saved-index.sqlite")).unwrap();
+    std::fs::create_dir(&index).unwrap();
+    assert!(engine.indexed_file_history("absent").is_none());
+    let crate::IndexHealth::Unavailable(failure) = engine.index_health() else {
+        panic!("expected index read failure");
+    };
+    assert_eq!(failure.stage(), crate::IndexFailureStage::Read);
+    assert!(epoch.matches(&engine.metadata_integrity));
+    assert!(base.matches(&engine.planning_context(), &config_hash(&engine)));
+    engine
+        .persist_auth_state(
+            json!({"auth":"published"}),
+            "alice",
+            OperationId::generate(),
+        )
+        .unwrap();
+    assert!(epoch.matches(&engine.metadata_integrity));
+    assert!(
+        engine
+            .published_state_base
+            .as_ref()
+            .unwrap()
+            .matches(&engine.planning_context(), &config_hash(&engine))
+    );
 }

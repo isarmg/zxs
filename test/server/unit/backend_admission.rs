@@ -207,7 +207,9 @@ impl Backend for BackendProbe {
         if matches!(self.blocked, BlockedEndpoint::Ready) {
             self.wait()?;
         }
-        Ok(crate::Readiness::Managed)
+        Ok(crate::Readiness::Managed {
+            history_index: crate::HistoryIndexStatus::Ready,
+        })
     }
     fn workspace_capacity(
         &self,

@@ -43,6 +43,185 @@ fn call(client: &mut FrameStream, request: Request) -> Result<Value, Response> {
 }
 
 #[test]
+fn rpc_flush_returns_published_receipt_when_index_projection_fails() {
+    use super::projection_failure::{
+        fail_projection, projection_sequence, receipt_without_observation_time,
+    };
+    let (temp, shared, backend, branch) = fixture();
+    let (mut wire, worker) = connect(shared.clone());
+    wire.send(
+        &Request::<String>::Open {
+            path: "report.txt".into(),
+            writable: true,
+            create: false,
+            truncate: false,
+            exclusive: false,
+            write_through: false,
+        },
+        None,
+    )
+    .unwrap();
+    let (response, descriptor) = wire.receive::<Response>().unwrap();
+    let Response::Ok { result } = response else {
+        panic!("writer must open: {response:?}")
+    };
+    let opened: OpenResult = json_codec::from_value(result).unwrap();
+    let file = File::from(descriptor.unwrap());
+    file.write_all_at(b"new", 0).unwrap();
+    call(
+        &mut wire,
+        Request::Dirty {
+            handle: opened.handle,
+        },
+    )
+    .unwrap();
+    let crate::Readiness::Engine(before) = backend.ready().unwrap() else {
+        panic!("expected real engine readiness")
+    };
+    let index = temp.path().join("state/index.sqlite");
+    let projected_before = fail_projection(&index);
+    assert_eq!(projected_before, before.sequence.to_string());
+
+    let saved = call(
+        &mut wire,
+        Request::Flush {
+            handle: opened.handle,
+        },
+    )
+    .unwrap();
+    assert_eq!(saved["commit_state"], "PUBLISHED");
+    assert_eq!(saved["result"]["outcome"], "COMMITTED_AND_PROTECTED");
+    assert_eq!(
+        saved["result"]["publication_sequence"],
+        (before.sequence + 1).to_string()
+    );
+    assert_eq!(projection_sequence(&index), projected_before);
+    let operation = saved["operation_id"].as_str().unwrap().parse().unwrap();
+    let queried = crate::operation_wire::operation_wire(
+        backend.operation(&identity(&shared), operation).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        receipt_without_observation_time(&queried),
+        receipt_without_observation_time(&saved)
+    );
+    let uploads = backend.uploads.load(Ordering::SeqCst);
+    assert_eq!(
+        call(
+            &mut wire,
+            Request::Flush {
+                handle: opened.handle
+            }
+        )
+        .unwrap(),
+        json!({"saved":true,"changed":false})
+    );
+    assert_eq!(backend.uploads.load(Ordering::SeqCst), uploads);
+    let entry = session(shared.clone(), &branch)
+        .entries()
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.path == "report.txt")
+        .unwrap();
+    assert_eq!(
+        backend
+            .file_history(&identity(&shared), &entry.file_id)
+            .unwrap()
+            .len(),
+        2
+    );
+    let crate::Readiness::Engine(after) = backend.ready().unwrap() else {
+        panic!("expected real engine readiness")
+    };
+    assert_eq!(after.sequence, before.sequence + 1);
+    assert_eq!(
+        after.history_index,
+        crate::HistoryIndexStatus::Unavailable {
+            code: storage_contract::ErrorCode::IndexRebuildFailed,
+        }
+    );
+    call(
+        &mut wire,
+        Request::Close {
+            handle: opened.handle,
+        },
+    )
+    .unwrap();
+    drop(file);
+    drop(wire);
+    worker.join().unwrap();
+}
+
+#[test]
+fn rpc_namespace_returns_published_receipt_and_does_not_replay_after_index_failure() {
+    use super::projection_failure::{
+        fail_projection, projection_sequence, receipt_without_observation_time,
+    };
+    let (temp, shared, backend, branch) = fixture();
+    let (mut wire, worker) = connect(shared.clone());
+    let operation = storage_contract::OperationId::generate();
+    let request = || Request::Namespace {
+        operation_id: operation.to_string(),
+        kind: smb_protocol::protocol::NamespaceOperation::Rename,
+        path: "report.txt".into(),
+        destination: Some("renamed.txt".into()),
+        replace: false,
+    };
+    let crate::Readiness::Engine(before) = backend.ready().unwrap() else {
+        panic!("expected real engine readiness")
+    };
+    let index = temp.path().join("state/index.sqlite");
+    let projected_before = fail_projection(&index);
+    assert_eq!(projected_before, before.sequence.to_string());
+
+    let saved = call(&mut wire, request()).unwrap();
+    assert_eq!(saved["operation_id"], operation.to_string());
+    assert_eq!(saved["commit_state"], "PUBLISHED");
+    assert_eq!(
+        saved["publication_sequence"],
+        (before.sequence + 1).to_string()
+    );
+    assert_eq!(saved["protection_at_publish"], "NOT_APPLICABLE");
+    assert_eq!(projection_sequence(&index), projected_before);
+    let queried = crate::operation_wire::operation_wire(
+        backend.operation(&identity(&shared), operation).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        receipt_without_observation_time(&queried),
+        receipt_without_observation_time(&saved)
+    );
+    assert_eq!(
+        fs::symlink_metadata(shared.spool.join(format!("{operation}.namespace.json")))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    assert!(matches!(
+        call(&mut wire, request()).unwrap_err(),
+        Response::Error {
+            code: storage_contract::ErrorCode::OperationIdConflict,
+            ..
+        }
+    ));
+    let crate::Readiness::Engine(after) = backend.ready().unwrap() else {
+        panic!("expected real engine readiness")
+    };
+    assert_eq!(after.sequence, before.sequence + 1);
+    assert_eq!(
+        after.history_index,
+        crate::HistoryIndexStatus::Unavailable {
+            code: storage_contract::ErrorCode::IndexRebuildFailed,
+        }
+    );
+    let entries = session(shared.clone(), &branch).entries().unwrap();
+    assert!(entries.iter().any(|entry| entry.path == "renamed.txt"));
+    assert!(!entries.iter().any(|entry| entry.path == "report.txt"));
+    drop(wire);
+    worker.join().unwrap();
+}
+
+#[test]
 fn unlink_and_rmdir_preserve_targets_of_the_wrong_kind() {
     let (_temp, shared, _backend, branch) = fixture();
     let mut session = session(shared, &branch);

@@ -254,8 +254,17 @@ mod tests;
 /// A successful readiness observation, not a lease for future writes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Readiness {
-    Managed,
+    Managed { history_index: HistoryIndexStatus },
     Engine(EngineReadiness),
+}
+
+/// Safe projection of the optional index's availability; no internal error text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serialization(tag = "state", rename_all = "snake_case")]
+pub enum HistoryIndexStatus {
+    Unbuilt,
+    Ready,
+    Unavailable { code: storage_contract::ErrorCode },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EngineReadiness {
@@ -263,6 +272,7 @@ pub struct EngineReadiness {
     pub sequence: u64,
     pub storage_disk_count: usize,
     pub metadata_member_count: usize,
+    pub history_index: HistoryIndexStatus,
 }
 #[derive(Serialize)]
 #[serialization(untagged)]
@@ -273,6 +283,7 @@ pub(crate) enum ReadinessResponse {
 #[derive(Serialize)]
 pub(crate) struct ManagedReadinessResponse {
     ready: bool,
+    history_index: HistoryIndexStatus,
 }
 #[derive(Serialize)]
 pub(crate) struct EngineReadinessResponse {
@@ -283,22 +294,28 @@ pub(crate) struct EngineReadinessResponse {
     storage_disk_count: usize,
     metadata_member_count: usize,
     metadata_redundancy: &'static str,
+    history_index: HistoryIndexStatus,
 }
 impl From<Readiness> for ReadinessResponse {
     fn from(readiness: Readiness) -> Self {
         match readiness {
-            Readiness::Managed => Self::Managed(ManagedReadinessResponse { ready: true }),
+            Readiness::Managed { history_index } => Self::Managed(ManagedReadinessResponse {
+                ready: true,
+                history_index,
+            }),
             Readiness::Engine(EngineReadiness {
                 mode,
                 sequence,
                 storage_disk_count,
                 metadata_member_count,
+                history_index,
             }) => Self::Engine(EngineReadinessResponse {
                 ready: true,
                 mode,
                 sequence,
                 storage_disk_count,
                 metadata_member_count,
+                history_index,
                 metadata_redundancy: if metadata_member_count == 1 {
                     "none"
                 } else {

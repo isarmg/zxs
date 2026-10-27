@@ -39,9 +39,12 @@ source and `DURABILITY_UNKNOWN` classification.
 Index failures retain the underlying database/platform cause. The existing
 SQLite corruption classifier alone decides whether quarantine/rebuild is safe;
 permission, busy, schema and I/O failures do not become corruption. A failed
-optional history-index read still disables that acceleration at its existing
-decision point. Poisoned engine locks expose invariant failure rather than
-becoming a recoverable storage result; actual filesystem failures still propagate.
+optional history-index read disables that acceleration and retains its concrete
+source. A post-publication update failure likewise becomes owned index health,
+not a failed mutation receipt. Close failure retains both causes without replacing
+the primary one. This exception is limited to the disposable index; authoritative
+publication and workspace persistence failures still propagate. Poisoned engine
+locks expose invariant failure rather than becoming a recoverable storage result.
 
 ## Server boundaries
 

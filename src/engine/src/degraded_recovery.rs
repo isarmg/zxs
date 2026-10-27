@@ -912,9 +912,9 @@ impl Engine {
                 .checked_add(1)
                 .ok_or_else(|| required("decision sequence exhausted"))?,
         );
-        // Publication is durable, but a failed local reconciliation must retain
-        // the write fence, just like ordinary publication's index update. A
-        // restart can rebuild the disposable index and reconcile workspaces.
+        // This explicit recovery still requires complete local reconciliation
+        // before releasing its write fence. It is not ordinary publication's
+        // optional index maintenance; workspace evidence must be reconciled too.
         self.rebuild_index()?;
         self.load_workspaces()?;
         self.blocked = false;

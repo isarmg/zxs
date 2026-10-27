@@ -139,7 +139,7 @@ platform-io → 文件系统 / SQLite / 凭据算法依赖
 | storage-contract | name-policy | 无 |
 | storage-client、smb-protocol | storage-contract | 无 |
 | storage-engine | storage-contract、name-policy、platform-io | 无 |
-| storage-server | authentication、storage-engine、platform-io、storage-contract、name-policy、smb-protocol | 无 |
+| storage-server | authentication、storage-engine、platform-io、storage-contract、name-policy、smb-protocol | storage-client（真实 HTTP 发布回归） |
 | smb-vfs | smb-protocol | 无 |
 | web-app | web-interface、storage-contract、name-policy | 无 |
 | web-interface | view-macros | 无 |

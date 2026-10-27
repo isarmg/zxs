@@ -1,6 +1,24 @@
 use super::*;
 use sqlite_access::Row;
 
+fn index_ready(engine: &Engine) -> bool {
+    matches!(engine.index_health(), IndexHealth::Ready { .. })
+}
+
+fn index_failure(engine: &Engine) -> Arc<IndexFailure> {
+    let IndexHealth::Unavailable(failure) = engine.index_health() else {
+        panic!("expected unavailable index");
+    };
+    failure
+}
+
+fn index_writer(proof: &mut QueryProof) -> &mut IndexConnection {
+    let IndexAvailability::Ready(writer) = &mut proof.availability else {
+        panic!("expected ready writer");
+    };
+    writer
+}
+
 fn version(id: &str, file: &str, sequence: u64) -> FileVersion {
     FileVersion {
         history_tree_id: "history".into(),
@@ -116,7 +134,7 @@ fn history_delta_handles_deletes_replacements_and_identity_moves() {
         .get_mut("b")
         .unwrap()
         .history_tree_id = "changed".into();
-    engine.update_index(&previous).unwrap();
+    engine.update_index(&previous);
     for file in ["file", "moved", "unrelated", "missing"] {
         assert_eq!(engine.indexed_file_history(file), Some(scan(&engine, file)));
     }
@@ -146,10 +164,7 @@ fn malformed_or_incomplete_index_falls_back_and_latches_until_rebuild() {
             scan(&engine, "file"),
             "{statement}"
         );
-        assert!(
-            !engine.history_query_proof.lock().unwrap().healthy,
-            "{statement}"
-        );
+        assert!(!index_ready(&engine), "{statement}");
         assert!(engine.indexed_file_history("file").is_none());
         engine.rebuild_index().unwrap();
         assert_eq!(
@@ -168,7 +183,7 @@ fn history_missing_database_and_untrusted_snapshot_fall_back() {
     assert!(engine.indexed_file_history("file").is_none());
     assert_eq!(engine.file_history("file").unwrap(), scan(&engine, "file"));
     assert!(!engine.root.join("index.sqlite").exists());
-    assert!(!engine.history_query_proof.lock().unwrap().healthy);
+    assert!(!index_ready(&engine));
     *engine.history_query_proof.lock().unwrap() = QueryProof::default();
     assert_eq!(engine.file_history("file").unwrap(), scan(&engine, "file"));
 }
@@ -189,10 +204,11 @@ fn typed_history_write_failure_rolls_back_all_projection_rows_and_proof() {
     std::sync::Arc::make_mut(&mut engine.state)
         .versions
         .insert("new".into(), version("new", "file", 1));
-    assert!(engine.update_index(&previous).is_err());
+    engine.update_index(&previous);
+    assert!(!index_ready(&engine));
     assert_eq!(rows(&path), baseline);
     assert_eq!(engine.file_history("file").unwrap(), scan(&engine, "file"));
-    assert!(!engine.history_query_proof.lock().unwrap().healthy);
+    assert!(!index_ready(&engine));
 }
 
 #[test]
@@ -203,13 +219,7 @@ fn busy_history_read_has_short_budget_and_latches() {
     let path = engine.root.join("index.sqlite");
     // Isolate the reader's external rollback-journal lock boundary. A live WAL
     // writer prevents switching journal mode, before this read even starts.
-    engine
-        .history_query_proof
-        .lock()
-        .unwrap()
-        .writer
-        .take()
-        .unwrap()
+    index_writer(&mut engine.history_query_proof.lock().unwrap())
         .close()
         .unwrap();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
@@ -232,7 +242,7 @@ fn busy_history_read_has_short_budget_and_latches() {
     let start = std::time::Instant::now();
     assert!(engine.indexed_file_history("file").is_none());
     assert!(start.elapsed() < std::time::Duration::from_secs(1));
-    assert!(!engine.history_query_proof.lock().unwrap().healthy);
+    assert!(!index_ready(&engine));
     let start = std::time::Instant::now();
     for _ in 0..100 {
         assert!(engine.indexed_file_history("file").is_none());
@@ -244,7 +254,7 @@ fn busy_history_read_has_short_budget_and_latches() {
 }
 
 #[test]
-fn successful_delta_does_not_clear_unhealthy_latch() {
+fn unavailable_index_skips_deltas_until_complete_rebuild() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = engine(&temp);
     populate(&mut engine);
@@ -253,22 +263,28 @@ fn successful_delta_does_not_clear_unhealthy_latch() {
         "DELETE FROM file_history_versions WHERE version_id='a'",
     );
     assert!(engine.indexed_file_history("file").is_none());
+    let first = index_failure(&engine);
+    let baseline = rows(&engine.root.join("index.sqlite"));
     let previous = engine.state().clone();
     std::sync::Arc::make_mut(&mut engine.state).sequence += 1;
     std::sync::Arc::make_mut(&mut engine.state)
-        .file_notes
-        .insert("file".into(), "changed".into());
+        .versions
+        .insert("new".into(), version("new", "file", 7));
     assert!(
-        previous
+        !previous
             .versions
             .shares_storage_with(&engine.state.versions)
     );
-    engine.update_index(&previous).unwrap();
+    HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.set(0));
+    engine.update_index(&previous);
+    assert_eq!(HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.get()), 0);
+    assert!(Arc::ptr_eq(&first, &index_failure(&engine)));
+    assert_eq!(rows(&engine.root.join("index.sqlite")), baseline);
     assert_eq!(
         rows(&engine.root.join("index.sqlite")).0,
-        engine.state.sequence.to_string()
+        previous.sequence.to_string()
     );
-    assert!(!engine.history_query_proof.lock().unwrap().healthy);
+    assert!(!index_ready(&engine));
     assert!(engine.indexed_file_history("file").is_none());
     assert_eq!(engine.file_history("file").unwrap(), scan(&engine, "file"));
     engine.rebuild_index().unwrap();
@@ -300,7 +316,7 @@ fn actual_history_route_uses_index_only_for_large_selective_stores() {
         "DELETE FROM file_history_versions WHERE version_id='a'",
     );
     assert_eq!(engine.file_history("file").unwrap(), scan(&engine, "file"));
-    assert!(!engine.history_query_proof.lock().unwrap().healthy);
+    assert!(!index_ready(&engine));
 }
 
 #[test]
@@ -624,12 +640,12 @@ fn shared_versions_advance_marker_and_proof_without_comparison_or_history_writes
         .insert("file".into(), "metadata only".into());
     assert!(previous.versions.shares_storage_with(&next.versions));
     HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.set(0));
-    engine.update_index(&previous).unwrap();
+    engine.update_index(&previous);
     assert_eq!(HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.get()), 0);
     assert_eq!(writes(&path), (0, 0, 0, 1));
     assert_eq!(rows(&path), (engine.state.sequence.to_string(), baseline));
     let proof = engine.history_query_proof.lock().unwrap();
-    assert!(proof.healthy);
+    assert!(matches!(proof.availability, IndexAvailability::Ready(_)));
     assert_eq!(proof.sequence, engine.state.sequence);
     assert_eq!(proof.counts, counts);
     drop(proof);
@@ -640,52 +656,43 @@ fn shared_versions_advance_marker_and_proof_without_comparison_or_history_writes
 }
 
 #[test]
-fn shared_versions_still_validate_sql_marker_and_query_proof_sequence() {
-    for stale_sql_marker in [true, false] {
-        let temp = tempfile::tempdir().unwrap();
-        let mut engine = engine(&temp);
-        populate(&mut engine);
-        let path = engine.root.join("index.sqlite");
-        let previous = engine.state().clone();
-        let next = std::sync::Arc::make_mut(&mut engine.state);
-        next.sequence += 1;
-        next.file_notes
-            .insert("file".into(), "metadata only".into());
-        assert!(previous.versions.shares_storage_with(&next.versions));
-        if stale_sql_marker {
-            sql(
-                &path,
-                "UPDATE current_state SET sequence='18446744073709551615'",
-            );
-        } else {
-            engine.history_query_proof.lock().unwrap().sequence = u64::MAX;
-        }
-        let baseline = rows(&path);
-        let proof_sequence = engine.history_query_proof.lock().unwrap().sequence;
-        let counts = engine.history_query_proof.lock().unwrap().counts.clone();
-        install_write_audit(&path);
-        HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.set(0));
-        let result = engine.update_index(&previous);
-        assert_eq!(HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.get()), 0);
-        if stale_sql_marker {
-            assert!(
-                result
-                    .unwrap_err()
-                    .message()
-                    .contains("projection sequence mismatch")
-            );
-            assert_eq!(writes(&path), (0, 0, 0, 0));
-            assert_eq!(rows(&path), baseline);
-        } else {
-            result.unwrap();
-            assert_eq!(writes(&path), (0, 0, 0, 1));
-            assert_eq!(rows(&path), (engine.state.sequence.to_string(), baseline.1));
-        }
-        let proof = engine.history_query_proof.lock().unwrap();
-        assert!(!proof.healthy);
-        assert_eq!(proof.sequence, proof_sequence);
-        assert_eq!(proof.counts, counts);
-    }
+fn shared_versions_still_validate_the_external_sql_marker() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(&temp);
+    populate(&mut engine);
+    let path = engine.root.join("index.sqlite");
+    let previous = engine.state().clone();
+    let next = std::sync::Arc::make_mut(&mut engine.state);
+    next.sequence += 1;
+    next.file_notes
+        .insert("file".into(), "metadata only".into());
+    assert!(previous.versions.shares_storage_with(&next.versions));
+    sql(
+        &path,
+        "UPDATE current_state SET sequence='18446744073709551615'",
+    );
+    let baseline = rows(&path);
+    let proof_sequence = engine.history_query_proof.lock().unwrap().sequence;
+    let counts = engine.history_query_proof.lock().unwrap().counts.clone();
+    install_write_audit(&path);
+    HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.set(0));
+    engine.update_index(&previous);
+    assert_eq!(HISTORY_DELTA_AFTER_ROWS_COMPARED.with(|rows| rows.get()), 0);
+    assert!(
+        index_failure(&engine)
+            .cause()
+            .message()
+            .contains("projection sequence mismatch")
+    );
+    assert_eq!(writes(&path), (0, 0, 0, 0));
+    assert_eq!(rows(&path), baseline);
+    let proof = engine.history_query_proof.lock().unwrap();
+    assert!(matches!(
+        proof.availability,
+        IndexAvailability::Unavailable(_)
+    ));
+    assert_eq!(proof.sequence, proof_sequence);
+    assert_eq!(proof.counts, counts);
 }
 
 #[test]
@@ -705,11 +712,11 @@ fn unprojected_changes_advance_marker_and_proof_without_history_writes() {
         HistoryDelta::between(Some(&previous.versions), &next.versions),
         HistoryDelta::default()
     );
-    engine.update_index(&previous).unwrap();
+    engine.update_index(&previous);
     assert_eq!(writes(&path), (0, 0, 0, 1));
     assert_eq!(rows(&path), (engine.state.sequence.to_string(), baseline));
     let proof = engine.history_query_proof.lock().unwrap();
-    assert!(proof.healthy);
+    assert!(matches!(proof.availability, IndexAvailability::Ready(_)));
     assert_eq!(proof.sequence, engine.state.sequence);
     assert_eq!(proof.counts.get("file"), Some(&5));
     drop(proof);
@@ -764,7 +771,7 @@ fn failed_delta_rolls_back_rows_and_sequence_then_rebuilds_from_state() {
 }
 
 #[test]
-fn publication_rejects_substituted_marker_view_and_reopen_recovers() {
+fn publication_survives_disabled_marker_view_and_reopen_recovers() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = engine(&temp);
     let root = engine.root.clone();
@@ -775,9 +782,9 @@ fn publication_rejects_substituted_marker_view_and_reopen_recovers() {
         "DROP TABLE current_state;CREATE VIEW current_state AS WITH RECURSIVE bounded(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM bounded WHERE n<10000) SELECT 1 AS singleton, CAST(sum(n)*0 AS TEXT) AS sequence FROM bounded",
     );
     assert!(engine.indexed_file_history("absent").is_none());
-    assert!(!engine.history_query_proof.lock().unwrap().healthy);
+    assert!(!index_ready(&engine));
     let operation = storage_contract::OperationId::generate();
-    let error = engine
+    let result = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("published").unwrap(),
             "P01",
@@ -785,26 +792,26 @@ fn publication_rejects_substituted_marker_view_and_reopen_recovers() {
             "admin",
             operation,
         )
-        .unwrap_err();
-    assert_eq!(
-        error.code(),
-        storage_contract::ErrorCode::IndexRebuildFailed
-    );
+        .unwrap();
+    assert_eq!(result.commit_state, CommitState::Published);
+    let failure = index_failure(&engine);
+    assert_eq!(failure.stage(), IndexFailureStage::Read);
     assert!(
-        error
+        failure
+            .cause()
             .to_string()
-            .contains("projection marker schema mismatch")
+            .contains("query schema mismatch")
     );
-    assert!(engine.is_read_only());
+    assert!(!engine.is_read_only());
     assert!(engine.state.operations.contains_key(&operation));
-    assert!(!engine.history_query_proof.lock().unwrap().healthy);
+    assert!(!index_ready(&engine));
     let published = engine.state().clone();
     drop(engine);
     let engine = Engine::open(&root).unwrap();
     assert!(!engine.is_read_only());
     assert_eq!(*engine.state, published);
     assert_projection(&root.join("index.sqlite"), &published);
-    assert!(engine.history_query_proof.lock().unwrap().healthy);
+    assert!(index_ready(&engine));
 }
 
 #[test]
@@ -834,7 +841,7 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
         "CREATE TRIGGER fail_write BEFORE INSERT ON current_state BEGIN SELECT RAISE(ABORT,'injected projection failure');END;",
     );
     let operation = storage_contract::OperationId::generate();
-    let error = engine
+    let result = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("second").unwrap(),
             "P01",
@@ -842,15 +849,45 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
             "admin",
             operation,
         )
-        .unwrap_err();
-    assert_eq!(
-        error.code(),
-        storage_contract::ErrorCode::IndexRebuildFailed
+        .unwrap();
+    assert_eq!(result.commit_state, CommitState::Published);
+    assert_eq!(engine.operation(operation).unwrap(), result);
+    let failure = index_failure(&engine);
+    assert_eq!(failure.stage(), IndexFailureStage::Update);
+    assert_eq!(failure.sequence(), result.sequence);
+    assert_eq!(failure.cause().code(), ErrorCode::IndexRebuildFailed);
+    assert!(
+        std::error::Error::source(failure.cause())
+            .unwrap()
+            .is::<sqlite_access::Error>()
     );
-    assert!(engine.is_read_only());
+    assert!(!engine.is_read_only());
     assert!(engine.state.operations.contains_key(&operation));
     let published = engine.state().clone();
     assert_eq!(rows(&path), baseline);
+    let replay = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("second").unwrap(),
+            "P01",
+            1,
+            "admin",
+            operation,
+        )
+        .unwrap();
+    assert_eq!(replay, result);
+    assert_eq!(engine.state(), &published);
+    assert!(Arc::ptr_eq(&failure, &index_failure(&engine)));
+    let error = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("different").unwrap(),
+            "P01",
+            1,
+            "admin",
+            operation,
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::IdempotencyKeyReused);
+    assert_eq!(engine.state(), &published);
     drop(engine);
     let mut engine = Engine::open(&root).unwrap();
     assert!(!engine.is_read_only());
@@ -906,7 +943,7 @@ fn startup_rebuilds_a_corrupt_disposable_database_from_durable_evidence() {
         let recovered = Engine::open(&root).unwrap();
         assert_eq!(*recovered.state, published);
         assert_projection(&root.join("index.sqlite"), &published);
-        assert!(recovered.history_query_proof.lock().unwrap().healthy);
+        assert!(index_ready(&recovered));
         assert!(!recovered.is_read_only());
         let quarantines: Vec<_> = std::fs::read_dir(&root)
             .unwrap()
@@ -938,7 +975,7 @@ fn corrupt_reader_closes_before_immediate_rebuild() {
     bytes[100] = 0xff;
     std::fs::write(&path, &bytes).unwrap();
     assert!(engine.indexed_file_history("missing").is_none());
-    assert!(!engine.history_query_proof.lock().unwrap().healthy);
+    assert!(!index_ready(&engine));
     engine.rebuild_index().unwrap();
     assert_eq!(engine.indexed_file_history("missing"), Some(vec![]));
     assert_projection(&path, engine.state());
@@ -995,7 +1032,7 @@ fn rebuild_refuses_linked_index_or_sidecar_without_touching_target() {
                 std::fs::read(engine.root.join("index.sqlite")).unwrap(),
                 original_index
             );
-            assert!(!engine.history_query_proof.lock().unwrap().healthy);
+            assert!(!index_ready(&engine));
             assert!(!std::fs::read_dir(&engine.root).unwrap().any(|entry| {
                 entry
                     .unwrap()
@@ -1022,7 +1059,7 @@ fn rebuild_refuses_linked_index_or_sidecar_without_touching_target() {
 }
 
 #[test]
-fn runtime_linked_cache_falls_back_and_blocks_publication_without_touching_target() {
+fn runtime_linked_cache_falls_back_and_preserves_publication_without_touching_target() {
     for name in INDEX_FILES {
         for hard_link in [false, true] {
             let temp = tempfile::tempdir().unwrap();
@@ -1041,8 +1078,8 @@ fn runtime_linked_cache_falls_back_and_blocks_publication_without_touching_targe
             }
             assert!(engine.indexed_file_history("file").is_none());
             assert_eq!(engine.file_history("file").unwrap(), scan(&engine, "file"));
-            assert!(!engine.history_query_proof.lock().unwrap().healthy);
-            let error = engine
+            assert!(!index_ready(&engine));
+            let result = engine
                 .create_repository(
                     &storage_contract::RepositoryName::parse("published").unwrap(),
                     "P01",
@@ -1050,9 +1087,10 @@ fn runtime_linked_cache_falls_back_and_blocks_publication_without_touching_targe
                     "admin",
                     storage_contract::OperationId::generate(),
                 )
-                .unwrap_err();
-            assert_eq!(error.code(), storage_contract::ErrorCode::UnsafePath);
-            assert!(engine.is_read_only());
+                .unwrap();
+            assert_eq!(result.commit_state, CommitState::Published);
+            assert_eq!(index_failure(&engine).cause().code(), ErrorCode::UnsafePath);
+            assert!(!engine.is_read_only());
             assert_eq!(std::fs::read(&target).unwrap(), b"do not change");
             let metadata = std::fs::symlink_metadata(&path).unwrap();
             drop(engine);
@@ -1138,7 +1176,7 @@ fn publications_reuse_admitted_worker_and_full_commit_policy() {
     let mut engine = engine(&temp);
     {
         let mut proof = engine.history_query_proof.lock().unwrap();
-        let connection = proof.writer.as_mut().unwrap().connection.as_mut().unwrap();
+        let connection = index_writer(&mut proof).connection.as_mut().unwrap();
         platform_io::sqlite::block_on_sqlite_connection(async {
             // TEMP objects belong to this native connection, not the database.
             connection.execute("CREATE TEMP TABLE lifetime_probe(value INTEGER);INSERT INTO lifetime_probe VALUES(73)").await.unwrap();
@@ -1155,7 +1193,7 @@ fn publications_reuse_admitted_worker_and_full_commit_policy() {
             )
             .unwrap();
         let mut proof = engine.history_query_proof.lock().unwrap();
-        let connection = proof.writer.as_mut().unwrap().connection.as_mut().unwrap();
+        let connection = index_writer(&mut proof).connection.as_mut().unwrap();
         platform_io::sqlite::block_on_sqlite_connection(async {
             let value: i64 = sqlite_access::query_scalar("SELECT value FROM temp.lifetime_probe")
                 .fetch_one(&mut *connection)
@@ -1212,7 +1250,7 @@ fn publications_reuse_admitted_worker_and_full_commit_policy() {
 }
 
 #[test]
-fn replaced_database_identity_blocks_publication_and_retains_receipt() {
+fn replaced_database_identity_disables_index_and_preserves_publication() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = engine(&temp);
     let path = engine.root.join("index.sqlite");
@@ -1220,7 +1258,7 @@ fn replaced_database_identity_blocks_publication_and_retains_receipt() {
     project(&replacement, None, engine.state()).unwrap();
     std::fs::rename(&replacement, &path).unwrap();
     let operation = storage_contract::OperationId::generate();
-    let error = engine
+    let result = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("published").unwrap(),
             "P01",
@@ -1228,10 +1266,12 @@ fn replaced_database_identity_blocks_publication_and_retains_receipt() {
             "admin",
             operation,
         )
-        .unwrap_err();
-    assert_eq!(error.code(), ErrorCode::UnsafePath);
-    assert!(error.to_string().contains("identity changed"));
-    assert!(engine.is_read_only());
+        .unwrap();
+    assert_eq!(result.commit_state, CommitState::Published);
+    let failure = index_failure(&engine);
+    assert_eq!(failure.cause().code(), ErrorCode::UnsafePath);
+    assert!(failure.cause().to_string().contains("identity changed"));
+    assert!(!engine.is_read_only());
     assert!(engine.state.operations.contains_key(&operation));
 }
 
@@ -1274,7 +1314,7 @@ fn live_writer_rejects_corrupt_current_main_page() {
         let path = engine.root.join("index.sqlite");
         let offset = {
             let mut proof = engine.history_query_proof.lock().unwrap();
-            let connection = proof.writer.as_mut().unwrap().connection.as_mut().unwrap();
+            let connection = index_writer(&mut proof).connection.as_mut().unwrap();
             platform_io::sqlite::block_on_sqlite_connection(async {
                 connection
                     .execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -1307,11 +1347,9 @@ fn live_writer_rejects_corrupt_current_main_page() {
         std::fs::write(&path, &bytes).unwrap();
         let previous = engine.state().clone();
         std::sync::Arc::make_mut(&mut engine.state).sequence += 1;
-        assert!(
-            engine.update_index(&previous).is_err(),
-            "marker_page={marker_page}"
-        );
-        assert!(!engine.history_query_proof.lock().unwrap().healthy);
+        engine.update_index(&previous);
+        assert!(!index_ready(&engine), "marker_page={marker_page}");
+        assert!(!index_ready(&engine));
     }
 }
 
@@ -1395,4 +1433,65 @@ fn oversized_history_write_set_retains_full_delta_fallback() {
     assert!(matches!(next.changes_since(&previous), MapChanges::All));
     let incremental = HistoryDelta::between(Some(&previous), &next);
     assert_eq!(incremental, HistoryDelta::between(None, &next));
+}
+
+#[test]
+fn index_close_failure_retains_primary_source_and_never_authorizes_quarantine() {
+    let primary: Error = sqlite_access::Error::Io(std::io::Error::from_raw_os_error(5)).into();
+    let close: Error = sqlite_access::Error::Io(std::io::Error::from_raw_os_error(13)).into();
+    let failure = ProjectionFailure {
+        source: primary,
+        corrupt: true,
+    }
+    .after_close(Err(ProjectionFailure {
+        source: close,
+        corrupt: true,
+    }));
+    assert!(!failure.corrupt);
+    let Error::Cleanup { operation, cleanup } = &failure.source else {
+        panic!("expected both concrete errors");
+    };
+    let Error::Database(sqlite_access::Error::Io(primary)) = operation.as_ref() else {
+        panic!("expected original database I/O source");
+    };
+    assert_eq!(primary.raw_os_error(), Some(5));
+    let close = cleanup.get_ref().unwrap().downcast_ref::<Error>().unwrap();
+    let Error::Database(sqlite_access::Error::Io(close)) = close else {
+        panic!("expected close database I/O source");
+    };
+    assert_eq!(close.raw_os_error(), Some(13));
+    assert!(
+        std::error::Error::source(&failure.source)
+            .unwrap()
+            .is::<Error>()
+    );
+}
+
+#[test]
+fn failed_rebuild_preserves_original_runtime_failure_until_success() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(&temp);
+    populate(&mut engine);
+    let path = engine.root.join("index.sqlite");
+    sql(
+        &path,
+        "DELETE FROM file_history_versions WHERE version_id='a'",
+    );
+    assert!(engine.indexed_file_history("file").is_none());
+    let first = index_failure(&engine);
+    let saved = engine.root.join("saved-index.sqlite");
+    std::fs::rename(&path, &saved).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    let error = engine.rebuild_index().unwrap_err();
+    assert_eq!(error.code(), ErrorCode::UnsafePath);
+    assert!(Arc::ptr_eq(&first, &index_failure(&engine)));
+    assert_eq!(engine.file_history("file").unwrap(), scan(&engine, "file"));
+    std::fs::remove_dir(&path).unwrap();
+    std::fs::rename(&saved, &path).unwrap();
+    engine.rebuild_index().unwrap();
+    assert!(index_ready(&engine));
+    assert_eq!(
+        engine.indexed_file_history("file"),
+        Some(scan(&engine, "file"))
+    );
 }

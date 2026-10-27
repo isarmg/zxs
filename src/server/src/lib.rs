@@ -152,7 +152,9 @@ mod backend_monitoring;
 pub use backend_monitoring::{DiskSample, PowerUnavailable};
 mod backend_read;
 mod backend_status;
-pub use backend_status::{Capabilities, EngineReadiness, Readiness, StorageState, StorageStatus};
+pub use backend_status::{
+    Capabilities, EngineReadiness, HistoryIndexStatus, Readiness, StorageState, StorageStatus,
+};
 mod backend_workspace;
 pub use backend_workspace::{
     CreateWorkspace, PublishedUploadState, PublishedUploadStatus, StageNamespace,

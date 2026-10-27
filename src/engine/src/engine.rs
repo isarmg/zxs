@@ -12,6 +12,7 @@ pub use config::ValidatedConfig;
 mod planning;
 pub(crate) use planning::PlanningContext;
 mod index;
+pub use index::{IndexFailure, IndexFailureStage, IndexHealth};
 mod integrity_scrub;
 pub use integrity_scrub::{
     IntegrityScrubArea, IntegrityScrubBatch, IntegrityScrubBatchAdmission,

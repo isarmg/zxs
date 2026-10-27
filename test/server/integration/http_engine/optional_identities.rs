@@ -503,7 +503,8 @@ async fn typed_readiness_is_anonymous_and_preserves_engine_membership_wire() {
     assert_eq!(ready["metadata_member_count"], 1);
     assert_eq!(ready["metadata_redundancy"], "none");
     assert!(ready["sequence"].as_str().unwrap().parse::<u64>().is_ok());
-    assert_eq!(ready.as_object().unwrap().len(), 6);
+    assert_eq!(ready["history_index"], json!({"state":"ready"}));
+    assert_eq!(ready.as_object().unwrap().len(), 7);
 }
 
 #[tokio::test]

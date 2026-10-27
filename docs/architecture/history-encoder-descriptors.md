@@ -29,13 +29,13 @@
 - qualified miss 实读准确旧图，保留 raw delta。读取失败先被原 fault observer 观察，并原样传播；不是 catch-I/O-as-miss，也不靠缓存成功盖掉真实失败。
 - 无 periodic owner、仅手工 scan、过期、成员／绑定变化或失效 epoch 时，即使 descriptor 驻留也完整读验／安装。原有 unqualified 精确重建规则保留。
 - 所有 fresh encoder 输出都真实安装到每个 required member，包括同 hash 的叶、索引和 history root；碰撞比较与 file/directory fsync 不变。
-- descriptor 仅随 DetachedPublication 转移；完整决定、publication 及 index 成功后才随 PublishedStateBase 变成下一次来源。失败或取消不签发新 base。
+- descriptor 仅随 DetachedPublication 转移；完整权威决定与 publication 完成、原 metadata epoch 仍有效时，才随 PublishedStateBase 变成下一次来源。权威失败或取消不签发新 base；独立 SQLite 索引失败只停用其候选加速，不撤销已完成的成员元数据证明。
 - 准备后、安装后和全部 PREPARE 后／first ACCEPT 前仍核验同一个原 permit，不延长原期限、不更换 owner，不改变不可逆决定归属。
 
 未触及旧节点的静默损坏可以后移到实际读取、scrub、导出或重开发现；即使同历史另一个字段发生变化也如此。描述符不进入这些读取路径，不是字节健康证明。已经观察到的故障仍使共享 provenance 失效；pending 来源正文例外不变。
 
 ## 验证范围
 
-测试定义包含：完整字段／owner delta 与独立全量 hash/bytes 对照；多代变化、增长与收缩；未变大字段和删除最大对象的精确预算；raw null/empty 不晋升来源；真 history 变化的 owner stop/replacement、原期限、PREPARE 撤销、InDoubt 与 index 失败；未变旧依赖破坏后 qualified 写不修复而导出、scrub、重开实读发现。
+测试定义包含：完整字段／owner delta 与独立全量 hash/bytes 对照；多代变化、增长与收缩；未变大字段和删除最大对象的精确预算；raw null/empty 不晋升来源；真 history 变化的 owner stop/replacement、原期限、PREPARE 撤销、InDoubt 的阻断与独立 index 失败后的发布成功；未变旧依赖破坏后 qualified 写不修复而导出、scrub、重开实读发现。
 
 隔离外部 I/O oracle 只观察其实际覆盖的 libc 调用并使用正控制，不代表所有 raw syscalls、物理 I/O 或物理断电验收。warm hit、miss、冷启动、scrub、修复与端到端规模测量必须分别报告；不能由更少图读取宣称整个 Engine O(delta)。

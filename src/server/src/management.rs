@@ -732,7 +732,9 @@ impl Backend for ManagementBackend {
     }
     fn ready(&self) -> Result<crate::Readiness, crate::ApiError> {
         if self.management_status().state() == StorageState::Ready {
-            Ok(crate::Readiness::Managed)
+            Ok(crate::Readiness::Managed {
+                history_index: self.inner.backend()?.history_index_status(),
+            })
         } else {
             Err(ApiError::new(
                 ::http::StatusCode::SERVICE_UNAVAILABLE,
