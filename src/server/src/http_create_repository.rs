@@ -55,16 +55,14 @@ pub(crate) async fn create(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .create_repository(&identity, parse(body)?)
-            .map(RepositoryResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .create_repository(&identity, parse(body)?)
+                .map(RepositoryResponse::from)
+        })
+        .await
+        .map(Json)
 }
 #[cfg(test)]
 #[path = "../../../test/server/unit/http_create_repository.rs"]

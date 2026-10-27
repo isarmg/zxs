@@ -63,16 +63,14 @@ pub(crate) async fn workspace(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .create_workspace(&identity, command)
-            .map(WorkspaceResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .create_workspace(&identity, command)
+                .map(WorkspaceResponse::from)
+        })
+        .await
+        .map(Json)
 }
 
 pub(crate) async fn abort(
@@ -94,16 +92,15 @@ pub(crate) async fn abort(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state.backend.abort_workspace(&identity, &id)?;
-        Ok(Json(AbortedWorkspace {
-            workspace_id: id,
-            state: storage_contract::WorkspaceState::Aborted,
-        }))
-    })
-    .await
-    .map_err(ApiError::join)?
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend.abort_workspace(&identity, &id)?;
+            Ok(Json(AbortedWorkspace {
+                workspace_id: id,
+                state: storage_contract::WorkspaceState::Aborted,
+            }))
+        })
+        .await
 }
 
 pub(crate) async fn workspace_info(
@@ -117,16 +114,14 @@ pub(crate) async fn workspace_info(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .workspace(&identity, &id)
-            .map(WorkspaceResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .workspace(&identity, &id)
+                .map(WorkspaceResponse::from)
+        })
+        .await
+        .map(Json)
 }
 
 pub(crate) fn public_commit(
@@ -157,17 +152,15 @@ pub(crate) async fn commit(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let command = public_commit(&id, body)?;
-        state
-            .backend
-            .commit_workspace_public(&identity, command)
-            .and_then(crate::operation_wire::operation_wire)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            let command = public_commit(&id, body)?;
+            backend
+                .commit_workspace_public(&identity, command)
+                .and_then(crate::operation_wire::operation_wire)
+        })
+        .await
+        .map(Json)
 }
 
 pub(crate) async fn seal(
@@ -189,13 +182,10 @@ pub(crate) async fn seal(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state.backend.seal_workspace(&identity, &id)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| backend.seal_workspace(&identity, &id))
+        .await
+        .map(Json)
 }
 
 #[derive(Deserialize)]
@@ -252,17 +242,15 @@ pub(crate) async fn namespace(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let command = namespace_command(body)?;
-        state
-            .backend
-            .stage_namespace(&identity, command)
-            .map(WorkspaceResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            let command = namespace_command(body)?;
+            backend
+                .stage_namespace(&identity, command)
+                .map(WorkspaceResponse::from)
+        })
+        .await
+        .map(Json)
 }
 
 #[derive(Deserialize)]
@@ -283,16 +271,14 @@ pub(crate) async fn write_session(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let body: WriteSessionBody =
-            json_codec::from_value(body).map_err(ApiError::invalid_source)?;
-        state
-            .backend
-            .create_write_session(&identity, &body.branch_id)
-            .map(crate::backend_workspace::WriteSessionResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            let body: WriteSessionBody =
+                json_codec::from_value(body).map_err(ApiError::invalid_source)?;
+            backend
+                .create_write_session(&identity, &body.branch_id)
+                .map(crate::backend_workspace::WriteSessionResponse::from)
+        })
+        .await
+        .map(Json)
 }

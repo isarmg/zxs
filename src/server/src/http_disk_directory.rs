@@ -76,16 +76,14 @@ async fn submit(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .mutate_disk_directory(&identity, parse(body, action)?)
-            .and_then(crate::operation_wire::operation_wire)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .mutate_disk_directory(&identity, parse(body, action)?)
+                .and_then(crate::operation_wire::operation_wire)
+        })
+        .await
+        .map(Json)
 }
 pub(crate) async fn create(
     State(state): State<AppState>,

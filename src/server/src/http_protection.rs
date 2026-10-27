@@ -146,16 +146,14 @@ pub(crate) async fn policy(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .protection_policy(&identity, &id)
-            .map(crate::backend_protection::PolicyResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .protection_policy(&identity, &id)
+                .map(crate::backend_protection::PolicyResponse::from)
+        })
+        .await
+        .map(Json)
 }
 pub(crate) async fn placement_rule(
     State(state): State<AppState>,
@@ -168,16 +166,14 @@ pub(crate) async fn placement_rule(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .placement_rule(&identity, &id)
-            .map(crate::backend_protection::PlacementRuleResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .placement_rule(&identity, &id)
+                .map(crate::backend_protection::PlacementRuleResponse::from)
+        })
+        .await
+        .map(Json)
 }
 pub(crate) async fn update_policy(
     State(state): State<AppState>,
@@ -191,17 +187,15 @@ pub(crate) async fn update_policy(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let command = parse_policy(body)?;
-        state
-            .backend
-            .update_protection_policy(&identity, command)
-            .and_then(crate::operation_wire::operation_wire)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            let command = parse_policy(body)?;
+            backend
+                .update_protection_policy(&identity, command)
+                .and_then(crate::operation_wire::operation_wire)
+        })
+        .await
+        .map(Json)
 }
 pub(crate) async fn update_placement_rule(
     State(state): State<AppState>,
@@ -215,17 +209,15 @@ pub(crate) async fn update_placement_rule(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let command = parse_placement(body)?;
-        state
-            .backend
-            .update_placement_rule(&identity, command)
-            .and_then(crate::operation_wire::operation_wire)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            let command = parse_placement(body)?;
+            backend
+                .update_placement_rule(&identity, command)
+                .and_then(crate::operation_wire::operation_wire)
+        })
+        .await
+        .map(Json)
 }
 #[cfg(test)]
 #[path = "../../../test/server/unit/http_protection.rs"]

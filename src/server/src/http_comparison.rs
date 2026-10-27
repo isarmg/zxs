@@ -39,23 +39,21 @@ pub(crate) async fn compare(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let body = CompareBody::parse(value)?;
-        state
-            .backend
-            .compare_commits(
-                &identity,
-                crate::CompareCommits {
-                    left: &body.left,
-                    right: &body.right,
-                },
-            )
-            .map(ComparisonResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            let body = CompareBody::parse(value)?;
+            backend
+                .compare_commits(
+                    &identity,
+                    crate::CompareCommits {
+                        left: &body.left,
+                        right: &body.right,
+                    },
+                )
+                .map(ComparisonResponse::from)
+        })
+        .await
+        .map(Json)
 }
 #[cfg(test)]
 #[path = "../../../test/server/unit/http_comparison.rs"]

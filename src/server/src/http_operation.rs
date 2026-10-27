@@ -28,17 +28,15 @@ pub(crate) async fn operation(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let operation = operation_id(&id)?;
-        state
-            .backend
-            .operation(&identity, operation)
-            .and_then(crate::operation_wire::operation_wire)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            let operation = operation_id(&id)?;
+            backend
+                .operation(&identity, operation)
+                .and_then(crate::operation_wire::operation_wire)
+        })
+        .await
+        .map(Json)
 }
 #[cfg(test)]
 #[path = "../../../test/server/unit/http_operation.rs"]

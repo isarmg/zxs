@@ -55,15 +55,9 @@ pub(crate) async fn submit(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let _auth_owner = state.auth;
-        state
-            .backend
-            .create_disk_write_session(&identity, parse(body)?)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(DiskWriteSessionResponse::from)
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| backend.create_disk_write_session(&identity, parse(body)?))
+        .await
+        .map(DiskWriteSessionResponse::from)
+        .map(Json)
 }

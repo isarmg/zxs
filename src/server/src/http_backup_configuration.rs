@@ -86,17 +86,14 @@ pub(crate) async fn read(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let _auth_owner = state.auth;
-        state
-            .backend
-            .backup_configuration(&identity, request)
-            .map(crate::backend_backup_configuration::BackupConfigurationResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .backup_configuration(&identity, request)
+                .map(crate::backend_backup_configuration::BackupConfigurationResponse::from)
+        })
+        .await
+        .map(Json)
 }
 
 pub(crate) async fn configure(
@@ -115,17 +112,14 @@ pub(crate) async fn configure(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let _auth_owner = state.auth;
-        state
-            .backend
-            .configure_backups(&identity, parse(body)?)
-            .and_then(crate::operation_wire::operation_wire)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .configure_backups(&identity, parse(body)?)
+                .and_then(crate::operation_wire::operation_wire)
+        })
+        .await
+        .map(Json)
 }
 
 #[cfg(test)]

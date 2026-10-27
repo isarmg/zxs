@@ -1060,6 +1060,7 @@ async fn storage_retry_backend_contention_never_blocks_runtime_or_releases_cance
     for _ in 0..2 {
         jobs.push(tokio::spawn(storage_retry_job(
             backend.clone(),
+            auth.clone(),
             slots.clone(),
             identity.clone(),
         )));
@@ -1076,10 +1077,15 @@ async fn storage_retry_backend_contention_never_blocks_runtime_or_releases_cance
     .unwrap();
     assert_eq!(probe.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert_eq!(
-        storage_retry_job(backend.clone(), slots.clone(), identity.clone())
-            .await
-            .unwrap_err()
-            .status,
+        storage_retry_job(
+            backend.clone(),
+            auth.clone(),
+            slots.clone(),
+            identity.clone()
+        )
+        .await
+        .unwrap_err()
+        .status,
         429,
     );
     for job in jobs {
@@ -1088,7 +1094,7 @@ async fn storage_retry_backend_contention_never_blocks_runtime_or_releases_cance
     }
     assert_eq!(slots.available_permits(), 0);
     assert_eq!(
-        storage_retry_job(backend, slots.clone(), identity)
+        storage_retry_job(backend, auth.clone(), slots.clone(), identity)
             .await
             .unwrap_err()
             .status,
@@ -1119,9 +1125,10 @@ async fn storage_retry_rechecks_a_completed_session_revocation() {
         auth: store.reader(),
     });
     store.logout(&login.token).unwrap();
+    let auth = Arc::new(Mutex::new(store));
     let slots = Arc::new(tokio::sync::Semaphore::new(1));
     assert_eq!(
-        storage_retry_job(backend, slots.clone(), identity)
+        storage_retry_job(backend, auth.clone(), slots.clone(), identity)
             .await
             .unwrap_err()
             .status,

@@ -96,14 +96,11 @@ async fn dispatch(
         .map_err(|source| {
             ApiError::limit("management operation capacity reached").with_source(source)
         })?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .setup_operation(action, input, bootstrap.as_deref(), identity.as_ref())
-    })
-    .await
-    .map_err(ApiError::join)?
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend.setup_operation(action, input, bootstrap.as_deref(), identity.as_ref())
+        })
+        .await
 }
 async fn body(request: Request) -> Result<Value, ApiError> {
     if !request

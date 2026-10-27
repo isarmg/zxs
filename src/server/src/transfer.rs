@@ -40,40 +40,36 @@ pub(crate) async fn upload_status(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        // Both quotas cover authorization, engine status and local spool reads.
-        // Keep them until actual work ends, even if the requester disconnects.
-        let _read_permit = read_permit;
-        let _backend_permit = backend_permit;
-        let published = state
-            .backend
-            .published_upload_status(&identity, &workspace, &item)?;
-        if let Some(record) = uploads::load(&state.config.spool_dir, &workspace, &item)? {
-            if record.principal != identity.principal {
-                return Err(ApiError::forbidden());
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, (read_permit, backend_permit))
+        .run(move |backend| {
+            // Both quotas cover authorization, engine status and local spool reads.
+            // Keep them until actual work ends, even if the requester disconnects.
+            let published = backend.published_upload_status(&identity, &workspace, &item)?;
+            if let Some(record) = uploads::load(&state.config.spool_dir, &workspace, &item)? {
+                if record.principal != identity.principal {
+                    return Err(ApiError::forbidden());
+                }
+                // A replacement can be durably receiving while the engine still owns
+                // the previous completed generation. Equal/newer engine generations
+                // remain authoritative, including their completed publication state.
+                if published
+                    .as_ref()
+                    .is_none_or(|status| record.generation > status.generation)
+                {
+                    return Ok(Json(uploads::status(&record)));
+                }
             }
-            // A replacement can be durably receiving while the engine still owns
-            // the previous completed generation. Equal/newer engine generations
-            // remain authoritative, including their completed publication state.
-            if published
-                .as_ref()
-                .is_none_or(|status| record.generation > status.generation)
-            {
-                return Ok(Json(uploads::status(&record)));
-            }
-        }
-        published
-            .map(|status| Json(published_upload_response(&workspace, &item, status)))
-            .ok_or_else(|| {
-                ApiError::new(
-                    ::http::StatusCode::NOT_FOUND,
-                    storage_contract::ErrorCode::NotFound,
-                    "upload item not found",
-                )
-            })
-    })
-    .await
-    .map_err(ApiError::join)?
+            published
+                .map(|status| Json(published_upload_response(&workspace, &item, status)))
+                .ok_or_else(|| {
+                    ApiError::new(
+                        ::http::StatusCode::NOT_FOUND,
+                        storage_contract::ErrorCode::NotFound,
+                        "upload item not found",
+                    )
+                })
+        })
+        .await
 }
 
 fn published_upload_response(
@@ -285,12 +281,9 @@ async fn upload_inner(
     let owner = identity.clone();
     let ws = workspace.clone();
     let ownership = admission.clone();
-    tokio::task::spawn_blocking(move || {
-        let _ownership = ownership;
-        backend.authorize_upload(&owner, &ws, Some(expected_length))
-    })
-    .await
-    .map_err(ApiError::join)??;
+    crate::http_job::HttpBackendJob::new(backend, state.auth.clone(), ownership)
+        .run(move |backend| backend.authorize_upload(&owner, &ws, Some(expected_length)))
+        .await?;
     let spool = state.config.spool_dir.clone();
     let root = spool.clone();
     let ws = workspace.clone();
@@ -540,20 +533,25 @@ async fn upload_inner(
     // Once admitted, blocking publication can outlive the HTTP deadline, even
     // while still queued. A timeout can no longer promise a rejected mutation.
     deadline.publication_admitted.store(true, Ordering::Release);
-    let staged = tokio::task::spawn_blocking(move || {
-        // A disconnected HTTP request cannot cancel a running blocking task.
-        // Keep its admission slot and per-item claim with publication itself,
-        // including the final durable status, so a retry cannot race it.
-        let _admission = admission;
-        let source = staged_file.source(expected_length, actual_hash)?;
-        let staged =
-            backend.upload_generation(&owner, &ws, &item_id, &logical_path, &source, generation)?;
-        record.state = crate::uploads::UploadState::Complete;
-        uploads::persist_staged(&record, &staged_file)?;
-        Ok::<_, ApiError>(staged)
-    })
-    .await
-    .map_err(ApiError::join)??;
+    let staged = crate::http_job::HttpBackendJob::new(backend, state.auth, admission)
+        .run(move |backend| {
+            // A disconnected HTTP request cannot cancel a running blocking task.
+            // Keep its admission slot and per-item claim with publication itself,
+            // including the final durable status, so a retry cannot race it.
+            let source = staged_file.source(expected_length, actual_hash)?;
+            let staged = backend.upload_generation(
+                &owner,
+                &ws,
+                &item_id,
+                &logical_path,
+                &source,
+                generation,
+            )?;
+            record.state = crate::uploads::UploadState::Complete;
+            uploads::persist_staged(&record, &staged_file)?;
+            Ok::<_, ApiError>(staged)
+        })
+        .await?;
     Ok(Json(staged.into()))
 }
 
@@ -677,22 +675,23 @@ pub(crate) async fn content(
     let permit = state.read_slots.acquire()?;
     let content = tokio::time::timeout_at(
         deadline,
-        tokio::task::spawn_blocking(move || {
-            let context = query.into_context()?;
-            let mut content = state.backend.range_content(
-                &identity,
-                crate::ReadContent {
-                    version: &version,
-                    context: context.as_ref(),
-                },
-            )?;
-            content.lease = Box::new((content.lease, permit));
-            Ok(content)
-        }),
+        crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit).run_with_permit(
+            move |backend, permit| {
+                let context = query.into_context()?;
+                let mut content = backend.range_content(
+                    &identity,
+                    crate::ReadContent {
+                        version: &version,
+                        context: context.as_ref(),
+                    },
+                )?;
+                content.lease = Box::new((content.lease, permit));
+                Ok(content)
+            },
+        ),
     )
     .await
-    .map_err(|source| timeout_error().with_source(source))?
-    .map_err(ApiError::join)??;
+    .map_err(|source| timeout_error().with_source(source))??;
     content_response_with_limits(content, method, headers, &limits, deadline)
 }
 pub(crate) async fn workspace_content(
@@ -707,17 +706,16 @@ pub(crate) async fn workspace_content(
     let permit = state.read_slots.acquire()?;
     let content = tokio::time::timeout_at(
         deadline,
-        tokio::task::spawn_blocking(move || {
-            let mut content = state
-                .backend
-                .workspace_content(&identity, &workspace, &item)?;
-            content.lease = Box::new((content.lease, permit));
-            Ok::<_, ApiError>(content)
-        }),
+        crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit).run_with_permit(
+            move |backend, permit| {
+                let mut content = backend.workspace_content(&identity, &workspace, &item)?;
+                content.lease = Box::new((content.lease, permit));
+                Ok::<_, ApiError>(content)
+            },
+        ),
     )
     .await
-    .map_err(|source| timeout_error().with_source(source))?
-    .map_err(ApiError::join)??;
+    .map_err(|source| timeout_error().with_source(source))??;
     content_response_with_limits(content, method, headers, &limits, deadline)
 }
 pub(crate) async fn checksums(
@@ -730,14 +728,15 @@ pub(crate) async fn checksums(
     let permit = state.read_slots.acquire()?;
     let (bytes, permit) = tokio::time::timeout_at(
         deadline,
-        tokio::task::spawn_blocking(move || {
-            let bytes = state.backend.checksums(&identity, &version)?;
-            Ok::<_, ApiError>((bytes, permit))
-        }),
+        crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit).run_with_permit(
+            move |backend, permit| {
+                let bytes = backend.checksums(&identity, &version)?;
+                Ok::<_, ApiError>((bytes, permit))
+            },
+        ),
     )
     .await
-    .map_err(|source| timeout_error().with_source(source))?
-    .map_err(ApiError::join)??;
+    .map_err(|source| timeout_error().with_source(source))??;
     let length = bytes.len();
     let stream = futures::stream::try_unfold(
         (bytes::Bytes::from(bytes), permit),

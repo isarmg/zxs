@@ -76,16 +76,14 @@ async fn disks(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .disk_status(&identity)
-            .map(backend_diagnostics::FileManagerDisksResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .disk_status(&identity)
+                .map(backend_diagnostics::FileManagerDisksResponse::from)
+        })
+        .await
+        .map(Json)
 }
 async fn history(
     State(state): State<AppState>,
@@ -97,18 +95,14 @@ async fn history(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    let backend = state.backend;
-    let auth_owner = state.auth;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let _auth_owner = auth_owner;
-        backend
-            .activity_history(&identity)
-            .and_then(backend_activity::ActivityHistoryResponse::try_from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .activity_history(&identity)
+                .and_then(backend_activity::ActivityHistoryResponse::try_from)
+        })
+        .await
+        .map(Json)
 }
 async fn file_history(
     State(state): State<AppState>,
@@ -121,24 +115,20 @@ async fn file_history(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    let backend = state.backend;
-    let auth_owner = state.auth;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let _auth_owner = auth_owner;
-        if let Some(key) = query
-            .keys()
-            .find(|key| !matches!(key.as_str(), "repository_id" | "path"))
-        {
-            return Err(ApiError::invalid(format!("unknown field {key}")));
-        }
-        let request =
-            ReadFileHistory::parse(file, query.remove("repository_id"), query.remove("path"))?;
-        backend
-            .file_history_snapshot(&identity, request)
-            .map(backend_file_history::FileHistoryResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            if let Some(key) = query
+                .keys()
+                .find(|key| !matches!(key.as_str(), "repository_id" | "path"))
+            {
+                return Err(ApiError::invalid(format!("unknown field {key}")));
+            }
+            let request =
+                ReadFileHistory::parse(file, query.remove("repository_id"), query.remove("path"))?;
+            backend
+                .file_history_snapshot(&identity, request)
+                .map(backend_file_history::FileHistoryResponse::from)
+        })
+        .await
+        .map(Json)
 }

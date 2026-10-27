@@ -42,24 +42,22 @@ pub(crate) async fn read(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let (filter, projection) = parse(query)?;
-        state
-            .backend
-            .directory_scopes(
-                &identity,
-                ReadDirectoryScopes {
-                    repository_id: &repository_id,
-                    filter: &filter,
-                    projection,
-                },
-            )
-            .map(DirectoryScopesResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            let (filter, projection) = parse(query)?;
+            backend
+                .directory_scopes(
+                    &identity,
+                    ReadDirectoryScopes {
+                        repository_id: &repository_id,
+                        filter: &filter,
+                        projection,
+                    },
+                )
+                .map(DirectoryScopesResponse::from)
+        })
+        .await
+        .map(Json)
 }
 
 #[cfg(test)]

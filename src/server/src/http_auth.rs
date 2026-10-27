@@ -332,20 +332,16 @@ async fn auth_job<T: Send + 'static>(
 /// Retry can perform management I/O; keep its bounded job off the runtime.
 pub(crate) async fn storage_retry_job(
     backend: Arc<dyn crate::Backend>,
+    auth: Arc<Mutex<crate::auth::AuthStore>>,
     slots: Arc<tokio::sync::Semaphore>,
     identity: Identity,
 ) -> Result<crate::StorageStatus, ApiError> {
     let permit = slots
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("management capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        // A disconnected caller does not free admission while the job is queued
-        // or blocked on the authority lock.
-        let _permit = permit;
-        backend.retry_storage(&identity)
-    })
-    .await
-    .map_err(ApiError::join)?
+    crate::http_job::HttpBackendJob::new(backend, auth, permit)
+        .run(move |backend| backend.retry_storage(&identity))
+        .await
 }
 
 #[derive(Clone)]

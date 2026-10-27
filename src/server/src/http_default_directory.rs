@@ -48,17 +48,15 @@ pub(crate) async fn select(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let command = parse(body)?;
-        state
-            .backend
-            .select_default_directory_branch(&identity, command)
-            .and_then(crate::operation_wire::operation_wire)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            let command = parse(body)?;
+            backend
+                .select_default_directory_branch(&identity, command)
+                .and_then(crate::operation_wire::operation_wire)
+        })
+        .await
+        .map(Json)
 }
 
 fn parse_rename(mut body: Map<String, Value>) -> Result<crate::RenameDirectoryBranch, ApiError> {
@@ -126,17 +124,15 @@ pub(crate) async fn rename(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let command = parse_rename(body)?;
-        state
-            .backend
-            .rename_directory_branch(&identity, command)
-            .and_then(crate::operation_wire::operation_wire)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            let command = parse_rename(body)?;
+            backend
+                .rename_directory_branch(&identity, command)
+                .and_then(crate::operation_wire::operation_wire)
+        })
+        .await
+        .map(Json)
 }
 
 #[cfg(test)]

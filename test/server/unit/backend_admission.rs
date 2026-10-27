@@ -33,6 +33,8 @@ enum BlockedEndpoint {
     Capabilities,
     Ready,
     Capacity,
+    UploadAuthorization,
+    UploadPublication,
 }
 struct BackendProbe {
     blocked: BlockedEndpoint,
@@ -371,6 +373,30 @@ impl Backend for BackendProbe {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
+    fn prepare_historical_save(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_purge(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PreparePurge, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
+    fn prepare_split(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: Result<crate::PrepareSplit, crate::ApiError>,
+    ) -> Result<storage_contract::Plan, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn commit_plan(
         &self,
         _identity: &crate::auth::Identity,
@@ -400,30 +426,6 @@ impl Backend for BackendProbe {
         _identity: &crate::auth::Identity,
         _request: crate::CreateDiskWriteSession,
     ) -> Result<crate::DiskWriteSession, crate::ApiError> {
-        self.wait()?;
-        Err(crate::ApiError::unsupported())
-    }
-    fn prepare_historical_save(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareHistoricalSave, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        self.wait()?;
-        Err(crate::ApiError::unsupported())
-    }
-    fn prepare_purge(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PreparePurge, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
-        self.wait()?;
-        Err(crate::ApiError::unsupported())
-    }
-    fn prepare_split(
-        &self,
-        _identity: &crate::auth::Identity,
-        _request: Result<crate::PrepareSplit, crate::ApiError>,
-    ) -> Result<storage_contract::Plan, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
@@ -646,7 +648,14 @@ impl Backend for BackendProbe {
         _workspace: &str,
         _logical_size: Option<u64>,
     ) -> Result<(), crate::ApiError> {
-        Err(crate::ApiError::unsupported())
+        match self.blocked {
+            BlockedEndpoint::UploadAuthorization => self.wait(),
+            BlockedEndpoint::UploadPublication => Ok(()),
+            BlockedEndpoint::Backend
+            | BlockedEndpoint::Capabilities
+            | BlockedEndpoint::Ready
+            | BlockedEndpoint::Capacity => Err(crate::ApiError::unsupported()),
+        }
     }
 
     fn lookup_current(
@@ -691,6 +700,7 @@ impl Backend for BackendProbe {
         _source: &crate::UploadSource,
         _generation: u64,
     ) -> Result<storage_contract::StagedFile, crate::ApiError> {
+        self.wait()?;
         Err(crate::ApiError::unsupported())
     }
 
@@ -705,6 +715,33 @@ impl Backend for BackendProbe {
         }
     }
     fn content(&self, _: &Identity, _: &str) -> Result<Content, ApiError> {
+        self.wait()?;
+        Ok(probe_content())
+    }
+    fn workspace_content(
+        &self,
+        identity: &Identity,
+        _: &str,
+        _: &str,
+    ) -> Result<Content, ApiError> {
+        self.content(identity, "version")
+    }
+    fn checksums(&self, _: &Identity, _: &str) -> Result<Vec<u8>, ApiError> {
+        self.wait()?;
+        Ok(vec![1, 2, 3])
+    }
+    fn retry_storage(&self, _: &Identity) -> Result<StorageStatus, ApiError> {
+        self.wait()?;
+        Err(ApiError::unsupported())
+    }
+    fn setup_operation(
+        &self,
+        _: &'static str,
+        _: Value,
+        _: Option<&str>,
+        _: Option<&Identity>,
+    ) -> Result<Value, ApiError> {
+        self.wait()?;
         Err(ApiError::unsupported())
     }
 }
@@ -1052,82 +1089,84 @@ async fn workspace_request(app: Router, method: &str, path: &str) -> Response {
     .unwrap()
 }
 
+const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
+    ("POST", "/api/branches/branch/write-sessions"),
+    ("POST", "/api/branches/branch/resolve"),
+    ("GET", "/api/versions/version"),
+    ("GET", "/api/branches/branch/tree?commit_id=commit"),
+    ("GET", "/api/repositories/repository"),
+    ("GET", "/api/branches/branch"),
+    ("GET", "/api/file-manager/files/file/history"),
+    ("POST", "/api/file-manager/files/file/metadata"),
+    ("POST", "/api/file-manager/versions/version/metadata"),
+    ("PATCH", "/api/file-manager/files/file/nodes/node"),
+    ("POST", "/api/file-manager/files/file/merge"),
+    ("POST", "/api/file-manager/files/file/tags"),
+    ("POST", "/api/file-manager/disks/P01/namespace"),
+    ("POST", "/api/file-manager/disks/P01/write-sessions"),
+    ("GET", "/api/repositories/repo/backup-configuration"),
+    ("PUT", "/api/repositories/repo/backup-configuration"),
+    ("GET", "/api/plans/plan"),
+    ("POST", "/api/plans/plan/cancel"),
+    ("POST", "/api/plans/plan/commit"),
+    ("POST", "/api/file-manager/disks/P01/namespace-batch"),
+    ("POST", "/api/file-manager/files/file/select"),
+    ("POST", "/api/file-manager/files/file/branches"),
+    ("PATCH", "/api/file-manager/files/file/branches/branch"),
+    ("POST", "/api/file-manager/disks/P01/directory-branches"),
+    ("POST", "/api/file-manager/disks/P01/directory-select"),
+    ("POST", "/api/repositories/repo/directory-scopes"),
+    ("POST", "/api/branches/branch/archive"),
+    ("POST", "/api/repositories/repo/branches"),
+    ("POST", "/api/repositories"),
+    ("POST", "/api/history-trees/history/merge-links"),
+    ("GET", "/api/commits/commit"),
+    ("GET", "/api/history-trees/history/graph"),
+    ("GET", "/api/events?after=17"),
+    ("GET", "/api/file-manager/history?ignored=true"),
+    ("GET", "/api/backup-topologies/default"),
+    ("GET", "/api/files/file/history"),
+    ("GET", "/api/repositories/repository/default-branch"),
+    ("GET", "/api/repositories/repository/directory-branches"),
+    ("POST", "/api/repositories/repository/directory-branches"),
+    (
+        "PATCH",
+        "/api/repositories/repository/directory-branches/directory",
+    ),
+    (
+        "GET",
+        "/api/repositories/repository/directory-branches?summary=true&path=",
+    ),
+    ("PUT", "/api/repositories/repository/default-branch"),
+    ("GET", "/api/admin/disks"),
+    ("GET", "/api/file-manager/disks"),
+    ("GET", "/api/file-manager/disks/P01/entries"),
+    ("GET", "/api/admin/check"),
+    ("POST", "/api/compare"),
+    ("GET", "/api/policies/policy"),
+    ("GET", "/api/primary-placement-rules/rule"),
+    ("PUT", "/api/policies/policy"),
+    ("PUT", "/api/primary-placement-rules/rule"),
+    ("GET", "/api/versions/version/placement"),
+    ("GET", "/api/repositories/repository/smb-binding"),
+    ("PUT", "/api/repositories/repository/smb-binding"),
+    ("GET", "/api/repositories/repository/branches"),
+    ("GET", "/api/operations/op_00000000000000000000000000000000"),
+    ("POST", "/api/workspaces"),
+    ("POST", "/api/workspaces/workspace/abort"),
+    ("POST", "/api/workspaces/workspace/seal"),
+    ("POST", "/api/workspaces/workspace/namespace-operations"),
+    ("POST", "/api/workspaces/workspace/commit"),
+    ("GET", "/api/workspaces/workspace"),
+    ("POST", "/api/history-trees/history/historical-save-plans"),
+    ("POST", "/api/history-trees/history/purge-plans"),
+    ("POST", "/api/history-trees/history/split-plans"),
+    ("POST", "/api/admin/disks"),
+];
+
 #[tokio::test]
 async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation() {
-    for (method, path) in [
-        ("POST", "/api/branches/branch/write-sessions"),
-        ("POST", "/api/branches/branch/resolve"),
-        ("GET", "/api/versions/version"),
-        ("GET", "/api/branches/branch/tree?commit_id=commit"),
-        ("GET", "/api/repositories/repository"),
-        ("GET", "/api/branches/branch"),
-        ("GET", "/api/file-manager/files/file/history"),
-        ("POST", "/api/file-manager/files/file/metadata"),
-        ("POST", "/api/file-manager/versions/version/metadata"),
-        ("PATCH", "/api/file-manager/files/file/nodes/node"),
-        ("POST", "/api/file-manager/files/file/merge"),
-        ("POST", "/api/file-manager/files/file/tags"),
-        ("POST", "/api/file-manager/disks/P01/namespace"),
-        ("POST", "/api/file-manager/disks/P01/write-sessions"),
-        ("GET", "/api/repositories/repo/backup-configuration"),
-        ("PUT", "/api/repositories/repo/backup-configuration"),
-        ("GET", "/api/plans/plan"),
-        ("POST", "/api/plans/plan/cancel"),
-        ("POST", "/api/plans/plan/commit"),
-        ("POST", "/api/history-trees/history/historical-save-plans"),
-        ("POST", "/api/history-trees/history/purge-plans"),
-        ("POST", "/api/history-trees/history/split-plans"),
-        ("POST", "/api/admin/disks"),
-        ("POST", "/api/file-manager/disks/P01/namespace-batch"),
-        ("POST", "/api/file-manager/files/file/select"),
-        ("POST", "/api/file-manager/files/file/branches"),
-        ("PATCH", "/api/file-manager/files/file/branches/branch"),
-        ("POST", "/api/file-manager/disks/P01/directory-branches"),
-        ("POST", "/api/file-manager/disks/P01/directory-select"),
-        ("POST", "/api/repositories/repo/directory-scopes"),
-        ("POST", "/api/branches/branch/archive"),
-        ("POST", "/api/repositories/repo/branches"),
-        ("POST", "/api/repositories"),
-        ("POST", "/api/history-trees/history/merge-links"),
-        ("GET", "/api/commits/commit"),
-        ("GET", "/api/history-trees/history/graph"),
-        ("GET", "/api/events?after=17"),
-        ("GET", "/api/file-manager/history?ignored=true"),
-        ("GET", "/api/backup-topologies/default"),
-        ("GET", "/api/files/file/history"),
-        ("GET", "/api/repositories/repository/default-branch"),
-        ("GET", "/api/repositories/repository/directory-branches"),
-        ("POST", "/api/repositories/repository/directory-branches"),
-        (
-            "PATCH",
-            "/api/repositories/repository/directory-branches/directory",
-        ),
-        (
-            "GET",
-            "/api/repositories/repository/directory-branches?summary=true&path=",
-        ),
-        ("PUT", "/api/repositories/repository/default-branch"),
-        ("GET", "/api/admin/disks"),
-        ("GET", "/api/file-manager/disks"),
-        ("GET", "/api/file-manager/disks/P01/entries"),
-        ("GET", "/api/admin/check"),
-        ("POST", "/api/compare"),
-        ("GET", "/api/policies/policy"),
-        ("GET", "/api/primary-placement-rules/rule"),
-        ("PUT", "/api/policies/policy"),
-        ("PUT", "/api/primary-placement-rules/rule"),
-        ("GET", "/api/versions/version/placement"),
-        ("GET", "/api/repositories/repository/smb-binding"),
-        ("PUT", "/api/repositories/repository/smb-binding"),
-        ("GET", "/api/repositories/repository/branches"),
-        ("GET", "/api/operations/op_00000000000000000000000000000000"),
-        ("POST", "/api/workspaces"),
-        ("POST", "/api/workspaces/workspace/abort"),
-        ("POST", "/api/workspaces/workspace/seal"),
-        ("POST", "/api/workspaces/workspace/namespace-operations"),
-        ("POST", "/api/workspaces/workspace/commit"),
-        ("GET", "/api/workspaces/workspace"),
-    ] {
+    for &(method, path) in TYPED_BACKEND_ROUTES {
         let root = crate::tests::private_tempdir();
         let (app, gate, _release) = fixture(root.path(), 0, false);
         let mut jobs = Vec::new();
@@ -1235,25 +1274,254 @@ fn probe_capacity() -> storage_contract::WorkspaceCapacity {
 
 #[tokio::test]
 async fn typed_jobs_hold_auth_owner_until_cancelled_worker_finishes() {
-    for (method, path) in [
-        ("GET", "/api/file-manager/files/file/history"),
-        ("GET", "/api/file-manager/history"),
-        ("GET", "/api/file-manager/disks/P01/entries"),
-        ("POST", "/api/file-manager/files/file/merge"),
-        ("POST", "/api/file-manager/files/file/tags"),
-        ("POST", "/api/file-manager/disks/P01/namespace"),
-        ("POST", "/api/file-manager/disks/P01/write-sessions"),
-        ("GET", "/api/repositories/repo/backup-configuration"),
-        ("PUT", "/api/repositories/repo/backup-configuration"),
-        ("GET", "/api/plans/plan"),
-        ("POST", "/api/plans/plan/cancel"),
-        ("POST", "/api/plans/plan/commit"),
-        ("POST", "/api/history-trees/history/historical-save-plans"),
-        ("POST", "/api/history-trees/history/purge-plans"),
-        ("POST", "/api/history-trees/history/split-plans"),
-        ("POST", "/api/admin/disks"),
+    for (method, path) in TYPED_BACKEND_ROUTES.iter().copied().chain([
+        ("GET", "/api/repositories"),
+        ("GET", "/api/workspaces/capacity"),
+        ("POST", "/api/system/storage/retry"),
+        ("GET", "/api/workspaces/workspace/files/item/upload-status"),
+        ("GET", "/api/versions/version/content"),
+        ("GET", "/api/workspaces/workspace/files/item/content"),
+        ("GET", "/api/versions/version/checksums"),
+    ]) {
+        assert_cancelled_job_keeps_auth(method, path, BlockedEndpoint::Backend).await;
+    }
+}
+
+#[tokio::test]
+async fn upload_jobs_hold_auth_until_cancelled_worker_finishes() {
+    for blocked in [
+        BlockedEndpoint::UploadAuthorization,
+        BlockedEndpoint::UploadPublication,
+    ] {
+        assert_cancelled_job_keeps_auth(
+            "PUT",
+            "/api/workspaces/workspace/files/entry_00000000000000000000000000000000/content?path=file.txt",
+            blocked,
+        ).await;
+    }
+}
+
+#[cfg(feature = "core")]
+#[tokio::test]
+async fn recovery_jobs_hold_auth_until_cancelled_worker_finishes() {
+    assert_cancelled_job_keeps_auth(
+        "POST",
+        "/api/management/offline-check",
+        BlockedEndpoint::Backend,
+    )
+    .await;
+}
+
+async fn assert_cancelled_job_keeps_auth(method: &str, path: &str, blocked: BlockedEndpoint) {
+    let root = crate::tests::private_tempdir();
+    let gate = Arc::new(Gate {
+        open: Mutex::new(false),
+        changed: Condvar::new(),
+        started: tokio::sync::Semaphore::new(0),
+        calls: AtomicUsize::new(0),
+        finished: tokio::sync::Semaphore::new(0),
+    });
+    let _release = Release(gate.clone());
+    let backend = Arc::new(BackendProbe {
+        blocked,
+        gate: gate.clone(),
+        outcome: 0,
+        auth: Mutex::new(None),
+    });
+    let mut auth = AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
+    let token = auth.login("admin", "a-long-test-password").unwrap().token;
+    let app = router(backend.clone(), auth, ServerConfig::loopback(root.path())).unwrap();
+    let owner = backend.auth.lock().unwrap().take().unwrap();
+    let weak = Arc::downgrade(&owner);
+    drop(owner);
+    let upload = matches!(
+        blocked,
+        BlockedEndpoint::UploadAuthorization | BlockedEndpoint::UploadPublication
+    );
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"));
+    let body = if upload {
+        request = request
+            .header("content-length", "3")
+            .header("x-zxs-content-hash", blake3::hash(b"abc").to_hex().as_str());
+        Body::from("abc")
+    } else {
+        Body::from(json_codec::to_vec(&workspace_body(method, path)).unwrap())
+    };
+    let job = tokio::spawn(app.oneshot(request.body(body).unwrap()));
+    tokio::time::timeout(Duration::from_secs(5), gate.started.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    job.abort();
+    assert!(job.await.unwrap_err().is_cancelled());
+    let retained = weak.upgrade().is_some();
+    gate.release();
+    assert!(retained, "{path}: worker must retain authentication owner");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while weak.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+fn probe_content() -> Content {
+    let mut file = tempfile::tempfile().unwrap();
+    std::io::Write::write_all(&mut file, b"abc").unwrap();
+    Content {
+        file,
+        size: 3,
+        hash: blake3::hash(b"abc").to_hex().to_string(),
+        checksum_manifest: None,
+        fallback_files: Vec::new(),
+        lease: Box::new(()),
+        download_name: None,
+    }
+}
+
+#[tokio::test]
+async fn completed_http_bodies_do_not_retain_auth_owner() {
+    for path in [
+        "/api/versions/version/content",
+        "/api/workspaces/workspace/files/item/content",
+        "/api/versions/version/checksums",
     ] {
         let root = crate::tests::private_tempdir();
+        let gate = Arc::new(Gate {
+            open: Mutex::new(true),
+            changed: Condvar::new(),
+            started: tokio::sync::Semaphore::new(0),
+            calls: AtomicUsize::new(0),
+            finished: tokio::sync::Semaphore::new(0),
+        });
+        let backend = Arc::new(BackendProbe {
+            blocked: BlockedEndpoint::Backend,
+            gate,
+            outcome: 0,
+            auth: Mutex::new(None),
+        });
+        let mut auth = AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
+        let token = auth.login("admin", "a-long-test-password").unwrap().token;
+        let app = router(backend.clone(), auth, ServerConfig::loopback(root.path())).unwrap();
+        let owner = backend.auth.lock().unwrap().take().unwrap();
+        let weak = Arc::downgrade(&owner);
+        drop(owner);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while weak.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let body = http_routing::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(body.len(), 3);
+    }
+}
+
+#[tokio::test]
+async fn completed_content_keeps_read_permit_but_not_auth_owner() {
+    let root = crate::tests::private_tempdir();
+    let auth = Arc::new(Mutex::new(
+        AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap(),
+    ));
+    let weak = Arc::downgrade(&auth);
+    let backend = Arc::new(BackendProbe {
+        blocked: BlockedEndpoint::Backend,
+        gate: Arc::new(Gate {
+            open: Mutex::new(true),
+            changed: Condvar::new(),
+            started: tokio::sync::Semaphore::new(0),
+            calls: AtomicUsize::new(0),
+            finished: tokio::sync::Semaphore::new(0),
+        }),
+        outcome: 0,
+        auth: Mutex::new(None),
+    });
+    let limits = TransferLimits {
+        slots: 1,
+        ..TransferLimits::default()
+    };
+    let slots = transfer_limits::Admission::new(&limits);
+    let content = http_job::HttpBackendJob::new(backend, auth, slots.acquire().unwrap())
+        .run_with_permit(|_, permit| {
+            let mut content = probe_content();
+            content.lease = Box::new((content.lease, permit));
+            Ok(content)
+        })
+        .await
+        .unwrap();
+    assert!(weak.upgrade().is_none());
+    assert!(slots.acquire().is_err());
+    drop(content);
+    drop(slots.acquire().unwrap());
+}
+
+#[tokio::test]
+async fn backend_job_releases_auth_and_admission_after_success_error_and_panic() {
+    for outcome in 0..=2 {
+        let root = crate::tests::private_tempdir();
+        let auth = Arc::new(Mutex::new(
+            AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap(),
+        ));
+        let weak = Arc::downgrade(&auth);
+        let backend = Arc::new(BackendProbe {
+            blocked: BlockedEndpoint::Backend,
+            gate: Arc::new(Gate {
+                open: Mutex::new(true),
+                changed: Condvar::new(),
+                started: tokio::sync::Semaphore::new(0),
+                calls: AtomicUsize::new(0),
+                finished: tokio::sync::Semaphore::new(0),
+            }),
+            outcome,
+            auth: Mutex::new(None),
+        });
+        let slots = Arc::new(tokio::sync::Semaphore::new(1));
+        let result = http_job::HttpBackendJob::new(
+            backend.clone(),
+            auth,
+            slots.clone().try_acquire_owned().unwrap(),
+        )
+        .run(move |_| backend.wait())
+        .await;
+        assert_eq!(result.is_ok(), outcome == 0);
+        assert!(weak.upgrade().is_none());
+        assert_eq!(slots.available_permits(), 1);
+    }
+}
+
+#[test]
+fn queued_backend_job_keeps_auth_and_admission_after_cancellation() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let root = crate::tests::private_tempdir();
+        let auth = Arc::new(Mutex::new(
+            AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap(),
+        ));
+        let weak = Arc::downgrade(&auth);
         let gate = Arc::new(Gate {
             open: Mutex::new(false),
             changed: Condvar::new(),
@@ -1268,34 +1536,33 @@ async fn typed_jobs_hold_auth_owner_until_cancelled_worker_finishes() {
             outcome: 0,
             auth: Mutex::new(None),
         });
-        let mut auth = AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
-        let token = auth.login("admin", "a-long-test-password").unwrap().token;
-        let app = router(backend.clone(), auth, ServerConfig::loopback(root.path())).unwrap();
-        let owner = backend.auth.lock().unwrap().take().unwrap();
-        let weak = Arc::downgrade(&owner);
-        drop(owner);
-        let job = tokio::spawn(
-            app.oneshot(
-                Request::builder()
-                    .method(method)
-                    .uri(path)
-                    .header("content-type", "application/json")
-                    .header("authorization", format!("Bearer {token}"))
-                    .body(Body::from(
-                        json_codec::to_vec(&workspace_body(method, path)).unwrap(),
-                    ))
-                    .unwrap(),
-            ),
-        );
+        let blocker = tokio::task::spawn_blocking({
+            let backend = backend.clone();
+            move || backend.wait()
+        });
         tokio::time::timeout(Duration::from_secs(5), gate.started.acquire())
             .await
             .unwrap()
             .unwrap()
             .forget();
-        job.abort();
-        assert!(job.await.unwrap_err().is_cancelled());
-        let retained_during_cancel = weak.upgrade().is_some();
+        let slots = Arc::new(tokio::sync::Semaphore::new(1));
+        let waiting = http_job::HttpBackendJob::new(
+            backend.clone(),
+            auth,
+            slots.clone().try_acquire_owned().unwrap(),
+        )
+        .run(move |_| backend.wait());
+        let waiter = tokio::spawn(waiting);
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        let retained = weak.upgrade().is_some();
+        let available = slots.available_permits();
+        let entered = gate.calls.load(Ordering::SeqCst);
         gate.release();
+        assert!(retained);
+        assert_eq!(available, 0);
+        assert_eq!(entered, 1, "authorized work must still be queued");
+        blocker.await.unwrap().unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
             while weak.upgrade().is_some() {
                 tokio::task::yield_now().await;
@@ -1303,11 +1570,9 @@ async fn typed_jobs_hold_auth_owner_until_cancelled_worker_finishes() {
         })
         .await
         .unwrap();
-        assert!(
-            retained_during_cancel,
-            "{path}: worker must retain authentication owner"
-        );
-    }
+        assert_eq!(slots.available_permits(), 1);
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
+    });
 }
 
 #[tokio::test]

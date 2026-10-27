@@ -40,12 +40,8 @@ pub(crate) async fn prepare(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let _auth_owner = state.auth;
-        state.backend.prepare_split(&identity, parse(body))
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| backend.prepare_split(&identity, parse(body)))
+        .await
+        .map(Json)
 }

@@ -5,6 +5,7 @@ pub mod engine_backend;
 mod file_manager;
 mod http_auth;
 mod http_boundary;
+mod http_job;
 mod http_shutdown;
 mod http_spool;
 #[cfg(feature = "core")]
@@ -2007,21 +2008,19 @@ async fn repositories(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .repositories_snapshot(&identity)
-            .map(|repositories| backend_read::RepositoryListResponse {
-                repositories: repositories
-                    .into_iter()
-                    .map(backend_read::RepositoryResponse::from)
-                    .collect(),
-            })
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .repositories_snapshot(&identity)
+                .map(|repositories| backend_read::RepositoryListResponse {
+                    repositories: repositories
+                        .into_iter()
+                        .map(backend_read::RepositoryResponse::from)
+                        .collect(),
+                })
+        })
+        .await
+        .map(Json)
 }
 async fn disks(
     State(state): State<AppState>,
@@ -2033,16 +2032,14 @@ async fn disks(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .disk_status(&identity)
-            .map(backend_diagnostics::DisksResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .disk_status(&identity)
+                .map(backend_diagnostics::DisksResponse::from)
+        })
+        .await
+        .map(Json)
 }
 async fn events(
     State(state): State<AppState>,
@@ -2054,20 +2051,18 @@ async fn events(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let after = storage_contract::parse_u64_decimal(
-            query.get("after").map(String::as_str).unwrap_or("0"),
-        )
-        .map_err(ApiError::invalid_source)?;
-        state
-            .backend
-            .event_page(&identity, after)
-            .map(backend_events::EventPageResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            let after = storage_contract::parse_u64_decimal(
+                query.get("after").map(String::as_str).unwrap_or("0"),
+            )
+            .map_err(ApiError::invalid_source)?;
+            backend
+                .event_page(&identity, after)
+                .map(backend_events::EventPageResponse::from)
+        })
+        .await
+        .map(Json)
 }
 async fn check(
     State(state): State<AppState>,
@@ -2079,16 +2074,14 @@ async fn check(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .integrity_check(&identity)
-            .map(backend_diagnostics::CheckResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .integrity_check(&identity)
+                .map(backend_diagnostics::CheckResponse::from)
+        })
+        .await
+        .map(Json)
 }
 async fn repository(
     State(state): State<AppState>,
@@ -2101,16 +2094,14 @@ async fn repository(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .repository_snapshot(&identity, &id)
-            .map(backend_read::RepositoryResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .repository_snapshot(&identity, &id)
+                .map(backend_read::RepositoryResponse::from)
+        })
+        .await
+        .map(Json)
 }
 
 async fn default_branch(
@@ -2124,16 +2115,14 @@ async fn default_branch(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .default_directory_branch(&identity, &id)
-            .map(backend_default_directory::DefaultDirectoryBranchResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .default_directory_branch(&identity, &id)
+                .map(backend_default_directory::DefaultDirectoryBranchResponse::from)
+        })
+        .await
+        .map(Json)
 }
 
 async fn branch_info(
@@ -2147,16 +2136,14 @@ async fn branch_info(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .branch_snapshot(&identity, &id)
-            .map(backend_branch::BranchResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .branch_snapshot(&identity, &id)
+                .map(backend_branch::BranchResponse::from)
+        })
+        .await
+        .map(Json)
 }
 async fn branches(
     State(state): State<AppState>,
@@ -2169,21 +2156,19 @@ async fn branches(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .branches_snapshot(&identity, &id)
-            .map(|branches| backend_branch::BranchListResponse {
-                branches: branches
-                    .into_iter()
-                    .map(backend_branch::BranchResponse::from)
-                    .collect(),
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend.branches_snapshot(&identity, &id).map(|branches| {
+                backend_branch::BranchListResponse {
+                    branches: branches
+                        .into_iter()
+                        .map(backend_branch::BranchResponse::from)
+                        .collect(),
+                }
             })
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+        })
+        .await
+        .map(Json)
 }
 async fn tree(
     State(state): State<AppState>,
@@ -2197,19 +2182,18 @@ async fn tree(
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
     let commit = query.remove("commit_id");
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state.backend.tree_snapshot(
-            &identity,
-            ReadTree {
-                branch: &branch,
-                commit: commit.as_deref(),
-            },
-        )
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend.tree_snapshot(
+                &identity,
+                ReadTree {
+                    branch: &branch,
+                    commit: commit.as_deref(),
+                },
+            )
+        })
+        .await
+        .map(Json)
 }
 async fn version(
     State(state): State<AppState>,
@@ -2222,16 +2206,14 @@ async fn version(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .version_snapshot(&identity, &id)
-            .map(backend_read::VersionResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .version_snapshot(&identity, &id)
+                .map(backend_read::VersionResponse::from)
+        })
+        .await
+        .map(Json)
 }
 async fn placement(
     State(state): State<AppState>,
@@ -2244,16 +2226,14 @@ async fn placement(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .placement_snapshot(&identity, &version)
-            .map(backend_storage_metadata::PlacementResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .placement_snapshot(&identity, &version)
+                .map(backend_storage_metadata::PlacementResponse::from)
+        })
+        .await
+        .map(Json)
 }
 async fn history(
     State(state): State<AppState>,
@@ -2266,16 +2246,14 @@ async fn history(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .file_history(&identity, &file)
-            .map(|versions| backend_read::FileHistoryResponse::new(file, versions))
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .file_history(&identity, &file)
+                .map(|versions| backend_read::FileHistoryResponse::new(file, versions))
+        })
+        .await
+        .map(Json)
 }
 async fn commit_info(
     State(state): State<AppState>,
@@ -2288,16 +2266,14 @@ async fn commit_info(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .commit_snapshot(&identity, &commit)
-            .map(commit_wire::CommitResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .commit_snapshot(&identity, &commit)
+                .map(commit_wire::CommitResponse::from)
+        })
+        .await
+        .map(Json)
 }
 async fn graph(
     State(state): State<AppState>,
@@ -2310,16 +2286,14 @@ async fn graph(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .history_graph(&identity, &history)
-            .map(backend_graph::HistoryGraphResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .history_graph(&identity, &history)
+                .map(backend_graph::HistoryGraphResponse::from)
+        })
+        .await
+        .map(Json)
 }
 async fn topology(
     State(state): State<AppState>,
@@ -2331,16 +2305,14 @@ async fn topology(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .topology_snapshot(&identity)
-            .map(backend_storage_metadata::TopologyResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .topology_snapshot(&identity)
+                .map(backend_storage_metadata::TopologyResponse::from)
+        })
+        .await
+        .map(Json)
 }
 
 async fn register_disk(
@@ -2355,13 +2327,9 @@ async fn register_disk(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    match tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let _auth_owner = state.auth;
-        state.backend.register_disk(&identity)
-    })
-    .await
-    .map_err(ApiError::join)?
+    match crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| backend.register_disk(&identity))
+        .await
     {
         Ok(impossible) => match impossible {},
         Err(error) => Err(error),
@@ -2395,13 +2363,10 @@ async fn workspace_capacity(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("management capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state.backend.workspace_capacity(&identity)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| backend.workspace_capacity(&identity))
+        .await
+        .map(Json)
 }
 
 async fn storage_status(
@@ -2414,7 +2379,7 @@ async fn storage_retry(
     State(state): State<AppState>,
     http_routing::Extension(identity): http_routing::Extension<Identity>,
 ) -> Result<Json<backend_status::StorageStatusResponse>, ApiError> {
-    http_auth::storage_retry_job(state.backend, state.management_slots, identity)
+    http_auth::storage_retry_job(state.backend, state.auth, state.management_slots, identity)
         .await
         .map(backend_status::StorageStatusResponse::from)
         .map(Json)

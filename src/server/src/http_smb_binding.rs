@@ -70,16 +70,14 @@ pub(crate) async fn smb_binding(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        state
-            .backend
-            .smb_binding_status(&identity, &repository)
-            .map(SmbBindingResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend
+                .smb_binding_status(&identity, &repository)
+                .map(SmbBindingResponse::from)
+        })
+        .await
+        .map(Json)
 }
 pub(crate) async fn update_smb_binding(
     State(state): State<AppState>,
@@ -97,29 +95,27 @@ pub(crate) async fn update_smb_binding(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let body = UpdateBody::parse(
-            body.as_object()
-                .expect("invariant: with_id binds an object body"),
-        )?;
-        state
-            .backend
-            .update_smb_binding(
-                &identity,
-                crate::UpdateSmbBinding {
-                    repository: &repository,
-                    branch: &body.branch,
-                    enabled: body.enabled,
-                    expected_history_generation: body.expected_history_generation,
-                    operation: body.operation,
-                },
-            )
-            .and_then(crate::operation_wire::operation_wire)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            let body = UpdateBody::parse(
+                body.as_object()
+                    .expect("invariant: with_id binds an object body"),
+            )?;
+            backend
+                .update_smb_binding(
+                    &identity,
+                    crate::UpdateSmbBinding {
+                        repository: &repository,
+                        branch: &body.branch,
+                        enabled: body.enabled,
+                        expected_history_generation: body.expected_history_generation,
+                        operation: body.operation,
+                    },
+                )
+                .and_then(crate::operation_wire::operation_wire)
+        })
+        .await
+        .map(Json)
 }
 
 #[cfg(test)]

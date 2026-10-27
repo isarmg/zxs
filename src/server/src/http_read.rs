@@ -56,28 +56,26 @@ pub(crate) async fn resolve(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let body = ResolveBody::parse(
-            value
-                .as_object()
-                .expect("invariant: with_id binds an object body"),
-        )?;
-        state
-            .backend
-            .resolve_entry(
-                &identity,
-                crate::ResolveEntry {
-                    branch: &branch,
-                    path: &body.path,
-                    commit: body.commit_id.as_deref(),
-                },
-            )
-            .map(crate::backend_read::ResolveResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            let body = ResolveBody::parse(
+                value
+                    .as_object()
+                    .expect("invariant: with_id binds an object body"),
+            )?;
+            backend
+                .resolve_entry(
+                    &identity,
+                    crate::ResolveEntry {
+                        branch: &branch,
+                        path: &body.path,
+                        commit: body.commit_id.as_deref(),
+                    },
+                )
+                .map(crate::backend_read::ResolveResponse::from)
+        })
+        .await
+        .map(Json)
 }
 
 #[cfg(test)]

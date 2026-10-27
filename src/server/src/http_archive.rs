@@ -51,17 +51,15 @@ pub(crate) async fn archive(
         .clone()
         .try_acquire_owned()
         .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let request = parse(body)?;
-        state
-            .backend
-            .archive_branch(&identity, request)
-            .map(ArchiveResponse::from)
-    })
-    .await
-    .map_err(ApiError::join)?
-    .map(Json)
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            let request = parse(body)?;
+            backend
+                .archive_branch(&identity, request)
+                .map(ArchiveResponse::from)
+        })
+        .await
+        .map(Json)
 }
 #[cfg(test)]
 #[path = "../../../test/server/unit/http_archive.rs"]
