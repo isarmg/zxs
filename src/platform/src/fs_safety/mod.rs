@@ -111,17 +111,17 @@ impl PrivateDirectory {
     /// truncation, relative to this held directory. Filesystem failures retain
     /// their I/O source; unsafe file types, links and permissions are rejected.
     pub fn open_payload(&self, name: &EntryName, mode: PayloadOpenMode) -> Result<File, Error> {
-        unix::open_payload(self, name, mode)
+        let (file, _) = unix::open_payload(self, name, mode)?;
+        Ok(file)
     }
     /// Detect replacement without ever using the replacement as the payload.
     pub fn verify_payload(&self, name: &EntryName, held: &File) -> Result<(), Error> {
         use std::os::unix::fs::MetadataExt;
         self.verify_identity()?;
-        let named = self
-            .open_payload(name, PayloadOpenMode::Existing)?
-            .metadata()?;
+        // Admission already inspected this newly opened descriptor's identity.
+        let (_named_file, named) = unix::open_payload(self, name, PayloadOpenMode::Existing)?;
         let held = held.metadata()?;
-        if named.dev() != held.dev() || named.ino() != held.ino() {
+        if named.st_dev != held.dev() || named.st_ino != held.ino() {
             return Err(Error::IdentityChanged(self.path.join(name.as_path())));
         }
         Ok(())

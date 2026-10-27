@@ -436,6 +436,7 @@ fn payload_create_new_has_one_winner_for_concurrent_creators() {
 #[test]
 fn trusted_spool_payloads_remain_anchored_and_replacements_are_rejected() {
     use std::io::{Read, Write};
+    use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("private");
     let held = PrivateDirectory::create_trusted(&path).unwrap();
@@ -444,15 +445,31 @@ fn trusted_spool_payloads_remain_anchored_and_replacements_are_rejected() {
         .open_payload(&name, PayloadOpenMode::CreateNew)
         .unwrap();
     file.write_all(b"original").unwrap();
+    held.verify_payload(&name, &file).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        held.verify_payload(&name, &file),
+        Err(Error::UnsafePermissions(rejected)) if rejected == path
+    ));
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    held.verify_payload(&name, &file).unwrap();
     fs::rename(path.join("data"), path.join("old")).unwrap();
     let mut replacement = held
         .open_payload(&name, PayloadOpenMode::CreateNew)
         .unwrap();
     replacement.write_all(b"replacement").unwrap();
-    assert!(held.verify_payload(&name, &file).is_err());
+    assert!(matches!(
+        held.verify_payload(&name, &file),
+        Err(Error::IdentityChanged(rejected)) if rejected == path.join("data")
+    ));
+    held.verify_payload(&name, &replacement).unwrap();
     fs::rename(&path, root.path().join("moved")).unwrap();
     PrivateDirectory::create_trusted(&path).unwrap();
     assert!(held.verify_identity().is_err());
+    assert!(matches!(
+        held.verify_payload(&name, &replacement),
+        Err(Error::UnsafeFileType(rejected)) if rejected == path
+    ));
     let mut bytes = Vec::new();
     held.open_payload(&name, PayloadOpenMode::Existing)
         .unwrap()
@@ -466,6 +483,64 @@ fn trusted_spool_payloads_remain_anchored_and_replacements_are_rejected() {
     .unwrap();
     assert!(root.path().join("moved/anchored").exists());
     assert!(!path.join("anchored").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn payload_verification_rechecks_leaf_constraints_in_existing_error_order() {
+    use std::io::Write;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let root = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::create(root.path().join("private")).unwrap();
+    let name = EntryName::new("data").unwrap();
+    let path = directory.path().join(name.as_path());
+    let mut held = directory
+        .open_payload(&name, PayloadOpenMode::CreateNew)
+        .unwrap();
+    held.write_all(b"original").unwrap();
+    directory.verify_payload(&name, &held).unwrap();
+
+    let alias = directory.path().join("alias");
+    fs::hard_link(&path, &alias).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+    assert!(matches!(
+        directory.verify_payload(&name, &held),
+        Err(Error::UnsafeFileType(rejected)) if rejected == path
+    ));
+    fs::remove_file(alias).unwrap();
+    assert!(matches!(
+        directory.verify_payload(&name, &held),
+        Err(Error::UnsafePermissions(rejected)) if rejected == path
+    ));
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    directory.verify_payload(&name, &held).unwrap();
+
+    let retained = directory.path().join("retained");
+    fs::rename(&path, &retained).unwrap();
+    assert!(matches!(
+        directory.verify_payload(&name, &held),
+        Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound
+    ));
+    symlink("retained", &path).unwrap();
+    assert!(matches!(
+        directory.verify_payload(&name, &held),
+        Err(Error::Io(error)) if error.raw_os_error() == Some(libc::ELOOP)
+    ));
+    fs::remove_file(&path).unwrap();
+    rustix::fs::mknodat(
+        directory.directory_handle(),
+        name.as_os_str(),
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::from_raw_mode(0o600),
+        0,
+    )
+    .unwrap();
+    assert!(matches!(
+        directory.verify_payload(&name, &held),
+        Err(Error::UnsafeFileType(rejected)) if rejected == path
+    ));
+    assert_eq!(fs::read(retained).unwrap(), b"original");
 }
 
 #[test]

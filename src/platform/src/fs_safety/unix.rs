@@ -716,7 +716,7 @@ pub(super) fn open_payload(
     directory: &PrivateDirectory,
     name: &EntryName,
     mode: PayloadOpenMode,
-) -> Result<File, Error> {
+) -> Result<(File, rustix::fs::Stat), Error> {
     let flags = OFlags::RDWR
         | OFlags::CLOEXEC
         | OFlags::NOFOLLOW
@@ -743,7 +743,7 @@ pub(super) fn open_payload(
             directory.path.join(name.as_path()),
         ));
     }
-    Ok(file)
+    Ok((file, stat))
 }
 
 #[cfg(test)]
