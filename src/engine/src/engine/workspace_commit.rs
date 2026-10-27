@@ -29,6 +29,7 @@ struct PlanningSnapshot {
     snapshot: Option<String>,
     published_state_base: Option<Arc<super::publication::PublishedStateBase>>,
     metadata_integrity: Arc<super::provenance::MetadataIntegrity>,
+    integrity_scrub_schedule: Option<std::sync::Weak<super::integrity_scrub::ScheduleState>>,
     next_slot: u64,
     replay: Option<super::OperationReadPlan>,
     locks: Vec<File>,
@@ -45,6 +46,7 @@ impl PlanningSnapshot {
             admission: super::planning::Admission::Detached,
             published_state_base: self.published_state_base.as_ref(),
             metadata_integrity: &self.metadata_integrity,
+            integrity_scrub_schedule: self.integrity_scrub_schedule.as_ref(),
         }
     }
 }
@@ -151,6 +153,7 @@ impl Engine {
             snapshot: self.snapshot.clone(),
             published_state_base: self.published_state_base.clone(),
             metadata_integrity: Arc::clone(&self.metadata_integrity),
+            integrity_scrub_schedule: self.integrity_scrub_schedule.clone(),
             next_slot: self.next_slot,
             replay: if replay {
                 Some(self.prepare_operation_health(self.operation_record(request.operation_id)?))

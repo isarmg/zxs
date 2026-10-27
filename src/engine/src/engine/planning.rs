@@ -24,6 +24,8 @@ pub(crate) struct PlanningContext<'a> {
     pub(crate) blocked: bool,
     pub(crate) metadata_integrity: &'a Arc<super::provenance::MetadataIntegrity>,
     pub(super) admission: Admission<'a>,
+    pub(super) integrity_scrub_schedule:
+        Option<&'a std::sync::Weak<super::integrity_scrub::ScheduleState>>,
     pub(super) published_state_base: Option<&'a Arc<super::publication::PublishedStateBase>>,
 }
 impl Engine {
@@ -38,6 +40,7 @@ impl Engine {
             metadata_integrity: &self.metadata_integrity,
             admission: Admission::Live(&self.commit_preparation),
             published_state_base: self.published_state_base.as_ref(),
+            integrity_scrub_schedule: self.integrity_scrub_schedule.as_ref(),
         }
     }
 }

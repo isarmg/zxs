@@ -6,6 +6,15 @@ impl SnapshotReuse {
     }
 }
 impl PreparedSnapshot {
+    /// Every entry here came from this encoder invocation, even if its digest
+    /// names an older object. Installation therefore always compares and syncs.
+    pub(crate) fn store_new_objects(&self, members: &[DiskConfig]) -> Result<String> {
+        self.root();
+        for object in &self.objects {
+            object.store(members)?;
+        }
+        Ok(self.hash.clone())
+    }
     pub(crate) fn reuse_basis(&self) -> SnapshotReuse {
         self.root();
         SnapshotReuse {

@@ -10,7 +10,7 @@ use std::time::SystemTime;
 mod metadata;
 mod schedule;
 pub use schedule::IntegrityScrubSchedule;
-pub(super) use schedule::ScheduleState;
+pub(super) use schedule::{ScheduleState, ScheduledScrub, ScrubCoveragePermit};
 
 const MAX_RETAINED_ISSUES: usize = 128;
 const MAX_BATCH_PAYLOAD_FILES: usize = 64;
@@ -144,7 +144,7 @@ pub struct IntegrityScrubPlan {
     verify_eof: bool,
     metadata_integrity: std::sync::Arc<super::provenance::MetadataIntegrity>,
     metadata_epoch: super::provenance::MetadataEpoch,
-    schedule: Option<std::sync::Weak<ScheduleState>>,
+    schedule: Option<ScheduledScrub>,
 }
 
 /// One version lease plus held payload handles. No byte verification occurs on admission.
@@ -165,7 +165,7 @@ pub enum IntegrityScrubBatchAdmission {
 pub struct IntegrityScrubOutcome {
     baseline: std::sync::Arc<State>,
     metadata_epoch: super::provenance::MetadataEpoch,
-    schedule: Option<std::sync::Weak<ScheduleState>>,
+    schedule: Option<ScheduledScrub>,
     started: std::time::Instant,
     owner: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, usize>>>,
     config: ValidatedConfig,
@@ -448,23 +448,45 @@ impl IntegrityScrubPlan {
             }
             cancellation.checkpoint()
         };
-        on_progress(&report);
         let mut extra_tail = std::collections::BTreeSet::new();
-        if let Err(error) = self.scan(
-            &mut acquire,
-            &mut observe,
-            &mut on_progress,
-            &mut report,
-            &mut extra_tail,
-        ) {
-            report.completion = if error.code() == ErrorCode::OperationAborted {
-                IntegrityScrubCompletion::Cancelled
-            } else {
-                IntegrityScrubCompletion::Failed(error)
+        {
+            let mut terminal_observed = false;
+            let mut progress = |report: &IntegrityScrubReport| {
+                if !terminal_observed
+                    && matches!(
+                        report.completion,
+                        IntegrityScrubCompletion::Cancelled
+                            | IntegrityScrubCompletion::Failed(_)
+                            | IntegrityScrubCompletion::Superseded
+                    )
+                {
+                    // This is before terminal progress and any later limiter or
+                    // Engine-lock wait. A stopped scan cannot authorize an
+                    // already preparing writer while finish waits for its lock.
+                    if let Some(run) = &self.schedule {
+                        run.revoke(&self.metadata_epoch);
+                    }
+                    terminal_observed = true;
+                }
+                on_progress(report);
             };
+            progress(&report);
+            if let Err(error) = self.scan(
+                &mut acquire,
+                &mut observe,
+                &mut progress,
+                &mut report,
+                &mut extra_tail,
+            ) {
+                report.completion = if error.code() == ErrorCode::OperationAborted {
+                    IntegrityScrubCompletion::Cancelled
+                } else {
+                    IntegrityScrubCompletion::Failed(error)
+                };
+            }
+            report.finished_at = SystemTime::now();
+            progress(&report);
         }
-        report.finished_at = SystemTime::now();
-        on_progress(&report);
         IntegrityScrubOutcome {
             baseline: self.state,
             metadata_epoch: self.metadata_epoch,

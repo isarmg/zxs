@@ -1477,3 +1477,119 @@ fn version_diagnostics_notify_shared_faults_but_not_payload_availability() {
     assert!(!engine.check().unwrap().issues.is_empty());
     assert!(!epoch.matches(&engine.metadata_integrity));
 }
+
+#[test]
+fn scheduled_resource_failure_revokes_before_terminal_progress_and_pacer_wait() {
+    use std::cell::Cell;
+    let (_temp, mut engine, repository) = fixture();
+    let id = save(&mut engine, &repository, b"namespace body");
+    move_fixture_into_namespace(&mut engine, &repository);
+    let owner = engine
+        .begin_integrity_scrub_schedule(
+            std::time::Duration::from_secs(3600),
+            std::time::Duration::from_secs(7200),
+        )
+        .unwrap();
+    let outcome = engine
+        .prepare_scheduled_integrity_scrub(&owner)
+        .unwrap()
+        .run(
+            &IntegrityScrubCancellation::new(),
+            |plan, id| engine.admit_integrity_scrub_batch(plan, id),
+            |_| {},
+            |_| {},
+        );
+    assert!(engine.finish_integrity_scrub(outcome).is_healthy());
+    let epoch = engine.metadata_integrity.capture();
+    let version = &engine.state.versions[&id];
+    let marker = engine.config.disks[0]
+        .root
+        .join("histories")
+        .join(&version.history_tree_id)
+        .join("file-containers")
+        .join(&version.file_id)
+        .join("namespace/.zxs-namespace.json");
+    fs::write(marker, vec![b' '; 70 * 1024]).unwrap();
+    let awaiting_charge = Cell::new(false);
+    let terminal = Cell::new(false);
+    let plan = engine.prepare_scheduled_integrity_scrub(&owner).unwrap();
+    let outcome = plan.run(
+        &IntegrityScrubCancellation::new(),
+        |plan, id| {
+            let batch = engine.admit_integrity_scrub_batch(plan, id)?;
+            awaiting_charge.set(true);
+            Ok(batch)
+        },
+        |_| {
+            if awaiting_charge.replace(false) {
+                assert!(terminal.get());
+                assert!(!engine.has_current_integrity_scrub_coverage());
+            }
+        },
+        |report| {
+            if let IntegrityScrubCompletion::Failed(error) = &report.completion {
+                assert_eq!(error.code(), ErrorCode::ResourceLimit);
+                terminal.set(true);
+                assert!(
+                    !engine.has_current_integrity_scrub_coverage(),
+                    "revocation precedes the terminal callback"
+                );
+                assert!(epoch.matches(&engine.metadata_integrity));
+            }
+        },
+    );
+    assert!(terminal.get());
+    assert!(
+        matches!(engine.finish_integrity_scrub(outcome).completion,IntegrityScrubCompletion::Failed(ref error) if error.code()==ErrorCode::ResourceLimit)
+    );
+}
+
+#[test]
+fn scheduled_real_purge_supersession_revokes_before_finish_without_a_metadata_fault() {
+    let (_temp, mut engine, repository) = fixture();
+    let old = save(&mut engine, &repository, b"old body");
+    save(&mut engine, &repository, b"current body");
+    let purge = engine
+        .create_purge_plan(&repository.history_tree_id, vec![old], "admin")
+        .unwrap();
+    let owner = engine
+        .begin_integrity_scrub_schedule(
+            std::time::Duration::from_secs(3600),
+            std::time::Duration::from_secs(7200),
+        )
+        .unwrap();
+    let outcome = engine
+        .prepare_scheduled_integrity_scrub(&owner)
+        .unwrap()
+        .run(
+            &IntegrityScrubCancellation::new(),
+            |plan, id| engine.admit_integrity_scrub_batch(plan, id),
+            |_| {},
+            |_| {},
+        );
+    assert!(engine.finish_integrity_scrub(outcome).is_healthy());
+    let epoch = engine.metadata_integrity.capture();
+    let plan = engine.prepare_scheduled_integrity_scrub(&owner).unwrap();
+    engine
+        .commit_plan(&purge.plan_id, "admin", OperationId::generate())
+        .unwrap();
+    assert!(engine.has_current_integrity_scrub_coverage());
+    let mut superseded = false;
+    let outcome = plan.run(
+        &IntegrityScrubCancellation::new(),
+        |plan, id| engine.admit_integrity_scrub_batch(plan, id),
+        |_| {},
+        |report| {
+            if matches!(report.completion, IntegrityScrubCompletion::Superseded) {
+                superseded = true;
+                assert!(!engine.has_current_integrity_scrub_coverage());
+                assert!(epoch.matches(&engine.metadata_integrity));
+            }
+        },
+    );
+    assert!(superseded);
+    assert!(matches!(
+        engine.finish_integrity_scrub(outcome).completion,
+        IntegrityScrubCompletion::Superseded
+    ));
+}

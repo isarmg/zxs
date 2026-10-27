@@ -99,7 +99,13 @@ fn compare(before: &State, after: &State, index: &DerivedOwners) -> DerivedOwner
                         .unwrap()
                     })
                     .collect();
-                graph::prepare_update(objects, edits, after, MAX_METADATA).unwrap()
+                let update = graph::prepare_update(objects, edits, after, MAX_METADATA).unwrap();
+                let mut objects = update.retained;
+                objects.extend(update.created);
+                (
+                    update.hash,
+                    super::super::unique_prepared_objects(objects).unwrap(),
+                )
             } else {
                 (hash, objects)
             }
@@ -396,4 +402,35 @@ fn stable_history_and_directory_head_writes_do_not_rebuild_dependency_membership
     assert_eq!(delta.histories["h1"].maps.len(), 2);
     assert_eq!(delta.histories["h2"].maps.len(), 2);
     compare(&before, &after, &index);
+}
+
+#[test]
+fn a_newly_encoded_equal_history_root_remains_created_not_retained() {
+    let state = dependency_fixture();
+    let id = state.histories.keys().next().unwrap();
+    let manifest = HistoryManifest::project_state(&state, id).unwrap();
+    let (old_hash, objects) = graph::prepare(&manifest, MAX_METADATA).unwrap();
+    let objects = objects
+        .into_iter()
+        .map(|object| {
+            let value = crate::decode_strict(object.bytes()).unwrap();
+            AuthenticatedMetadataObject::authenticate(object.kind(), &object.hash, value).unwrap()
+        })
+        .collect();
+    let update =
+        graph::prepare_update(objects, HistoryEdits::default(), &state, MAX_METADATA).unwrap();
+    assert_eq!(update.hash, old_hash);
+    assert!(
+        update
+            .created
+            .iter()
+            .any(|object| object.kind() == "history-manifest" && object.hash == old_hash)
+    );
+    assert!(
+        !update
+            .retained
+            .iter()
+            .any(|object| object.kind() == "history-manifest" && object.hash == old_hash)
+    );
+    assert!(!update.retained.is_empty());
 }

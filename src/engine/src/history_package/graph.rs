@@ -146,12 +146,19 @@ pub(super) fn prepare_indexed(
 }
 
 /// Encode only exact field edits, including membership changes and deletions.
+pub(super) struct PreparedUpdate {
+    pub(super) hash: String,
+    pub(super) created: Vec<PreparedMetadataObject>,
+    pub(super) retained: Vec<PreparedMetadataObject>,
+    pub(super) maximum_object_bytes: usize,
+}
+
 pub(super) fn prepare_update(
     objects: Vec<GraphObject>,
     edits: HistoryEdits,
     state: &crate::State,
     maximum: usize,
-) -> Result<(String, Vec<PreparedMetadataObject>)> {
+) -> Result<PreparedUpdate> {
     let root = objects
         .last()
         .expect("invariant: a resolved history graph ends with its root");
@@ -199,14 +206,25 @@ pub(super) fn prepare_update(
         }
     }
     let hash = encoder.object("history-manifest", &decoded)?;
-    let mut prepared = Vec::new();
+    let mut retained = Vec::new();
     for object in objects {
         if reachable.contains(&(object.kind(), object.hash().to_owned())) {
-            prepared.push(object.into_prepared(maximum)?);
+            retained.push(object.into_prepared(maximum)?);
         }
     }
-    prepared.extend(encoder.finish());
-    Ok((hash, super::unique_prepared_objects(prepared)?))
+    let created = encoder.finish();
+    let maximum_object_bytes = created
+        .iter()
+        .chain(&retained)
+        .map(|object| object.bytes().len())
+        .max()
+        .expect("invariant: an updated history includes its newly encoded root");
+    Ok(PreparedUpdate {
+        hash,
+        created,
+        retained,
+        maximum_object_bytes,
+    })
 }
 
 fn collect_reused<'a>(

@@ -137,6 +137,60 @@ pub(crate) fn prepare_history_manifests_incremental_observed(
     Vec<PreparedMetadataObject>,
     DerivedOwners,
 )> {
+    prepare_history_incremental(
+        before,
+        after,
+        HistoryBaseline::Revalidate(previous, owners),
+        members,
+        maximum,
+        fault,
+    )
+}
+
+pub(crate) fn prepare_history_manifests_reusing_published(
+    before: &State,
+    after: &State,
+    reuse: &crate::engine::PublishedDependencyReuse,
+    members: &[DiskConfig],
+    maximum: usize,
+    fault: &mut impl FnMut(&Error),
+) -> Result<(
+    crate::metadata_map::MapRoot,
+    Vec<PreparedMetadataObject>,
+    DerivedOwners,
+)> {
+    prepare_history_incremental(
+        before,
+        after,
+        HistoryBaseline::Published(reuse),
+        members,
+        maximum,
+        fault,
+    )
+}
+
+enum HistoryBaseline<'a> {
+    Revalidate(&'a crate::metadata_map::MapRoot, &'a DerivedOwners),
+    Published(&'a crate::engine::PublishedDependencyReuse),
+}
+
+fn prepare_history_incremental(
+    before: &State,
+    after: &State,
+    baseline: HistoryBaseline<'_>,
+    members: &[DiskConfig],
+    maximum: usize,
+    fault: &mut impl FnMut(&Error),
+) -> Result<(
+    crate::metadata_map::MapRoot,
+    Vec<PreparedMetadataObject>,
+    DerivedOwners,
+)> {
+    let (previous, owners) = match &baseline {
+        HistoryBaseline::Revalidate(previous, owners) => (*previous, *owners),
+        HistoryBaseline::Published(reuse) => reuse.history_basis(),
+    };
+    let reuse_published = matches!(baseline, HistoryBaseline::Published(_));
     let Some(delta::ProjectionDelta {
         owners,
         mut histories,
@@ -147,18 +201,41 @@ pub(crate) fn prepare_history_manifests_incremental_observed(
         let (catalog, objects) = prepare_history_manifests(after, maximum)?;
         return Ok((catalog, objects, DerivedOwners::from_state(after)));
     };
-    let changed = histories.keys().cloned().collect();
+    let changed: BTreeSet<_> = histories.keys().cloned().collect();
     let mut bindings = BTreeMap::new();
     let mut objects = Vec::new();
-    // This loop is the still-required old dependency read/install pass, not a
-    // projection scan. No unchanged history materializes a HistoryManifest.
-    for id in after.histories.keys() {
+    // Only a genuine successful-root permit removes untouched histories from
+    // this pass. Changed histories still authenticate their source graph.
+    let ids: Vec<_> = if reuse_published {
+        changed
+            .iter()
+            .filter(|id| after.histories.contains_key(*id))
+            .cloned()
+            .collect()
+    } else {
+        after.histories.keys().cloned().collect()
+    };
+    for id in &ids {
         let old = previous.catalog_binding(id);
         let edits = histories.remove(id);
         let prepared = match old {
             Some(old) => match read_published_history_objects(members, &old.hash, id, fault) {
                 Ok(graph) => match edits {
-                    Some(edits) => Some(graph::prepare_update(graph, edits, after, maximum)?),
+                    Some(edits) => {
+                        let graph::PreparedUpdate {
+                            hash,
+                            created,
+                            mut retained,
+                            maximum_object_bytes,
+                        } = graph::prepare_update(graph, edits, after, maximum)?;
+                        let objects = if reuse_published {
+                            created
+                        } else {
+                            retained.extend(created);
+                            retained
+                        };
+                        Some((hash, objects, maximum_object_bytes))
+                    }
                     None => {
                         objects.extend(
                             graph
@@ -179,21 +256,19 @@ pub(crate) fn prepare_history_manifests_incremental_observed(
                             "reconstructed history differs from published baseline",
                         ));
                     }
-                    Some(rebuilt)
+                    Some(with_history_maximum(rebuilt))
                 }
             },
-            None => Some(graph::prepare_indexed(after, id, &owners, maximum)?),
+            None => Some(with_history_maximum(graph::prepare_indexed(
+                after, id, &owners, maximum,
+            )?)),
         };
-        if let Some((hash, graph)) = prepared {
+        if let Some((hash, graph, maximum_object_bytes)) = prepared {
             bindings.insert(
                 id.clone(),
                 crate::metadata_map::HistoryBinding {
                     hash,
-                    maximum_object_bytes: graph
-                        .iter()
-                        .map(|object| object.bytes().len())
-                        .max()
-                        .expect("invariant: history includes root"),
+                    maximum_object_bytes,
                 },
             );
             objects.extend(graph);
@@ -215,8 +290,14 @@ pub(crate) fn prepare_history_manifests_incremental_observed(
             "history graph exceeds metadata reader budget",
         ));
     }
-    let mut fresh = encoder
-        .finish()
+    let created = encoder.finish();
+    if reuse_published {
+        // Fresh encoder output is never subtracted by digest, even if an older
+        // root named identical bytes. All such objects still get real barriers.
+        objects.extend(created);
+        return Ok((catalog, unique_prepared_objects(objects)?, owners));
+    }
+    let mut fresh = created
         .into_iter()
         .map(|object| ((object.kind(), object.hash.clone()), object))
         .collect::<BTreeMap<_, _>>();
@@ -237,6 +318,17 @@ pub(crate) fn prepare_history_manifests_incremental_observed(
         Ok(())
     })?;
     Ok((catalog, unique_prepared_objects(objects)?, owners))
+}
+
+fn with_history_maximum(
+    (hash, objects): (String, Vec<PreparedMetadataObject>),
+) -> (String, Vec<PreparedMetadataObject>, usize) {
+    let maximum = objects
+        .iter()
+        .map(|object| object.bytes().len())
+        .max()
+        .expect("invariant: history includes root");
+    (hash, objects, maximum)
 }
 
 /// Cold readers resolve the exact catalog before checking complete history coverage.

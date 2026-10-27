@@ -356,3 +356,27 @@ fn oversized_first_source_reports_its_bound_fault_even_when_a_healthy_replica_su
         "source selection never repairs or replaces evidence"
     );
 }
+
+#[test]
+fn newly_encoded_snapshot_objects_never_use_existing_names_as_installation_evidence() {
+    let (_temp, config, state, prepared) = fixture(24);
+    let duplicate = prepare_snapshot(&state, MAX_METADATA).unwrap();
+    assert_eq!(duplicate.hash, prepared.hash);
+    let object = duplicate
+        .objects
+        .iter()
+        .find(|object| object.kind == "state-page")
+        .unwrap();
+    let path = object_path(&config.disks[2], object.kind, &object.hash);
+    fs::write(&path, b"failed earlier installation").unwrap();
+    assert_eq!(
+        duplicate
+            .store_new_objects(&config.disks)
+            .unwrap_err()
+            .code(),
+        ErrorCode::ObjectCollision
+    );
+    assert_eq!(fs::read(&path).unwrap(), b"failed earlier installation");
+    fs::write(&path, &object.bytes).unwrap();
+    duplicate.store_new_objects(&config.disks).unwrap();
+}

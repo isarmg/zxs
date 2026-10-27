@@ -25,7 +25,7 @@ pub use observations::{DiskObservation, DiskObservationPlan, MetadataMemberProbe
 pub use operations::{OperationReadPlan, OperationRecord};
 pub(crate) mod provenance;
 mod publication;
-pub(crate) use publication::DetachedPublication;
+pub(crate) use publication::{DetachedPublication, PublishedDependencyReuse};
 mod workspace_commit;
 pub use workspace_commit::{PreparedWorkspaceCommit, WorkspaceCommitPreparation};
 mod reads;
@@ -66,8 +66,19 @@ pub struct Engine {
     recovery_warnings: RecoveryWarnings,
     _locks: Vec<File>,
     #[cfg(feature = "fault-injection")]
-    pub(crate) fault: Option<String>,
+    fault: Option<FaultInjection>,
 }
+#[cfg(feature = "fault-injection")]
+struct FaultInjection {
+    point: String,
+    action: FaultAction,
+}
+#[cfg(feature = "fault-injection")]
+enum FaultAction {
+    Fail,
+    Pause(Arc<std::sync::Barrier>),
+}
+
 pub struct ReadLease {
     version: String,
     reads: Arc<Mutex<BTreeMap<String, usize>>>,
@@ -585,18 +596,45 @@ impl Engine {
     /// Deterministic injection only, never enabled by network or environment input.
     #[cfg(feature = "fault-injection")]
     pub fn inject_fault_once(&mut self, point: &str) {
-        self.fault = Some(point.to_string());
+        self.fault = Some(FaultInjection {
+            point: point.to_owned(),
+            action: FaultAction::Fail,
+        });
+    }
+    /// Pause a feature-gated failure boundary until the harness observes it and
+    /// releases it again. Never configured from requests or environment input.
+    #[cfg(feature = "fault-injection")]
+    pub fn inject_pause_once(&mut self, point: &str, barrier: Arc<std::sync::Barrier>) {
+        self.fault = Some(FaultInjection {
+            point: point.to_owned(),
+            action: FaultAction::Pause(barrier),
+        });
     }
     #[cfg(feature = "fault-injection")]
     pub(crate) fn failpoint(&mut self, point: &str) -> Result<()> {
-        if self.fault.as_deref() == Some(point) {
-            self.fault = None;
-            return Err(Error::new(
-                storage_contract::ErrorCode::InjectedFailure,
-                format!("interrupted at {point}"),
-            ));
+        if !self
+            .fault
+            .as_ref()
+            .is_some_and(|fault| fault.point == point)
+        {
+            return Ok(());
         }
-        Ok(())
+        match self
+            .fault
+            .take()
+            .expect("invariant: matching injected fault is present")
+            .action
+        {
+            FaultAction::Fail => Err(Error::new(
+                ErrorCode::InjectedFailure,
+                format!("interrupted at {point}"),
+            )),
+            FaultAction::Pause(barrier) => {
+                barrier.wait();
+                barrier.wait();
+                Ok(())
+            }
+        }
     }
     pub(crate) fn trusted_evidence_members(&self) -> Vec<DiskConfig> {
         self.members()

@@ -36,6 +36,48 @@ impl PublishedStateBase {
     }
 }
 
+/// Authority for this one preparation, captured from a successful publication
+/// and the original live periodic owner's executed scan receipt.
+pub(crate) struct PublishedDependencyReuse {
+    base: std::sync::Arc<PublishedStateBase>,
+    coverage: super::integrity_scrub::ScrubCoveragePermit,
+}
+
+impl PublishedDependencyReuse {
+    fn admit(self, context: &crate::engine::PlanningContext<'_>, config_hash: &str) -> Result<()> {
+        if !context
+            .published_state_base
+            .is_some_and(|base| std::sync::Arc::ptr_eq(base, &self.base))
+            || !self.base.matches(context, config_hash)
+            || !self.coverage.admit(context, &self.base.metadata_epoch)
+        {
+            return Err(Error::new(
+                ErrorCode::PreparationStale,
+                "published dependency authority changed before decision admission",
+            )
+            .retryable());
+        }
+        Ok(())
+    }
+
+    fn matches(&self, context: &crate::engine::PlanningContext<'_>, config_hash: &str) -> bool {
+        context
+            .published_state_base
+            .is_some_and(|base| std::sync::Arc::ptr_eq(base, &self.base))
+            && self.base.matches(context, config_hash)
+            && self.coverage.matches(context)
+    }
+
+    pub(crate) fn history_basis(
+        &self,
+    ) -> (
+        &crate::metadata_map::MapRoot,
+        &crate::history_package::DerivedOwners,
+    ) {
+        (&self.base.roots, &self.base.history_owners)
+    }
+}
+
 /// An owned preparation, never serializable or constructible by callers.
 pub(crate) struct DetachedPublication {
     next: State,
@@ -45,6 +87,7 @@ pub(crate) struct DetachedPublication {
     names: crate::container_storage::PreparedNames,
     metadata_epoch: super::provenance::MetadataEpoch,
     prepared_epoch: super::provenance::MetadataEpoch,
+    reused_dependencies: Option<PublishedDependencyReuse>,
     base_config: super::ValidatedConfig,
     base_root: std::path::PathBuf,
     base_snapshot: Option<String>,
@@ -99,6 +142,9 @@ impl Engine {
     ) -> Result<OperationResult> {
         if self.blocked
             || !detached.prepared_epoch.matches(&self.metadata_integrity)
+            || detached.reused_dependencies.as_ref().is_some_and(|reuse| {
+                !reuse.matches(&self.planning_context(), &detached.config_hash)
+            })
             || !self.config.same_admission(&detached.base_config)
             || self.root != detached.base_root
             || self.snapshot != detached.base_snapshot
@@ -123,6 +169,8 @@ impl Engine {
             history_owners,
             config_hash,
             metadata_epoch,
+            prepared_epoch,
+            reused_dependencies,
             ..
         } = detached;
         verified
@@ -180,18 +228,37 @@ impl Engine {
                 self.failpoint(&format!("after_prepare_{prepared}"))?;
             }
         }
-        // Once the first ACCEPT may have reached disk, failure is indeterminate.
+        #[cfg(feature = "fault-injection")]
+        self.failpoint("before_decision_admission")?;
+        if let Some(reuse) = reused_dependencies {
+            reuse.admit(&self.planning_context(), &config_hash)?;
+        } else if !prepared_epoch.matches(&self.metadata_integrity) {
+            // Full installation has its own exact post-store epoch. A shared
+            // fault observed during PREPARE wins before decision admission too.
+            return Err(Error::new(
+                ErrorCode::PreparationStale,
+                "metadata changed after complete dependency preparation",
+            )
+            .retryable());
+        }
+        // Admission is after every PREPARE and before first ACCEPT. The short
+        // schedule/epoch fence has now committed to starting this decision;
+        // stop/fault after it cannot cancel publication or release ownership.
         self.blocked = true;
-        let finish = self.complete_candidate_verified(
-            &candidate,
-            &hash,
-            &next,
-            None,
-            Completion::Prepared {
-                payloads: &verified,
-                names,
-            },
-        );
+        let finish = (|| {
+            #[cfg(feature = "fault-injection")]
+            self.failpoint("after_decision_admission")?;
+            self.complete_candidate_verified(
+                &candidate,
+                &hash,
+                &next,
+                None,
+                Completion::Prepared {
+                    payloads: &verified,
+                    names,
+                },
+            )
+        })();
         if let Err(e) = finish {
             self.metadata_integrity.invalidate();
             let message = format!("{e}; query operation {} and recover", result.operation_id);
@@ -715,6 +782,10 @@ mod cache_budget_tests;
 #[path = "../../../../test/engine/unit/engine/publication/history_baseline_tests.rs"]
 mod history_baseline_tests;
 
+#[cfg(all(test, feature = "fault-injection"))]
+#[path = "../../../../test/engine/unit/engine/publication/omission_tests.rs"]
+mod omission_tests;
+
 impl crate::engine::PlanningContext<'_> {
     pub(crate) fn prepare_publication(
         &self,
@@ -805,6 +876,13 @@ impl crate::engine::PlanningContext<'_> {
             .published_state_base
             .as_ref()
             .filter(|base| base.matches(self, &config_hash));
+        let reused_dependencies = baseline.and_then(|base| {
+            self.capture_scrub_coverage()
+                .map(|coverage| PublishedDependencyReuse {
+                    base: std::sync::Arc::clone(base),
+                    coverage,
+                })
+        });
         let mut snapshot = match baseline {
             Some(base) => {
                 assert!(
@@ -823,28 +901,41 @@ impl crate::engine::PlanningContext<'_> {
             prepare_snapshot(&next, maximum)?.hash,
             "incremental snapshot differs from full encoding"
         );
-        let (history_basis, manifests, history_owners) = match self
-            .published_state_base
-            .as_ref()
-            .filter(|base| base.matches(self, &config_hash))
-        {
-            Some(base) => crate::history_package::prepare_history_manifests_incremental_observed(
+        let (history_basis, manifests, history_owners) = if let Some(reuse) = &reused_dependencies {
+            crate::history_package::prepare_history_manifests_reusing_published(
                 self.state,
                 &next,
-                &base.roots,
-                &base.history_owners,
+                reuse,
                 &members,
                 maximum,
                 &mut |error| self.metadata_integrity.fault(error),
-            )?,
-            None => {
-                let (roots, objects) =
-                    crate::history_package::prepare_history_manifests(&next, maximum)?;
-                (
-                    roots,
-                    objects,
-                    crate::history_package::DerivedOwners::from_state(&next),
-                )
+            )?
+        } else {
+            match self
+                .published_state_base
+                .as_ref()
+                .filter(|base| base.matches(self, &config_hash))
+            {
+                Some(base) => {
+                    crate::history_package::prepare_history_manifests_incremental_observed(
+                        self.state,
+                        &next,
+                        &base.roots,
+                        &base.history_owners,
+                        &members,
+                        maximum,
+                        &mut |error| self.metadata_integrity.fault(error),
+                    )?
+                }
+                None => {
+                    let (roots, objects) =
+                        crate::history_package::prepare_history_manifests(&next, maximum)?;
+                    (
+                        roots,
+                        objects,
+                        crate::history_package::DerivedOwners::from_state(&next),
+                    )
+                }
             }
         };
         // The full implementation remains an independent oracle in every
@@ -901,11 +992,32 @@ impl crate::engine::PlanningContext<'_> {
             cache_maximum,
             Some(self.metadata_integrity),
         )?;
-        self.metadata_integrity
-            .observe(snapshot.store(&members, &next))?;
+        if let Some(reuse) = &reused_dependencies {
+            if !reuse.matches(self, &config_hash) {
+                return Err(Error::new(
+                    ErrorCode::PreparationStale,
+                    "published dependency authority changed during preparation",
+                )
+                .retryable());
+            }
+            self.metadata_integrity
+                .observe(snapshot.store_new_objects(&members))?;
+        } else {
+            self.metadata_integrity
+                .observe(snapshot.store(&members, &next))?;
+        }
         let snapshot_basis = snapshot.reuse_basis();
         for manifest in manifests {
             self.metadata_integrity.observe(manifest.store(&members))?;
+        }
+        if let Some(reuse) = &reused_dependencies
+            && !reuse.matches(self, &config_hash)
+        {
+            return Err(Error::new(
+                ErrorCode::PreparationStale,
+                "published dependency authority changed during installation",
+            )
+            .retryable());
         }
         Ok(DetachedPublication {
             next,
@@ -915,6 +1027,7 @@ impl crate::engine::PlanningContext<'_> {
             names,
             metadata_epoch,
             prepared_epoch: self.metadata_integrity.capture(),
+            reused_dependencies,
             base_config: self.config.clone(),
             base_root: self.root.to_path_buf(),
             base_snapshot: self.snapshot.clone(),

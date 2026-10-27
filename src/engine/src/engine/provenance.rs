@@ -70,6 +70,24 @@ impl MetadataIntegrity {
 }
 
 impl MetadataEpoch {
+    /// The decision's short admission fence holds the epoch while its other
+    /// mutable authority (schedule/deadline) is checked. No I/O runs here.
+    pub(super) fn admits(
+        &self,
+        owner: &Arc<MetadataIntegrity>,
+        condition: impl FnOnce() -> bool,
+    ) -> bool {
+        let generation = owner
+            .generation
+            .lock()
+            .expect("invariant: metadata generation lock poisoned");
+        Arc::ptr_eq(&self.owner, owner) && Arc::ptr_eq(&self.generation, &generation) && condition()
+    }
+
+    pub(super) fn same_generation(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.owner, &other.owner) && Arc::ptr_eq(&self.generation, &other.generation)
+    }
+
     pub(super) fn matches(&self, owner: &Arc<MetadataIntegrity>) -> bool {
         Arc::ptr_eq(&self.owner, owner)
             && Arc::ptr_eq(

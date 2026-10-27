@@ -19,9 +19,36 @@ pub(in crate::engine) struct ScheduleState {
     observation: Mutex<Observation>,
 }
 
+/// The original run admission, not a reference to whichever receipt is newest.
+/// Its metadata epoch is retained alongside it in the private plan/outcome.
+pub(in crate::engine) struct ScheduledScrub {
+    owner: Weak<ScheduleState>,
+    admission: Arc<()>,
+}
+
+impl ScheduledScrub {
+    pub(super) fn revoke(&self, epoch: &MetadataEpoch) {
+        let Some(state) = self.owner.upgrade() else {
+            return;
+        };
+        let mut observation = state
+            .observation
+            .lock()
+            .expect("invariant: scrub schedule lock poisoned");
+        if observation.active
+            && Arc::ptr_eq(&observation.admission, &self.admission)
+            && epoch.matches(&state.integrity)
+        {
+            observation.admission = Arc::new(());
+            observation.coverage = None;
+        }
+    }
+}
+
 struct Observation {
     active: bool,
-    coverage: Option<Coverage>,
+    coverage: Option<Arc<Coverage>>,
+    admission: Arc<()>,
 }
 
 struct Coverage {
@@ -31,6 +58,115 @@ struct Coverage {
     epoch: MetadataEpoch,
     started: Instant,
     completed: Instant,
+}
+
+/// A captured receipt retains its original deadlines, never a mutable health bit.
+pub(in crate::engine) struct ScrubCoveragePermit {
+    schedule: Weak<ScheduleState>,
+    coverage: Arc<Coverage>,
+    admission: Arc<()>,
+}
+
+impl ScrubCoveragePermit {
+    /// Lock order is schedule -> metadata generation, as in capture/finish.
+    /// Success consumes this permit at the irreversible decision-admission
+    /// point. Later stop/fault revokes future decisions, not this started one.
+    pub(in crate::engine) fn admit(
+        self,
+        context: &crate::engine::PlanningContext<'_>,
+        epoch: &MetadataEpoch,
+    ) -> bool {
+        let Some(state) = self.schedule.upgrade() else {
+            return false;
+        };
+        if !context.owns_scrub_schedule(&state) {
+            return false;
+        }
+        let observation = state
+            .observation
+            .lock()
+            .expect("invariant: scrub schedule lock poisoned");
+        epoch.admits(context.metadata_integrity, || {
+            observation.active
+                && Arc::ptr_eq(&observation.admission, &self.admission)
+                && self.coverage.epoch.same_generation(epoch)
+                && self
+                    .coverage
+                    .matches_baseline(context, &state, Instant::now())
+        })
+    }
+
+    pub(in crate::engine) fn matches(&self, context: &crate::engine::PlanningContext<'_>) -> bool {
+        let Some(state) = self.schedule.upgrade() else {
+            return false;
+        };
+        if !context.owns_scrub_schedule(&state) {
+            return false;
+        }
+        let observation = state
+            .observation
+            .lock()
+            .expect("invariant: scrub schedule lock poisoned");
+        observation.active
+            && Arc::ptr_eq(&observation.admission, &self.admission)
+            && self.coverage.matches(context, &state, Instant::now())
+    }
+}
+
+impl Coverage {
+    fn matches(
+        &self,
+        context: &crate::engine::PlanningContext<'_>,
+        schedule: &ScheduleState,
+        now: Instant,
+    ) -> bool {
+        self.epoch.matches(context.metadata_integrity)
+            && self.matches_baseline(context, schedule, now)
+    }
+
+    fn matches_baseline(
+        &self,
+        context: &crate::engine::PlanningContext<'_>,
+        schedule: &ScheduleState,
+        now: Instant,
+    ) -> bool {
+        !context.blocked
+            && now.duration_since(self.started) < schedule.max_age
+            && now.duration_since(self.completed) < schedule.interval
+            && self.sequence <= context.state.sequence
+            && (self.sequence != context.state.sequence
+                || (self.baseline.ptr_eq(&Arc::downgrade(context.state))
+                    && &self.snapshot == context.snapshot))
+    }
+}
+
+impl crate::engine::PlanningContext<'_> {
+    fn owns_scrub_schedule(&self, state: &Arc<ScheduleState>) -> bool {
+        self.integrity_scrub_schedule
+            .is_some_and(|current| Weak::ptr_eq(current, &Arc::downgrade(state)))
+            && Arc::ptr_eq(self.metadata_integrity, &state.integrity)
+            && self.config.same_admission(&state.config)
+    }
+
+    pub(in crate::engine) fn capture_scrub_coverage(&self) -> Option<ScrubCoveragePermit> {
+        let schedule = self.integrity_scrub_schedule?;
+        let state = schedule.upgrade()?;
+        if !self.owns_scrub_schedule(&state) {
+            return None;
+        }
+        let observation = state
+            .observation
+            .lock()
+            .expect("invariant: scrub schedule lock poisoned");
+        let coverage = observation.coverage.as_ref()?;
+        (observation.active && coverage.matches(self, &state, Instant::now())).then(|| {
+            ScrubCoveragePermit {
+                schedule: schedule.clone(),
+                coverage: Arc::clone(coverage),
+                admission: Arc::clone(&observation.admission),
+            }
+        })
+    }
 }
 
 impl IntegrityScrubSchedule {
@@ -90,6 +226,7 @@ impl Engine {
             observation: Mutex::new(Observation {
                 active: true,
                 coverage: None,
+                admission: Arc::new(()),
             }),
         });
         self.integrity_scrub_schedule = Some(Arc::downgrade(&state));
@@ -102,30 +239,27 @@ impl Engine {
         &self,
         schedule: &IntegrityScrubSchedule,
     ) -> Result<IntegrityScrubPlan> {
-        if !self.owns_scrub_schedule(&schedule.state)
-            || !schedule
-                .state
-                .observation
-                .lock()
-                .expect("invariant: scrub schedule lock poisoned")
-                .active
-        {
+        let observation = schedule
+            .state
+            .observation
+            .lock()
+            .expect("invariant: scrub schedule lock poisoned");
+        if !self.owns_scrub_schedule(&schedule.state) || !observation.active {
             return Err(Error::new(
                 ErrorCode::PreparationStale,
                 "integrity scrub schedule is no longer owned by this Engine",
             ));
         }
         let mut plan = self.prepare_integrity_scrub()?;
-        plan.schedule = Some(Arc::downgrade(&schedule.state));
+        plan.schedule = Some(ScheduledScrub {
+            owner: Arc::downgrade(&schedule.state),
+            admission: Arc::clone(&observation.admission),
+        });
         Ok(plan)
     }
 
     fn owns_scrub_schedule(&self, state: &Arc<ScheduleState>) -> bool {
-        self.integrity_scrub_schedule
-            .as_ref()
-            .is_some_and(|current| Weak::ptr_eq(current, &Arc::downgrade(state)))
-            && Arc::ptr_eq(&self.metadata_integrity, &state.integrity)
-            && self.config.same_admission(&state.config)
+        self.planning_context().owns_scrub_schedule(state)
     }
 
     /// Coverage is for the captured retained graph in this continuous writer,
@@ -152,19 +286,17 @@ impl Engine {
             .lock()
             .expect("invariant: scrub schedule lock poisoned");
         observation.active
-            && observation.coverage.as_ref().is_some_and(|coverage| {
-                coverage.epoch.matches(&self.metadata_integrity)
-                    && now.duration_since(coverage.started) < state.max_age
-                    && now.duration_since(coverage.completed) < state.interval
-                    && coverage.sequence <= self.state.sequence
-                    && (coverage.sequence != self.state.sequence
-                        || (coverage.baseline.ptr_eq(&Arc::downgrade(&self.state))
-                            && coverage.snapshot == self.snapshot))
-            })
+            && observation
+                .coverage
+                .as_ref()
+                .is_some_and(|coverage| coverage.matches(&self.planning_context(), &state, now))
     }
 
     pub(super) fn finish_scrub_schedule(&self, outcome: &IntegrityScrubOutcome) {
-        let Some(state) = outcome.schedule.as_ref().and_then(Weak::upgrade) else {
+        let Some(run) = &outcome.schedule else {
+            return;
+        };
+        let Some(state) = run.owner.upgrade() else {
             return;
         };
         if !self.owns_scrub_schedule(&state) {
@@ -174,27 +306,37 @@ impl Engine {
             .observation
             .lock()
             .expect("invariant: scrub schedule lock poisoned");
-        if !observation.active {
+        if !observation.active
+            || !Arc::ptr_eq(&observation.admission, &run.admission)
+            || !outcome.metadata_epoch.matches(&self.metadata_integrity)
+        {
             return;
         }
         // All per-member graph faults have already revoked this exact epoch,
         // including failed sources hidden by a later healthy-copy fallback.
         // Local version/proof/body availability is deliberately not graph authority.
-        observation.coverage = (!self.blocked
+        let coverage = (!self.blocked
             && matches!(
                 outcome.report.completion,
                 IntegrityScrubCompletion::Complete
             )
-            && outcome.report.metadata_members_checked == self.config.metadata_members().len()
-            && outcome.metadata_epoch.matches(&self.metadata_integrity))
-        .then(|| Coverage {
-            baseline: Arc::downgrade(&outcome.baseline),
-            sequence: outcome.baseline.sequence,
-            snapshot: outcome.report.snapshot_hash.clone(),
-            epoch: outcome.metadata_epoch.clone(),
-            started: outcome.started,
-            completed: Instant::now(),
+            && outcome.report.metadata_members_checked == self.config.metadata_members().len())
+        .then(|| {
+            Arc::new(Coverage {
+                baseline: Arc::downgrade(&outcome.baseline),
+                sequence: outcome.baseline.sequence,
+                snapshot: outcome.report.snapshot_hash.clone(),
+                epoch: outcome.metadata_epoch.clone(),
+                started: outcome.started,
+                completed: Instant::now(),
+            })
         });
+        if coverage.is_none() {
+            // Healthy refreshes preserve still-fresh original receipts. Failed
+            // runs revoke old admissions permanently, even after a later success.
+            observation.admission = Arc::new(());
+        }
+        observation.coverage = coverage;
     }
 }
 
