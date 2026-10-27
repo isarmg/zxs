@@ -105,6 +105,7 @@ fn save_path(engine: &mut Engine, branch: &str, path: &str, bytes: &[u8]) -> Str
 #[test]
 fn version_and_history_exports_follow_owned_roots_and_still_reject_damaged_seals() {
     let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut engine = initialize(&temp.path().join("source"));
     let repo = engine
         .create_repository(
