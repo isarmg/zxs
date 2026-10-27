@@ -28,16 +28,38 @@ fn compare_update(
     changes: Map<String, Value>,
     maximum: usize,
 ) -> (usize, usize) {
+    compare_edits(
+        before,
+        changes
+            .into_iter()
+            .map(|(key, value)| (key, Some(value)))
+            .collect(),
+        maximum,
+    )
+}
+
+fn compare_edits(
+    before: Map<String, Value>,
+    changes: BTreeMap<String, Option<Value>>,
+    maximum: usize,
+) -> (usize, usize) {
     let (reference, objects) = prepared(before.clone(), MAX_METADATA);
     let mut previous = authenticate(objects);
     let mut expected = before;
     for (key, value) in &changes {
-        *expected.get_mut(key).unwrap() = value.clone();
+        match value {
+            Some(value) => {
+                expected.insert(key.clone(), value.clone());
+            }
+            None => {
+                expected.remove(key);
+            }
+        }
     }
     let (expected_root, expected_objects) = prepared(expected.clone(), maximum);
     let mut encoder = Encoder::new(maximum);
     let updated = encoder
-        .replace_map_values(&reference, changes, |reference| {
+        .edit_map_values(&reference, changes, |reference| {
             Ok(&previous[&(reference.kind.domain(), reference.hash.clone())])
         })
         .unwrap();
@@ -181,5 +203,61 @@ fn deterministic_replacement_batches_match_independent_complete_encoding() {
         }
         compare_update(map.clone(), changes.clone(), MAX_METADATA);
         map.extend(changes);
+    }
+}
+
+#[test]
+fn inserted_and_deleted_rows_cover_empty_roots_new_paths_and_collapse() {
+    compare_edits(
+        Map::new(),
+        BTreeMap::from_iter([("absent".into(), None)]),
+        MAX_METADATA,
+    );
+    compare_edits(
+        Map::new(),
+        BTreeMap::from_iter([("new".into(), Some(json!(1)))]),
+        MAX_METADATA,
+    );
+    let before = (0..1000)
+        .map(|index| (format!("row-{index:04}"), json!(index)))
+        .collect::<Map<_, _>>();
+    let mut changes = before
+        .keys()
+        .take(998)
+        .map(|key| (key.clone(), None))
+        .collect::<BTreeMap<_, _>>();
+    changes.insert("new-radix-route".into(), Some(json!("文")));
+    compare_edits(before.clone(), changes, MAX_METADATA);
+    compare_edits(
+        before.clone(),
+        before.keys().map(|key| (key.clone(), None)).collect(),
+        MAX_METADATA,
+    );
+}
+
+#[test]
+fn mixed_insert_update_delete_batches_match_independent_complete_bytes() {
+    let mut before = Map::new();
+    let mut random = 0xa5f1_u64;
+    for _ in 0..20 {
+        let mut changes = BTreeMap::new();
+        for _ in 0..24 {
+            random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let key = format!("row-{:04}", random % 160);
+            let value = (!random.is_multiple_of(3))
+                .then(|| json!("文".repeat(((random >> 16) % 1500) as usize)));
+            changes.insert(key, value);
+        }
+        compare_edits(before.clone(), changes.clone(), MAX_METADATA);
+        for (key, value) in changes {
+            match value {
+                Some(value) => {
+                    before.insert(key, value);
+                }
+                None => {
+                    before.remove(&key);
+                }
+            }
+        }
     }
 }

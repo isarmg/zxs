@@ -19,7 +19,7 @@
 | [State](../../src/contract/src/model.rs)、[Tracked](../../src/contract/src/tracked.rs)、[SharedRecords](../../src/contract/src/shared_records.rs) | 有写集和大记录共享；普通映射、永久操作收据仍用 `BTreeMap`，事件仍是 `Vec`，共享记录首次写仍复制整张键/句柄表；不是持久路径复制容器 |
 | [index.rs](../../src/engine/src/engine/index.rs) | 版本索引差分已消费可信写集；未知谱系/全字段变更及重建仍保留完整比较，不能把这一步称为端到端增量 |
 | [snapshot.rs](../../src/engine/src/journal/snapshot.rs)、[snapshot_reuse.rs](../../src/engine/src/journal/snapshot_reuse.rs)、[journal.rs](../../src/engine/src/journal.rs) | [ADR 0006](0006-bounded-metadata-roots.md)改用固定 Snapshot 映射根与 Candidate 历史目录根，按真实写集增量编码并维护精确预算摘要；全部旧依赖仍实读验存，未启用免读 |
-| [history_package.rs](../../src/engine/src/history_package.rs)、[changes.rs](../../src/engine/src/history_package/changes.rs) | 未变图仍读验、语义准入并安装；稳定history/file归属的分支值更新可按窄delta编码，其他变化历史仍完整投影，文件和目录归属仍可能扫描全部版本/提交 |
+| [history_package.rs](../../src/engine/src/history_package.rs)、[delta.rs](../../src/engine/src/history_package/delta.rs) | [一般 owner closure](../architecture/history-owner-deltas.md)从 State 冷建派生索引，按精确写集更新投影行；成功发布谱系内不再重建／复验全 manifest，冷／外部准入保留。旧图仍完整读验存，变更字段 descriptor 重建、SharedRecords 首写及名字投影仍有全量成本；未启用免读 |
 | [publication.rs](../../src/engine/src/engine/publication.rs) | `PublishedStateBase` 仅在完整发布且索引成功后签发，匹配精确 State 分配、快照、序号和配置；不证明各对象此刻健康 |
 | [reads.rs](../../src/engine/src/engine/reads.rs)、[disk.rs](../../src/engine/src/disk.rs)、[engine_backend.rs](../../src/server/src/engine_backend.rs) | `Engine::check` 调用逐盘 `offline_check`，服务端仍持引擎锁；扫描版本目录、本盘证明、墓碑和正文，不是完整快照/历史元数据图的有界后台巡检，也没有由此建立周期调度或健康新鲜度 |
 

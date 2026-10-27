@@ -368,7 +368,7 @@ pub(crate) fn prune_retained_policies(state: &mut State, repository: &str) {
         .values()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    state.protection_policies.retain(|id, policy| {
+    state.protection_policies.retain_keys(|id, policy| {
         policy.repository_id != repository || policy.inheritable || referenced.contains(id.as_str())
     });
 }

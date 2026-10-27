@@ -155,13 +155,8 @@ fn repository_in_state<'a>(
         )
     })
 }
-/// Publications append increasing sequences; snapshot recovery preserves their
-/// vector order. Seek directly to the unseen suffix for resumed event polls.
-fn events_after(events: &[storage_contract::Event], after: u64) -> &[storage_contract::Event] {
-    &events[events.partition_point(|event| event.sequence <= after)..]
-}
-fn capture_event_page(
-    events: &[storage_contract::Event],
+fn capture_event_page<'a>(
+    events: impl Iterator<Item = &'a storage_contract::Event>,
     published: u64,
     after: u64,
 ) -> Result<crate::EventPage, ApiError> {
@@ -172,11 +167,7 @@ fn capture_event_page(
             "event cursor is ahead of the published sequence",
         ));
     }
-    let events: Vec<_> = events_after(events, after)
-        .iter()
-        .take(1000)
-        .cloned()
-        .collect();
+    let events: Vec<_> = events.take(1000).cloned().collect();
     let next_cursor = events.last().map_or(after, |event| event.sequence);
     Ok(crate::EventPage {
         events,
@@ -1339,7 +1330,7 @@ impl Backend for EngineBackend {
     ) -> Result<crate::EventPage, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        capture_event_page(&engine.state().events, engine.state().sequence, after)
+        capture_event_page(engine.events_after(after), engine.state().sequence, after)
     }
     fn activity_history(
         &self,

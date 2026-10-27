@@ -524,6 +524,16 @@ impl Engine {
     pub fn is_read_only(&self) -> bool {
         self.blocked
     }
+    /// Borrow the unseen event suffix from admitted, publication-ordered State.
+    /// Cold admission rejects decreasing sequences; writers only append newer
+    /// publication slots, and recovery preserves the admitted ordinal order.
+    pub fn events_after(&self, after: u64) -> impl ExactSizeIterator<Item = &Event> {
+        let rank = self
+            .state
+            .events
+            .partition_point(|event| event.sequence <= after);
+        self.state.events[rank..].iter()
+    }
     pub fn auth_state(&self) -> Option<json_codec::Value> {
         self.state.control_auth.clone()
     }

@@ -188,6 +188,19 @@ impl<V> TrackedMap<V> {
         self.key_changed(&owned, bytes);
         self.value.remove(key)
     }
+    /// Remove selected keys without granting mutable access to retained values.
+    /// The predicate scans the map; only removed keys enter the exact write set.
+    pub fn retain_keys(&mut self, mut keep: impl FnMut(&String, &V) -> bool) {
+        let removed = self
+            .value
+            .iter()
+            .filter(|(key, value)| !keep(key, value))
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for key in removed {
+            self.remove(&key);
+        }
+    }
     pub fn retain(&mut self, mut keep: impl FnMut(&String, &mut V) -> bool) {
         // The predicate receives mutable values, so even retained keys are dirty.
         self.all_changed();
@@ -227,6 +240,14 @@ impl<V: Clone> TrackedRecords<V> {
     }
 }
 impl<V> TrackedRecords<V> {
+    /// Extend immutable records while recording each incoming key precisely.
+    pub fn extend_shared(&mut self, source: &SharedRecords<V>) {
+        for key in source.keys() {
+            self.key_changed(key, key.len());
+        }
+        self.value.extend_shared(source);
+    }
+
     pub fn remove_discard<Q>(&mut self, key: &Q) -> bool
     where
         String: Borrow<Q>,

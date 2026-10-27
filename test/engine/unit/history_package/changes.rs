@@ -9,8 +9,8 @@ use storage_contract::{MapChanges, Tracked};
 
 const MAX_PENDING_OWNERS: usize = 16_384;
 
-// One classification serves conservative invalidation and precise projection
-// deltas. A field cannot enter State without being classified by both consumers.
+// This retained test oracle classifies State independently of the production
+// owner index and exact row projection.
 macro_rules! projection_fields {
     ($consumer:ident) => {
         $consumer! {
@@ -25,7 +25,6 @@ macro_rules! projection_fields {
         }
     };
 }
-pub(super) use projection_fields;
 
 #[derive(Default, Debug)]
 pub(super) struct HistoryChanges {

@@ -154,3 +154,39 @@ fn operation_write_sets_are_typed_bounded_and_branch_isolated() {
     }
     assert_eq!(many.changes_since(&before), MapChanges::All);
 }
+
+#[test]
+fn immutable_retention_tracks_only_removals_and_preserves_noop_lineage() {
+    let before = base();
+    let mut next = before.clone();
+    next.begin_tracking();
+    next.retain_keys(|_, _| true);
+    assert!(next.changes_since(&before).is_empty());
+    next.retain_keys(|key, _| key != "a");
+    assert_eq!(keys(next.changes_since(&before)), vec!["a"]);
+    assert_eq!(next["b"], "second");
+    assert_eq!(before.len(), 2);
+}
+
+#[test]
+fn tracked_shared_extension_keeps_record_handles_and_precise_key_union() {
+    #[derive(Debug, PartialEq)]
+    struct Immutable(u8);
+    let before: TrackedRecords<Immutable> = [("a".into(), Immutable(1))].into_iter().collect();
+    let source: SharedRecords<Immutable> = [("a".into(), Immutable(2)), ("b".into(), Immutable(3))]
+        .into_iter()
+        .collect();
+    let retained = before.get_shared("a").unwrap();
+    let mut next = before.clone();
+    next.begin_tracking();
+    next.extend_shared(&SharedRecords::new());
+    assert!(next.changes_since(&before).is_empty());
+    next.extend_shared(&source);
+    assert_eq!(keys(next.changes_since(&before)), vec!["a", "b"]);
+    assert!(Arc::ptr_eq(
+        &next.get_shared("b").unwrap(),
+        &source.get_shared("b").unwrap()
+    ));
+    assert_eq!(retained.0, 1);
+    assert_eq!(next["a"].0, 2);
+}

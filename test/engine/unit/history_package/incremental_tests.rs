@@ -629,7 +629,7 @@ fn branch_value_updates_preserve_full_graph_bytes_and_rebuild_unavailable_old_ro
 }
 
 #[test]
-fn precise_branch_updates_do_not_skip_complete_manifest_admission() {
+fn unknown_branch_mutation_and_cold_state_retain_complete_manifest_admission() {
     let temp = tempfile::tempdir().unwrap();
     let config = Config::development([
         temp.path().join("one"),
@@ -646,9 +646,17 @@ fn precise_branch_updates_do_not_skip_complete_manifest_admission() {
     let mut after = fork(&before);
     after
         .branches
-        .get_mut(&branch.branch_id)
+        .values_mut()
+        .find(|candidate| candidate.branch_id == branch.branch_id)
         .unwrap()
         .file_node_id = Some("fmeta_00000000000000000000000000000000".into());
+    // Unknown mutation is not backed by a private mutator's reference contract.
+    assert!(matches!(
+        after.branches.changes_since(&before.branches),
+        storage_contract::MapChanges::All
+    ));
+    let raw: RawState = json_codec::from_slice(&canonical_json(&after).unwrap()).unwrap();
+    assert!(AdmittedState::try_from(raw).is_err());
     assert!(prepare_history_manifests(&after, MAX_METADATA).is_err());
     assert!(
         prepare_history_manifests_incremental(&before, &after, &roots, &config.disks, MAX_METADATA)

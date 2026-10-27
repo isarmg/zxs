@@ -291,8 +291,15 @@ impl<F: FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>> Resolv
     pub(crate) fn map(&mut self, reference: &Reference) -> Result<Map<String, Value>> {
         reference.validate()?;
         let mut entries = Map::new();
-        self.node(reference, "", &mut entries)?;
+        self.node(reference, "", Some(&mut entries))?;
         Ok(entries)
+    }
+
+    /// Keep authenticated dependency objects without cloning all logical rows.
+    /// The same routing/shape checks and per-address source deduplication apply.
+    pub(crate) fn retain_map(&mut self, reference: &Reference) -> Result<()> {
+        reference.validate()?;
+        self.node(reference, "", None)
     }
 
     pub(crate) fn finish(self) -> Vec<AuthenticatedMetadataObject> {
@@ -303,7 +310,7 @@ impl<F: FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>> Resolv
         &mut self,
         reference: &Reference,
         prefix: &str,
-        entries: &mut Map<String, Value>,
+        mut entries: Option<&mut Map<String, Value>>,
     ) -> Result<()> {
         // The root is admitted at map entry; decoded index edges already carry
         // checked addresses and digits. Prefixes are constructed from those edges.
@@ -324,9 +331,11 @@ impl<F: FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>> Resolv
                     .as_object()
                     .ok_or_else(|| invalid("metadata map leaf is not a map"))?;
                 PageShape::read(object)?.validate_at(prefix)?;
-                for (key, value) in page {
-                    if entries.insert(key.clone(), value.clone()).is_some() {
-                        return Err(invalid("duplicate metadata entity in graph"));
+                if let Some(entries) = &mut entries {
+                    for (key, value) in page {
+                        if entries.insert(key.clone(), value.clone()).is_some() {
+                            return Err(invalid("duplicate metadata entity in graph"));
+                        }
                     }
                 }
             }
@@ -336,7 +345,7 @@ impl<F: FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>> Resolv
                     return Err(invalid("invalid metadata map index"));
                 }
                 for (digit, child) in index.children {
-                    self.node(&child, &format!("{prefix}{digit}"), entries)?;
+                    self.node(&child, &format!("{prefix}{digit}"), entries.as_deref_mut())?;
                 }
             }
         }

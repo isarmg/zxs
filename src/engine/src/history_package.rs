@@ -3,8 +3,11 @@ use crate::journal::RecordType;
 use crate::{disk::*, journal::*, *};
 use data_serialization::{Deserialize, Serialize};
 use json_codec::json;
+#[cfg(test)]
+#[path = "../../../test/engine/unit/history_package/changes.rs"]
 mod changes;
 mod delta;
+pub(crate) use delta::DerivedOwners;
 mod graph;
 pub(crate) use graph::decode_history_root;
 mod manifest;
@@ -108,79 +111,87 @@ pub(crate) fn prepare_history_manifests_incremental(
     members: &[DiskConfig],
     maximum: usize,
 ) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
-    prepare_history_manifests_incremental_observed(
+    let owners = DerivedOwners::from_state(before);
+    let (catalog, objects, _) = prepare_history_manifests_incremental_observed(
         before,
         after,
         previous,
+        &owners,
         members,
         maximum,
         &mut |_| {},
-    )
+    )?;
+    Ok((catalog, objects))
 }
 
 pub(crate) fn prepare_history_manifests_incremental_observed(
     before: &State,
     after: &State,
     previous: &crate::metadata_map::MapRoot,
+    owners: &DerivedOwners,
     members: &[DiskConfig],
     maximum: usize,
     fault: &mut impl FnMut(&Error),
-) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
-    let projection = delta::ProjectionDelta::between(before, after);
-    let changed = match &projection {
-        delta::ProjectionDelta::StableBranches(edits) => edits.keys().cloned().collect(),
-        delta::ProjectionDelta::Full => changes::HistoryChanges::between(before, after).histories,
+) -> Result<(
+    crate::metadata_map::MapRoot,
+    Vec<PreparedMetadataObject>,
+    DerivedOwners,
+)> {
+    let Some(delta::ProjectionDelta {
+        owners,
+        mut histories,
+    }) = delta::ProjectionDelta::between(before, after, owners)?
+    else {
+        // An actual unknown mutable escape/foreign replacement loses the exact
+        // write-set proof. Cold complete admission remains the explicit path.
+        let (catalog, objects) = prepare_history_manifests(after, maximum)?;
+        return Ok((catalog, objects, DerivedOwners::from_state(after)));
     };
+    let changed = histories.keys().cloned().collect();
     let mut bindings = BTreeMap::new();
     let mut objects = Vec::new();
+    // This loop is the still-required old dependency read/install pass, not a
+    // projection scan. No unchanged history materializes a HistoryManifest.
     for id in after.histories.keys() {
         let old = previous.catalog_binding(id);
-        if let Some(old) = old.filter(|_| !changed.contains(id)) {
-            let hash = &old.hash;
-            let (manifest, graph) = match bound_history_graph_observed(members, hash, fault) {
-                Ok(graph) => graph,
+        let edits = histories.remove(id);
+        let prepared = match old {
+            Some(old) => match read_published_history_objects(members, &old.hash, id, fault) {
+                Ok(graph) => match edits {
+                    Some(edits) => Some(graph::prepare_update(graph, edits, after, maximum)?),
+                    None => {
+                        objects.extend(
+                            graph
+                                .into_iter()
+                                .map(|object| object.into_prepared(maximum))
+                                .collect::<Result<Vec<_>>>()?,
+                        );
+                        None
+                    }
+                },
                 Err(_) => {
-                    let (rebuilt_hash, rebuilt) =
-                        graph::prepare(&HistoryManifest::from_state(after, id)?, maximum)?;
-                    if &rebuilt_hash != hash {
+                    // Only source acquisition falls back. The fault observer has
+                    // seen the failure; encoding/store/decision failures propagate.
+                    let rebuilt = graph::prepare_indexed(after, id, &owners, maximum)?;
+                    if edits.is_none() && rebuilt.0 != old.hash {
                         return Err(Error::new(
                             ErrorCode::ObjectCorrupt,
                             "reconstructed history differs from published baseline",
                         ));
                     }
-                    objects.extend(rebuilt);
-                    continue;
+                    Some(rebuilt)
                 }
-            };
-            if manifest.history.history_tree_id != *id {
-                return Err(Error::new(
-                    ErrorCode::ObjectCorrupt,
-                    "published history baseline identity differs",
-                ));
-            }
-            for object in graph {
-                objects.push(object.into_prepared(maximum)?);
-            }
-        } else {
-            let incremental = try_prepare_branch_update(
-                members,
-                old.map(|binding| &binding.hash),
-                id,
-                &projection,
-                maximum,
-                fault,
-            )?;
-            let (hash, graph) = match incremental {
-                Some(graph) => graph,
-                None => graph::prepare(&HistoryManifest::from_state(after, id)?, maximum)?,
-            };
+            },
+            None => Some(graph::prepare_indexed(after, id, &owners, maximum)?),
+        };
+        if let Some((hash, graph)) = prepared {
             bindings.insert(
                 id.clone(),
                 crate::metadata_map::HistoryBinding {
                     hash,
                     maximum_object_bytes: graph
                         .iter()
-                        .map(|o| o.bytes().len())
+                        .map(|object| object.bytes().len())
                         .max()
                         .expect("invariant: history includes root"),
                 },
@@ -225,7 +236,7 @@ pub(crate) fn prepare_history_manifests_incremental_observed(
         objects.push(object);
         Ok(())
     })?;
-    Ok((catalog, unique_prepared_objects(objects)?))
+    Ok((catalog, unique_prepared_objects(objects)?, owners))
 }
 
 /// Cold readers resolve the exact catalog before checking complete history coverage.
@@ -256,36 +267,33 @@ pub(crate) fn catalog_entry<'a>(id: &str, value: &'a json_codec::Value) -> Resul
         .ok_or_else(|| Error::new(ErrorCode::ObjectCorrupt, "invalid history catalog digest"))
 }
 
-fn try_prepare_branch_update(
+fn read_published_history_objects(
     members: &[DiskConfig],
-    previous: Option<&String>,
+    hash: &str,
     id: &str,
-    projection: &delta::ProjectionDelta,
-    maximum: usize,
     fault: &mut impl FnMut(&Error),
-) -> Result<Option<(String, Vec<PreparedMetadataObject>)>> {
-    let delta::ProjectionDelta::StableBranches(edits) = projection else {
-        return Ok(None);
-    };
-    let (Some(edits), Some(previous)) = (edits.get(id), previous) else {
-        return Ok(None);
-    };
-    let (manifest, objects) = match read_history_graph_observed(members, previous, fault) {
-        Ok(graph) => graph,
-        // Only this read-only source graph acquisition may fall back to the
-        // original complete encoder for the admitted after State. It prepares
-        // a new changed root, never substitutes a decided/unchanged root.
-        // Update/admission errors below and later visitor/store/decision errors
-        // propagate; none can enter this source-read fallback.
-        Err(_) => return Ok(None),
-    };
-    if manifest.history.history_tree_id != id {
-        return Err(Error::new(
-            storage_contract::ErrorCode::ObjectCorrupt,
-            "published history baseline identity differs",
-        ));
+) -> Result<HistoryGraphObjects> {
+    let root = crate::publication_evidence::verified_graph_object_observed(
+        members,
+        "history-manifest",
+        hash,
+        fault,
+    )?;
+    let result = (|| {
+        if decode_history_root(&root)?.history.history_tree_id != id {
+            return Err(Error::new(
+                ErrorCode::ObjectCorrupt,
+                "published history baseline identity differs",
+            ));
+        }
+        graph::read_objects(root, |kind, hash| {
+            crate::publication_evidence::verified_graph_object_observed(members, kind, hash, fault)
+        })
+    })();
+    if let Err(error) = &result {
+        fault(error);
     }
-    graph::prepare_branch_update(manifest, objects, edits, maximum).map(Some)
+    result
 }
 
 // First occurrence retains dependency order across the frozen history graphs.

@@ -22,6 +22,7 @@ pub(super) struct PublishedStateBase {
     config: super::ValidatedConfig,
     roots: crate::metadata_map::MapRoot,
     snapshot_basis: SnapshotReuse,
+    history_owners: crate::history_package::DerivedOwners,
 }
 impl PublishedStateBase {
     fn matches(&self, engine: &crate::engine::PlanningContext<'_>, config_hash: &str) -> bool {
@@ -52,6 +53,7 @@ pub(crate) struct DetachedPublication {
     config_hash: String,
     snapshot_basis: SnapshotReuse,
     history_basis: crate::metadata_map::MapRoot,
+    history_owners: crate::history_package::DerivedOwners,
 }
 
 enum Completion<'a> {
@@ -118,6 +120,7 @@ impl Engine {
             names,
             snapshot_basis,
             history_basis,
+            history_owners,
             config_hash,
             metadata_epoch,
             ..
@@ -213,6 +216,7 @@ impl Engine {
                 config: self.config.clone(),
                 roots: history_basis,
                 snapshot_basis,
+                history_owners,
             })
         });
         self.blocked = false;
@@ -819,7 +823,7 @@ impl crate::engine::PlanningContext<'_> {
             prepare_snapshot(&next, maximum)?.hash,
             "incremental snapshot differs from full encoding"
         );
-        let (history_basis, manifests) = match self
+        let (history_basis, manifests, history_owners) = match self
             .published_state_base
             .as_ref()
             .filter(|base| base.matches(self, &config_hash))
@@ -828,11 +832,20 @@ impl crate::engine::PlanningContext<'_> {
                 self.state,
                 &next,
                 &base.roots,
+                &base.history_owners,
                 &members,
                 maximum,
                 &mut |error| self.metadata_integrity.fault(error),
             )?,
-            None => crate::history_package::prepare_history_manifests(&next, maximum)?,
+            None => {
+                let (roots, objects) =
+                    crate::history_package::prepare_history_manifests(&next, maximum)?;
+                (
+                    roots,
+                    objects,
+                    crate::history_package::DerivedOwners::from_state(&next),
+                )
+            }
         };
         // The full implementation remains an independent oracle in every
         // engine publication test, including merge/split/restore workflows.
@@ -910,6 +923,7 @@ impl crate::engine::PlanningContext<'_> {
             config_hash,
             snapshot_basis,
             history_basis,
+            history_owners,
         })
     }
 }

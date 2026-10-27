@@ -3365,13 +3365,14 @@ fn real_branch_rename_uses_precise_projection_and_matches_complete_graph_bytes()
             storage_contract::OperationId::generate(),
         )
         .unwrap();
-    let super::delta::ProjectionDelta::StableBranches(edits) =
-        super::delta::ProjectionDelta::between(&before, engine.state())
-    else {
-        panic!("the real rename must retain a precise history projection write set");
-    };
-    assert_eq!(edits.len(), 1);
-    assert_eq!(edits[&repo.history_tree_id].len(), 1);
+    let owners = super::delta::DerivedOwners::from_state(&before);
+    let delta = super::delta::ProjectionDelta::between(&before, engine.state(), &owners)
+        .unwrap()
+        .expect("the real rename retains an exact history projection write set");
+    assert_eq!(delta.histories.len(), 1);
+    let edits = &delta.histories[&repo.history_tree_id];
+    assert_eq!(edits.maps.len(), 1);
+    assert_eq!(edits.maps[&super::delta::Field::Branches].len(), 1);
     let (expected, objects) = prepare_history_manifests(engine.state(), MAX_METADATA).unwrap();
     let disk = &engine.config.disks[0];
     let scanned = scan(disk).unwrap();
@@ -3395,4 +3396,109 @@ fn real_branch_rename_uses_precise_projection_and_matches_complete_graph_bytes()
         .export_history_package(&repo.history_tree_id, &package)
         .unwrap();
     offline_check_history_package(&package).unwrap();
+}
+
+#[test]
+fn real_save_metadata_and_backup_policy_writes_keep_general_projection_deltas() {
+    fn precise(before: &State, after: &State, history: &str) {
+        let owners = super::delta::DerivedOwners::from_state(before);
+        let delta = super::delta::ProjectionDelta::between(before, after, &owners)
+            .unwrap()
+            .expect("ordinary saves and metadata writes have exact map provenance");
+        assert_eq!(
+            delta
+                .histories
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec![history]
+        );
+        assert_eq!(delta.owners, super::delta::DerivedOwners::from_state(after));
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = initialize(temp.path());
+    let repo = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("general exact projection").unwrap(),
+            "P01",
+            2,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    for body in [
+        b"first generation".as_slice(),
+        b"second generation".as_slice(),
+    ] {
+        let before = engine.state().clone();
+        save(&mut engine, &repo.main_branch_id, body);
+        precise(&before, engine.state(), &repo.history_tree_id);
+    }
+    let entry = engine
+        .list_tree(&repo.main_branch_id)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
+        .unwrap();
+    let unchanged = canonical_json(engine.state()).unwrap();
+    let error = engine
+        .create_file_branch_from_node(
+            &entry.file_id,
+            &entry.version_id,
+            "fmeta_00000000000000000000000000000000",
+            &storage_contract::BranchName::parse("missing node").unwrap(),
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::FileNodeNotFound);
+    assert_eq!(canonical_json(engine.state()).unwrap(), unchanged);
+    for (version, note) in [
+        (None, "file note"),
+        (Some(entry.version_id.as_str()), "version note"),
+        (None, ""),
+    ] {
+        let before = engine.state().clone();
+        engine
+            .set_file_note(
+                &entry.file_id,
+                version,
+                &storage_contract::Note::parse(note.to_owned()).unwrap(),
+                "alice",
+                storage_contract::OperationId::generate(),
+            )
+            .unwrap();
+        precise(&before, engine.state(), &repo.history_tree_id);
+    }
+    let before = engine.state().clone();
+    engine
+        .configure_backups(BackupConfigurationRequest {
+            repository_id: &repo.repository_id,
+            path: "file.txt",
+            target_copies: 2,
+            backup_prefixes: &BTreeMap::from([("B01".into(), "owner-projection".into())]),
+            expected_generation: 0,
+            principal: "alice",
+            operation_id: storage_contract::OperationId::generate(),
+        })
+        .unwrap();
+    precise(&before, engine.state(), &repo.history_tree_id);
+    let (catalog, objects) = prepare_history_manifests(engine.state(), MAX_METADATA).unwrap();
+    let disk = &engine.config.disks[0];
+    let scanned = scan(disk).unwrap();
+    let record = &scanned
+        .records
+        .iter()
+        .rev()
+        .find(|(record, _)| record.record_type == RecordType::Publication)
+        .unwrap()
+        .0;
+    let candidate: Candidate = load_object(disk, "candidate", &record.candidate_hash).unwrap();
+    assert_eq!(&candidate.history_roots, catalog.reference());
+    for object in objects {
+        assert_eq!(
+            fs::read(object_path(disk, object.kind(), &object.hash)).unwrap(),
+            object.bytes()
+        );
+    }
 }

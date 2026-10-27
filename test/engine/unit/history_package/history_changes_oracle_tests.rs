@@ -11,7 +11,7 @@ fn record<T: data_serialization::de::DeserializeOwned>(value: json_codec::Value)
 // file and directory. Such repository sharing is not publishable under today's
 // manifest validator, but invalidation must not assume that invariant to omit
 // an owner. Actual valid publication graphs are tested separately below.
-fn dependency_fixture() -> State {
+pub(super) fn dependency_fixture() -> State {
     let mut state = State::default();
     for (history, repository, branch, commit, version, file, directory) in [
         (

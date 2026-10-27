@@ -97,8 +97,12 @@ impl Engine {
                 }
                 // Historical aliases remain frozen, while their writable
                 // ownership target follows a later explicit owner merge.
-                for target in state.file_branch_aliases.values_mut() {
-                    if branches.contains(target) { *target = survivor.into(); }
+                let aliases = state.file_branch_aliases.iter()
+                    .filter(|(_, target)| branches.contains(*target) && target.as_str() != survivor)
+                    .map(|(id, _)| id.clone()).collect::<Vec<_>>();
+                for alias in aliases {
+                    *state.file_branch_aliases.get_mut(&alias)
+                        .expect("invariant: selected alias is still present") = survivor.into();
                 }
                 Ok(json!({"file_id":file,"merge_id":merge_id,"history_tree_id":body.history_tree_id,
                     "branch_id":survivor,"surviving_branch_id":survivor,"node_id":result,"version_id":version,

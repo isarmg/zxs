@@ -70,7 +70,7 @@ fn manifest() -> HistoryManifest {
             "provenance": null
         }
     });
-    for &field in MAP_FIELDS {
+    for field in Field::ALL.iter().map(|field| field.name()) {
         value[field] = json!({});
     }
     json_codec::from_value(value).unwrap()
@@ -166,7 +166,7 @@ fn deterministic_bounded_graph_preserves_logical_wire_rules() {
             .collect::<BTreeSet<_>>(),
         BTreeSet::from(["format", "history", "maps", "repository"])
     );
-    assert_eq!(root["maps"].as_object().unwrap().len(), MAP_FIELDS.len());
+    assert_eq!(root["maps"].as_object().unwrap().len(), Field::ALL.len());
     assert_eq!(root["history"]["generation"], u64::MAX.to_string());
     let mut seen = BTreeSet::new();
     for (kind, hash, value) in reachable {

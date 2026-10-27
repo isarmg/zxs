@@ -842,13 +842,16 @@ impl Engine {
                     .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
                     .map(|entry| entry.entry_id.as_str())
                     .collect::<BTreeSet<_>>();
-                for policy in state.protection_policies.values_mut()
-                    .filter(|policy| policy.repository_id == original.repository_id) {
-                    if policy.scope_directory_id.as_deref().is_some_and(|directory|
-                        directory != original.repository_id && !source_directories.contains(directory)) {
-                        policy.scope_directory_id = None;
-                        policy.inheritable = false;
-                    }
+                let policies = state.protection_policies.iter()
+                    .filter(|(_, policy)| policy.repository_id == original.repository_id
+                        && policy.scope_directory_id.as_deref().is_some_and(|directory|
+                            directory != original.repository_id && !source_directories.contains(directory)))
+                    .map(|(id, _)| id.clone()).collect::<Vec<_>>();
+                for id in policies {
+                    let policy = state.protection_policies.get_mut(&id)
+                        .expect("invariant: selected source policy is still present");
+                    policy.scope_directory_id = None;
+                    policy.inheritable = false;
                 }
                 crate::protection::prune_retained_policies(state, &original.repository_id);
                 // The cut edge and each crossing merge edge are explicit audit boundaries.
@@ -878,12 +881,16 @@ impl Engine {
                     }
                 }
                 // Existing audit boundaries whose local endpoint moved follow that endpoint.
-                for boundary in state.history_boundaries.values_mut() {
-                    if boundary.history_tree_id == history && selected.contains(&boundary.local_commit_id) {
-                        boundary.history_tree_id = history_id.clone();
-                        boundary.local_commit_id = commit_map[&boundary.local_commit_id].clone();
-                        boundary.local_branch_id = boundary.local_branch_id.as_ref().and_then(|b| branch_map.get(b)).cloned();
-                    }
+                let boundaries = state.history_boundaries.iter()
+                    .filter(|(_, boundary)| boundary.history_tree_id == history
+                        && selected.contains(&boundary.local_commit_id))
+                    .map(|(id, _)| id.clone()).collect::<Vec<_>>();
+                for id in boundaries {
+                    let boundary = state.history_boundaries.get_mut(&id)
+                        .expect("invariant: selected audit boundary is still present");
+                    boundary.history_tree_id = history_id.clone();
+                    boundary.local_commit_id = commit_map[&boundary.local_commit_id].clone();
+                    boundary.local_branch_id = boundary.local_branch_id.as_ref().and_then(|b| branch_map.get(b)).cloned();
                 }
                 for old_version in version_map.keys() {
                     let used = state.commits.values().filter(|c| c.history_tree_id == history)

@@ -629,19 +629,36 @@ impl Encoder {
         let planned = plan(Some(basis), String::new(), changes, &mut lookup, key_text)?;
         planned.encode(self, measure, &mut |_| {}, key_text)
     }
+    #[cfg(test)]
     pub(crate) fn replace_map_values<'a>(
         &mut self,
         reference: &Reference,
         replacements: Map<String, Value>,
         load: impl Fn(&Reference) -> Result<&'a AuthenticatedMetadataObject>,
     ) -> Result<MapUpdate> {
-        let basis = MapRoot::read(reference, ProofMeasure::Plain, &load)?;
         for key in replacements.keys() {
             if lookup_loaded(reference, key, &load)?.is_none() {
                 return Err(invalid("replacement key is absent from the published map"));
             }
         }
-        let keys = replacements
+        self.edit_map_values(
+            reference,
+            replacements
+                .into_iter()
+                .map(|(key, value)| (key, Some(value)))
+                .collect(),
+            load,
+        )
+    }
+    /// Exact insert/update/delete edits, preserving every unchanged source row.
+    pub(crate) fn edit_map_values<'a>(
+        &mut self,
+        reference: &Reference,
+        edits: BTreeMap<String, Option<Value>>,
+        load: impl Fn(&Reference) -> Result<&'a AuthenticatedMetadataObject>,
+    ) -> Result<MapUpdate> {
+        let basis = MapRoot::read(reference, ProofMeasure::Plain, &load)?;
+        let keys = edits
             .keys()
             .map(|key| (key.clone(), key_route(key)))
             .collect();
@@ -649,8 +666,8 @@ impl Encoder {
             Some(&basis),
             String::new(),
             keys,
-            &mut |key| match replacements.get(key) {
-                Some(v) => Ok(Some(v.clone())),
+            &mut |key| match edits.get(key) {
+                Some(value) => Ok(value.clone()),
                 None => lookup_loaded(reference, key, &load),
             },
             &|key: &String| Cow::Borrowed(key.as_str()),
