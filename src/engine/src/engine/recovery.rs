@@ -124,6 +124,15 @@ impl Engine {
             let Some(handle) = self.disk_resources.available(d) else {
                 continue;
             };
+            if super::provenance::validate_owned_seal(
+                &self.disk_resources,
+                d,
+                &self.metadata_integrity,
+            )
+            .is_err()
+            {
+                continue;
+            }
             let opened = OpenJournal::scan_at(&handle.root, d)?;
             let scanned = &opened.scan;
             torn_tail |= scanned.torn_tail;

@@ -49,6 +49,14 @@ case "${1:-}" in
     cargo test --locked --offline -p storage-engine --lib \
       history_package::graph::tests::distributed_history_larger_than_real_reader_limit_roundtrips \
       -- --ignored --exact --test-threads=1
+    # These tests isolate mounts inside a new unprivileged user/mount namespace.
+    # Namespace or mount failures are test failures, not permission-based skips.
+    cargo test --locked --offline -p storage-engine --lib \
+      disk::admission_tests::immutable_existing_bind_leaf_is_rejected_before_read_or_sync \
+      -- --ignored --exact --test-threads=1
+    cargo test --locked --offline -p storage-engine --lib \
+      disk::admission_tests::cold_device_admission_does_not_borrow_a_replacement_mount_identity \
+      -- --ignored --exact --test-threads=1
     ;;
   foundation|foundation-platform|foundation-crypto|foundation-data|foundation-language|foundation-async)
     bash .github/scripts/check-foundation.sh "$1"

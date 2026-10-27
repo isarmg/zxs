@@ -1,5 +1,5 @@
 //! Durable workspace manifests and restart reconciliation.
-use super::Engine;
+use super::{Engine, ReadSource};
 use crate::journal::RecordType;
 use crate::{disk::*, *};
 use std::{
@@ -43,7 +43,7 @@ impl Engine {
         &self,
         workspace: &Workspace,
         request: &CommitRequest,
-        directories: &[PathBuf],
+        directories: &[ReadSource],
     ) -> Result<bool> {
         let Some(operation) = self.state.operations.get(&request.operation_id) else {
             return Ok(false);
@@ -63,8 +63,7 @@ impl Engine {
         let mut damage = None;
         for directory in directories {
             let Some(body) = read_workspace_evidence::<json_codec::Value>(
-                self.planning_context()
-                    .workspace_source_file(&directory.join("wire-request.json")),
+                directory.join("wire-request.json").open().map(Some),
                 &mut damage,
             )?
             else {
@@ -98,10 +97,17 @@ impl Engine {
         self.planning_context().workspace_data_directory(workspace)
     }
     /// Read-only recovery may retain system-side evidence while the admitted
-    /// resource set has no primary handle. This is only its configured address.
+    /// resource set has no primary handle. A present resource still needs its seal.
     fn workspace_recovery_directory(&self, workspace: &Workspace) -> Result<PathBuf> {
         let repository = self.repository_for_branch(&workspace.branch_id)?;
         let disk = self.disk(&repository.primary_slot_id)?;
+        if self.disk_resources.available(disk).is_some() {
+            super::provenance::validate_owned_seal(
+                &self.disk_resources,
+                disk,
+                &self.metadata_integrity,
+            )?;
+        }
         Ok(disk
             .root
             .join("staging/workspaces")
@@ -122,11 +128,16 @@ impl Engine {
     fn load_workspace_mirrors(&mut self, authoritative: bool) -> Result<()> {
         // Collect paths, not decoded manifests. At most two bounded metadata
         // inputs may represent an ID; extra copies are a conflict, not votes.
-        let mut candidates = BTreeMap::<String, Vec<PathBuf>>::new();
+        let mut candidates = BTreeMap::<String, Vec<ReadSource>>::new();
         let maximum = self.effective_workspace_limits().max_retained_workspaces;
         let local = self.root.join("workspaces");
         match DiskRoot::open(&local) {
-            Ok(root) => collect_workspace_paths(&root, &local, maximum, &mut candidates)?,
+            Ok(root) => collect_workspace_paths(
+                &root,
+                &ReadSource::external(local.clone()),
+                maximum,
+                &mut candidates,
+            )?,
             Err(Error::Filesystem(platform_io::fs_safety::Error::Io(source)))
                 if source.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
@@ -137,7 +148,7 @@ impl Engine {
             };
             collect_workspace_paths(
                 &held.root,
-                &disk.root.join("staging/workspaces"),
+                &ReadSource::on_disk(held, disk.root.join("staging/workspaces")),
                 maximum,
                 &mut candidates,
             )?;
@@ -148,11 +159,10 @@ impl Engine {
             let mut healthy = Vec::new();
             let mut damage = None;
             for path in &paths {
-                if let Some(workspace) = read_workspace_evidence::<Workspace>(
-                    self.planning_context().workspace_source_file(path),
-                    &mut damage,
-                )? {
-                    self.validate_workspace_mirror(&id, path, &workspace, authoritative)?;
+                if let Some(workspace) =
+                    read_workspace_evidence::<Workspace>(path.open().map(Some), &mut damage)?
+                {
+                    self.validate_workspace_mirror(&id, path.path(), &workspace, authoritative)?;
                     healthy.push(workspace);
                 }
             }
@@ -216,10 +226,11 @@ impl Engine {
                 for file in selected.files.values() {
                     let mut source = self
                         .planning_context()
-                        .workspace_source_file(&file.source_path)?
+                        .admit_staged_source(&selected.workspace_id, file)?
                         .ok_or_else(|| {
                             recovery_required("workspace staging resource is unavailable")
-                        })?;
+                        })?
+                        .open()?;
                     let digest = file.content_hash.digest();
                     platform_io::payload::verify_full(
                         &mut source,
@@ -296,20 +307,9 @@ impl Engine {
             ));
         }
         for file in workspace.files.values() {
-            let owned = if let Some(primary) = &primary {
-                file.source_path.starts_with(primary) || file.source_path.starts_with(&local)
-            } else {
-                file.source_path.starts_with(&local)
-                    || self.config.disks.iter().any(|disk| {
-                        file.source_path
-                            .starts_with(disk.root.join("staging/workspaces").join(id))
-                    })
-            };
-            if !owned
-                || file
-                    .source_path
-                    .components()
-                    .any(|part| matches!(part, Component::ParentDir))
+            if let Some(primary) = &primary
+                && !file.source_path.starts_with(primary)
+                && !file.source_path.starts_with(&local)
             {
                 return Err(Error::new(
                     storage_contract::ErrorCode::UnsafePath,
@@ -320,7 +320,8 @@ impl Engine {
             // Permission and I/O failures are not evidence of missing content.
             match self
                 .planning_context()
-                .workspace_source_file(&file.source_path)
+                .admit_staged_source(&workspace.workspace_id, file)
+                .and_then(|source| source.map(|source| source.open()).transpose())
             {
                 Ok(_) => {}
                 Err(Error::Filesystem(platform_io::fs_safety::Error::Io(source)))
@@ -370,15 +371,13 @@ impl Engine {
     /// Current selections may have changed since the save, so they cannot prove
     /// the receipt. Bind the original snapshot to the verified operation/slot.
     fn workspace_publication_snapshot(&self, workspace: &Workspace) -> Result<Arc<State>> {
-        let directories = [
-            self.root.join("workspaces").join(&workspace.workspace_id),
-            self.workspace_recovery_directory(workspace)?,
-        ];
+        let directories = self
+            .planning_context()
+            .workspace_evidence_directories(workspace)?;
         let mut damage = None;
         for directory in &directories {
             let Some(request) = read_workspace_evidence::<CommitRequest>(
-                self.planning_context()
-                    .workspace_source_file(&directory.join("commit-request.json")),
+                directory.join("commit-request.json").open().map(Some),
                 &mut damage,
             )?
             else {
@@ -451,16 +450,14 @@ impl Engine {
     }
 
     fn reconcile_workspace_receipt(&self, workspace: &mut Workspace) -> Result<bool> {
-        let directories = [
-            self.root.join("workspaces").join(&workspace.workspace_id),
-            self.workspace_recovery_directory(workspace)?,
-        ];
+        let directories = self
+            .planning_context()
+            .workspace_evidence_directories(workspace)?;
         let mut completion = None;
         let mut damage = None;
         for directory in &directories {
             let Some(request) = read_workspace_evidence::<CommitRequest>(
-                self.planning_context()
-                    .workspace_source_file(&directory.join("commit-request.json")),
+                directory.join("commit-request.json").open().map(Some),
                 &mut damage,
             )?
             else {
@@ -571,11 +568,11 @@ impl Engine {
 
 fn collect_workspace_paths(
     root: &DiskRoot,
-    directory: &Path,
+    directory: &ReadSource,
     maximum: usize,
-    candidates: &mut BTreeMap<String, Vec<PathBuf>>,
+    candidates: &mut BTreeMap<String, Vec<ReadSource>>,
 ) -> Result<()> {
-    match root.directory(directory) {
+    match root.directory(directory.path()) {
         Ok(_) => {}
         Err(Error::Filesystem(platform_io::fs_safety::Error::Io(source)))
         | Err(Error::Contract(storage_contract::Error::Io { source, .. }))
@@ -585,10 +582,10 @@ fn collect_workspace_paths(
         }
         Err(error) => return Err(error),
     }
-    for entry in root.entries(directory)? {
+    for entry in root.entries(directory.path())? {
         let entry = entry?;
         let child = directory.join(entry.as_path());
-        let Some(metadata) = root.optional_metadata(&child)? else {
+        let Some(metadata) = root.optional_metadata(child.path())? else {
             continue;
         };
         if metadata.file_type().is_symlink() {
@@ -601,7 +598,7 @@ fn collect_workspace_paths(
             continue;
         }
         let path = child.join("workspace.json");
-        match root.open_regular(&path) {
+        match path.open() {
             Ok(_) => {}
             Err(Error::Filesystem(platform_io::fs_safety::Error::Io(source)))
             | Err(Error::Contract(storage_contract::Error::Io { source, .. }))
@@ -654,29 +651,15 @@ impl crate::engine::PlanningContext<'_> {
         request: &CommitRequest,
     ) -> Result<()> {
         let expected = canonical_json(request)?;
-        let local = self
-            .root
-            .join("workspaces")
-            .join(&workspace.workspace_id)
-            .join("commit-request.json");
         let mut damage = None;
-        let mut matches = |path: &std::path::Path| -> Result<bool> {
+        for directory in self.workspace_evidence_directories(workspace)? {
             match read_workspace_evidence::<CommitRequest>(
-                self.workspace_source_file(path),
+                directory.join("commit-request.json").open().map(Some),
                 &mut damage,
             )? {
-                Some(saved) => Ok(canonical_json(&saved)? == expected),
-                None => Ok(false),
+                Some(saved) if canonical_json(&saved)? == expected => return Ok(()),
+                Some(_) | None => {}
             }
-        };
-        if matches(&local)? {
-            return Ok(());
-        }
-        let data = self
-            .workspace_data_directory(workspace)?
-            .join("commit-request.json");
-        if matches(&data)? {
-            return Ok(());
         }
         Err(missing_evidence(
             damage,
@@ -686,30 +669,87 @@ impl crate::engine::PlanningContext<'_> {
 }
 
 impl<'a> crate::engine::PlanningContext<'a> {
-    pub(crate) fn workspace_data_root(&self, workspace: &Workspace) -> Result<&'a DiskRoot> {
+    pub(crate) fn workspace_disk(&self, workspace: &Workspace) -> Result<&'a Arc<DiskHandle>> {
         let repo = self.repository_for_branch(&workspace.branch_id)?;
-        let disk = self.disk(&repo.primary_slot_id)?;
-        Ok(&self.disk_resources.get(disk)?.root)
+        self.disk_resources.get(self.disk(&repo.primary_slot_id)?)
+    }
+
+    pub(crate) fn workspace_data_root(&self, workspace: &Workspace) -> Result<&'a DiskRoot> {
+        Ok(&self.workspace_disk(workspace)?.root)
     }
 
     pub(crate) fn workspace_data_directory(&self, w: &Workspace) -> Result<PathBuf> {
         let repo = self.repository_for_branch(&w.branch_id)?;
         let disk = self.disk(&repo.primary_slot_id)?;
-        self.disk_resources.get(disk)?;
+        super::provenance::validate_owned_seal(self.disk_resources, disk, self.metadata_integrity)?;
         Ok(disk.root.join("staging/workspaces").join(&w.workspace_id))
     }
 
-    fn workspace_source_file(&self, path: &Path) -> Result<Option<fs::File>> {
-        if let Some(disk) = self
-            .config
-            .disks
-            .iter()
-            .find(|disk| path.starts_with(&disk.root))
-            && self.disk_resources.available(disk).is_none()
-        {
-            return Ok(None);
+    fn workspace_evidence_directories(&self, workspace: &Workspace) -> Result<Vec<ReadSource>> {
+        let mut directories = vec![ReadSource::external(
+            self.root.join("workspaces").join(&workspace.workspace_id),
+        )];
+        let repo = self.repository_for_branch(&workspace.branch_id)?;
+        let disk = self.disk(&repo.primary_slot_id)?;
+        if let Some(owner) = self.disk_resources.available(disk) {
+            directories.push(ReadSource::on_disk(
+                owner,
+                self.workspace_data_directory(workspace)?,
+            ));
         }
-        self.open_source(path).map(Some)
+        Ok(directories)
+    }
+
+    /// Decode a persisted StagedFile address within its workspace namespace.
+    /// Public source paths never enter this boundary. Recovery may run before
+    /// the branch/primary is known; validate_workspace_mirror separately binds
+    /// an authoritative manifest to that primary after journal replay.
+    fn admit_staged_source(
+        &self,
+        workspace: &str,
+        file: &StagedFile,
+    ) -> Result<Option<ReadSource>> {
+        let path = &file.source_path;
+        if path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+        {
+            return Err(Error::new(
+                ErrorCode::UnsafePath,
+                "workspace staging path escapes owned directory",
+            ));
+        }
+        let local = self.root.join("workspaces").join(workspace);
+        if path.strip_prefix(&local).is_ok() {
+            return Ok(Some(ReadSource::external(path.clone())));
+        }
+        for disk in &self.config.disks {
+            let directory = disk.root.join("staging/workspaces").join(workspace);
+            if path.strip_prefix(directory).is_ok() {
+                return Ok(self
+                    .disk_resources
+                    .available(disk)
+                    .map(|owner| ReadSource::on_disk(owner, path.clone())));
+            }
+        }
+        Err(Error::new(
+            ErrorCode::UnsafePath,
+            "workspace staging path escapes owned directory",
+        ))
+    }
+
+    pub(crate) fn staged_source(
+        &self,
+        workspace: &Workspace,
+        file: &StagedFile,
+    ) -> Result<ReadSource> {
+        self.admit_staged_source(&workspace.workspace_id, file)?
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::DiskUnavailable,
+                    "workspace staging disk was unavailable at admission",
+                )
+            })
     }
 }
 

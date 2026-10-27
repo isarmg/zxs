@@ -242,8 +242,7 @@ pub(super) fn open_regular(directory: &PrivateDirectory, name: &EntryName) -> Re
         )
         .map_err(io::Error::from)?,
     );
-    let identity = regular_single_link(&file, name.as_path())?;
-    validate_administrative_file(directory, &identity, name.as_path())?;
+    let identity = validate_opened_regular(directory, &file, name)?;
     let current = statat(
         &directory.directory,
         name.as_os_str(),
@@ -254,6 +253,16 @@ pub(super) fn open_regular(directory: &PrivateDirectory, name: &EntryName) -> Re
         return Err(Error::IdentityChanged(name.as_path().to_path_buf()));
     }
     Ok(file)
+}
+
+pub(super) fn validate_opened_regular(
+    directory: &PrivateDirectory,
+    file: &File,
+    name: &EntryName,
+) -> Result<rustix::fs::Stat, Error> {
+    let identity = regular_single_link(file, name.as_path())?;
+    validate_administrative_file(directory, &identity, name.as_path())?;
+    Ok(identity)
 }
 
 pub(super) fn read_bounded(
@@ -499,7 +508,7 @@ fn validate_administration(file: &File, path: &Path, uid: u32, gid: u32) -> Resu
     Ok(())
 }
 
-fn verify_administration(directory: &PrivateDirectory) -> Result<(), Error> {
+pub(super) fn verify_administration(directory: &PrivateDirectory) -> Result<(), Error> {
     if let Some((uid, gid)) = directory.administration_owner {
         validate_administration(&directory.directory, directory.path(), uid, gid)?;
     }

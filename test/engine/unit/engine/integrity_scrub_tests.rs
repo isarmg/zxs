@@ -419,7 +419,9 @@ fn renamed_owner_payload_damage_is_not_masked_by_a_replacement_body() {
     fs::rename(&disk.root, &retained).unwrap();
     private_dir(path.parent().unwrap()).unwrap();
     fs::write(&path, b"good bytes").unwrap();
-    fs::write(retained.join(relative), b"evil bytes").unwrap();
+    let damaged = retained.join("damaged-body");
+    fs::write(&damaged, b"evil bytes").unwrap();
+    fs::rename(damaged, retained.join(relative)).unwrap();
     let report = scrub(&mut engine);
     assert_eq!(report.identity_failures, 0, "{report:?}");
     assert_eq!(report.metadata_failures, 0);

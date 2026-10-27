@@ -173,7 +173,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
                 history: &repo.history_tree_id,
                 file_id: &old_entry.file_id,
                 path: &name_policy::PortablePath::parse("renamed.txt").unwrap(),
-                source: &source,
+                source: &crate::engine::ReadSource::external(source.clone()),
                 primary: "P01",
                 copies: 3,
                 source_ids: vec![old_entry.version_id.clone()],

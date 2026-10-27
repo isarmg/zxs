@@ -1037,7 +1037,7 @@ impl Engine {
                 state.content_states.insert(id.clone(),manifest.content_states[id]);
                 if manifest.content_states[id] == ContentState::Available {
                     pending.push(crate::engine::Prepared {version:version.clone(),placement,
-                        source:package_version(package,id).join("content").join(&version.creation_name)});
+                        source:crate::engine::ReadSource::external(package_version(package,id).join("content").join(&version.creation_name))});
                 }
             }
             Ok(json!({"history_tree_id":manifest.history.history_tree_id,"repository_id":repository.repository_id,

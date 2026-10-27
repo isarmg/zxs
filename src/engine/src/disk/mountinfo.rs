@@ -3,9 +3,22 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub(super) struct Mount {
+    id: u64,
     point: PathBuf,
     pub(super) kind: String,
     pub(super) source: PathBuf,
+}
+
+/// Select the exact mount reported by statx on an already held directory.
+pub(super) fn resolve_id(mountinfo: &str, id: u64) -> Result<Mount> {
+    let mut selected = None;
+    for line in mountinfo.split_terminator('\n') {
+        let mount = parse(line)?;
+        if mount.id == id {
+            selected = Some(mount);
+        }
+    }
+    selected.ok_or_else(|| invalid("held disk root mount is absent from mountinfo"))
 }
 
 /// Resolve only the mount table; device canonicalization and topology checks
@@ -62,6 +75,9 @@ fn parse(line: &str) -> Result<Mount> {
         return Err(invalid("mountinfo mount point must be absolute"));
     }
     Ok(Mount {
+        id: fields[0]
+            .parse()
+            .map_err(|_| invalid("invalid mountinfo mount identity"))?,
         point,
         kind: filesystem[0].to_owned(),
         source: decode_field(filesystem[1], Escapes::Source)?.into(),

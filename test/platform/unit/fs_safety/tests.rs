@@ -132,9 +132,7 @@ fn raw_directory_admission_and_atomic_writes_keep_the_supplied_handle() {
     assert!(held.verify_identity().is_err());
     AtomicFile::create(&held, &name, b"created").unwrap();
     AtomicFile::replace(&held, &name.as_relative(), b"updated").unwrap();
-    let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut held.open_regular(&name).unwrap(), &mut bytes).unwrap();
-    assert_eq!(bytes, b"updated");
+    assert_eq!(held.read_bounded(&name, 7).unwrap(), b"updated");
     assert_eq!(fs::read(moved.join(name.as_path())).unwrap(), b"updated");
     assert_eq!(fs::read(path.join(name.as_path())).unwrap(), b"replacement");
     assert_eq!(fs::read_dir(&moved).unwrap().count(), 1);

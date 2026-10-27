@@ -213,3 +213,35 @@ fn accepts_a_complete_record_without_a_trailing_newline() {
     let mount = resolve(table.strip_suffix('\n').unwrap(), Path::new("/mnt/disk")).unwrap();
     assert_eq!(mount.source, Path::new("/dev/sda1"));
 }
+
+#[test]
+fn held_mount_identity_selects_its_record_not_the_rebound_named_mount() {
+    let held = "36 35 8:1 / /retained rw - btrfs /dev/held rw\n";
+    let replacement = "37 35 8:2 / /configured rw - btrfs /dev/replacement rw\n";
+    for table in [
+        format!("{held}{replacement}"),
+        format!("{replacement}{held}"),
+    ] {
+        let selected = resolve_id(&table, 36).unwrap();
+        assert_eq!(selected.source, Path::new("/dev/held"));
+        assert_eq!(selected.kind, "btrfs");
+        assert_eq!(
+            resolve(&table, Path::new("/configured")).unwrap().source,
+            Path::new("/dev/replacement")
+        );
+    }
+}
+
+#[test]
+fn absent_held_mount_cannot_fall_back_to_an_available_named_mount() {
+    let table = record("/configured", "/dev/replacement");
+    assert_eq!(
+        resolve_id(&table, 37).unwrap_err().code(),
+        storage_contract::ErrorCode::DiskIdentityMismatch
+    );
+    let overflow = table.replacen("36 ", "18446744073709551616 ", 1);
+    assert_eq!(
+        resolve_id(&overflow, 36).unwrap_err().code(),
+        storage_contract::ErrorCode::DiskIdentityMismatch
+    );
+}

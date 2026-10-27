@@ -141,3 +141,43 @@ impl MetadataReadContext<'_> {
         Ok(seal)
     }
 }
+
+/// Re-admit mutable seal bytes on the already owned resource, without looking
+/// up the configured root or re-sampling device topology.
+pub(crate) fn validate_owned_seal(
+    resources: &crate::disk::DiskResources,
+    disk: &crate::DiskConfig,
+    integrity: &MetadataIntegrity,
+) -> Result<()> {
+    let result = (|| {
+        let handle = resources.get(disk)?;
+        let stored = handle
+            .root
+            .read_json_observed(&disk.root.join("disk.json"), &mut |_| Ok(()))?;
+        crate::disk::validate_stored_seal(&stored, &handle.seal)
+    })();
+    if disk.metadata_member {
+        integrity.observe(result)
+    } else {
+        result
+    }
+}
+
+pub(crate) fn validate_candidate_seals(
+    config: &super::ValidatedConfig,
+    resources: &crate::disk::DiskResources,
+    candidate: &crate::journal::Candidate,
+    integrity: &MetadataIntegrity,
+) -> Result<()> {
+    for disk in &config.disks {
+        if disk.metadata_member
+            || candidate
+                .versions
+                .iter()
+                .any(|evidence| evidence.placement.route_slot_ids.contains(&disk.slot_id))
+        {
+            validate_owned_seal(resources, disk, integrity)?;
+        }
+    }
+    Ok(())
+}

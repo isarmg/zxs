@@ -123,6 +123,8 @@ fn freeze_observation(mut observed: Vec<Value>) -> (Vec<Value>, Vec<Value>) {
     }
     (observed, details)
 }
+/// Search evidence on available held resources during read-only cold recovery.
+/// Required recovery locks, membership and seals are admitted separately.
 pub(crate) fn discover_publication(
     engine: &Engine,
     candidate: &Candidate,
@@ -130,7 +132,10 @@ pub(crate) fn discover_publication(
 ) -> Result<Option<Publication>> {
     let mut found: Option<Publication> = None;
     for disk in engine.members() {
-        let root = &engine.disk_resources.get(&disk)?.root;
+        let Some(handle) = engine.disk_resources.available(&disk) else {
+            continue;
+        };
+        let root = &handle.root;
         for name in list_object_hashes_at(root, &disk, "publication")? {
             let publication: Publication = load_object_at(root, &disk, "publication", &name)
                 .map_err(|source| {
@@ -151,9 +156,13 @@ pub(crate) fn discover_publication(
     }
     for evidence in &candidate.versions {
         for slot in &evidence.placement.route_slot_ids {
-            let root = &engine.disk_resources.get(engine.disk(slot)?)?.root;
+            let disk = engine.disk(slot)?;
+            let Some(handle) = engine.disk_resources.available(disk) else {
+                continue;
+            };
+            let root = &handle.root;
             let directory = version_dir(
-                engine.disk(slot)?,
+                disk,
                 &evidence.version.history_tree_id,
                 &evidence.version.version_id,
             );
@@ -559,6 +568,15 @@ impl Engine {
         }
         let (candidate, _, members, original_accepts) =
             self.pending_recovery_candidate(operation, None)?;
+        // A preview can reuse an existing plan, but not an earlier seal read.
+        // Admit mutable seal bytes after loading the candidate closure and
+        // before either plan writes or the payload-loss observation.
+        crate::engine::provenance::validate_candidate_seals(
+            &self.config,
+            &self.disk_resources,
+            &candidate,
+            &self.metadata_integrity,
+        )?;
         let hash = object_hash("candidate", &candidate)?;
         let disk = &self.members()[0];
         let old = member_plan_path(disk, &hash);
@@ -713,6 +731,14 @@ impl Engine {
         }
         let (candidate, admitted, members, accepts) =
             self.pending_recovery_candidate(plan.operation_id, Some(&plan))?;
+        // The held generation can outlive a preview. Re-admit each required
+        // seal once at this commit's actual payload-loss boundary.
+        crate::engine::provenance::validate_candidate_seals(
+            &self.config,
+            &self.disk_resources,
+            &candidate,
+            &self.metadata_integrity,
+        )?;
         let (observed, loss_details) = freeze_observation(observe(self, &candidate)?);
         if canonical_json(&members)? != canonical_json(&plan.members)?
             || canonical_json(&accepts)? != canonical_json(&plan.original_accepts)?

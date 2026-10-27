@@ -246,7 +246,10 @@ fn folder_and_file_rename_append_path_nodes_reusing_bodies_then_write_follows_th
     drop(e);
     let e = Engine::open(&t.path().join("system")).unwrap();
     let mut data = Vec::new();
-    std::fs::File::open(e.valid_replica(&finalentry.version_id).unwrap().0)
+    e.valid_replica(&finalentry.version_id)
+        .unwrap()
+        .0
+        .open()
         .unwrap()
         .read_to_end(&mut data)
         .unwrap();
@@ -344,7 +347,7 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
     // Lose only the old body's physical replicas, leaving its active branch and
     // all immutable history metadata intact.
     while let Ok((path, _)) = e.valid_replica(&original.version_id) {
-        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(path.path()).unwrap();
     }
     let before = canonical_json(e.state()).unwrap();
     assert_eq!(
@@ -399,7 +402,7 @@ fn pending_selection_preserves_frozen_source_even_when_source_replicas_are_missi
     save(&mut engine, &repo, "file.txt", b"current body");
     loop {
         match engine.valid_replica(&source.version_id) {
-            Ok((path, _)) => std::fs::remove_file(path).unwrap(),
+            Ok((path, _)) => std::fs::remove_file(path.path()).unwrap(),
             Err(error) if error.code() == storage_contract::ErrorCode::ContentUnavailable => break,
             Err(error) => panic!("unexpected replica failure: {error}"),
         }
@@ -500,7 +503,7 @@ fn file_merge_requires_readable_chosen_body_but_receipt_replay_does_not() {
         };
         loop {
             match engine.valid_replica(&source.version_id) {
-                Ok((path, _)) => std::fs::remove_file(path).unwrap(),
+                Ok((path, _)) => std::fs::remove_file(path.path()).unwrap(),
                 Err(error) if error.code() == storage_contract::ErrorCode::ContentUnavailable => {
                     break;
                 }

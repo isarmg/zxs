@@ -434,7 +434,7 @@ impl Engine {
         }
         Ok(())
     }
-    pub(crate) fn cleanup_purged(&self) -> Result<()> {
+    pub(crate) fn cleanup_purged(&mut self) -> Result<()> {
         self.require_no_commit_preparation()?;
         if !self
             .state
@@ -505,6 +505,12 @@ impl Engine {
                 "published tombstone evidence is unavailable",
             )
         })?;
+        #[cfg(feature = "fault-injection")]
+        self.failpoint("after_purge_evidence")?;
+        // Reading the publication closure does not authorize destructive I/O
+        // indefinitely. Re-admit each actual cleanup target at first use, not
+        // for every version, retaining the existing unavailable-target skip.
+        let mut cleanup_slots = BTreeMap::new();
         for (id, state) in &self.state.content_states {
             if *state != ContentState::Purged && *state != ContentState::Migrated {
                 continue;
@@ -550,6 +556,17 @@ impl Engine {
             };
             for slot in &p.route_slot_ids {
                 let d = self.disk(slot)?;
+                let admitted = cleanup_slots.entry(slot).or_insert_with(|| {
+                    crate::engine::provenance::validate_owned_seal(
+                        &self.disk_resources,
+                        d,
+                        &self.metadata_integrity,
+                    )
+                    .is_ok()
+                });
+                if !*admitted {
+                    continue;
+                }
                 let Some(handle) = self.disk_resources.available(d) else {
                     continue;
                 };
@@ -572,10 +589,7 @@ impl Engine {
                     Ok(()) => root.sync_dir(content.parent().expect("content parent"))?,
                     Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
                     | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
-                        if error.kind() == std::io::ErrorKind::NotFound =>
-                    {
-                        ()
-                    }
+                        if error.kind() == std::io::ErrorKind::NotFound => {}
                     Err(error) => return Err(error),
                 }
             }

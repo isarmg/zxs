@@ -108,6 +108,18 @@ class SuiteCoverageTests(unittest.TestCase):
                 if output:
                     self.assertIn(output, result.stdout)
 
+    def test_workspace_runs_both_isolated_mount_admission_regressions(self):
+        calls = self.suite("workspace")
+        for name in (
+            "immutable_existing_bind_leaf_is_rejected_before_read_or_sync",
+            "cold_device_admission_does_not_borrow_a_replacement_mount_identity",
+        ):
+            self.assertEqual(calls.count({"tool": "cargo", "args": [
+                "test", "--locked", "--offline", "-p", "storage-engine", "--lib",
+                f"disk::admission_tests::{name}",
+                "--", "--ignored", "--exact", "--test-threads=1",
+            ]}), 1)
+
     def test_server_engine_integration_targets_declare_core_admission(self):
         root = Path(__file__).resolve().parents[2]
         manifest = tomllib.loads((root / "src/server/Cargo.toml").read_text())

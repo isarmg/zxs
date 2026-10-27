@@ -188,6 +188,90 @@ fn detached_upload_keeps_its_admitted_workspace_directory_after_root_replacement
 }
 
 #[test]
+fn caller_paths_and_staged_sources_keep_distinct_origins_after_root_replacement() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_temp, mut engine, workspace) = fixture();
+    let staged = engine
+        .workspace(&workspace.workspace_id)
+        .unwrap()
+        .files
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    let disk = engine.disk("P01").unwrap().clone();
+    let input = disk.root.join("caller-input");
+    fs::write(&input, b"old named input").unwrap();
+    fs::rename(&disk.root, disk.root.with_extension("held")).unwrap();
+    fs::create_dir(&disk.root).unwrap();
+    fs::set_permissions(&disk.root, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(&input, b"new named input").unwrap();
+    fs::create_dir_all(staged.source_path.parent().unwrap()).unwrap();
+    fs::write(&staged.source_path, b"replacement staged bytes").unwrap();
+
+    let staged_external = engine
+        .stage_file(&workspace.workspace_id, "external-stage", &input)
+        .unwrap();
+    let item = new_id("entry");
+    let upload = engine
+        .prepare_upload(&workspace.workspace_id, &item, "external-upload", &input, 1)
+        .unwrap();
+    // External admission retains its selected file, not a later named replacement.
+    let later = input.with_extension("later");
+    fs::write(&later, b"later named input").unwrap();
+    fs::rename(later, &input).unwrap();
+    engine.finish_upload(upload.execute().unwrap()).unwrap();
+    for (item, expected) in [
+        (staged.item_id.as_str(), &b"original"[..]),
+        (staged_external.item_id.as_str(), &b"new named input"[..]),
+        (item.as_str(), &b"new named input"[..]),
+    ] {
+        let mut bytes = Vec::new();
+        engine
+            .open_workspace_content(&workspace.workspace_id, item, "admin")
+            .unwrap()
+            .file
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert_eq!(bytes, expected);
+    }
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: OperationId::generate(),
+            principal: "admin".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: "explicit source provenance".into(),
+            request_digest: None,
+        })
+        .unwrap();
+    for entry in engine.list_tree(&workspace.branch_id).unwrap() {
+        let mut bytes = Vec::new();
+        engine
+            .open_content(&entry.version_id)
+            .unwrap()
+            .file
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert_eq!(
+            bytes,
+            if entry.path() == "body" {
+                &b"original"[..]
+            } else {
+                &b"new named input"[..]
+            }
+        );
+    }
+    assert!(!disk.root.join("disk.json").exists());
+    assert_eq!(fs::read(&input).unwrap(), b"later named input");
+    assert_eq!(
+        fs::read(staged.source_path).unwrap(),
+        b"replacement staged bytes"
+    );
+}
+
+#[test]
 fn held_reads_still_read_tombstones_and_corrupt_bytes_from_the_old_disk() {
     let (_temp, engine, version_id) = committed_fixture();
     let version = engine.state.versions.get(&version_id).unwrap();
@@ -378,9 +462,9 @@ fn copy_build_rejects_replacement_after_replica_verification_before_candidate_mu
     let before = canonical_json(&candidate).unwrap();
     let mut pending = Vec::new();
     for replacement in [&b"modified"[..], &b"short"[..]] {
-        let substitute = source.with_extension("replacement");
+        let substitute = source.path().with_extension("replacement");
         fs::write(&substitute, replacement).unwrap();
-        fs::rename(&substitute, &source).unwrap();
+        fs::rename(&substitute, source.path()).unwrap();
         let error = engine
             .build_copied_version(
                 &mut candidate,
@@ -658,9 +742,9 @@ fn prepare_rejects_source_growth_after_planning_without_installing_payload() {
         panic!("new workspace content has a payload plan");
     };
     let payload = &prepared[0];
-    let replacement = payload.source.with_extension("replacement");
+    let replacement = payload.source.path().with_extension("replacement");
     fs::write(&replacement, b"original but longer").unwrap();
-    fs::rename(replacement, &payload.source).unwrap();
+    fs::rename(replacement, payload.source.path()).unwrap();
     assert_eq!(
         engine.prepare_payload(payload).unwrap_err().code(),
         ErrorCode::SourceChanged

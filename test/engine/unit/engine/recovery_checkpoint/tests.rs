@@ -1,6 +1,7 @@
 use super::*;
 use crate::journal::RecordType;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 
 fn setup() -> (tempfile::TempDir, std::path::PathBuf, Config) {
     let temp = tempfile::tempdir().unwrap();
@@ -611,6 +612,7 @@ fn invalid_paths_and_file_types_have_distinct_causes() {
         Err(Error::Checkpoint(CheckpointError::InvalidPath(_)))
     ));
     let temp = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     std::os::unix::fs::symlink("missing", temp.path().join("link")).unwrap();
     let error = inventory(
         &DiskRoot::open(temp.path()).unwrap(),
@@ -629,6 +631,7 @@ fn invalid_paths_and_file_types_have_distinct_causes() {
 fn non_utf8_directory_name_retains_source_and_classification() {
     use std::os::unix::ffi::OsStringExt;
     let temp = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::write(
         temp.path().join(std::ffi::OsString::from_vec(vec![0xff])),
         b"",

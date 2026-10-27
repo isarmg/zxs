@@ -8,6 +8,58 @@ use std::{
 };
 
 #[test]
+fn same_mount_private_leaf_open_keeps_the_held_parent_and_file_constraints() {
+    let temporary = tempfile::tempdir().unwrap();
+    let address = temporary.path().join("private");
+    let private = PrivateDirectory::create(&address).unwrap();
+    fs::write(address.join("file"), b"held").unwrap();
+    let moved = temporary.path().join("moved");
+    fs::rename(&address, &moved).unwrap();
+    PrivateDirectory::create(&address).unwrap();
+    fs::write(address.join("file"), b"replacement").unwrap();
+    let mut file = open_private_regular(&private, &EntryName::new("file").unwrap()).unwrap();
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut bytes).unwrap();
+    assert_eq!(bytes, b"held");
+
+    symlink("file", moved.join("link")).unwrap();
+    assert!(open_private_regular(&private, &EntryName::new("link").unwrap()).is_err());
+    fs::hard_link(moved.join("file"), moved.join("hard")).unwrap();
+    assert!(matches!(
+        open_private_regular(&private, &EntryName::new("file").unwrap()),
+        Err(Error::MultipleLinks(_))
+    ));
+    assert!(matches!(
+        open_private_regular(&private, &EntryName::new("missing").unwrap()),
+        Err(Error::Io(ref source)) if source.kind() == io::ErrorKind::NotFound
+    ));
+    assert_eq!(fs::read(address.join("file")).unwrap(), b"replacement");
+}
+
+#[test]
+fn same_mount_private_leaf_open_preserves_administrative_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("private");
+    PrivateDirectory::create(&path).unwrap();
+    let private = PrivateDirectory::open_for_administration(&path).unwrap();
+    let name = EntryName::new("file").unwrap();
+    let file = path.join(name.as_path());
+    fs::write(&file, b"bytes").unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    open_private_regular(&private, &name).unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o400)).unwrap();
+    assert!(matches!(
+        open_private_regular(&private, &name),
+        Err(Error::UnsafePermissions(_))
+    ));
+    assert_eq!(
+        fs::metadata(file).unwrap().permissions().mode() & 0o777,
+        0o400
+    );
+}
+
+#[test]
 fn admitted_directory_conversion_keeps_original_handle_after_path_rebinding() {
     for mounts in [MountPolicy::SameMount, MountPolicy::AllowNestedMounts] {
         let temp = tempfile::tempdir().unwrap();

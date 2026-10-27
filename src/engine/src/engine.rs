@@ -36,8 +36,10 @@ mod recovery_checkpoint;
 mod workspace_budget;
 mod workspace_limits;
 pub use workspace_limits::RetainedWorkspaceLimits;
+mod source;
 mod workspace_storage;
 use config::acquire_locks;
+pub(crate) use source::ReadSource;
 
 /// Nonfatal checkpoint failures from the latest recovery invocation.
 #[derive(Debug, Default)]
@@ -112,7 +114,7 @@ pub struct OpenedContent {
 pub(crate) struct Prepared {
     pub version: FileVersion,
     pub placement: Placement,
-    pub source: PathBuf,
+    pub source: ReadSource,
 }
 
 /// A real unpublished mutation plan; constructing it never acknowledges a
@@ -635,7 +637,14 @@ impl Engine {
     pub(crate) fn trusted_evidence_members(&self) -> Vec<DiskConfig> {
         self.members()
             .into_iter()
-            .filter(|disk| self.disk_resources.available(disk).is_some())
+            .filter(|disk| {
+                provenance::validate_owned_seal(
+                    &self.disk_resources,
+                    disk,
+                    &self.metadata_integrity,
+                )
+                .is_ok()
+            })
             .collect()
     }
     pub(crate) fn members(&self) -> Vec<DiskConfig> {

@@ -1,6 +1,6 @@
 //! Held filesystem resources, separate from serializable configuration and writer locks.
 use super::*;
-use platform_io::fs_safety::linux::{DirectoryEntries, FileIdentity};
+use platform_io::fs_safety::linux::DirectoryEntries;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -296,18 +296,7 @@ pub(crate) struct DiskHandle {
 impl DiskHandle {
     fn open(config: &ValidatedConfig, disk: &DiskConfig, sealed: bool) -> Result<Self> {
         let root = DiskRoot::open(&disk.root)?;
-        let seal = identity(config, disk)?;
-        if root.directory.identity()
-            != (FileIdentity {
-                device: seal.device,
-                inode: seal.inode,
-            })
-        {
-            return Err(Error::new(
-                ErrorCode::DiskIdentityMismatch,
-                "disk root changed during admission",
-            ));
-        }
+        let seal = identity_at(config, disk, root.directory.directory())?;
         if sealed {
             let stored =
                 decode_strict(&root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?)?;

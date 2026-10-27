@@ -147,11 +147,6 @@ impl PrivateDirectory {
     pub fn read_bounded(&self, name: &EntryName, max_bytes: usize) -> Result<Vec<u8>, Error> {
         unix::read_bounded(self, name, max_bytes)
     }
-    /// Open a single-linked regular child for reading, relative to this held directory.
-    /// The diagnostic path is not reopened; file ownership rules match `read_bounded`.
-    pub fn open_regular(&self, name: &EntryName) -> Result<File, Error> {
-        unix::open_regular(self, name)
-    }
     pub fn remove_file(&self, name: &EntryName) -> Result<(), Error> {
         unix::remove_file(self, name)
     }

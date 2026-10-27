@@ -35,7 +35,7 @@ fn version_builds_advance_inside_one_candidate_and_discard_with_that_candidate()
                     history: &repo.history_tree_id,
                     file_id: &file,
                     path: &path,
-                    source: &source,
+                    source: &crate::engine::ReadSource::external(source.clone()),
                     primary: "P01",
                     copies: 1,
                     source_ids: Vec::new(),

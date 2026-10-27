@@ -2,7 +2,7 @@ use crate::*;
 use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::{
     AtomicFile, EntryName, PrivateDirectory, RelativePath,
-    linux::{MountPolicy, OpenAt2Root, SingleLinkRequirement},
+    linux::{MountPolicy, OpenAt2Root, SingleLinkRequirement, open_private_regular},
 };
 use std::{
     fs::{self, File},
@@ -294,33 +294,40 @@ fn write_atomic_in(
     replace: bool,
 ) -> Result<()> {
     if !replace {
-        match directory.read_bounded(&name, bytes.len()) {
-            Ok(existing) if existing == bytes => {
+        match open_private_regular(directory, name) {
+            Ok(mut file) => {
+                let mut existing = Vec::new();
+                (&mut file)
+                    .take(bytes.len() as u64 + 1)
+                    .read_to_end(&mut existing)
+                    .map_err(|error| fs_error(platform_io::fs_safety::Error::Io(error)))?;
+                if existing.len() > bytes.len() {
+                    return Err(
+                        fs_error(platform_io::fs_safety::Error::BudgetExceeded).context(
+                            storage_contract::ErrorCode::ObjectCollision,
+                            "immutable object exceeds expected byte length",
+                        ),
+                    );
+                }
+                if existing != bytes {
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::ObjectCollision,
+                        "immutable object differs from existing bytes",
+                    ));
+                }
                 // A prior create may have installed bytes before its parent sync failed.
-                directory.open_regular(name).map_err(fs_error)?.sync_all()?;
+                file.sync_all()?;
                 return directory.sync().map_err(fs_error);
-            }
-            Ok(_) => {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::ObjectCollision,
-                    "immutable object differs from existing bytes",
-                ));
             }
             Err(platform_io::fs_safety::Error::Io(error))
                 if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error @ platform_io::fs_safety::Error::BudgetExceeded) => {
-                return Err(fs_error(error).context(
-                    storage_contract::ErrorCode::ObjectCollision,
-                    "immutable object exceeds expected byte length",
-                ));
-            }
             Err(error) => return Err(fs_error(error)),
         }
     }
     if replace {
-        AtomicFile::replace(&directory, &name.as_relative(), bytes).map_err(fs_error)
+        AtomicFile::replace(directory, &name.as_relative(), bytes).map_err(fs_error)
     } else {
-        AtomicFile::create(&directory, &name, bytes).map_err(fs_error)
+        AtomicFile::create(directory, name, bytes).map_err(fs_error)
     }
 }
 /// Every JSON object must fit the same bound used by its on-disk reader.
@@ -866,21 +873,36 @@ pub(crate) fn identity(config: &ValidatedConfig, disk: &DiskConfig) -> Result<Di
             "disk root is not a physical directory",
         ));
     }
+    seal_for_root(config, disk, &m, || production_device(&disk.root))
+}
+
+fn identity_at(config: &ValidatedConfig, disk: &DiskConfig, root: &File) -> Result<DiskSeal> {
+    seal_for_root(config, disk, &root.metadata()?, || {
+        production_device_at(root)
+    })
+}
+
+fn seal_for_root(
+    config: &ValidatedConfig,
+    disk: &DiskConfig,
+    metadata: &fs::Metadata,
+    production: impl FnOnce() -> Result<(String, String)>,
+) -> Result<DiskSeal> {
     let (physical_device, filesystem_uuid) = if config.mode == Mode::Development {
         (
             format!("development:{}", disk.slot_id),
             format!("development:{}", disk.disk_id),
         )
     } else {
-        production_device(&disk.root)?
+        production()?
     };
     Ok(DiskSeal {
         pool_id: config.pool_id.clone(),
         disk_id: disk.disk_id.clone(),
         slot_id: disk.slot_id.clone(),
         binding_generation: disk.binding_generation,
-        device: m.dev(),
-        inode: m.ino(),
+        device: metadata.dev(),
+        inode: metadata.ino(),
         physical_device,
         filesystem_uuid,
         simulation: config.mode == Mode::Development,
@@ -890,6 +912,33 @@ fn production_device(root: &Path) -> Result<(String, String)> {
     let canonical = root.canonicalize()?;
     let mountinfo = fs::read_to_string("/proc/self/mountinfo")?;
     let selected = mountinfo::resolve(&mountinfo, &canonical)?;
+    production_device_on_mount(selected)
+}
+
+fn mount_identity(root: &File) -> Result<u64> {
+    let identity = rustix::fs::statx(
+        root,
+        "",
+        rustix::fs::AtFlags::EMPTY_PATH,
+        rustix::fs::StatxFlags::MNT_ID,
+    )
+    .map_err(std::io::Error::from)?;
+    if identity.stx_mask & rustix::fs::StatxFlags::MNT_ID.bits() == 0 {
+        return Err(Error::new(
+            storage_contract::ErrorCode::DiskIdentityMismatch,
+            "kernel did not report the held disk root mount identity",
+        ));
+    }
+    Ok(identity.stx_mnt_id)
+}
+
+fn production_device_at(root: &File) -> Result<(String, String)> {
+    let mount_id = mount_identity(root)?;
+    let mountinfo = fs::read_to_string("/proc/self/mountinfo")?;
+    production_device_on_mount(mountinfo::resolve_id(&mountinfo, mount_id)?)
+}
+
+fn production_device_on_mount(selected: mountinfo::Mount) -> Result<(String, String)> {
     if selected.kind != "btrfs" {
         return Err(Error::new(
             storage_contract::ErrorCode::FilesystemRequired,
@@ -1160,3 +1209,7 @@ pub fn offline_export(root: &Path, version_id: &str, destination: &Path) -> Resu
 #[cfg(test)]
 #[path = "../../../test/engine/unit/disk/export_tests.rs"]
 mod export_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/disk/admission_tests.rs"]
+mod admission_tests;

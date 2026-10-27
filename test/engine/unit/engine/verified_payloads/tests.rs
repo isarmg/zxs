@@ -104,8 +104,10 @@ fn large_candidate_uses_bounded_full_revalidation_and_rejects_changes() {
             crate::engine::Prepared {
                 version: evidence.version.clone(),
                 placement: evidence.placement.clone(),
-                source: crate::container_storage::content_path(&directory, &evidence.version)
-                    .unwrap(),
+                source: crate::engine::ReadSource::on_disk(
+                    engine.disk_resources.get(disk).unwrap(),
+                    crate::container_storage::content_path(&directory, &evidence.version).unwrap(),
+                ),
             }
         })
         .collect();
@@ -515,8 +517,10 @@ fn existing_prepared(engine: &Engine, candidate: &Candidate) -> Vec<crate::engin
             crate::engine::Prepared {
                 version: evidence.version.clone(),
                 placement: evidence.placement.clone(),
-                source: crate::container_storage::content_path(&directory, &evidence.version)
-                    .unwrap(),
+                source: crate::engine::ReadSource::on_disk(
+                    engine.disk_resources.get(disk).unwrap(),
+                    crate::container_storage::content_path(&directory, &evidence.version).unwrap(),
+                ),
             }
         })
         .collect()

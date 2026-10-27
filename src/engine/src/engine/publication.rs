@@ -236,6 +236,22 @@ impl Engine {
         }
         #[cfg(feature = "fault-injection")]
         self.failpoint("before_decision_admission")?;
+        // PREPARE can take time after the complete payload check. Check all
+        // required held seals once at the decision boundary, before the epoch
+        // fence, so an unobserved seal replacement cannot authorize ACCEPT or
+        // mint a published dependency base.
+        super::provenance::validate_candidate_seals(
+            &self.config,
+            &self.disk_resources,
+            &candidate,
+            &self.metadata_integrity,
+        )
+        .map_err(|error| {
+            let message = format!("prepared disk seal changed before decision: {error}");
+            error
+                .context(ErrorCode::PreparationStale, message)
+                .retryable()
+        })?;
         if let Some(reuse) = reused_dependencies {
             reuse.admit(&self.planning_context(), &config_hash)?;
         } else if !prepared_epoch.matches(&self.metadata_integrity) {
@@ -497,6 +513,16 @@ impl Engine {
                 )?
             }
         };
+        if verified.is_none() {
+            // Recovered candidates have no live HeldSeal proof. Admit their
+            // required seals once before the first recovered decision write.
+            super::provenance::validate_candidate_seals(
+                &self.config,
+                &self.disk_resources,
+                c,
+                &self.metadata_integrity,
+            )?;
+        }
         let members = self.members();
         let mut accepts = Vec::new();
         for d in &members {
@@ -1002,8 +1028,7 @@ impl crate::engine::PlanningContext<'_> {
             history_roots: history_basis.reference().clone(),
         };
         crate::metadata_budget::preflight_publication_prepared(
-            self.config,
-            self.disk_resources,
+            self,
             &candidate,
             &result,
             &next,
@@ -1159,7 +1184,7 @@ impl crate::engine::PlanningContext<'_> {
                         root,
                         match source.take() {
                             Some(file) => file,
-                            None => self.open_source(&p.source)?,
+                            None => p.source.open()?,
                         },
                         &target,
                         &p.version,

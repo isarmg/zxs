@@ -36,7 +36,10 @@ fn entries(e: &Engine, r: &Repository) -> BTreeMap<String, Entry> {
 }
 fn body(e: &Engine, id: &str) -> Vec<u8> {
     let mut o = Vec::new();
-    std::fs::File::open(e.valid_replica(id).unwrap().0)
+    e.valid_replica(id)
+        .unwrap()
+        .0
+        .open()
         .unwrap()
         .read_to_end(&mut o)
         .unwrap();

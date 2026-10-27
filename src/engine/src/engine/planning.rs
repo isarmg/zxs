@@ -47,20 +47,6 @@ impl Engine {
     }
 }
 impl<'a> PlanningContext<'a> {
-    /// Internal source addresses select an already-owned disk, not its current name.
-    pub(crate) fn open_source(&self, path: &Path) -> Result<std::fs::File> {
-        let path = absolute_path(path)?;
-        match self
-            .config
-            .disks
-            .iter()
-            .find(|disk| path.starts_with(&disk.root))
-        {
-            Some(disk) => self.disk_resources.get(disk)?.root.open_regular(&path),
-            None => open_regular(&path),
-        }
-    }
-
     pub(crate) fn members(&self) -> Vec<DiskConfig> {
         let mut members = self
             .config

@@ -40,6 +40,29 @@ pub enum MountPolicy {
     AllowNestedMounts,
 }
 
+/// Open a private regular child on its held parent's mount, refusing all links.
+/// The returned descriptor owns the bytes to read and synchronize; this does not
+/// reopen the directory's diagnostic path or recheck the leaf by name.
+///
+/// # Errors
+/// Preserves openat2/I/O failures, including cross-mount `EXDEV`, and the private
+/// directory's regular-file, single-link and administrative permission errors.
+pub fn open_private_regular(directory: &PrivateDirectory, name: &EntryName) -> Result<File, Error> {
+    crate::fs_safety::unix::verify_administration(directory)?;
+    let file = File::from(
+        openat2(
+            &directory.directory,
+            name.as_os_str(),
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
+        )
+        .map_err(io::Error::from)?,
+    );
+    crate::fs_safety::unix::validate_opened_regular(directory, &file, name)?;
+    Ok(file)
+}
+
 #[derive(Debug)]
 pub struct OpenAt2Root {
     root: File,

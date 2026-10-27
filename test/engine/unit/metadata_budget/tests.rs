@@ -97,7 +97,7 @@ fn metadata_graph_limit_rejects_before_any_new_payload_or_decision_and_keeps_pub
                 history: &repo.history_tree_id,
                 file_id: &new_id("file"),
                 path: &name_policy::PortablePath::parse("pending.txt").unwrap(),
-                source: &source,
+                source: &crate::engine::ReadSource::external(source.clone()),
                 primary: "P01",
                 copies: 3,
                 source_ids: Vec::new(),
@@ -675,8 +675,7 @@ fn reused_content_pages_have_identical_exact_tombstone_budget_without_installing
         .0;
     let budget = |snapshot: &PreparedSnapshot, maximum| {
         preflight_publication_prepared(
-            &engine.config,
-            &engine.disk_resources,
+            &engine.planning_context(),
             &candidate,
             &result,
             &after,

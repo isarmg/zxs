@@ -6,26 +6,118 @@ use std::{
 };
 
 fn fixture() -> (tempfile::TempDir, Engine) {
+    fixture_with_members([true; 3], 1)
+}
+fn fixture_with_members(metadata_members: [bool; 3], copies: u32) -> (tempfile::TempDir, Engine) {
     let temp = tempfile::tempdir().unwrap();
-    let mut engine = Engine::initialize(
-        &temp.path().join("system"),
-        Config::development([
-            temp.path().join("a"),
-            temp.path().join("b"),
-            temp.path().join("c"),
-        ]),
-    )
-    .unwrap();
+    let mut config = Config::development([
+        temp.path().join("a"),
+        temp.path().join("b"),
+        temp.path().join("c"),
+    ]);
+    for (disk, member) in config.disks.iter_mut().zip(metadata_members) {
+        disk.metadata_member = member;
+    }
+    let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     engine
         .create_repository(
             &RepositoryName::parse("reuse").unwrap(),
             "P01",
-            1,
+            copies,
             "alice",
             OperationId::generate(),
         )
         .unwrap();
     (temp, engine)
+}
+
+#[test]
+fn unobserved_required_seal_changes_during_prepare_reject_before_accept() {
+    for metadata_members in [[true; 3], [true, false, true]] {
+        for reuse in [false, true] {
+            for replace in [false, true] {
+                let (_temp, mut engine) = fixture_with_members(metadata_members, 3);
+                let branch = engine.state.branches.keys().next().unwrap().clone();
+                let workspace = engine.create_workspace(&branch, "alice").unwrap();
+                engine
+                    .stage_bytes(
+                        &workspace.workspace_id,
+                        "new.txt",
+                        b"required complete bytes",
+                    )
+                    .unwrap();
+                let _owner = reuse.then(|| covered(&mut engine));
+                let prepared = engine
+                    .prepare_workspace_commit(
+                        CommitRequest {
+                            workspace_id: workspace.workspace_id,
+                            operation_id: OperationId::generate(),
+                            principal: "alice".into(),
+                            expected_head: workspace.base_head,
+                            fencing_token: workspace.fencing_token,
+                            message: "seal decision fence".into(),
+                            request_digest: None,
+                        },
+                        None,
+                    )
+                    .unwrap()
+                    .execute()
+                    .unwrap();
+                let sequence = engine.next_slot;
+                let prior_sequence = engine.state.sequence;
+                let prior_base = Arc::clone(engine.published_state_base.as_ref().unwrap());
+                let epoch = engine.metadata_integrity.capture();
+                let disk = engine
+                    .config
+                    .disks
+                    .iter()
+                    .find(|disk| !disk.metadata_member)
+                    .unwrap_or(&engine.config.disks[0])
+                    .clone();
+                let barrier = Arc::new(Barrier::new(2));
+                engine.inject_pause_once("before_decision_admission", Arc::clone(&barrier));
+                let (engine, result) = std::thread::scope(|scope| {
+                    let worker = scope.spawn(move || {
+                        let result = engine.finish_workspace_commit(prepared);
+                        (engine, result)
+                    });
+                    barrier.wait();
+                    let path = disk.root.join("disk.json");
+                    if replace {
+                        let replacement = path.with_extension("replacement");
+                        std::fs::write(&replacement, b"broken seal").unwrap();
+                        std::fs::rename(replacement, path).unwrap();
+                    } else {
+                        std::fs::write(path, b"broken seal").unwrap();
+                    }
+                    // No probe, scrub or other observer reports this mutation.
+                    barrier.wait();
+                    worker.join().unwrap()
+                });
+                assert_eq!(result.unwrap_err().code(), ErrorCode::PreparationStale);
+                assert_eq!(engine.state.sequence, prior_sequence);
+                assert_eq!(accepts(&engine, sequence), 0);
+                assert!(engine.members().iter().all(|member| {
+                    crate::journal::scan(member)
+                        .unwrap()
+                        .records
+                        .iter()
+                        .any(|(record, _)| {
+                            record.sequence == sequence && record.record_type == RecordType::Prepare
+                        })
+                }));
+                assert!(Arc::ptr_eq(
+                    engine.published_state_base.as_ref().unwrap(),
+                    &prior_base
+                ));
+                assert_eq!(
+                    epoch.matches(&engine.metadata_integrity),
+                    !disk.metadata_member
+                );
+                assert!(!engine.blocked);
+            }
+        }
+    }
 }
 fn scan(engine: &Engine, owner: &IntegrityScrubSchedule) {
     let outcome = engine

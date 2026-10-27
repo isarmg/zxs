@@ -37,8 +37,7 @@ pub(crate) fn preflight_publication(
     maximum: usize,
 ) -> Result<usize> {
     preflight_publication_prepared(
-        &engine.config,
-        &engine.disk_resources,
+        &engine.planning_context(),
         candidate,
         result,
         state,
@@ -71,8 +70,7 @@ pub(crate) fn preflight_bound_publication(
     )
 }
 pub(crate) fn preflight_publication_prepared(
-    config: &ValidatedConfig,
-    resources: &DiskResources,
+    context: &crate::engine::PlanningContext<'_>,
     candidate: &Candidate,
     result: &OperationResult,
     state: &State,
@@ -81,12 +79,12 @@ pub(crate) fn preflight_publication_prepared(
     prepared_graphs: Option<(&PreparedSnapshot, &crate::metadata_map::MapRoot)>,
 ) -> Result<usize> {
     preflight_inner(
-        config,
+        context.config,
         candidate,
         result,
         state,
         PreflightOptions {
-            resources,
+            resources: context.disk_resources,
             recovery,
             maximum,
             prepared_graphs,

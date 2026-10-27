@@ -611,27 +611,24 @@ pub(super) fn save(
                             .join("file-containers")
                             .join(&evidence.version.file_id),
                     ] {
-                        match metadata(target_root, &relative)? {
-                            None => {
-                                let paths = absent.entry(target.disk_id.clone()).or_default();
-                                paths.insert(
-                                    relative
-                                        .to_str()
-                                        .ok_or_else(|| {
-                                            CheckpointError::InvalidPath(relative.to_path_buf())
-                                        })?
-                                        .into(),
-                                );
-                                if paths.len() > MAX_COVERAGE_ENTRIES {
-                                    return Err(CheckpointError::AbsentPaths {
-                                        actual: paths.len(),
-                                        disk: target.disk_id.clone(),
-                                        limit: MAX_COVERAGE_ENTRIES,
-                                    }
-                                    .into());
+                        if metadata(target_root, &relative)?.is_none() {
+                            let paths = absent.entry(target.disk_id.clone()).or_default();
+                            paths.insert(
+                                relative
+                                    .to_str()
+                                    .ok_or_else(|| {
+                                        CheckpointError::InvalidPath(relative.to_path_buf())
+                                    })?
+                                    .into(),
+                            );
+                            if paths.len() > MAX_COVERAGE_ENTRIES {
+                                return Err(CheckpointError::AbsentPaths {
+                                    actual: paths.len(),
+                                    disk: target.disk_id.clone(),
+                                    limit: MAX_COVERAGE_ENTRIES,
                                 }
+                                .into());
                             }
-                            Some(_) => (),
                         }
                     }
                 }

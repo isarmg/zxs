@@ -1,6 +1,6 @@
 //! Verified replicas, read leases, offline export and disk observations.
 use super::provenance::MetadataReadContext;
-use super::{Engine, OpenedContent, ReadLease};
+use super::{Engine, OpenedContent, ReadLease, ReadSource};
 use crate::{disk::*, *};
 use std::path::Path;
 use std::{io::Read, path::PathBuf, sync::Arc};
@@ -9,7 +9,7 @@ impl Engine {
     pub(crate) fn used_bytes(&self, slot: &str) -> u64 {
         self.planning_context().used_bytes(slot)
     }
-    pub(crate) fn valid_replica(&self, version_id: &str) -> Result<(PathBuf, FileVersion)> {
+    pub(crate) fn valid_replica(&self, version_id: &str) -> Result<(ReadSource, FileVersion)> {
         self.with_replica(version_id, |disk, directory, version| {
             disk.verify_payload(directory, version)?;
             let content = crate::container_storage::content_path_at(
@@ -18,7 +18,7 @@ impl Engine {
                 version,
                 &mut |_| Ok(()),
             )?;
-            Ok((content, version.clone()))
+            Ok((ReadSource::on_disk(disk, content), version.clone()))
         })
     }
     fn verified_replica(&self, version_id: &str) -> Result<(std::fs::File, FileVersion, PathBuf)> {
@@ -33,7 +33,7 @@ impl Engine {
     fn with_replica<T>(
         &self,
         version_id: &str,
-        mut read: impl FnMut(&DiskHandle, &Path, &FileVersion) -> Result<T>,
+        mut read: impl FnMut(&Arc<DiskHandle>, &Path, &FileVersion) -> Result<T>,
     ) -> Result<T> {
         if self
             .state
@@ -130,7 +130,7 @@ impl Engine {
                 "workspace item not found",
             )
         })?;
-        let file = self.planning_context().open_source(&staged.source_path)?;
+        let file = self.planning_context().staged_source(&w, staged)?.open()?;
         let key = staged
             .base_version_id
             .clone()
@@ -291,8 +291,8 @@ impl Engine {
 }
 
 impl ContentReadPlan {
-    /// A fresh, complete verification, never a cached protection assertion.
-    /// Keep the plan (and therefore its read lease) alive for the entire scan.
+    /// An explicit observation of current named members, not a held-resource
+    /// content read. Keep the read lease alive throughout the complete scan.
     pub(crate) fn health(&self, target_copies: u32) -> storage_contract::CurrentHealth {
         let healthy = self
             .disks
@@ -303,19 +303,22 @@ impl ContentReadPlan {
                     &self.version.history_tree_id,
                     &self.version.version_id,
                 );
-                let Ok(handle) = self.disk_resources.get(disk) else {
+                let identity = validate_seal(&self.config, disk);
+                let identity = if disk.metadata_member {
+                    self.metadata_integrity.observe(identity)
+                } else {
+                    identity
+                };
+                let Ok(identity) = identity else {
                     return false;
                 };
-                let metadata = MetadataReadContext::for_disk(
-                    &self.config,
-                    &handle.seal,
-                    disk.metadata_member
-                        .then_some(self.metadata_integrity.as_ref()),
-                );
-                handle
-                    .verify_publication(&directory, &self.version, &metadata)
+                let metadata = disk.metadata_member.then(|| {
+                    self.metadata_integrity
+                        .read_context(&self.config, &identity)
+                });
+                verify_local_publication_in_context(&directory, &self.version, metadata.as_ref())
                     .is_ok()
-                    && handle.verify_payload(&directory, &self.version).is_ok()
+                    && verify_payload(&directory, &self.version).is_ok()
             })
             .count();
         if healthy == 0 {

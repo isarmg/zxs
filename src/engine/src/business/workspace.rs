@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     disk::*,
-    engine::{MutationPlan, Prepared},
+    engine::{MutationPlan, Prepared, ReadSource},
 };
 use json_codec::json;
 use platform_io::fs_safety::{
@@ -442,7 +442,7 @@ pub(crate) struct VersionBuild<'a> {
     pub(crate) history: &'a str,
     pub(crate) file_id: &'a str,
     pub(crate) path: &'a name_policy::PortablePath,
-    pub(crate) source: &'a Path,
+    pub(crate) source: &'a ReadSource,
     pub(crate) primary: &'a str,
     pub(crate) copies: u32,
     pub(crate) source_ids: Vec<String>,
@@ -641,7 +641,7 @@ impl Engine {
                 workspace,
                 item,
                 path,
-                self.planning_context().open_source(source)?,
+                open_regular(source)?,
                 generation,
                 None,
             )?
@@ -773,7 +773,7 @@ impl Engine {
             workspace,
             item,
             &name_policy::PortablePath::parse(path)?,
-            self.planning_context().open_source(source)?,
+            open_regular(source)?,
             generation,
             None,
         )
@@ -1039,7 +1039,10 @@ impl Engine {
         let previous = w.files.get(item);
         let mut temporary = tempfile::NamedTempFile::new_in(&self.root)?;
         let expected = if let Some(previous) = previous {
-            let source = self.planning_context().open_source(&previous.source_path)?;
+            let source = self
+                .planning_context()
+                .staged_source(&w, previous)?
+                .open()?;
             std::io::copy(
                 &mut source.take(previous.size.saturating_add(1)),
                 &mut temporary,
@@ -1303,7 +1306,7 @@ impl crate::engine::PlanningContext<'_> {
             source_ids,
             checkpoint,
         } = input;
-        let mut file = self.open_source(source)?;
+        let mut file = source.open()?;
         let size = file.metadata()?.len();
         if size > self.config.max_file_bytes {
             return Err(Error::new(
@@ -1412,7 +1415,7 @@ impl crate::engine::PlanningContext<'_> {
         pending.push(Prepared {
             version: version.clone(),
             placement,
-            source: source.into(),
+            source: source.clone(),
         });
         Ok(version)
     }
@@ -1581,8 +1584,9 @@ impl crate::engine::PlanningContext<'_> {
                     } else {
                         engine.new_file_placement_for_file(&repo.repository_id,Some(&file_id), path)?
                     };
+                    let source = engine.staged_source(&w, file)?;
                     let version = engine.build_version(
-                        state, pending, crate::business::VersionBuild { history: &branch.history_tree_id, file_id: &file_id, path: location, source: &file.source_path, primary: &primary, copies, source_ids: source_ids.clone(), checkpoint: pending_source.is_some() },
+                        state, pending, crate::business::VersionBuild { history: &branch.history_tree_id, file_id: &file_id, path: location, source: &source, primary: &primary, copies, source_ids: source_ids.clone(), checkpoint: pending_source.is_some() },
                     )?;
                     if version.logical_size != file.size || version.content_hash != file.content_hash {
                         return Err(Error::new(storage_contract::ErrorCode::ChecksumMismatch, "workspace source changed after sealing"));

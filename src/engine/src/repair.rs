@@ -1,7 +1,12 @@
 //! Repair the original unpublished candidate using complete verified bytes.
-use crate::{disk::*, engine::Prepared, journal::Candidate, *};
+use crate::{
+    disk::*,
+    engine::{Prepared, ReadSource},
+    journal::Candidate,
+    *,
+};
 use platform_io::payload::{Expectation, verify_full};
-use std::{fs::File, path::PathBuf};
+use std::fs::File;
 
 fn required(message: impl Into<String>) -> Error {
     Error::new(storage_contract::ErrorCode::RecoveryRequired, message)
@@ -47,22 +52,25 @@ impl Engine {
         &self,
         version: &FileVersion,
         placement: &Placement,
-    ) -> Result<Option<PathBuf>> {
+    ) -> Result<Option<ReadSource>> {
         for slot in &placement.route_slot_ids {
             let disk = self.disk(slot)?;
-            let root = &self.disk_resources.get(disk)?.root;
+            let owner = self.disk_resources.get(disk)?;
+            let root = &owner.root;
             let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
             let source =
                 crate::container_storage::content_path_at(root, &directory, version, &mut |_| {
                     Ok(())
                 })?;
             if matching(root.open_regular(&source), version)? {
-                return Ok(Some(source));
+                return Ok(Some(ReadSource::on_disk(owner, source)));
             }
         }
         for workspace in self.workspaces.values() {
             let directory = self.workspace_data_directory(workspace)?;
-            let root = self.planning_context().workspace_data_root(workspace)?;
+            let context = self.planning_context();
+            let owner = context.workspace_disk(workspace)?;
+            let root = &owner.root;
             let entries = match root.entries(&directory) {
                 Ok(entries) => entries,
                 Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
@@ -81,7 +89,7 @@ impl Engine {
                 if path.extension().is_some_and(|suffix| suffix == "full")
                     && matching(root.open_regular(&path), version)?
                 {
-                    return Ok(Some(path));
+                    return Ok(Some(ReadSource::on_disk(owner, path)));
                 }
             }
         }
@@ -97,13 +105,14 @@ impl Engine {
                 continue;
             }
             if let Ok((source, _)) = self.valid_replica(&published.version_id)
-                && matching(self.planning_context().open_source(&source), version)?
+                && matching(source.open(), version)?
             {
                 return Ok(Some(source));
             }
         }
         for disk in &self.config.disks {
-            let root = &self.disk_resources.get(disk)?.root;
+            let owner = self.disk_resources.get(disk)?;
+            let root = &owner.root;
             let quarantine = disk.root.join("quarantine");
             let entries = match root.entries(&quarantine) {
                 Ok(entries) => entries,
@@ -132,7 +141,7 @@ impl Engine {
                 // live container layout used by the original version.
                 let source = path.join("content").join(&version.creation_name);
                 if matching(root.open_regular(&source), version)? {
-                    return Ok(Some(source));
+                    return Ok(Some(ReadSource::on_disk(owner, source)));
                 }
             }
         }
@@ -170,7 +179,8 @@ impl Engine {
                     ))
                 })?;
             for (disk, directory) in damaged {
-                let root = &self.disk_resources.get(&disk)?.root;
+                let owner = self.disk_resources.get(&disk)?;
+                let root = &owner.root;
                 let quarantine = disk.root.join("quarantine");
                 root.private_dir(&quarantine)?;
                 let name = format!("{}-repair-{}", version.version_id, new_id("req"));
@@ -202,8 +212,11 @@ impl Engine {
                         .map_err(std::io::Error::from)?;
                         from.sync_all()?;
                         to.sync_all()?;
-                        if source == content {
-                            source = destination.join(&version.creation_name);
+                        if source.path() == content {
+                            source = ReadSource::on_disk(
+                                owner,
+                                destination.join(&version.creation_name),
+                            );
                         }
                     }
                 }

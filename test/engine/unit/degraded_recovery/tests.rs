@@ -6,12 +6,22 @@ fn fixture_with_history(
     point: &str,
     retained: usize,
 ) -> (tempfile::TempDir, Engine, OperationId, Candidate) {
+    fixture_with_members(point, retained, [true; 3])
+}
+fn fixture_with_members(
+    point: &str,
+    retained: usize,
+    metadata_members: [bool; 3],
+) -> (tempfile::TempDir, Engine, OperationId, Candidate) {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
+    let mut config = Config::development([
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("c"),
     ]);
+    for (disk, member) in config.disks.iter_mut().zip(metadata_members) {
+        disk.metadata_member = member;
+    }
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -78,6 +88,105 @@ fn fixture_with_history(
     let record = records.records.last().unwrap();
     let candidate = load_object(&member, "candidate", &record.0.candidate_hash).unwrap();
     (temp, engine, operation, candidate)
+}
+
+#[test]
+fn recovery_preview_and_commit_read_required_seals_from_the_held_generation() {
+    for metadata_members in [[true; 3], [true, false, true]] {
+        for preview_first in [false, true] {
+            for corrupt_bytes in [false, true] {
+                let (temp, engine, operation, candidate) =
+                    fixture_with_members("after_accept_2", 0, metadata_members);
+                lose(&engine, &candidate, true);
+                drop(engine);
+                let mut engine = Engine::open_for_recovery(&temp.path().join("state")).unwrap();
+                let plan = preview_first.then(|| {
+                    engine
+                        .prepare_degraded_recovery(operation, "alice", "all source bytes lost")
+                        .unwrap()
+                });
+                let disk = engine
+                    .config
+                    .disks
+                    .iter()
+                    .find(|disk| !disk.metadata_member)
+                    .unwrap_or(&engine.config.disks[0])
+                    .clone();
+                let journals = engine
+                    .members()
+                    .iter()
+                    .map(|member| (log_path(member), fs::read(log_path(member)).unwrap()))
+                    .collect::<Vec<_>>();
+                let path = disk.root.join("disk.json");
+                let replacement = path.with_extension("replacement");
+                if corrupt_bytes {
+                    fs::write(&replacement, b"broken seal").unwrap();
+                } else {
+                    let mut seal: DiskSeal = read_json(&path).unwrap();
+                    seal.binding_generation += 1;
+                    write_json(&replacement, &seal, false).unwrap();
+                }
+                fs::rename(&replacement, &path).unwrap();
+                let result = match plan {
+                    Some(plan) => engine
+                        .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", true)
+                        .map(|_| ()),
+                    None => engine
+                        .prepare_degraded_recovery(operation, "alice", "all source bytes lost")
+                        .map(|_| ()),
+                };
+                let error = result.unwrap_err();
+                if !corrupt_bytes {
+                    assert_eq!(error.code(), ErrorCode::DiskIdentityMismatch);
+                }
+                assert!(!engine.state.operations.contains_key(&operation));
+                for (path, bytes) in journals {
+                    assert_eq!(fs::read(path).unwrap(), bytes, "no recovery decision write");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn recovery_commit_after_root_replacement_uses_original_seals_and_journals() {
+    use std::os::unix::fs::PermissionsExt;
+    let (temp, engine, operation, candidate) = fixture("after_accept_2");
+    lose(&engine, &candidate, true);
+    drop(engine);
+    let mut engine = Engine::open_for_recovery(&temp.path().join("state")).unwrap();
+    let plan = engine
+        .prepare_degraded_recovery(operation, "alice", "all source bytes lost")
+        .unwrap();
+    let mut held_disks = Vec::new();
+    for disk in &engine.config.disks {
+        let mut held = disk.clone();
+        held.root = disk.root.with_extension("held");
+        fs::rename(&disk.root, &held.root).unwrap();
+        fs::create_dir(&disk.root).unwrap();
+        fs::set_permissions(&disk.root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(disk.root.join("replacement-only"), b"not admitted").unwrap();
+        held_disks.push(held);
+    }
+    let result = engine
+        .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", true)
+        .unwrap();
+    assert_eq!(
+        result.commit_state,
+        storage_contract::CommitState::PublishedDegraded
+    );
+    for disk in held_disks {
+        assert!(scan(&disk).unwrap().records.iter().any(|(record, _)| {
+            record.sequence == candidate.sequence && record.record_type == RecordType::Publication
+        }));
+    }
+    for disk in &engine.config.disks {
+        assert_eq!(fs::read_dir(&disk.root).unwrap().count(), 1);
+        assert_eq!(
+            fs::read(disk.root.join("replacement-only")).unwrap(),
+            b"not admitted"
+        );
+    }
 }
 fn lose(engine: &Engine, candidate: &Candidate, all_copies: bool) {
     let lost = candidate
@@ -732,7 +841,7 @@ fn recoverable_pending_torn_tail_completes_without_leaving_engine_blocked() {
 #[test]
 fn incomplete_quorum_only_recovery_preserves_pending_torn_evidence() {
     use std::io::Write;
-    let (temp, engine, _operation, _candidate) = fixture("after_accept_2");
+    let (temp, engine, operation, candidate) = fixture("after_accept_2");
     let disks = engine.members();
     drop(engine);
     let path = log_path(&disks[0]);
@@ -743,8 +852,25 @@ fn incomplete_quorum_only_recovery_preserves_pending_torn_evidence() {
     let torn = fs::read(&path).unwrap();
     let missing = disks[2].root.with_extension("offline");
     fs::rename(&disks[2].root, &missing).unwrap();
-    let incomplete = Engine::open(&temp.path().join("state")).unwrap();
+    let mut incomplete = Engine::open(&temp.path().join("state")).unwrap();
     assert!(incomplete.is_read_only());
+    assert!(
+        discover_publication(
+            &incomplete,
+            &candidate,
+            &object_hash("candidate", &candidate).unwrap(),
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!(
+        incomplete
+            .prepare_degraded_recovery(operation, "alice", "not an absent-publication authority")
+            .unwrap_err()
+            .code(),
+        ErrorCode::RecoveryRequired,
+        "best-effort discovery does not lower required recovery admission"
+    );
     assert_eq!(fs::read(&path).unwrap(), torn);
     drop(incomplete);
     fs::rename(missing, &disks[2].root).unwrap();

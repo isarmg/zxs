@@ -1,5 +1,6 @@
 use super::*;
 use json_codec::json;
+use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn historical_completion_rejects_invalid_persisted_fence_instead_of_leaving_workspace_open() {
@@ -75,6 +76,7 @@ fn historical_completion_rejects_invalid_persisted_fence_instead_of_leaving_work
 #[test]
 fn workspace_evidence_distinguishes_absent_leaf_and_parent_from_json_damage() {
     let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let held = DiskRoot::open(root.path()).unwrap();
     let mut damage = None;
     for path in [
@@ -119,16 +121,15 @@ fn workspace_evidence_distinguishes_absent_leaf_and_parent_from_json_damage() {
 #[test]
 fn workspace_scan_rejects_unsafe_private_directory_without_chmod() {
     use platform_io::fs_safety::Error as FsError;
-    use std::os::unix::fs::PermissionsExt;
-
     let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let held = DiskRoot::open(root.path()).unwrap();
     let directory = root.path().join("staging/workspaces");
     private_dir(&directory).unwrap();
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
     let mut candidates = BTreeMap::new();
     assert!(matches!(
-        collect_workspace_paths(&held, &directory, 1, &mut candidates),
+        collect_workspace_paths(&held, &ReadSource::external(directory.clone()), 1, &mut candidates),
         Err(Error::Filesystem(FsError::UnsafePermissions(rejected))) if rejected == directory
     ));
     assert!(candidates.is_empty());
@@ -224,18 +225,15 @@ fn workspace_recovery_does_not_adopt_a_mirror_on_an_unadmitted_replacement() {
         engine.workspace(&workspace.workspace_id).unwrap().principal,
         "admin"
     );
-    let mut damage = None;
-    assert!(
-        read_workspace_evidence::<Workspace>(
-            engine
-                .planning_context()
-                .workspace_source_file(&replacement),
-            &mut damage,
-        )
-        .unwrap()
-        .is_none()
+    let directories = engine
+        .planning_context()
+        .workspace_evidence_directories(&workspace)
+        .unwrap();
+    assert_eq!(directories.len(), 1);
+    assert_eq!(
+        directories[0].path(),
+        engine.root.join("workspaces").join(&workspace.workspace_id)
     );
-    assert!(damage.is_none());
     assert!(
         engine.blocked,
         "missing members do not shrink the write barrier"

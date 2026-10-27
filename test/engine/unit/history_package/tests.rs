@@ -103,6 +103,69 @@ fn save_path(engine: &mut Engine, branch: &str, path: &str, bytes: &[u8]) -> Str
 }
 
 #[test]
+fn version_and_history_exports_follow_owned_roots_and_still_reject_damaged_seals() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = initialize(&temp.path().join("source"));
+    let repo = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("owned exports").unwrap(),
+            "P01",
+            3,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    save(&mut engine, &repo.main_branch_id, b"old complete bytes");
+    let old = engine.list_tree(&repo.main_branch_id).unwrap()[0]
+        .version_id
+        .clone();
+    save(&mut engine, &repo.main_branch_id, b"latest complete bytes");
+    let mut held_roots = Vec::new();
+    for disk in &engine.config.disks {
+        let held = disk.root.with_extension("held");
+        fs::rename(&disk.root, &held).unwrap();
+        fs::create_dir(&disk.root).unwrap();
+        fs::set_permissions(&disk.root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(disk.root.join("replacement-only"), b"not an admitted disk").unwrap();
+        held_roots.push(held);
+    }
+    let destination = temp.path().join("exports/old.txt");
+    engine.export_version(&old, &destination).unwrap();
+    assert_eq!(fs::read(destination).unwrap(), b"old complete bytes");
+    let package = temp.path().join("owned-history");
+    let exported = engine
+        .export_history_package(&repo.history_tree_id, &package)
+        .unwrap();
+    let checked = offline_check_history_package(&package).unwrap();
+    assert_eq!(exported.manifest_hash, checked.manifest_hash);
+    assert_eq!(checked.full_files, 2);
+    assert_eq!(checked.full_bytes, 39);
+    for disk in &engine.config.disks {
+        assert_eq!(fs::read_dir(&disk.root).unwrap().count(), 1);
+        assert_eq!(
+            fs::read(disk.root.join("replacement-only")).unwrap(),
+            b"not an admitted disk"
+        );
+    }
+
+    // Resource identity is not a permanent health certificate. Damage the
+    // original held disks, not their unrelated configured replacement paths.
+    for held in held_roots {
+        fs::write(held.join("disk.json"), b"broken held seal").unwrap();
+    }
+    let failed_export = temp.path().join("exports/rejected.txt");
+    assert!(engine.export_version(&old, &failed_export).is_err());
+    assert!(!failed_export.exists());
+    let failed_package = temp.path().join("rejected-history");
+    assert!(
+        engine
+            .export_history_package(&repo.history_tree_id, &failed_package)
+            .is_err()
+    );
+    assert!(!failed_package.exists());
+}
+
+#[test]
 fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
     for path in ["", "empty"] {
         let temp = tempfile::tempdir().unwrap();
@@ -1021,11 +1084,18 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
     assert_eq!(restored.state.file_contexts, manifest.file_contexts);
     assert_eq!(restored.state.file_locations, manifest.file_locations);
     assert_eq!(
-        fs::read(restored.valid_replica(&original.version_id).unwrap().0).unwrap(),
+        fs::read(
+            restored
+                .valid_replica(&original.version_id)
+                .unwrap()
+                .0
+                .path()
+        )
+        .unwrap(),
         b"F1"
     );
     assert_eq!(
-        fs::read(restored.valid_replica(&moved.version_id).unwrap().0).unwrap(),
+        fs::read(restored.valid_replica(&moved.version_id).unwrap().0.path()).unwrap(),
         b"F2"
     );
     save_path(&mut restored, "a/f.txt", b"F3 from old alias");
@@ -1044,11 +1114,11 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
     drop(restored);
     let restored = Engine::open(&restored_root.join("state")).unwrap();
     assert_eq!(
-        fs::read(restored.valid_replica(&latest).unwrap().0).unwrap(),
+        fs::read(restored.valid_replica(&latest).unwrap().0.path()).unwrap(),
         b"F3 from old alias"
     );
     assert_eq!(
-        fs::read(restored.valid_replica(&moved.version_id).unwrap().0).unwrap(),
+        fs::read(restored.valid_replica(&moved.version_id).unwrap().0.path()).unwrap(),
         b"F2"
     );
 }
@@ -1088,7 +1158,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
         .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap();
     let proof = canonical_json(&engine.state.versions[&old.version_id]).unwrap();
-    let inode = fs::metadata(engine.valid_replica(&old.version_id).unwrap().0)
+    let inode = fs::metadata(engine.valid_replica(&old.version_id).unwrap().0.path())
         .unwrap()
         .ino();
     for (source, destination) in [("a/f.txt", "a/g.txt"), ("a", "b")] {
@@ -1112,7 +1182,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
             proof
         );
         assert_eq!(
-            fs::metadata(engine.valid_replica(&old.version_id).unwrap().0)
+            fs::metadata(engine.valid_replica(&old.version_id).unwrap().0.path())
                 .unwrap()
                 .ino(),
             inode
@@ -1140,6 +1210,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
     let body = engine.valid_replica(&old.version_id).unwrap().0;
     let cache: json_codec::Value = read_json(
         &body
+            .path()
             .parent()
             .unwrap()
             .parent()
@@ -1246,7 +1317,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
         storage_contract::ErrorCode::ContentPurged
     );
     assert_eq!(
-        fs::read(restored.valid_replica(&latest.version_id).unwrap().0).unwrap(),
+        fs::read(restored.valid_replica(&latest.version_id).unwrap().0.path()).unwrap(),
         b"new content after both renames"
     );
 }

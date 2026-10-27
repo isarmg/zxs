@@ -37,8 +37,8 @@ pub struct OperationReadPlan {
 }
 
 impl OperationReadPlan {
-    /// Held-disk seal bytes, publication proof and complete payload verification
-    /// happen here, after the caller has released its Engine mutex.
+    /// Current named-disk identity, publication proof and complete payload
+    /// verification happen after the caller releases its Engine mutex.
     pub fn check(mut self) -> OperationRecord {
         let mut degraded = false;
         for (plan, target_copies) in &self.versions {
