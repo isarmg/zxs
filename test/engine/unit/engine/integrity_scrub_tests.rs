@@ -371,19 +371,61 @@ fn detached_preparation_is_rejected_before_scan_and_releases_admission_on_drop()
 }
 
 #[test]
-fn actual_identity_replacement_cannot_pass_the_end_of_scan_identity_boundary() {
-    let (temp, engine, _) = fixture();
-    let disk = &engine.config.disks[0];
-    let before = validate_seal(&engine.config, disk).unwrap();
-    fs::rename(&disk.root, temp.path().join("old-member")).unwrap();
-    private_dir(&disk.root).unwrap();
-    let replacement = identity(&engine.config, disk).unwrap();
-    write_json(&disk.root.join("disk.json"), &replacement, false).unwrap();
-    let after = validate_seal(&engine.config, disk).unwrap();
-    assert_eq!(
-        stable_identity(&before, &after).unwrap_err().code(),
-        ErrorCode::DiskIdentityMismatch
+fn root_name_replacement_cannot_redirect_scrub_metadata_or_payload_reads() {
+    let (temp, mut engine, repository) = fixture();
+    let old = save(&mut engine, &repository, b"retained tombstone");
+    save(&mut engine, &repository, b"held resources");
+    let purge = engine
+        .create_purge_plan(&repository.history_tree_id, vec![old], "admin")
+        .unwrap();
+    engine
+        .commit_plan(&purge.plan_id, "admin", OperationId::generate())
+        .unwrap();
+    let plan = engine.prepare_integrity_scrub().unwrap();
+    for disk in &engine.config.disks {
+        fs::rename(
+            &disk.root,
+            temp.path().join(format!("old-{}", disk.slot_id)),
+        )
+        .unwrap();
+        private_dir(&disk.root).unwrap();
+        let replacement = identity(&engine.config, disk).unwrap();
+        write_json(&disk.root.join("disk.json"), &replacement, false).unwrap();
+    }
+    let outcome = plan.run(
+        &IntegrityScrubCancellation::new(),
+        |plan, id| engine.admit_integrity_scrub_batch(plan, id),
+        |_| {},
+        |_| {},
     );
+    let report = engine.finish_integrity_scrub(outcome);
+    assert!(report.is_healthy(), "{report:?}");
+    assert_eq!(report.metadata_members_checked, 3);
+    assert_eq!(report.payload_copies_verified, 3);
+    assert_eq!(report.tombstones_verified, 3);
+    for disk in &engine.config.disks {
+        assert_eq!(fs::read_dir(&disk.root).unwrap().count(), 1);
+    }
+}
+
+#[test]
+fn renamed_owner_payload_damage_is_not_masked_by_a_replacement_body() {
+    let (temp, mut engine, repository) = fixture();
+    let id = save(&mut engine, &repository, b"good bytes");
+    let disk = &engine.config.disks[0];
+    let path = payload_path(&engine, disk, &id);
+    let relative = path.strip_prefix(&disk.root).unwrap();
+    let retained = temp.path().join("retained-member");
+    fs::rename(&disk.root, &retained).unwrap();
+    private_dir(path.parent().unwrap()).unwrap();
+    fs::write(&path, b"good bytes").unwrap();
+    fs::write(retained.join(relative), b"evil bytes").unwrap();
+    let report = scrub(&mut engine);
+    assert_eq!(report.identity_failures, 0, "{report:?}");
+    assert_eq!(report.metadata_failures, 0);
+    assert_eq!(report.payload_copies_unavailable, 1);
+    assert_eq!(report.payload_copies_verified, 2);
+    assert!(!report.is_healthy());
 }
 
 #[test]
@@ -516,10 +558,10 @@ fn journal_checksum_failure_is_observed_without_torn_tail_repair() {
 }
 
 #[test]
-fn offline_member_is_explicitly_unverified_not_a_healthy_or_corrupt_payload() {
-    let (temp, mut engine, repository) = fixture();
+fn missing_held_seal_is_explicitly_unverified_not_a_healthy_or_corrupt_payload() {
+    let (_temp, mut engine, repository) = fixture();
     save(&mut engine, &repository, b"required copies");
-    fs::rename(&engine.config.disks[0].root, temp.path().join("offline")).unwrap();
+    fs::remove_file(engine.config.disks[0].root.join("disk.json")).unwrap();
     let report = scrub(&mut engine);
     assert_eq!(report.identity_failures, 1, "{report:?}");
     assert_eq!(report.metadata_failures, 1);
@@ -798,7 +840,7 @@ fn offlock_empty_plan_cannot_be_accepted_by_reopened_owner() {
 }
 
 #[test]
-fn offlock_disk_loss_after_verified_payloads_is_not_healthy() {
+fn offlock_root_rename_after_verified_payloads_keeps_the_same_healthy_owner() {
     let (temp, mut engine, repository) = fixture();
     save(&mut engine, &repository, b"body");
     let root = engine.config.disks[0].root.clone();
@@ -818,8 +860,56 @@ fn offlock_disk_loss_after_verified_payloads_is_not_healthy() {
     let report = engine.finish_integrity_scrub(outcome);
     assert!(removed);
     assert_eq!(report.payload_copies_verified, 3);
+    assert!(report.is_healthy(), "{report:?}");
+}
+
+#[test]
+fn held_seal_change_after_verified_payloads_revokes_scrub_coverage() {
+    let (_temp, mut engine, repository) = fixture();
+    save(&mut engine, &repository, b"body");
+    let disk = engine.config.disks[0].clone();
+    let mut changed = engine.disk_resources.get(&disk).unwrap().seal.clone();
+    changed.binding_generation += 1;
+    let epoch = engine.metadata_integrity.capture();
+    let plan = engine.prepare_integrity_scrub().unwrap();
+    let mut replaced = false;
+    let outcome = plan.run(
+        &IntegrityScrubCancellation::new(),
+        |plan, id| engine.admit_integrity_scrub_batch(plan, id),
+        |_| {},
+        |partial| {
+            if !replaced && partial.payload_copies_verified == 3 {
+                write_json(&disk.root.join("disk.json"), &changed, true).unwrap();
+                replaced = true;
+            }
+        },
+    );
+    let report = engine.finish_integrity_scrub(outcome);
+    assert!(replaced);
+    assert_eq!(report.payload_copies_verified, 3);
     assert_eq!(report.identity_failures, 1);
+    assert_eq!(report.metadata_failures, 1);
+    assert!(!epoch.matches(&engine.metadata_integrity));
     assert!(!report.is_healthy());
+}
+
+#[test]
+fn captured_scrub_resources_do_not_retain_writer_locks_or_admit_a_new_owner() {
+    let (temp, engine, _) = fixture();
+    let plan = engine.prepare_integrity_scrub().unwrap();
+    drop(engine);
+    let reopened = Engine::open(&temp.path().join("system")).unwrap();
+    let outcome = plan.run(
+        &IntegrityScrubCancellation::new(),
+        |_, _| panic!("no versions"),
+        |_| {},
+        |_| {},
+    );
+    let report = reopened.finish_integrity_scrub(outcome);
+    assert!(matches!(
+        report.completion,
+        IntegrityScrubCompletion::Superseded
+    ));
 }
 
 #[test]

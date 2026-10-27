@@ -12,11 +12,13 @@ use std::{
 };
 
 mod mountinfo;
+mod owned;
+pub(crate) use owned::{DiskHandle, DiskResources, DiskRoot};
 
 pub(crate) fn fs_error(e: platform_io::fs_safety::Error) -> Error {
     e.into()
 }
-fn absolute_path(path: &Path) -> Result<PathBuf> {
+pub(crate) fn absolute_path(path: &Path) -> Result<PathBuf> {
     let path = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -118,8 +120,8 @@ pub(crate) fn open_optional_regular(path: &Path) -> Result<Option<File>> {
         Err(error) => Err(fs_error(error)),
     }
 }
-pub(crate) fn open_existing_journal(path: &Path) -> Result<Option<File>> {
-    match open_journal_file(path, rustix::fs::OFlags::empty()) {
+pub(crate) fn open_existing_journal(parent: &File, name: &EntryName) -> Result<Option<File>> {
+    match open_journal_file(parent, name, rustix::fs::OFlags::empty()) {
         Ok(file) => Ok(Some(file)),
         Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
             if error.kind() == std::io::ErrorKind::NotFound =>
@@ -129,26 +131,17 @@ pub(crate) fn open_existing_journal(path: &Path) -> Result<Option<File>> {
         Err(error) => Err(error),
     }
 }
-pub(crate) fn create_journal(path: &Path) -> Result<File> {
-    open_journal_file(path, rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL)
+pub(crate) fn create_journal(parent: &File, name: &EntryName) -> Result<File> {
+    open_journal_file(
+        parent,
+        name,
+        rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL,
+    )
 }
-fn open_journal_file(path: &Path, flags: rustix::fs::OFlags) -> Result<File> {
-    let path = absolute_path(path)?;
-    let parent = path.parent().ok_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::UnsafePath,
-            "missing file parent",
-        )
-    })?;
-    let root = OpenAt2Root::open(parent, MountPolicy::SameMount).map_err(fs_error)?;
-    let name =
-        EntryName::new(path.file_name().ok_or_else(|| {
-            Error::new(storage_contract::ErrorCode::UnsafePath, "missing file name")
-        })?)
-        .map_err(fs_error)?;
+fn open_journal_file(parent: &File, name: &EntryName, flags: rustix::fs::OFlags) -> Result<File> {
     let file = File::from(
         rustix::fs::openat2(
-            root.directory(),
+            parent,
             name.as_os_str(),
             flags
                 | rustix::fs::OFlags::RDWR
@@ -291,11 +284,20 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8], replace: bool) -> Result<(
         )
     })?)
     .map_err(fs_error)?;
+    write_atomic_in(&directory, &name, bytes, replace)
+}
+
+fn write_atomic_in(
+    directory: &PrivateDirectory,
+    name: &EntryName,
+    bytes: &[u8],
+    replace: bool,
+) -> Result<()> {
     if !replace {
         match directory.read_bounded(&name, bytes.len()) {
             Ok(existing) if existing == bytes => {
                 // A prior create may have installed bytes before its parent sync failed.
-                open_regular(&path)?.sync_all()?;
+                directory.open_regular(name).map_err(fs_error)?.sync_all()?;
                 return directory.sync().map_err(fs_error);
             }
             Ok(_) => {
@@ -339,6 +341,7 @@ pub(crate) fn write_json<T: Serialize + ?Sized>(
 ) -> Result<()> {
     write_atomic(path, &encode_metadata(value, MAX_METADATA)?, replace)
 }
+#[cfg(test)]
 pub(crate) fn full_copy(
     source: &Path,
     destination: &Path,
@@ -421,6 +424,39 @@ pub(crate) fn verified_full_copy<'a>(
     })
 }
 
+pub(crate) fn verified_full_copy_at<'a>(
+    root: &DiskRoot,
+    source: File,
+    destination: &Path,
+    version: &'a FileVersion,
+    max_bytes: u64,
+) -> std::result::Result<VerifiedCopy<'a>, CopyFailure> {
+    let parent = destination
+        .parent()
+        .expect("invariant: payload destination has a parent");
+    root.private_dir(parent)?;
+    let directory = root.directory(parent)?;
+    let name = EntryName::new(
+        destination
+            .file_name()
+            .expect("invariant: payload destination has a name"),
+    )
+    .map_err(fs_error)?;
+    full_copy_checked(
+        source,
+        &directory,
+        &name,
+        version.checksum_chunk_bytes,
+        max_bytes,
+        Some(version),
+    )
+    .map(|(_, _, checksums, file)| VerifiedCopy {
+        file,
+        version,
+        checksums,
+    })
+}
+
 fn full_copy_to_path(
     source: File,
     destination: &Path,
@@ -454,7 +490,7 @@ fn full_copy_to_path(
     .map_err(fs_error)?;
     full_copy_checked(
         source,
-        &directory,
+        directory.directory(),
         &destination_name,
         chunk_bytes,
         max_bytes,
@@ -471,7 +507,7 @@ pub(crate) fn full_copy_held(
 ) -> Result<(u64, ContentHash, ChecksumManifest, File)> {
     full_copy_checked(
         source,
-        directory,
+        directory.directory(),
         destination_name,
         chunk_bytes,
         max_bytes,
@@ -482,7 +518,7 @@ pub(crate) fn full_copy_held(
 
 fn full_copy_checked(
     source: File,
-    directory: &OpenAt2Root,
+    directory: &File,
     destination_name: &EntryName,
     chunk_bytes: u32,
     max_bytes: u64,
@@ -491,7 +527,7 @@ fn full_copy_checked(
     let temporary = format!(".zxs-full-{}", new_id("req"));
     let mut target = File::from(
         rustix::fs::openat(
-            directory.directory(),
+            directory,
             temporary.as_str(),
             rustix::fs::OFlags::CREATE
                 | rustix::fs::OFlags::EXCL
@@ -563,29 +599,28 @@ fn full_copy_checked(
         // the name. The rename still needs its own parent-directory barrier.
         target.sync_all()?;
         rustix::fs::renameat_with(
-            directory.directory(),
+            directory,
             temporary.as_str(),
-            directory.directory(),
+            directory,
             destination_name.as_os_str(),
             rustix::fs::RenameFlags::NOREPLACE,
         )
         .map_err(std::io::Error::from)?;
-        directory.directory().sync_all()?;
+        directory.sync_all()?;
         Ok((size, hash, checksums))
     })();
     match result {
         Ok((size, hash, checksums)) => Ok((size, hash, checksums, target)),
-        Err(operation) => match rustix::fs::unlinkat(
-            directory.directory(),
-            temporary.as_str(),
-            rustix::fs::AtFlags::empty(),
-        ) {
-            Ok(()) | Err(rustix::io::Errno::NOENT) => Err(operation),
-            Err(cleanup) => Err(CopyFailure::Destination(Error::Cleanup {
-                operation: Box::new(operation.into_error()),
-                cleanup: cleanup.into(),
-            })),
-        },
+        Err(operation) => {
+            match rustix::fs::unlinkat(directory, temporary.as_str(), rustix::fs::AtFlags::empty())
+            {
+                Ok(()) | Err(rustix::io::Errno::NOENT) => Err(operation),
+                Err(cleanup) => Err(CopyFailure::Destination(Error::Cleanup {
+                    operation: Box::new(operation.into_error()),
+                    cleanup: cleanup.into(),
+                })),
+            }
+        }
     }
 }
 pub(crate) fn verify_payload(directory: &Path, version: &FileVersion) -> Result<()> {
@@ -596,18 +631,44 @@ pub(crate) fn open_payload(
     directory: &Path,
     version: &FileVersion,
 ) -> Result<(File, ChecksumManifest)> {
-    let checks = read_bytes(&directory.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
-    let manifest = decode_checksum_manifest(&checks, version)?;
-    let file = open_payload_file(directory, version)?;
+    let directory = absolute_path(directory)?;
+    let history = directory.parent().and_then(Path::parent).ok_or_else(|| {
+        Error::new(
+            ErrorCode::UnsafePath,
+            "version metadata has no history root",
+        )
+    })?;
+    let root = DiskRoot::open(history)?;
+    let (file, _, manifest) = open_payload_at(&root, &directory, version)?;
     Ok((file, manifest))
 }
 
-pub(crate) fn read_checksum_manifest(
+pub(crate) fn open_payload_at(
+    root: &DiskRoot,
+    directory: &Path,
+    version: &FileVersion,
+) -> Result<(File, Vec<u8>, ChecksumManifest)> {
+    let checks = root.read_bytes(&directory.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
+    let manifest = decode_checksum_manifest(&checks, version)?;
+    let path =
+        crate::container_storage::content_path_at(root, directory, version, &mut |_| Ok(()))?;
+    let file = root.open_regular(&path)?;
+    if file.metadata()?.len() != version.logical_size {
+        return Err(Error::new(
+            ErrorCode::ChecksumMismatch,
+            "payload length differs",
+        ));
+    }
+    Ok((file, checks, manifest))
+}
+
+pub(crate) fn read_checksum_manifest_at(
+    root: &DiskRoot,
     directory: &Path,
     version: &FileVersion,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<ChecksumManifest> {
-    let checks = read_bytes_observed(
+    let checks = root.read_bytes_observed(
         &directory.join("checksums.bin"),
         MAX_CHECKSUM_MANIFEST,
         observe,
@@ -634,21 +695,18 @@ fn decode_checksum_manifest(checks: &[u8], version: &FileVersion) -> Result<Chec
     Ok(manifest)
 }
 
-pub(crate) fn open_payload_file(directory: &Path, version: &FileVersion) -> Result<File> {
-    open_payload_file_observed(directory, version, &mut |_| Ok(()))
-}
-
-pub(crate) fn open_payload_file_observed(
+pub(crate) fn open_payload_file_observed_at(
+    root: &DiskRoot,
     directory: &Path,
     version: &FileVersion,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<File> {
-    let file = open_regular(&crate::container_storage::content_path_observed(
-        directory, version, observe,
+    let file = root.open_regular(&crate::container_storage::content_path_at(
+        root, directory, version, observe,
     )?)?;
     if file.metadata()?.len() != version.logical_size {
         return Err(Error::new(
-            storage_contract::ErrorCode::ChecksumMismatch,
+            ErrorCode::ChecksumMismatch,
             "payload length differs",
         ));
     }
@@ -732,9 +790,27 @@ pub(crate) struct VerifiedExisting<'a> {
     file: File,
 }
 impl<'a> VerifiedExisting<'a> {
+    #[cfg(test)]
     pub(crate) fn read(directory: &Path, version: &'a FileVersion) -> Result<Self> {
-        let path = crate::container_storage::content_path(directory, version)?;
-        let file = verify_payload_held(directory, version)?;
+        let directory = absolute_path(directory)?;
+        let history = directory.parent().and_then(Path::parent).ok_or_else(|| {
+            Error::new(
+                ErrorCode::UnsafePath,
+                "version metadata has no history root",
+            )
+        })?;
+        Self::read_at(&DiskRoot::open(history)?, &directory, version)
+    }
+
+    pub(crate) fn read_at(
+        root: &DiskRoot,
+        directory: &Path,
+        version: &'a FileVersion,
+    ) -> Result<Self> {
+        let path =
+            crate::container_storage::content_path_at(root, directory, version, &mut |_| Ok(()))?;
+        let (file, _, manifest) = open_payload_at(root, directory, version)?;
+        let file = verify_open_payload(file, manifest, version, usize::MAX, &mut |_| Ok(()))?;
         Ok(Self {
             version,
             directory: directory.to_path_buf(),
@@ -754,14 +830,15 @@ impl<'a> VerifiedExisting<'a> {
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
-    pub(crate) fn sync_at(&self, directory: &Path, path: &Path) -> Result<()> {
+    pub(crate) fn sync_at(&self, root: &DiskRoot, directory: &Path, path: &Path) -> Result<()> {
         use platform_io::fs_safety::linux::FileIdentity;
         assert_eq!(
             directory, self.directory,
             "invariant: install consumes its admitted directory"
         );
         if path != self.path
-            || FileIdentity::from_fd(open_regular(path)?)? != FileIdentity::from_fd(&self.file)?
+            || FileIdentity::from_fd(root.open_regular(path)?)?
+                != FileIdentity::from_fd(&self.file)?
         {
             return Err(Error::new(
                 ErrorCode::PreparationStale,
@@ -964,10 +1041,6 @@ pub(crate) fn validate_stored_seal(stored: &DiskSeal, live: &DiskSeal) -> Result
         ));
     }
     Ok(())
-}
-pub(crate) fn available(root: &Path) -> Result<u64> {
-    let s = rustix::fs::statvfs(root).map_err(std::io::Error::from)?;
-    Ok(s.f_bavail.saturating_mul(s.f_frsize))
 }
 
 pub fn offline_check(root: &Path) -> Result<CheckReport> {

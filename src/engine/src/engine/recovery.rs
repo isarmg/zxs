@@ -2,7 +2,7 @@
 use super::Engine;
 use crate::journal::RecordType;
 use crate::publication_evidence::{
-    repair_object_copies, verified_object, verified_publication_seal, verified_snapshot,
+    repair_object_copies_at, verified_object_at, verified_publication_seal_at, verified_snapshot_at,
 };
 use crate::{disk::*, journal::*, *};
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,17 +23,17 @@ impl Engine {
         journaled: &BTreeSet<&str>,
     ) -> Result<()> {
         for disk in online {
+            let root = &self.disk_resources.get(disk)?.root;
             let directory = disk.root.join("metadata/publication-seals");
-            match std::fs::symlink_metadata(&directory) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error.into()),
-                Ok(_) => {
-                    existing_private_dir(&directory)?;
+            match root.optional_metadata(&directory)? {
+                None => continue,
+                Some(_) => {
+                    root.directory(&directory)?;
                 }
             }
-            for entry in std::fs::read_dir(&directory)? {
+            for entry in root.entries(&directory)? {
                 let entry = entry?;
-                let name = entry.file_name();
+                let name = entry.as_os_str();
                 let Some(hash) = name.to_str().and_then(|name| name.strip_suffix(".json")) else {
                     // An unfinished atomic-write temporary is not a seal.
                     continue;
@@ -41,11 +41,17 @@ impl Engine {
                 if journaled.contains(hash) {
                     continue;
                 }
-                let seal: PublicationSeal = read_json(&entry.path())?;
-                let candidate: Candidate = verified_object(online, "candidate", hash)?;
+                let seal: PublicationSeal =
+                    root.read_json_observed(&directory.join(entry.as_path()), &mut |_| Ok(()))?;
+                let candidate: Candidate =
+                    verified_object_at(&self.disk_resources, online, "candidate", hash)?;
                 self.verify_candidate_membership(&candidate)?;
-                let publication: Publication =
-                    verified_object(online, "publication", &seal.publication_hash)?;
+                let publication: Publication = verified_object_at(
+                    &self.disk_resources,
+                    online,
+                    "publication",
+                    &seal.publication_hash,
+                )?;
                 verify_publication_seal(&candidate, &publication, &seal)?;
                 if candidate.pool_id != self.config.pool_id {
                     return Err(Error::new(
@@ -65,7 +71,8 @@ impl Engine {
     /// Read the complete exact candidate-bound object closure across replicas.
     /// A damaged preferred member must not hide healthy metadata dependencies.
     pub(crate) fn load_bound_snapshot(&self, hash: &str) -> Result<State> {
-        Ok(crate::publication_evidence::verified_snapshot_observed(
+        Ok(crate::publication_evidence::verified_snapshot_observed_at(
+            &self.disk_resources,
             &self.members(),
             hash,
             &mut |error| self.metadata_integrity.fault(error),
@@ -77,10 +84,19 @@ impl Engine {
     /// persisted decision, including decisions made by an older page writer.
     pub(crate) fn repair_bound_snapshot(&self, hash: &str) -> Result<()> {
         let members = self.members();
-        crate::publication_evidence::verified_snapshot_observed(&members, hash, &mut |error| {
-            self.metadata_integrity.fault(error)
-        })?;
-        repair_snapshot_copies(&members, &members, hash, &mut BTreeSet::new())
+        crate::publication_evidence::verified_snapshot_observed_at(
+            &self.disk_resources,
+            &members,
+            hash,
+            &mut |error| self.metadata_integrity.fault(error),
+        )?;
+        repair_snapshot_copies(
+            &self.disk_resources,
+            &members,
+            &members,
+            hash,
+            &mut BTreeSet::new(),
+        )
     }
 
     fn repair_journal_tails(&mut self) -> Result<()> {
@@ -105,10 +121,10 @@ impl Engine {
         let mut torn_tail = false;
         let mut records = super::recovery_checkpoint::Records::new();
         for d in &members {
-            if validate_seal(&self.config, d).is_err() {
+            let Some(handle) = self.disk_resources.available(d) else {
                 continue;
-            }
-            let opened = OpenJournal::scan(d)?;
+            };
+            let opened = OpenJournal::scan_at(&handle.root, d)?;
             let scanned = &opened.scan;
             torn_tail |= scanned.torn_tail;
             prefixes.insert(
@@ -171,7 +187,7 @@ impl Engine {
                 .expect("scanned online journal");
             scanned_journals.insert(disk.disk_id.clone(), opened.scan.records.clone());
             self.journals
-                .insert(disk.disk_id.clone(), opened.into_writer(disk)?);
+                .insert(disk.disk_id.clone(), opened.into_writer()?);
         }
         let checkpoint = if online.len() == members.len() && !torn_tail {
             match super::recovery_checkpoint::load(self, &prefixes, &records) {
@@ -222,7 +238,8 @@ impl Engine {
             let Some((hash, rs)) = active.into_iter().next() else {
                 continue;
             };
-            let candidate: Candidate = verified_object(&online, "candidate", &hash)?;
+            let candidate: Candidate =
+                verified_object_at(&self.disk_resources, &online, "candidate", &hash)?;
             self.verify_candidate_membership(&candidate)?;
             if candidate.pool_id != self.config.pool_id
                 || candidate.previous_snapshot != self.snapshot
@@ -236,7 +253,8 @@ impl Engine {
                 .iter()
                 .find(|receipt| receipt.record.record_type == RecordType::Publication);
             let publication = if let Some(receipt) = publication_record {
-                Some(verified_object::<Publication>(
+                Some(verified_object_at::<Publication>(
+                    &self.disk_resources,
                     &online,
                     "publication",
                     &receipt.record.object_hash,
@@ -258,11 +276,20 @@ impl Engine {
                 // Coverage established that all historical repair artifacts remain
                 // byte-for-byte present after the previous successful full replay.
                 for d in &online {
-                    let seal: PublicationSeal = read_json(&publication_seal_path(d, &hash))?;
+                    let seal: PublicationSeal = self
+                        .disk_resources
+                        .get(d)?
+                        .root
+                        .read_json_observed(&publication_seal_path(d, &hash), &mut |_| Ok(()))?;
                     verify_publication_seal(&candidate, publication, &seal)?;
                 }
                 // Checkpoint coverage never substitutes for candidate-bound graph verification.
-                crate::history_package::bound_history_objects(&online, &candidate, None)?;
+                crate::history_package::bound_history_objects_at(
+                    &self.disk_resources,
+                    &online,
+                    &candidate,
+                    None,
+                )?;
                 if candidate.sequence == checkpoint.sequence {
                     if hash != checkpoint.candidate_hash
                         || candidate.snapshot_hash != checkpoint.snapshot_hash
@@ -272,8 +299,12 @@ impl Engine {
                             "checkpoint boundary differs from journal",
                         ));
                     }
-                    let mut next =
-                        verified_snapshot(&online, &candidate.snapshot_hash)?.into_state();
+                    let mut next = verified_snapshot_at(
+                        &self.disk_resources,
+                        &online,
+                        &candidate.snapshot_hash,
+                    )?
+                    .into_state();
                     if publication.recovery.is_some() {
                         next.operations
                             .insert(candidate.operation_id, publication.result.clone());
@@ -283,8 +314,10 @@ impl Engine {
                 self.snapshot = Some(candidate.snapshot_hash);
                 continue;
             }
-            let admitted = verified_snapshot(&online, &candidate.snapshot_hash)?;
-            let history_objects = crate::history_package::bound_history_objects(
+            let admitted =
+                verified_snapshot_at(&self.disk_resources, &online, &candidate.snapshot_hash)?;
+            let history_objects = crate::history_package::bound_history_objects_at(
+                &self.disk_resources,
                 &online,
                 &candidate,
                 Some(&admitted),
@@ -321,6 +354,7 @@ impl Engine {
                 // Repair only replicas of the exact hash-bound snapshot. Never
                 // manufacture a replacement state from an unverifiable copy.
                 repair_snapshot_copies(
+                    &self.disk_resources,
                     &online,
                     &members,
                     &candidate.snapshot_hash,
@@ -330,14 +364,22 @@ impl Engine {
                 // installed on every member. Re-encoding State here duplicates
                 // that work and can create unrelated roots when the writer's
                 // page partitioning has changed since this snapshot was saved.
-                crate::history_package::repair_history_objects(
+                crate::history_package::repair_history_objects_at(
+                    &self.disk_resources,
                     &members,
                     &history_objects,
                     &mut repaired_histories,
                 )?;
-                repair_object_copies(&members, "candidate", &hash, &candidate)?;
+                repair_object_copies_at(
+                    &self.disk_resources,
+                    &members,
+                    "candidate",
+                    &hash,
+                    &candidate,
+                )?;
                 if let Some(publication) = &publication {
-                    repair_object_copies(
+                    repair_object_copies_at(
+                        &self.disk_resources,
                         &members,
                         "publication",
                         &object_hash("publication", publication)?,
@@ -401,7 +443,9 @@ impl Engine {
                 // A PUBLICATION object or a single frame is not the complete
                 // barrier. Preserve the old visible state until all configured
                 // synchronized receipts can be checked after restart.
-                let sealed = verified_publication_seal(&online, &candidate, &p).is_ok();
+                let sealed =
+                    verified_publication_seal_at(&self.disk_resources, &online, &candidate, &p)
+                        .is_ok();
                 if !sealed {
                     self.blocked = true;
                     break;
@@ -470,12 +514,15 @@ fn remember_repaired_page(repaired: &mut BTreeSet<String>, hash: &str) {
 }
 
 fn repair_snapshot_copies(
+    resources: &DiskResources,
     sources: &[DiskConfig],
     members: &[DiskConfig],
     hash: &str,
     repaired_pages: &mut BTreeSet<String>,
 ) -> Result<()> {
-    let root = crate::publication_evidence::verified_graph_object(sources, "snapshot", hash)?;
+    let root = crate::publication_evidence::verified_graph_object_at(
+        resources, sources, "snapshot", hash,
+    )?;
     let snapshot: Snapshot = json_codec::from_value(root.value().clone())?;
     validate_snapshot_schema(&snapshot)?;
     for reference in snapshot
@@ -485,12 +532,18 @@ fn repair_snapshot_copies(
     {
         crate::metadata_map::visit_objects(
             reference,
-            |kind, hash| crate::publication_evidence::verified_graph_object(sources, kind, hash),
+            |kind, hash| {
+                crate::publication_evidence::verified_graph_object_at(
+                    resources, sources, kind, hash,
+                )
+            },
             |object| {
                 // Domain participates in the key: a digest is not an object kind.
                 let address = format!("{}/{}", object.kind(), object.hash());
                 if !repaired_pages.contains(&address) {
-                    crate::publication_evidence::repair_authenticated_object(members, &object)?;
+                    crate::publication_evidence::repair_authenticated_object_at(
+                        resources, members, &object,
+                    )?;
                     remember_repaired_page(repaired_pages, &address);
                     #[cfg(test)]
                     PAGE_REPAIR_COUNT.with(|count| count.set(count.get() + 1));
@@ -499,13 +552,14 @@ fn repair_snapshot_copies(
             },
         )?;
     }
-    let auth = crate::publication_evidence::verified_graph_object(
+    let auth = crate::publication_evidence::verified_graph_object_at(
+        resources,
         sources,
         "state-control-auth",
         snapshot.control_auth.hash(),
     )?;
-    crate::publication_evidence::repair_authenticated_object(members, &auth)?;
-    crate::publication_evidence::repair_authenticated_object(members, &root)
+    crate::publication_evidence::repair_authenticated_object_at(resources, members, &auth)?;
+    crate::publication_evidence::repair_authenticated_object_at(resources, members, &root)
 }
 
 #[cfg(test)]

@@ -164,47 +164,24 @@ impl ValidatedConfig {
     }
 }
 
-pub(super) enum DiskLockPolicy {
-    NewPoolRoots,
-    AvailableMembers,
-}
-
-pub(super) fn acquire_locks(
-    root: &Path,
-    config: &ValidatedConfig,
-    policy: DiskLockPolicy,
-) -> Result<Vec<File>> {
-    let mut paths = vec![root.join("writer.lock")];
-    for d in &config.disks {
-        match policy {
-            DiskLockPolicy::NewPoolRoots => {
-                if !d.root.try_exists()? {
-                    continue;
-                }
-            }
-            DiskLockPolicy::AvailableMembers => {
-                if disk_unavailable(d)? {
-                    continue;
-                }
-                validate_seal(config, d)?;
-            }
-        }
-        paths.push(d.root.join(".writer.lock"));
-    }
+pub(super) fn acquire_locks(root: &Path, disks: &DiskResources) -> Result<Vec<File>> {
+    let system = File::from(
+        rustix::fs::open(
+            root.join("writer.lock"),
+            rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::RDWR
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::from_raw_mode(0o600),
+        )
+        .map_err(std::io::Error::from)?,
+    );
+    let files =
+        std::iter::once(Ok(system)).chain(disks.handles().map(|disk| disk.root.lock_file()));
     let mut locks = Vec::new();
-    for path in paths {
-        let f = File::from(
-            rustix::fs::open(
-                &path,
-                rustix::fs::OFlags::CREATE
-                    | rustix::fs::OFlags::RDWR
-                    | rustix::fs::OFlags::NOFOLLOW
-                    | rustix::fs::OFlags::NONBLOCK
-                    | rustix::fs::OFlags::CLOEXEC,
-                rustix::fs::Mode::from_raw_mode(0o600),
-            )
-            .map_err(std::io::Error::from)?,
-        );
+    for file in files {
+        let f = file?;
         platform_io::fs_safety::linux::SingleLinkRequirement::check(&f).map_err(|e| {
             let message = e.to_string();
             Error::from(e).context(storage_contract::ErrorCode::UnsafePath, message)

@@ -110,6 +110,7 @@ pub struct UploadPreparation {
     base_version_id: Option<String>,
     directory: std::path::PathBuf,
     directory_handle: OpenAt2Root,
+    disk_resources: std::sync::Arc<DiskResources>,
     target: std::path::PathBuf,
     previous: Option<StagedFile>,
     existing: bool,
@@ -640,7 +641,7 @@ impl Engine {
                 workspace,
                 item,
                 path,
-                open_regular(source)?,
+                self.planning_context().open_source(source)?,
                 generation,
                 None,
             )?
@@ -772,7 +773,7 @@ impl Engine {
             workspace,
             item,
             &name_policy::PortablePath::parse(path)?,
-            open_regular(source)?,
+            self.planning_context().open_source(source)?,
             generation,
             None,
         )
@@ -827,11 +828,15 @@ impl Engine {
             workspace: workspace.into(),
             claims: self.upload_preparations.clone(),
         };
-        let directory_handle =
-            OpenAt2Root::open(&directory, MountPolicy::SameMount).map_err(preparation_fs_error)?;
+        let disk_root = self.planning_context().workspace_data_root(&w)?;
+        let directory_handle = OpenAt2Root::from_private_directory(
+            disk_root.private_directory(&directory)?,
+            MountPolicy::SameMount,
+        )
+        .map_err(preparation_fs_error)?;
         let (retained, generations) = retained_upload_usage(&directory_handle)?;
         let target = directory.join(format!("{item}-{generation}.full"));
-        let existing = target.try_exists()?;
+        let existing = disk_root.open_optional_regular(&target)?.is_some();
         if generations > self.config.max_entries
             || (!existing && generations >= self.config.max_entries)
             || retained > self.config.max_workspace_bytes
@@ -852,6 +857,7 @@ impl Engine {
             base_version_id: base_entry.map(|entry| entry.version_id),
             directory,
             directory_handle,
+            disk_resources: std::sync::Arc::clone(&self.disk_resources),
             target,
             previous,
             existing,
@@ -878,6 +884,7 @@ impl Engine {
             plan.generation,
         )?;
         if canonical_json(&w)? != canonical_json(&plan.workspace)?
+            || !std::sync::Arc::ptr_eq(&self.disk_resources, &plan.disk_resources)
             || base_entry.map(|entry| entry.version_id) != plan.base_version_id
             || self.config.max_file_bytes != plan.max_file_bytes
             || self.config.max_workspace_bytes != plan.max_workspace_bytes
@@ -894,9 +901,13 @@ impl Engine {
                 "workspace storage changed during upload preparation",
             ));
         }
-        let current_directory = OpenAt2Root::open(&plan.directory, MountPolicy::SameMount)
-            .map_err(preparation_fs_error)?;
-        if current_directory.identity() != plan.directory_handle.identity() {
+        let current_directory = self
+            .planning_context()
+            .workspace_data_root(&w)?
+            .directory(&plan.directory)?;
+        if platform_io::fs_safety::linux::FileIdentity::from_fd(&current_directory)?
+            != plan.directory_handle.identity()
+        {
             return Err(Error::new(
                 storage_contract::ErrorCode::UnsafePath,
                 "workspace data directory identity changed during preparation",
@@ -1028,7 +1039,7 @@ impl Engine {
         let previous = w.files.get(item);
         let mut temporary = tempfile::NamedTempFile::new_in(&self.root)?;
         let expected = if let Some(previous) = previous {
-            let source = open_regular(&previous.source_path)?;
+            let source = self.planning_context().open_source(&previous.source_path)?;
             std::io::copy(
                 &mut source.take(previous.size.saturating_add(1)),
                 &mut temporary,
@@ -1169,7 +1180,7 @@ impl Engine {
             &request,
             true,
         )?;
-        write_json(
+        self.planning_context().workspace_data_root(w)?.write_json(
             &self
                 .workspace_data_directory(w)?
                 .join("commit-request.json"),
@@ -1177,12 +1188,20 @@ impl Engine {
             true,
         )?;
         if let Some(wire) = wire {
-            for directory in [
-                self.root.join("workspaces").join(&w.workspace_id),
-                self.workspace_data_directory(w)?,
-            ] {
-                write_json(&directory.join("wire-request.json"), &wire.body, true)?;
-            }
+            write_json(
+                &self
+                    .root
+                    .join("workspaces")
+                    .join(&w.workspace_id)
+                    .join("wire-request.json"),
+                &wire.body,
+                true,
+            )?;
+            self.planning_context().workspace_data_root(w)?.write_json(
+                &self.workspace_data_directory(w)?.join("wire-request.json"),
+                &wire.body,
+                true,
+            )?;
         }
         Ok(())
     }
@@ -1284,7 +1303,7 @@ impl crate::engine::PlanningContext<'_> {
             source_ids,
             checkpoint,
         } = input;
-        let mut file = open_regular(source)?;
+        let mut file = self.open_source(source)?;
         let size = file.metadata()?.len();
         if size > self.config.max_file_bytes {
             return Err(Error::new(

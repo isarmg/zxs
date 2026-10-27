@@ -1,5 +1,5 @@
 use super::*;
-use std::io::Read;
+use std::{fs, io::Read};
 fn pending() -> (tempfile::TempDir, PathBuf, Config, String, OperationId) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");

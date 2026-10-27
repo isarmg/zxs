@@ -6,16 +6,7 @@ use crate::{disk::*, journal::*, *};
 
 // The journal supplies the authoritative digest. A replica is usable only if
 // its decoded object matches that exact digest, never by majority agreement.
-pub(crate) fn verified_object<
-    T: data_serialization::Serialize + data_serialization::de::DeserializeOwned,
->(
-    members: &[DiskConfig],
-    kind: &str,
-    hash: &str,
-) -> Result<T> {
-    verified_object_observed(members, kind, hash, &mut |_| {})
-}
-
+#[cfg(test)]
 pub(crate) fn verified_object_observed<
     T: data_serialization::Serialize + data_serialization::de::DeserializeOwned,
 >(
@@ -24,24 +15,43 @@ pub(crate) fn verified_object_observed<
     hash: &str,
     fault: &mut impl FnMut(&Error),
 ) -> Result<T> {
-    let mut first_error = None;
-    for member in members {
-        match load_object(member, kind, hash) {
-            Ok(value) => return Ok(value),
-            Err(error) => {
-                fault(&error);
-                first_error.get_or_insert(error);
-            }
-        }
-    }
-    Err(first_error.unwrap_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::RecoveryRequired,
-            "no trusted object replica",
-        )
-    }))
+    select_replica(
+        members,
+        |member| load_object(member, kind, hash),
+        fault,
+        "no trusted object replica",
+    )
 }
 
+pub(crate) fn verified_object_at<
+    T: data_serialization::Serialize + data_serialization::de::DeserializeOwned,
+>(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    kind: &str,
+    hash: &str,
+) -> Result<T> {
+    verified_object_observed_at(resources, members, kind, hash, &mut |_| {})
+}
+
+pub(crate) fn verified_object_observed_at<
+    T: data_serialization::Serialize + data_serialization::de::DeserializeOwned,
+>(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    kind: &str,
+    hash: &str,
+    fault: &mut impl FnMut(&Error),
+) -> Result<T> {
+    select_replica(
+        members,
+        |member| load_object_at(&resources.get(member)?.root, member, kind, hash),
+        fault,
+        "no trusted object replica",
+    )
+}
+
+#[cfg(test)]
 pub(crate) fn verified_graph_object(
     members: &[DiskConfig],
     kind: &'static str,
@@ -50,34 +60,50 @@ pub(crate) fn verified_graph_object(
     verified_graph_object_observed(members, kind, hash, &mut |_| {})
 }
 
+#[cfg(test)]
 pub(crate) fn verified_graph_object_observed(
     members: &[DiskConfig],
     kind: &'static str,
     hash: &str,
     fault: &mut impl FnMut(&Error),
 ) -> Result<AuthenticatedMetadataObject> {
-    let mut first_error = None;
-    for member in members {
-        match load_authenticated_object(member, kind, hash) {
-            Ok(object) => return Ok(object),
-            Err(error) => {
-                fault(&error);
-                first_error.get_or_insert(error);
-            }
-        }
-    }
-    Err(first_error.unwrap_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::RecoveryRequired,
-            "no trusted object replica",
-        )
-    }))
+    select_replica(
+        members,
+        |member| load_authenticated_object(member, kind, hash),
+        fault,
+        "no trusted object replica",
+    )
+}
+
+pub(crate) fn verified_graph_object_at(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    kind: &'static str,
+    hash: &str,
+) -> Result<AuthenticatedMetadataObject> {
+    verified_graph_object_observed_at(resources, members, kind, hash, &mut |_| {})
+}
+
+pub(crate) fn verified_graph_object_observed_at(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    kind: &'static str,
+    hash: &str,
+    fault: &mut impl FnMut(&Error),
+) -> Result<AuthenticatedMetadataObject> {
+    select_replica(
+        members,
+        |member| load_authenticated_object_at(&resources.get(member)?.root, member, kind, hash),
+        fault,
+        "no trusted object replica",
+    )
 }
 
 // A candidate binds one exact root and every referenced page digest. Resolve
 // each object independently across trusted members: no member needs to retain
 // the whole closure, but every dependency must authenticate before returning.
 // This read path never repairs or rewrites any replica.
+#[cfg(test)]
 pub(crate) fn verified_snapshot(
     members: &[DiskConfig],
     hash: &str,
@@ -85,15 +111,45 @@ pub(crate) fn verified_snapshot(
     verified_snapshot_observed(members, hash, &mut |_| {})
 }
 
+#[cfg(test)]
 pub(crate) fn verified_snapshot_observed(
     members: &[DiskConfig],
     hash: &str,
     fault: &mut impl FnMut(&Error),
 ) -> Result<crate::history_package::AdmittedState> {
     let snapshot: Snapshot = verified_object_observed(members, "snapshot", hash, fault)?;
-    let result = resolve_admitted_snapshot(snapshot, |kind, hash| {
+    resolve_verified_snapshot(snapshot, fault, |kind, hash, fault| {
         verified_graph_object_observed(members, kind, hash, fault)
-    });
+    })
+}
+
+pub(crate) fn verified_snapshot_at(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    hash: &str,
+) -> Result<crate::history_package::AdmittedState> {
+    verified_snapshot_observed_at(resources, members, hash, &mut |_| {})
+}
+
+pub(crate) fn verified_snapshot_observed_at(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    hash: &str,
+    fault: &mut impl FnMut(&Error),
+) -> Result<crate::history_package::AdmittedState> {
+    let snapshot: Snapshot =
+        verified_object_observed_at(resources, members, "snapshot", hash, fault)?;
+    resolve_verified_snapshot(snapshot, fault, |kind, hash, fault| {
+        verified_graph_object_observed_at(resources, members, kind, hash, fault)
+    })
+}
+
+fn resolve_verified_snapshot<F: FnMut(&Error)>(
+    snapshot: Snapshot,
+    fault: &mut F,
+    mut load: impl FnMut(&'static str, &str, &mut F) -> Result<AuthenticatedMetadataObject>,
+) -> Result<crate::history_package::AdmittedState> {
+    let result = resolve_admitted_snapshot(snapshot, |kind, hash| load(kind, hash, fault));
     if let Err(error) = &result {
         fault(error);
     }
@@ -101,28 +157,61 @@ pub(crate) fn verified_snapshot_observed(
 }
 /// A seal has no independently supplied digest: validate its complete receipt
 /// barrier against the exact candidate and publication before accepting a copy.
-pub(crate) fn verified_publication_seal(
+pub(crate) fn verified_publication_seal_at(
+    resources: &DiskResources,
     members: &[DiskConfig],
     candidate: &Candidate,
     publication: &Publication,
 ) -> Result<PublicationSeal> {
-    verified_publication_seal_observed(members, candidate, publication, &mut |_| {})
+    verified_publication_seal_observed_at(resources, members, candidate, publication, &mut |_| {})
 }
 
-pub(crate) fn verified_publication_seal_observed(
+pub(crate) fn verified_publication_seal_observed_at(
+    resources: &DiskResources,
     members: &[DiskConfig],
     candidate: &Candidate,
     publication: &Publication,
     fault: &mut impl FnMut(&Error),
 ) -> Result<PublicationSeal> {
     let hash = object_hash("candidate", candidate)?;
+    select_replica(
+        members,
+        |member| {
+            read_publication_seal(
+                &resources.get(member)?.root,
+                member,
+                &hash,
+                candidate,
+                publication,
+            )
+        },
+        fault,
+        "no trusted publication seal replica",
+    )
+}
+
+fn read_publication_seal(
+    root: &DiskRoot,
+    member: &DiskConfig,
+    hash: &str,
+    candidate: &Candidate,
+    publication: &Publication,
+) -> Result<PublicationSeal> {
+    let seal =
+        decode_strict(&root.read_bytes(&publication_seal_path(member, hash), MAX_METADATA)?)?;
+    verify_publication_seal(candidate, publication, &seal)?;
+    Ok(seal)
+}
+
+fn select_replica<T>(
+    members: &[DiskConfig],
+    mut read: impl FnMut(&DiskConfig) -> Result<T>,
+    fault: &mut impl FnMut(&Error),
+    missing: &'static str,
+) -> Result<T> {
     let mut first_error = None;
     for member in members {
-        let result = read_json(&publication_seal_path(member, &hash)).and_then(|seal| {
-            verify_publication_seal(candidate, publication, &seal)?;
-            Ok(seal)
-        });
-        match result {
+        match read(member) {
             Ok(seal) => return Ok(seal),
             Err(error) => {
                 fault(&error);
@@ -130,30 +219,47 @@ pub(crate) fn verified_publication_seal_observed(
             }
         }
     }
-    Err(first_error.unwrap_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::RecoveryRequired,
-            "no trusted publication seal replica",
-        )
-    }))
+    Err(first_error
+        .unwrap_or_else(|| Error::new(storage_contract::ErrorCode::RecoveryRequired, missing)))
 }
 
+#[cfg(test)]
 pub(crate) fn repair_object_copies<T: data_serialization::Serialize>(
     members: &[DiskConfig],
     kind: &str,
     hash: &str,
     value: &T,
 ) -> Result<()> {
-    if object_hash(kind, value)? != hash {
-        return Err(Error::new(
-            storage_contract::ErrorCode::ObjectCorrupt,
-            "repair object digest differs",
-        ));
-    }
-    let bytes = encode_metadata(value, MAX_METADATA)?;
+    let bytes = encode_repair(kind, hash, value)?;
     repair_object_bytes(members, kind, hash, &bytes)
 }
 
+pub(crate) fn repair_object_copies_at<T: data_serialization::Serialize>(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    kind: &str,
+    hash: &str,
+    value: &T,
+) -> Result<()> {
+    let bytes = encode_repair(kind, hash, value)?;
+    repair_object_bytes_at(resources, members, kind, hash, &bytes)
+}
+
+fn encode_repair<T: data_serialization::Serialize>(
+    kind: &str,
+    hash: &str,
+    value: &T,
+) -> Result<Vec<u8>> {
+    if object_hash(kind, value)? != hash {
+        return Err(Error::new(
+            ErrorCode::ObjectCorrupt,
+            "repair object digest differs",
+        ));
+    }
+    encode_metadata(value, MAX_METADATA)
+}
+
+#[cfg(test)]
 pub(crate) fn repair_authenticated_object(
     members: &[DiskConfig],
     object: &AuthenticatedMetadataObject,
@@ -161,42 +267,80 @@ pub(crate) fn repair_authenticated_object(
     repair_object_bytes(members, object.kind(), object.hash(), object.bytes())
 }
 
+pub(crate) fn repair_authenticated_object_at(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    object: &AuthenticatedMetadataObject,
+) -> Result<()> {
+    repair_object_bytes_at(
+        resources,
+        members,
+        object.kind(),
+        object.hash(),
+        object.bytes(),
+    )
+}
+
+#[cfg(test)]
 fn repair_object_bytes(members: &[DiskConfig], kind: &str, hash: &str, bytes: &[u8]) -> Result<()> {
     for member in members {
-        let mut paths = existing_object_paths(member, kind, hash)?;
-        if paths.is_empty() {
-            paths.push(object_path(member, kind, hash));
-        }
-        for path in paths {
-            match std::fs::symlink_metadata(&path) {
-                Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
-                    // Never replace an unsafe entry, even if a healthy replica exists.
-                    let replace = match open_optional_regular(&path)? {
-                        None => false,
-                        Some(file) => match read_file_bytes(file, MAX_METADATA) {
-                            Ok(existing) => existing != bytes,
-                            Err(error)
-                                if error.code() == storage_contract::ErrorCode::ResourceLimit =>
-                            {
-                                true
-                            }
-                            Err(error) => return Err(error),
-                        },
-                    };
-                    // Matching bytes may be the visible result of a previous
-                    // repair whose directory sync failed. Complete its barrier.
-                    write_atomic(&path, bytes, replace)?;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    write_atomic(&path, bytes, false)?;
-                }
-                Err(e) => return Err(e.into()),
-                Ok(_) => {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::UnsafePath,
-                        "object repair target is not a regular file",
-                    ));
-                }
+        repair_member(&DiskRoot::open(&member.root)?, member, kind, hash, bytes)?;
+    }
+    Ok(())
+}
+
+fn repair_object_bytes_at(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    kind: &str,
+    hash: &str,
+    bytes: &[u8],
+) -> Result<()> {
+    for member in members {
+        repair_member(&resources.get(member)?.root, member, kind, hash, bytes)?;
+    }
+    Ok(())
+}
+
+fn repair_member(
+    root: &DiskRoot,
+    member: &DiskConfig,
+    kind: &str,
+    hash: &str,
+    bytes: &[u8],
+) -> Result<()> {
+    let paths = existing_object_paths_at(root, member, kind, hash)?;
+    if paths.is_empty() {
+        return root.write_atomic(&object_path(member, kind, hash), bytes, false);
+    }
+    for path in paths {
+        match root.optional_metadata(&path)? {
+            Some(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                // Never replace an unsafe entry, even if a healthy replica exists.
+                let replace = match root.open_optional_regular(&path)? {
+                    None => false,
+                    Some(file) => match read_file_bytes(file, MAX_METADATA) {
+                        Ok(existing) => existing != bytes,
+                        Err(error)
+                            if error.code() == storage_contract::ErrorCode::ResourceLimit =>
+                        {
+                            true
+                        }
+                        Err(error) => return Err(error),
+                    },
+                };
+                // Matching bytes may be the visible result of a previous
+                // repair whose directory sync failed. Complete its barrier.
+                root.write_atomic(&path, bytes, replace)?;
+            }
+            None => {
+                root.write_atomic(&path, bytes, false)?;
+            }
+            Some(_) => {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::UnsafePath,
+                    "object repair target is not a regular file",
+                ));
             }
         }
     }

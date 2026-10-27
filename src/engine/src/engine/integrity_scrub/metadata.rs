@@ -70,6 +70,7 @@ enum Shape {
 struct MemberScan<'a, O, P> {
     plan: &'a IntegrityScrubPlan,
     disk: &'a DiskConfig,
+    root: &'a DiskRoot,
     observe: &'a mut O,
     progress: &'a mut P,
     report: &'a mut IntegrityScrubReport,
@@ -86,10 +87,12 @@ pub(super) fn verify_member(
     progress: &mut impl FnMut(&IntegrityScrubReport),
     report: &mut IntegrityScrubReport,
 ) -> Result<(AcknowledgedUnavailable, bool)> {
-    verify_saved_membership(plan, disk, observe)?;
+    let root = &plan.disk_resources.get(disk)?.root;
+    verify_saved_membership(plan, root, disk, observe)?;
     MemberScan {
         plan,
         disk,
+        root,
         observe,
         progress,
         report,
@@ -109,7 +112,7 @@ impl<O: FnMut(usize) -> Result<()>, P: FnMut(&IntegrityScrubReport)> MemberScan<
             Error::new(ErrorCode::RecoveryRequired, "metadata member has no admitted writer anchor; recover it before certifying its retained closure")
         })?;
         // No BufReader read-ahead: only the explicit one-byte probe may read beyond the captured frontier.
-        let mut reader = JournalFrameReader::new(open_regular(&log_path(self.disk))?);
+        let mut reader = JournalFrameReader::new(self.root.open_regular(&log_path(self.disk))?);
         let mut previous_snapshot = None;
         let mut published_sequence = 0;
         let mut last_frame = None;
@@ -185,7 +188,7 @@ impl<O: FnMut(usize) -> Result<()>, P: FnMut(&IntegrityScrubReport)> MemberScan<
             ));
         }
         let publication: Publication = self.object("publication", &record.object_hash)?;
-        let seal: PublicationSeal = read_json_observed(
+        let seal: PublicationSeal = self.root.read_json_observed(
             &publication_seal_path(self.disk, &record.candidate_hash),
             self.observe,
         )?;
@@ -261,19 +264,20 @@ impl<O: FnMut(usize) -> Result<()>, P: FnMut(&IntegrityScrubReport)> MemberScan<
         hash: &str,
     ) -> Result<T> {
         self.admit_object()?;
-        let value = load_object_observed(self.disk, kind, hash, self.observe).map_err(|error| {
-            if matches!(
-                error.code(),
-                ErrorCode::OperationAborted | ErrorCode::ResourceLimit
-            ) {
-                error
-            } else {
-                error.context(
-                    ErrorCode::ObjectCorrupt,
-                    format!("{kind}/{hash} failed integrity scrub"),
-                )
-            }
-        })?;
+        let value = load_object_observed_at(self.root, self.disk, kind, hash, self.observe)
+            .map_err(|error| {
+                if matches!(
+                    error.code(),
+                    ErrorCode::OperationAborted | ErrorCode::ResourceLimit
+                ) {
+                    error
+                } else {
+                    error.context(
+                        ErrorCode::ObjectCorrupt,
+                        format!("{kind}/{hash} failed integrity scrub"),
+                    )
+                }
+            })?;
         self.report.metadata_objects_verified += 1;
         Ok(value)
     }
@@ -284,8 +288,9 @@ impl<O: FnMut(usize) -> Result<()>, P: FnMut(&IntegrityScrubReport)> MemberScan<
         hash: &str,
     ) -> Result<AuthenticatedMetadataObject> {
         self.admit_object()?;
-        let object = load_authenticated_object_observed(self.disk, kind, hash, self.observe)
-            .map_err(|error| {
+        let object =
+            load_authenticated_object_observed_at(self.root, self.disk, kind, hash, self.observe)
+                .map_err(|error| {
                 if matches!(
                     error.code(),
                     ErrorCode::OperationAborted | ErrorCode::ResourceLimit
@@ -533,10 +538,11 @@ fn same_prefix(actual: &str, expected: &str) -> Result<()> {
 
 fn verify_saved_membership(
     plan: &IntegrityScrubPlan,
+    root: &DiskRoot,
     disk: &DiskConfig,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<()> {
-    let saved = ValidatedConfig::try_from(read_json_observed::<Config>(
+    let saved = ValidatedConfig::try_from(root.read_json_observed::<Config>(
         &disk.root.join("metadata/pool-membership/config.json"),
         observe,
     )?)?;

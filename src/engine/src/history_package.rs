@@ -78,6 +78,19 @@ pub(crate) fn store_history_manifests_bounded(
     }
     Ok(catalog)
 }
+#[cfg(test)]
+pub(crate) fn store_history_manifests_bounded_at(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    state: &State,
+    maximum: usize,
+) -> Result<crate::metadata_map::MapRoot> {
+    let (catalog, objects) = prepare_history_manifests(state, maximum)?;
+    for object in objects {
+        object.store_at(resources, members)?;
+    }
+    Ok(catalog)
+}
 pub(crate) fn prepare_history_manifests(
     state: &State,
     maximum: usize,
@@ -116,6 +129,7 @@ pub(crate) fn prepare_history_manifests_incremental(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn prepare_history_manifests_incremental_observed(
     projection: &mut ProjectionTransition<'_>,
     previous: &crate::metadata_map::MapRoot,
@@ -126,13 +140,37 @@ pub(crate) fn prepare_history_manifests_incremental_observed(
     prepare_history_incremental(
         projection,
         HistoryBaseline::Revalidate(previous),
-        members,
         maximum,
         fault,
+        &mut |kind, hash, fault| {
+            crate::publication_evidence::verified_graph_object_observed(members, kind, hash, fault)
+        },
     )
 }
 
-pub(crate) fn prepare_history_manifests_reusing_published(
+pub(crate) fn prepare_history_manifests_incremental_observed_at(
+    resources: &DiskResources,
+    projection: &mut ProjectionTransition<'_>,
+    previous: &crate::metadata_map::MapRoot,
+    members: &[DiskConfig],
+    maximum: usize,
+    fault: &mut impl FnMut(&Error),
+) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
+    prepare_history_incremental(
+        projection,
+        HistoryBaseline::Revalidate(previous),
+        maximum,
+        fault,
+        &mut |kind, hash, fault| {
+            crate::publication_evidence::verified_graph_object_observed_at(
+                resources, members, kind, hash, fault,
+            )
+        },
+    )
+}
+
+pub(crate) fn prepare_history_manifests_reusing_published_at(
+    resources: &DiskResources,
     projection: &mut ProjectionTransition<'_>,
     reuse: &crate::engine::PublishedDependencyReuse,
     members: &[DiskConfig],
@@ -142,9 +180,13 @@ pub(crate) fn prepare_history_manifests_reusing_published(
     prepare_history_incremental(
         projection,
         HistoryBaseline::Published(reuse),
-        members,
         maximum,
         fault,
+        &mut |kind, hash, fault| {
+            crate::publication_evidence::verified_graph_object_observed_at(
+                resources, members, kind, hash, fault,
+            )
+        },
     )
 }
 
@@ -153,12 +195,12 @@ enum HistoryBaseline<'a> {
     Published(&'a crate::engine::PublishedDependencyReuse),
 }
 
-fn prepare_history_incremental(
+fn prepare_history_incremental<F: FnMut(&Error)>(
     projection: &mut ProjectionTransition<'_>,
     baseline: HistoryBaseline<'_>,
-    members: &[DiskConfig],
     maximum: usize,
-    fault: &mut impl FnMut(&Error),
+    fault: &mut F,
+    load: &mut impl FnMut(&'static str, &str, &mut F) -> Result<AuthenticatedMetadataObject>,
 ) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
     let previous = match &baseline {
         HistoryBaseline::Revalidate(previous) => *previous,
@@ -205,7 +247,7 @@ fn prepare_history_incremental(
                 )?)
             }
             (Some(old), edits) => {
-                match read_published_history_objects(members, &old.hash, id, fault) {
+                match read_published_history_objects(&old.hash, id, fault, load) {
                     Ok(graph) => match edits {
                         Some(edits) => {
                             let graph::PreparedUpdate {
@@ -301,9 +343,7 @@ fn prepare_history_incremental(
         let object = if let Some(object) = fresh.remove(&address) {
             object
         } else {
-            match crate::publication_evidence::verified_graph_object_observed(
-                members, address.0, &address.1, fault,
-            ) {
+            match load(address.0, &address.1, fault) {
                 Ok(object) => object.into_prepared(maximum)?,
                 Err(_) => node.reconstruct_catalog_object(prefix, maximum)?,
             }
@@ -342,18 +382,13 @@ pub(crate) fn catalog_entry<'a>(id: &str, value: &'a json_codec::Value) -> Resul
         .ok_or_else(|| Error::new(ErrorCode::ObjectCorrupt, "invalid history catalog digest"))
 }
 
-fn read_published_history_objects(
-    members: &[DiskConfig],
+fn read_published_history_objects<F: FnMut(&Error)>(
     hash: &str,
     id: &str,
-    fault: &mut impl FnMut(&Error),
+    fault: &mut F,
+    load: &mut impl FnMut(&'static str, &str, &mut F) -> Result<AuthenticatedMetadataObject>,
 ) -> Result<HistoryGraphObjects> {
-    let root = crate::publication_evidence::verified_graph_object_observed(
-        members,
-        "history-manifest",
-        hash,
-        fault,
-    )?;
+    let root = load("history-manifest", hash, fault)?;
     let result = (|| {
         if decode_history_root(&root)?.history.history_tree_id != id {
             return Err(Error::new(
@@ -361,9 +396,7 @@ fn read_published_history_objects(
                 "published history baseline identity differs",
             ));
         }
-        graph::read_objects(root, |kind, hash| {
-            crate::publication_evidence::verified_graph_object_observed(members, kind, hash, fault)
-        })
+        graph::read_objects(root, |kind, hash| load(kind, hash, fault))
     })();
     if let Err(error) = &result {
         fault(error);
@@ -397,12 +430,41 @@ fn unique_prepared_objects(
 type HistoryGraphObjects = Vec<AuthenticatedMetadataObject>;
 
 /// Select every dependency independently from trusted replicas, without repair.
+#[cfg(test)]
 fn bound_history_graph_observed(
     members: &[DiskConfig],
     hash: &str,
     fault: &mut impl FnMut(&Error),
 ) -> Result<(HistoryManifest, HistoryGraphObjects)> {
-    let (manifest, objects) = read_history_graph_observed(members, hash, fault)?;
+    bound_history_graph_with(hash, fault, |kind, hash, fault| {
+        crate::publication_evidence::verified_graph_object_observed(members, kind, hash, fault)
+    })
+}
+
+fn bound_history_graph_observed_at(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    hash: &str,
+    fault: &mut impl FnMut(&Error),
+) -> Result<(HistoryManifest, HistoryGraphObjects)> {
+    bound_history_graph_with(hash, fault, |kind, hash, fault| {
+        crate::publication_evidence::verified_graph_object_observed_at(
+            resources, members, kind, hash, fault,
+        )
+    })
+}
+
+fn bound_history_graph_with<F: FnMut(&Error)>(
+    hash: &str,
+    fault: &mut F,
+    mut load: impl FnMut(&'static str, &str, &mut F) -> Result<AuthenticatedMetadataObject>,
+) -> Result<(HistoryManifest, HistoryGraphObjects)> {
+    let root = load("history-manifest", hash, fault)?;
+    let result = graph::resolve_with_objects(root, |kind, hash| load(kind, hash, fault));
+    if let Err(error) = &result {
+        fault(error);
+    }
+    let (manifest, objects) = result?;
     if let Err(error) = manifest.validate() {
         fault(&error);
         return Err(error);
@@ -410,43 +472,36 @@ fn bound_history_graph_observed(
     Ok((manifest, objects))
 }
 
-fn read_history_graph(
-    members: &[DiskConfig],
-    hash: &str,
-) -> Result<(HistoryManifest, HistoryGraphObjects)> {
-    read_history_graph_observed(members, hash, &mut |_| {})
-}
-
-fn read_history_graph_observed(
-    members: &[DiskConfig],
-    hash: &str,
-    fault: &mut impl FnMut(&Error),
-) -> Result<(HistoryManifest, HistoryGraphObjects)> {
-    let root = crate::publication_evidence::verified_graph_object_observed(
-        members,
-        "history-manifest",
-        hash,
-        fault,
-    )?;
-    let result = graph::resolve_with_objects(root, |kind, hash| {
-        crate::publication_evidence::verified_graph_object_observed(members, kind, hash, fault)
-    });
-    if let Err(error) = &result {
-        fault(error);
-    }
-    result
-}
-
 /// Bind the exact authenticated graph to an admitted snapshot projection, or
 /// independently admit its semantics when replay has no snapshot projection.
+#[cfg(test)]
 pub(crate) fn bound_history_objects(
     members: &[DiskConfig],
     candidate: &Candidate,
     admitted: Option<&AdmittedState>,
 ) -> Result<HistoryGraphObjects> {
-    let (catalog, catalog_objects) = resolve_catalog(&candidate.history_roots, |kind, hash| {
+    bound_history_objects_with(candidate, admitted, |kind, hash| {
         crate::publication_evidence::verified_graph_object(members, kind, hash)
-    })?;
+    })
+}
+
+pub(crate) fn bound_history_objects_at(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    candidate: &Candidate,
+    admitted: Option<&AdmittedState>,
+) -> Result<HistoryGraphObjects> {
+    bound_history_objects_with(candidate, admitted, |kind, hash| {
+        crate::publication_evidence::verified_graph_object_at(resources, members, kind, hash)
+    })
+}
+
+fn bound_history_objects_with(
+    candidate: &Candidate,
+    admitted: Option<&AdmittedState>,
+    mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
+) -> Result<HistoryGraphObjects> {
+    let (catalog, catalog_objects) = resolve_catalog(&candidate.history_roots, &mut load)?;
     let mut objects = Vec::new();
     let mut seen = BTreeSet::new();
     let state = admitted.map(AdmittedState::state);
@@ -459,7 +514,8 @@ pub(crate) fn bound_history_objects(
         ));
     }
     for (id, hash) in &catalog {
-        let (manifest, graph) = read_history_graph(members, hash)?;
+        let root = load("history-manifest", hash)?;
+        let (manifest, graph) = graph::resolve_with_objects(root, &mut load)?;
         if manifest.history.history_tree_id != *id {
             return Err(Error::new(
                 storage_contract::ErrorCode::ObjectCorrupt,
@@ -492,16 +548,38 @@ pub(crate) fn bound_history_objects(
     Ok(objects)
 }
 
+#[cfg(test)]
 pub(crate) fn repair_history_objects(
     members: &[DiskConfig],
     objects: &HistoryGraphObjects,
     repaired: &mut BTreeSet<(String, String)>,
 ) -> Result<()> {
+    repair_history_objects_with(objects, repaired, |object| {
+        crate::publication_evidence::repair_authenticated_object(members, object)
+    })
+}
+
+pub(crate) fn repair_history_objects_at(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    objects: &HistoryGraphObjects,
+    repaired: &mut BTreeSet<(String, String)>,
+) -> Result<()> {
+    repair_history_objects_with(objects, repaired, |object| {
+        crate::publication_evidence::repair_authenticated_object_at(resources, members, object)
+    })
+}
+
+fn repair_history_objects_with(
+    objects: &HistoryGraphObjects,
+    repaired: &mut BTreeSet<(String, String)>,
+    mut repair: impl FnMut(&AuthenticatedMetadataObject) -> Result<()>,
+) -> Result<()> {
     // Resolver output is dependency-first, including child indexes before parents.
     for object in objects {
         let address = (object.kind().to_owned(), object.hash().to_owned());
         if !repaired.contains(&address) {
-            crate::publication_evidence::repair_authenticated_object(members, object)?;
+            repair(object)?;
             if repaired.len() < 16_384 {
                 repaired.insert(address);
             }
@@ -627,18 +705,20 @@ impl Engine {
         for disk in &members {
             for (record, _) in self
                 .metadata_integrity
-                .observe(scan(disk))?
+                .observe(scan_at(&self.disk_resources.get(disk)?.root, disk))?
                 .records
                 .into_iter()
                 .rev()
                 .filter(|(r, _)| r.record_type == RecordType::Publication)
             {
-                let candidate: Candidate = crate::publication_evidence::verified_object_observed(
-                    &members,
-                    "candidate",
-                    &record.candidate_hash,
-                    &mut |error| self.metadata_integrity.fault(error),
-                )?;
+                let candidate: Candidate =
+                    crate::publication_evidence::verified_object_observed_at(
+                        &self.disk_resources,
+                        &members,
+                        "candidate",
+                        &record.candidate_hash,
+                        &mut |error| self.metadata_integrity.fault(error),
+                    )?;
                 self.verify_candidate_membership(&candidate)?;
                 if candidate.pool_id != self.config.pool_id || candidate.sequence != record.sequence
                 {
@@ -651,7 +731,8 @@ impl Engine {
                     &candidate.history_roots,
                     history,
                     |kind, hash| {
-                        crate::publication_evidence::verified_graph_object_observed(
+                        crate::publication_evidence::verified_graph_object_observed_at(
+                            &self.disk_resources,
                             &members,
                             kind,
                             hash,
@@ -671,23 +752,27 @@ impl Engine {
                         )
                     })?
                     .to_owned();
-                let (bound, objects) =
-                    bound_history_graph_observed(&members, &hash, &mut |error| {
-                        self.metadata_integrity.fault(error)
-                    })?;
+                let (bound, objects) = bound_history_graph_observed_at(
+                    &self.disk_resources,
+                    &members,
+                    &hash,
+                    &mut |error| self.metadata_integrity.fault(error),
+                )?;
                 if canonical_json(&bound)? != canonical_json(&manifest)? {
                     continue;
                 }
                 graph_objects = objects;
                 let publication: Publication =
-                    crate::publication_evidence::verified_object_observed(
+                    crate::publication_evidence::verified_object_observed_at(
+                        &self.disk_resources,
                         &members,
                         "publication",
                         &record.object_hash,
                         &mut |error| self.metadata_integrity.fault(error),
                     )?;
                 let publication_seal: PublicationSeal =
-                    crate::publication_evidence::verified_publication_seal_observed(
+                    crate::publication_evidence::verified_publication_seal_observed_at(
+                        &self.disk_resources,
                         &members,
                         &candidate,
                         &publication,
@@ -724,27 +809,22 @@ impl Engine {
                 if manifest.content_states[id] != ContentState::Available {
                     continue;
                 }
-                let (source, _) = self.valid_replica(id)?;
+                let source = self.open_content(id)?;
                 let dir = package_version(&staging, id);
                 private_dir(&dir.join("content"))?;
-                let (size, hash, checksums) = full_copy(
-                    &source,
+                let copied = verified_full_copy(
+                    source.file,
                     &dir.join("content").join(&version.creation_name),
-                    version.checksum_chunk_bytes,
+                    version,
                     self.config.max_file_bytes,
-                )?;
-                if size != version.logical_size
-                    || hash != version.content_hash
-                    || blake3::hash(&checksums.encode()?).to_hex().as_str()
-                        != version.checksum_manifest_hash
-                {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::SourceChanged,
-                        "exported content differs from the published manifest",
-                    ));
-                }
+                )
+                .map_err(CopyFailure::into_error)?;
                 write_json(&dir.join("version.json"), version, false)?;
-                write_atomic(&dir.join("checksums.bin"), &checksums.encode()?, false)?;
+                write_atomic(
+                    &dir.join("checksums.bin"),
+                    &copied.checksums().encode()?,
+                    false,
+                )?;
                 sync_dir(&dir)?;
             }
             for object in &graph_objects {

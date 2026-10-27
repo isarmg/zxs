@@ -6,10 +6,9 @@ use crate::{
     *,
 };
 use json_codec::json;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-};
+use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::fs;
 
 struct BoundaryInput<'a> {
     history: &'a str,
@@ -451,25 +450,31 @@ impl Engine {
         let mut published = None;
         let members = self.trusted_evidence_members();
         for member in &members {
-            let scanned = self.metadata_integrity.observe(scan(member))?;
+            let scanned = self
+                .metadata_integrity
+                .observe(scan_at(&self.disk_resources.get(member)?.root, member))?;
             if let Some((record, _)) = scanned.records.iter().rev().find(|(r, _)| {
                 r.sequence == self.state.sequence && r.record_type == RecordType::Publication
             }) {
-                let candidate: Candidate = crate::publication_evidence::verified_object_observed(
-                    &members,
-                    "candidate",
-                    &record.candidate_hash,
-                    &mut |error| self.metadata_integrity.fault(error),
-                )?;
+                let candidate: Candidate =
+                    crate::publication_evidence::verified_object_observed_at(
+                        &self.disk_resources,
+                        &members,
+                        "candidate",
+                        &record.candidate_hash,
+                        &mut |error| self.metadata_integrity.fault(error),
+                    )?;
                 self.verify_candidate_membership(&candidate)?;
                 let publication: Publication =
-                    crate::publication_evidence::verified_object_observed(
+                    crate::publication_evidence::verified_object_observed_at(
+                        &self.disk_resources,
                         &members,
                         "publication",
                         &record.object_hash,
                         &mut |error| self.metadata_integrity.fault(error),
                     )?;
-                let seal = crate::publication_evidence::verified_publication_seal_observed(
+                let seal = crate::publication_evidence::verified_publication_seal_observed_at(
+                    &self.disk_resources,
                     &members,
                     &candidate,
                     &publication,
@@ -483,7 +488,8 @@ impl Engine {
                         "tombstone publication differs from recovered state",
                     ));
                 }
-                let snapshot: Snapshot = crate::publication_evidence::verified_object_observed(
+                let snapshot: Snapshot = crate::publication_evidence::verified_object_observed_at(
+                    &self.disk_resources,
                     &members,
                     "snapshot",
                     &candidate.snapshot_hash,
@@ -518,7 +524,8 @@ impl Engine {
                 &snapshot.maps["content_states"],
                 id,
                 |kind, hash| {
-                    crate::publication_evidence::verified_graph_object_observed(
+                    crate::publication_evidence::verified_graph_object_observed_at(
+                        &self.disk_resources,
                         &members,
                         kind,
                         hash,
@@ -543,23 +550,33 @@ impl Engine {
             };
             for slot in &p.route_slot_ids {
                 let d = self.disk(slot)?;
-                if self
-                    .metadata_integrity
-                    .validate_seal(&self.config, d)
-                    .is_err()
-                {
+                let Some(handle) = self.disk_resources.available(d) else {
                     continue;
-                }
+                };
+                let root = &handle.root;
                 let dir = version_dir(d, &v.history_tree_id, id);
-                if !dir.try_exists()? {
-                    continue;
+                match root.directory(&dir) {
+                    Ok(_) => {}
+                    Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+                    | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+                        if error.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        continue;
+                    }
+                    Err(error) => return Err(error),
                 }
-                write_json(&dir.join("purged.json"), &tombstone, true)?;
-                let content = crate::container_storage::content_path(&dir, v)?;
-                match fs::remove_file(&content) {
-                    Ok(()) => sync_dir(content.parent().expect("content parent"))?,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-                    Err(error) => return Err(error.into()),
+                root.write_json(&dir.join("purged.json"), &tombstone, true)?;
+                let content =
+                    crate::container_storage::content_path_at(root, &dir, v, &mut |_| Ok(()))?;
+                match root.remove_file(&content) {
+                    Ok(()) => root.sync_dir(content.parent().expect("content parent"))?,
+                    Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+                    | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+                        if error.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        ()
+                    }
+                    Err(error) => return Err(error),
                 }
             }
         }

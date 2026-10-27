@@ -137,6 +137,7 @@ impl IntegrityScrubReport {
 /// Existing immutable metadata has no runtime GC; the journal frontier is fixed.
 pub struct IntegrityScrubPlan {
     config: ValidatedConfig,
+    disk_resources: std::sync::Arc<DiskResources>,
     state: std::sync::Arc<State>,
     snapshot: Option<String>,
     tails: std::collections::BTreeMap<String, Option<String>>,
@@ -181,6 +182,7 @@ impl Engine {
         self.require_no_commit_preparation()?;
         Ok(IntegrityScrubPlan {
             config: self.config.clone(),
+            disk_resources: std::sync::Arc::clone(&self.disk_resources),
             state: std::sync::Arc::clone(&self.state),
             snapshot: self.snapshot.clone(),
             tails: self
@@ -282,7 +284,14 @@ impl Engine {
                 let directory = version_dir(disk, &version.history_tree_id, version_id);
                 payloads.push((
                     slot.clone(),
-                    open_payload_file_observed(&directory, version, &mut observe_layout),
+                    plan.disk_resources.get(disk).and_then(|handle| {
+                        open_payload_file_observed_at(
+                            &handle.root,
+                            &directory,
+                            version,
+                            &mut observe_layout,
+                        )
+                    }),
                 ));
             }
         }
@@ -409,7 +418,7 @@ impl IntegrityScrubPlan {
     /// for rate allowance. Ordinary reads are <=64 KiB; one locked path-discovery
     /// batch defers its actual marker-byte charge (<128 KiB) until after unlock. It must wake on cancellation;
     /// the core checks the token before reads and immediately after the callback.
-    /// Identity sysfs/procfs and directory-enumeration syscalls are not byte metered.
+    /// Directory-enumeration syscalls are not byte metered; stored seals are.
     /// `on_progress` publishes partial counters promptly after an observed issue;
     /// Running is never healthy. Neither callback can interrupt a kernel I/O call.
     pub fn run(
@@ -511,9 +520,9 @@ impl IntegrityScrubPlan {
         let mut identities = std::collections::BTreeMap::new();
         for disk in &self.config.disks {
             observe(0)?;
-            match validate_seal_observed(&self.config, disk, observe) {
-                Ok(identity) => {
-                    identities.insert(disk.slot_id.as_str(), identity);
+            match self.verify_disk_seal(disk, observe) {
+                Ok(handle) => {
+                    identities.insert(disk.slot_id.as_str(), handle);
                 }
                 Err(error) => {
                     let error = resumable_failure(error)?;
@@ -641,10 +650,15 @@ impl IntegrityScrubPlan {
                     .iter()
                     .find(|disk| disk.slot_id == *slot)
                     .expect("invariant: admitted placement references a configured disk");
-                let metadata = identities
-                    .get(slot.as_str())
-                    .filter(|_| disk.metadata_member)
-                    .map(|identity| self.metadata_integrity.read_context(&self.config, identity));
+                let Some(handle) = identities.get(slot.as_str()) else {
+                    continue;
+                };
+                let metadata = super::provenance::MetadataReadContext::for_disk(
+                    &self.config,
+                    &handle.seal,
+                    disk.metadata_member
+                        .then_some(self.metadata_integrity.as_ref()),
+                );
                 let directory = version_dir(disk, &version.history_tree_id, id);
                 let target = || IntegrityScrubTarget::Version {
                     slot_id: slot.clone(),
@@ -652,18 +666,16 @@ impl IntegrityScrubPlan {
                 };
                 match state {
                     None | Some(ContentState::Available) => {
-                        if !identities.contains_key(slot.as_str()) {
-                            continue;
-                        }
                         let allows_missing_proof = acknowledged_unavailable
                             .as_ref()
                             .is_some_and(|proof| proof.contains(id, slot));
                         match verify_version_metadata_observed(
+                            &handle.root,
                             &directory,
                             version,
                             allows_missing_proof,
                             observe,
-                            metadata.as_ref(),
+                            Some(&metadata),
                         ) {
                             Ok(LocalReplicaMetadata::Published) => (),
                             Ok(LocalReplicaMetadata::AcknowledgedUnavailable) => {
@@ -687,10 +699,11 @@ impl IntegrityScrubPlan {
                             continue;
                         }
                         let file = opened.remove(slot).expect("invariant: successful batch admission holds each available required route");
-                        let verified = read_checksum_manifest(&directory, version, observe)
-                            .and_then(|manifest| {
-                                verify_open_payload_observed(file, manifest, version, observe)
-                            });
+                        let verified =
+                            read_checksum_manifest_at(&handle.root, &directory, version, observe)
+                                .and_then(|manifest| {
+                                    verify_open_payload_observed(file, manifest, version, observe)
+                                });
                         match verified {
                             Ok(_) => report.payload_copies_verified += 1,
                             Err(error) => {
@@ -700,15 +713,13 @@ impl IntegrityScrubPlan {
                         }
                     }
                     Some(state @ (ContentState::Purged | ContentState::Migrated)) => {
-                        if !identities.contains_key(slot.as_str()) {
-                            continue;
-                        }
                         match verify_retained_tombstone_observed(
+                            &handle.root,
                             &directory,
                             version,
                             state,
                             observe,
-                            metadata.as_ref(),
+                            Some(&metadata),
                         ) {
                             Ok(true) => report.tombstones_verified += 1,
                             Ok(false) => (),
@@ -726,14 +737,12 @@ impl IntegrityScrubPlan {
             drop(batch);
         }
         for disk in &self.config.disks {
-            let Some(identity) = identities.get(disk.slot_id.as_str()) else {
+            let Some(_) = identities.get(disk.slot_id.as_str()) else {
                 continue;
             };
             observe(0)?;
-            match validate_seal_observed(&self.config, disk, observe)
-                .and_then(|after| stable_identity(identity, &after))
-            {
-                Ok(()) => (),
+            match self.verify_disk_seal(disk, observe) {
+                Ok(_) => (),
                 Err(error) => {
                     let error = resumable_failure(error)?;
                     if disk.metadata_member {
@@ -747,27 +756,25 @@ impl IntegrityScrubPlan {
         }
         observe(0)
     }
+
+    fn verify_disk_seal(
+        &self,
+        disk: &DiskConfig,
+        observe: &mut impl FnMut(usize) -> Result<()>,
+    ) -> Result<&DiskHandle> {
+        let handle = self.disk_resources.get(disk)?;
+        let stored: DiskSeal = handle
+            .root
+            .read_json_observed(&disk.root.join("disk.json"), observe)?;
+        validate_stored_seal(&stored, &handle.seal)?;
+        Ok(handle)
+    }
 }
 
 fn disk_target(disk: &DiskConfig) -> IntegrityScrubTarget {
     IntegrityScrubTarget::Disk {
         slot_id: disk.slot_id.clone(),
     }
-}
-
-fn stable_identity(before: &DiskSeal, after: &DiskSeal) -> Result<()> {
-    if before.device != after.device
-        || before.inode != after.inode
-        || before.physical_device != after.physical_device
-        || before.filesystem_uuid != after.filesystem_uuid
-        || before.binding_generation != after.binding_generation
-    {
-        return Err(Error::new(
-            ErrorCode::DiskIdentityMismatch,
-            "disk changed during integrity scrub",
-        ));
-    }
-    Ok(())
 }
 
 // These two causes mean the scan did not finish, not that an object was unhealthy.
@@ -784,13 +791,14 @@ enum LocalReplicaMetadata {
 }
 
 fn verify_version_metadata_observed(
+    root: &DiskRoot,
     directory: &std::path::Path,
     version: &FileVersion,
     allows_missing_proof: bool,
     observe: &mut impl FnMut(usize) -> Result<()>,
     metadata: Option<&super::provenance::MetadataReadContext<'_>>,
 ) -> Result<LocalReplicaMetadata> {
-    let stored: FileVersion = read_json_observed(&directory.join("version.json"), observe)?;
+    let stored: FileVersion = root.read_json_observed(&directory.join("version.json"), observe)?;
     if stored != *version {
         return Err(Error::new(
             ErrorCode::ObjectCorrupt,
@@ -798,15 +806,18 @@ fn verify_version_metadata_observed(
         ));
     }
     if allows_missing_proof
-        && open_optional_regular(&directory.join("publication-proof.json"))?.is_none()
+        && root
+            .open_optional_regular(&directory.join("publication-proof.json"))?
+            .is_none()
     {
         return Ok(LocalReplicaMetadata::AcknowledgedUnavailable);
     }
-    verify_local_publication_observed(directory, version, observe, metadata)?;
+    verify_local_publication_at(root, directory, version, observe, metadata)?;
     Ok(LocalReplicaMetadata::Published)
 }
 
 fn verify_retained_tombstone_observed(
+    root: &DiskRoot,
     directory: &std::path::Path,
     version: &FileVersion,
     state: ContentState,
@@ -815,7 +826,7 @@ fn verify_retained_tombstone_observed(
 ) -> Result<bool> {
     // The safe component-by-component directory opener rejects symlink
     // ancestors before absence can be classified as a legitimately removed tree.
-    match existing_private_dir(directory) {
+    match root.directory(directory) {
         Ok(_) => (),
         Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
             if error.kind() == std::io::ErrorKind::NotFound =>
@@ -824,21 +835,22 @@ fn verify_retained_tombstone_observed(
         }
         Err(error) => return Err(error),
     }
-    let stored: FileVersion = read_json_observed(&directory.join("version.json"), observe)?;
+    let stored: FileVersion = root.read_json_observed(&directory.join("version.json"), observe)?;
     if stored != *version {
         return Err(Error::new(
             ErrorCode::ObjectCorrupt,
             "retained version differs from admitted version",
         ));
     }
-    let tombstone: ContentTombstone = read_json_observed(&directory.join("purged.json"), observe)?;
+    let tombstone: ContentTombstone =
+        root.read_json_observed(&directory.join("purged.json"), observe)?;
     if tombstone.state != state {
         return Err(Error::new(
             ErrorCode::TombstoneInvalid,
             "local tombstone differs from current content state",
         ));
     }
-    verify_tombstone_content_observed(directory, version, &tombstone, observe, metadata)?;
+    verify_tombstone_content_at(root, directory, version, &tombstone, observe, metadata)?;
     Ok(true)
 }
 
@@ -848,7 +860,8 @@ fn verify_retained_tombstone(
     version: &FileVersion,
     state: ContentState,
 ) -> Result<bool> {
-    verify_retained_tombstone_observed(directory, version, state, &mut |_| Ok(()), None)
+    let root = DiskRoot::open(directory.ancestors().nth(4).unwrap())?;
+    verify_retained_tombstone_observed(&root, directory, version, state, &mut |_| Ok(()), None)
 }
 
 #[cfg(test)]

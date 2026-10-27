@@ -198,7 +198,7 @@ fn held_proof_rejects_disk_seal_replacement_and_candidate_changes() {
         storage_contract::ErrorCode::PreparationStale
     );
     assert!(epoch.matches(&engine.metadata_integrity));
-    let path = proof.disks[0].root.join("disk.json");
+    let path = proof.disks[0].path.clone();
     let bytes = std::fs::read(&path).unwrap();
     std::fs::rename(&path, path.with_extension("old")).unwrap();
     std::fs::write(&path, bytes).unwrap();
@@ -229,8 +229,8 @@ fn old_payload_proof_identity_fault_revokes_the_current_writer_after_a_later_pub
         .iter()
         .find(|disk| disk.metadata_member)
         .unwrap()
-        .root
-        .join("disk.json");
+        .path
+        .clone();
     let bytes = std::fs::read(&path).unwrap();
     std::fs::rename(&path, path.with_extension("old")).unwrap();
     std::fs::write(path, bytes).unwrap();
@@ -256,8 +256,8 @@ fn non_metadata_payload_disk_identity_fault_does_not_revoke_shared_graph_provena
         .iter()
         .find(|disk| !disk.metadata_member)
         .unwrap()
-        .root
-        .join("disk.json");
+        .path
+        .clone();
     let bytes = std::fs::read(&path).unwrap();
     std::fs::rename(&path, path.with_extension("old")).unwrap();
     std::fs::write(path, bytes).unwrap();
@@ -280,6 +280,7 @@ fn payload_preparation_reports_a_missing_metadata_seal_to_its_writer() {
     assert!(
         PayloadPreparation::new(
             &engine.config,
+            &engine.disk_resources,
             &candidate,
             Arc::clone(&engine.metadata_integrity)
         )
@@ -315,11 +316,12 @@ fn preparation_pins_disk_identity_before_payload_work() {
     let epoch = engine.metadata_integrity.capture();
     let preparation = PayloadPreparation::new(
         &engine.config,
+        &engine.disk_resources,
         &candidate,
         Arc::clone(&engine.metadata_integrity),
     )
     .unwrap();
-    let path = preparation.disks[0].root.join("disk.json");
+    let path = preparation.disks[0].path.clone();
     let bytes = std::fs::read(&path).unwrap();
     std::fs::rename(&path, path.with_extension("old")).unwrap();
     std::fs::write(&path, bytes).unwrap();
@@ -333,8 +335,12 @@ fn preparation_pins_disk_identity_before_payload_work() {
 // Pre-optimization reference: retain the discarded first pass explicitly.
 fn reference_prepare(engine: &Engine, candidate: &Candidate) -> Result<VerifiedPayloadSet> {
     let config = &engine.config;
-    let preparation =
-        PayloadPreparation::new(config, candidate, Arc::clone(&engine.metadata_integrity))?;
+    let preparation = PayloadPreparation::new(
+        config,
+        &engine.disk_resources,
+        candidate,
+        Arc::clone(&engine.metadata_integrity),
+    )?;
     let replicas: usize = candidate
         .versions
         .iter()
@@ -344,8 +350,7 @@ fn reference_prepare(engine: &Engine, candidate: &Candidate) -> Result<VerifiedP
     let mut entries = Vec::new();
     for evidence in &candidate.versions {
         for slot in &evidence.placement.route_slot_ids {
-            let entry =
-                verify_replica(config, &evidence.version, slot, &engine.metadata_integrity)?;
+            let entry = verify_replica(config, &engine.disk_resources, &evidence.version, slot)?;
             if !full_revalidation {
                 entries.push(entry);
             }
@@ -355,6 +360,7 @@ fn reference_prepare(engine: &Engine, candidate: &Candidate) -> Result<VerifiedP
         metadata_integrity: preparation.metadata_integrity,
         entries,
         disks: preparation.disks,
+        resources: preparation.resources,
         full_revalidation,
     };
     proof.validate(config, candidate)?;
@@ -449,11 +455,12 @@ fn large_preparation_rechecks_disk_identity_after_last_replica() {
     let epoch = engine.metadata_integrity.capture();
     let preparation = PayloadPreparation::new(
         &engine.config,
+        &engine.disk_resources,
         &candidate,
         Arc::clone(&engine.metadata_integrity),
     )
     .unwrap();
-    let path = preparation.disks[0].root.join("disk.json");
+    let path = preparation.disks[0].path.clone();
     let bytes = std::fs::read(&path).unwrap();
     // Replace with identical contents after all hashes succeed, while the
     // original disk seal is still held. Content equality is not live evidence.
@@ -476,11 +483,12 @@ fn large_preparation_rejects_disk_change_before_hashing() {
     let epoch = engine.metadata_integrity.capture();
     let preparation = PayloadPreparation::new(
         &engine.config,
+        &engine.disk_resources,
         &candidate,
         Arc::clone(&engine.metadata_integrity),
     )
     .unwrap();
-    let path = preparation.disks[0].root.join("disk.json");
+    let path = preparation.disks[0].path.clone();
     let bytes = std::fs::read(&path).unwrap();
     std::fs::rename(&path, path.with_extension("old")).unwrap();
     std::fs::write(&path, bytes).unwrap();
@@ -597,6 +605,7 @@ fn existing_install_token_does_not_replace_decision_byte_verification() {
     assert_eq!(
         PayloadPreparation::new(
             &engine.config,
+            &engine.disk_resources,
             &candidate,
             Arc::clone(&engine.metadata_integrity)
         )
@@ -632,7 +641,7 @@ fn existing_admission_above_descriptor_budget_uses_uncached_preparation() {
 }
 
 #[test]
-fn name_projection_preparation_reports_shared_identity_faults_at_the_source() {
+fn name_projection_uses_the_owner_but_payload_admission_reports_a_corrupt_seal() {
     let (_temp, engine, candidate) = fixture();
     let version = &candidate.versions[0].version;
     let mut next = engine.state().clone();
@@ -644,15 +653,61 @@ fn name_projection_preparation_reports_shared_identity_faults_at_the_source() {
     assert!(disk.metadata_member);
     let epoch = engine.metadata_integrity.capture();
     std::fs::remove_file(disk.root.join("disk.json")).unwrap();
+    crate::container_storage::prepare_names(
+        &engine.config,
+        &engine.disk_resources,
+        &crate::state_projection::ProjectionTransition::new(engine.state(), &next, None).unwrap(),
+        MAX_METADATA,
+    )
+    .unwrap();
+    assert!(epoch.matches(&engine.metadata_integrity));
     assert!(
-        crate::container_storage::prepare_names(
+        PayloadPreparation::new(
             &engine.config,
-            &crate::state_projection::ProjectionTransition::new(engine.state(), &next, None)
-                .unwrap(),
-            MAX_METADATA,
-            Some(&engine.metadata_integrity),
+            &engine.disk_resources,
+            &candidate,
+            Arc::clone(&engine.metadata_integrity)
         )
         .is_err()
     );
     assert!(!epoch.matches(&engine.metadata_integrity));
+}
+
+#[test]
+fn held_proof_does_not_rebind_when_the_configured_names_are_replaced() {
+    let (_temp, engine, candidate) = fixture();
+    let proof = VerifiedPayloadSet::prepare(&engine, &candidate).unwrap();
+    for disk in &engine.config.disks {
+        std::fs::rename(&disk.root, disk.root.with_extension("held")).unwrap();
+        std::fs::create_dir(&disk.root).unwrap();
+    }
+    proof.validate(&engine.config, &candidate).unwrap();
+    assert!(
+        engine
+            .config
+            .disks
+            .iter()
+            .all(|disk| std::fs::read_dir(&disk.root).unwrap().next().is_none())
+    );
+}
+
+#[test]
+fn detached_decision_rejects_a_different_disk_resource_generation() {
+    let (_temp, mut engine, candidate) = fixture();
+    let mut next = engine.state().clone();
+    next.sequence = engine.next_slot;
+    let result = engine.state.operations[&candidate.operation_id].clone();
+    let detached = engine
+        .prepare_publication(next, Vec::new(), result, MAX_METADATA)
+        .unwrap();
+    let sequence = engine.state.sequence;
+    let slot = engine.next_slot;
+    engine.disk_resources = Arc::new(DiskResources::open(&engine.config, true).unwrap());
+    assert_eq!(
+        engine.decide_publication(detached).unwrap_err().code(),
+        ErrorCode::PreparationStale
+    );
+    assert_eq!(engine.state.sequence, sequence);
+    assert_eq!(engine.next_slot, slot);
+    assert!(!engine.blocked);
 }

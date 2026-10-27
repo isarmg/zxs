@@ -37,7 +37,7 @@ mod workspace_budget;
 mod workspace_limits;
 pub use workspace_limits::RetainedWorkspaceLimits;
 mod workspace_storage;
-use config::{DiskLockPolicy, acquire_locks};
+use config::acquire_locks;
 
 /// Nonfatal checkpoint failures from the latest recovery invocation.
 #[derive(Debug, Default)]
@@ -49,6 +49,7 @@ pub struct RecoveryWarnings {
 pub struct Engine {
     pub(crate) root: PathBuf,
     pub(crate) config: ValidatedConfig,
+    pub(crate) disk_resources: Arc<DiskResources>,
     pub(crate) state: Arc<State>,
     pub(crate) workspaces: BTreeMap<String, Workspace>,
     workspace_budget: workspace_budget::WorkspaceBudget,
@@ -245,21 +246,13 @@ impl Engine {
             roots.push(path);
         }
         let config = config.with_disk_roots(roots)?;
-        let mut physical = BTreeSet::new();
+        let disk_resources = Arc::new(DiskResources::open(&config, false)?);
+        let locks = acquire_locks(&root, &disk_resources)?;
         for d in &config.disks {
-            let seal = identity(&config, d)?;
-            if !physical.insert(seal.physical_device.clone()) {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::DiskNotIndependent,
-                    "two slots reference one physical disk",
-                ));
-            }
-        }
-        let locks = acquire_locks(&root, &config, DiskLockPolicy::NewPoolRoots)?;
-        for d in &config.disks {
-            let seal = identity(&config, d)?;
-            write_json(&d.root.join("disk.json"), &seal, false)?;
-            write_atomic(&d.root.join("README.txt"),b"ZXS disk format 2. Ordinary full files are stored below histories/. Use zxs-rescue offline-check/offline-export before recovery. Development disks are not physical redundancy evidence.\n",false)?;
+            let disk = disk_resources.get(d)?;
+            disk.root
+                .write_json(&d.root.join("disk.json"), &disk.seal, false)?;
+            disk.root.write_atomic(&d.root.join("README.txt"),b"ZXS disk format 2. Ordinary full files are stored below histories/. Use zxs-rescue offline-check/offline-export before recovery. Development disks are not physical redundancy evidence.\n",false)?;
             for p in [
                 "histories",
                 "metadata/application-log",
@@ -267,13 +260,13 @@ impl Engine {
                 "staging",
                 "quarantine",
             ] {
-                private_dir(&d.root.join(p))?;
+                disk.root.private_dir(&d.root.join(p))?;
             }
-            sync_dir(&d.root)?;
+            disk.root.sync_dir(&d.root)?;
         }
         // Every payload disk retains the fixed membership anchor for offline proofs.
         for d in &config.disks {
-            write_json(
+            disk_resources.get(d)?.root.write_json(
                 &d.root.join("metadata/pool-membership/config.json"),
                 &config,
                 false,
@@ -292,13 +285,17 @@ impl Engine {
             .map(|disk| {
                 Ok((
                     disk.disk_id.clone(),
-                    crate::journal::JournalWriter::create(disk)?,
+                    crate::journal::JournalWriter::create_at(
+                        &disk_resources.get(disk)?.root,
+                        disk,
+                    )?,
                 ))
             })
             .collect::<Result<_>>()?;
         let engine = Self {
             root,
             config,
+            disk_resources,
             state: Arc::new(state),
             workspaces: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
@@ -362,10 +359,12 @@ impl Engine {
     /// Admission preflight is read-only apart from writer lock files. Keep this
     /// same Engine and its locks through replay and authoritative reconciliation.
     fn prepare_workspace_recovery(root: PathBuf, config: ValidatedConfig) -> Result<Self> {
-        let locks = acquire_locks(&root, &config, DiskLockPolicy::AvailableMembers)?;
+        let disk_resources = Arc::new(DiskResources::open(&config, true)?);
+        let locks = acquire_locks(&root, &disk_resources)?;
         let mut engine = Self {
             root,
             config,
+            disk_resources,
             state: Arc::new(State {
                 topology_generation: 1,
                 ..State::default()
@@ -514,9 +513,6 @@ impl Engine {
                 "reopen recovery to acquire every metadata journal",
             ));
         }
-        for disk in &self.config.disks {
-            self.metadata_integrity.validate_seal(&self.config, disk)?;
-        }
         Ok(())
     }
     pub fn config(&self) -> &Config {
@@ -639,11 +635,7 @@ impl Engine {
     pub(crate) fn trusted_evidence_members(&self) -> Vec<DiskConfig> {
         self.members()
             .into_iter()
-            .filter(|disk| {
-                self.metadata_integrity
-                    .observe(validate_seal(&self.config, disk))
-                    .is_ok()
-            })
+            .filter(|disk| self.disk_resources.available(disk).is_some())
             .collect()
     }
     pub(crate) fn members(&self) -> Vec<DiskConfig> {
@@ -676,10 +668,6 @@ impl Engine {
                 "an unresolved decision or unavailable metadata member blocks writes",
             )
             .retryable());
-        }
-        for d in self.members() {
-            self.metadata_integrity
-                .observe(validate_seal(&self.config, &d))?;
         }
         Ok(())
     }

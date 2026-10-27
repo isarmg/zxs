@@ -17,6 +17,7 @@ fn unique_object_budget_is_an_explicit_incomplete_scan_not_an_empty_success() {
     let mut scan = MemberScan {
         plan: &plan,
         disk: &disk,
+        root: &plan.disk_resources.get(&disk).unwrap().root,
         observe: &mut observe,
         progress: &mut progress,
         report: &mut report,
@@ -51,6 +52,7 @@ fn one_page_is_read_once_even_if_multiple_closures_share_it() {
     let mut scan = MemberScan {
         plan: &plan,
         disk: &disk,
+        root: &plan.disk_resources.get(&disk).unwrap().root,
         observe: &mut observe,
         progress: &mut progress,
         report: &mut report,
@@ -91,6 +93,7 @@ fn page_role_classification_never_reloads_a_catalog_leaf() {
         let mut scan = MemberScan {
             plan: &plan,
             disk: &disk,
+            root: &plan.disk_resources.get(&disk).unwrap().root,
             observe: &mut observe,
             progress: &mut progress,
             report: &mut report,

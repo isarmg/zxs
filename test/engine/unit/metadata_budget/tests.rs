@@ -676,6 +676,7 @@ fn reused_content_pages_have_identical_exact_tombstone_budget_without_installing
     let budget = |snapshot: &PreparedSnapshot, maximum| {
         preflight_publication_prepared(
             &engine.config,
+            &engine.disk_resources,
             &candidate,
             &result,
             &after,

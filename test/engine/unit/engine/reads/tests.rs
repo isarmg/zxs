@@ -27,6 +27,209 @@ fn fixture() -> (tempfile::TempDir, Engine, Workspace) {
     (temp, engine, workspace)
 }
 
+fn committed_fixture() -> (tempfile::TempDir, Engine, String) {
+    let (temp, mut engine, workspace) = fixture();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: storage_contract::OperationId::generate(),
+            principal: "admin".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: "held disk".into(),
+            request_digest: None,
+        })
+        .unwrap();
+    let version = engine.list_tree(&workspace.branch_id).unwrap()[0]
+        .version_id
+        .clone();
+    (temp, engine, version)
+}
+
+#[test]
+fn live_reads_and_detached_plan_keep_the_admitted_disks_after_root_replacement() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_temp, engine, version) = committed_fixture();
+    let plan = engine.prepare_content(&version).unwrap();
+    for disk in &engine.config.disks {
+        fs::rename(&disk.root, disk.root.with_extension("held")).unwrap();
+        fs::create_dir(&disk.root).unwrap();
+        fs::set_permissions(&disk.root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(disk.root.join("replacement-only"), b"not an admitted disk").unwrap();
+    }
+    let mut bytes = Vec::new();
+    engine
+        .open_content(&version)
+        .unwrap()
+        .file
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert_eq!(bytes, b"original");
+    bytes.clear();
+    plan.open().unwrap().file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"original");
+    assert!(
+        engine
+            .disk_status()
+            .unwrap()
+            .iter()
+            .all(|disk| !disk.online)
+    );
+    assert!(
+        engine
+            .config
+            .disks
+            .iter()
+            .all(|disk| { fs::read_dir(&disk.root).unwrap().count() == 1 })
+    );
+}
+
+#[test]
+fn a_content_plan_does_not_retain_writer_locks() {
+    let (temp, engine, version) = committed_fixture();
+    let plan = engine.prepare_content(&version).unwrap();
+    drop(engine);
+    let reopened = Engine::open(&temp.path().join("state")).unwrap();
+    let mut bytes = Vec::new();
+    plan.open().unwrap().file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"original");
+    assert!(reopened.open_content(&version).is_ok());
+}
+
+#[test]
+fn staging_and_detached_commit_use_the_admitted_disks_after_root_replacement() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_temp, mut engine, workspace) = fixture();
+    for disk in &engine.config.disks {
+        fs::rename(&disk.root, disk.root.with_extension("held")).unwrap();
+        fs::create_dir(&disk.root).unwrap();
+        fs::set_permissions(&disk.root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(disk.root.join("replacement-only"), b"not admitted").unwrap();
+    }
+    engine
+        .stage_bytes(&workspace.workspace_id, "second", b"new content")
+        .unwrap();
+    let operation = storage_contract::OperationId::generate();
+    let prepared = engine
+        .prepare_workspace_commit(
+            CommitRequest {
+                workspace_id: workspace.workspace_id,
+                operation_id: operation,
+                principal: "admin".into(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: "same held disks".into(),
+                request_digest: None,
+            },
+            None,
+        )
+        .unwrap()
+        .execute()
+        .unwrap();
+    engine.finish_workspace_commit(prepared).unwrap();
+    assert!(engine.operation(operation).is_ok());
+    let entries = engine.list_tree(&workspace.branch_id).unwrap();
+    assert_eq!(entries.len(), 2);
+    for entry in entries {
+        let mut bytes = Vec::new();
+        engine
+            .open_content(&entry.version_id)
+            .unwrap()
+            .file
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert!(bytes == b"original" || bytes == b"new content");
+    }
+    for disk in &engine.config.disks {
+        assert_eq!(fs::read_dir(&disk.root).unwrap().count(), 1);
+        assert!(
+            crate::journal::scan_at(&engine.disk_resources.get(disk).unwrap().root, disk)
+                .unwrap()
+                .records
+                .len()
+                >= 8
+        );
+    }
+}
+
+#[test]
+fn detached_upload_keeps_its_admitted_workspace_directory_after_root_replacement() {
+    use std::os::unix::fs::PermissionsExt;
+    let (temp, mut engine, workspace) = fixture();
+    let source = temp.path().join("upload-source");
+    fs::write(&source, b"detached content").unwrap();
+    let item = storage_contract::new_id("entry");
+    let preparation = engine
+        .prepare_upload(&workspace.workspace_id, &item, "detached", &source, 1)
+        .unwrap();
+    for disk in &engine.config.disks {
+        fs::rename(&disk.root, disk.root.with_extension("held")).unwrap();
+        fs::create_dir(&disk.root).unwrap();
+        fs::set_permissions(&disk.root, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    engine
+        .finish_upload(preparation.execute().unwrap())
+        .unwrap();
+    let mut bytes = Vec::new();
+    engine
+        .open_workspace_content(&workspace.workspace_id, &item, "admin")
+        .unwrap()
+        .file
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert_eq!(bytes, b"detached content");
+    assert!(
+        engine
+            .config
+            .disks
+            .iter()
+            .all(|disk| fs::read_dir(&disk.root).unwrap().next().is_none())
+    );
+}
+
+#[test]
+fn held_reads_still_read_tombstones_and_corrupt_bytes_from_the_old_disk() {
+    let (_temp, engine, version_id) = committed_fixture();
+    let version = engine.state.versions.get(&version_id).unwrap();
+    for disk in &engine.config.disks {
+        let directory = version_dir(disk, &version.history_tree_id, &version_id);
+        let body = crate::container_storage::content_path(&directory, version).unwrap();
+        let moved = disk.root.with_extension("held");
+        fs::rename(&disk.root, &moved).unwrap();
+        let body = moved.join(body.strip_prefix(&disk.root).unwrap());
+        let replacement = body.with_extension("damaged");
+        fs::write(&replacement, b"modified").unwrap();
+        fs::rename(replacement, &body).unwrap();
+    }
+    assert_eq!(
+        engine.open_content(&version_id).err().unwrap().code(),
+        ErrorCode::ContentUnavailable
+    );
+    assert_eq!(
+        engine.prepare_content(&version_id).unwrap().health(3),
+        storage_contract::CurrentHealth::Unavailable
+    );
+    for disk in &engine.config.disks {
+        let directory = version_dir(disk, &version.history_tree_id, &version_id);
+        let moved = disk.root.with_extension("held");
+        fs::write(
+            moved
+                .join(directory.strip_prefix(&disk.root).unwrap())
+                .join("purged.json"),
+            b"present",
+        )
+        .unwrap();
+    }
+    let error = engine
+        .prepare_content(&version_id)
+        .unwrap()
+        .open()
+        .err()
+        .unwrap();
+    assert_eq!(error.code(), ErrorCode::ContentUnavailable);
+    assert!(std::error::Error::source(&error).is_some());
+}
+
 #[test]
 fn verified_replica_holds_checked_inode_and_rewinds_before_returning() {
     let (_temp, mut engine, workspace) = fixture();
@@ -502,7 +705,7 @@ fn content_plan_keeps_admitted_roots_and_limits_after_rebinding_and_engine_drop(
 }
 
 #[test]
-fn detached_content_plan_checks_current_member_identity_and_preserves_cause() {
+fn detached_content_plan_keeps_its_members_when_their_names_are_replaced() {
     let (temp, engine, version) = commit_fixture();
     let plan = engine.prepare_content(&version.version_id).unwrap();
     let roots: Vec<_> = engine
@@ -518,9 +721,9 @@ fn detached_content_plan_checks_current_member_identity_and_preserves_cause() {
         fs::create_dir(root).unwrap();
         fs::copy(removed.join("disk.json"), root.join("disk.json")).unwrap();
     }
-    let error = plan.open().err().unwrap();
-    assert_eq!(error.code(), ErrorCode::ContentUnavailable);
-    assert!(std::error::Error::source(&error).is_some());
+    let mut bytes = Vec::new();
+    plan.open().unwrap().file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"original");
 }
 
 #[test]

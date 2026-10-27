@@ -54,19 +54,6 @@ impl MetadataIntegrity {
         }
         result
     }
-
-    pub(crate) fn validate_seal(
-        &self,
-        config: &super::ValidatedConfig,
-        disk: &crate::DiskConfig,
-    ) -> Result<crate::disk::DiskSeal> {
-        let identity = crate::disk::validate_seal(config, disk);
-        if disk.metadata_member {
-            self.observe(identity)
-        } else {
-            identity
-        }
-    }
 }
 
 impl MetadataEpoch {
@@ -105,7 +92,7 @@ impl MetadataEpoch {
 pub(crate) struct MetadataReadContext<'a> {
     config: &'a super::ValidatedConfig,
     identity: &'a crate::disk::DiskSeal,
-    integrity: &'a MetadataIntegrity,
+    integrity: Option<&'a MetadataIntegrity>,
 }
 
 impl MetadataIntegrity {
@@ -114,31 +101,43 @@ impl MetadataIntegrity {
         config: &'a super::ValidatedConfig,
         identity: &'a crate::disk::DiskSeal,
     ) -> MetadataReadContext<'a> {
-        MetadataReadContext {
-            config,
-            identity,
-            integrity: self,
-        }
+        MetadataReadContext::for_disk(config, identity, Some(self))
     }
 }
 
 impl MetadataReadContext<'_> {
+    pub(crate) fn for_disk<'a>(
+        config: &'a super::ValidatedConfig,
+        identity: &'a crate::disk::DiskSeal,
+        integrity: Option<&'a MetadataIntegrity>,
+    ) -> MetadataReadContext<'a> {
+        MetadataReadContext {
+            config,
+            identity,
+            integrity,
+        }
+    }
+
+    fn observe<T>(&self, result: Result<T>) -> Result<T> {
+        match self.integrity {
+            Some(integrity) => integrity.observe(result),
+            None => result,
+        }
+    }
     pub(crate) fn membership(
         &self,
         loaded: Result<super::ValidatedConfig>,
     ) -> Result<super::ValidatedConfig> {
-        let saved = self.integrity.observe(loaded)?;
-        self.integrity
-            .observe(self.config.verify_saved_metadata_membership(&saved))?;
+        let saved = self.observe(loaded)?;
+        self.observe(self.config.verify_saved_metadata_membership(&saved))?;
         Ok(saved)
     }
     pub(crate) fn seal(
         &self,
         loaded: Result<crate::disk::DiskSeal>,
     ) -> Result<crate::disk::DiskSeal> {
-        let seal = self.integrity.observe(loaded)?;
-        self.integrity
-            .observe(crate::disk::validate_stored_seal(&seal, self.identity))?;
+        let seal = self.observe(loaded)?;
+        self.observe(crate::disk::validate_stored_seal(&seal, self.identity))?;
         Ok(seal)
     }
 }

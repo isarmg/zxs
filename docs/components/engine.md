@@ -6,6 +6,7 @@
 | --- | --- |
 | `engine.rs` | 生命周期、业务准入、操作查询、在克隆状态上组合一次业务变更 |
 | `engine/config.rs` | 拓扑与额度配置、独占操作系统锁 |
+| `disk/owned.rs` | 同代磁盘根与身份所有权、盘内 FD 相对 I/O；不持 writer lock |
 | `engine/publication.rs` | 正文准备、精确元数据预检、持久决定与发布屏障 |
 | `engine/recovery.rs` | 仅沿已验证发布前缀回放，协调未完成决定 |
 | `engine/reads.rs` | 副本验证、读租约、导出、磁盘容量与状态 |
@@ -29,6 +30,12 @@
 | `wire.rs` / `protection.rs` | 冻结上传清单、请求摘要、后续版本放置与保护规则 |
 
 ## 权威数据与投影
+
+### 磁盘资源生命周期
+
+`Engine` 的 `Arc<DiskResources>` 保存一次准入后的磁盘根 FD 与实际身份，独立于配置和 `_locks`。Planning、detached publication、内容读计划和 scrub 共用该代资源；盘内遍历、marker、正文/证明、对象图、journal、镜像、修复与 checkpoint 均从同一根执行相对 I/O，容量也读取该 FD。根路径改名或替换不把普通 I/O 转向新盘；缺席成员必须重开后才重新准入。资源 owner 不持 writer lock，内容读计划不会延长写者锁生命周期，写准备仍显式保留原 OS 锁。
+
+初始化、重开和停服重配验证实际设备、seal 与物理独立性；普通操作不轮询 mountinfo/sysfs。真实文件读取、seal/成员证明、正文哈希和文件/目录同步不由身份代替。显式 `check`、成员 probe、磁盘状态及容量 observation 仍描述当前命名路径，不作写入准入。资源与候选代际、同步预算及外部路径边界见 [ADR 0007](../adr/0007-owned-disk-resources.md)。
 
 业务操作先在 State 克隆上组合修改；分支创建只登记冻结引用，不新建空文件。实际内容写入才准备 FULL 和固定路由副本。DirectoryBranch 保持稳定 ID/名称，DirectoryTree 保存不可变组合；文件修改或子项选择只增加子树并推进 head。PREPARE 不表示可见，ACCEPT → FINALIZE → PUBLICATION 及同步收据共同决定公开状态，恢复沿原候选继续。
 

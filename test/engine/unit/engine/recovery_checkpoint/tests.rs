@@ -101,14 +101,14 @@ fn same_length_legacy_payload_changes_invalidate_coverage() {
     );
     assert!(
         !payload(
-            &config.disks[0].root,
+            &DiskRoot::open(&config.disks[0].root).unwrap(),
             Path::new("histories/history_test/versions/ver_test/content/body")
         )
         .unwrap()
     );
     assert!(
         !payload(
-            &config.disks[0].root,
+            &DiskRoot::open(&config.disks[0].root).unwrap(),
             Path::new("histories/history_test/file-containers/file_test/name/legacy/ver_test/body")
         )
         .unwrap()
@@ -612,7 +612,13 @@ fn invalid_paths_and_file_types_have_distinct_causes() {
     ));
     let temp = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink("missing", temp.path().join("link")).unwrap();
-    let error = inventory(temp.path(), Path::new("link"), &mut Vec::new(), &mut 0).unwrap_err();
+    let error = inventory(
+        &DiskRoot::open(temp.path()).unwrap(),
+        Path::new("link"),
+        &mut Vec::new(),
+        &mut 0,
+    )
+    .unwrap_err();
     assert!(matches!(
         error,
         Error::Checkpoint(CheckpointError::FileType(_))
@@ -628,7 +634,7 @@ fn non_utf8_directory_name_retains_source_and_classification() {
         b"",
     )
     .unwrap();
-    let error = children(temp.path(), Path::new("")).unwrap_err();
+    let error = children(&DiskRoot::open(temp.path()).unwrap(), Path::new("")).unwrap_err();
     assert_eq!(error.code(), ErrorCode::CheckpointInvalid);
     match error {
         Error::Context { source, .. } => assert!(matches!(*source, Error::PathEncoding(_))),
@@ -718,4 +724,76 @@ fn coverage_entry_budget_has_its_own_cause() {
         })
     ));
     assert_eq!(entries.len(), MAX_COVERAGE_ENTRIES);
+}
+
+#[test]
+fn checkpoint_inventory_load_and_save_stay_on_the_admitted_root() {
+    let (_temp, system, config) = setup();
+    let engine = reopen(&system).0;
+    let envelope: Envelope = read_json(&path(&config.disks[0])).unwrap();
+    let journals = config
+        .disks
+        .iter()
+        .map(|disk| {
+            let root = &engine.disk_resources.get(disk).unwrap().root;
+            (disk.disk_id.clone(), scan_at(root, disk).unwrap().records)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let prefixes = journals
+        .iter()
+        .map(|(disk, records)| {
+            (
+                disk.clone(),
+                records
+                    .iter()
+                    .map(|(_, hash)| hash.clone())
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect();
+    let disk = &config.disks[0];
+    let moved = disk.root.with_extension("held");
+    std::fs::rename(&disk.root, &moved).unwrap();
+    private_dir(&disk.root).unwrap();
+    write_atomic(&path(disk), b"replacement checkpoint", false).unwrap();
+
+    verify_coverage(&engine, &envelope.checkpoint, &BTreeSet::new()).unwrap();
+    assert_eq!(
+        load(&engine, &prefixes, &Records::new()).unwrap(),
+        Some(envelope.checkpoint.clone())
+    );
+    save(&engine, &journals).unwrap();
+    let saved: Envelope = read_json(&moved.join("metadata/replay-checkpoint.json")).unwrap();
+    assert_eq!(saved.checkpoint, envelope.checkpoint);
+    assert_eq!(
+        std::fs::read(path(disk)).unwrap(),
+        b"replacement checkpoint"
+    );
+
+    let seal_path = moved.join("disk.json");
+    let mut changed_seal: DiskSeal = read_json(&seal_path).unwrap();
+    std::fs::write(&seal_path, b"{").unwrap();
+    assert!(
+        matches!(
+            verify_coverage(&engine, &saved.checkpoint, &BTreeSet::new()),
+            Err(Error::Contract(storage_contract::Error::Json { .. }))
+        ),
+        "the held root is not a cached assertion that its seal bytes remain valid"
+    );
+    assert!(matches!(
+        load(&engine, &prefixes, &Records::new()),
+        Err(Error::Contract(storage_contract::Error::Json { .. }))
+    ));
+    assert!(matches!(
+        save(&engine, &journals),
+        Err(Error::Contract(storage_contract::Error::Json { .. }))
+    ));
+    changed_seal.binding_generation += 1;
+    write_json(&seal_path, &changed_seal, true).unwrap();
+    assert_eq!(
+        verify_coverage(&engine, &saved.checkpoint, &BTreeSet::new())
+            .unwrap_err()
+            .code(),
+        ErrorCode::DiskIdentityMismatch
+    );
 }

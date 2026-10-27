@@ -90,8 +90,12 @@ pub(crate) struct Scan {
 pub(crate) fn log_path(d: &DiskConfig) -> PathBuf {
     d.root.join("metadata/application-log/journal.bin")
 }
+#[cfg(test)]
 pub(crate) fn scan(d: &DiskConfig) -> Result<Scan> {
-    match open_optional_regular(&log_path(d))? {
+    scan_at(&DiskRoot::open(&d.root)?, d)
+}
+pub(crate) fn scan_at(root: &DiskRoot, d: &DiskConfig) -> Result<Scan> {
+    match root.open_optional_regular(&log_path(d))? {
         Some(file) => scan_frames(BufReader::new(file)),
         None => Ok(Scan {
             records: Vec::new(),
@@ -103,14 +107,20 @@ pub(crate) fn scan(d: &DiskConfig) -> Result<Scan> {
 
 /// Existing bytes stay untouched until recovery has accepted the publication prefix.
 pub(crate) struct OpenJournal {
+    directory: std::fs::File,
     file: Option<std::fs::File>,
     pub scan: Scan,
     #[cfg(feature = "fault-injection")]
     opening_fault: Option<OpeningFault>,
 }
 impl OpenJournal {
+    #[cfg(test)]
     pub(crate) fn scan(d: &DiskConfig) -> Result<Self> {
-        let file = open_existing_journal(&log_path(d))?;
+        Self::scan_at(&DiskRoot::open(&d.root)?, d)
+    }
+    pub(crate) fn scan_at(root: &DiskRoot, d: &DiskConfig) -> Result<Self> {
+        let directory = root.directory(log_path(d).parent().expect("journal parent"))?;
+        let file = open_existing_journal(&directory, &journal_name())?;
         let scan = match &file {
             Some(file) => scan_frames(BufReader::new(file))?,
             None => Scan {
@@ -120,25 +130,26 @@ impl OpenJournal {
             },
         };
         Ok(Self {
+            directory,
             file,
             scan,
             #[cfg(feature = "fault-injection")]
             opening_fault: None,
         })
     }
-    pub(crate) fn into_writer(self, d: &DiskConfig) -> Result<JournalWriter> {
+    pub(crate) fn into_writer(self) -> Result<JournalWriter> {
         let file = match self.file {
             Some(file) => {
                 // A surviving leaf may come from a failed creation before its directory fence.
                 sync_open_journal(
                     &file,
-                    log_path(d).parent().expect("journal parent"),
+                    &self.directory,
                     #[cfg(feature = "fault-injection")]
                     self.opening_fault,
                 )?;
                 file
             }
-            None => create_synced_journal(d)?,
+            None => create_synced_journal(&self.directory)?,
         };
         let mut records = self.scan.records;
         let start = records.last().map_or(0, |(last, _)| {
@@ -317,7 +328,7 @@ pub(crate) enum OpeningFault {
 
 fn sync_open_journal(
     file: &std::fs::File,
-    parent: &Path,
+    parent: &std::fs::File,
     #[cfg(feature = "fault-injection")] fault: Option<OpeningFault>,
 ) -> Result<()> {
     #[cfg(feature = "fault-injection")]
@@ -329,24 +340,34 @@ fn sync_open_journal(
     if fault == Some(OpeningFault::DirectorySync) {
         return Err(std::io::Error::from_raw_os_error(5).into());
     }
-    sync_dir(parent)
+    parent.sync_all()?;
+    Ok(())
 }
 
-fn create_synced_journal(d: &DiskConfig) -> Result<std::fs::File> {
-    let path = log_path(d);
-    let file = create_journal(&path)?;
+fn journal_name() -> platform_io::fs_safety::EntryName {
+    platform_io::fs_safety::EntryName::new("journal.bin")
+        .expect("invariant: journal has one fixed entry name")
+}
+
+fn create_synced_journal(parent: &std::fs::File) -> Result<std::fs::File> {
+    let file = create_journal(parent, &journal_name())?;
     sync_open_journal(
         &file,
-        path.parent().expect("journal parent"),
+        parent,
         #[cfg(feature = "fault-injection")]
         None,
     )?;
     Ok(file)
 }
 impl JournalWriter {
+    #[cfg(test)]
     pub(crate) fn create(d: &DiskConfig) -> Result<Self> {
+        Self::create_at(&DiskRoot::open(&d.root)?, d)
+    }
+    pub(crate) fn create_at(root: &DiskRoot, d: &DiskConfig) -> Result<Self> {
+        let directory = root.directory(log_path(d).parent().expect("journal parent"))?;
         Ok(Self {
-            file: create_synced_journal(d)?,
+            file: create_synced_journal(&directory)?,
             records: Vec::new(),
             state: WriterState::Ready,
             #[cfg(feature = "fault-injection")]
@@ -510,8 +531,13 @@ pub(crate) use test_support::{
 };
 
 mod object_storage;
-pub(crate) use object_storage::{existing_object_paths, list_object_hashes, object_path};
-use object_storage::{read_object_bytes_observed, write_object_bytes};
+#[cfg(test)]
+use object_storage::write_object_bytes;
+use object_storage::write_object_bytes_at;
+#[cfg(test)]
+pub(crate) use object_storage::{existing_object_paths, list_object_hashes};
+pub(crate) use object_storage::{existing_object_paths_at, list_object_hashes_at, object_path};
+#[cfg(test)]
 pub(crate) fn store_object<T: Serialize + ?Sized>(
     d: &DiskConfig,
     kind: &str,
@@ -519,6 +545,16 @@ pub(crate) fn store_object<T: Serialize + ?Sized>(
 ) -> Result<String> {
     let hash = object_hash(kind, value)?;
     write_object_bytes(d, kind, &hash, &encode_metadata(value, MAX_METADATA)?)?;
+    Ok(hash)
+}
+pub(crate) fn store_object_at<T: Serialize + ?Sized>(
+    root: &DiskRoot,
+    d: &DiskConfig,
+    kind: &str,
+    value: &T,
+) -> Result<String> {
+    let hash = object_hash(kind, value)?;
+    write_object_bytes_at(root, d, kind, &hash, &encode_metadata(value, MAX_METADATA)?)?;
     Ok(hash)
 }
 /// Frozen canonical bytes shared by size preflight and every replica write.
@@ -550,7 +586,32 @@ impl PreparedMetadataObject {
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
+    #[cfg(test)]
     pub(crate) fn store(&self, members: &[DiskConfig]) -> Result<String> {
+        self.store_with(members, |disk| {
+            write_object_bytes(disk, self.kind, &self.hash, &self.bytes)
+        })
+    }
+    pub(crate) fn store_at(
+        &self,
+        resources: &DiskResources,
+        members: &[DiskConfig],
+    ) -> Result<String> {
+        self.store_with(members, |disk| {
+            write_object_bytes_at(
+                &resources.get(disk)?.root,
+                disk,
+                self.kind,
+                &self.hash,
+                &self.bytes,
+            )
+        })
+    }
+    fn store_with(
+        &self,
+        members: &[DiskConfig],
+        mut install: impl FnMut(&DiskConfig) -> Result<()>,
+    ) -> Result<String> {
         if !members.is_empty() && self.bytes.len() > MAX_METADATA {
             return Err(Error::new(
                 storage_contract::ErrorCode::ResourceLimit,
@@ -558,7 +619,7 @@ impl PreparedMetadataObject {
             ));
         }
         for disk in members {
-            write_object_bytes(disk, self.kind, &self.hash, &self.bytes)?;
+            install(disk)?;
         }
         Ok(self.hash.clone())
     }
@@ -620,6 +681,7 @@ impl AuthenticatedMetadataObject {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn load_authenticated_object(
     disk: &DiskConfig,
     kind: &'static str,
@@ -637,7 +699,27 @@ pub(crate) fn load_authenticated_object(
     )
 }
 
-pub(crate) fn load_authenticated_object_observed(
+pub(crate) fn load_authenticated_object_at(
+    root: &DiskRoot,
+    disk: &DiskConfig,
+    kind: &'static str,
+    hash: &str,
+) -> Result<AuthenticatedMetadataObject> {
+    AuthenticatedMetadataObject::authenticate(
+        kind,
+        hash,
+        decode_strict(&object_storage::read_object_bytes_bounded_at(
+            root,
+            disk,
+            kind,
+            hash,
+            MAX_METADATA,
+        )?)?,
+    )
+}
+
+pub(crate) fn load_authenticated_object_observed_at(
+    root: &DiskRoot,
     disk: &DiskConfig,
     kind: &'static str,
     hash: &str,
@@ -646,7 +728,8 @@ pub(crate) fn load_authenticated_object_observed(
     AuthenticatedMetadataObject::authenticate(
         kind,
         hash,
-        decode_strict(&read_object_bytes_observed(
+        decode_strict(&object_storage::read_object_bytes_observed_at(
+            root,
             disk,
             kind,
             hash,
@@ -656,6 +739,7 @@ pub(crate) fn load_authenticated_object_observed(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn load_object<T: data_serialization::de::DeserializeOwned + Serialize>(
     d: &DiskConfig,
     kind: &str,
@@ -668,7 +752,21 @@ pub(crate) fn load_object<T: data_serialization::de::DeserializeOwned + Serializ
     )
 }
 
-pub(crate) fn load_object_observed<T: data_serialization::de::DeserializeOwned + Serialize>(
+pub(crate) fn load_object_at<T: data_serialization::de::DeserializeOwned + Serialize>(
+    root: &DiskRoot,
+    d: &DiskConfig,
+    kind: &str,
+    hash: &str,
+) -> Result<T> {
+    decode_object(
+        kind,
+        hash,
+        &object_storage::read_object_bytes_bounded_at(root, d, kind, hash, MAX_METADATA)?,
+    )
+}
+
+pub(crate) fn load_object_observed_at<T: data_serialization::de::DeserializeOwned + Serialize>(
+    root: &DiskRoot,
     d: &DiskConfig,
     kind: &str,
     hash: &str,
@@ -677,7 +775,7 @@ pub(crate) fn load_object_observed<T: data_serialization::de::DeserializeOwned +
     decode_object(
         kind,
         hash,
-        &read_object_bytes_observed(d, kind, hash, MAX_METADATA, observe)?,
+        &object_storage::read_object_bytes_observed_at(root, d, kind, hash, MAX_METADATA, observe)?,
     )
 }
 
@@ -1173,7 +1271,8 @@ pub(crate) fn verify_tombstone_content_in_context(
     )
 }
 
-pub(crate) fn verify_tombstone_content_observed(
+pub(crate) fn verify_tombstone_content_at(
+    root: &DiskRoot,
     directory: &Path,
     version: &FileVersion,
     t: &ContentTombstone,
@@ -1184,7 +1283,7 @@ pub(crate) fn verify_tombstone_content_observed(
         directory,
         version,
         t,
-        &mut |path| read_bytes_observed(path, MAX_METADATA, observe),
+        &mut |path| root.read_bytes_observed(path, MAX_METADATA, observe),
         metadata,
     )
 }
@@ -1234,9 +1333,13 @@ fn verify_tombstone_content_with(
 
 /// A later protection transaction reuses immutable FULL identities. Preserve
 /// the first locally published proof and retain each later receipt by candidate.
-pub(crate) fn local_proof_directory(directory: &Path, candidate: &str) -> Result<PathBuf> {
+pub(crate) fn local_proof_directory_at(
+    root: &DiskRoot,
+    directory: &Path,
+    candidate: &str,
+) -> Result<PathBuf> {
     let original = directory.join("commit-proof.json");
-    match read_json::<CommitProof>(&original) {
+    match root.read_json_observed::<CommitProof>(&original, &mut |_| Ok(())) {
         Ok(proof) => {
             if proof.candidate_hash != candidate {
                 return Ok(directory.join("protection-proofs").join(candidate));
@@ -1259,12 +1362,7 @@ pub(crate) fn verify_local_publication_in_context(
     version: &FileVersion,
     metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
 ) -> Result<()> {
-    verify_local_publication_with(
-        directory,
-        version,
-        &mut |path| read_bytes(path, MAX_METADATA),
-        metadata,
-    )
+    verify_local_publication_observed(directory, version, &mut |_| Ok(()), metadata)
 }
 
 pub(crate) fn verify_local_publication_observed(
@@ -1273,10 +1371,29 @@ pub(crate) fn verify_local_publication_observed(
     observe: &mut impl FnMut(usize) -> Result<()>,
     metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
 ) -> Result<()> {
+    let directory = absolute_path(directory)?;
+    let root = directory.ancestors().nth(4).ok_or_else(|| {
+        Error::new(
+            ErrorCode::PublicationInvalid,
+            "version is outside disk layout",
+        )
+    })?;
+    let root = DiskRoot::open(root)?;
+    verify_local_publication_at(&root, &directory, version, observe, metadata)
+}
+
+pub(crate) fn verify_local_publication_at(
+    root: &DiskRoot,
+    directory: &Path,
+    version: &FileVersion,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+    metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
+) -> Result<()> {
     verify_local_publication_with(
         directory,
         version,
-        &mut |path| read_bytes_observed(path, MAX_METADATA, observe),
+        &mut |path| root.read_bytes_observed(path, MAX_METADATA, observe),
+        &mut |path| root.open_optional_regular(path).map(|file| file.is_some()),
         metadata,
     )
 }
@@ -1285,10 +1402,11 @@ fn verify_local_publication_with(
     directory: &Path,
     version: &FileVersion,
     read: &mut impl FnMut(&Path) -> Result<Vec<u8>>,
+    present: &mut impl FnMut(&Path) -> Result<bool>,
     metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
 ) -> Result<()> {
     verify_local_version_publication(directory, version, read, metadata)?;
-    if open_optional_regular(&directory.join("purged.json"))?.is_some() {
+    if present(&directory.join("purged.json"))? {
         return Err(Error::new(
             storage_contract::ErrorCode::ContentPurged,
             "this version has a local content tombstone",

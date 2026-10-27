@@ -52,6 +52,50 @@ fn held_writer_preserves_golden_bytes_and_idempotent_current_receipts() {
 }
 
 #[test]
+fn scanned_journal_keeps_its_parent_for_creation_and_sync_after_root_rebinding() {
+    for existing in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let disk = disk(&temp);
+        let held = DiskRoot::open(&disk.root).unwrap();
+        if existing {
+            let mut writer = JournalWriter::create_at(&held, &disk).unwrap();
+            put(&mut writer, &disk, RecordType::Prepare, 1);
+        }
+        let opened = OpenJournal::scan_at(&held, &disk).unwrap();
+        let moved = temp.path().join("moved");
+        std::fs::rename(&disk.root, &moved).unwrap();
+        private_dir(log_path(&disk).parent().unwrap()).unwrap();
+        let mut replacement = JournalWriter::create(&disk).unwrap();
+        put(&mut replacement, &disk, RecordType::Prepare, 99);
+        let replacement_bytes = std::fs::read(log_path(&disk)).unwrap();
+
+        let mut original = opened.into_writer().unwrap();
+        put(&mut original, &disk, RecordType::Accept, 1);
+        assert_eq!(std::fs::read(log_path(&disk)).unwrap(), replacement_bytes);
+        let records = scan_at(&held, &disk).unwrap().records;
+        assert_eq!(records.len(), if existing { 2 } else { 1 });
+        assert_eq!(records.last().unwrap().0.record_type, RecordType::Accept);
+        assert_eq!(records.last().unwrap().0.sequence, 1);
+        assert!(moved.join("metadata/application-log/journal.bin").is_file());
+    }
+}
+
+#[test]
+fn journal_creation_uses_the_held_root_after_its_name_is_replaced() {
+    let temp = tempfile::tempdir().unwrap();
+    let disk = disk(&temp);
+    let held = DiskRoot::open(&disk.root).unwrap();
+    let moved = temp.path().join("moved");
+    std::fs::rename(&disk.root, &moved).unwrap();
+    private_dir(log_path(&disk).parent().unwrap()).unwrap();
+    let mut writer = JournalWriter::create_at(&held, &disk).unwrap();
+    put(&mut writer, &disk, RecordType::Prepare, 1);
+    assert!(moved.join("metadata/application-log/journal.bin").is_file());
+    assert!(!log_path(&disk).exists());
+    assert_eq!(scan_at(&held, &disk).unwrap().records.len(), 1);
+}
+
+#[test]
 fn failed_write_or_sync_requires_explicit_recovery_before_retry() {
     for fault in [JournalFault::PartialWrite, JournalFault::Sync] {
         let temp = tempfile::tempdir().unwrap();
@@ -91,7 +135,7 @@ fn failed_write_or_sync_requires_explicit_recovery_before_retry() {
         );
         // Scan alone is read-only, including a damaged suffix.
         assert_eq!(std::fs::read(log_path(&disk)).unwrap(), bytes);
-        let mut writer = opened.into_writer(&disk).unwrap();
+        let mut writer = opened.into_writer().unwrap();
         writer.repair_torn_tail().unwrap();
         let receipt = put(&mut writer, &disk, RecordType::Accept, 1);
         assert!(
@@ -317,15 +361,17 @@ fn leftover_created_leaf_requires_both_opening_durability_fences() {
         let parent = path.parent().unwrap();
         std::fs::remove_file(&path).unwrap();
         sync_dir(parent).unwrap();
-        let file = create_journal(&path).unwrap();
-        let error = sync_open_journal(&file, parent, Some(fault)).unwrap_err();
+        let held = DiskRoot::open(&disk.root).unwrap();
+        let directory = held.directory(parent).unwrap();
+        let file = create_journal(&directory, &journal_name()).unwrap();
+        let error = sync_open_journal(&file, &directory, Some(fault)).unwrap_err();
         assert!(error.source().is_some());
         drop(file);
         assert!(path.is_file());
 
         let mut opened = OpenJournal::scan(&disk).unwrap();
         opened.opening_fault = Some(OpeningFault::DirectorySync);
-        let error = opened.into_writer(&disk).err().unwrap();
+        let error = opened.into_writer().err().unwrap();
         assert!(error.source().is_some());
         assert!(scan(&disk).unwrap().records.is_empty());
 

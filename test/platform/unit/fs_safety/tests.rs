@@ -112,6 +112,71 @@ fn atomic_replace_keeps_the_held_parent_after_its_path_is_replaced() {
     assert_eq!(fs::read_dir(&path).unwrap().count(), 1);
 }
 
+#[test]
+fn raw_directory_admission_and_atomic_writes_keep_the_supplied_handle() {
+    use std::os::fd::AsRawFd;
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("state");
+    PrivateDirectory::create(&path).unwrap();
+    let file = File::open(&path).unwrap();
+    let descriptor = file.as_raw_fd();
+    let moved = temp.path().join("moved");
+    fs::rename(&path, &moved).unwrap();
+    let replacement = PrivateDirectory::create(&path).unwrap();
+    let name = EntryName::new("progress.json").unwrap();
+    AtomicFile::create(&replacement, &name, b"replacement").unwrap();
+
+    let held = PrivateDirectory::from_directory(file, path.clone()).unwrap();
+    assert_eq!(held.directory_handle().as_raw_fd(), descriptor);
+    assert_eq!(held.path(), path);
+    assert!(held.verify_identity().is_err());
+    AtomicFile::create(&held, &name, b"created").unwrap();
+    AtomicFile::replace(&held, &name.as_relative(), b"updated").unwrap();
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut held.open_regular(&name).unwrap(), &mut bytes).unwrap();
+    assert_eq!(bytes, b"updated");
+    assert_eq!(fs::read(moved.join(name.as_path())).unwrap(), b"updated");
+    assert_eq!(fs::read(path.join(name.as_path())).unwrap(), b"replacement");
+    assert_eq!(fs::read_dir(&moved).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(&path).unwrap().count(), 1);
+}
+
+#[test]
+fn raw_directory_admission_rejects_file_type_and_permissions_without_repair() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("file");
+    fs::write(&path, b"untouched").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(matches!(
+        PrivateDirectory::from_directory(File::open(&path).unwrap(), path.clone()),
+        Err(Error::UnsafeFileType(_))
+    ));
+    assert_eq!(fs::read(&path).unwrap(), b"untouched");
+
+    let path = temp.path().join("directory");
+    fs::create_dir(&path).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        PrivateDirectory::from_directory(File::open(&path).unwrap(), path.clone()),
+        Err(Error::UnsafePermissions(_))
+    ));
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+        0o755
+    );
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(matches!(
+        PrivateDirectory::from_directory(File::open(&path).unwrap(), "relative".into()),
+        Err(Error::AbsolutePathRequired(_))
+    ));
+    assert!(matches!(
+        PrivateDirectory::from_directory(File::open(&path).unwrap(), path.join("../label")),
+        Err(Error::UnsafeRelativePath(_))
+    ));
+    PrivateDirectory::from_directory(File::open(&path).unwrap(), path).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn inventory_rejects_symlinks_and_budgets() {

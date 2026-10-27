@@ -83,6 +83,47 @@ fn snapshot_recovers_disjoint_page_replicas_without_read_repair() {
 }
 
 #[test]
+fn rooted_evidence_selection_and_repair_do_not_follow_replaced_disk_names() {
+    let (temp, engine, _repository) = fixture();
+    let members = engine.members();
+    let hash = engine.snapshot.clone().unwrap();
+    let descriptor: Snapshot = load_object(&members[0], "snapshot", &hash).unwrap();
+    let expected = canonical_json(engine.state()).unwrap();
+    fs::write(object_path(&members[0], "snapshot", &hash), b"damaged").unwrap();
+    for (index, member) in members.iter().enumerate() {
+        fs::rename(&member.root, temp.path().join(format!("held-{index}"))).unwrap();
+        private_dir(&member.root).unwrap();
+    }
+    let mut faults = 0;
+    let restored =
+        verified_snapshot_observed_at(&engine.disk_resources, &members, &hash, &mut |_| {
+            faults += 1
+        })
+        .unwrap();
+    assert!(faults > 0);
+    assert_eq!(canonical_json(restored.state()).unwrap(), expected);
+    repair_object_copies_at(
+        &engine.disk_resources,
+        &members,
+        "snapshot",
+        &hash,
+        &descriptor,
+    )
+    .unwrap();
+    for member in &members {
+        let restored: Snapshot = load_object_at(
+            &engine.disk_resources.get(member).unwrap().root,
+            member,
+            "snapshot",
+            &hash,
+        )
+        .unwrap();
+        assert_eq!(object_hash("snapshot", &restored).unwrap(), hash);
+        assert!(!member.root.join("metadata").exists());
+    }
+}
+
+#[test]
 fn purged_state_reopens_with_one_damaged_and_one_offline_metadata_member() {
     for kind in [
         "candidate",

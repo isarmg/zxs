@@ -174,3 +174,53 @@ fn immutable_writer_propagates_unsafe_target_errors_without_overwriting() {
     assert!(write_atomic(&target, b"replacement", false).is_err());
     assert_eq!(fs::read(&outside).unwrap(), b"untouched");
 }
+
+#[test]
+fn object_reads_inventory_and_publication_share_the_held_root_after_rebinding() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = config(&temp);
+    let disk = &config.disks[0];
+    let original = json!({"origin": "held"});
+    let hash = store_object(disk, "publication", &original).unwrap();
+    let held = DiskRoot::open(&disk.root).unwrap();
+    let moved = temp.path().join("moved");
+    fs::rename(&disk.root, &moved).unwrap();
+    let replacement = json!({"origin": "replacement"});
+    let replacement_hash = store_object(disk, "publication", &replacement).unwrap();
+    let next = json!({"origin": "next"});
+    let next_hash = store_object_at(&held, disk, "publication", &next).unwrap();
+
+    assert_eq!(
+        load_object_at::<Value>(&held, disk, "publication", &hash).unwrap(),
+        original
+    );
+    assert_eq!(
+        load_object_at::<Value>(&held, disk, "publication", &next_hash).unwrap(),
+        next
+    );
+    assert_eq!(
+        list_object_hashes_at(&held, disk, "publication").unwrap(),
+        BTreeSet::from([hash.clone(), next_hash.clone()])
+    );
+    assert_eq!(
+        list_object_hashes(disk, "publication").unwrap(),
+        BTreeSet::from([replacement_hash])
+    );
+    assert!(!object_path(disk, "publication", &hash).exists());
+    assert!(!object_path(disk, "publication", &next_hash).exists());
+
+    let original_path = moved.join(
+        object_path(disk, "publication", &hash)
+            .strip_prefix(&disk.root)
+            .unwrap(),
+    );
+    fs::write(&original_path, b"broken").unwrap();
+    assert!(load_object_at::<Value>(&held, disk, "publication", &hash).is_err());
+    assert_eq!(
+        store_object_at(&held, disk, "publication", &original)
+            .unwrap_err()
+            .code(),
+        ErrorCode::ObjectCollision
+    );
+    assert_eq!(fs::read(&original_path).unwrap(), b"broken");
+}

@@ -1,10 +1,16 @@
 //! Linux-only openat2 root policy and typed object/lock boundaries.
-use crate::fs_safety::{Error, PrivateDirectory, RelativePath};
+use crate::fs_safety::{EntryName, Error, PrivateDirectory, RelativePath};
 use rustix::{
     fd::AsFd,
-    fs::{FileType, Mode, OFlags, ResolveFlags, fstat, openat, openat2},
+    fs::{Dir, FileType, Mode, OFlags, ResolveFlags, fstat, openat, openat2},
 };
-use std::{fs::File, io, os::unix::fs::MetadataExt, path::Path};
+use std::{
+    ffi::OsStr,
+    fs::File,
+    io,
+    os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    path::Path,
+};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct FileIdentity {
@@ -105,6 +111,50 @@ impl OpenAt2Root {
         self.root
     }
 
+    /// Open a descendant directory under this root's mount and link policy.
+    ///
+    /// # Errors
+    /// Returns the source error for missing, linked, cross-mount or non-directory paths.
+    pub fn open_directory(&self, path: &RelativePath) -> Result<File, Error> {
+        Ok(File::from(
+            openat2(
+                &self.root,
+                path.as_path(),
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                Mode::empty(),
+                self.resolve | ResolveFlags::NO_SYMLINKS,
+            )
+            .map_err(io::Error::from)?,
+        ))
+    }
+
+    /// Enumerate this held root with a cursor independent of other readers.
+    ///
+    /// # Errors
+    /// Opening or reading the directory preserves its underlying I/O error.
+    pub fn entries(&self) -> Result<DirectoryEntries, Error> {
+        // Reopen only "." relative to the held FD. A duplicated descriptor
+        // would share the directory cursor, and the root may be O_PATH-only.
+        let directory = File::from(
+            openat(
+                &self.root,
+                ".",
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(io::Error::from)?,
+        );
+        DirectoryEntries::new(directory)
+    }
+
+    /// Enumerate a descendant under the same policy without reconstructing a root.
+    ///
+    /// # Errors
+    /// Propagates directory-open, entry-read and entry-name errors.
+    pub fn entries_at(&self, path: &RelativePath) -> Result<DirectoryEntries, Error> {
+        DirectoryEntries::new(self.open_directory(path)?)
+    }
+
     /// Open only a single-linked regular file, refusing links in every component.
     /// NONBLOCK prevents a malicious FIFO from hanging before the type check.
     pub fn open_file(&self, path: &RelativePath, write: bool) -> Result<File, Error> {
@@ -124,6 +174,37 @@ impl OpenAt2Root {
     }
     pub fn identity_of(&self, path: &RelativePath) -> Result<FileIdentity, Error> {
         Ok(FileIdentity::from_fd(self.open_file(path, false)?)?)
+    }
+}
+
+/// Streaming directory names; object type and contents remain a later I/O boundary.
+pub struct DirectoryEntries {
+    directory: Dir,
+}
+
+impl DirectoryEntries {
+    fn new(directory: File) -> Result<Self, Error> {
+        Ok(Self {
+            directory: Dir::new(directory).map_err(io::Error::from)?,
+        })
+    }
+}
+
+impl Iterator for DirectoryEntries {
+    type Item = Result<EntryName, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let entry = match self.directory.read()? {
+                Ok(entry) => entry,
+                Err(error) => return Some(Err(io::Error::from(error).into())),
+            };
+            let name = entry.file_name().to_bytes();
+            if matches!(name, b"." | b"..") {
+                continue;
+            }
+            return Some(EntryName::new(OsStr::from_bytes(name)));
+        }
     }
 }
 

@@ -304,12 +304,12 @@ impl Engine {
         }
         for (slot, bytes) in &per_slot {
             let disk = self.disk(slot)?;
-            self.metadata_integrity.validate_seal(&self.config, disk)?;
             let capacity = disk
                 .capacity_bytes
                 .map(|limit| limit.saturating_sub(self.used_bytes(slot)))
                 .unwrap_or(u64::MAX);
-            if available(&disk.root)? < bytes.saturating_add(self.config.metadata_reserve_bytes)
+            if self.disk_resources.get(disk)?.root.available()?
+                < bytes.saturating_add(self.config.metadata_reserve_bytes)
                 || *bytes > capacity
             {
                 return Err(Error::new(

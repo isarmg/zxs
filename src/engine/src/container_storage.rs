@@ -6,13 +6,13 @@ use crate::state_projection::{ProjectionTransition, StateProjection};
 use changes::changed_files;
 use date_time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use json_codec::json;
-use platform_io::fs_safety::linux::{MountPolicy, OpenAt2Root};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{Read, Seek, Write},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 fn invalid(message: &str) -> Error {
@@ -148,6 +148,7 @@ pub(crate) fn version_identity(
     Ok((name, timestamp))
 }
 
+#[cfg(test)]
 fn directory_exists(path: &Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -162,6 +163,42 @@ fn directory_exists(path: &Path) -> Result<bool> {
     }
 }
 
+fn directory_exists_at(root: &DiskRoot, path: &Path) -> Result<bool> {
+    match root.optional_metadata(path)? {
+        None => Ok(false),
+        Some(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            root.directory(path)?;
+            Ok(true)
+        }
+        Some(_) => Err(invalid(
+            "container path must be a private directory without symbolic links",
+        )),
+    }
+}
+
+fn path_directory_exists_at(root: &DiskRoot, base: &Path, path: &Path) -> Result<bool> {
+    if !path_exists_at(root, base, path)? {
+        return Ok(false);
+    }
+    directory_exists_at(root, path)
+}
+
+// Missing ancestors are part of the existing MISSING classification. Inspect
+// them through the held root without imposing new private-mode requirements.
+fn path_exists_at(root: &DiskRoot, base: &Path, path: &Path) -> Result<bool> {
+    let relative = path
+        .strip_prefix(base)
+        .expect("invariant: container paths remain below their admitted base");
+    let mut current = base.to_path_buf();
+    for component in relative.components() {
+        current.push(component);
+        if root.optional_metadata(&current)?.is_none() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn history_root(directory: &Path) -> Result<&Path> {
     directory
         .parent()
@@ -174,25 +211,22 @@ fn history_root(directory: &Path) -> Result<&Path> {
 const NAMESPACE_MARKER: &str = ".zxs-namespace.json";
 const OWNER_MARKER: &str = ".zxs-container-owner.json";
 
-fn marker_matches(path: &Path, file_id: &str) -> Result<bool> {
-    marker_matches_observed(path, file_id, &mut |_| Ok(()))
-}
-
-fn marker_matches_observed(
+fn marker_matches_at(
+    root: &DiskRoot,
     path: &Path,
     file_id: &str,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<bool> {
     observe(0)?;
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(error.into()),
-        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+    match root.optional_metadata(path)? {
+        None => return Ok(false),
+        Some(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
             return Ok(false);
         }
-        Ok(_) => {}
+        Some(_) => {}
     }
-    if !file_exists(path)? || read_json_observed::<String>(path, observe)? != file_id {
+    if !file_exists_at(root, path)? || root.read_json_observed::<String>(path, observe)? != file_id
+    {
         return Err(invalid(
             "container location marker differs from its stable file identity",
         ));
@@ -202,23 +236,20 @@ fn marker_matches_observed(
 
 // Unsupported on-disk layouts are never migrated or cleaned automatically.
 // Inspect metadata only; preserve all old bytes, including empty placeholders.
-fn reject_unsupported_container(named: &Path) -> Result<()> {
+fn reject_unsupported_container(root: &DiskRoot, named: &Path) -> Result<()> {
     for name in ["pending-branches", "legacy"] {
-        match fs::symlink_metadata(named.join(name)) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-            Ok(_) => {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::FormatUnsupported,
-                    "legacy container storage is not supported",
-                ));
-            }
+        if root.optional_metadata(&named.join(name))?.is_some() {
+            return Err(Error::new(
+                storage_contract::ErrorCode::FormatUnsupported,
+                "legacy container storage is not supported",
+            ));
         }
     }
     Ok(())
 }
 
 fn named_containers(
+    disk: &DiskRoot,
     root: &Path,
     file_id: &str,
     depth: usize,
@@ -228,32 +259,39 @@ fn named_containers(
     if depth > 33 {
         return Err(invalid("container namespace exceeds the path depth limit"));
     }
-    for entry in fs::read_dir(root)? {
+    for entry in disk.entries(root)? {
         observe(0)?;
         let entry = entry?;
-        if depth == 0 && entry.file_name() == NAMESPACE_MARKER {
-            if !marker_matches_observed(&entry.path(), file_id, observe)? {
+        let path = root.join(entry.as_path());
+        if depth == 0 && entry.as_os_str() == NAMESPACE_MARKER {
+            if !marker_matches_at(disk, &path, file_id, observe)? {
                 return Err(invalid("container namespace marker is missing"));
             }
             continue;
         }
-        if !entry.file_type()?.is_dir() || entry.file_type()?.is_symlink() {
+        if !disk
+            .optional_metadata(&path)?
+            .is_some_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        {
             return Err(invalid(
                 "container namespace contains a non-directory or symbolic link",
             ));
         }
-        let name = entry.file_name().into_string().map_err(|name| {
-            Error::PathEncoding(name).context(
-                ErrorCode::ContainerLayoutInvalid,
-                "container directory name is not UTF-8",
-            )
-        })?;
+        let name = entry
+            .as_os_str()
+            .to_os_string()
+            .into_string()
+            .map_err(|name| {
+                Error::PathEncoding(name).context(
+                    ErrorCode::ContainerLayoutInvalid,
+                    "container directory name is not UTF-8",
+                )
+            })?;
         name_policy::validate_name(&name)?;
-        let path = entry.path();
-        existing_private_dir(&path)?;
-        if marker_matches_observed(&path.join(OWNER_MARKER), file_id, observe)? {
-            reject_unsupported_container(&path)?;
-            if !directory_exists(&path.join("versions"))? {
+        disk.directory(&path)?;
+        if marker_matches_at(disk, &path.join(OWNER_MARKER), file_id, observe)? {
+            reject_unsupported_container(disk, &path)?;
+            if !directory_exists_at(disk, &path.join("versions"))? {
                 return Err(invalid("owned container has no version directory"));
             }
             if selected.replace(path).is_some() {
@@ -263,62 +301,72 @@ fn named_containers(
                 ));
             }
         } else {
-            named_containers(&path, file_id, depth + 1, selected, observe)?;
+            named_containers(disk, &path, file_id, depth + 1, selected, observe)?;
         }
     }
     Ok(())
 }
 
+#[cfg(test)]
 fn container(history: &Path, file_id: &str) -> Result<Option<PathBuf>> {
-    container_observed(history, file_id, &mut |_| Ok(()))
-}
-
-fn container_observed(
-    history: &Path,
-    file_id: &str,
-    observe: &mut impl FnMut(usize) -> Result<()>,
-) -> Result<Option<PathBuf>> {
-    observe(0)?;
     validate_id(file_id, "file")?;
     if !directory_exists(history)? {
         return Ok(None);
     }
+    let root = DiskRoot::open(history)?;
+    container_at(&root, root.path(), file_id, &mut |_| Ok(()))
+}
+
+fn container_at(
+    disk: &DiskRoot,
+    history: &Path,
+    file_id: &str,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<Option<PathBuf>> {
     let root = history.join("file-containers");
-    if !directory_exists(&root)? {
+    if !directory_exists_at(disk, &root)? {
         return Ok(None);
     }
     let root = root.join(file_id);
-    if !directory_exists(&root)? {
+    if !directory_exists_at(disk, &root)? {
         return Ok(None);
     }
     let mut selected = None;
-    for entry in fs::read_dir(&root)? {
+    for entry in disk.entries(&root)? {
         observe(0)?;
         let entry = entry?;
-        if !entry.file_type()?.is_dir() || entry.file_type()?.is_symlink() {
+        let path = root.join(entry.as_path());
+        if !disk
+            .optional_metadata(&path)?
+            .is_some_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        {
             return Err(invalid(
                 "stable file directory contains a non-directory or symbolic link",
             ));
         }
-        let name = entry.file_name().into_string().map_err(|name| {
-            Error::PathEncoding(name).context(
-                ErrorCode::ContainerLayoutInvalid,
-                "container directory name is not UTF-8",
-            )
-        })?;
+        let name = entry
+            .as_os_str()
+            .to_os_string()
+            .into_string()
+            .map_err(|name| {
+                Error::PathEncoding(name).context(
+                    ErrorCode::ContainerLayoutInvalid,
+                    "container directory name is not UTF-8",
+                )
+            })?;
         name_policy::validate_name(&name)?;
-        existing_private_dir(&entry.path())?;
+        disk.directory(&path)?;
         if name == "namespace"
-            && marker_matches_observed(&entry.path().join(NAMESPACE_MARKER), file_id, observe)?
+            && marker_matches_at(disk, &path.join(NAMESPACE_MARKER), file_id, observe)?
         {
             // The stable identity is the lookup key; logical aliases never
             // choose the physical location. Empty source parents left by an
             // interrupted move are harmless, but two payload owners fail closed.
-            named_containers(&entry.path(), file_id, 0, &mut selected, observe)?;
+            named_containers(disk, &path, file_id, 0, &mut selected, observe)?;
             continue;
         }
-        reject_unsupported_container(&entry.path())?;
-        if selected.replace(entry.path()).is_some() {
+        reject_unsupported_container(disk, &path)?;
+        if selected.replace(path).is_some() {
             return Err(Error::new(
                 storage_contract::ErrorCode::ContainerAmbiguous,
                 "stable file identity has more than one named container",
@@ -328,72 +376,100 @@ fn container_observed(
     Ok(selected)
 }
 
-fn file_exists(path: &Path) -> Result<bool> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error.into()),
-        Ok(metadata)
+fn file_exists_at(root: &DiskRoot, path: &Path) -> Result<bool> {
+    match root.optional_metadata(path)? {
+        None => Ok(false),
+        Some(metadata)
             if metadata.is_file()
                 && !metadata.file_type().is_symlink()
                 && metadata.nlink() == 1 =>
         {
-            open_regular(path)?;
+            root.open_regular(path)?;
             Ok(true)
         }
-        Ok(_) => Err(invalid("version body must be one ordinary unlinked file")),
+        Some(_) => Err(invalid("version body must be one ordinary unlinked file")),
     }
+}
+
+#[cfg(test)]
+pub(crate) fn content_path(directory: &Path, version: &FileVersion) -> Result<PathBuf> {
+    validate_version(version)?;
+    let history = history_root(directory)?;
+    if !directory_exists(history)? {
+        return Ok(expected_content_path(history, version));
+    }
+    let root = DiskRoot::open(history)?;
+    let directory = root.path().join(
+        directory
+            .strip_prefix(history)
+            .expect("invariant: version directory is below its history"),
+    );
+    content_path_inner(&root, &directory, version, &mut |_| Ok(()))
 }
 
 /// Missing bodies return their expected path so repair can retain its existing
 /// MISSING classification. Only malformed or ambiguous layout fails closed.
-pub(crate) fn content_path(directory: &Path, version: &FileVersion) -> Result<PathBuf> {
-    content_path_observed(directory, version, &mut |_| Ok(()))
-}
-
-pub(crate) fn content_path_observed(
+pub(crate) fn content_path_at(
+    root: &DiskRoot,
     directory: &Path,
     version: &FileVersion,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<PathBuf> {
     validate_version(version)?;
+    observe(0)?;
+    content_path_inner(root, directory, version, observe)
+}
+
+fn expected_content_path(history: &Path, version: &FileVersion) -> PathBuf {
+    history
+        .join("file-containers")
+        .join(&version.file_id)
+        .join(&version.creation_name)
+        .join("versions")
+        .join(&version.storage_name)
+}
+
+fn content_path_inner(
+    root: &DiskRoot,
+    directory: &Path,
+    version: &FileVersion,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<PathBuf> {
     let prepared = directory.join("content").join(&version.creation_name);
-    let name = &version.storage_name;
     let history = history_root(directory)?;
-    let named = container_observed(history, &version.file_id, observe)?.unwrap_or_else(|| {
-        history
-            .join("file-containers")
-            .join(&version.file_id)
-            .join(&version.creation_name)
-    });
-    let versions = named.join("versions");
-    let target = versions.join(name);
-    if directory_exists(&versions)? && file_exists(&target)? {
-        return Ok(target);
+    if !path_directory_exists_at(root, root.path(), history)? {
+        return Ok(expected_content_path(history, version));
     }
+    let container = container_at(root, history, &version.file_id, observe)?;
+    let target = match container {
+        Some(named) => {
+            let versions = named.join("versions");
+            let target = versions.join(&version.storage_name);
+            if directory_exists_at(root, &versions)? && file_exists_at(root, &target)? {
+                return Ok(target);
+            }
+            target
+        }
+        None => expected_content_path(history, version),
+    };
     // Current preparation and offline packages hold the verified body beside
     // its immutable metadata until installation moves it into the container.
-    if file_exists(&prepared)? {
+    if path_exists_at(root, history, &directory.join("content"))?
+        && file_exists_at(root, &prepared)?
+    {
         return Ok(prepared);
     }
     Ok(target)
 }
 
-fn held_directory(path: &Path) -> Result<OpenAt2Root> {
-    let private = existing_private_dir(path)?;
-    OpenAt2Root::from_private_directory(private, MountPolicy::SameMount).map_err(|error| {
-        let message = error.to_string();
-        Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
-    })
-}
-
-fn verify_body(path: &Path, version: &FileVersion) -> Result<fs::File> {
-    if !file_exists(path)? {
+fn verify_body(root: &DiskRoot, path: &Path, version: &FileVersion) -> Result<fs::File> {
+    if !file_exists_at(root, path)? {
         return Err(Error::new(
             storage_contract::ErrorCode::ContentMissing,
             "version body is missing",
         ));
     }
-    let mut file = open_regular(path)?;
+    let mut file = root.open_regular(path)?;
     if file.metadata()?.len() != version.logical_size {
         return Err(Error::new(
             storage_contract::ErrorCode::ContentCorrupt,
@@ -442,9 +518,25 @@ pub(crate) enum PreparedContent<'a> {
     Copied(VerifiedCopy<'a>),
 }
 
+#[cfg(test)]
+pub(crate) fn install_version_content(
+    directory: &Path,
+    content: PreparedContent<'_>,
+) -> Result<PathBuf> {
+    let history = history_root(directory)?;
+    let root = DiskRoot::open(history)?;
+    let directory = root.path().join(
+        directory
+            .strip_prefix(history)
+            .expect("invariant: version directory is below its history"),
+    );
+    install_version_content_at(&root, &directory, content)
+}
+
 /// Move a verified prepared body on its existing filesystem. Never hardlink,
 /// reflink or duplicate the payload to represent a version or rename.
-pub(crate) fn install_version_content(
+pub(crate) fn install_version_content_at(
+    root: &DiskRoot,
     directory: &Path,
     content: PreparedContent<'_>,
 ) -> Result<PathBuf> {
@@ -459,86 +551,88 @@ pub(crate) fn install_version_content(
     let source = directory.join("content").join(&version.creation_name);
     let name = &version.storage_name;
     let history = history_root(directory)?;
-    existing_private_dir(history)?;
+    root.directory(history)?;
     let stable = history.join("file-containers").join(&version.file_id);
-    private_dir(&stable)?;
-    let named = match container(history, &version.file_id)? {
+    root.private_dir(&stable)?;
+    let named = match container_at(root, history, &version.file_id, &mut |_| Ok(()))? {
         Some(named) => named,
         None => {
             let named = stable.join(&version.creation_name);
-            private_dir(&named)?;
-            sync_dir(&stable)?;
+            root.private_dir(&named)?;
+            root.sync_dir(&stable)?;
             named
         }
     };
     let versions = named.join("versions");
-    private_dir(&versions)?;
+    root.private_dir(&versions)?;
     let target = versions.join(name);
-    if file_exists(&target)? {
+    if file_exists_at(root, &target)? {
         if let Some(verified) = &verified
             && verified.path() == target
         {
-            verified.sync_at(directory, &target)?;
+            verified.sync_at(root, directory, &target)?;
         } else {
-            verify_body(&target, version)?;
+            verify_body(root, &target, version)?;
         }
-        if file_exists(&source)? {
+        let source_parent = source.parent().expect("invariant: source has a parent");
+        if path_directory_exists_at(root, history, source_parent)? && file_exists_at(root, &source)?
+        {
             let _source = match copied {
                 Some(file) => Some(file),
                 None => {
                     if let Some(verified) = &verified
                         && verified.path() == source
                     {
-                        verified.sync_at(directory, &source)?;
+                        verified.sync_at(root, directory, &source)?;
                         None
                     } else {
-                        Some(verify_body(&source, version)?)
+                        Some(verify_body(root, &source, version)?)
                     }
                 }
             };
-            let parent = held_directory(source.parent().expect("source parent"))?;
+            let parent = root.directory(source_parent)?;
             rustix::fs::unlinkat(
-                parent.directory(),
+                &parent,
                 source.file_name().expect("source name"),
                 rustix::fs::AtFlags::empty(),
             )
             .map_err(std::io::Error::from)?;
-            parent.directory().sync_all()?;
+            parent.sync_all()?;
         }
         // Retrying after an interrupted directory sync must complete durability
         // even when the exclusive move already made the target visible.
-        if directory_exists(source.parent().expect("source parent"))? {
-            sync_dir(source.parent().expect("source parent"))?;
+        if path_directory_exists_at(root, history, source_parent)? {
+            root.sync_dir(source_parent)?;
         }
-        sync_dir(&versions)?;
-        sync_dir(&named)?;
-        sync_dir(&stable)?;
+        root.sync_dir(&versions)?;
+        root.sync_dir(&named)?;
+        root.sync_dir(&stable)?;
         return Ok(target);
     }
     let _source = match copied {
         Some(file) => Some(file),
         None => {
             if let Some(verified) = &verified {
-                verified.sync_at(directory, &source)?;
+                verified.sync_at(root, directory, &source)?;
                 None
             } else {
-                Some(verify_body(&source, version)?)
+                Some(verify_body(root, &source, version)?)
             }
         }
     };
-    let from = held_directory(source.parent().expect("source parent"))?;
-    let to = held_directory(&versions)?;
+    let from = root.directory(source.parent().expect("source parent"))?;
+    let to = root.directory(&versions)?;
     rustix::fs::renameat_with(
-        from.directory(),
+        &from,
         source.file_name().expect("source name"),
-        to.directory(),
+        &to,
         name.as_str(),
         rustix::fs::RenameFlags::NOREPLACE,
     )
     .map_err(std::io::Error::from)?;
-    from.directory().sync_all()?;
-    to.directory().sync_all()?;
-    sync_dir(&named)?;
+    from.sync_all()?;
+    to.sync_all()?;
+    root.sync_dir(&named)?;
     Ok(target)
 }
 
@@ -667,6 +761,7 @@ fn namespace_repository<'a>(state: &'a State, history: &str) -> &'a Repository {
 }
 
 fn synchronize_location(
+    root: &DiskRoot,
     current: PathBuf,
     stable: &Path,
     file_id: &str,
@@ -677,16 +772,16 @@ fn synchronize_location(
     let Some(location) = location else {
         let target = current.parent().expect("container parent").join(name);
         if target != current {
-            let parent = held_directory(current.parent().expect("container parent"))?;
+            let parent = root.directory(current.parent().expect("container parent"))?;
             rustix::fs::renameat_with(
-                parent.directory(),
+                &parent,
                 current.file_name().expect("container name"),
-                parent.directory(),
+                &parent,
                 name,
                 rustix::fs::RenameFlags::NOREPLACE,
             )
             .map_err(std::io::Error::from)?;
-            parent.directory().sync_all()?;
+            parent.sync_all()?;
         }
         return Ok(target);
     };
@@ -700,101 +795,116 @@ fn synchronize_location(
     let mut current = current;
     // Initial installation may name a current-format file `namespace` before
     // its location is projected. Move that container aside for retry-safe projection.
-    if current == namespace && !marker_matches(&namespace.join(NAMESPACE_MARKER), file_id)? {
+    if current == namespace
+        && !marker_matches_at(
+            root,
+            &namespace.join(NAMESPACE_MARKER),
+            file_id,
+            &mut |_| Ok(()),
+        )?
+    {
         let temporary_name = format!(".zxs-relocate-{}", new_id("req"));
-        let parent = held_directory(stable)?;
+        let parent = root.directory(stable)?;
         rustix::fs::renameat_with(
-            parent.directory(),
+            &parent,
             "namespace",
-            parent.directory(),
+            &parent,
             temporary_name.as_str(),
             rustix::fs::RenameFlags::NOREPLACE,
         )
         .map_err(std::io::Error::from)?;
-        parent.directory().sync_all()?;
+        parent.sync_all()?;
         current = stable.join(temporary_name);
     }
-    private_dir(&namespace)?;
-    if !marker_matches(&namespace.join(NAMESPACE_MARKER), file_id)? {
-        write_json(&namespace.join(NAMESPACE_MARKER), &file_id, false)?;
+    root.private_dir(&namespace)?;
+    if !marker_matches_at(
+        root,
+        &namespace.join(NAMESPACE_MARKER),
+        file_id,
+        &mut |_| Ok(()),
+    )? {
+        root.write_json(&namespace.join(NAMESPACE_MARKER), &file_id, false)?;
     }
     let target = namespace.join(location);
     if target != current {
         if target.starts_with(&current) || current.starts_with(&target) {
             let temporary_name = format!(".zxs-relocate-{}", new_id("req"));
-            let source = held_directory(current.parent().expect("current container parent"))?;
-            let destination = held_directory(stable)?;
+            let source = root.directory(current.parent().expect("current container parent"))?;
+            let destination = root.directory(stable)?;
             rustix::fs::renameat_with(
-                source.directory(),
+                &source,
                 current.file_name().expect("current container name"),
-                destination.directory(),
+                &destination,
                 temporary_name.as_str(),
                 rustix::fs::RenameFlags::NOREPLACE,
             )
             .map_err(std::io::Error::from)?;
-            source.directory().sync_all()?;
-            destination.directory().sync_all()?;
+            source.sync_all()?;
+            destination.sync_all()?;
             current = stable.join(temporary_name);
         }
-        if directory_exists(&target)? {
+        if path_directory_exists_at(root, &namespace, &target)? {
             // Only structural empty parents can be replaced. Validate all of
             // them before removing any; unexpected bytes or links stay intact.
             let mut empty = Vec::new();
-            collect_empty_directories(&target, 0, &mut empty)?;
+            collect_empty_directories(root, &target, 0, &mut empty)?;
             for directory in empty {
-                let parent = held_directory(directory.parent().expect("empty parent"))?;
+                let parent = root.directory(directory.parent().expect("empty parent"))?;
                 rustix::fs::unlinkat(
-                    parent.directory(),
+                    &parent,
                     directory.file_name().expect("empty name"),
                     rustix::fs::AtFlags::REMOVEDIR,
                 )
                 .map_err(std::io::Error::from)?;
-                parent.directory().sync_all()?;
+                parent.sync_all()?;
             }
         }
         let destination_parent = target.parent().expect("canonical location parent");
-        private_dir(destination_parent)?;
+        root.private_dir(destination_parent)?;
         let mut directory = Some(destination_parent);
         while let Some(parent) = directory {
-            sync_dir(parent)?;
+            root.sync_dir(parent)?;
             if parent == stable {
                 break;
             }
             directory = parent.parent();
         }
-        if !marker_matches(&current.join(OWNER_MARKER), file_id)? {
-            write_json(&current.join(OWNER_MARKER), &file_id, false)?;
+        if !marker_matches_at(root, &current.join(OWNER_MARKER), file_id, &mut |_| Ok(()))? {
+            root.write_json(&current.join(OWNER_MARKER), &file_id, false)?;
         }
-        sync_dir(&current)?;
-        let source = held_directory(current.parent().expect("current container parent"))?;
-        let destination = held_directory(destination_parent)?;
+        root.sync_dir(&current)?;
+        let source = root.directory(current.parent().expect("current container parent"))?;
+        let destination = root.directory(destination_parent)?;
         rustix::fs::renameat_with(
-            source.directory(),
+            &source,
             current.file_name().expect("current container name"),
-            destination.directory(),
+            &destination,
             target.file_name().expect("target container name"),
             rustix::fs::RenameFlags::NOREPLACE,
         )
         .map_err(std::io::Error::from)?;
-        source.directory().sync_all()?;
-        destination.directory().sync_all()?;
+        source.sync_all()?;
+        destination.sync_all()?;
     }
-    sync_dir(&namespace)?;
-    sync_dir(stable)?;
+    root.sync_dir(&namespace)?;
+    root.sync_dir(stable)?;
     if let Some(mut parent) = original_parent {
-        while parent != namespace && parent.starts_with(&namespace) && directory_exists(&parent)? {
-            if fs::read_dir(&parent)?.next().is_some() {
+        while parent != namespace
+            && parent.starts_with(&namespace)
+            && path_directory_exists_at(root, &namespace, &parent)?
+        {
+            if root.entries(&parent)?.next().transpose()?.is_some() {
                 break;
             }
             let ancestor = parent.parent().expect("namespace ancestor").to_path_buf();
-            let held = held_directory(&ancestor)?;
+            let held = root.directory(&ancestor)?;
             rustix::fs::unlinkat(
-                held.directory(),
+                &held,
                 parent.file_name().expect("empty namespace parent"),
                 rustix::fs::AtFlags::REMOVEDIR,
             )
             .map_err(std::io::Error::from)?;
-            held.directory().sync_all()?;
+            held.sync_all()?;
             parent = ancestor;
         }
     }
@@ -802,6 +912,7 @@ fn synchronize_location(
 }
 
 fn collect_empty_directories(
+    disk: &DiskRoot,
     root: &Path,
     depth: usize,
     directories: &mut Vec<PathBuf>,
@@ -809,15 +920,19 @@ fn collect_empty_directories(
     if depth > 33 {
         return Err(invalid("container namespace exceeds the path depth limit"));
     }
-    existing_private_dir(root)?;
-    for entry in fs::read_dir(root)? {
+    disk.directory(root)?;
+    for entry in disk.entries(root)? {
         let entry = entry?;
-        if !entry.file_type()?.is_dir() || entry.file_type()?.is_symlink() {
+        let path = root.join(entry.as_path());
+        if !disk
+            .optional_metadata(&path)?
+            .is_some_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        {
             return Err(invalid(
                 "canonical container target contains unexpected data",
             ));
         }
-        collect_empty_directories(&entry.path(), depth + 1, directories)?;
+        collect_empty_directories(disk, &path, depth + 1, directories)?;
     }
     directories.push(root.to_path_buf());
     Ok(())
@@ -827,7 +942,6 @@ fn collect_empty_directories(
 /// or caches. Signed version evidence remains separate from this inspection cache.
 pub(crate) struct PreparedNames {
     cache: Option<PreparedNameCache>,
-    historical: bool,
 }
 struct PreparedNameCache {
     items: Vec<PreparedName>,
@@ -836,8 +950,8 @@ struct PreparedNameCache {
     file: fs::File,
 }
 struct PreparedName {
-    slot: String,
-    history_id: String,
+    disk: Arc<DiskHandle>,
+    history: PathBuf,
     file: String,
     location: Option<String>,
     name: String,
@@ -845,31 +959,22 @@ struct PreparedName {
     length: usize,
 }
 impl PreparedNames {
-    pub(crate) fn apply(self, config: &ValidatedConfig) -> Result<()> {
+    pub(crate) fn apply(self) -> Result<()> {
         let Some(mut cache) = self.cache else {
             return Ok(());
         };
         for item in cache.items {
-            let disk = config
-                .disks
-                .iter()
-                .find(|disk| disk.slot_id == item.slot)
-                .ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::DiskNotFound,
-                        "container slot disappeared",
-                    )
-                })?;
-            if self.historical && disk_unavailable(disk)? {
+            let root = &item.disk.root;
+            if !path_directory_exists_at(root, root.path(), &item.history)? {
                 continue;
             }
-            validate_seal(config, disk)?;
-            let history = disk.root.join("histories").join(&item.history_id);
-            let Some(current) = container(&history, &item.file)? else {
+            let Some(current) = container_at(root, &item.history, &item.file, &mut |_| Ok(()))?
+            else {
                 continue;
             };
-            let stable = history.join("file-containers").join(&item.file);
+            let stable = item.history.join("file-containers").join(&item.file);
             let named = synchronize_location(
+                root,
                 current,
                 &stable,
                 &item.file,
@@ -877,12 +982,12 @@ impl PreparedNames {
                 &item.name,
             )?;
             // Seal even a rename made visible by an earlier interrupted attempt.
-            sync_dir(&stable)?;
+            root.sync_dir(&stable)?;
             cache.file.seek(std::io::SeekFrom::Start(item.offset))?;
             let mut bytes = vec![0; item.length];
             cache.file.read_exact(&mut bytes)?;
-            write_atomic(&named.join("container.json"), &bytes, true)?;
-            sync_dir(&named)?;
+            root.write_atomic(&named.join("container.json"), &bytes, true)?;
+            root.sync_dir(&named)?;
         }
         Ok(())
     }
@@ -895,7 +1000,8 @@ pub(crate) fn synchronize_names(
     next: &State,
 ) -> Result<()> {
     let projection = ProjectionTransition::new(previous, next, None)?;
-    prepare_names(config, &projection, MAX_METADATA, None)?.apply(config)
+    let resources = Arc::new(DiskResources::open(config, true)?);
+    prepare_names(config, &resources, &projection, MAX_METADATA)?.apply()
 }
 
 /// A verified Publication authorizes repair that skips unavailable replicas.
@@ -903,21 +1009,21 @@ pub(crate) fn synchronize_names(
 /// publication; present-but-invalid identities are never ignored.
 pub(crate) fn repair_historical_names(
     config: &ValidatedConfig,
+    resources: &Arc<DiskResources>,
     previous: &State,
     next: &State,
-    metadata: &crate::engine::provenance::MetadataIntegrity,
 ) -> Result<()> {
     let projection = ProjectionTransition::new(previous, next, None)?;
-    prepare_names_inner(config, &projection, MAX_METADATA, true, Some(metadata))?.apply(config)
+    prepare_names_inner(config, resources, &projection, MAX_METADATA, true)?.apply()
 }
 
 pub(crate) fn prepare_names(
     config: &ValidatedConfig,
+    resources: &Arc<DiskResources>,
     projection: &ProjectionTransition<'_>,
     maximum: usize,
-    metadata: Option<&crate::engine::provenance::MetadataIntegrity>,
 ) -> Result<PreparedNames> {
-    prepare_names_inner(config, projection, maximum, false, metadata)
+    prepare_names_inner(config, resources, projection, maximum, false)
 }
 
 fn projection_locations(
@@ -990,10 +1096,10 @@ pub(crate) fn validate_new_projection_paths(projection: &ProjectionTransition<'_
 
 fn prepare_names_inner(
     config: &ValidatedConfig,
+    resources: &Arc<DiskResources>,
     projection: &ProjectionTransition<'_>,
     maximum: usize,
     historical: bool,
-    metadata: Option<&crate::engine::provenance::MetadataIntegrity>,
 ) -> Result<PreparedNames> {
     let previous = projection.previous();
     let view = projection.next();
@@ -1017,14 +1123,12 @@ fn prepare_names_inner(
                         "container placement references an absent slot",
                     )
                 })?;
-            if historical && disk_unavailable(disk)? {
-                continue;
-            }
-            let history = disk.root.join("histories").join(&history_id);
-            match metadata {
-                Some(metadata) => metadata.validate_seal(config, disk)?,
-                None => validate_seal(config, disk)?,
+            let held = match resources.available(disk) {
+                Some(held) => held,
+                None if historical => continue,
+                None => resources.get(disk)?,
             };
+            let history = disk.root.join("histories").join(&history_id);
             let (physical_location, physical_name) = projection_path(next, &file, &slot);
             // Other new-candidate callers retain the same admission boundary.
             // Published decisions use existing layout checks, not new-name rules.
@@ -1032,7 +1136,10 @@ fn prepare_names_inner(
                 validate_new_projection_path(physical_location)?;
             }
             // Metadata-only references and tombstones never synthesize bodies.
-            let Some(current) = container(&history, &file)? else {
+            if !path_directory_exists_at(&held.root, held.root.path(), &history)? {
+                continue;
+            }
+            let Some(current) = container_at(&held.root, &history, &file, &mut |_| Ok(()))? else {
                 continue;
             };
             let current_name = current
@@ -1085,8 +1192,8 @@ fn prepare_names_inner(
             let offset = staged.file.stream_position()?;
             staged.file.write_all(&bytes)?;
             staged.items.push(PreparedName {
-                slot,
-                history_id,
+                disk: Arc::clone(held),
+                history,
                 file: file.clone(),
                 location: physical_location.cloned(),
                 name: name.to_owned(),
@@ -1099,7 +1206,7 @@ fn prepare_names_inner(
     if let Some(staged) = &cache {
         staged.file.sync_data()?;
     }
-    Ok(PreparedNames { cache, historical })
+    Ok(PreparedNames { cache })
 }
 
 #[cfg(test)]

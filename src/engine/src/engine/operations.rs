@@ -3,7 +3,7 @@
 //! must authorize the receipt before capturing health and recheck after slow I/O.
 use super::{ContentReadPlan, Engine};
 use crate::journal::RecordType;
-use crate::{journal::*, publication_evidence::verified_object, *};
+use crate::{disk::DiskResources, journal::*, publication_evidence::verified_object_at, *};
 use std::collections::BTreeSet;
 
 /// Only the selected operation and its owner, never a clone of the whole State.
@@ -37,8 +37,8 @@ pub struct OperationReadPlan {
 }
 
 impl OperationReadPlan {
-    /// All disk identity, publication proof and complete payload verification
-    /// happens here, after the caller has released its Engine mutex.
+    /// Held-disk seal bytes, publication proof and complete payload verification
+    /// happen here, after the caller has released its Engine mutex.
     pub fn check(mut self) -> OperationRecord {
         let mut degraded = false;
         for (plan, target_copies) in &self.versions {
@@ -73,7 +73,13 @@ impl Engine {
             }
             Err(error) => return Err(error),
         };
-        snapshot_entry(&members, &snapshot, "operation_principals", id)
+        snapshot_entry(
+            &self.disk_resources,
+            &members,
+            &snapshot,
+            "operation_principals",
+            id,
+        )
     }
 
     /// Published records are metadata-only. An uncertain decision reads only
@@ -86,9 +92,16 @@ impl Engine {
             });
         }
         let (members, snapshot, candidate) = self.pending_operation_snapshot(id)?;
-        let owner = snapshot_entry(&members, &snapshot, "operation_principals", id)?;
-        let mut result: OperationResult = snapshot_entry(&members, &snapshot, "operations", id)?
-            .ok_or_else(operation_not_found)?;
+        let owner = snapshot_entry(
+            &self.disk_resources,
+            &members,
+            &snapshot,
+            "operation_principals",
+            id,
+        )?;
+        let mut result: OperationResult =
+            snapshot_entry(&self.disk_resources, &members, &snapshot, "operations", id)?
+                .ok_or_else(operation_not_found)?;
         if result.operation_id != id
             || result.request_digest != candidate.request_digest
             || result.sequence != candidate.sequence
@@ -172,7 +185,7 @@ impl Engine {
         let members = self.trusted_evidence_members();
         let mut first_error = None;
         for disk in &members {
-            let scanned = match scan(disk) {
+            let scanned = match scan_at(&self.disk_resources.get(disk)?.root, disk) {
                 Ok(scanned) => scanned,
                 Err(error) => {
                     first_error.get_or_insert(error);
@@ -185,7 +198,8 @@ impl Engine {
                     RecordType::Accept | RecordType::Publication
                 )
             }) {
-                let candidate = match verified_object::<Candidate>(
+                let candidate = match verified_object_at::<Candidate>(
+                    &self.disk_resources,
                     &members,
                     "candidate",
                     &record.candidate_hash,
@@ -202,8 +216,12 @@ impl Engine {
                 {
                     continue;
                 }
-                let snapshot: Snapshot =
-                    verified_object(&members, "snapshot", &candidate.snapshot_hash)?;
+                let snapshot: Snapshot = verified_object_at(
+                    &self.disk_resources,
+                    &members,
+                    "snapshot",
+                    &candidate.snapshot_hash,
+                )?;
                 validate_snapshot_schema(&snapshot)?;
                 if snapshot.sequence != candidate.sequence {
                     return Err(Error::new(
@@ -228,6 +246,7 @@ fn operation_not_found() -> Error {
 // Verify exact bounded pages one at a time. Do not materialize unrelated maps,
 // or trust an unverified index/cache as a substitute for the accepted root.
 fn snapshot_entry<T: data_serialization::Serialize + data_serialization::de::DeserializeOwned>(
+    resources: &DiskResources,
     members: &[DiskConfig],
     snapshot: &Snapshot,
     field: &str,
@@ -240,7 +259,7 @@ fn snapshot_entry<T: data_serialization::Serialize + data_serialization::de::Des
         )
     })?;
     let value = crate::metadata_map::lookup(reference, &id.to_string(), |kind, hash| {
-        crate::publication_evidence::verified_graph_object(members, kind, hash)
+        crate::publication_evidence::verified_graph_object_at(resources, members, kind, hash)
     })?;
     value
         .map(json_codec::from_value)

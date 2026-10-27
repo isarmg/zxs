@@ -39,13 +39,13 @@ struct HeldFile {
     stamp: Stamp,
 }
 impl HeldFile {
-    fn open(path: &Path) -> Result<Self> {
-        let file = open_regular(path)?;
+    fn open(root: &DiskRoot, path: &Path) -> Result<Self> {
+        let file = root.open_regular(path)?;
         let stamp = Stamp::of(&file)?;
         Ok(Self { file, stamp })
     }
-    fn validate(&self, path: &Path) -> Result<()> {
-        let current = open_regular(path)?;
+    fn validate(&self, root: &DiskRoot, path: &Path) -> Result<()> {
+        let current = root.open_regular(path)?;
         if Stamp::of(&self.file)? != self.stamp || Stamp::of(&current)? != self.stamp {
             return Err(Error::new(
                 storage_contract::ErrorCode::PreparationStale,
@@ -56,6 +56,7 @@ impl HeldFile {
     }
 }
 struct VerifiedPayload {
+    disk: Arc<DiskHandle>,
     version_id: String,
     slot_id: String,
     version_hash: String,
@@ -63,18 +64,17 @@ struct VerifiedPayload {
     body: HeldFile,
     metadata: Vec<(PathBuf, HeldFile)>,
 }
-struct HeldDisk {
+struct HeldSeal {
     metadata_member: bool,
-    root: PathBuf,
-    directory: File,
-    device: u64,
-    inode: u64,
+    disk: Arc<DiskHandle>,
+    path: PathBuf,
     seal: HeldFile,
 }
 pub(super) struct VerifiedPayloadSet {
     metadata_integrity: Arc<MetadataIntegrity>,
     entries: Vec<VerifiedPayload>,
-    disks: Vec<HeldDisk>,
+    disks: Vec<HeldSeal>,
+    resources: Arc<DiskResources>,
     full_revalidation: bool,
 }
 pub(super) const MAX_HELD_PAYLOAD_FILES: usize = 128;
@@ -88,11 +88,13 @@ std::thread_local! {
 /// can turn this preparation into a live decision proof.
 pub(super) struct PayloadPreparation {
     metadata_integrity: Arc<MetadataIntegrity>,
-    disks: Vec<HeldDisk>,
+    disks: Vec<HeldSeal>,
+    resources: Arc<DiskResources>,
 }
 impl PayloadPreparation {
     pub(super) fn new(
         config: &ValidatedConfig,
+        resources: &Arc<DiskResources>,
         candidate: &Candidate,
         metadata_integrity: Arc<MetadataIntegrity>,
     ) -> Result<Self> {
@@ -107,16 +109,17 @@ impl PayloadPreparation {
                 continue;
             }
             let identity = (|| {
-                validate_seal(config, disk)?;
-                let directory = File::open(&disk.root)?;
-                let metadata = directory.metadata()?;
-                Ok(HeldDisk {
+                let handle = resources.get(disk)?;
+                let path = disk.root.join("disk.json");
+                let seal = HeldFile::open(&handle.root, &path)?;
+                let stored: DiskSeal =
+                    decode_strict(&handle.root.read_bytes(&path, MAX_METADATA)?)?;
+                validate_stored_seal(&stored, &handle.seal)?;
+                Ok(HeldSeal {
                     metadata_member: disk.metadata_member,
-                    root: disk.root.clone(),
-                    directory,
-                    device: metadata.dev(),
-                    inode: metadata.ino(),
-                    seal: HeldFile::open(&disk.root.join("disk.json"))?,
+                    disk: Arc::clone(handle),
+                    path,
+                    seal,
                 })
             })();
             disks.push(if disk.metadata_member {
@@ -128,6 +131,7 @@ impl PayloadPreparation {
         Ok(Self {
             metadata_integrity,
             disks,
+            resources: Arc::clone(resources),
         })
     }
     pub(super) fn verify(
@@ -155,9 +159,9 @@ impl PayloadPreparation {
                 for slot in &evidence.placement.route_slot_ids {
                     entries.push(verify_replica(
                         config,
+                        &self.resources,
                         &evidence.version,
                         slot,
-                        &self.metadata_integrity,
                     )?);
                 }
             }
@@ -169,6 +173,7 @@ impl PayloadPreparation {
             metadata_integrity: self.metadata_integrity,
             entries,
             disks: self.disks,
+            resources: self.resources,
             full_revalidation,
         };
         proof.validate(config, candidate)?;
@@ -177,9 +182,9 @@ impl PayloadPreparation {
 }
 fn verify_replica(
     config: &ValidatedConfig,
+    resources: &DiskResources,
     version: &FileVersion,
     slot: &str,
-    metadata_integrity: &MetadataIntegrity,
 ) -> Result<VerifiedPayload> {
     #[cfg(test)]
     VERIFICATION_COST.with(|cost| {
@@ -196,14 +201,16 @@ fn verify_replica(
                 "prepared payload slot disappeared",
             )
         })?;
-    metadata_integrity.validate_seal(config, disk)?;
+    let handle = resources.get(disk)?;
     let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
     let mut metadata = Vec::new();
     for name in ["version.json", "checksums.bin", "payload.json"] {
         let path = directory.join(name);
-        metadata.push((path.clone(), HeldFile::open(&path)?));
+        metadata.push((path.clone(), HeldFile::open(&handle.root, &path)?));
     }
-    let recorded: FileVersion = read_json(&directory.join("version.json"))?;
+    let recorded: FileVersion = handle
+        .root
+        .read_json_observed(&directory.join("version.json"), &mut |_| Ok(()))?;
     let version_hash = object_hash("version", version)?;
     if object_hash("version", &recorded)? != version_hash {
         return Err(Error::new(
@@ -211,7 +218,9 @@ fn verify_replica(
             "prepared version metadata differs",
         ));
     }
-    let checks = read_bytes(&directory.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
+    let checks = handle
+        .root
+        .read_bytes(&directory.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
     if blake3::hash(&checks).to_hex().as_str() != version.checksum_manifest_hash {
         return Err(Error::new(
             storage_contract::ErrorCode::ChecksumMismatch,
@@ -227,8 +236,11 @@ fn verify_replica(
             "checksum header differs from version",
         ));
     }
-    let path = crate::container_storage::content_path(&directory, version)?;
-    let mut body = HeldFile::open(&path)?;
+    let path =
+        crate::container_storage::content_path_at(&handle.root, &directory, version, &mut |_| {
+            Ok(())
+        })?;
+    let mut body = HeldFile::open(&handle.root, &path)?;
     if body.stamp.size != version.logical_size {
         return Err(Error::new(
             storage_contract::ErrorCode::ChecksumMismatch,
@@ -261,11 +273,12 @@ fn verify_replica(
             "complete payload hash differs",
         ));
     }
-    body.validate(&path)?;
+    body.validate(&handle.root, &path)?;
     for (path, held) in &metadata {
-        held.validate(path)?;
+        held.validate(&handle.root, path)?;
     }
     Ok(VerifiedPayload {
+        disk: Arc::clone(handle),
         version_id: version.version_id.clone(),
         slot_id: slot.to_owned(),
         version_hash,
@@ -280,6 +293,7 @@ impl VerifiedPayloadSet {
     fn prepare(engine: &Engine, candidate: &Candidate) -> Result<Self> {
         PayloadPreparation::new(
             &engine.config,
+            &engine.disk_resources,
             candidate,
             Arc::clone(&engine.metadata_integrity),
         )?
@@ -287,23 +301,7 @@ impl VerifiedPayloadSet {
     }
     fn validate_disks(&self) -> Result<()> {
         for disk in &self.disks {
-            let identity = (|| {
-                let current = std::fs::symlink_metadata(&disk.root)?;
-                let held = disk.directory.metadata()?;
-                if !current.is_dir()
-                    || current.file_type().is_symlink()
-                    || current.dev() != disk.device
-                    || current.ino() != disk.inode
-                    || held.dev() != disk.device
-                    || held.ino() != disk.inode
-                {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::PreparationStale,
-                        "prepared disk directory identity changed",
-                    ));
-                }
-                disk.seal.validate(&disk.root.join("disk.json"))
-            })();
+            let identity = disk.seal.validate(&disk.disk.root, &disk.path);
             if disk.metadata_member {
                 self.metadata_integrity.observe(identity)?;
             } else {
@@ -338,8 +336,8 @@ impl VerifiedPayloadSet {
                 run();
             }
         });
-        // Long-running full revalidation must also preserve the disk identity
-        // pinned before preparation, including after the final replica read.
+        // Root identity is held; mutable seal bytes must still survive the
+        // complete verification interval, including the final replica read.
         self.validate_disks()
     }
     pub(super) fn validate_payload(
@@ -352,7 +350,7 @@ impl VerifiedPayloadSet {
             // Large candidates keep only disk identities pinned. Re-read every
             // byte with the same metadata and held-inode checks, one replica at
             // a time, rather than exhausting process-wide file descriptors.
-            verify_replica(config, version, slot, &self.metadata_integrity)?;
+            verify_replica(config, &self.resources, version, slot)?;
             return Ok(());
         }
         let entry = self
@@ -375,7 +373,6 @@ impl VerifiedPayloadSet {
                     "payload slot changed",
                 )
             })?;
-        self.metadata_integrity.validate_seal(config, disk)?;
         if entry.directory != version_dir(disk, &version.history_tree_id, &version.version_id)
             || entry.version_hash != object_hash("version", version)?
         {
@@ -384,14 +381,17 @@ impl VerifiedPayloadSet {
                 "payload proof identity differs",
             ));
         }
-        entry
-            .body
-            .validate(&crate::container_storage::content_path(
+        entry.body.validate(
+            &entry.disk.root,
+            &crate::container_storage::content_path_at(
+                &entry.disk.root,
                 &entry.directory,
                 version,
-            )?)?;
+                &mut |_| Ok(()),
+            )?,
+        )?;
         for (path, held) in &entry.metadata {
-            held.validate(path)?;
+            held.validate(&entry.disk.root, path)?;
         }
         Ok(())
     }

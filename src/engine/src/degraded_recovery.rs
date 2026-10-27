@@ -4,7 +4,9 @@ use crate::journal::RecordType;
 use crate::{disk::*, journal::*, *};
 use data_serialization::{Deserialize, Serialize};
 use json_codec::{Value, json};
-use std::{collections::BTreeSet, fs};
+use std::collections::BTreeSet;
+#[cfg(test)]
+use std::fs;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -67,7 +69,7 @@ fn observe(engine: &Engine, candidate: &Candidate) -> Result<Vec<Value>> {
         let mut slots = Vec::new();
         for slot in &evidence.placement.route_slot_ids {
             let disk = engine.disk(slot)?;
-            validate_seal(&engine.config, disk)?;
+            let handle = engine.disk_resources.get(disk)?;
             if evidence.placement.binding_generations.get(slot) != Some(&disk.binding_generation) {
                 return Err(required("candidate payload binding generation differs"));
             }
@@ -76,25 +78,28 @@ fn observe(engine: &Engine, candidate: &Candidate) -> Result<Vec<Value>> {
                 &evidence.version.history_tree_id,
                 &evidence.version.version_id,
             );
-            let state = match verify_payload(&dir, &evidence.version) {
-                Ok(()) => "COMPLETE_VERIFIED",
+            let state = match handle.verify_payload(&dir, &evidence.version) {
+                Ok(_) => "COMPLETE_VERIFIED",
                 Err(error) => {
                     // An inaccessible device or an arbitrary I/O failure is not permanent loss.
-                    let content = crate::container_storage::content_path(&dir, &evidence.version)?;
-                    match fs::symlink_metadata(&content) {
-                        Err(io) if io.kind() == std::io::ErrorKind::NotFound => "MISSING",
+                    let content = crate::container_storage::content_path_at(
+                        &handle.root,
+                        &dir,
+                        &evidence.version,
+                        &mut |_| Ok(()),
+                    )?;
+                    match handle.root.open_regular(&content) {
+                        Err(Error::Filesystem(platform_io::fs_safety::Error::Io(io)))
+                        | Err(Error::Contract(storage_contract::Error::Io {
+                            source: io, ..
+                        })) if io.kind() == std::io::ErrorKind::NotFound => "MISSING",
                         Err(source) => {
-                            return Err(Error::from(source).context(
+                            return Err(source.context(
                                 ErrorCode::RecoveryRequired,
                                 format!("cannot classify payload slot {slot}: {error}"),
                             ));
                         }
-                        Ok(meta) if meta.is_file() => "CORRUPT",
-                        Ok(_) => {
-                            return Err(required(
-                                "untrusted payload path requires manual quarantine",
-                            ));
-                        }
+                        Ok(_) => "CORRUPT",
                     }
                 }
             };
@@ -125,9 +130,10 @@ pub(crate) fn discover_publication(
 ) -> Result<Option<Publication>> {
     let mut found: Option<Publication> = None;
     for disk in engine.members() {
-        for name in list_object_hashes(&disk, "publication")? {
-            let publication: Publication =
-                load_object(&disk, "publication", &name).map_err(|source| {
+        let root = &engine.disk_resources.get(&disk)?.root;
+        for name in list_object_hashes_at(root, &disk, "publication")? {
+            let publication: Publication = load_object_at(root, &disk, "publication", &name)
+                .map_err(|source| {
                     source.context(
                         ErrorCode::RecoveryRequired,
                         "an unreadable publication object prevents proving absence",
@@ -145,14 +151,17 @@ pub(crate) fn discover_publication(
     }
     for evidence in &candidate.versions {
         for slot in &evidence.placement.route_slot_ids {
+            let root = &engine.disk_resources.get(engine.disk(slot)?)?.root;
             let directory = version_dir(
                 engine.disk(slot)?,
                 &evidence.version.history_tree_id,
                 &evidence.version.version_id,
             );
-            let path = local_proof_directory(&directory, hash)?.join("publication-proof.json");
+            let path =
+                local_proof_directory_at(root, &directory, hash)?.join("publication-proof.json");
             {
-                let local: LocalPublication = match read_json(&path) {
+                let local: LocalPublication = match root.read_json_observed(&path, &mut |_| Ok(()))
+                {
                     Ok(local) => local,
                     Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
                     | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
@@ -390,13 +399,15 @@ impl Engine {
         let mut witnesses = Vec::new();
         let mut accepts = Vec::new();
         for disk in self.members() {
-            let scanned = scan(&disk)?;
+            let root = &self.disk_resources.get(&disk)?.root;
+            let scanned = scan_at(root, &disk)?;
             if scanned.torn_tail {
                 return Err(required("a torn log cannot exclude an earlier publication"));
             }
             let mut found = None;
             for (record, _) in &scanned.records {
-                let c: Candidate = load_object(&disk, "candidate", &record.candidate_hash)?;
+                let c: Candidate =
+                    load_object_at(root, &disk, "candidate", &record.candidate_hash)?;
                 if c.operation_id == operation {
                     found = Some(c);
                 }
@@ -451,9 +462,14 @@ impl Engine {
                     let valid = match record.record.record_type {
                         RecordType::Reprotect => record.record.object_hash == plan_hash,
                         RecordType::Finalize => {
-                            load_object::<Finalize>(&disk, "finalize", &record.record.object_hash)?
-                                .recovery_id
-                                .as_deref()
+                            load_object_at::<Finalize>(
+                                root,
+                                &disk,
+                                "finalize",
+                                &record.record.object_hash,
+                            )?
+                            .recovery_id
+                            .as_deref()
                                 == Some(plan.recovery_id.as_str())
                         }
                         RecordType::Prepare | RecordType::Accept | RecordType::Publication => false,
@@ -516,11 +532,17 @@ impl Engine {
         let candidate = candidate.ok_or_else(|| required("candidate missing"))?;
         let hash = object_hash("candidate", &candidate)?;
         exclude_publication(self, &candidate, &hash)?;
-        let state = crate::publication_evidence::verified_snapshot(
+        let state = crate::publication_evidence::verified_snapshot_at(
+            &self.disk_resources,
             &self.members(),
             &candidate.snapshot_hash,
         )?;
-        crate::history_package::bound_history_objects(&self.members(), &candidate, Some(&state))?;
+        crate::history_package::bound_history_objects_at(
+            &self.disk_resources,
+            &self.members(),
+            &candidate,
+            Some(&state),
+        )?;
         Ok((candidate, state, witnesses, accepts))
     }
     pub fn prepare_degraded_recovery(
@@ -538,8 +560,14 @@ impl Engine {
         let (candidate, _, members, original_accepts) =
             self.pending_recovery_candidate(operation, None)?;
         let hash = object_hash("candidate", &candidate)?;
-        let old = member_plan_path(&self.members()[0], &hash);
-        let existing = match read_json::<RecoveryPlan>(&old) {
+        let disk = &self.members()[0];
+        let old = member_plan_path(disk, &hash);
+        let existing = match self
+            .disk_resources
+            .get(disk)?
+            .root
+            .read_json_observed::<RecoveryPlan>(&old, &mut |_| Ok(()))
+        {
             Ok(plan) => Some(plan),
             Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
             | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
@@ -556,8 +584,9 @@ impl Engine {
                 ));
             }
             for disk in self.members() {
-                write_json(&member_plan_path(&disk, &hash), &plan, false)?;
-                store_object(&disk, "recovery-plan", &plan)?;
+                let root = &self.disk_resources.get(&disk)?.root;
+                root.write_json(&member_plan_path(&disk, &hash), &plan, false)?;
+                store_object_at(root, &disk, "recovery-plan", &plan)?;
             }
             write_json(&plan_path(&self.root, &plan.recovery_id), &plan, false)?;
             return Ok(plan);
@@ -590,8 +619,9 @@ impl Engine {
         };
         plan.digest = plan_digest(&plan)?;
         for disk in self.members() {
-            write_json(&member_plan_path(&disk, &hash), &plan, false)?;
-            store_object(&disk, "recovery-plan", &plan)?;
+            let root = &self.disk_resources.get(&disk)?.root;
+            root.write_json(&member_plan_path(&disk, &hash), &plan, false)?;
+            store_object_at(root, &disk, "recovery-plan", &plan)?;
         }
         write_json(&plan_path(&self.root, &plan.recovery_id), &plan, false)?;
         Ok(plan)
@@ -607,14 +637,21 @@ impl Engine {
             {
                 let mut found: Option<RecoveryPlan> = None;
                 for disk in self.members() {
+                    let root = &self.disk_resources.get(&disk)?.root;
                     let directory = disk.root.join("metadata/recovery-plans");
-                    let entries = match fs::read_dir(&directory) {
+                    let entries = match root.entries(&directory) {
                         Ok(entries) => entries,
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                        Err(error) => return Err(error.into()),
+                        Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+                        | Err(Error::Contract(storage_contract::Error::Io {
+                            source: error, ..
+                        })) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) => return Err(error),
                     };
                     for entry in entries {
-                        let candidate: RecoveryPlan = read_json(&entry?.path())?;
+                        let candidate: RecoveryPlan = root
+                            .read_json_observed(&directory.join(entry?.as_path()), &mut |_| {
+                                Ok(())
+                            })?;
                         if candidate.recovery_id == id {
                             if found
                                 .as_ref()
@@ -689,7 +726,8 @@ impl Engine {
         }
         require_permanent_loss(self, &candidate, &plan.version_protection)?;
         let member_disks = self.members();
-        let history_objects = crate::history_package::bound_history_objects(
+        let history_objects = crate::history_package::bound_history_objects_at(
+            &self.disk_resources,
             &member_disks,
             &candidate,
             Some(&admitted),
@@ -731,7 +769,8 @@ impl Engine {
         )?;
         // All graph and combined proof checks precede any recovery writes.
         self.repair_bound_snapshot(&candidate.snapshot_hash)?;
-        crate::history_package::repair_history_objects(
+        crate::history_package::repair_history_objects_at(
+            &self.disk_resources,
             &member_disks,
             &history_objects,
             &mut BTreeSet::new(),
@@ -739,8 +778,9 @@ impl Engine {
         let mut reprotect = Vec::new();
         let plan_hash = object_hash("recovery-plan", &plan)?;
         for disk in &member_disks {
-            store_object(disk, "candidate", &candidate)?;
-            store_object(disk, "recovery-plan", &plan)?;
+            let root = &self.disk_resources.get(disk)?.root;
+            store_object_at(root, disk, "candidate", &candidate)?;
+            store_object_at(root, disk, "recovery-plan", &plan)?;
             reprotect.push(self.append_journal(
                 disk,
                 RecordType::Reprotect,
@@ -759,7 +799,12 @@ impl Engine {
         let final_hash = object_hash("finalize", &finalize)?;
         let mut finalize_receipts = Vec::new();
         for disk in &member_disks {
-            store_object(disk, "finalize", &finalize)?;
+            store_object_at(
+                &self.disk_resources.get(disk)?.root,
+                disk,
+                "finalize",
+                &finalize,
+            )?;
             finalize_receipts.push(self.append_journal(
                 disk,
                 RecordType::Finalize,
@@ -792,7 +837,8 @@ impl Engine {
                     &evidence.version.history_tree_id,
                     &evidence.version.version_id,
                 );
-                verify_payload(&dir, &evidence.version)?;
+                let handle = self.disk_resources.get(disk)?;
+                handle.verify_payload(&dir, &evidence.version)?;
                 let proof = CommitProof {
                     candidate_hash: plan.candidate_hash.clone(),
                     finalize: finalize.clone(),
@@ -801,8 +847,10 @@ impl Engine {
                     slot_id: slot.clone(),
                     route_slot_ids: evidence.placement.route_slot_ids.clone(),
                 };
-                let proof_dir = local_proof_directory(&dir, &plan.candidate_hash)?;
-                write_json(&proof_dir.join("commit-proof.json"), &proof, true)?;
+                let proof_dir = local_proof_directory_at(&handle.root, &dir, &plan.candidate_hash)?;
+                handle
+                    .root
+                    .write_json(&proof_dir.join("commit-proof.json"), &proof, true)?;
                 payload_receipts.push(PayloadReceipt {
                     version_id: evidence.version.version_id.clone(),
                     disk_id: disk.disk_id.clone(),

@@ -212,8 +212,13 @@ fn staged_bytes(prepared: &mut PreparedNames) -> DescriptorBytes {
                 bytes
                     .insert(
                         (
-                            item.slot.clone(),
-                            item.history_id.clone(),
+                            item.disk.seal.slot_id.clone(),
+                            item.history
+                                .file_name()
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .to_owned(),
                             item.file.clone()
                         ),
                         content
@@ -464,6 +469,7 @@ impl Fixture {
 #[test]
 fn warm_and_cold_container_bytes_match_full_scans_before_and_after_physical_apply() {
     let fixture = Fixture::new();
+    let resources = Arc::new(DiskResources::open(&fixture.config, true).unwrap());
     let before = &fixture.state;
     let mut after = before.clone();
     after.begin_tracking();
@@ -478,10 +484,11 @@ fn warm_and_cold_container_bytes_match_full_scans_before_and_after_physical_appl
         full_locations(before, &after, &fixture.file)
     );
     let expected = fixture.expected(before, &after);
-    let mut prepared = prepare_names(&fixture.config, &transition, MAX_METADATA, None).unwrap();
+    let mut prepared =
+        prepare_names(&fixture.config, &resources, &transition, MAX_METADATA).unwrap();
     assert_eq!(staged_bytes(&mut prepared), expected);
     fixture.assert_bodies_unchanged();
-    prepared.apply(&fixture.config).unwrap();
+    prepared.apply().unwrap();
     for ((slot, history, file), bytes) in &expected {
         let disk = fixture
             .config
@@ -496,15 +503,16 @@ fn warm_and_cold_container_bytes_match_full_scans_before_and_after_physical_appl
     }
     fixture.assert_bodies_unchanged();
     let cold = ProjectionTransition::new(before, &after, None).unwrap();
-    let mut replay = prepare_names(&fixture.config, &cold, MAX_METADATA, None).unwrap();
+    let mut replay = prepare_names(&fixture.config, &resources, &cold, MAX_METADATA).unwrap();
     assert_eq!(staged_bytes(&mut replay), expected);
-    replay.apply(&fixture.config).unwrap();
+    replay.apply().unwrap();
     fixture.assert_bodies_unchanged();
 }
 
 #[test]
 fn deleted_migrated_version_retains_old_only_history_route_without_recreating_content() {
     let fixture = Fixture::new();
+    let resources = Arc::new(DiskResources::open(&fixture.config, true).unwrap());
     let mut after = fixture.state.clone();
     after.begin_tracking();
     after.versions.remove(&id("ver", 3));
@@ -515,19 +523,21 @@ fn deleted_migrated_version_retains_old_only_history_route_without_recreating_co
     let expected = fixture.expected(&fixture.state, &after);
     let old_history = ("C01".into(), id("history", 2), fixture.file.clone());
     assert!(expected.contains_key(&old_history));
-    let mut prepared = prepare_names(&fixture.config, &transition, MAX_METADATA, None).unwrap();
+    let mut prepared =
+        prepare_names(&fixture.config, &resources, &transition, MAX_METADATA).unwrap();
     assert_eq!(staged_bytes(&mut prepared), expected);
     let old: Value = json_codec::from_slice(&expected[&old_history]).unwrap();
     assert_eq!(old["versions"], json!([]));
     assert!(!old["path_contexts"].as_object().unwrap().is_empty());
     assert!(!old["branch_aliases"].as_object().unwrap().is_empty());
-    prepared.apply(&fixture.config).unwrap();
+    prepared.apply().unwrap();
     fixture.assert_bodies_unchanged();
 }
 
 #[test]
 fn per_object_budget_failure_leaves_physical_names_and_bodies_unmodified() {
     let fixture = Fixture::new();
+    let resources = Arc::new(DiskResources::open(&fixture.config, true).unwrap());
     let mut after = fixture.state.clone();
     after.begin_tracking();
     after
@@ -546,7 +556,7 @@ fn per_object_budget_failure_leaves_physical_names_and_bodies_unmodified() {
         }
     }
     assert_eq!(
-        prepare_names(&fixture.config, &transition, 512, None)
+        prepare_names(&fixture.config, &resources, &transition, 512)
             .err()
             .unwrap()
             .code(),

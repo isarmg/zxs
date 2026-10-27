@@ -38,6 +38,7 @@ pub(crate) fn preflight_publication(
 ) -> Result<usize> {
     preflight_publication_prepared(
         &engine.config,
+        &engine.disk_resources,
         candidate,
         result,
         state,
@@ -61,6 +62,7 @@ pub(crate) fn preflight_bound_publication(
         result,
         state,
         PreflightOptions {
+            resources: &engine.disk_resources,
             recovery,
             maximum,
             prepared_graphs: None,
@@ -70,6 +72,7 @@ pub(crate) fn preflight_bound_publication(
 }
 pub(crate) fn preflight_publication_prepared(
     config: &ValidatedConfig,
+    resources: &DiskResources,
     candidate: &Candidate,
     result: &OperationResult,
     state: &State,
@@ -83,6 +86,7 @@ pub(crate) fn preflight_publication_prepared(
         result,
         state,
         PreflightOptions {
+            resources,
             recovery,
             maximum,
             prepared_graphs,
@@ -91,6 +95,7 @@ pub(crate) fn preflight_publication_prepared(
     )
 }
 struct PreflightOptions<'a> {
+    resources: &'a DiskResources,
     recovery: Option<RecoveryProof>,
     maximum: usize,
     prepared_graphs: Option<(&'a PreparedSnapshot, &'a crate::metadata_map::MapRoot)>,
@@ -105,6 +110,7 @@ fn preflight_inner(
     options: PreflightOptions<'_>,
 ) -> Result<usize> {
     let PreflightOptions {
+        resources,
         mut recovery,
         maximum,
         prepared_graphs,
@@ -241,7 +247,8 @@ fn preflight_inner(
             .map(|(snapshot, catalog)| (snapshot, catalog))
     });
     let (snapshot, tail, history_proof_bytes) = if recovering {
-        let snapshot: Snapshot = crate::publication_evidence::verified_object(
+        let snapshot: Snapshot = crate::publication_evidence::verified_object_at(
+            resources,
             &members,
             "snapshot",
             &candidate.snapshot_hash,
@@ -250,12 +257,20 @@ fn preflight_inner(
         let content = crate::metadata_map::MapRoot::load(
             &snapshot.maps["content_states"],
             crate::metadata_map::ProofMeasure::ContentStates,
-            |kind, hash| crate::publication_evidence::verified_graph_object(&members, kind, hash),
+            |kind, hash| {
+                crate::publication_evidence::verified_graph_object_at(
+                    resources, &members, kind, hash,
+                )
+            },
         )?;
         let catalog = crate::metadata_map::MapRoot::load(
             &candidate.history_roots,
             crate::metadata_map::ProofMeasure::Plain,
-            |kind, hash| crate::publication_evidence::verified_graph_object(&members, kind, hash),
+            |kind, hash| {
+                crate::publication_evidence::verified_graph_object_at(
+                    resources, &members, kind, hash,
+                )
+            },
         )?;
         let tail = content.maximum_tombstone_tail();
         (snapshot, tail, catalog.maximum_inclusion_proof_bytes())

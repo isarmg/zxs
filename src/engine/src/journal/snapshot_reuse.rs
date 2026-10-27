@@ -8,10 +8,24 @@ impl SnapshotReuse {
 impl PreparedSnapshot {
     /// Every entry here came from this encoder invocation, even if its digest
     /// names an older object. Installation therefore always compares and syncs.
+    #[cfg(test)]
     pub(crate) fn store_new_objects(&self, members: &[DiskConfig]) -> Result<String> {
+        self.store_created(|object| object.store(members))
+    }
+    pub(crate) fn store_new_objects_at(
+        &self,
+        resources: &DiskResources,
+        members: &[DiskConfig],
+    ) -> Result<String> {
+        self.store_created(|object| object.store_at(resources, members))
+    }
+    fn store_created(
+        &self,
+        mut install: impl FnMut(&PreparedMetadataObject) -> Result<String>,
+    ) -> Result<String> {
         self.root();
         for object in &self.objects {
-            object.store(members)?;
+            install(object)?;
         }
         Ok(self.hash.clone())
     }
@@ -42,15 +56,54 @@ impl PreparedSnapshot {
         );
         root
     }
+    #[cfg(test)]
     pub(crate) fn store(&self, members: &[DiskConfig], state: &State) -> Result<String> {
         self.store_with(members, state, |disk, kind, hash, bytes| {
             write_object_bytes(disk, kind, hash, bytes)
         })
     }
+    pub(crate) fn store_at(
+        &self,
+        resources: &DiskResources,
+        members: &[DiskConfig],
+        state: &State,
+    ) -> Result<String> {
+        self.store_with_read(
+            members,
+            state,
+            |disk, kind, hash, maximum| {
+                object_storage::read_object_bytes_bounded_at(
+                    &resources.get(disk)?.root,
+                    disk,
+                    kind,
+                    hash,
+                    maximum,
+                )
+            },
+            |disk, kind, hash, bytes| {
+                write_object_bytes_at(&resources.get(disk)?.root, disk, kind, hash, bytes)
+            },
+        )
+    }
+    #[cfg(test)]
     fn store_with(
         &self,
         members: &[DiskConfig],
         state: &State,
+        install: impl FnMut(&DiskConfig, &str, &str, &[u8]) -> Result<()>,
+    ) -> Result<String> {
+        self.store_with_read(
+            members,
+            state,
+            object_storage::read_object_bytes_bounded,
+            install,
+        )
+    }
+    fn store_with_read(
+        &self,
+        members: &[DiskConfig],
+        state: &State,
+        mut read: impl FnMut(&DiskConfig, &str, &str, usize) -> Result<Vec<u8>>,
         mut install: impl FnMut(&DiskConfig, &str, &str, &[u8]) -> Result<()>,
     ) -> Result<String> {
         let root = self.root();
@@ -90,12 +143,13 @@ impl PreparedSnapshot {
                     }
                     return Ok(());
                 }
-                let bytes = match read_published_object(
+                let bytes = match read_published_object_with(
                     members,
                     kind,
                     hash,
                     maximum.min(self.maximum),
                     &mut fault,
+                    &mut read,
                 ) {
                     Ok(bytes) => bytes,
                     Err(_) => {
@@ -137,12 +191,13 @@ impl PreparedSnapshot {
                 install(disk, object.kind, &object.hash, &object.bytes)?;
             }
         } else {
-            let bytes = match read_published_object(
+            let bytes = match read_published_object_with(
                 members,
                 "state-control-auth",
                 hash,
                 self.auth_bytes.min(self.maximum),
                 &mut fault,
+                &mut read,
             ) {
                 Ok(bytes) => bytes,
                 Err(_) => {
@@ -173,6 +228,7 @@ fn invalid_reconstruction() -> Error {
         "reconstructed snapshot graph differs from its exact bound root",
     )
 }
+#[cfg(test)]
 fn read_published_object(
     members: &[DiskConfig],
     kind: &str,
@@ -180,10 +236,27 @@ fn read_published_object(
     maximum: usize,
     fault: &mut impl FnMut(&Error),
 ) -> Result<Vec<u8>> {
+    read_published_object_with(
+        members,
+        kind,
+        hash,
+        maximum,
+        fault,
+        &mut object_storage::read_object_bytes_bounded,
+    )
+}
+fn read_published_object_with(
+    members: &[DiskConfig],
+    kind: &str,
+    hash: &str,
+    maximum: usize,
+    fault: &mut impl FnMut(&Error),
+    read: &mut impl FnMut(&DiskConfig, &str, &str, usize) -> Result<Vec<u8>>,
+) -> Result<Vec<u8>> {
     let mut first = None;
     for disk in members {
         let result = (|| {
-            let bytes = object_storage::read_object_bytes_bounded(disk, kind, hash, maximum)?;
+            let bytes = read(disk, kind, hash, maximum)?;
             #[cfg(test)]
             REUSED_OBJECT_PEAK_BYTES.with(|peak| peak.set(peak.get().max(bytes.len())));
             // Provenance is exact current-process encoder output, not a generic

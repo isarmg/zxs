@@ -20,6 +20,47 @@ fn fork(state: &State) -> State {
 }
 
 #[test]
+fn incremental_history_dependencies_stay_on_the_admitted_roots_after_rebinding() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = Config::development([temp.path().join("a"), temp.path().join("b")]);
+    for disk in &config.disks {
+        private_dir(&disk.root).unwrap();
+    }
+    let admitted = ValidatedConfig::try_from(config.clone()).unwrap();
+    let resources = DiskResources::open(&admitted, false).unwrap();
+    let before = fixture();
+    let previous =
+        store_history_manifests_bounded_at(&resources, &config.disks, &before, MAX_METADATA)
+            .unwrap();
+    for (index, disk) in config.disks.iter().enumerate() {
+        std::fs::rename(&disk.root, temp.path().join(format!("held-{index}"))).unwrap();
+        private_dir(&disk.root).unwrap();
+    }
+    let mut after = fork(&before);
+    after.sequence += 1;
+    let owners = DerivedOwners::from_state(&before);
+    let mut projection = ProjectionTransition::new(&before, &after, Some(&owners)).unwrap();
+    let mut faults = 0;
+    let (catalog, objects) = prepare_history_manifests_incremental_observed_at(
+        &resources,
+        &mut projection,
+        &previous,
+        &config.disks,
+        MAX_METADATA,
+        &mut |_| faults += 1,
+    )
+    .unwrap();
+    assert_eq!(faults, 0);
+    assert_eq!(catalog.reference(), previous.reference());
+    for object in objects {
+        object.store_at(&resources, &config.disks).unwrap();
+    }
+    for disk in &config.disks {
+        assert!(!disk.root.join("metadata").exists());
+    }
+}
+
+#[test]
 fn file_and_version_dependencies_resolve_both_owners_without_other_histories() {
     let mut before = fixture();
     let first = before.histories.keys().next().unwrap().clone();

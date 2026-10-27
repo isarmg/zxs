@@ -1,31 +1,27 @@
 //! Repair the original unpublished candidate using complete verified bytes.
 use crate::{disk::*, engine::Prepared, journal::Candidate, *};
-use platform_io::{
-    fs_safety::linux::{MountPolicy, OpenAt2Root},
-    payload::{Expectation, verify_full},
-};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use platform_io::payload::{Expectation, verify_full};
+use std::{fs::File, path::PathBuf};
 
 fn required(message: impl Into<String>) -> Error {
     Error::new(storage_contract::ErrorCode::RecoveryRequired, message)
 }
-fn matching(path: &Path, version: &FileVersion) -> Result<bool> {
-    match fs::symlink_metadata(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => {
-            let message = format!("cannot inspect recovery bytes: {e}");
-            return Err(Error::from(e).context(ErrorCode::RecoveryRequired, message));
+fn matching(source: Result<File>, version: &FileVersion) -> Result<bool> {
+    let mut file = match source {
+        Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+        | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            return Ok(false);
         }
-        Ok(meta) if !meta.is_file() || meta.file_type().is_symlink() => {
-            return Err(required("recovery source is not a regular non-linked file"));
+        Err(error) => {
+            return Err(error.context(ErrorCode::RecoveryRequired, "cannot open recovery bytes"));
         }
-        Ok(meta) if meta.len() != version.logical_size => return Ok(false),
-        Ok(_) => {}
+        Ok(file) => file,
+    };
+    if file.metadata()?.len() != version.logical_size {
+        return Ok(false);
     }
-    let mut file = open_regular(path)?;
     let hash = version.content_hash.digest();
     match verify_full(
         &mut file,
@@ -54,31 +50,38 @@ impl Engine {
     ) -> Result<Option<PathBuf>> {
         for slot in &placement.route_slot_ids {
             let disk = self.disk(slot)?;
-            self.metadata_integrity.validate_seal(&self.config, disk)?;
+            let root = &self.disk_resources.get(disk)?.root;
             let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
-            let source = crate::container_storage::content_path(&directory, version)?;
-            if matching(&source, version)? {
+            let source =
+                crate::container_storage::content_path_at(root, &directory, version, &mut |_| {
+                    Ok(())
+                })?;
+            if matching(root.open_regular(&source), version)? {
                 return Ok(Some(source));
             }
         }
         for workspace in self.workspaces.values() {
             let directory = self.workspace_data_directory(workspace)?;
-            let entries = match fs::read_dir(&directory) {
+            let root = self.planning_context().workspace_data_root(workspace)?;
+            let entries = match root.entries(&directory) {
                 Ok(entries) => entries,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error.into()),
+                Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+                | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+                    if error.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error),
             };
             // Older generations remain valid recovery candidates even after
             // the current workspace manifest points at newer dirty bytes.
             for entry in entries {
                 let entry = entry?;
-                if entry
-                    .path()
-                    .extension()
-                    .is_some_and(|suffix| suffix == "full")
-                    && matching(&entry.path(), version)?
+                let path = directory.join(entry.as_path());
+                if path.extension().is_some_and(|suffix| suffix == "full")
+                    && matching(root.open_regular(&path), version)?
                 {
-                    return Ok(Some(entry.path()));
+                    return Ok(Some(path));
                 }
             }
         }
@@ -94,24 +97,32 @@ impl Engine {
                 continue;
             }
             if let Ok((source, _)) = self.valid_replica(&published.version_id)
-                && matching(&source, version)?
+                && matching(self.planning_context().open_source(&source), version)?
             {
                 return Ok(Some(source));
             }
         }
         for disk in &self.config.disks {
-            self.metadata_integrity.validate_seal(&self.config, disk)?;
+            let root = &self.disk_resources.get(disk)?.root;
             let quarantine = disk.root.join("quarantine");
-            let entries = match fs::read_dir(&quarantine) {
+            let entries = match root.entries(&quarantine) {
                 Ok(entries) => entries,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error.into()),
+                Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+                | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+                    if error.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error),
             };
             for entry in entries {
                 let entry = entry?;
-                if !entry.file_type()?.is_dir()
+                let path = quarantine.join(entry.as_path());
+                if !root
+                    .optional_metadata(&path)?
+                    .is_some_and(|metadata| metadata.is_dir())
                     || !entry
-                        .file_name()
+                        .as_os_str()
                         .to_string_lossy()
                         .starts_with(&format!("{}-repair-", version.version_id))
                 {
@@ -119,8 +130,8 @@ impl Engine {
                 }
                 // Quarantine is an inspection bundle, independently of the
                 // live container layout used by the original version.
-                let source = entry.path().join("content").join(&version.creation_name);
-                if matching(&source, version)? {
+                let source = path.join("content").join(&version.creation_name);
+                if matching(root.open_regular(&source), version)? {
                     return Ok(Some(source));
                 }
             }
@@ -134,11 +145,15 @@ impl Engine {
             let mut damaged = Vec::new();
             for slot in &evidence.placement.route_slot_ids {
                 let disk = self.disk(slot)?;
-                self.metadata_integrity.validate_seal(&self.config, disk)?;
+                let handle = self.disk_resources.get(disk)?;
                 let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
-                let intact = read_json::<FileVersion>(&directory.join("version.json"))
+                let intact = handle
+                    .root
+                    .read_json_observed::<FileVersion>(&directory.join("version.json"), &mut |_| {
+                        Ok(())
+                    })
                     .is_ok_and(|stored| stored == *version)
-                    && verify_payload(&directory, version).is_ok();
+                    && handle.verify_payload(&directory, version).is_ok();
                 if !intact {
                     damaged.push((disk.clone(), directory));
                 }
@@ -155,79 +170,68 @@ impl Engine {
                     ))
                 })?;
             for (disk, directory) in damaged {
+                let root = &self.disk_resources.get(&disk)?.root;
                 let quarantine = disk.root.join("quarantine");
-                private_dir(&quarantine)?;
+                root.private_dir(&quarantine)?;
                 let name = format!("{}-repair-{}", version.version_id, new_id("req"));
                 let bundle = quarantine.join(&name);
-                private_dir(&bundle)?;
-                let content = crate::container_storage::content_path(&directory, version)?;
-                match fs::symlink_metadata(&content) {
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(e.into()),
-                    Ok(meta) if !meta.is_file() || meta.file_type().is_symlink() => {
-                        return Err(required("damaged payload is not a trusted regular file"));
-                    }
+                root.private_dir(&bundle)?;
+                let content = crate::container_storage::content_path_at(
+                    root,
+                    &directory,
+                    version,
+                    &mut |_| Ok(()),
+                )?;
+                match root.open_regular(&content) {
+                    Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+                    | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+                        if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
                     Ok(_) => {
                         let destination = bundle.join("content");
-                        private_dir(&destination)?;
-                        let from = OpenAt2Root::open(
-                            content.parent().expect("content parent"),
-                            MountPolicy::SameMount,
-                        )
-                        .map_err(|source| {
-                            let message = source.to_string();
-                            Error::from(source).context(ErrorCode::RecoveryRequired, message)
-                        })?;
-                        let to = OpenAt2Root::open(&destination, MountPolicy::SameMount).map_err(
-                            |source| {
-                                let message = source.to_string();
-                                Error::from(source).context(ErrorCode::RecoveryRequired, message)
-                            },
-                        )?;
+                        root.private_dir(&destination)?;
+                        let from = root.directory(content.parent().expect("content parent"))?;
+                        let to = root.directory(&destination)?;
                         rustix::fs::renameat_with(
-                            from.directory(),
+                            &from,
                             content.file_name().expect("payload name"),
-                            to.directory(),
+                            &to,
                             version.creation_name.as_str(),
                             rustix::fs::RenameFlags::NOREPLACE,
                         )
                         .map_err(std::io::Error::from)?;
-                        from.directory().sync_all()?;
-                        to.directory().sync_all()?;
+                        from.sync_all()?;
+                        to.sync_all()?;
                         if source == content {
                             source = destination.join(&version.creation_name);
                         }
                     }
                 }
-                match fs::symlink_metadata(&directory) {
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(e) => return Err(e.into()),
-                    Ok(meta) if !meta.is_dir() || meta.file_type().is_symlink() => {
-                        return Err(required("damaged replica path is not a trusted directory"));
+                match root.directory(&directory) {
+                    Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+                    | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+                        if error.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        continue;
                     }
+                    Err(error) => return Err(error),
                     Ok(_) => {}
                 }
                 let parent = directory
                     .parent()
                     .ok_or_else(|| required("replica parent missing"))?;
-                let from = OpenAt2Root::open(parent, MountPolicy::SameMount).map_err(|source| {
-                    let message = source.to_string();
-                    Error::from(source).context(ErrorCode::RecoveryRequired, message)
-                })?;
-                let to = OpenAt2Root::open(&bundle, MountPolicy::SameMount).map_err(|source| {
-                    let message = source.to_string();
-                    Error::from(source).context(ErrorCode::RecoveryRequired, message)
-                })?;
+                let from = root.directory(parent)?;
+                let to = root.directory(&bundle)?;
                 rustix::fs::renameat_with(
-                    from.directory(),
+                    &from,
                     directory.file_name().expect("version directory name"),
-                    to.directory(),
+                    &to,
                     "metadata",
                     rustix::fs::RenameFlags::NOREPLACE,
                 )
                 .map_err(std::io::Error::from)?;
-                from.directory().sync_all()?;
-                to.directory().sync_all()?;
+                from.sync_all()?;
+                to.sync_all()?;
             }
             self.prepare_payload(&Prepared {
                 version: version.clone(),

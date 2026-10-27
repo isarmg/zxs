@@ -2,21 +2,21 @@ use super::*;
 use std::{collections::BTreeMap, os::unix::fs::symlink};
 
 #[test]
-fn held_directory_preserves_private_admission_errors() {
+fn disk_root_preserves_private_admission_errors() {
     use platform_io::fs_safety::Error as FsError;
     use std::os::unix::fs::PermissionsExt;
 
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("root");
     assert!(matches!(
-        held_directory(&path),
+        DiskRoot::open(&path),
         Err(Error::Filesystem(FsError::Io(error)))
             if error.kind() == std::io::ErrorKind::NotFound
     ));
     fs::create_dir(&path).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(matches!(
-        held_directory(&path),
+        DiskRoot::open(&path),
         Err(Error::Filesystem(FsError::UnsafePermissions(rejected))) if rejected == path
     ));
     assert_eq!(
@@ -614,6 +614,7 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
     ]))
     .unwrap();
     drop(Engine::initialize_validated(&temporary.path().join("state"), config.clone()).unwrap());
+    let resources = Arc::new(DiskResources::open(&config, true).unwrap());
     let history_id = new_id("history");
     let file = new_id("file");
     let item = version(&State::default(), &history_id, &file, "file.txt", b"body");
@@ -631,20 +632,20 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
         .insert(file.clone(), ".ZXS-NAMESPACE.JSON".into());
 
     assert!(matches!(
-        prepare_names(&config, &ProjectionTransition::new(&previous, &published, None).unwrap(), MAX_METADATA, None),
+        prepare_names(&config, &resources, &ProjectionTransition::new(&previous, &published, None).unwrap(), MAX_METADATA),
         Err(error) if error.code() == storage_contract::ErrorCode::NameCollision
     ));
     // The same physical spelling is valid for replay of an immutable decision.
     // This is the existing publication phase boundary, not a second disk format.
     prepare_names_inner(
         &config,
+        &resources,
         &ProjectionTransition::new(&previous, &published, None).unwrap(),
         MAX_METADATA,
         true,
-        None,
     )
     .unwrap()
-    .apply(&config)
+    .apply()
     .unwrap();
     let body = content_path(&directory, &item).unwrap();
     assert_eq!(fs::metadata(&body).unwrap().ino(), inode);
@@ -659,7 +660,7 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
         .insert(file.clone(), NAMESPACE_MARKER.into());
     assert!(
         matches!(
-            prepare_names(&config, &ProjectionTransition::new(&published, &renamed, None).unwrap(), MAX_METADATA, None),
+            prepare_names(&config, &resources, &ProjectionTransition::new(&published, &renamed, None).unwrap(), MAX_METADATA),
             Err(error) if error.code() == storage_contract::ErrorCode::NameCollision
         ),
         "case-only changes are new admissions, not publication replay"
@@ -674,7 +675,7 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
     write_json(&marker, &new_id("file"), true).unwrap();
     let evidence = fs::read(&marker).unwrap();
     assert!(matches!(
-        prepare_names_inner(&config, &ProjectionTransition::new(&previous, &published, None).unwrap(), MAX_METADATA, true, None),
+        prepare_names_inner(&config, &resources, &ProjectionTransition::new(&previous, &published, None).unwrap(), MAX_METADATA, true),
         Err(error) if error.code() == storage_contract::ErrorCode::ContainerLayoutInvalid
     ));
     assert_eq!(
@@ -926,6 +927,7 @@ fn empty_name_projection_has_no_staging_file() {
         temporary.path().join("c"),
     ]))
     .unwrap();
+    let resources = Arc::new(DiskResources::open(&config, true).unwrap());
     let previous = State::default();
     let mut metadata_only = previous.clone();
     metadata_only.sequence = 1;
@@ -936,17 +938,17 @@ fn empty_name_projection_has_no_staging_file() {
         for historical in [false, true] {
             let prepared = prepare_names_inner(
                 &config,
+                &resources,
                 &ProjectionTransition::new(&previous, next, None).unwrap(),
                 0,
                 historical,
-                None,
             )
             .unwrap();
             assert!(
                 prepared.cache.is_none(),
                 "empty projections must not allocate staging"
             );
-            prepared.apply(&config).unwrap();
+            prepared.apply().unwrap();
         }
     }
     for disk in &config.disks {
@@ -1176,6 +1178,294 @@ fn verified_existing_fixture() -> (tempfile::TempDir, DiskConfig, FileVersion, P
     item.checksum_manifest_hash = blake3::hash(&manifest).to_hex().to_string();
     let directory = prepare(&history, &item, bytes);
     (temporary, disk, item, directory)
+}
+
+#[test]
+fn rooted_container_lookup_keeps_nested_markers_and_body_on_the_held_disk() {
+    let (_temporary, disk, item, directory) = verified_existing_fixture();
+    let installed = install_existing(&directory, &item).unwrap();
+    let named = installed.parent().unwrap().parent().unwrap();
+    let stable = named.parent().unwrap();
+    let root = DiskRoot::open(&disk.root).unwrap();
+    let named = synchronize_location(
+        &root,
+        named.to_path_buf(),
+        stable,
+        &item.file_id,
+        Some("nested/branch/body"),
+        "body",
+    )
+    .unwrap();
+    let body = named.join("versions").join(&item.storage_name);
+    let before = fs::metadata(&body).unwrap();
+    let moved = disk.root.with_extension("held");
+    fs::rename(&disk.root, &moved).unwrap();
+    private_dir(&disk.root).unwrap();
+    let replacement_history = history_root(&directory).unwrap();
+    prepare(replacement_history, &item, b"replacement disk bytes");
+
+    let resolved = content_path_at(&root, &directory, &item, &mut |_| Ok(())).unwrap();
+    assert_eq!(resolved, body);
+    let mut held = root.open_regular(&resolved).unwrap();
+    let after = held.metadata().unwrap();
+    assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
+    let mut bytes = Vec::new();
+    held.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"verified existing body");
+    assert_eq!(
+        fs::read(directory.join("content/body")).unwrap(),
+        b"replacement disk bytes",
+        "looking up through the old root neither reads nor changes its replacement"
+    );
+
+    let marker = moved
+        .join(named.strip_prefix(&disk.root).unwrap())
+        .join(OWNER_MARKER);
+    write_json(&marker, &new_id("file"), true).unwrap();
+    assert_eq!(
+        content_path_at(&root, &directory, &item, &mut |_| Ok(()))
+            .unwrap_err()
+            .code(),
+        ErrorCode::ContainerLayoutInvalid,
+        "held resource identity never makes subsequently read marker bytes trusted"
+    );
+}
+
+#[test]
+fn rooted_container_lookup_still_rejects_ambiguity_after_root_replacement() {
+    let (_temporary, disk, item, directory) = verified_existing_fixture();
+    let installed = install_existing(&directory, &item).unwrap();
+    let stable = installed
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let root = DiskRoot::open(&disk.root).unwrap();
+    let moved = disk.root.with_extension("held");
+    fs::rename(&disk.root, &moved).unwrap();
+    private_dir(&disk.root).unwrap();
+    private_dir(
+        &moved
+            .join(stable.strip_prefix(&disk.root).unwrap())
+            .join("another-container"),
+    )
+    .unwrap();
+    assert_eq!(
+        content_path_at(&root, &directory, &item, &mut |_| Ok(()))
+            .unwrap_err()
+            .code(),
+        ErrorCode::ContainerAmbiguous
+    );
+}
+
+#[test]
+fn rooted_container_lookup_preserves_missing_and_linked_body_classification() {
+    let (_temporary, disk, item, directory) = verified_existing_fixture();
+    let installed = install_existing(&directory, &item).unwrap();
+    let root = DiskRoot::open(&disk.root).unwrap();
+    fs::remove_file(&installed).unwrap();
+    assert_eq!(
+        content_path_at(&root, &directory, &item, &mut |_| Ok(())).unwrap(),
+        installed
+    );
+    symlink("/does-not-exist", &installed).unwrap();
+    assert_eq!(
+        content_path_at(&root, &directory, &item, &mut |_| Ok(()))
+            .unwrap_err()
+            .code(),
+        ErrorCode::ContainerLayoutInvalid
+    );
+}
+
+#[test]
+fn rooted_container_lookup_preserves_missing_metadata_parent_classification() {
+    for missing in ["versions", "history", "histories"] {
+        let (_temporary, disk, item, directory) = verified_existing_fixture();
+        let history = history_root(&directory).unwrap();
+        let root = DiskRoot::open(&disk.root).unwrap();
+        let missing = match missing {
+            "versions" => history.join("versions"),
+            "history" => history.to_path_buf(),
+            "histories" => disk.root.join("histories"),
+            _ => unreachable!(),
+        };
+        fs::remove_dir_all(missing).unwrap();
+        let expected = history
+            .join("file-containers")
+            .join(&item.file_id)
+            .join(&item.creation_name)
+            .join("versions")
+            .join(&item.storage_name);
+        assert_eq!(
+            content_path_at(&root, &directory, &item, &mut |_| Ok(())).unwrap(),
+            expected
+        );
+        assert_eq!(content_path(&directory, &item).unwrap(), expected);
+    }
+}
+
+#[test]
+fn rooted_container_lookup_rejects_unsafe_private_directory_without_chmod() {
+    use platform_io::fs_safety::Error as FsError;
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_temporary, disk, item, directory) = verified_existing_fixture();
+    let installed = install_existing(&directory, &item).unwrap();
+    let named = installed.parent().unwrap().parent().unwrap();
+    let root = DiskRoot::open(&disk.root).unwrap();
+    fs::set_permissions(named, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        content_path_at(&root, &directory, &item, &mut |_| Ok(())),
+        Err(Error::Filesystem(FsError::UnsafePermissions(rejected))) if rejected == named
+    ));
+    assert_eq!(fs::metadata(named).unwrap().mode() & 0o7777, 0o755);
+    assert_eq!(fs::read(installed).unwrap(), b"verified existing body");
+}
+
+#[test]
+fn rooted_prepared_lookup_preserves_existing_parent_mode_contract() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_temporary, disk, item, directory) = verified_existing_fixture();
+    let root = DiskRoot::open(&disk.root).unwrap();
+    for parent in [
+        disk.root.join("histories"),
+        directory.parent().unwrap().to_path_buf(),
+        directory.clone(),
+        directory.join("content"),
+    ] {
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+        let content = content_path_at(&root, &directory, &item, &mut |_| Ok(())).unwrap();
+        assert_eq!(content, directory.join("content/body"));
+        assert_eq!(
+            root.read_bytes(&content, MAX_METADATA).unwrap(),
+            b"verified existing body"
+        );
+        assert_eq!(fs::metadata(parent).unwrap().mode() & 0o7777, 0o755);
+    }
+}
+
+#[test]
+fn rooted_installation_retry_preserves_missing_prepared_parent_classification() {
+    for missing in ["content", "version", "versions"] {
+        let (_temporary, disk, item, directory) = verified_existing_fixture();
+        let installed = install_existing(&directory, &item).unwrap();
+        let root = DiskRoot::open(&disk.root).unwrap();
+        let proof = VerifiedExisting::read_at(&root, &directory, &item).unwrap();
+        let absent = match missing {
+            "content" => directory.join("content"),
+            "version" => directory.clone(),
+            "versions" => directory.parent().unwrap().to_path_buf(),
+            _ => unreachable!(),
+        };
+        fs::remove_dir_all(&absent).unwrap();
+        assert_eq!(
+            install_version_content_at(&root, &directory, PreparedContent::Verified(proof))
+                .unwrap(),
+            installed,
+            "{missing}"
+        );
+        assert!(
+            !absent.exists(),
+            "retry must not recreate missing preparation"
+        );
+        assert_eq!(fs::read(installed).unwrap(), b"verified existing body");
+    }
+}
+
+#[test]
+fn rooted_installation_moves_the_verified_inode_without_touching_replacement_root() {
+    let (_temporary, disk, item, directory) = verified_existing_fixture();
+    let source = directory.join("content/body");
+    let before = fs::metadata(&source).unwrap();
+    let verified = VerifiedExisting::read(&directory, &item).unwrap();
+    let root = DiskRoot::open(&disk.root).unwrap();
+    let moved = disk.root.with_extension("held");
+    fs::rename(&disk.root, &moved).unwrap();
+    private_dir(&disk.root).unwrap();
+    write_atomic(&disk.root.join("replacement"), b"unchanged", false).unwrap();
+
+    let installed =
+        install_version_content_at(&root, &directory, PreparedContent::Verified(verified)).unwrap();
+    let after = root.open_regular(&installed).unwrap().metadata().unwrap();
+    assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
+    assert_eq!(after.nlink(), 1);
+    let moved_source = moved.join(source.strip_prefix(&disk.root).unwrap());
+    assert!(!moved_source.exists());
+    let moved_target = moved.join(installed.strip_prefix(&disk.root).unwrap());
+    assert_eq!(fs::read(moved_target).unwrap(), b"verified existing body");
+    assert_eq!(fs::read_dir(&disk.root).unwrap().count(), 1);
+    assert_eq!(
+        fs::read(disk.root.join("replacement")).unwrap(),
+        b"unchanged"
+    );
+}
+
+#[test]
+fn prepared_names_apply_to_the_resource_captured_before_root_replacement() {
+    let temporary = tempfile::tempdir().unwrap();
+    let config =
+        ValidatedConfig::try_from(Config::development([temporary.path().join("disk")])).unwrap();
+    drop(Engine::initialize_validated(&temporary.path().join("system"), config.clone()).unwrap());
+    let resources = Arc::new(DiskResources::open(&config, true).unwrap());
+    let disk = &config.disks[0];
+    let history_id = new_id("history");
+    let item = version(
+        &State::default(),
+        &history_id,
+        &new_id("file"),
+        "body",
+        b"original body",
+    );
+    let history = disk.root.join("histories").join(&history_id);
+    let directory = prepare(&history, &item, b"original body");
+    let body = install_existing(&directory, &item).unwrap();
+    let inode = fs::metadata(&body).unwrap().ino();
+    let previous = with_version(&item);
+    let mut next = previous.clone();
+    next.file_names
+        .insert(item.file_id.clone(), "renamed".into());
+    next.file_locations
+        .insert(item.file_id.clone(), "nested/renamed".into());
+    let projection = ProjectionTransition::new(&previous, &next, None).unwrap();
+    let prepared = prepare_names(&config, &resources, &projection, MAX_METADATA).unwrap();
+
+    let moved = disk.root.with_extension("held");
+    fs::rename(&disk.root, &moved).unwrap();
+    private_dir(&disk.root).unwrap();
+    write_atomic(&disk.root.join("replacement"), b"unchanged", false).unwrap();
+    prepared.apply().unwrap();
+
+    let held = resources.get(disk).unwrap();
+    let resolved = content_path_at(&held.root, &directory, &item, &mut |_| Ok(())).unwrap();
+    assert!(
+        resolved
+            .to_string_lossy()
+            .contains("/namespace/nested/renamed/versions/")
+    );
+    assert_eq!(
+        held.root
+            .open_regular(&resolved)
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .ino(),
+        inode
+    );
+    let named = resolved.parent().unwrap().parent().unwrap();
+    let descriptor: json_codec::Value = held
+        .root
+        .read_json_observed(&named.join("container.json"), &mut |_| Ok(()))
+        .unwrap();
+    assert_eq!(descriptor["name"], "renamed");
+    assert_eq!(descriptor["location"], "nested/renamed");
+    assert_eq!(fs::read_dir(&disk.root).unwrap().count(), 1);
+    assert_eq!(
+        fs::read(disk.root.join("replacement")).unwrap(),
+        b"unchanged"
+    );
 }
 
 #[test]

@@ -2,7 +2,8 @@
 //!
 //! Capture configuration and logical accounting while holding the engine;
 //! filesystem/seal probes run later without blocking publication. Never use an
-//! observation as admission for a write: commit paths verify current bindings.
+//! observation as admission for a write: ordinary I/O uses its admitted held
+//! resources, while explicit probes describe the current configured names.
 use super::Engine;
 use crate::{disk::*, *};
 use platform_io::fs_safety::linux::{MountPolicy, OpenAt2Root};

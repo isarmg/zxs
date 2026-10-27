@@ -14,7 +14,11 @@ impl Engine {
         let admission = self.check_workspace_budget(w)?;
         let primary = self.workspace_data_directory(w)?;
         let result = (|| {
-            write_json(&primary.join("workspace.json"), w, true)?;
+            self.planning_context().workspace_data_root(w)?.write_json(
+                &primary.join("workspace.json"),
+                w,
+                true,
+            )?;
             write_json(
                 &self
                     .root
@@ -59,7 +63,8 @@ impl Engine {
         let mut damage = None;
         for directory in directories {
             let Some(body) = read_workspace_evidence::<json_codec::Value>(
-                &directory.join("wire-request.json"),
+                self.planning_context()
+                    .workspace_source_file(&directory.join("wire-request.json")),
                 &mut damage,
             )?
             else {
@@ -92,14 +97,11 @@ impl Engine {
     pub(crate) fn workspace_data_directory(&self, workspace: &Workspace) -> Result<PathBuf> {
         self.planning_context().workspace_data_directory(workspace)
     }
-    /// Read-only recovery may retain system-side evidence while the primary
-    /// is physically absent. A present disk must still have its expected seal.
+    /// Read-only recovery may retain system-side evidence while the admitted
+    /// resource set has no primary handle. This is only its configured address.
     fn workspace_recovery_directory(&self, workspace: &Workspace) -> Result<PathBuf> {
         let repository = self.repository_for_branch(&workspace.branch_id)?;
         let disk = self.disk(&repository.primary_slot_id)?;
-        if !disk_unavailable(disk)? {
-            self.metadata_integrity.validate_seal(&self.config, disk)?;
-        }
         Ok(disk
             .root
             .join("staging/workspaces")
@@ -118,71 +120,27 @@ impl Engine {
     }
 
     fn load_workspace_mirrors(&mut self, authoritative: bool) -> Result<()> {
-        let mut roots = vec![self.root.join("workspaces")];
-        roots.extend(
-            self.config
-                .disks
-                .iter()
-                .filter(|d| d.level == 1)
-                .map(|d| d.root.join("staging/workspaces")),
-        );
         // Collect paths, not decoded manifests. At most two bounded metadata
         // inputs may represent an ID; extra copies are a conflict, not votes.
         let mut candidates = BTreeMap::<String, Vec<PathBuf>>::new();
-        for root in roots {
-            match fs::symlink_metadata(&root) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error.into()),
-                Ok(_) => {
-                    if let Some(disk) = self
-                        .config
-                        .disks
-                        .iter()
-                        .find(|disk| root == disk.root.join("staging/workspaces"))
-                    {
-                        self.metadata_integrity.validate_seal(&self.config, disk)?;
-                    }
-                    existing_private_dir(&root)?;
-                }
-            }
-            for entry in fs::read_dir(&root)? {
-                let entry = entry?;
-                if entry.file_type()?.is_symlink() {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::UnsafePath,
-                        "linked workspace directory",
-                    ));
-                }
-                if !entry.file_type()?.is_dir() {
-                    continue;
-                }
-                let path = entry.path().join("workspace.json");
-                match fs::symlink_metadata(&path) {
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(error) => return Err(error.into()),
-                    Ok(_) => {}
-                }
-                let id = entry.file_name().into_string().map_err(|name| {
-                    Error::PathEncoding(name).context(
-                        ErrorCode::UnsafePath,
-                        "invalid workspace directory identity",
-                    )
-                })?;
-                validate_id(&id, "ws")?;
-                if !candidates.contains_key(&id)
-                    && candidates.len() >= self.effective_workspace_limits().max_retained_workspaces
-                {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::ResourceLimit,
-                        "retained workspace scan budget exhausted",
-                    ));
-                }
-                let paths = candidates.entry(id).or_default();
-                if paths.len() == 2 {
-                    return Err(recovery_required("too many workspace mirrors"));
-                }
-                paths.push(path);
-            }
+        let maximum = self.effective_workspace_limits().max_retained_workspaces;
+        let local = self.root.join("workspaces");
+        match DiskRoot::open(&local) {
+            Ok(root) => collect_workspace_paths(&root, &local, maximum, &mut candidates)?,
+            Err(Error::Filesystem(platform_io::fs_safety::Error::Io(source)))
+                if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        for disk in self.config.disks.iter().filter(|disk| disk.level == 1) {
+            let Some(held) = self.disk_resources.available(disk) else {
+                continue;
+            };
+            collect_workspace_paths(
+                &held.root,
+                &disk.root.join("staging/workspaces"),
+                maximum,
+                &mut candidates,
+            )?;
         }
         self.workspaces.clear();
         self.reset_workspace_budget();
@@ -190,7 +148,10 @@ impl Engine {
             let mut healthy = Vec::new();
             let mut damage = None;
             for path in &paths {
-                if let Some(workspace) = read_workspace_evidence::<Workspace>(path, &mut damage)? {
+                if let Some(workspace) = read_workspace_evidence::<Workspace>(
+                    self.planning_context().workspace_source_file(path),
+                    &mut damage,
+                )? {
                     self.validate_workspace_mirror(&id, path, &workspace, authoritative)?;
                     healthy.push(workspace);
                 }
@@ -253,7 +214,12 @@ impl Engine {
                 // staging bytes survived. Verify them without changing either
                 // mirror, so all damaged evidence remains available for repair.
                 for file in selected.files.values() {
-                    let mut source = open_regular(&file.source_path)?;
+                    let mut source = self
+                        .planning_context()
+                        .workspace_source_file(&file.source_path)?
+                        .ok_or_else(|| {
+                            recovery_required("workspace staging resource is unavailable")
+                        })?;
                     let digest = file.content_hash.digest();
                     platform_io::payload::verify_full(
                         &mut source,
@@ -352,7 +318,10 @@ impl Engine {
             }
             // Missing bytes can be an existing unavailable-content condition.
             // Permission and I/O failures are not evidence of missing content.
-            match open_regular(&file.source_path) {
+            match self
+                .planning_context()
+                .workspace_source_file(&file.source_path)
+            {
                 Ok(_) => {}
                 Err(Error::Filesystem(platform_io::fs_safety::Error::Io(source)))
                 | Err(Error::Contract(storage_contract::Error::Io { source, .. }))
@@ -408,7 +377,8 @@ impl Engine {
         let mut damage = None;
         for directory in &directories {
             let Some(request) = read_workspace_evidence::<CommitRequest>(
-                &directory.join("commit-request.json"),
+                self.planning_context()
+                    .workspace_source_file(&directory.join("commit-request.json")),
                 &mut damage,
             )?
             else {
@@ -425,7 +395,10 @@ impl Engine {
             for member in &members {
                 for (record, _) in self
                     .metadata_integrity
-                    .observe(crate::journal::scan(member))?
+                    .observe(crate::journal::scan_at(
+                        &self.disk_resources.get(member)?.root,
+                        member,
+                    ))?
                     .records
                 {
                     if record.sequence != operation.sequence
@@ -434,7 +407,8 @@ impl Engine {
                         continue;
                     }
                     let candidate: crate::journal::Candidate =
-                        crate::publication_evidence::verified_object_observed(
+                        crate::publication_evidence::verified_object_observed_at(
+                            &self.disk_resources,
                             &members,
                             "candidate",
                             &record.candidate_hash,
@@ -485,7 +459,8 @@ impl Engine {
         let mut damage = None;
         for directory in &directories {
             let Some(request) = read_workspace_evidence::<CommitRequest>(
-                &directory.join("commit-request.json"),
+                self.planning_context()
+                    .workspace_source_file(&directory.join("commit-request.json")),
                 &mut damage,
             )?
             else {
@@ -594,6 +569,74 @@ impl Engine {
     }
 }
 
+fn collect_workspace_paths(
+    root: &DiskRoot,
+    directory: &Path,
+    maximum: usize,
+    candidates: &mut BTreeMap<String, Vec<PathBuf>>,
+) -> Result<()> {
+    match root.directory(directory) {
+        Ok(_) => {}
+        Err(Error::Filesystem(platform_io::fs_safety::Error::Io(source)))
+        | Err(Error::Contract(storage_contract::Error::Io { source, .. }))
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    }
+    for entry in root.entries(directory)? {
+        let entry = entry?;
+        let child = directory.join(entry.as_path());
+        let Some(metadata) = root.optional_metadata(&child)? else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(Error::new(
+                ErrorCode::UnsafePath,
+                "linked workspace directory",
+            ));
+        }
+        if !metadata.is_dir() {
+            continue;
+        }
+        let path = child.join("workspace.json");
+        match root.open_regular(&path) {
+            Ok(_) => {}
+            Err(Error::Filesystem(platform_io::fs_safety::Error::Io(source)))
+            | Err(Error::Contract(storage_contract::Error::Io { source, .. }))
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
+        let id = entry
+            .as_os_str()
+            .to_os_string()
+            .into_string()
+            .map_err(|name| {
+                Error::PathEncoding(name).context(
+                    ErrorCode::UnsafePath,
+                    "invalid workspace directory identity",
+                )
+            })?;
+        validate_id(&id, "ws")?;
+        if !candidates.contains_key(&id) && candidates.len() >= maximum {
+            return Err(Error::new(
+                ErrorCode::ResourceLimit,
+                "retained workspace scan budget exhausted",
+            ));
+        }
+        let paths = candidates.entry(id).or_default();
+        if paths.len() == 2 {
+            return Err(recovery_required("too many workspace mirrors"));
+        }
+        paths.push(path);
+    }
+    Ok(())
+}
+
 fn recovery_required(message: &str) -> Error {
     Error::new(storage_contract::ErrorCode::RecoveryRequired, message)
 }
@@ -618,7 +661,10 @@ impl crate::engine::PlanningContext<'_> {
             .join("commit-request.json");
         let mut damage = None;
         let mut matches = |path: &std::path::Path| -> Result<bool> {
-            match read_workspace_evidence::<CommitRequest>(path, &mut damage)? {
+            match read_workspace_evidence::<CommitRequest>(
+                self.workspace_source_file(path),
+                &mut damage,
+            )? {
                 Some(saved) => Ok(canonical_json(&saved)? == expected),
                 None => Ok(false),
             }
@@ -639,22 +685,46 @@ impl crate::engine::PlanningContext<'_> {
     }
 }
 
-impl crate::engine::PlanningContext<'_> {
+impl<'a> crate::engine::PlanningContext<'a> {
+    pub(crate) fn workspace_data_root(&self, workspace: &Workspace) -> Result<&'a DiskRoot> {
+        let repo = self.repository_for_branch(&workspace.branch_id)?;
+        let disk = self.disk(&repo.primary_slot_id)?;
+        Ok(&self.disk_resources.get(disk)?.root)
+    }
+
     pub(crate) fn workspace_data_directory(&self, w: &Workspace) -> Result<PathBuf> {
         let repo = self.repository_for_branch(&w.branch_id)?;
         let disk = self.disk(&repo.primary_slot_id)?;
-        self.metadata_integrity.validate_seal(self.config, disk)?;
+        self.disk_resources.get(disk)?;
         Ok(disk.root.join("staging/workspaces").join(&w.workspace_id))
+    }
+
+    fn workspace_source_file(&self, path: &Path) -> Result<Option<fs::File>> {
+        if let Some(disk) = self
+            .config
+            .disks
+            .iter()
+            .find(|disk| path.starts_with(&disk.root))
+            && self.disk_resources.available(disk).is_none()
+        {
+            return Ok(None);
+        }
+        self.open_source(path).map(Some)
     }
 }
 
 // These bounded redundant files may be absent or contain a torn JSON mirror.
 // I/O/permission failures are not evidence of absence or recoverable corruption.
 fn read_workspace_evidence<T: data_serialization::de::DeserializeOwned>(
-    path: &Path,
+    file: Result<Option<fs::File>>,
     damage: &mut Option<Error>,
 ) -> Result<Option<T>> {
-    match read_json(path) {
+    let bytes = match file {
+        Ok(None) => return Ok(None),
+        Ok(Some(file)) => read_file_bytes(file, MAX_METADATA),
+        Err(error) => Err(error),
+    };
+    match bytes.and_then(|bytes| decode_strict(&bytes).map_err(Into::into)) {
         Ok(value) => Ok(Some(value)),
         Err(Error::Filesystem(platform_io::fs_safety::Error::Io(source)))
         | Err(Error::Contract(storage_contract::Error::Io { source, .. }))

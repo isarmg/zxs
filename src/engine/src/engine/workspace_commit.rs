@@ -23,6 +23,7 @@ impl Drop for PreparationAdmission {
 struct PlanningSnapshot {
     root: std::path::PathBuf,
     config: ValidatedConfig,
+    disk_resources: Arc<crate::disk::DiskResources>,
     state: Arc<State>,
     workspace: Workspace,
     blocked: bool,
@@ -39,6 +40,7 @@ impl PlanningSnapshot {
         super::PlanningContext {
             root: &self.root,
             config: &self.config,
+            disk_resources: &self.disk_resources,
             state: &self.state,
             snapshot: &self.snapshot,
             next_slot: self.next_slot,
@@ -147,6 +149,7 @@ impl Engine {
         let snapshot = PlanningSnapshot {
             root: self.root.clone(),
             config: self.config.clone(),
+            disk_resources: Arc::clone(&self.disk_resources),
             state: Arc::clone(&self.state),
             workspace: workspace.clone(),
             blocked: self.blocked,

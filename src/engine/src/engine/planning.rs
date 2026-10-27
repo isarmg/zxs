@@ -18,6 +18,7 @@ pub(super) enum Admission<'a> {
 pub(crate) struct PlanningContext<'a> {
     pub(crate) root: &'a Path,
     pub(crate) config: &'a ValidatedConfig,
+    pub(crate) disk_resources: &'a Arc<DiskResources>,
     pub(crate) state: &'a Arc<State>,
     pub(crate) snapshot: &'a Option<String>,
     pub(crate) next_slot: u64,
@@ -33,6 +34,7 @@ impl Engine {
         PlanningContext {
             root: &self.root,
             config: &self.config,
+            disk_resources: &self.disk_resources,
             state: &self.state,
             snapshot: &self.snapshot,
             next_slot: self.next_slot,
@@ -45,6 +47,20 @@ impl Engine {
     }
 }
 impl<'a> PlanningContext<'a> {
+    /// Internal source addresses select an already-owned disk, not its current name.
+    pub(crate) fn open_source(&self, path: &Path) -> Result<std::fs::File> {
+        let path = absolute_path(path)?;
+        match self
+            .config
+            .disks
+            .iter()
+            .find(|disk| path.starts_with(&disk.root))
+        {
+            Some(disk) => self.disk_resources.get(disk)?.root.open_regular(&path),
+            None => open_regular(&path),
+        }
+    }
+
     pub(crate) fn members(&self) -> Vec<DiskConfig> {
         let mut members = self
             .config
@@ -162,10 +178,6 @@ impl<'a> PlanningContext<'a> {
                 "an unresolved decision or unavailable metadata member blocks writes",
             )
             .retryable());
-        }
-        for disk in self.members() {
-            self.metadata_integrity
-                .observe(validate_seal(self.config, &disk))?;
         }
         Ok(())
     }

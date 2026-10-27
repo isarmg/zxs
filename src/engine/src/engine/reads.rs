@@ -1,6 +1,7 @@
 //! Verified replicas, read leases, offline export and disk observations.
+use super::provenance::MetadataReadContext;
 use super::{Engine, OpenedContent, ReadLease};
-use crate::{disk::*, journal::verify_local_publication_in_context, *};
+use crate::{disk::*, *};
 use std::path::Path;
 use std::{io::Read, path::PathBuf, sync::Arc};
 
@@ -9,13 +10,20 @@ impl Engine {
         self.planning_context().used_bytes(slot)
     }
     pub(crate) fn valid_replica(&self, version_id: &str) -> Result<(PathBuf, FileVersion)> {
-        let (_, version, directory) = self.verified_replica(version_id)?;
-        let content = crate::container_storage::content_path(&directory, &version)?;
-        Ok((content, version))
+        self.with_replica(version_id, |disk, directory, version| {
+            disk.verify_payload(directory, version)?;
+            let content = crate::container_storage::content_path_at(
+                &disk.root,
+                directory,
+                version,
+                &mut |_| Ok(()),
+            )?;
+            Ok((content, version.clone()))
+        })
     }
     fn verified_replica(&self, version_id: &str) -> Result<(std::fs::File, FileVersion, PathBuf)> {
-        self.with_replica(version_id, |directory, version| {
-            let mut file = verify_payload_held(directory, version)?;
+        self.with_replica(version_id, |disk, directory, version| {
+            let mut file = disk.verify_payload(directory, version)?;
             use std::io::{Seek, SeekFrom};
             file.seek(SeekFrom::Start(0))?;
             Ok((file, version.clone(), directory.to_path_buf()))
@@ -25,7 +33,7 @@ impl Engine {
     fn with_replica<T>(
         &self,
         version_id: &str,
-        mut read: impl FnMut(&Path, &FileVersion) -> Result<T>,
+        mut read: impl FnMut(&DiskHandle, &Path, &FileVersion) -> Result<T>,
     ) -> Result<T> {
         if self
             .state
@@ -54,19 +62,16 @@ impl Engine {
         for slot in &placement.route_slot_ids {
             let d = self.disk(slot)?;
             let candidate = (|| {
-                let identity = validate_seal(&self.config, d);
-                let identity = if d.metadata_member {
-                    self.metadata_integrity.observe(identity)?
-                } else {
-                    identity?
-                };
+                let disk = self.disk_resources.get(d)?;
                 let dir = version_dir(d, &version.history_tree_id, version_id);
-                let metadata = d.metadata_member.then(|| {
-                    self.metadata_integrity
-                        .read_context(&self.config, &identity)
-                });
-                verify_local_publication_in_context(&dir, version, metadata.as_ref())?;
-                read(&dir, version)
+                let metadata = MetadataReadContext::for_disk(
+                    &self.config,
+                    &disk.seal,
+                    d.metadata_member
+                        .then_some(self.metadata_integrity.as_ref()),
+                );
+                disk.verify_publication(&dir, version, &metadata)?;
+                read(disk, &dir, version)
             })();
             match candidate {
                 Ok(replica) => return Ok(replica),
@@ -125,7 +130,7 @@ impl Engine {
                 "workspace item not found",
             )
         })?;
-        let file = open_regular(&staged.source_path)?;
+        let file = self.planning_context().open_source(&staged.source_path)?;
         let key = staged
             .base_version_id
             .clone()
@@ -156,20 +161,15 @@ impl Engine {
             .open()
     }
     pub fn read_checksums(&self, version: &str) -> Result<Vec<u8>> {
-        let (_, version, directory) = self.verified_replica(version)?;
-        let checks = read_bytes(&directory.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
-        // Bind the returned bytes too, not an earlier read of this pathname.
-        if blake3::hash(&checks).to_hex().as_str() != version.checksum_manifest_hash {
-            return Err(Error::new(
-                storage_contract::ErrorCode::ChecksumMismatch,
-                "checksum manifest digest differs",
-            ));
-        }
-        Ok(checks)
+        self.with_replica(version, |disk, directory, version| {
+            let (file, checks, manifest) = disk.open_payload(directory, version)?;
+            verify_open_payload_observed(file, manifest, version, &mut |_| Ok(()))?;
+            Ok(checks)
+        })
     }
     pub fn export_version(&self, version_id: &str, destination: &Path) -> Result<()> {
-        self.with_replica(version_id, |directory, version| {
-            let (file, _) = open_payload(directory, version)?;
+        self.with_replica(version_id, |disk, directory, version| {
+            let (file, _, _) = disk.open_payload(directory, version)?;
             match verified_full_copy(file, destination, version, version.logical_size) {
                 Ok(_) => Ok(Ok(())),
                 Err(CopyFailure::Source(error)) => Err(error),
@@ -218,6 +218,7 @@ impl Engine {
 /// selected version while publication evidence and payload handles are opened.
 pub struct ContentReadPlan {
     config: ValidatedConfig,
+    disk_resources: Arc<DiskResources>,
     disks: Vec<DiskConfig>,
     version: FileVersion,
     lease: ReadLease,
@@ -278,6 +279,7 @@ impl Engine {
         Ok(ContentReadPlan {
             metadata_integrity: Arc::clone(&self.metadata_integrity),
             config: self.config.clone(),
+            disk_resources: Arc::clone(&self.disk_resources),
             disks,
             version,
             lease: ReadLease {
@@ -291,7 +293,7 @@ impl Engine {
 impl ContentReadPlan {
     /// A fresh, complete verification, never a cached protection assertion.
     /// Keep the plan (and therefore its read lease) alive for the entire scan.
-    pub(super) fn health(&self, target_copies: u32) -> storage_contract::CurrentHealth {
+    pub(crate) fn health(&self, target_copies: u32) -> storage_contract::CurrentHealth {
         let healthy = self
             .disks
             .iter()
@@ -301,22 +303,19 @@ impl ContentReadPlan {
                     &self.version.history_tree_id,
                     &self.version.version_id,
                 );
-                let identity = validate_seal(&self.config, disk);
-                let identity = if disk.metadata_member {
-                    self.metadata_integrity.observe(identity)
-                } else {
-                    identity
-                };
-                let Ok(identity) = identity else {
+                let Ok(handle) = self.disk_resources.get(disk) else {
                     return false;
                 };
-                let metadata = disk.metadata_member.then(|| {
-                    self.metadata_integrity
-                        .read_context(&self.config, &identity)
-                });
-                verify_local_publication_in_context(&directory, &self.version, metadata.as_ref())
+                let metadata = MetadataReadContext::for_disk(
+                    &self.config,
+                    &handle.seal,
+                    disk.metadata_member
+                        .then_some(self.metadata_integrity.as_ref()),
+                );
+                handle
+                    .verify_publication(&directory, &self.version, &metadata)
                     .is_ok()
-                    && verify_payload(&directory, &self.version).is_ok()
+                    && handle.verify_payload(&directory, &self.version).is_ok()
             })
             .count();
         if healthy == 0 {
@@ -333,49 +332,20 @@ impl ContentReadPlan {
         let mut first_error: Option<Error> = None;
         for disk in &self.disks {
             let candidate = (|| {
-                let identity = validate_seal(&self.config, disk);
-                let identity = if disk.metadata_member {
-                    self.metadata_integrity.observe(identity)?
-                } else {
-                    identity?
-                };
+                let handle = self.disk_resources.get(disk)?;
                 let dir = version_dir(
                     disk,
                     &self.version.history_tree_id,
                     &self.version.version_id,
                 );
-                let metadata = disk.metadata_member.then(|| {
-                    self.metadata_integrity
-                        .read_context(&self.config, &identity)
-                });
-                verify_local_publication_in_context(&dir, &self.version, metadata.as_ref())?;
-                let checks = read_bytes(&dir.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
-                if blake3::hash(&checks).to_hex().as_str() != self.version.checksum_manifest_hash {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::ChecksumMismatch,
-                        "checksum manifest digest differs",
-                    ));
-                }
-                let manifest = ChecksumManifest::decode(&checks)?;
-                if manifest.logical_size != self.version.logical_size
-                    || manifest.chunk_bytes != self.version.checksum_chunk_bytes
-                {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::ChecksumMismatch,
-                        "checksum header differs from version",
-                    ));
-                }
-                let file = open_regular(&crate::container_storage::content_path(
-                    &dir,
-                    &self.version,
-                )?)?;
-                if file.metadata()?.len() != self.version.logical_size {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::ChecksumMismatch,
-                        "payload length differs",
-                    ));
-                }
-                Ok((file, checks, manifest))
+                let metadata = MetadataReadContext::for_disk(
+                    &self.config,
+                    &handle.seal,
+                    disk.metadata_member
+                        .then_some(self.metadata_integrity.as_ref()),
+                );
+                handle.verify_publication(&dir, &self.version, &metadata)?;
+                handle.open_payload(&dir, &self.version)
             })();
             match candidate {
                 Ok(candidate) => replicas.push(candidate),

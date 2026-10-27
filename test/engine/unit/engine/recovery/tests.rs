@@ -419,7 +419,10 @@ fn object_repair_does_not_replace_symlink_or_hardlink() {
         } else {
             symlink(&external, &target).unwrap();
         }
-        assert!(repair_object_copies(&members, "candidate", &hash, &value).is_err());
+        assert!(
+            repair_object_copies_at(&engine.disk_resources, &members, "candidate", &hash, &value)
+                .is_err()
+        );
         assert_eq!(std::fs::read(&external).unwrap(), b"untouched");
         assert_eq!(std::fs::read(&target).unwrap(), b"untouched");
     }
@@ -528,14 +531,27 @@ fn failed_replica_repair_does_not_cache_page_success() {
     std::fs::create_dir(&target).unwrap();
     let mut repaired = BTreeSet::new();
     assert_eq!(
-        repair_snapshot_copies(&members, &members, &hash, &mut repaired)
-            .unwrap_err()
-            .code(),
+        repair_snapshot_copies(
+            &engine.disk_resources,
+            &members,
+            &members,
+            &hash,
+            &mut repaired
+        )
+        .unwrap_err()
+        .code(),
         storage_contract::ErrorCode::UnsafePath
     );
     assert!(!repaired.contains(&format!("state-page/{page}")));
     std::fs::remove_dir(&target).unwrap();
-    repair_snapshot_copies(&members, &members, &hash, &mut repaired).unwrap();
+    repair_snapshot_copies(
+        &engine.disk_resources,
+        &members,
+        &members,
+        &hash,
+        &mut repaired,
+    )
+    .unwrap();
     assert!(repaired.contains(&format!("state-page/{page}")));
     assert_eq!(std::fs::read(&target).unwrap(), original);
 }
@@ -1213,7 +1229,7 @@ fn replay_receipts_survive_multiple_tail_slot_advances_for_checkpoint() {
     drop(writer);
     let opened = OpenJournal::scan(&disk).unwrap();
     let mut replayed = opened.scan.records.clone();
-    let mut writer = opened.into_writer(&disk).unwrap();
+    let mut writer = opened.into_writer().unwrap();
     for sequence in 1..=4 {
         let candidate = if sequence == 1 {
             "a".repeat(64)

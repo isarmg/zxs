@@ -94,6 +94,32 @@ fn reused_fields_hold_one_page_buffer_and_never_serialize_their_records() {
 }
 
 #[test]
+fn snapshot_reuse_reads_and_installs_only_in_its_admitted_resources_after_rebinding() {
+    let (temp, config, state, prepared) = fixture(256);
+    let admitted = ValidatedConfig::try_from(config.clone()).unwrap();
+    let resources = DiskResources::open(&admitted, false).unwrap();
+    let (next, hot) = heat(&state, &prepared);
+    for (index, disk) in config.disks.iter().enumerate() {
+        fs::rename(&disk.root, temp.path().join(format!("held-{index}"))).unwrap();
+        private_dir(&disk.root).unwrap();
+    }
+    snapshot::take_encoding_counts();
+    hot.store_at(&resources, &config.disks, &next).unwrap();
+    assert_eq!(snapshot::take_encoding_counts().get("file_notes"), None);
+    for disk in &config.disks {
+        let root = &resources.get(disk).unwrap().root;
+        let descriptor = load_object_at(root, disk, "snapshot", &hot.hash).unwrap();
+        let restored = resolve_raw_snapshot(descriptor, |kind, hash| {
+            load_authenticated_object_at(root, disk, kind, hash)
+        })
+        .unwrap()
+        .into_codec_fixture();
+        assert_eq!(restored, next);
+        assert!(!disk.root.join("metadata").exists());
+    }
+}
+
+#[test]
 fn missing_pages_reconstruct_the_field_once_with_the_identical_reference_sequence() {
     let (_temp, config, state, prepared) = fixture(512);
     snapshot::take_encoding_counts();

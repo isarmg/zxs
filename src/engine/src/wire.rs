@@ -1,5 +1,5 @@
 //! Frozen upload manifests and the public request digest envelope.
-use crate::{disk::*, *};
+use crate::*;
 use json_codec::{Value, json};
 use std::collections::BTreeMap;
 
@@ -140,7 +140,7 @@ impl Engine {
             .plan_workspace_commit_wire(workspace, request, envelope, replay)
     }
     pub fn version_health(&self, version: &str) -> Result<String> {
-        let v = self.state.versions.get(version).ok_or_else(|| {
+        self.state.versions.get(version).ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::VersionNotFound,
                 "version not found",
@@ -157,31 +157,11 @@ impl Engine {
                 "placement not found",
             )
         })?;
-        let mut healthy = 0;
-        for slot in &p.route_slot_ids {
-            let d = self.disk(slot)?;
-            if let Ok(identity) = self.metadata_integrity.validate_seal(&self.config, d) {
-                let metadata = d.metadata_member.then(|| {
-                    self.metadata_integrity
-                        .read_context(&self.config, &identity)
-                });
-                let dir = version_dir(d, &v.history_tree_id, version);
-                if crate::journal::verify_local_publication_in_context(&dir, v, metadata.as_ref())
-                    .is_ok()
-                    && verify_payload(&dir, v).is_ok()
-                {
-                    healthy += 1;
-                }
-            }
-        }
-        Ok(if healthy == 0 {
-            "UNAVAILABLE"
-        } else if healthy < p.target_copies as usize {
-            "DEGRADED"
-        } else {
-            "HEALTHY"
-        }
-        .into())
+        Ok(self
+            .prepare_content(version)?
+            .health(p.target_copies)
+            .as_str()
+            .into())
     }
 }
 

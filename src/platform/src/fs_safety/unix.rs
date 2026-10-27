@@ -14,7 +14,7 @@ use std::{
     ffi::OsStr,
     fs::File,
     io::{self, Read, Write},
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
 };
 
 const DIRECTORY_FLAGS: OFlags = OFlags::RDONLY
@@ -49,6 +49,31 @@ pub(super) fn open_private_directory(path: &Path) -> Result<PrivateDirectory, Er
     })
 }
 
+pub(super) fn private_directory_from_handle(
+    directory: File,
+    path: PathBuf,
+) -> Result<PrivateDirectory, Error> {
+    if !path.is_absolute() {
+        return Err(Error::AbsolutePathRequired(path));
+    }
+    if path
+        .components()
+        .any(|part| !matches!(part, Component::RootDir | Component::Normal(_)))
+    {
+        return Err(Error::UnsafeRelativePath(path));
+    }
+    let stat = fstat(&directory).map_err(io::Error::from)?;
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
+        return Err(Error::UnsafeFileType(path));
+    }
+    validate_private_permissions(&stat, &path)?;
+    Ok(PrivateDirectory {
+        path,
+        directory,
+        administration_owner: None,
+    })
+}
+
 pub(super) fn open_administrative_directory(path: &Path) -> Result<PrivateDirectory, Error> {
     let directory = open_directory(path)?;
     let stat = fstat(&directory).map_err(io::Error::from)?;
@@ -65,6 +90,10 @@ pub(super) fn open_administrative_directory(path: &Path) -> Result<PrivateDirect
 
 fn validate_private_directory(directory: &File, path: &Path) -> Result<(), Error> {
     let stat = fstat(directory).map_err(io::Error::from)?;
+    validate_private_permissions(&stat, path)
+}
+
+fn validate_private_permissions(stat: &rustix::fs::Stat, path: &Path) -> Result<(), Error> {
     if stat.st_uid != geteuid().as_raw() || stat.st_mode & 0o7777 != 0o700 {
         return Err(Error::UnsafePermissions(path.to_path_buf()));
     }
@@ -202,7 +231,7 @@ pub(super) fn files(
     Ok(result)
 }
 
-fn open_regular(directory: &PrivateDirectory, name: &EntryName) -> Result<File, Error> {
+pub(super) fn open_regular(directory: &PrivateDirectory, name: &EntryName) -> Result<File, Error> {
     verify_administration(directory)?;
     let file = File::from(
         openat(

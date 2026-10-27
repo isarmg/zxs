@@ -35,11 +35,33 @@ struct Envelope {
 fn path(d: &DiskConfig) -> std::path::PathBuf {
     d.root.join("metadata/replay-checkpoint.json")
 }
+
+fn checkpoint_disk<'a>(engine: &'a Engine, disk: &DiskConfig) -> Result<&'a DiskHandle> {
+    let held = engine.disk_resources.get(disk)?;
+    let stored = held
+        .root
+        .read_json_observed(&disk.root.join("disk.json"), &mut |_| Ok(()))?;
+    validate_stored_seal(&stored, &held.seal)?;
+    Ok(held)
+}
+
+/// Covered absences include missing ancestors, but never links or other I/O failures.
+fn metadata(root: &DiskRoot, relative: &Path) -> Result<Option<std::fs::Metadata>> {
+    match root.optional_metadata(&root.path().join(relative)) {
+        Err(Error::Filesystem(platform_io::fs_safety::Error::Io(source)))
+        | Err(Error::Contract(storage_contract::Error::Io { source, .. }))
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            Ok(None)
+        }
+        result => result,
+    }
+}
 // Read every repair-relevant byte, not metadata timestamps. Installed named
 // version payloads are excluded: recovery reconstructs their publication proof
 // without re-verifying the body. Prepared content remains hashed because replay
 // must verify it before installation, including after an interrupted move.
-fn named_container(root: &Path, relative: &Path) -> Result<bool> {
+fn named_container(root: &DiskRoot, relative: &Path) -> Result<bool> {
     let parts = relative_parts(relative)?;
     if parts.len() < 5 || parts[0] != "histories" || parts[2] != "file-containers" {
         return Ok(false);
@@ -49,14 +71,15 @@ fn named_container(root: &Path, relative: &Path) -> Result<bool> {
     if parts.len() == 5 && parts[4] != "namespace" {
         return Ok(true);
     }
-    let Some(file) = open_optional_regular(&root.join(relative).join(".zxs-container-owner.json"))?
+    let Some(file) =
+        root.open_optional_regular(&root.path().join(relative).join(".zxs-container-owner.json"))?
     else {
         return Ok(false);
     };
     let owner: String = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
     Ok(owner == parts[3])
 }
-fn payload(root: &Path, relative: &Path) -> Result<bool> {
+fn payload(root: &DiskRoot, relative: &Path) -> Result<bool> {
     let Some(parent) = relative.parent() else {
         return Ok(false);
     };
@@ -105,7 +128,7 @@ fn excluded(path: &Path) -> bool {
     path == Path::new("metadata/application-log")
         || path == Path::new("metadata/replay-checkpoint.json")
 }
-fn append_only(root: &Path, path: &Path) -> Result<bool> {
+fn append_only(root: &DiskRoot, path: &Path) -> Result<bool> {
     let parts = relative_parts(path)?;
     if path.file_name().is_some_and(|name| name == "versions")
         && match path.parent() {
@@ -126,16 +149,20 @@ fn append_only(root: &Path, path: &Path) -> Result<bool> {
                         && parts[4] == "protection-proofs"))),
     )
 }
-fn children(root: &Path, path: &Path) -> Result<Vec<String>> {
+fn children(root: &DiskRoot, path: &Path) -> Result<Vec<String>> {
     let mut out = Vec::new();
     let mut bytes = 0;
-    for entry in std::fs::read_dir(root.join(path))? {
-        let name = entry?.file_name().into_string().map_err(|name| {
-            Error::PathEncoding(name).context(
-                ErrorCode::CheckpointInvalid,
-                format!("checkpoint directory name is not UTF-8 at {path:?}"),
-            )
-        })?;
+    for entry in root.entries(&root.path().join(path))? {
+        let name = entry?
+            .as_os_str()
+            .to_os_string()
+            .into_string()
+            .map_err(|name| {
+                Error::PathEncoding(name).context(
+                    ErrorCode::CheckpointInvalid,
+                    format!("checkpoint directory name is not UTF-8 at {path:?}"),
+                )
+            })?;
         if excluded(&path.join(&name)) {
             continue;
         }
@@ -165,8 +192,8 @@ fn directory_budget(path: &Path, entries: usize, bytes: usize) -> Result<()> {
     }
     Ok(())
 }
-fn file_hash(path: &Path) -> Result<String> {
-    let mut file = open_regular(path)?;
+fn file_hash(root: &DiskRoot, path: &Path) -> Result<String> {
+    let mut file = root.open_regular(path)?;
     let mut h = blake3::Hasher::new();
     let mut bytes = [0; 64 * 1024];
     loop {
@@ -210,15 +237,16 @@ fn add_entry(out: &mut Vec<CoverageEntry>, entry: CoverageEntry, budget: &mut us
     Ok(())
 }
 fn inventory(
-    root: &Path,
+    root: &DiskRoot,
     relative: &Path,
     out: &mut Vec<CoverageEntry>,
     budget: &mut usize,
 ) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
-    let metadata = std::fs::symlink_metadata(root.join(relative))?;
+    let metadata =
+        metadata(root, relative)?.ok_or_else(|| std::io::Error::from(rustix::io::Errno::NOENT))?;
     if metadata.file_type().is_symlink() || !(metadata.is_dir() || metadata.is_file()) {
-        return Err(CheckpointError::FileType(root.join(relative)).into());
+        return Err(CheckpointError::FileType(root.path().join(relative)).into());
     }
     let name = relative
         .to_str()
@@ -254,7 +282,7 @@ fn inventory(
                     hash: if payload(root, relative)? {
                         None
                     } else {
-                        Some(file_hash(&root.join(relative))?)
+                        Some(file_hash(root, &root.path().join(relative))?)
                     },
                 },
             },
@@ -270,10 +298,10 @@ fn coverage(
     let mut out = BTreeMap::new();
     let mut budget = 0;
     for d in &engine.config.disks {
-        validate_seal(&engine.config, d)?;
+        let root = &engine.disk_resources.get(d)?.root;
         let mut entries = Vec::new();
-        inventory(&d.root, Path::new("metadata"), &mut entries, &mut budget)?;
-        inventory(&d.root, Path::new("histories"), &mut entries, &mut budget)?;
+        inventory(root, Path::new("metadata"), &mut entries, &mut budget)?;
+        inventory(root, Path::new("histories"), &mut entries, &mut budget)?;
         for path in absent.get(&d.disk_id).into_iter().flatten() {
             add_entry(
                 &mut entries,
@@ -324,9 +352,11 @@ fn suffix_rebuilt_containers(
             break;
         };
         let disk = engine.disk(&receipt.slot_id)?;
-        let c: Candidate = load_object(disk, "candidate", hash)?;
+        let root = &engine.disk_resources.get(disk)?.root;
+        let c: Candidate = load_object_at(root, disk, "candidate", hash)?;
         engine.verify_candidate_membership(&c)?;
-        let p: Publication = load_object(disk, "publication", &receipt.record.object_hash)?;
+        let p: Publication =
+            load_object_at(root, disk, "publication", &receipt.record.object_hash)?;
         if c.pool_id != engine.config.pool_id
             || c.sequence != *sequence
             || c.previous_snapshot != previous
@@ -336,7 +366,15 @@ fn suffix_rebuilt_containers(
         // Only a continuous, fully sealed suffix may waive checking a derived
         // container cache. Pending/forked decisions never authorize exceptions.
         let sealed = engine.members().iter().all(|d| {
-            read_json::<PublicationSeal>(&publication_seal_path(d, hash))
+            engine
+                .disk_resources
+                .get(d)
+                .and_then(|held| {
+                    held.root.read_json_observed::<PublicationSeal>(
+                        &publication_seal_path(d, hash),
+                        &mut |_| Ok(()),
+                    )
+                })
                 .and_then(|seal| verify_publication_seal(&c, &p, &seal))
                 .is_ok()
         });
@@ -365,7 +403,7 @@ fn verify_coverage(
         return Err(CheckpointError::Members.into());
     }
     for d in &engine.config.disks {
-        validate_seal(&engine.config, d)?;
+        let root = &checkpoint_disk(engine, d)?.root;
         let entries = checkpoint
             .coverage
             .get(&d.disk_id)
@@ -392,26 +430,26 @@ fn verify_coverage(
                 && parts[2] == "file-containers"
                 && parts.last() == Some(&"container.json")
                 && match path.parent() {
-                    Some(parent) => named_container(&d.root, parent)?,
+                    Some(parent) => named_container(root, parent)?,
                     None => false,
                 }
                 && rebuilt.contains(&(parts[1].to_owned(), parts[3].to_owned()))
             {
                 continue;
             }
-            let metadata = std::fs::symlink_metadata(d.root.join(path));
+            let metadata = metadata(root, path);
             match (&entry.value, metadata) {
-                (Covered::Absent, Err(e)) if e.kind() == std::io::ErrorKind::NotFound => (),
-                (Covered::Directory { children: expected }, Ok(m))
+                (Covered::Absent, Ok(None)) => (),
+                (Covered::Directory { children: expected }, Ok(Some(m)))
                     if m.is_dir() && !m.file_type().is_symlink() =>
                 {
                     if let Some(expected) = expected {
-                        if children(&d.root, path)? != *expected {
+                        if children(root, path)? != *expected {
                             return Err(
                                 CheckpointError::DirectoryChildren(d.root.join(path)).into()
                             );
                         }
-                    } else if !append_only(&d.root, path)? {
+                    } else if !append_only(root, path)? {
                         return Err(CheckpointError::InvalidException(d.root.join(path)).into());
                     }
                 }
@@ -421,13 +459,13 @@ fn verify_coverage(
                         hash,
                         links,
                     },
-                    Ok(m),
+                    Ok(Some(m)),
                 ) if m.is_file() && !m.file_type().is_symlink() => {
                     if m.len() != *length || m.nlink() != *links {
                         return Err(CheckpointError::FileMetadata(d.root.join(path)).into());
                     }
                     match hash {
-                        Some(hash) if file_hash(&d.root.join(path))? == *hash => {
+                        Some(hash) if file_hash(root, &d.root.join(path))? == *hash => {
                             // Append-only directories may gain an alternate layout for an
                             // already covered hash. That addition must not hide conflicting
                             // evidence behind the checkpoint's historical replay shortcut.
@@ -441,7 +479,7 @@ fn verify_coverage(
                                     .last()
                                     .and_then(|name| name.strip_suffix(".json"))
                                     .ok_or_else(|| CheckpointError::InvalidPath(path.into()))?;
-                                let paths = existing_object_paths(d, kind, object_hash)?;
+                                let paths = existing_object_paths_at(root, d, kind, object_hash)?;
                                 let covered = d.root.join(path);
                                 if !paths.contains(&covered) {
                                     return Err(
@@ -449,13 +487,14 @@ fn verify_coverage(
                                     );
                                 }
                                 for alternate in paths {
-                                    if alternate != covered && file_hash(&alternate)? != *hash {
+                                    if alternate != covered && file_hash(root, &alternate)? != *hash
+                                    {
                                         return Err(CheckpointError::FileContent(alternate).into());
                                     }
                                 }
                             }
                         }
-                        None if payload(&d.root, path)? => (),
+                        None if payload(root, path)? => (),
                         Some(_) => {
                             return Err(CheckpointError::FileContent(d.root.join(path)).into());
                         }
@@ -465,10 +504,17 @@ fn verify_coverage(
                     }
                 }
                 (_, Err(source)) => {
-                    return Err(Error::from(source).context(
+                    return Err(source.context(
                         ErrorCode::CheckpointInvalid,
                         format!("cannot inspect covered path {:?}", d.root.join(path)),
                     ));
+                }
+                (_, Ok(None)) => {
+                    return Err(Error::from(std::io::Error::from(rustix::io::Errno::NOENT))
+                        .context(
+                            ErrorCode::CheckpointInvalid,
+                            format!("cannot inspect covered path {:?}", d.root.join(path)),
+                        ));
                 }
                 _ => return Err(CheckpointError::PathState(d.root.join(path)).into()),
             }
@@ -484,7 +530,12 @@ pub(super) fn load(
     let members = engine.members();
     let mut chosen = None;
     for d in &members {
-        let Some(file) = open_optional_regular(&path(d))? else {
+        let Some(file) = engine
+            .disk_resources
+            .get(d)?
+            .root
+            .open_optional_regular(&path(d))?
+        else {
             return Ok(None);
         };
         let envelope: Envelope = decode_strict(&read_file_bytes(file, MAX_CHECKPOINT_BYTES)?)?;
@@ -523,12 +574,15 @@ pub(super) fn save(
     if engine.blocked || engine.snapshot.is_none() {
         return Ok(());
     }
+    for disk in &engine.config.disks {
+        checkpoint_disk(engine, disk)?;
+    }
     let mut tips = BTreeMap::new();
     let mut candidate = None;
     let mut absent = BTreeMap::<String, BTreeSet<String>>::new();
     let mut version_ids = BTreeSet::new();
     for d in engine.members() {
-        validate_seal(&engine.config, &d)?;
+        let root = &engine.disk_resources.get(&d)?.root;
         let records = &scanned_journals[&d.disk_id];
         // Preserve absences that made historical recovery skip local proof or
         // container work. Restoring such a prefix path requires full repair.
@@ -536,7 +590,7 @@ pub(super) fn save(
             .iter()
             .filter(|(r, _)| r.record_type == RecordType::Publication)
         {
-            let c: Candidate = load_object(&d, "candidate", &record.candidate_hash)?;
+            let c: Candidate = load_object_at(root, &d, "candidate", &record.candidate_hash)?;
             for evidence in &c.versions {
                 version_ids.insert(evidence.version.version_id.clone());
                 if version_ids.len() > MAX_COVERAGE_ENTRIES {
@@ -548,6 +602,7 @@ pub(super) fn save(
                 }
                 for slot in &evidence.placement.route_slot_ids {
                     let target = engine.disk(slot)?;
+                    let target_root = &engine.disk_resources.get(target)?.root;
                     let history = Path::new("histories").join(&evidence.version.history_tree_id);
                     for relative in [
                         history.clone(),
@@ -556,8 +611,8 @@ pub(super) fn save(
                             .join("file-containers")
                             .join(&evidence.version.file_id),
                     ] {
-                        match std::fs::symlink_metadata(target.root.join(&relative)) {
-                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        match metadata(target_root, &relative)? {
+                            None => {
                                 let paths = absent.entry(target.disk_id.clone()).or_default();
                                 paths.insert(
                                     relative
@@ -576,8 +631,7 @@ pub(super) fn save(
                                     .into());
                                 }
                             }
-                            Err(e) => return Err(e.into()),
-                            Ok(_) => (),
+                            Some(_) => (),
                         }
                     }
                 }
@@ -624,7 +678,11 @@ pub(super) fn save(
     };
     let bytes = encode_metadata(&envelope, MAX_CHECKPOINT_BYTES)?;
     for d in engine.members() {
-        write_atomic(&path(&d), &bytes, true)?;
+        engine
+            .disk_resources
+            .get(&d)?
+            .root
+            .write_atomic(&path(&d), &bytes, true)?;
     }
     Ok(())
 }

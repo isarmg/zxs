@@ -25,6 +25,10 @@ fn administrative_atomic_files_keep_service_owner_and_refuse_unsafe_targets() {
     if geteuid().as_raw() == 0 {
         chown(&path, Some(uid), Some(gid)).unwrap();
         assert!(PrivateDirectory::open_existing(&path).is_err());
+        assert!(matches!(
+            PrivateDirectory::from_directory(File::open(&path).unwrap(), path.clone()),
+            Err(Error::UnsafePermissions(_))
+        ));
     }
     let directory = PrivateDirectory::open_for_administration(&path).unwrap();
     let pending = RelativePath::new("pending.json").unwrap();

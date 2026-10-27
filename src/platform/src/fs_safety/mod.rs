@@ -128,12 +128,29 @@ impl PrivateDirectory {
         unix::open_private_directory(path)
     }
 
+    /// Consume an opened directory after checking its type, owner and exact 0700 mode.
+    /// The absolute path is a diagnostic name for [`Self::path`] and explicit
+    /// [`Self::verify_identity`] calls; construction never opens or checks that name.
+    /// Relative operations and atomic writes remain anchored to the supplied handle.
+    ///
+    /// # Errors
+    /// Rejects a relative or parent-traversing diagnostic path, a non-directory handle,
+    /// or unsafe ownership and permissions. Descriptor errors retain their I/O source.
+    pub fn from_directory(directory: File, path: PathBuf) -> Result<Self, Error> {
+        unix::private_directory_from_handle(directory, path)
+    }
+
     /// Enumerate only regular, single-linked children with hard entry/byte budgets.
     pub fn files(&self, limits: InventoryLimits) -> Result<Vec<FileEntry>, Error> {
         unix::files(self, limits)
     }
     pub fn read_bounded(&self, name: &EntryName, max_bytes: usize) -> Result<Vec<u8>, Error> {
         unix::read_bounded(self, name, max_bytes)
+    }
+    /// Open a single-linked regular child for reading, relative to this held directory.
+    /// The diagnostic path is not reopened; file ownership rules match `read_bounded`.
+    pub fn open_regular(&self, name: &EntryName) -> Result<File, Error> {
+        unix::open_regular(self, name)
     }
     pub fn remove_file(&self, name: &EntryName) -> Result<(), Error> {
         unix::remove_file(self, name)
