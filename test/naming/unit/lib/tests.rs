@@ -47,6 +47,65 @@ fn path_budgets() {
 }
 
 #[test]
+fn name_byte_budget_covers_ascii_cjk_and_supplementary_letters() {
+    for (letter, count, utf16_units) in [("a", 240, 240), ("界", 80, 80), ("𐐀", 60, 120)] {
+        let boundary = letter.repeat(count);
+        assert_eq!(boundary.len(), 240);
+        assert_eq!(boundary.encode_utf16().count(), utf16_units);
+        assert_eq!(validate_name(&boundary), Ok(()));
+        assert_eq!(validate_lookup_name(&boundary), Ok(()));
+
+        let oversized = letter.repeat(count + 1);
+        assert_eq!(oversized.len(), 240 + letter.len());
+        assert_eq!(validate_name(&oversized), Err(Error::NameTooLong));
+        assert_eq!(validate_lookup_name(&oversized), Err(Error::NameTooLong));
+    }
+}
+
+#[test]
+fn name_byte_budget_precedes_other_name_errors_and_normalization() {
+    for name in [
+        format!(" {}", "a".repeat(240)),
+        format!("{}:", "a".repeat(240)),
+        "e\u{301}".repeat(81),
+    ] {
+        assert_eq!(validate_name(&name), Err(Error::NameTooLong));
+        assert_eq!(validate_lookup_name(&name), Err(Error::NameTooLong));
+    }
+}
+
+#[test]
+fn path_utf16_budget_still_limits_valid_name_components() {
+    let first = "a".repeat(100);
+    let last = "b".repeat(99);
+    let boundary = format!("{first}/{last}");
+    assert_eq!(boundary.len(), 200);
+    assert_eq!(boundary.encode_utf16().count(), 200);
+    assert_eq!(validate_path(&boundary), Ok(()));
+    assert_eq!(validate_lookup_path(&boundary), Ok(()));
+    assert_eq!(PortablePath::parse(&boundary).unwrap().as_str(), boundary);
+    assert_eq!(LookupPath::parse(&boundary).unwrap().as_str(), boundary);
+
+    let oversized = format!("{boundary}b");
+    assert_eq!(oversized.len(), 201);
+    assert_eq!(oversized.encode_utf16().count(), 201);
+    for component in oversized.split('/') {
+        assert_eq!(validate_name(component), Ok(()));
+        assert_eq!(validate_lookup_name(component), Ok(()));
+    }
+    assert_eq!(validate_path(&oversized), Err(Error::InvalidPath));
+    assert_eq!(validate_lookup_path(&oversized), Err(Error::InvalidPath));
+    assert_eq!(
+        PortablePath::parse(&oversized).unwrap_err(),
+        Error::InvalidPath
+    );
+    assert_eq!(
+        LookupPath::parse(&oversized).unwrap_err(),
+        Error::InvalidPath
+    );
+}
+
+#[test]
 fn lookup_paths_accept_canonical_equivalence_without_relaxing_new_names() {
     for (stored, query) in [
         ("Café/é.txt", "Cafe\u{301}/e\u{301}.txt"),

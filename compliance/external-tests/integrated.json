@@ -116,7 +116,7 @@
         },
         {
           "path": "test/naming/unit/lib/tests.rs",
-          "sha256": "c2b742aa56217611812c36a9c0c62b8a8cf498ad068616e2bb6eb469103c58e2",
+          "sha256": "cae6478d304b39c8762145bbc262fa5d8f121d7b52dae092f5ec296505e05236",
           "source": "src/naming/src/lib.rs",
           "source_sha256_before": "619a98004dc108746a51157455bbf031c0f2c7112946e04b535b7391f87d20ad"
         },

@@ -181,7 +181,7 @@ fn validate_name_inner(name: &str, usage: NameUse) -> Result<()> {
     if name.is_empty() || [".", ".."].contains(&name) {
         return Err(Error::EmptyOrDot);
     }
-    if name.len() > 240 || name.encode_utf16().count() > 240 {
+    if name.len() > 240 {
         return Err(Error::NameTooLong);
     }
     if name.starts_with(' ') || name.ends_with([' ', '.']) {
