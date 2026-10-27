@@ -7,6 +7,7 @@ fn rescue_exposes_only_offline_recovery_and_configuration_operations() {
         "recovery-preview",
         "recovery-commit",
         "offline-check",
+        "scrub",
         "offline-export",
         "package",
         "configuration",
@@ -401,4 +402,66 @@ fn malformed_operation_id_is_rejected_before_opening_the_pool() {
         );
         assert!(!root.exists());
     }
+}
+
+#[test]
+fn scrub_is_a_real_exclusive_offline_consumer_with_explicit_partial_failure() {
+    use storage_engine::{Config, Engine, OperationId, RepositoryName};
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("system");
+    let disks = ["a", "b", "c"].map(|name| directory.path().join(name));
+    let mut engine = Engine::initialize(&root, Config::development(disks.clone())).unwrap();
+    engine
+        .create_repository(
+            &RepositoryName::parse("scrub-fixture").unwrap(),
+            "P01",
+            3,
+            "admin",
+            OperationId::generate(),
+        )
+        .unwrap();
+    let invoke = || {
+        Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+            .arg("--root")
+            .arg(&root)
+            .arg("scrub")
+            .output()
+            .unwrap()
+    };
+    let locked = invoke();
+    assert_eq!(locked.status.code(), Some(1));
+    assert!(locked.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&locked.stderr).contains("WRITER_ALREADY_ACTIVE"));
+    drop(engine);
+    let healthy = invoke();
+    assert!(healthy.status.success(), "{healthy:?}");
+    let report: json_codec::Value = json_codec::from_slice(&healthy.stdout).unwrap();
+    assert_eq!(report["state"], "complete_success");
+    assert_eq!(report["metadata_members_checked"], 3);
+    assert!(report["metadata_publications_verified"].as_u64().unwrap() > 0);
+    assert_eq!(report["last_complete_success_at"], report["finished_at"]);
+    std::fs::remove_dir_all(&disks[2]).unwrap();
+    let partial = invoke();
+    assert_eq!(partial.status.code(), Some(1), "{partial:?}");
+    let report: json_codec::Value = json_codec::from_slice(&partial.stdout).unwrap();
+    assert_eq!(report["state"], "partial_failure");
+    assert!(report["last_complete_success_at"].is_null());
+    assert!(report["identity_failures"].as_u64().unwrap() > 0);
+    assert_eq!(report["issues"][0]["area"], "identity");
+    assert_eq!(report["issues"][0]["target"]["slot_id"], "C01");
+}
+
+#[test]
+fn scrub_cannot_turn_a_failed_open_into_a_healthy_report() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("absent-system");
+    let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+        .arg("--root")
+        .arg(&root)
+        .arg("scrub")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(!root.exists());
 }

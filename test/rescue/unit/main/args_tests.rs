@@ -112,6 +112,7 @@ fn retained_workspace_flags_require_all_positive_values_or_none() {
 #[test]
 fn retained_workspace_flags_are_global_for_every_engine_command() {
     for command in [
+        vec!["scrub"],
         vec!["package", "export", "history", "/package"],
         vec!["package", "restore", "/package", "--primary-slot", "P01"],
         vec!["restore-system", "--disks", "/disk"],

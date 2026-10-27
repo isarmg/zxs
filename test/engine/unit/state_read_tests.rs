@@ -439,3 +439,89 @@ fn stored_snapshots_admit_all_version_identities_before_per_file_sequence_use() 
     .unwrap();
     assert!(name.starts_with("v000002_"), "{name}");
 }
+
+#[test]
+fn stored_event_sequences_admit_duplicates_and_reject_rehashed_invalid_sequences() {
+    let fixture = Fixture::new();
+    let mut engine = fixture.initialize();
+    let repo = repository(&mut engine, 3);
+    save(&mut engine, &repo.main_branch_id, "file.txt", b"body");
+    let original = engine.state.as_ref().clone();
+    assert!(original.events.len() >= 2);
+    assert!(
+        original
+            .events
+            .iter()
+            .map(|event| event.sequence)
+            .is_sorted()
+    );
+    let mut duplicate = original.clone();
+    duplicate
+        .events
+        .push(original.events.iter().next_back().unwrap().clone());
+    assert_eq!(
+        duplicate.events.iter().next_back().unwrap().sequence,
+        duplicate.sequence
+    );
+    let duplicate_hash = store_snapshot(&fixture.config.disks, &duplicate).unwrap();
+    for disk in &fixture.config.disks {
+        assert_eq!(load_snapshot(disk, &duplicate_hash).unwrap(), duplicate);
+    }
+    assert_eq!(
+        crate::publication_evidence::verified_snapshot(&fixture.config.disks, &duplicate_hash)
+            .unwrap()
+            .into_state(),
+        duplicate
+    );
+    let mut decreasing = original.clone();
+    decreasing.events = original.events.iter().rev().cloned().collect();
+    assert!(
+        !decreasing
+            .events
+            .iter()
+            .map(|event| event.sequence)
+            .is_sorted()
+    );
+    let mut future = original.clone();
+    let last = future.events.len() - 1;
+    future.events[last].sequence = future.sequence + 1;
+    assert!(future.events.iter().map(|event| event.sequence).is_sorted());
+    for (invalid, message) in [
+        (decreasing, "snapshot event sequences are not nondecreasing"),
+        (future, "snapshot event sequence exceeds published sequence"),
+    ] {
+        // Recompute every object address so a raw digest mismatch cannot hide
+        // semantic admission failures. No candidate/journal is changed.
+        let hash = store_snapshot(&fixture.config.disks, &invalid).unwrap();
+        let snapshot: crate::journal::Snapshot =
+            crate::journal::load_object(&fixture.config.disks[0], "snapshot", &hash).unwrap();
+        let mut evidence = Vec::new();
+        for disk in &fixture.config.disks {
+            for (kind, address) in std::iter::once(("snapshot", hash.as_str())).chain(
+                snapshot.pages["events"]
+                    .iter()
+                    .map(|hash| ("state-page", hash.as_str())),
+            ) {
+                let path = crate::journal::object_path(disk, kind, address);
+                evidence.push((path.clone(), fs::read(path).unwrap()));
+            }
+            let error = load_snapshot(disk, &hash).unwrap_err();
+            assert_eq!(error.code(), ErrorCode::StateInvalid);
+            assert_eq!(error.message(), message);
+        }
+        let error = crate::publication_evidence::verified_snapshot(&fixture.config.disks, &hash)
+            .err()
+            .unwrap();
+        assert_eq!(error.code(), ErrorCode::StateInvalid);
+        assert_eq!(error.message(), message);
+        for (path, bytes) in evidence {
+            assert_eq!(fs::read(path).unwrap(), bytes);
+        }
+        assert_eq!(engine.state.as_ref(), &original);
+    }
+    drop(engine);
+    assert_eq!(
+        Engine::open(&fixture.root).unwrap().state.as_ref(),
+        &original
+    );
+}

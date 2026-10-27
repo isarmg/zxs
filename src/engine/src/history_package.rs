@@ -4,7 +4,9 @@ use crate::{disk::*, journal::*, *};
 use data_serialization::{Deserialize, Serialize};
 use json_codec::json;
 mod changes;
+mod delta;
 mod graph;
+pub(crate) use graph::decode_history_root;
 mod manifest;
 mod state_read;
 pub use manifest::HistoryManifest;
@@ -98,13 +100,29 @@ pub(crate) fn prepare_history_manifests_incremental(
             "published history baseline coverage differs",
         ));
     }
-    let changed = changes::HistoryChanges::between(before, after);
+    let projection = delta::ProjectionDelta::between(before, after);
+    let changed = match &projection {
+        delta::ProjectionDelta::StableBranches(edits) => edits.keys().cloned().collect(),
+        delta::ProjectionDelta::Full => changes::HistoryChanges::between(before, after).histories,
+    };
     let mut hashes = BTreeMap::new();
     let mut objects = Vec::new();
     for id in after.histories.keys() {
-        if changed.histories.contains(id) || !previous_roots.contains_key(id) {
-            let manifest = HistoryManifest::from_state(after, id)?;
-            let (hash, graph) = graph::prepare(&manifest, maximum)?;
+        if changed.contains(id) || !previous_roots.contains_key(id) {
+            let incremental = try_prepare_branch_update(
+                members,
+                previous_roots.get(id),
+                id,
+                &projection,
+                maximum,
+            )?;
+            let (hash, graph) = match incremental {
+                Some(graph) => graph,
+                None => {
+                    let manifest = HistoryManifest::from_state(after, id)?;
+                    graph::prepare(&manifest, maximum)?
+                }
+            };
             hashes.insert(id.clone(), hash);
             objects.extend(graph);
         } else {
@@ -141,6 +159,37 @@ pub(crate) fn prepare_history_manifests_incremental(
         }
     }
     Ok((hashes, unique_prepared_objects(objects)?))
+}
+
+fn try_prepare_branch_update(
+    members: &[DiskConfig],
+    previous: Option<&String>,
+    id: &str,
+    projection: &delta::ProjectionDelta,
+    maximum: usize,
+) -> Result<Option<(String, Vec<PreparedMetadataObject>)>> {
+    let delta::ProjectionDelta::StableBranches(edits) = projection else {
+        return Ok(None);
+    };
+    let (Some(edits), Some(previous)) = (edits.get(id), previous) else {
+        return Ok(None);
+    };
+    let (manifest, objects) = match read_history_graph(members, previous) {
+        Ok(graph) => graph,
+        // Only this read-only source graph acquisition may fall back to the
+        // original complete encoder for the admitted after State. It prepares
+        // a new changed root, never substitutes a decided/unchanged root.
+        // Update/admission errors below and later visitor/store/decision errors
+        // propagate; none can enter this source-read fallback.
+        Err(_) => return Ok(None),
+    };
+    if manifest.history.history_tree_id != id {
+        return Err(Error::new(
+            storage_contract::ErrorCode::ObjectCorrupt,
+            "published history baseline identity differs",
+        ));
+    }
+    graph::prepare_branch_update(manifest, objects, edits, maximum).map(Some)
 }
 
 // First occurrence retains dependency order across the frozen history graphs.

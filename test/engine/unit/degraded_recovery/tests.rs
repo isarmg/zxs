@@ -749,3 +749,46 @@ fn incomplete_quorum_only_recovery_preserves_pending_torn_evidence() {
     assert!(!recovered.is_read_only());
     assert!(!scan(&disks[0]).unwrap().torn_tail);
 }
+
+#[test]
+fn scrub_classifies_acknowledged_permanent_loss_as_payload_unavailable_not_metadata_damage() {
+    let (temp, engine, operation, candidate) = fixture("after_accept_2");
+    lose(&engine, &candidate, true);
+    drop(engine);
+    let mut engine = Engine::open_for_recovery(&temp.path().join("state")).unwrap();
+    let plan = engine
+        .prepare_degraded_recovery(
+            operation,
+            "alice",
+            "all acknowledged source bytes permanently lost",
+        )
+        .unwrap();
+    engine
+        .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", true)
+        .unwrap();
+    let report = engine.scrub(&IntegrityScrubCancellation::new()).unwrap();
+    assert_eq!(report.metadata_failures, 0, "{report:?}");
+    assert_eq!(report.payload_copies_required, 6);
+    assert_eq!(report.payload_copies_verified, 3);
+    assert_eq!(report.payload_copies_unavailable, 3);
+    assert_eq!(report.payload_copies_unverified, 0);
+    assert!(!report.is_healthy());
+
+    // The exception belongs only to the explicitly unavailable version/routes.
+    let healthy = candidate
+        .versions
+        .iter()
+        .find(|evidence| evidence.version.creation_name == "healthy.txt")
+        .unwrap();
+    let directory = version_dir(
+        &engine.members()[0],
+        &healthy.version.history_tree_id,
+        &healthy.version.version_id,
+    );
+    fs::remove_file(directory.join("publication-proof.json")).unwrap();
+    let report = engine.scrub(&IntegrityScrubCancellation::new()).unwrap();
+    assert_eq!(report.metadata_failures, 1, "{report:?}");
+    assert_eq!(report.payload_copies_verified, 2);
+    assert_eq!(report.payload_copies_unavailable, 3);
+    assert_eq!(report.payload_copies_unverified, 1);
+}

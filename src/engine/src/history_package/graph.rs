@@ -4,11 +4,11 @@ use super::HistoryManifest;
 use crate::{
     Error, HistoryTree, Repository, Result,
     journal::{AuthenticatedMetadataObject, PreparedMetadataObject},
-    metadata_map::{Encoder, Reference, Resolver},
+    metadata_map::{Encoder, MapUpdate, Reference, ReferenceKind, Resolver, decode_index},
 };
 use data_serialization::{Deserialize, Serialize};
 use json_codec::{Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 // This is a schema, not a list inferred from fields present in untrusted JSON.
 // Even optional, omitted logical maps have explicit roots in the paged graph.
@@ -47,10 +47,10 @@ const MAP_FIELDS: &[&str] = &[
 
 #[derive(Deserialize, Serialize)]
 #[serialization(deny_unknown_fields)]
-struct PagedHistoryRoot {
-    repository: Repository,
-    history: HistoryTree,
-    maps: BTreeMap<String, Reference>,
+pub(crate) struct PagedHistoryRoot {
+    pub(crate) repository: Repository,
+    pub(crate) history: HistoryTree,
+    pub(crate) maps: BTreeMap<String, Reference>,
 }
 
 pub(super) type GraphObject = AuthenticatedMetadataObject;
@@ -105,17 +105,7 @@ pub(super) fn resolve_with_objects(
     root: AuthenticatedMetadataObject,
     load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
 ) -> Result<ResolvedGraph> {
-    let decoded: PagedHistoryRoot = json_codec::from_value(root.value().clone())?;
-    if decoded.maps.len() != MAP_FIELDS.len()
-        || MAP_FIELDS
-            .iter()
-            .any(|field| !decoded.maps.contains_key(*field))
-    {
-        return Err(invalid("history root has an invalid logical schema"));
-    }
-    for reference in decoded.maps.values() {
-        reference.validate()?;
-    }
+    let decoded = decode_history_root(&root)?;
     let mut logical = Map::new();
     logical.insert(
         "repository".to_owned(),
@@ -131,6 +121,100 @@ pub(super) fn resolve_with_objects(
     let mut objects = resolver.finish();
     objects.push(root);
     Ok((manifest, objects))
+}
+
+/// Apply proven same-owner branch edits without projecting or re-encoding all
+/// logical maps. Complete graph reads, semantic admission and installation remain.
+pub(super) fn prepare_branch_update(
+    mut manifest: HistoryManifest,
+    objects: Vec<GraphObject>,
+    edits: &super::delta::BranchEdits,
+    maximum: usize,
+) -> Result<(String, Vec<PreparedMetadataObject>)> {
+    for (key, branch) in edits {
+        let previous = manifest
+            .branches
+            .get_mut(key)
+            .expect("invariant: stable branch edits belong to the published history projection");
+        *previous = branch.clone();
+    }
+    manifest.validate()?;
+    let root = objects
+        .last()
+        .expect("invariant: a resolved history graph ends with its root");
+    let mut decoded = decode_history_root(root)?;
+    let available = objects
+        .iter()
+        .map(|object| ((object.kind(), object.hash().to_owned()), object))
+        .collect::<BTreeMap<_, _>>();
+    let load = |reference: &Reference| {
+        Ok(*available
+            .get(&(reference.kind().domain(), reference.hash().to_owned()))
+            .expect("invariant: a resolved graph retains every bound dependency"))
+    };
+    let replacements = edits
+        .iter()
+        .map(|(key, branch)| Ok((key.clone(), json_codec::to_value(branch)?)))
+        .collect::<Result<Map<_, _>>>()?;
+    let mut encoder = Encoder::new(maximum);
+    let MapUpdate {
+        reference,
+        reused_roots,
+    } = encoder.replace_map_values(&decoded.maps["branches"], replacements, load)?;
+    decoded.maps.insert("branches".into(), reference);
+    let mut reachable = BTreeSet::new();
+    for reference in reused_roots.iter().chain(
+        decoded
+            .maps
+            .iter()
+            .filter(|(field, _)| field.as_str() != "branches")
+            .map(|(_, reference)| reference),
+    ) {
+        collect_reused(reference, &load, &mut reachable)?;
+    }
+    let hash = encoder.object("history-manifest", &decoded)?;
+    let mut prepared = Vec::new();
+    // The resolver's original order is dependency-first. Removed paths are not
+    // installed: they no longer belong to the newly prepared candidate.
+    for object in objects {
+        if reachable.contains(&(object.kind(), object.hash().to_owned())) {
+            prepared.push(object.into_prepared(maximum)?);
+        }
+    }
+    prepared.extend(encoder.finish());
+    Ok((hash, super::unique_prepared_objects(prepared)?))
+}
+
+fn collect_reused<'a>(
+    reference: &Reference,
+    load: &impl Fn(&Reference) -> Result<&'a AuthenticatedMetadataObject>,
+    reachable: &mut BTreeSet<(&'static str, String)>,
+) -> Result<()> {
+    if !reachable.insert((reference.kind().domain(), reference.hash().to_owned())) {
+        return Ok(());
+    }
+    if matches!(reference.kind(), ReferenceKind::Index) {
+        for child in decode_index(load(reference)?)?.children.into_values() {
+            collect_reused(&child, load, reachable)?;
+        }
+    }
+    Ok(())
+}
+
+/// Shared root-schema boundary for full resolution and exact-closure scrub.
+pub(crate) fn decode_history_root(root: &AuthenticatedMetadataObject) -> Result<PagedHistoryRoot> {
+    let decoded: PagedHistoryRoot = json_codec::from_value(root.value().clone())?;
+    if decoded.maps.len() != MAP_FIELDS.len()
+        || MAP_FIELDS
+            .iter()
+            .any(|field| !decoded.maps.contains_key(*field))
+    {
+        return Err(invalid("history root has an invalid logical schema"));
+    }
+    for reference in decoded.maps.values() {
+        reference.validate()?;
+    }
+    Ok(decoded)
 }
 
 #[cfg(test)]

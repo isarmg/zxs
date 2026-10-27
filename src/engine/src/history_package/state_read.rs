@@ -124,6 +124,24 @@ history_coverage! {
 }
 
 fn validate(state: &State) -> Result<()> {
+    // Event polling seeks by sequence while preserving ordinal array order.
+    // Writers append increasing publication slots; recovery must establish the
+    // same premise for decoded bytes, including equal-sequence event groups.
+    if !state.events.iter().map(|event| event.sequence).is_sorted() {
+        return Err(invalid("snapshot event sequences are not nondecreasing"));
+    }
+    // The sorted tail must already be published, so the next writer's newer
+    // publication slot preserves this order instead of appending behind it.
+    if state
+        .events
+        .iter()
+        .next_back()
+        .is_some_and(|event| event.sequence > state.sequence)
+    {
+        return Err(invalid(
+            "snapshot event sequence exceeds published sequence",
+        ));
+    }
     // History projection filters unowned rows; reject those at the disk boundary.
     if state
         .content_states

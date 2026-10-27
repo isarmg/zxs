@@ -32,8 +32,10 @@ pub use business::{
 pub use degraded_recovery::RecoveryPlan;
 pub use disk::{offline_check, offline_export};
 pub use engine::{
-    ContentReadPlan, DiskObservation, DiskObservationPlan, Engine, MetadataMemberProbe,
-    OpenedContent, OperationReadPlan, OperationRecord, RangeContent, ReadLease, RecoveryWarnings,
+    ContentReadPlan, DiskObservation, DiskObservationPlan, Engine, IntegrityScrubArea,
+    IntegrityScrubCancellation, IntegrityScrubCompletion, IntegrityScrubIssue,
+    IntegrityScrubReport, IntegrityScrubTarget, MetadataMemberProbe, OpenedContent,
+    OperationReadPlan, OperationRecord, RangeContent, ReadLease, RecoveryWarnings,
     RetainedWorkspaceLimits, ValidatedConfig, WorkspaceReadPlan,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};

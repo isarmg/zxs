@@ -3312,3 +3312,81 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
         assert_eq!(canonical_json(destination.state()).unwrap(), before);
     }
 }
+
+#[test]
+fn real_branch_rename_uses_precise_projection_and_matches_complete_graph_bytes() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let mut engine = initialize(temp.path());
+    let repo = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("incremental branch labels").unwrap(),
+            "P01",
+            1,
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    save(&mut engine, &repo.main_branch_id, b"retained body");
+    let entry = engine
+        .list_tree(&repo.main_branch_id)
+        .unwrap()
+        .pop()
+        .unwrap();
+    engine
+        .create_file_branch(
+            &entry.file_id,
+            &entry.version_id,
+            &storage_contract::BranchName::parse("original branch").unwrap(),
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let branch = engine
+        .state()
+        .branches
+        .values()
+        .find(|branch| branch.file_id.is_some())
+        .unwrap()
+        .clone();
+    let before = engine.state().clone();
+    engine
+        .rename_file_branch(
+            branch.file_id.as_deref().unwrap(),
+            &branch.branch_id,
+            &storage_contract::BranchName::parse("renamed branch").unwrap(),
+            "alice",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let super::delta::ProjectionDelta::StableBranches(edits) =
+        super::delta::ProjectionDelta::between(&before, engine.state())
+    else {
+        panic!("the real rename must retain a precise history projection write set");
+    };
+    assert_eq!(edits.len(), 1);
+    assert_eq!(edits[&repo.history_tree_id].len(), 1);
+    let (expected, objects) = prepare_history_manifests(engine.state(), MAX_METADATA).unwrap();
+    let disk = &engine.config.disks[0];
+    let scanned = scan(disk).unwrap();
+    let record = &scanned
+        .records
+        .iter()
+        .rev()
+        .find(|(record, _)| record.record_type == RecordType::Publication)
+        .unwrap()
+        .0;
+    let candidate: Candidate = load_object(disk, "candidate", &record.candidate_hash).unwrap();
+    assert_eq!(candidate.history_manifest_hashes, expected);
+    for object in objects {
+        assert_eq!(
+            fs::read(object_path(disk, object.kind(), &object.hash)).unwrap(),
+            object.bytes()
+        );
+    }
+    let package = temp.path().join("renamed-history");
+    engine
+        .export_history_package(&repo.history_tree_id, &package)
+        .unwrap();
+    offline_check_history_package(&package).unwrap();
+}

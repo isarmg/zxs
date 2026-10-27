@@ -18,6 +18,7 @@ command-line.workspace = true
 data-serialization.workspace = true
 json-codec.workspace = true
 storage-engine.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 storage-server.workspace = true

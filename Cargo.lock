@@ -1356,6 +1356,7 @@ dependencies = [
  "storage-engine",
  "storage-server",
  "tempfile",
+ "tokio",
  "tracing",
 ]
 

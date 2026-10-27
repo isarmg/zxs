@@ -27,6 +27,22 @@ zxs-rescue --root /srv/zxs/system recovery-commit RECOVERY_ID \
 
 仅支持已经获得 ACCEPT 但尚未发布、所有原始数据盘都可访问且正文确已不可修复的操作。执行时必须持有池的独占锁及适当本机权限。先审查持久预览和损失范围，再提交完全匹配的摘要并明确接受永久数据损失。缺盘替换、自动重试发布、自动 reset 和任意撤销已发布历史均不属于此能力。
 
+## 显式完整巡检（第一阶段）
+
+```sh
+zxs-rescue --root /srv/zxs/system scrub
+```
+
+先停止该池服务。此命令是完整巡检执行器的真实离线调用方，不是定期后台调度，也不替换 HTTP `/api/admin/check` 或 `offline-check` 的单盘目录诊断范围。当前 `Engine::scrub` 在整次扫描中持有 Engine 独占借用；不得把本命令改为默认周期在线任务，或据此宣布增量发布免读门禁已经满足。
+
+命令先安装 SIGINT / SIGTERM 接收器，再在一个专属本机线程中打开池；系统目录和可用磁盘的既有非阻塞写者锁拒绝同池服务或第二个巡检进程，不排队积压。打开使用 `PreservePending` 恢复入口，不自动提交未发布决定。**打开阶段仍会执行既有恢复、日志尾修复、已清除正文清理和可重建索引维护，不是整个命令只读。** 只有随后的 `scrub` 扫描是无隐式修复的观测；恢复可能先修复可恢复的元数据副本，因此报告反映打开之后的实际字节，不能当作打开之前损坏清单。无法安全打开时不运行巡检、不输出健康报告，错误写到 stderr，退出码为 1。
+
+SIGINT / SIGTERM 只请求协作取消，不终止或分离 I/O 线程。核心在对象、日志帧和正文块之间检查取消；已在执行的系统调用及打开阶段必须实际结束。命令等待线程 join 后才返回；调用 future 被取消或销毁也先取消并真实 drain。OS 强制终止、设备永久阻塞及物理断电不属于协作取消的完成保证。线程创建失败、线程 panic、信号安装失败和核心准入错误都明确失败，不伪装成完整报告。
+
+完成后 stdout 只输出一份 JSON：`state` 为 `complete_success`、`partial_failure`、`cancelled` 或 `failed`，并包含核心的发布 `sequence` / `snapshot_hash`、实际覆盖计数、至多 128 条 issue、截断数量及起止时间。时间使用 `{ "secs_since_epoch": …, "nanos_since_epoch": … }`。只有完整覆盖且无故障的 `complete_success` 返回退出码 0，并令 `last_complete_success_at` 等于本次完成时间；其它扫描结果仍输出部分覆盖报告并返回 1。输出或编码本身失败同样返回 1。
+
+`last_complete_success_at` **只属于本次调用**：命令不保存跨进程健康缓存，不读取普通写入成功时间，不宣称先前结果仍新鲜；每次启动从未检查状态重新准入。报告是扫描区间观测，不能用作未来读写许可、当前健康凭证或自动修复授权。离线阶段没有 HTTP 任务队列、在线 status/cancel 路由及自动周期策略；最终在线方案必须先完成有界锁外执行、具体后台 owner、恢复 drain 与前台资源公平性的独立设计和验证。
+
 ## 单盘核验与隔离导出
 
 ```sh
@@ -70,4 +86,4 @@ zxs-rescue configuration register-disk --config /srv/private-layout/custom.json 
 
 ## 检查
 
-运行 `cargo test --locked --offline -p storage-rescue`。`test/rescue/startup.rs` 覆盖命令边界、损失确认、元数据恢复、历史包字节一致性及拒绝覆盖/损坏证明；`test/rescue/unit` 覆盖草稿拓扑、权限、锁和原子备份。测试不替代真实设备及生产恢复演练。
+运行 `cargo test --locked --offline -p storage-rescue`。`test/rescue/startup.rs` 覆盖命令边界、损失确认、元数据恢复、历史包字节一致性及拒绝覆盖/损坏证明；`test/rescue/unit` 覆盖草稿拓扑、权限、锁和原子备份，以及巡检的真实信号、取消、future 销毁、线程失败和 Engine 锁释放；巡检集成用例实际运行命令并检查健康、缺盘和准入失败结果。测试不替代真实设备及生产恢复演练。

@@ -9,6 +9,24 @@ use storage_contract::{MapChanges, Tracked};
 
 const MAX_PENDING_OWNERS: usize = 16_384;
 
+// One classification serves conservative invalidation and precise projection
+// deltas. A field cannot enter State without being classified by both consumers.
+macro_rules! projection_fields {
+    ($consumer:ident) => {
+        $consumer! {
+            branch { branches, }
+            history { histories, commits, versions, file_path_nodes, file_metadata_nodes, file_branch_merges, merge_links, history_boundaries, }
+            repository { repositories, directory_branches, placement_rules, protection_policies, }
+            version { placements, content_states, file_node_parents, version_notes, }
+            file { file_write_origins, file_locations, file_backup_paths, file_backup_policies, file_selection_generations, file_notes, file_names, }
+            directory { directory_tree_selections, directory_selection_generations, }
+            special { file_contexts, file_branch_aliases, file_path_notes, file_selections, directory_trees, directory_selections, }
+            independent { operations, operation_principals, plans, }
+        }
+    };
+}
+pub(super) use projection_fields;
+
 #[derive(Default, Debug)]
 pub(super) struct HistoryChanges {
     pub(super) histories: BTreeSet<String>,
@@ -66,7 +84,8 @@ impl HistoryChanges {
         // This one schema drives exhaustive State matching and dependency
         // application. A new State field cannot compile until classified.
         macro_rules! classify {
-            (history { $($history:ident,)* }
+            (branch { $($branch:ident,)* }
+             history { $($history:ident,)* }
              repository { $($repository:ident,)* }
              version { $($version:ident,)* }
              file { $($file:ident,)* }
@@ -74,9 +93,14 @@ impl HistoryChanges {
              special { $($special:ident,)* }
              independent { $($independent:ident,)* }) => {{
                 let State { sequence: _, business_generation: _, topology_generation: _, control_auth: _, events: _,
-                    $($history: _,)* $($repository: _,)* $($version: _,)*
+                    $($branch: _,)* $($history: _,)* $($repository: _,)* $($version: _,)*
                     $($file: _,)* $($directory: _,)* $($special: _,)* $($independent: _,)*
                 } = after;
+                $(changes.keys(&before.$branch, &after.$branch, |out, key| {
+                    for state in [before, after] {
+                        if let Some(value) = state.$branch.get(key) { out.history(&value.history_tree_id); }
+                    }
+                });)*
                 $(changes.keys(&before.$history, &after.$history, |out, key| {
                     for state in [before, after] {
                         if let Some(value) = state.$history.get(key) { out.history(&value.history_tree_id); }
@@ -96,15 +120,7 @@ impl HistoryChanges {
                 $(changes.keys(&before.$directory, &after.$directory, |out, key| out.directory(key));)*
             }};
         }
-        classify! {
-            history { histories, branches, commits, versions, file_path_nodes, file_metadata_nodes, file_branch_merges, merge_links, history_boundaries, }
-            repository { repositories, directory_branches, placement_rules, protection_policies, }
-            version { placements, content_states, file_node_parents, version_notes, }
-            file { file_write_origins, file_locations, file_backup_paths, file_backup_policies, file_selection_generations, file_notes, file_names, }
-            directory { directory_tree_selections, directory_selection_generations, }
-            special { file_contexts, file_branch_aliases, file_path_notes, file_selections, directory_trees, directory_selections, }
-            independent { operations, operation_principals, plans, }
-        }
+        projection_fields!(classify);
         changes.keys(&before.file_contexts, &after.file_contexts, |out, key| {
             // Context inclusion is repository-prefix based, not branch based.
             if let Some((repository, _)) = key.split_once('/') {

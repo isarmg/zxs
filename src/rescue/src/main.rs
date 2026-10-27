@@ -1,6 +1,7 @@
 //! Deliberately small offline rescue utility. Stop the daemon before using it.
 mod configuration;
 mod private_io;
+mod scrub;
 use command_line::{Parser, Subcommand};
 use json_codec::json;
 use std::path::PathBuf;
@@ -63,6 +64,8 @@ enum Command {
         #[command(subcommand)]
         command: PackageCommand,
     },
+    /// Scan retained publication metadata and required full copies; stop ZXS first.
+    Scrub,
     OfflineCheck {
         disk: PathBuf,
     },
@@ -237,6 +240,7 @@ fn run(args: Args) -> Result<()> {
             report_recovery_warnings(&mut engine);
             print(result?)
         }
+        Command::Scrub => scrub::run(root, retained_workspace_limits),
         Command::OfflineCheck { disk } => {
             let report = storage_engine::offline_check(&disk)?;
             let healthy = report.issues.is_empty();

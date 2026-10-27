@@ -367,3 +367,52 @@ pub(super) fn take_encoding_counts() -> BTreeMap<String, usize> {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/journal/event_append_tests.rs"]
 mod event_append_tests;
+/// Check the current writer schema without reconstructing every historical State.
+/// The caller still authenticates the exact root and every referenced page.
+pub(crate) fn validate_schema(snapshot: &Snapshot) -> Result<()> {
+    #[derive(Deserialize)]
+    #[serialization(deny_unknown_fields)]
+    struct Header {
+        #[serialization(with = "storage_contract::u64_string")]
+        sequence: u64,
+        #[serialization(rename = "business_generation", with = "storage_contract::u64_string")]
+        _business_generation: u64,
+        #[serialization(rename = "topology_generation", with = "storage_contract::u64_string")]
+        _topology_generation: u64,
+        #[serialization(rename = "control_auth")]
+        _control_auth: Option<json_codec::Value>,
+    }
+    let Header {
+        sequence,
+        _business_generation: _,
+        _topology_generation: _,
+        _control_auth: _,
+    } = json_codec::from_value(json_codec::Value::Object(snapshot.scalars.clone()))?;
+    if sequence != snapshot.sequence
+        || snapshot.pages.contains_key("control_auth")
+            == snapshot.scalars.contains_key("control_auth")
+        || !snapshot.pages.contains_key("events")
+    {
+        return Err(Error::new(
+            ErrorCode::ObjectCorrupt,
+            "snapshot scalar/page layout differs",
+        ));
+    }
+    macro_rules! check_fields {
+        (required { $($required:ident,)* } optional { $($optional:ident,)* }) => {
+            if [$(stringify!($required),)*].iter().any(|field| !snapshot.pages.contains_key(*field)) {
+                return Err(Error::new(ErrorCode::ObjectCorrupt, "snapshot required field is absent"));
+            }
+            for field in snapshot.pages.keys() {
+                match field.as_str() {
+                    $(stringify!($required) |)* $(stringify!($optional) |)*
+                    "directory_selection_generations" | "file_selection_generations" |
+                    "events" | "control_auth" => (),
+                    _ => return Err(Error::new(ErrorCode::ObjectCorrupt, "snapshot contains an unknown field")),
+                }
+            }
+        };
+    }
+    state_map_fields!(check_fields);
+    Ok(())
+}

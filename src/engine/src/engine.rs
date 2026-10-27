@@ -12,6 +12,11 @@ pub use config::ValidatedConfig;
 mod planning;
 pub(crate) use planning::PlanningContext;
 mod index;
+mod integrity_scrub;
+pub use integrity_scrub::{
+    IntegrityScrubArea, IntegrityScrubCancellation, IntegrityScrubCompletion, IntegrityScrubIssue,
+    IntegrityScrubReport, IntegrityScrubTarget,
+};
 mod observations;
 mod operations;
 pub use observations::{DiskObservation, DiskObservationPlan, MetadataMemberProbe};
@@ -178,8 +183,16 @@ impl Engine {
         &self,
         candidate: &crate::journal::Candidate,
     ) -> Result<()> {
-        let expected: BTreeSet<_> = self.members().into_iter().map(|d| d.disk_id).collect();
-        let actual: BTreeSet<_> = candidate.metadata_disk_ids.iter().cloned().collect();
+        let expected: BTreeSet<_> = self
+            .config
+            .metadata_members()
+            .map(|disk| disk.disk_id.as_str())
+            .collect();
+        let actual: BTreeSet<_> = candidate
+            .metadata_disk_ids
+            .iter()
+            .map(String::as_str)
+            .collect();
         if expected.is_empty()
             || actual != expected
             || actual.len() != candidate.metadata_disk_ids.len()

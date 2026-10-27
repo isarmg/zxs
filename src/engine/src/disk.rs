@@ -541,11 +541,23 @@ pub(crate) fn open_payload(
 }
 
 pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Result<File> {
+    verify_payload_held_with(directory, version, || Ok(()))
+}
+
+/// Checkpoints never stand in for byte verification; scrub uses them to stop
+/// between bounded chunks while ordinary readers retain the same full proof.
+pub(crate) fn verify_payload_held_with(
+    directory: &Path,
+    version: &FileVersion,
+    mut checkpoint: impl FnMut() -> Result<()>,
+) -> Result<File> {
+    checkpoint()?;
     let (mut file, manifest) = open_payload(directory, version)?;
     let mut full = blake3::Hasher::new();
     let mut buf = vec![0u8; manifest.chunk_bytes as usize];
     let mut remaining = manifest.logical_size;
     for expected in manifest.chunks {
+        checkpoint()?;
         let n = remaining.min(buf.len() as u64) as usize;
         file.read_exact(&mut buf[..n])?;
         if blake3::hash(&buf[..n]).as_bytes() != &expected {
@@ -570,6 +582,7 @@ pub(crate) fn verify_payload_held(directory: &Path, version: &FileVersion) -> Re
             "complete payload hash differs",
         ));
     }
+    checkpoint()?;
     Ok(file)
 }
 /// Byte verification held only until this preparation installs/syncs that inode.

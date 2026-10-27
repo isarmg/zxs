@@ -523,3 +523,102 @@ fn directory_branch_head_entry_comparison_preserves_boundary_rejections() {
         "directory branch projection differs from its HEAD tree"
     );
 }
+
+#[test]
+fn branch_value_updates_preserve_full_graph_bytes_and_rebuild_unavailable_old_root() {
+    for missing_old_root in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let config = Config::development([
+            temp.path().join("one"),
+            temp.path().join("two"),
+            temp.path().join("three"),
+        ]);
+        let before = fixture();
+        let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
+        let branch = before
+            .branches
+            .values()
+            .find(|branch| branch.file_id.is_some())
+            .unwrap();
+        let mut after = fork(&before);
+        after.branches.get_mut(&branch.branch_id).unwrap().name = "precise branch update".into();
+        if missing_old_root {
+            for disk in &config.disks {
+                fs::write(
+                    object_path(disk, "history-manifest", &roots[&branch.history_tree_id]),
+                    b"unreadable old root",
+                )
+                .unwrap();
+            }
+        }
+        let (expected, expected_objects) = prepare_history_manifests(&after, MAX_METADATA).unwrap();
+        let (actual, objects) = prepare_history_manifests_incremental(
+            &before,
+            &after,
+            &roots,
+            &config.disks,
+            MAX_METADATA,
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+        let bytes = |objects: &[PreparedMetadataObject]| {
+            objects
+                .iter()
+                .map(|object| {
+                    (
+                        (object.kind(), object.hash.clone()),
+                        object.bytes().to_vec(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        assert_eq!(bytes(&objects), bytes(&expected_objects));
+        for object in objects {
+            object.store(&config.disks).unwrap();
+        }
+        if missing_old_root {
+            // The discarded old root is not a dependency of the new candidate;
+            // the preparation must neither install it nor silently repair it.
+            for disk in &config.disks {
+                assert_eq!(
+                    fs::read(object_path(
+                        disk,
+                        "history-manifest",
+                        &roots[&branch.history_tree_id]
+                    ))
+                    .unwrap(),
+                    b"unreadable old root"
+                );
+            }
+        }
+        bound_history_graph(&config.disks, &actual[&branch.history_tree_id]).unwrap();
+    }
+}
+
+#[test]
+fn precise_branch_updates_do_not_skip_complete_manifest_admission() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = Config::development([
+        temp.path().join("one"),
+        temp.path().join("two"),
+        temp.path().join("three"),
+    ]);
+    let before = fixture();
+    let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
+    let branch = before
+        .branches
+        .values()
+        .find(|branch| branch.file_id.is_some())
+        .unwrap();
+    let mut after = fork(&before);
+    after
+        .branches
+        .get_mut(&branch.branch_id)
+        .unwrap()
+        .file_node_id = Some("fmeta_00000000000000000000000000000000".into());
+    assert!(prepare_history_manifests(&after, MAX_METADATA).is_err());
+    assert!(
+        prepare_history_manifests_incremental(&before, &after, &roots, &config.disks, MAX_METADATA)
+            .is_err()
+    );
+}

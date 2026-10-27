@@ -159,30 +159,43 @@ impl OpenJournal {
     }
 }
 
-fn scan_frames(mut reader: impl Read) -> Result<Scan> {
-    let mut out = Scan {
-        records: Vec::new(),
-        valid_bytes: 0,
-        torn_tail: false,
-    };
-    let mut previous = "0".repeat(64);
-    let mut last_sequence = 0;
-    loop {
+/// The same bounded frame/chain parser serves recovery and streaming scrub.
+/// This reader never repairs a torn tail or opens a writable descriptor.
+pub(crate) struct JournalFrameReader<R> {
+    reader: R,
+    previous: String,
+    last_sequence: u64,
+    pub(crate) valid_bytes: u64,
+    pub(crate) torn_tail: bool,
+}
+
+impl<R: Read> JournalFrameReader<R> {
+    pub(crate) fn new(reader: R) -> Self {
+        Self {
+            reader,
+            previous: "0".repeat(64),
+            last_sequence: 0,
+            valid_bytes: 0,
+            torn_tail: false,
+        }
+    }
+
+    pub(crate) fn next_record(&mut self) -> Result<Option<(Record, String)>> {
         let mut header = [0u8; LOG_HEADER_BYTES];
         let mut got = 0;
         while got < LOG_HEADER_BYTES {
-            let n = reader.read(&mut header[got..])?;
+            let n = self.reader.read(&mut header[got..])?;
             if n == 0 {
                 break;
             }
             got += n;
         }
         if got == 0 {
-            break;
+            return Ok(None);
         }
         if got < LOG_HEADER_BYTES {
-            out.torn_tail = true;
-            break;
+            self.torn_tail = true;
+            return Ok(None);
         }
         if &header[..8] != LOG_MAGIC {
             return Err(Error::new(
@@ -202,18 +215,18 @@ fn scan_frames(mut reader: impl Read) -> Result<Scan> {
             ));
         }
         let mut payload = vec![0; len];
-        if let Err(e) = reader.read_exact(&mut payload) {
+        if let Err(e) = self.reader.read_exact(&mut payload) {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                out.torn_tail = true;
-                break;
+                self.torn_tail = true;
+                return Ok(None);
             }
             return Err(e.into());
         }
         let mut digest = [0; 32];
-        if let Err(e) = reader.read_exact(&mut digest) {
+        if let Err(e) = self.reader.read_exact(&mut digest) {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                out.torn_tail = true;
-                break;
+                self.torn_tail = true;
+                return Ok(None);
             }
             return Err(e.into());
         }
@@ -228,20 +241,32 @@ fn scan_frames(mut reader: impl Read) -> Result<Scan> {
         }
         let record: Record = decode_strict(&payload)?;
         if canonical_json(&record)? != payload
-            || record.previous_frame_hash != previous
-            || record.sequence < last_sequence
+            || record.previous_frame_hash != self.previous
+            || record.sequence < self.last_sequence
         {
             return Err(Error::new(
                 storage_contract::ErrorCode::LogCorrupt,
                 "log chain or canonical encoding differs",
             ));
         }
-        previous = blake3::Hash::from_bytes(digest).to_hex().to_string();
-        last_sequence = record.sequence;
-        out.records.push((record, previous.clone()));
-        out.valid_bytes += LOG_HEADER_BYTES as u64 + len as u64 + 32;
+        self.previous = blake3::Hash::from_bytes(digest).to_hex().to_string();
+        self.last_sequence = record.sequence;
+        self.valid_bytes += LOG_HEADER_BYTES as u64 + len as u64 + 32;
+        Ok(Some((record, self.previous.clone())))
     }
-    Ok(out)
+}
+
+fn scan_frames(reader: impl Read) -> Result<Scan> {
+    let mut reader = JournalFrameReader::new(reader);
+    let mut records = Vec::new();
+    while let Some(record) = reader.next_record()? {
+        records.push(record);
+    }
+    Ok(Scan {
+        records,
+        valid_bytes: reader.valid_bytes,
+        torn_tail: reader.torn_tail,
+    })
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AppendMode {
@@ -678,6 +703,7 @@ pub(crate) struct PreparedSnapshot {
 }
 #[path = "journal/snapshot.rs"]
 mod snapshot;
+pub(crate) use snapshot::validate_schema as validate_snapshot_schema;
 #[path = "journal/snapshot_reuse.rs"]
 mod snapshot_reuse;
 pub(crate) fn prepare_snapshot(state: &State, maximum: usize) -> Result<PreparedSnapshot> {

@@ -9,6 +9,7 @@
 | `engine/publication.rs` | 正文准备、精确元数据预检、持久决定与发布屏障 |
 | `engine/recovery.rs` | 仅沿已验证发布前缀回放，协调未完成决定 |
 | `engine/reads.rs` | 副本验证、读租约、导出、磁盘容量与状态 |
+| `engine/integrity_scrub.rs` | 独占 Engine 的有界完整巡检，分开报告 metadata 闭包与 required payload 副本 |
 | `publication_evidence.rs` | 只读选择精确摘要的对象、完整快照及发布 seal；查询不执行磁盘修复 |
 | `engine/workspace_storage.rs` | 工作区清单的双位置持久化与重启协调 |
 | `engine/workspace_limits.rs` | 独立于持久配置的本机运行期保留证据上限 |
@@ -37,6 +38,14 @@
 SQLite、容器 container.json 及当前名称是可重建投影，不能替代发布记录和不可变证明。新建分支不生成占位文件；检测到 legacy 或 pending-branches 旧容器结构时返回 `FORMAT_UNSUPPORTED`，不删除或迁移原材料。活动文件分支、工作区和读租约固定正文；目录只固定选中及尚未完成分支的当前 head，不永久固定旧子树。
 
 读取继承冻结父版本，范围编辑保留父未改字节；零字节或同摘要首写仍建立独立版本。历史另存只为 staged 文件生成 FULL。Branch/Commit 空映射及新增目录 map 按当前稀疏编码省略序列化；FULL 证明仍使用确定性编码。语义、目录子树与默认视图见[分支说明](../design/branch-system-logic.md)。
+
+## 完整巡检（过渡实现）
+
+`Engine::scrub` 实读每个配置元数据成员的已准入 journal/发布证明与全部保留元数据闭包，
+并逐 required route 验证当前 AVAILABLE 正文。它不替换 `check` 的磁盘目录诊断，
+不修复、不发布 State，也不删除普通写校验。当前整次保持独占 Engine，并拒绝已准入的
+锁外 commit preparation；它不是磁盘快照或最终后台减锁方案。起止时间、取消/失败、
+有限问题记录、去重和资源上限见[巡检契约](../architecture/integrity-scrub.md)。
 
 ## 事务元数据的记录级共享
 
