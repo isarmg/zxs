@@ -1,6 +1,30 @@
 use super::*;
 use std::{collections::BTreeMap, os::unix::fs::symlink};
 
+#[test]
+fn held_directory_preserves_private_admission_errors() {
+    use platform_io::fs_safety::Error as FsError;
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("root");
+    assert!(matches!(
+        held_directory(&path),
+        Err(Error::Filesystem(FsError::Io(error)))
+            if error.kind() == std::io::ErrorKind::NotFound
+    ));
+    fs::create_dir(&path).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        held_directory(&path),
+        Err(Error::Filesystem(FsError::UnsafePermissions(rejected))) if rejected == path
+    ));
+    assert_eq!(
+        fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+}
+
 fn version(state: &State, history: &str, file: &str, name: &str, bytes: &[u8]) -> FileVersion {
     let hash = blake3::hash(bytes);
     let (storage_name, created_at) = version_identity(state, file, name, &hash).unwrap();

@@ -29,6 +29,18 @@ ZXS 独立的 Linux 服务端基础库，在本项目维护和构建。
 
 平台库的 Tokio 直接生产依赖仅启用 `rt`；SQLite 依赖自行声明所需的 `sync`/`time`。测试单独启用宏和多线程运行时，以覆盖两种执行环境。这不会移除服务端实际需要的多线程运行时，也不改变 SQLite 持久化策略。
 
+<a id="admitted-directory-handoff"></a>
+
+## 已准入目录句柄的移交
+
+`OpenAt2Root::from_private_directory` 消耗 `PrivateDirectory`，把已持有的 `File`
+直接移交共享私有构造步骤，不沿路径重开、复制 FD 或重复目录类型及 owner/mode 准入。
+转换前路径被重命名或替换时，根身份与后续相对读取仍绑定原目录；这不是命名路径
+仍指向原目录的证明，也不是新的设备身份缓存。转换仍用 fstat 读取持有 FD 的身份，
+并执行必需的 openat2 探测，错误保留原来源；接受未知 `File` 的 `from_directory`
+仍在该边界检查目录类型。`SameMount` 仍添加
+`NO_XDEV`；相对文件打开仍拒绝符号链接、非普通文件和多链接。
+
 ## 私有 payload 打开模式
 
 `PrivateDirectory::open_payload` 显式接收 `PayloadOpenMode`：`CreateNew` 使用

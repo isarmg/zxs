@@ -34,6 +34,12 @@ container.json 的 inherited_branches 记录来源、可见 version_id、空 own
 
 实现直接复用本项目的 `disk::{private_dir, existing_private_dir, open_regular, write_json, sync_dir}` 与 `platform-io` 安全文件系统原语；没有复制兄弟仓库的存储协议或脚本。依赖 `rustix` 和 `time` 的真实包名保留。
 
+`held_directory` 将 `existing_private_dir` 已准入的目录直接交给
+[`OpenAt2Root::from_private_directory`](../../platform.md#admitted-directory-handoff)，
+保留 `SameMount`，不再沿相同绝对路径做第二次逐组件打开。静态减少一次从 `/`
+开始的目录路径遍历及相应打开／关闭，实际 syscall 数和耗时尚未计量；原有准入、
+openat2 探测、文件单链接检查、源／目标同步和写锁生命周期均不变。
+
 <a id="name-capture-lineage"></a>
 
 ## 命名捕获的发布谱系与增量边界

@@ -1,5 +1,5 @@
 //! Linux-only openat2 root policy and typed object/lock boundaries.
-use crate::fs_safety::{Error, RelativePath};
+use crate::fs_safety::{Error, PrivateDirectory, RelativePath};
 use rustix::{
     fd::AsFd,
     fs::{FileType, Mode, OFlags, ResolveFlags, fstat, openat, openat2},
@@ -46,11 +46,36 @@ impl OpenAt2Root {
         Self::from_directory(root, mounts)
     }
 
+    /// Consume an admitted directory handle without reopening its path.
+    ///
+    /// # Errors
+    /// Propagates identity inspection and required openat2 probe failures.
+    /// The selected mount policy is unchanged.
+    pub fn from_private_directory(
+        root: PrivateDirectory,
+        mounts: MountPolicy,
+    ) -> Result<Self, Error> {
+        let identity = FileIdentity::from_fd(&root.directory)?;
+        Self::from_admitted_directory(root.directory, identity, mounts)
+    }
+
     pub fn from_directory(root: File, mounts: MountPolicy) -> Result<Self, Error> {
         let stat = fstat(&root).map_err(io::Error::from)?;
         if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
             return Err(Error::UnsafeFileType("root".into()));
         }
+        let identity = FileIdentity {
+            device: stat.st_dev,
+            inode: stat.st_ino,
+        };
+        Self::from_admitted_directory(root, identity, mounts)
+    }
+
+    fn from_admitted_directory(
+        root: File,
+        identity: FileIdentity,
+        mounts: MountPolicy,
+    ) -> Result<Self, Error> {
         let mut resolve = ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS;
         if mounts == MountPolicy::SameMount {
             resolve |= ResolveFlags::NO_XDEV;
@@ -66,10 +91,7 @@ impl OpenAt2Root {
         .map_err(io::Error::from)?;
         Ok(Self {
             root,
-            identity: FileIdentity {
-                device: stat.st_dev,
-                inode: stat.st_ino,
-            },
+            identity,
             resolve,
         })
     }

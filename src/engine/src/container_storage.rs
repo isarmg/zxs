@@ -380,7 +380,7 @@ pub(crate) fn content_path_observed(
 
 fn held_directory(path: &Path) -> Result<OpenAt2Root> {
     let private = existing_private_dir(path)?;
-    OpenAt2Root::open(private.path(), MountPolicy::SameMount).map_err(|error| {
+    OpenAt2Root::from_private_directory(private, MountPolicy::SameMount).map_err(|error| {
         let message = error.to_string();
         Error::from(error).context(storage_contract::ErrorCode::UnsafePath, message)
     })
