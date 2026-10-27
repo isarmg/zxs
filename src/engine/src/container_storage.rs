@@ -105,8 +105,11 @@ pub(crate) fn version_identity(
         .values()
         .filter(|version| version.file_id == file_id)
     {
-        validate_version(version)?;
-        maximum = maximum.max(sequence(&version.storage_name)?);
+        // Snapshot/import admission and version builders preserve this identity.
+        maximum = maximum.max(
+            sequence(&version.storage_name)
+                .expect("invariant: admitted or generated versions have valid storage names"),
+        );
     }
     let number = maximum.checked_add(1).ok_or_else(|| {
         Error::new(

@@ -371,8 +371,8 @@ impl Client {
 
 pub fn segment(value: &str) -> String {
     url_encoding::form::byte_serialize(value.as_bytes())
-        .collect::<String>()
-        .replace('+', "%20")
+        .map(|part| if part == "+" { "%20" } else { part })
+        .collect()
 }
 
 #[cfg(test)]

@@ -708,6 +708,53 @@ fn identity_counts_each_file_independently_with_required_numbered_names() {
 }
 
 #[test]
+fn identity_preserves_number_width_and_exhaustion_without_global_sequence_coupling() {
+    let history = new_id("history");
+    let file = new_id("file");
+    let original = version(&State::default(), &history, &file, "file.txt", b"old");
+    let digest = original.content_hash.digest().to_hex();
+    for (number, expected) in [
+        ("000001", 2),
+        ("0000001", 2),
+        ("1000000", 1_000_001),
+        ("18446744073709551614", u64::MAX),
+    ] {
+        let mut retained = original.clone();
+        // The storage stamp has its existing shape-only contract; it need not
+        // equal the independently validated RFC3339 creation time.
+        retained.storage_name = format!("v{number}_20269999T999999Z_{}.txt", &digest[..8]);
+        validate_version(&retained).unwrap();
+        let mut state = with_version(&retained);
+        state.sequence = u64::MAX;
+        let before = state.versions.clone();
+        let generated = version(&state, &history, &file, "file.txt", b"new");
+        assert_eq!(sequence(&generated.storage_name).unwrap(), expected);
+        assert_eq!(state.versions, before);
+    }
+
+    let mut last = original;
+    last.storage_name = format!("v{}_20261018T133000Z_{}.txt", u64::MAX, &digest[..8]);
+    validate_version(&last).unwrap();
+    let state = with_version(&last);
+    let error = version_identity(&state, &file, "file.txt", &blake3::hash(b"next")).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ResourceLimit);
+    assert_eq!(error.message(), "file version sequence exhausted");
+    let other = version(&state, &history, &new_id("file"), "other.txt", b"other");
+    assert_eq!(sequence(&other.storage_name).unwrap(), 1);
+}
+
+#[test]
+fn raw_storage_sequence_parser_retains_format_errors() {
+    for number in ["000000", "00001", "18446744073709551616", "-00001"] {
+        let name = format!("v{number}_20261018T133000Z_01234567.txt");
+        assert_eq!(
+            sequence(&name).unwrap_err().code(),
+            ErrorCode::ContainerLayoutInvalid
+        );
+    }
+}
+
+#[test]
 fn installation_moves_one_ordinary_inode_and_missing_paths_remain_classifiable() {
     let temporary = tempfile::tempdir().unwrap();
     let history_id = new_id("history");

@@ -270,3 +270,172 @@ fn stored_snapshot_rejects_file_identity_reused_across_histories() {
         "snapshot stable file identity crosses histories"
     );
 }
+
+#[derive(Clone, Copy, Debug)]
+enum VersionIdentityCorruption {
+    StorageName,
+    ZeroSequence,
+    OverflowSequence,
+    DigestPrefix,
+    CreationTimeOffset,
+    CreationTimeInvalidDate,
+    CreationName,
+}
+
+impl VersionIdentityCorruption {
+    fn apply(self, version: &mut FileVersion) {
+        match self {
+            Self::StorageName => version.storage_name = "invalid.txt".into(),
+            Self::ZeroSequence => {
+                let suffix = version.storage_name.split_once('_').unwrap().1;
+                version.storage_name = format!("v000000_{suffix}");
+            }
+            Self::OverflowSequence => {
+                let suffix = version.storage_name.split_once('_').unwrap().1;
+                version.storage_name = format!("v18446744073709551616_{suffix}");
+            }
+            Self::DigestPrefix => {
+                let (prefix, digest) = version.storage_name.rsplit_once('_').unwrap();
+                let first = if digest.starts_with('0') { '1' } else { '0' };
+                version.storage_name = format!("{prefix}_{first}{}", &digest[1..]);
+            }
+            Self::CreationTimeOffset => {
+                version.created_at = "2026-10-27T00:00:00+00:00".into();
+            }
+            Self::CreationTimeInvalidDate => {
+                version.created_at = "2026-02-30T00:00:00Z".into();
+            }
+            Self::CreationName => version.creation_name = "../outside.txt".into(),
+        }
+    }
+}
+
+fn assert_version_identity_admission_error(error: Error) {
+    assert_eq!(error.code(), ErrorCode::StateInvalid);
+    let Error::Context { source, .. } = error else {
+        panic!("snapshot admission must retain its version-validation source");
+    };
+    assert_eq!(source.code(), ErrorCode::HistoryPackageInvalid);
+    assert!(
+        source
+            .message()
+            .starts_with("invalid version storage identity:"),
+        "{source}"
+    );
+}
+
+#[test]
+fn stored_snapshots_admit_all_version_identities_before_per_file_sequence_use() {
+    use VersionIdentityCorruption::*;
+    let fixture = Fixture::new();
+    let mut engine = fixture.initialize();
+    let repo = repository(&mut engine, 3);
+    save(
+        &mut engine,
+        &repo.main_branch_id,
+        "matching.txt",
+        b"matching",
+    );
+    save(
+        &mut engine,
+        &repo.main_branch_id,
+        "unrelated.txt",
+        b"unrelated",
+    );
+    let entries = engine.list_tree(&repo.main_branch_id).unwrap();
+    let matching = entries
+        .iter()
+        .find(|entry| entry.path() == "matching.txt")
+        .unwrap();
+    let unrelated = entries
+        .iter()
+        .find(|entry| entry.path() == "unrelated.txt")
+        .unwrap();
+    let original = engine.state.as_ref().clone();
+
+    for target in [matching, unrelated] {
+        for status in [
+            ContentState::Available,
+            ContentState::Purged,
+            ContentState::Migrated,
+        ] {
+            let mut baseline = original.clone();
+            baseline
+                .content_states
+                .insert(target.version_id.clone(), status);
+            let hash = store_snapshot(&fixture.config.disks, &baseline).unwrap();
+            let admitted =
+                crate::publication_evidence::verified_snapshot(&fixture.config.disks, &hash)
+                    .unwrap()
+                    .into_state();
+            assert_eq!(admitted, baseline, "{} {status:?}", target.path());
+            let (name, _) = crate::container_storage::version_identity(
+                &admitted,
+                &matching.file_id,
+                matching.path(),
+                &blake3::hash(b"next"),
+            )
+            .unwrap();
+            assert!(name.starts_with("v000002_"), "{name}");
+
+            for corruption in [
+                StorageName,
+                ZeroSequence,
+                OverflowSequence,
+                DigestPrefix,
+                CreationTimeOffset,
+                CreationTimeInvalidDate,
+                CreationName,
+            ] {
+                let mut state = baseline.clone();
+                corruption.apply(state.versions.get_mut(&target.version_id).unwrap());
+                // Rehash the changed metadata, so checksum rejection cannot hide
+                // a missing semantic boundary for either matching or unrelated rows.
+                let hash = store_snapshot(&fixture.config.disks, &state).unwrap();
+                let snapshot: crate::journal::Snapshot =
+                    crate::journal::load_object(&fixture.config.disks[0], "snapshot", &hash)
+                        .unwrap();
+                let mut evidence = Vec::new();
+                for disk in &fixture.config.disks {
+                    for (kind, hash) in std::iter::once(("snapshot", hash.as_str())).chain(
+                        snapshot.pages["versions"]
+                            .iter()
+                            .map(|hash| ("state-page", hash.as_str())),
+                    ) {
+                        let path = crate::journal::object_path(disk, kind, hash);
+                        evidence.push((path.clone(), fs::read(path).unwrap()));
+                    }
+                }
+                assert_version_identity_admission_error(
+                    load_snapshot(&fixture.config.disks[0], &hash).unwrap_err(),
+                );
+                let error = match crate::publication_evidence::verified_snapshot(
+                    &fixture.config.disks,
+                    &hash,
+                ) {
+                    Ok(_) => panic!(
+                        "{} {status:?} {corruption:?} entered engine state",
+                        target.path()
+                    ),
+                    Err(error) => error,
+                };
+                assert_version_identity_admission_error(error);
+                for (path, bytes) in evidence {
+                    assert_eq!(fs::read(path).unwrap(), bytes, "rejected evidence changed");
+                }
+            }
+        }
+    }
+    assert_eq!(engine.state.as_ref(), &original);
+    drop(engine);
+    let reopened = Engine::open(&fixture.root).unwrap();
+    assert_eq!(reopened.state.as_ref(), &original);
+    let (name, _) = crate::container_storage::version_identity(
+        reopened.state(),
+        &matching.file_id,
+        matching.path(),
+        &blake3::hash(b"after reopen"),
+    )
+    .unwrap();
+    assert!(name.starts_with("v000002_"), "{name}");
+}

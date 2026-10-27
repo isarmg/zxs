@@ -20,6 +20,63 @@ fn route_segments_cannot_escape_scope() {
     }
     assert!(client.url("/api/files?path=a/../b").is_ok());
 }
+
+#[test]
+fn segment_preserves_exact_public_encoding_vectors() {
+    for (value, expected) in [
+        ("", ""),
+        ("AZaz09*-._", "AZaz09*-._"),
+        ("..", ".."),
+        ("a b+c", "a%20b%2Bc"),
+        ("  +  ", "%20%20%2B%20%20"),
+        ("!~'()", "%21%7E%27%28%29"),
+        ("a/b?x=1", "a%2Fb%3Fx%3D1"),
+        ("%#&", "%25%23%26"),
+        ("\0\r\n\t\u{7f}", "%00%0D%0A%09%7F"),
+        ("中文", "%E4%B8%AD%E6%96%87"),
+        ("é", "%C3%A9"),
+        ("e\u{301}", "e%CC%81"),
+        ("😀", "%F0%9F%98%80"),
+        ("\u{10ffff}", "%F4%8F%BF%BF"),
+    ] {
+        assert_eq!(segment(value), expected, "input {value:?}");
+    }
+}
+
+// Keep the previous public byte contract only as a test oracle.
+fn original_segment(value: &str) -> String {
+    url_encoding::form::byte_serialize(value.as_bytes())
+        .collect::<String>()
+        .replace('+', "%20")
+}
+
+#[test]
+fn segment_matches_original_for_all_ascii_and_adjacent_pairs() {
+    let all_ascii: String = (0u8..=127).map(char::from).collect();
+    assert_eq!(segment(&all_ascii), original_segment(&all_ascii));
+    for first in 0u8..=127 {
+        for second in 0u8..=127 {
+            let value = format!("A{}{} Z+~", char::from(first), char::from(second));
+            assert_eq!(segment(&value), original_segment(&value), "input {value:?}");
+        }
+    }
+}
+
+#[test]
+fn segment_matches_original_for_generated_utf8_strings() {
+    let boundaries = [
+        0x7f, 0x80, 0x7ff, 0x800, 0xd7ff, 0xe000, 0xffff, 0x10000, 0x10ffff,
+    ];
+    for codepoint in boundaries.into_iter().chain((0..=0x10ffff).step_by(997)) {
+        // Surrogates are not valid UTF-8 string input to the public API.
+        let Some(character) = char::from_u32(codepoint) else {
+            continue;
+        };
+        let value = format!("AZ {character}+中e\u{301}{character}~*'() ");
+        assert_eq!(segment(&value), original_segment(&value), "input {value:?}");
+    }
+}
+
 #[test]
 fn session_debug_never_prints_credentials() {
     let session = Session {
