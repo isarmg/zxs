@@ -151,7 +151,7 @@ impl Engine {
             kind: kind.into(),
             principal: principal.into(),
             expected_sequence: self.state.business_generation,
-            digest: object_hash("plan", &input)?,
+            digest: object_hash_value("plan", &input)?,
             input,
             state: PlanState::Ready,
         };
@@ -245,7 +245,7 @@ impl Engine {
         // Every plan kind must execute exactly the input that was previewed.
         // Checking only the stored digest field would accept a stale digest
         // paired with modified local purge/split input after restart.
-        if plan.plan_id != id || object_hash("plan", &plan.input)? != plan.digest {
+        if plan.plan_id != id || object_hash_value("plan", &plan.input)? != plan.digest {
             return Err(Error::new(
                 storage_contract::ErrorCode::PlanInvalid,
                 "plan identity or input digest differs",

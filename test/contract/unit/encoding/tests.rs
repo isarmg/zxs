@@ -284,25 +284,119 @@ fn borrowed_value_encoding_matches_generic_bytes_and_hashes() {
 }
 
 #[test]
+fn borrowed_value_plan_encoding_preserves_frozen_inputs_and_digests() {
+    let check = |input: &Value, expected: &str| {
+        // The expected digest is bound to literal bytes, not either encoder.
+        let mut hash = blake3::Hasher::new();
+        hash.update(b"zxs:plan\0");
+        hash.update(expected.as_bytes());
+        let expected_hash = hash.finalize().to_hex().to_string();
+        assert_eq!(baseline::canonical(input).unwrap(), expected.as_bytes());
+        assert_eq!(canonical_json(input).unwrap(), expected.as_bytes());
+        assert_eq!(canonical_json_value(input).unwrap(), expected.as_bytes());
+        assert_eq!(object_hash("plan", input).unwrap(), expected_hash);
+        assert_eq!(object_hash_value("plan", input).unwrap(), expected_hash);
+        expected_hash
+    };
+    let purge = json_codec::json!({
+        "history_tree_id": "history-a",
+        "version_ids": ["version-a", "version-b"]
+    });
+    let purge_hash = check(
+        &purge,
+        r#"{"history_tree_id":"history-a","version_ids":["version-a","version-b"]}"#,
+    );
+    check(
+        &json_codec::json!({"history_tree_id":"history-a", "cut_commit_id":"commit-a"}),
+        r#"{"cut_commit_id":"commit-a","history_tree_id":"history-a"}"#,
+    );
+    let historical = json_codec::json!({
+        "history_tree_id": "history-a", "source_commit_id": "commit-a",
+        "name": "历史 É分支", "workspace_id": "ws-a",
+        "sealed_manifest_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "workspace_fencing_token": "7", "expected_topology_generation": "9",
+        "primary_slot_id": null, "target_copies": null,
+        "branch_creation": "placeholder-until-write", "placeholder_files": 2,
+        "full_copy_bytes": "21", "full_copy_files": 1,
+        "required_bytes_by_slot": {"P02":"21", "P01":"21"}
+    });
+    let historical_bytes = concat!(
+        r#"{"branch_creation":"placeholder-until-write","expected_topology_generation":"9","#,
+        r#""full_copy_bytes":"21","full_copy_files":1,"history_tree_id":"history-a","#,
+        r#""name":"历史 É分支","placeholder_files":2,"primary_slot_id":null,"#,
+        r#""required_bytes_by_slot":{"P01":"21","P02":"21"},"#,
+        r#""sealed_manifest_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
+        r#""source_commit_id":"commit-a","target_copies":null,"#,
+        r#""workspace_fencing_token":"7","workspace_id":"ws-a"}"#,
+    );
+    let historical_hash = check(&historical, historical_bytes);
+    let mut omitted = historical;
+    omitted.as_object_mut().unwrap().remove("primary_slot_id");
+    assert_ne!(
+        check(
+            &omitted,
+            &historical_bytes.replace("\"primary_slot_id\":null,", "")
+        ),
+        historical_hash,
+    );
+
+    let mut reversed = purge.clone();
+    reversed["version_ids"].as_array_mut().unwrap().reverse();
+    assert_ne!(
+        check(
+            &reversed,
+            r#"{"history_tree_id":"history-a","version_ids":["version-b","version-a"]}"#,
+        ),
+        purge_hash,
+    );
+    let mut extended = purge;
+    extended["preview_extra"] = json_codec::json!({"nested":[null, true, {"label":"附加"}]});
+    assert_ne!(
+        check(
+            &extended,
+            concat!(
+                r#"{"history_tree_id":"history-a","preview_extra":{"nested":[null,true,{"label":"附加"}]},"#,
+                r#""version_ids":["version-a","version-b"]}"#,
+            ),
+        ),
+        purge_hash,
+    );
+}
+
+#[test]
 fn borrowed_value_encoding_preserves_validation_errors_and_domain_priority() {
+    fn sources(error: &dyn std::error::Error) -> Vec<String> {
+        let mut messages = Vec::new();
+        let mut source = error.source();
+        while let Some(error) = source {
+            messages.push(error.to_string());
+            source = error.source();
+        }
+        messages
+    }
     for value in [
         json_codec::json!({"x": [1.5]}),
+        json_codec::json!({"x": [-0.0]}),
         json_codec::json!({"x": u64::MAX}),
         json_codec::json!({"x": i64::MIN}),
     ] {
         let old = canonical_json(&value).unwrap_err();
         let new = canonical_json_value(&value).unwrap_err();
         assert_eq!((&new.code(), &new.message()), (&old.code(), &old.message()));
-        for kind in ["state-page", "", "Invalid", "bad_domain"] {
+        for kind in ["state-page", "plan", "", "Invalid", "bad_domain"] {
             let old = encode_hashed_object(kind, &value).unwrap_err();
             let new = encode_hashed_value(kind, &value).unwrap_err();
             assert_eq!((&new.code(), &new.message()), (&old.code(), &old.message()));
+            assert_eq!(new.is_retryable(), old.is_retryable());
+            assert_eq!(sources(&new), sources(&old));
             let hash_error = object_hash_value(kind, &value).unwrap_err();
             assert_eq!(
                 (&hash_error.code(), &hash_error.message()),
                 (&old.code(), &old.message())
             );
-            if kind != "state-page" {
+            assert_eq!(hash_error.is_retryable(), old.is_retryable());
+            assert_eq!(sources(&hash_error), sources(&old));
+            if !matches!(kind, "state-page" | "plan") {
                 assert_eq!(new.code(), crate::ErrorCode::InvalidObjectType);
             }
         }

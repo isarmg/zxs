@@ -324,7 +324,7 @@ impl Engine {
             kind: "historical_save".into(),
             principal: principal.into(),
             expected_sequence: self.state.business_generation,
-            digest: object_hash("plan", &input)?,
+            digest: object_hash_value("plan", &input)?,
             input,
             state: PlanState::Ready,
         };
