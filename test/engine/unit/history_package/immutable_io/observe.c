@@ -1,4 +1,4 @@
-/* Only the selected libtest child is preloaded. Observe libc fsync, not raw
+/* Only the selected libtest child is preloaded. Observe libc read/fsync, not raw
  * syscalls or physical power loss. Existing target files are preinstalled. */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -78,6 +78,45 @@ int fsync(int fd) {
     int saved_errno = errno;
     event(member, kind, result ? "failed" : "success");
     pending[member] = !result && !strcmp(kind, "file");
+    errno = saved_errno;
+    return result;
+}
+
+/* The read-only oracle uses positive controls on both sides of the qualified
+ * update. This observes libc read only, not openat2 or direct/raw syscalls. */
+static _Thread_local int observing_read;
+
+ssize_t read(int fd, void *buffer, size_t count) {
+    ssize_t (*real_read)(int, void *, size_t) = dlsym(RTLD_NEXT, "read");
+    if (!real_read) abort();
+    const char *stage = getenv("ZXS_HISTORY_IO_STAGE");
+    if (observing_read || !stage || strcmp(stage, "read"))
+        return real_read(fd, buffer, count);
+    observing_read = 1;
+    const char *root = getenv("ZXS_HISTORY_IO_ROOT");
+    char marker[4096];
+    if (!root) abort();
+    if (snprintf(marker, sizeof(marker), "%s/observe", root) >= (int)sizeof(marker)) abort();
+    if (access(marker, F_OK)) {
+        observing_read = 0;
+        return real_read(fd, buffer, count);
+    }
+    if (!loaded) load_targets(root);
+    char descriptor[64], path[4096];
+    snprintf(descriptor, sizeof(descriptor), "/proc/self/fd/%d", fd);
+    ssize_t size = readlink(descriptor, path, sizeof(path) - 1);
+    if (size < 0) abort();
+    path[size] = '\0';
+    int member = -1;
+    for (int i = 0; i < 3; i++) {
+        if (!strcmp(path, targets[i])) member = i;
+    }
+    if (member >= 0) event(member, "read", "attempt");
+    ssize_t result = real_read(fd, buffer, count);
+    int saved_errno = errno;
+    if (member >= 0)
+        event(member, "read", result < 0 ? "failed" : result ? "data" : "eof");
+    observing_read = 0;
     errno = saved_errno;
     return result;
 }

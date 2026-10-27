@@ -78,8 +78,50 @@ fn compare(before: &State, after: &State, index: &DerivedOwners) -> DerivedOwner
             graph::prepare(&expected_manifest, MAX_METADATA).unwrap();
         let (actual_hash, actual_objects) = if before.histories.contains_key(id) {
             let before_manifest = HistoryManifest::project_state(before, id).unwrap();
-            let (hash, objects) = graph::prepare(&before_manifest, MAX_METADATA).unwrap();
+            let prepared = graph::prepare_encoded(&before_manifest, MAX_METADATA).unwrap();
+            let hash = prepared.binding.hash;
+            let origin = prepared.binding.encoder.unwrap();
+            let objects = prepared.objects;
             if let Some(edits) = delta.histories.remove(id) {
+                // Independent full projection above is also the oracle for the
+                // encoder-origin path: every field, move, removal and None edit.
+                let warm = graph::update_encoded(
+                    &origin,
+                    HistoryEdits {
+                        maps: edits.maps.clone(),
+                        repository: edits.repository,
+                        history: edits.history,
+                    },
+                    after,
+                    MAX_METADATA,
+                )
+                .unwrap();
+                assert_eq!(
+                    warm.binding.hash, expected_hash,
+                    "descriptor history root for {id}"
+                );
+                assert_eq!(
+                    warm.binding.maximum_object_bytes,
+                    expected_objects
+                        .iter()
+                        .map(|object| object.bytes().len())
+                        .max()
+                        .unwrap()
+                );
+                for created in &warm.objects {
+                    let expected = expected_objects
+                        .iter()
+                        .find(|object| {
+                            object.kind() == created.kind() && object.hash == created.hash
+                        })
+                        .unwrap();
+                    assert_eq!(
+                        created.bytes(),
+                        expected.bytes(),
+                        "descriptor created bytes for {id}"
+                    );
+                }
+                assert!(warm.binding.encoder.is_some());
                 let mut projected = logical(before, id);
                 if edits.history {
                     projected["history"] = json_codec::to_value(&after.histories[id]).unwrap();
@@ -116,7 +158,19 @@ fn compare(before: &State, after: &State, index: &DerivedOwners) -> DerivedOwner
                         .unwrap()
                     })
                     .collect();
-                let update = graph::prepare_update(objects, edits, after, MAX_METADATA).unwrap();
+                let update = graph::prepare_update_with_origin(
+                    objects,
+                    Some(&origin),
+                    edits,
+                    after,
+                    MAX_METADATA,
+                )
+                .unwrap();
+                let inherited = update.encoder.as_ref().unwrap();
+                let warm_after_raw =
+                    graph::update_encoded(inherited, HistoryEdits::default(), after, MAX_METADATA)
+                        .unwrap();
+                assert_eq!(warm_after_raw.binding.hash, expected_hash);
                 let mut objects = update.retained;
                 objects.extend(update.created);
                 (

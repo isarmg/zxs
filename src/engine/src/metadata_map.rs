@@ -165,6 +165,7 @@ impl Encoder {
         hash
     }
 
+    #[cfg(test)]
     pub(crate) fn map(&mut self, map: Map<String, Value>) -> Result<Reference> {
         Ok(self.map_root(map, ProofMeasure::Plain)?.reference().clone())
     }

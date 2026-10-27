@@ -194,6 +194,7 @@ fn catalog_reuses_bounded_typed_bindings_and_removes_obsolete_largest_dependency
                 HistoryBinding {
                     hash: format!("{n:064x}"),
                     maximum_object_bytes: 1024 * 1024 + n,
+                    encoder: None,
                 },
             )
         })
@@ -230,6 +231,7 @@ fn inclusion_budget_is_an_actual_key_path_and_empty_catalog_has_none() {
                     HistoryBinding {
                         hash: format!("{n:064x}"),
                         maximum_object_bytes: 100,
+                        encoder: None,
                     },
                 )
             })

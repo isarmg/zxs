@@ -4,21 +4,82 @@ use super::HistoryManifest;
 use crate::{
     Error, HistoryTree, Repository, Result,
     journal::{AuthenticatedMetadataObject, PreparedMetadataObject},
-    metadata_map::{Encoder, MapUpdate, Reference, ReferenceKind, Resolver, decode_index},
+    metadata_map::{
+        Encoder, HistoryBinding, MapRoot, MapUpdate, ProofMeasure, Reference, ReferenceKind,
+        Resolver, decode_index,
+    },
 };
 use data_serialization::{Deserialize, Serialize};
 use json_codec::{Map, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use crate::state_projection::{DerivedOwners, Field, HistoryEdits};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct PagedHistoryRoot {
     pub(crate) format: crate::metadata_map::RootFormat,
     pub(crate) repository: Repository,
     pub(crate) history: HistoryTree,
     pub(crate) maps: BTreeMap<String, Reference>,
+}
+
+/// Actual encoder output for one exact history root, not semantic admission or
+/// disk health. Only full encoding or updates with an existing encoder origin
+/// construct this type. In particular, resolving raw JSON cannot mint one.
+pub(crate) struct EncodedHistory {
+    hash: String,
+    root: PagedHistoryRoot,
+    maps: BTreeMap<Field, MapRoot>,
+}
+
+pub(super) struct PreparedHistory {
+    pub(super) binding: HistoryBinding,
+    pub(super) objects: Vec<PreparedMetadataObject>,
+}
+
+fn finish_encoded(
+    mut encoder: Encoder,
+    mut root: PagedHistoryRoot,
+    maps: BTreeMap<Field, MapRoot>,
+    maximum: usize,
+) -> Result<PreparedHistory> {
+    root.maps = maps
+        .iter()
+        .map(|(field, map)| (field.name().to_owned(), map.reference().clone()))
+        .collect();
+    let hash = encoder.object("history-manifest", &root)?;
+    let objects = encoder.finish();
+    let root_bytes = objects
+        .last()
+        .expect("invariant: encoded history ends with its root")
+        .bytes()
+        .len();
+    let maximum_object_bytes = maps.values().fold(root_bytes, |maximum, map| {
+        maximum.max(map.maximum_object_bytes())
+    });
+    if maximum_object_bytes > maximum {
+        return Err(Error::new(
+            storage_contract::ErrorCode::ResourceLimit,
+            "history graph exceeds metadata reader budget",
+        ));
+    }
+    let encoder = Arc::new(EncodedHistory {
+        hash: hash.clone(),
+        root,
+        maps,
+    });
+    Ok(PreparedHistory {
+        binding: HistoryBinding {
+            hash,
+            maximum_object_bytes,
+            encoder: Some(encoder),
+        },
+        objects,
+    })
 }
 
 pub(super) type GraphObject = AuthenticatedMetadataObject;
@@ -30,10 +91,10 @@ fn invalid(message: &str) -> Error {
 
 /// Freeze the complete graph in dependency order. Admission limits may reject
 /// a graph but never change its partitioning or its candidate-bound root hash.
-pub(super) fn prepare(
+pub(super) fn prepare_encoded(
     manifest: &HistoryManifest,
     maximum: usize,
-) -> Result<(String, Vec<PreparedMetadataObject>)> {
+) -> Result<PreparedHistory> {
     // Going through the logical serializer preserves all field-specific wire
     // rules, especially omitted optional maps and decimal-string u64 values.
     let Value::Object(mut logical) = json_codec::to_value(manifest)? else {
@@ -44,14 +105,14 @@ pub(super) fn prepare(
     }
     let mut encoder = Encoder::new(maximum);
     let mut maps = BTreeMap::new();
-    for field in Field::ALL.iter().map(|field| field.name()) {
+    for &field in Field::ALL {
         let value = logical
-            .remove(field)
+            .remove(field.name())
             .unwrap_or_else(|| Value::Object(Map::new()));
         let Value::Object(map) = value else {
             return Err(invalid("history manifest map is not an object"));
         };
-        maps.insert(field.to_owned(), encoder.map(map)?);
+        maps.insert(field, encoder.map_root(map, ProofMeasure::Plain)?);
     }
     if !logical.is_empty() {
         return Err(invalid(
@@ -62,10 +123,18 @@ pub(super) fn prepare(
         format: crate::metadata_map::RootFormat::RadixMapRoots,
         repository: manifest.repository.clone(),
         history: manifest.history.clone(),
-        maps,
+        maps: BTreeMap::new(),
     };
-    let hash = encoder.object("history-manifest", &root)?;
-    Ok((hash, encoder.finish()))
+    finish_encoded(encoder, root, maps, maximum)
+}
+
+#[cfg(test)]
+pub(super) fn prepare(
+    manifest: &HistoryManifest,
+    maximum: usize,
+) -> Result<(String, Vec<PreparedMetadataObject>)> {
+    let prepared = prepare_encoded(manifest, maximum)?;
+    Ok((prepared.binding.hash, prepared.objects))
 }
 
 /// Sources authenticate each address once before the resolver checks graph shape
@@ -112,12 +181,12 @@ pub(super) fn read_objects(
 /// A newly introduced history uses indexed row membership, not a scan of every
 /// State map. Private mutations preserve logical admission; cold imports do not
 /// enter here until their external graph and State have passed full validation.
-pub(super) fn prepare_indexed(
+pub(super) fn prepare_indexed_encoded(
     state: &crate::State,
     id: &str,
     owners: &DerivedOwners,
     maximum: usize,
-) -> Result<(String, Vec<PreparedMetadataObject>)> {
+) -> Result<PreparedHistory> {
     let history = state
         .histories
         .get(id)
@@ -133,16 +202,71 @@ pub(super) fn prepare_indexed(
             Some(rows) => rows.values(field, state)?,
             None => Map::new(),
         };
-        maps.insert(field.name().to_owned(), encoder.map(values)?);
+        maps.insert(field, encoder.map_root(values, ProofMeasure::Plain)?);
     }
     let root = PagedHistoryRoot {
         format: crate::metadata_map::RootFormat::RadixMapRoots,
         repository: repository.clone(),
         history: history.clone(),
-        maps,
+        maps: BTreeMap::new(),
     };
-    let hash = encoder.object("history-manifest", &root)?;
-    Ok((hash, encoder.finish()))
+    finish_encoded(encoder, root, maps, maximum)
+}
+
+#[cfg(test)]
+pub(super) fn prepare_indexed(
+    state: &crate::State,
+    id: &str,
+    owners: &DerivedOwners,
+    maximum: usize,
+) -> Result<(String, Vec<PreparedMetadataObject>)> {
+    let prepared = prepare_indexed_encoded(state, id, owners, maximum)?;
+    Ok((prepared.binding.hash, prepared.objects))
+}
+
+/// Only the caller holding the original PublishedDependencyReuse may omit I/O.
+/// The descriptor itself is encoding provenance, never omission authority.
+pub(super) fn update_encoded(
+    basis: &EncodedHistory,
+    edits: HistoryEdits,
+    state: &crate::State,
+    maximum: usize,
+) -> Result<PreparedHistory> {
+    let mut root = basis.root.clone();
+    update_header(&mut root, &edits, state);
+    let mut maps = basis.maps.clone();
+    let mut encoder = Encoder::new(maximum);
+    for (field, replacements) in edits.maps {
+        let map = encoder.update_map(
+            &maps[&field],
+            replacements.keys().cloned().collect(),
+            ProofMeasure::Plain,
+            |key| match replacements.get(key) {
+                // A removed owner row may still exist in global State.
+                Some(value) => Ok(value.clone()),
+                None => field.value(state, key),
+            },
+        )?;
+        maps.insert(field, map);
+    }
+    finish_encoded(encoder, root, maps, maximum)
+}
+
+fn update_header(root: &mut PagedHistoryRoot, edits: &HistoryEdits, state: &crate::State) {
+    if edits.history {
+        root.history = state
+            .histories
+            .get(&root.history.history_tree_id)
+            .expect("invariant: updating an existing history")
+            .clone();
+    }
+    if edits.repository {
+        root.repository = state
+            .repositories
+            .get(&root.history.repository_id)
+            .expect("invariant: a history references its admitted repository")
+            .clone();
+    }
 }
 
 /// Encode only exact field edits, including membership changes and deletions.
@@ -151,10 +275,22 @@ pub(super) struct PreparedUpdate {
     pub(super) created: Vec<PreparedMetadataObject>,
     pub(super) retained: Vec<PreparedMetadataObject>,
     pub(super) maximum_object_bytes: usize,
+    pub(super) encoder: Option<Arc<EncodedHistory>>,
 }
 
+#[cfg(test)]
 pub(super) fn prepare_update(
     objects: Vec<GraphObject>,
+    edits: HistoryEdits,
+    state: &crate::State,
+    maximum: usize,
+) -> Result<PreparedUpdate> {
+    prepare_update_with_origin(objects, None, edits, state, maximum)
+}
+
+pub(super) fn prepare_update_with_origin(
+    objects: Vec<GraphObject>,
+    origin: Option<&EncodedHistory>,
     edits: HistoryEdits,
     state: &crate::State,
     maximum: usize,
@@ -163,21 +299,18 @@ pub(super) fn prepare_update(
         .last()
         .expect("invariant: a resolved history graph ends with its root");
     let mut decoded = decode_history_root(root)?;
-    let id = &decoded.history.history_tree_id;
-    if edits.history {
-        decoded.history = state
-            .histories
-            .get(id)
-            .expect("invariant: updating an existing history")
-            .clone();
-    }
-    if edits.repository {
-        decoded.repository = state
-            .repositories
-            .get(&decoded.history.repository_id)
-            .expect("invariant: a history references its admitted repository")
-            .clone();
-    }
+    // Raw graph admission alone never promotes a descriptor. An existing origin
+    // binds the exact authenticated preimage; replacement rows are new encoder
+    // input, and every unchanged field retains its actual prior descriptor.
+    let mut maps = origin.map(|origin| {
+        assert_eq!(
+            origin.hash,
+            root.hash(),
+            "invariant: encoder origin binds the exact source root"
+        );
+        origin.maps.clone()
+    });
+    update_header(&mut decoded, &edits, state);
     let available = objects
         .iter()
         .map(|object| ((object.kind(), object.hash().to_owned()), object))
@@ -196,11 +329,14 @@ pub(super) fn prepare_update(
         }
     }
     for (field, replacements) in edits.maps {
-        let MapUpdate {
-            reference,
-            reused_roots,
-        } = encoder.edit_map_values(&decoded.maps[field.name()], replacements, load)?;
-        decoded.maps.insert(field.name().into(), reference);
+        let MapUpdate { root, reused_roots } =
+            encoder.edit_map_values(&decoded.maps[field.name()], replacements, load)?;
+        decoded
+            .maps
+            .insert(field.name().into(), root.reference().clone());
+        if let Some(maps) = &mut maps {
+            maps.insert(field, root);
+        }
         for reference in reused_roots {
             collect_reused(&reference, &load, &mut reachable)?;
         }
@@ -219,11 +355,19 @@ pub(super) fn prepare_update(
         .map(|object| object.bytes().len())
         .max()
         .expect("invariant: an updated history includes its newly encoded root");
+    let encoder = maps.map(|maps| {
+        Arc::new(EncodedHistory {
+            hash: hash.clone(),
+            root: decoded,
+            maps,
+        })
+    });
     Ok(PreparedUpdate {
         hash,
         created,
         retained,
         maximum_object_bytes,
+        encoder,
     })
 }
 

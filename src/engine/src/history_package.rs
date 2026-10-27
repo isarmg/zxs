@@ -13,7 +13,7 @@ mod graph;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/history_package/delta/tests.rs"]
 mod projection_delta_tests;
-pub(crate) use graph::decode_history_root;
+pub(crate) use graph::{EncodedHistory, decode_history_root};
 mod manifest;
 mod state_read;
 pub use manifest::HistoryManifest;
@@ -86,19 +86,9 @@ pub(crate) fn prepare_history_manifests(
     let mut objects = Vec::new();
     for id in state.histories.keys() {
         let manifest = HistoryManifest::from_state(state, id)?;
-        let (hash, graph) = graph::prepare(&manifest, maximum)?;
-        bindings.insert(
-            id.clone(),
-            crate::metadata_map::HistoryBinding {
-                hash,
-                maximum_object_bytes: graph
-                    .iter()
-                    .map(|o| o.bytes().len())
-                    .max()
-                    .expect("invariant: a prepared history includes its root"),
-            },
-        );
-        objects.extend(graph);
+        let prepared = graph::prepare_encoded(&manifest, maximum)?;
+        bindings.insert(id.clone(), prepared.binding);
+        objects.extend(prepared.objects);
     }
     let mut encoder = crate::metadata_map::Encoder::new(maximum);
     let catalog = encoder.map_catalog(&bindings)?;
@@ -187,8 +177,8 @@ fn prepare_history_incremental(
     let changed: BTreeSet<_> = histories.keys().cloned().collect();
     let mut bindings = BTreeMap::new();
     let mut objects = Vec::new();
-    // Only a genuine successful-root permit removes untouched histories from
-    // this pass. Changed histories still authenticate their source graph.
+    // Only the original successful-root permit can omit old dependencies. An
+    // encoder descriptor is data provenance, not independent I/O authority.
     let ids: Vec<_> = if reuse_published {
         changed
             .iter()
@@ -201,60 +191,81 @@ fn prepare_history_incremental(
     for id in &ids {
         let old = previous.catalog_binding(id);
         let edits = histories.remove(id);
-        let prepared = match old {
-            Some(old) => match read_published_history_objects(members, &old.hash, id, fault) {
-                Ok(graph) => match edits {
-                    Some(edits) => {
-                        let graph::PreparedUpdate {
-                            hash,
-                            created,
-                            mut retained,
-                            maximum_object_bytes,
-                        } = graph::prepare_update(graph, edits, after, maximum)?;
-                        let objects = if reuse_published {
-                            created
-                        } else {
-                            retained.extend(created);
-                            retained
-                        };
-                        Some((hash, objects, maximum_object_bytes))
+        // A qualified descriptor miss deliberately uses the existing exact raw
+        // graph path. I/O errors are never interpreted as cache misses.
+        let prepared = match (old, edits) {
+            (Some(old), Some(edits)) if reuse_published && old.encoder.is_some() => {
+                Some(graph::update_encoded(
+                    old.encoder
+                        .as_deref()
+                        .expect("invariant: qualified encoder descriptor exists"),
+                    edits,
+                    after,
+                    maximum,
+                )?)
+            }
+            (Some(old), edits) => {
+                match read_published_history_objects(members, &old.hash, id, fault) {
+                    Ok(graph) => match edits {
+                        Some(edits) => {
+                            let graph::PreparedUpdate {
+                                hash,
+                                created,
+                                mut retained,
+                                maximum_object_bytes,
+                                encoder,
+                            } = graph::prepare_update_with_origin(
+                                graph,
+                                old.encoder.as_deref(),
+                                edits,
+                                after,
+                                maximum,
+                            )?;
+                            let objects = if reuse_published {
+                                created
+                            } else {
+                                retained.extend(created);
+                                retained
+                            };
+                            Some(graph::PreparedHistory {
+                                binding: crate::metadata_map::HistoryBinding {
+                                    hash,
+                                    maximum_object_bytes,
+                                    encoder,
+                                },
+                                objects,
+                            })
+                        }
+                        None => {
+                            objects.extend(
+                                graph
+                                    .into_iter()
+                                    .map(|object| object.into_prepared(maximum))
+                                    .collect::<Result<Vec<_>>>()?,
+                            );
+                            None
+                        }
+                    },
+                    Err(error) if reuse_published => return Err(error),
+                    Err(_) => {
+                        // Preserve the existing source-reconstruction path, after the
+                        // fault observer has revoked any old omission authority.
+                        let rebuilt = graph::prepare_indexed_encoded(after, id, owners, maximum)?;
+                        if edits.is_none() && rebuilt.binding.hash != old.hash {
+                            return Err(Error::new(
+                                ErrorCode::ObjectCorrupt,
+                                "reconstructed history differs from published baseline",
+                            ));
+                        }
+                        Some(rebuilt)
                     }
-                    None => {
-                        objects.extend(
-                            graph
-                                .into_iter()
-                                .map(|object| object.into_prepared(maximum))
-                                .collect::<Result<Vec<_>>>()?,
-                        );
-                        None
-                    }
-                },
-                Err(_) => {
-                    // Only source acquisition falls back. The fault observer has
-                    // seen the failure; encoding/store/decision failures propagate.
-                    let rebuilt = graph::prepare_indexed(after, id, owners, maximum)?;
-                    if edits.is_none() && rebuilt.0 != old.hash {
-                        return Err(Error::new(
-                            ErrorCode::ObjectCorrupt,
-                            "reconstructed history differs from published baseline",
-                        ));
-                    }
-                    Some(with_history_maximum(rebuilt))
                 }
-            },
-            None => Some(with_history_maximum(graph::prepare_indexed(
-                after, id, owners, maximum,
-            )?)),
+            }
+            (None, _) => Some(graph::prepare_indexed_encoded(after, id, owners, maximum)?),
         };
-        if let Some((hash, graph, maximum_object_bytes)) = prepared {
-            bindings.insert(
-                id.clone(),
-                crate::metadata_map::HistoryBinding {
-                    hash,
-                    maximum_object_bytes,
-                },
-            );
-            objects.extend(graph);
+        if let Some(prepared) = prepared {
+            bindings.insert(id.clone(), prepared.binding);
+            objects.extend(prepared.objects);
         }
     }
     let mut encoder = crate::metadata_map::Encoder::new(maximum);
@@ -301,17 +312,6 @@ fn prepare_history_incremental(
         Ok(())
     })?;
     Ok((catalog, unique_prepared_objects(objects)?))
-}
-
-fn with_history_maximum(
-    (hash, objects): (String, Vec<PreparedMetadataObject>),
-) -> (String, Vec<PreparedMetadataObject>, usize) {
-    let maximum = objects
-        .iter()
-        .map(|object| object.bytes().len())
-        .max()
-        .expect("invariant: history includes root");
-    (hash, objects, maximum)
 }
 
 /// Cold readers resolve the exact catalog before checking complete history coverage.

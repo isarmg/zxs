@@ -673,3 +673,6 @@ fn markerless_and_previous_domain_history_roots_are_rejected_without_rewriting()
         assert_eq!(std::fs::read(path).unwrap(), bytes);
     }
 }
+
+#[path = "descriptor_tests.rs"]
+mod descriptor_tests;

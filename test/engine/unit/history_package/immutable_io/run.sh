@@ -26,3 +26,16 @@ for stage in success file directory; do
     fi
   done
 done
+
+# Separate child so read observation cannot change the existing exact fsync log.
+root="$temporary/read"
+mkdir -m 700 "$root"
+echo "Changed history descriptor libc read oracle"
+env LD_PRELOAD="$temporary/observe.so" ZXS_HISTORY_IO_ROOT="$root" \
+  ZXS_HISTORY_IO_LOG="$root/events" ZXS_HISTORY_IO_STAGE=read \
+  ZXS_HISTORY_IO_MEMBER=-1 "$binary" --ignored --exact --nocapture \
+  --test-threads=1 engine::publication::omission_tests::changed_history_reads_in_isolated_child
+if [[ ! -f "$root/completed" || "$(cat "$root/completed")" != read:-1 ]]; then
+  echo "Missing or invalid history read oracle completion marker" >&2
+  exit 1
+fi

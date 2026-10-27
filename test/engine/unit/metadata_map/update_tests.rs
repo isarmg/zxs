@@ -64,7 +64,7 @@ fn compare_edits(
         })
         .unwrap();
     assert_eq!(
-        canonical_json(&updated.reference).unwrap(),
+        canonical_json(updated.root.reference()).unwrap(),
         canonical_json(&expected_root).unwrap()
     );
     let encoded = encoder.finish();
@@ -86,7 +86,7 @@ fn compare_edits(
         let object = &previous[&(kind, hash.to_owned())];
         AuthenticatedMetadataObject::authenticate(kind, hash, object.value().clone())
     });
-    let resolved = resolver.map(&updated.reference).unwrap();
+    let resolved = resolver.map(updated.root.reference()).unwrap();
     assert_eq!(resolved, expected);
     let reachable = resolver.finish();
     assert_eq!(reachable.len(), expected_objects.len());

@@ -346,6 +346,7 @@ fn reconstruction_never_overwrites_corruption_unsafe_targets_or_changes_bound_ro
                 crate::metadata_map::HistoryBinding {
                     hash: "0".repeat(64),
                     maximum_object_bytes: MAX_METADATA,
+                    encoder: None,
                 },
             )
         })

@@ -34,9 +34,13 @@ objects even when their hash equals an earlier object's hash. They always use
 real immutable-byte comparison and file/directory barriers on every required
 member. History `retained` comes from the exact successful catalog root, not hash
 set subtraction. With a valid permit, untouched histories and old catalog/snapshot
-nodes are not re-read or reinstalled. Changed histories still read/authenticate
-their source graph. Without authority the complete old dependency path remains,
-including exact-hash reconstruction where previously legal.
+nodes are not re-read or reinstalled. Changed histories with an actual
+[encoder-origin descriptor](history-encoder-descriptors.md) path-copy their field
+maps without reading the old graph. A qualified descriptor miss explicitly reads
+the exact old graph; source failures propagate with their original cause. Without
+authority the complete old dependency path remains, including exact-hash
+reconstruction where previously legal. Raw graph admission alone never creates
+an encoder-origin descriptor.
 
 ## Final admission and concurrent revocation
 
@@ -69,6 +73,9 @@ healthy replica succeeds. Pending missing-source metadata selection remains lega
 without asserting that its payload is readable.
 
 This removes unchanged dependency read/install work, not every full traversal:
-changed history source closures are still read and visited, and other documented
-business, projection, index and payload work remains. Report warm, cold, scrub,
-repair and end-to-end costs separately; do not infer O(delta) for the whole Engine.
+descriptor misses and unqualified history source closures are still read and
+visited, and other documented business, projection, index and payload work
+remains. Descriptors retain projected keys and nodes, not raw Values; their extra
+residency is O(current projected key bytes + nodes), shared across generations,
+not O(delta) or fixed RAM. Report warm hits, misses, cold, scrub, repair and
+end-to-end costs separately; do not infer O(delta) for the whole Engine.

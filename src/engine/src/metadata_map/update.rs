@@ -110,6 +110,7 @@ struct Node<K> {
 pub(crate) struct HistoryBinding {
     pub(crate) hash: String,
     pub(crate) maximum_object_bytes: usize,
+    pub(crate) encoder: Option<Arc<crate::history_package::EncodedHistory>>,
 }
 impl<K: Ord + Clone> MapRoot<K> {
     pub(crate) fn visit(
@@ -570,7 +571,7 @@ fn plan<K: Ord + Clone>(
 /// Frontier references are not durability receipts: callers still verify and
 /// install the complete reachable closure before publishing its aggregate root.
 pub(crate) struct MapUpdate {
-    pub(crate) reference: Reference,
+    pub(crate) root: MapRoot,
     pub(crate) reused_roots: Vec<Reference>,
 }
 impl Encoder {
@@ -679,10 +680,7 @@ impl Encoder {
             &mut |reference| reused_roots.push(reference.clone()),
             &|key: &String| Cow::Borrowed(key.as_str()),
         )?;
-        Ok(MapUpdate {
-            reference: root.reference().clone(),
-            reused_roots,
-        })
+        Ok(MapUpdate { root, reused_roots })
     }
 }
 fn lookup_loaded<'a>(
