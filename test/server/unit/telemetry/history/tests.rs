@@ -1,6 +1,9 @@
 use super::*;
 use crate::telemetry::{CpuStatus, MemoryStatus};
 
+#[path = "budget.rs"]
+mod budget;
+
 fn sample(at: i64, value: Option<f64>) -> Sample {
     Sample {
         unix_seconds: at,
@@ -155,9 +158,9 @@ fn mixed_null_metrics_remain_exact_after_two_aggregations_and_persistence() {
     cache.append_file(false, &minute_a).unwrap();
     cache.append_file(false, &minute_b).unwrap();
     drop(cache);
-    let mut cache = HistoryStore::open(&root.path().join("cache"), now + 120).unwrap();
+    let cache = HistoryStore::open(&root.path().join("cache"), now + 120).unwrap();
     assert_eq!(cache.minutes.len(), 2);
-    let twice = average(cache.minutes.make_contiguous());
+    let twice = average(&cache.minutes.iter().cloned().collect::<Vec<_>>());
     let direct = average(&a.into_iter().chain(b).collect::<Vec<_>>());
     let expected = 100.0 / 13.0;
     assert!((twice.status.cpu.usage_percent.unwrap() - expected as f32).abs() < 0.00001);
@@ -215,8 +218,11 @@ fn old_aggregates_without_metric_statistics_are_ignored_but_raw_points_recover()
     drop(cache);
     let cache = HistoryStore::open(&path, now).unwrap();
     assert_eq!(cache.minutes.len(), 1);
-    assert_eq!(cache.minutes[0].status.cpu.power_watts, Some(20.0));
-    assert_eq!(cache.minutes[0].observations, 1);
+    assert_eq!(
+        cache.minutes.front().unwrap().status.cpu.power_watts,
+        Some(20.0)
+    );
+    assert_eq!(cache.minutes.front().unwrap().observations, 1);
 }
 
 #[test]
@@ -337,6 +343,9 @@ fn cache_recovery_rejects_bad_byte_encodings_and_out_of_range_statistics() {
     drop(file);
     let cache = HistoryStore::open(&directory, now + 10).unwrap();
     assert_eq!(cache.recent.len(), 1);
-    assert_eq!(cache.recent[0].unix_seconds, now);
-    assert_eq!(cache.recent[0].status.memory.used_bytes, Some(10));
+    assert_eq!(cache.recent.front().unwrap().unix_seconds, now);
+    assert_eq!(
+        cache.recent.front().unwrap().status.memory.used_bytes,
+        Some(10)
+    );
 }

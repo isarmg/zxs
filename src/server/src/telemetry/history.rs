@@ -57,10 +57,84 @@ impl Sample {
     }
 }
 
+struct ChargedSample {
+    sample: Sample,
+    encoded_bytes: usize,
+}
+
+// Entries expose only shared samples: changing an envelope must also replace its
+// charge. Sorting moves the sample and charge together; removal never re-encodes.
+#[derive(Default)]
+struct SampleQueue {
+    entries: VecDeque<ChargedSample>,
+    encoded_bytes: usize,
+}
+
+impl SampleQueue {
+    fn push_back(&mut self, sample: Sample) {
+        let encoded_bytes = memory_charge(json_codec::to_vec(&sample));
+        self.encoded_bytes += encoded_bytes;
+        self.entries.push_back(ChargedSample {
+            sample,
+            encoded_bytes,
+        });
+    }
+
+    fn pop_front(&mut self) {
+        let entry = self
+            .entries
+            .pop_front()
+            .expect("invariant: telemetry pruning removes an existing sample");
+        self.encoded_bytes -= entry.encoded_bytes;
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &Sample> {
+        self.entries.iter().map(|entry| &entry.sample)
+    }
+
+    fn front(&self) -> Option<&Sample> {
+        self.entries.front().map(|entry| &entry.sample)
+    }
+
+    fn back(&self) -> Option<&Sample> {
+        self.entries.back().map(|entry| &entry.sample)
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    fn sort_by_time(&mut self) {
+        self.entries
+            .make_contiguous()
+            .sort_by_key(|entry| entry.sample.unix_seconds);
+    }
+}
+
+impl FromIterator<Sample> for SampleQueue {
+    fn from_iter<T: IntoIterator<Item = Sample>>(samples: T) -> Self {
+        let mut result = Self::default();
+        for sample in samples {
+            result.push_back(sample);
+        }
+        result
+    }
+}
+
+fn memory_charge(encoded: json_codec::Result<Vec<u8>>) -> usize {
+    // Retain the existing conservative accounting fallback. Persistence reports
+    // its own encoding/I/O failure; accounting must not change that precedence.
+    encoded.map_or(MAX_CACHE_LINE, |bytes| bytes.len())
+}
+
 pub(super) struct HistoryStore {
     directory: Option<PathBuf>,
-    recent: VecDeque<Sample>,
-    minutes: VecDeque<Sample>,
+    recent: SampleQueue,
+    minutes: SampleQueue,
     pending_minute: Vec<Sample>,
     last_maintenance_minute: i64,
 }
@@ -69,8 +143,8 @@ impl HistoryStore {
     pub(super) fn memory(now: i64) -> Self {
         Self {
             directory: None,
-            recent: VecDeque::new(),
-            minutes: VecDeque::new(),
+            recent: SampleQueue::default(),
+            minutes: SampleQueue::default(),
             pending_minute: Vec::new(),
             last_maintenance_minute: now / 60,
         }
@@ -85,8 +159,8 @@ impl HistoryStore {
         ensure_private_directory(directory)?;
         let mut result = Self {
             directory: Some(directory.into()),
-            recent: VecDeque::new(),
-            minutes: VecDeque::new(),
+            recent: SampleQueue::default(),
+            minutes: SampleQueue::default(),
             pending_minute: Vec::new(),
             last_maintenance_minute: -1,
         };
@@ -159,7 +233,7 @@ impl HistoryStore {
         // A restart can interrupt the last minute. Recover completed minute
         // aggregates from real recent samples without creating any missing data.
         let mut recovered = BTreeMap::<i64, Vec<Sample>>::new();
-        for sample in &result.recent {
+        for sample in result.recent.iter() {
             recovered
                 .entry(sample.unix_seconds / 60)
                 .or_default()
@@ -181,10 +255,7 @@ impl HistoryStore {
                 result.minutes.push_back(sample);
             }
         }
-        result
-            .minutes
-            .make_contiguous()
-            .sort_by_key(|sample| sample.unix_seconds);
+        result.minutes.sort_by_time();
         result.last_maintenance_minute = -1;
         result.prune(now);
         result.last_maintenance_minute = now / 60;
@@ -247,7 +318,7 @@ impl HistoryStore {
             .filter(|sample| sample.unix_seconds >= from && sample.unix_seconds <= to)
             .map(|sample| sample.unix_seconds / 60)
             .collect::<std::collections::BTreeSet<_>>();
-        for sample in &self.minutes {
+        for sample in self.minutes.iter() {
             if sample.unix_seconds >= from
                 && sample.unix_seconds <= to
                 && !recent_minutes.contains(&(sample.unix_seconds / 60))
@@ -255,7 +326,7 @@ impl HistoryStore {
                 source.insert(sample.unix_seconds, sample.clone());
             }
         }
-        for sample in &self.recent {
+        for sample in self.recent.iter() {
             if sample.unix_seconds >= from && sample.unix_seconds <= to {
                 source.insert(sample.unix_seconds, sample.clone());
             }
@@ -290,31 +361,18 @@ impl HistoryStore {
         {
             self.minutes.pop_front();
         }
-        let approximate = |points: &VecDeque<Sample>| {
-            points
-                .iter()
-                .map(|sample| {
-                    json_codec::to_vec(sample).map_or(MAX_CACHE_LINE, |bytes| bytes.len())
-                })
-                .sum::<usize>()
-        };
         // Check memory admission only once per minute; the point-count bound is
         // enforced on every observation. 3-drive installations retain 31 days.
         if self.last_maintenance_minute != now / 60 {
-            let mut bytes = approximate(&self.minutes) + approximate(&self.recent);
-            while bytes > MAX_MEMORY_BYTES && !self.minutes.is_empty() {
-                if let Some(sample) = self.minutes.pop_front() {
-                    bytes = bytes.saturating_sub(
-                        json_codec::to_vec(&sample).map_or(MAX_CACHE_LINE, |value| value.len()),
-                    );
-                }
+            while self.minutes.encoded_bytes + self.recent.encoded_bytes > MAX_MEMORY_BYTES
+                && !self.minutes.is_empty()
+            {
+                self.minutes.pop_front();
             }
-            while bytes > MAX_MEMORY_BYTES && self.recent.len() > 1 {
-                if let Some(sample) = self.recent.pop_front() {
-                    bytes = bytes.saturating_sub(
-                        json_codec::to_vec(&sample).map_or(MAX_CACHE_LINE, |value| value.len()),
-                    );
-                }
+            while self.minutes.encoded_bytes + self.recent.encoded_bytes > MAX_MEMORY_BYTES
+                && self.recent.len() > 1
+            {
+                self.recent.pop_front();
             }
         }
     }
