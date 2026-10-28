@@ -49,7 +49,7 @@ pub(super) fn failure(browser: &Browser, directory: &Path, password: &str) {
             match message["method"].as_str()? {
                 "Network.requestWillBeSent" => Some(json!({"event":"request","id":params["requestId"],"url":params["request"]["url"],"method":params["request"]["method"]})),
                 "Network.responseReceived" => Some(json!({"event":"response","id":params["requestId"],"url":params["response"]["url"],"status":params["response"]["status"]})),
-                "Network.loadingFailed" => Some(json!({"event":"failed","id":params["requestId"],"error":params["errorText"]})),
+                "Network.loadingFailed" => Some(json!({"event":"failed","id":params["requestId"],"error":params["errorText"],"blockedReason":params["blockedReason"],"canceled":params["canceled"],"type":params["type"]})),
                 _ => None,
             }
         }).collect();

@@ -33,7 +33,7 @@ G4 保持 CSS 自动发现的 Automatic 路径及现有 SVG 算法，不切换 C
 
 `mount(root_id, app) -> Result<(), JsValue>` 同步检查根节点并安排异步启动。`i18n::initialize` 与 `theme::initialize` 先应用语言和主题；随后立即挂载应用，不等待字体下载或解码。`ZxsUI` 常规、粗体两个字重在后台加载，保留原字体资源与最终排版。应用挂载并启动轮廓控制器后，先保存完整所有权，再发布 `zxs-startup-ready`。同步错误返回调用者，异步错误发布 `zxs-startup-failed`。
 
-启动状态为 `data-zxs-startup="pending|ready|failed"`。字体状态独立为 `data-zxs-fonts="pending|ready|failed"`：加载中或失败时应用使用系统回退字体且仍可操作，下载完成后浏览器切换到原字体，现有字体完成和尺寸观察器更新轮廓。字体任务收到启动失败事件或离开页面即取消，释放后不再写入字体状态；字体任务不设启动超时。截图验收仍显式等待字体完成。构建工具生成的资源引导器也有 30 秒上限，负责在 WASM 无法加载时用系统字体显示错误页和重新加载按钮。它在动态导入绑定之前安装失败监听器，成功或失败后移除这些临时监听器。`styles/startup.css` 单独提前加载，因此失败提示不依赖应用字体。
+启动状态为 `data-zxs-startup="pending|ready|failed"`。字体状态独立为 `data-zxs-fonts="pending|ready|failed"`：加载中或失败时应用使用系统回退字体且仍可操作，下载完成后浏览器切换到原字体，现有字体完成和尺寸观察器更新轮廓。字体任务收到启动失败事件或离开页面即取消，释放后不再写入字体状态；字体任务不设启动超时。截图验收仍显式等待字体完成。构建工具生成的唯一资源引导器在开始执行后有 30 秒上限，不覆盖其自身下载失败／停滞；它在 head 中先于两个静态 stylesheet link 执行，捕获各自真实 `load`／`error`，不把 `link.sheet` 当成功证明。绑定导入等待 DOMContentLoaded，WASM 初始化还必须等待两份 CSS 准入；成功或失败后移除临时监听器。失败立即终结 lifetime，只有基本 HTML 错误视图等待 body；禁用未成功 CSS 解除 render-blocking，原根以 `hidden` 隐藏，迟到资源不再启用样式或复活应用。`styles/startup.css` 保留独立加载，已加载时提供错误页样式，失败时不强求样式恢复；用户可自行刷新或使用已有按钮手动重载，不提供自动恢复。详见[资源启动边界](../tools/web-build.md)。
 
 应用保留 CSR 卸载句柄和轮廓控制器。非 bfcache 的 `pagehide` 会释放 owner、主题监听器、轮廓观察器、动画帧及 Blob URL；进入 bfcache 时保留页面状态。几何与绘制规则及启动状态转换具有纯 Rust 回归；实际字体资源、浏览器事件和 CSP 仍须通过浏览器验收。
 
