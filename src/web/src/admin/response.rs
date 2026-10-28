@@ -1,8 +1,9 @@
 //! Validate the endpoint's actual success contract before releasing write fences.
 //! Domain-returning endpoints are not operation receipts.
-use crate::api;
 use json_codec::Value;
-use storage_contract::{Branch, MergeLink, OperationResult, Plan, Repository};
+use storage_contract::{
+    Branch, MergeLink, OperationResult, Plan, Repository, client_protocol::ResponseError,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PreviewKind {
@@ -87,7 +88,7 @@ impl Contract {
         }
     }
 
-    pub(super) fn validate(&self, value: Value) -> Result<Value, api::Error> {
+    pub(super) fn validate(&self, value: Value) -> Result<Value, ResponseError> {
         let valid = match self {
             Self::Inspect => true,
             Self::Operation { id } => {
@@ -167,7 +168,11 @@ impl Contract {
         if valid {
             Ok(value)
         } else {
-            Err(api::Error { code: storage_contract::ErrorCode::InvalidAdminResponse, message: "The response did not confirm the requested action. Inspect the original operation before retrying.".into(), retryable: false, status: 200, request_id: None, source: None })
+            Err(ResponseError::new(
+                200,
+                storage_contract::ErrorCode::InvalidAdminResponse,
+                "The response did not confirm the requested action. Inspect the original operation before retrying.",
+            ))
         }
     }
 }

@@ -1,5 +1,5 @@
+use super::super::request::{self, Kind, QueryKind};
 use super::*;
-use crate::admin::request::{self, Kind, QueryKind};
 use json_codec::json;
 const OPERATION: &str = "op_00000000000000000000000000000001";
 fn contract(kind: Kind, fields: &[(&str, &str)]) -> Contract {
@@ -352,5 +352,9 @@ fn malformed_success_keeps_the_existing_unknown_mutation_classification() {
     );
     assert_eq!(error.status, 200);
     assert!(error.source().is_none());
-    assert!(error.mutation_outcome_unknown());
+    assert!(!error.retryable);
+    assert!(error.request_id.is_none());
+    assert!(storage_contract::client_protocol::mutation_outcome_unknown(
+        error.status
+    ));
 }

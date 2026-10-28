@@ -2,6 +2,8 @@
 use super::*;
 #[path = "../../../../src/web/src/admin/request.rs"]
 mod request;
+#[path = "../../../../src/web/src/admin/response.rs"]
+mod response;
 use request::{InputError, Kind};
 fn fields(pairs: &[(&str, &str)]) -> request::Fields {
     pairs
@@ -10,8 +12,18 @@ fn fields(pairs: &[(&str, &str)]) -> request::Fields {
         .collect()
 }
 async fn apply(app: &Router, token: &str, kind: Kind, fields: &request::Fields) -> Value {
-    let (method, path, body) = request::build(kind, fields, &new_id("op")).unwrap();
-    success(app, token, method, &path, Some(body)).await
+    let request = request::build(kind, fields, &new_id("op"), "admin").unwrap();
+    apply_request(app, token, request).await
+}
+async fn apply_request(app: &Router, token: &str, request: request::Request) -> Value {
+    let request::Request {
+        method,
+        path,
+        body,
+        contract,
+    } = request;
+    let value = success(app, token, method, &path, body).await;
+    contract.validate(value).unwrap()
 }
 #[tokio::test]
 async fn web_daily_forms_execute_real_management_operations() {
@@ -30,7 +42,7 @@ async fn web_daily_forms_execute_real_management_operations() {
     let history = repo["history_tree_id"].as_str().unwrap();
     // Retired account/grant actions are not representable by the production Kind.
     assert!(matches!(
-        request::build(Kind::Inspect, &fields(&[]), &new_id("op")),
+        request::build(Kind::Inspect, &fields(&[]), &new_id("op"), "admin"),
         Err(InputError::Inspect)
     ));
     let session = login(&app, "admin", "integration-test-password").await;
@@ -60,9 +72,17 @@ async fn web_daily_forms_execute_real_management_operations() {
             ("generation", "0"),
         ]);
         apply(&app, &admin, kind, &f).await;
-        let (method, path, body) = request::build(kind, &f, &new_id("op")).unwrap();
+        let request = request::build(kind, &f, &new_id("op"), "admin").unwrap();
         assert_eq!(
-            send(&app, Some(&admin), method, &path, Some(body)).await.0,
+            send(
+                &app,
+                Some(&admin),
+                request.method,
+                &request.path,
+                request.body
+            )
+            .await
+            .0,
             StatusCode::CONFLICT
         );
     }
@@ -153,9 +173,8 @@ async fn web_daily_forms_execute_real_management_operations() {
         )
         .await;
         assert!(request::plan_action(&plan, true, false, &new_id("op")).is_err());
-        let (method, path, body) =
-            request::plan_action(&plan, publish, true, &new_id("op")).unwrap();
-        let result = success(&app, &admin, method, &path, Some(body)).await;
+        let request = request::plan_action(&plan, publish, true, &new_id("op")).unwrap();
+        let result = apply_request(&app, &admin, request).await;
         if publish {
             assert_eq!(result["commit_state"], "PUBLISHED");
         }
@@ -168,7 +187,8 @@ fn web_daily_contracts_reject_invalid_input_and_bind_exact_review_digest() {
         request::build(
             Kind::Repository,
             &fields(&[("name", "test"), ("slot", "P01"), ("copies", "0")]),
-            "op_test"
+            "op_test",
+            "admin"
         ),
         Err(InputError::ZeroCopies)
     ));
@@ -181,15 +201,16 @@ fn web_daily_contracts_reject_invalid_input_and_bind_exact_review_digest() {
             ("generation", "-1"),
         ]),
         "op_test",
+        "admin",
     )
     .unwrap_err();
     assert!(matches!(error, InputError::Generation(_)));
     assert!(std::error::Error::source(&error).is_some());
 
     let plan = json!({"plan_id":"plan/x","digest":"reviewed-digest","state":"ready"});
-    let (_, path, body) = request::plan_action(&plan, true, true, "op_test").unwrap();
-    assert_eq!(path, "/api/plans/plan%2Fx/commit");
-    assert_eq!(body["plan_digest"], "reviewed-digest");
+    let request = request::plan_action(&plan, true, true, "op_test").unwrap();
+    assert_eq!(request.path, "/api/plans/plan%2Fx/commit");
+    assert_eq!(request.body.unwrap()["plan_digest"], "reviewed-digest");
     assert!(
         request::plan_action(
             &json!({"plan_id":"p","digest":"d","state":"completed"}),
@@ -203,11 +224,16 @@ fn web_daily_contracts_reject_invalid_input_and_bind_exact_review_digest() {
         (Kind::Purge, "versions", "v1,v2"),
         (Kind::Split, "commit", "c1"),
     ] {
-        let (_, path, body) =
-            request::build(kind, &fields(&[("history", "h"), (key, value)]), "op_test").unwrap();
-        assert!(path.ends_with("-plans"));
-        assert!(body.get("operation_id").is_none());
-        assert!(!path.ends_with("/commit"));
+        let request = request::build(
+            kind,
+            &fields(&[("history", "h"), (key, value)]),
+            "op_test",
+            "admin",
+        )
+        .unwrap();
+        assert!(request.path.ends_with("-plans"));
+        assert!(request.body.unwrap().get("operation_id").is_none());
+        assert!(!request.path.ends_with("/commit"));
     }
 }
 
@@ -275,22 +301,26 @@ async fn web_purge_and_split_preview_digest_cancel_and_commit_use_real_engine() 
             ("commit", &cut),
         ]);
         let cancel = apply(&app, &admin, kind, &input).await;
-        let (method, path, body) =
-            request::plan_action(&cancel, false, false, &new_id("op")).unwrap();
-        success(&app, &admin, method, &path, Some(body)).await;
+        let request = request::plan_action(&cancel, false, false, &new_id("op")).unwrap();
+        apply_request(&app, &admin, request).await;
         let plan = apply(&app, &admin, kind, &input).await;
-        let (method, path, mut body) =
-            request::plan_action(&plan, true, true, &new_id("op")).unwrap();
-        body["plan_digest"] = "wrong-review-digest".into();
+        let mut request = request::plan_action(&plan, true, true, &new_id("op")).unwrap();
+        request.body.as_mut().unwrap()["plan_digest"] = "wrong-review-digest".into();
         assert!(
-            !send(&app, Some(&admin), method, &path, Some(body))
-                .await
-                .0
-                .is_success()
+            !send(
+                &app,
+                Some(&admin),
+                request.method,
+                &request.path,
+                request.body
+            )
+            .await
+            .0
+            .is_success()
         );
-        let (method, path, body) = request::plan_action(&plan, true, true, &new_id("op")).unwrap();
+        let request = request::plan_action(&plan, true, true, &new_id("op")).unwrap();
         assert_eq!(
-            success(&app, &admin, method, &path, Some(body)).await["commit_state"],
+            apply_request(&app, &admin, request).await["commit_state"],
             "PUBLISHED"
         );
     }

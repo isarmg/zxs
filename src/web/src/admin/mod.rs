@@ -102,7 +102,7 @@ fn execute(state: RwSignal<State>, request: request::Request) {
         } = request;
         let result = api::request(method, &path, body)
             .await
-            .and_then(|value| contract.validate(value));
+            .and_then(|value| contract.validate(value).map_err(api::Error::from));
         complete(state, epoch, &contract, result);
     });
 }

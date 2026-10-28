@@ -114,3 +114,54 @@ fn protocol_decode_sources_survive_the_browser_adapter_and_cloning() {
         cloned.source.as_ref().unwrap()
     ));
 }
+
+#[test]
+fn protocol_conversion_preserves_metadata_and_the_original_decode_source() {
+    use std::error::Error as _;
+    let protocol = storage_contract::client_protocol::decode_response(
+        503,
+        br#"{"error":{"code":"UNKNOWN_REMOTE_CODE","message":"private","retryable":false,"request_id":"req_original"}}"#,
+    ).unwrap_err();
+    let error = Error::from(protocol);
+    assert_eq!(error.status, 503);
+    assert_eq!(error.code, storage_contract::ErrorCode::InvalidResponse);
+    assert_eq!(
+        error.message,
+        "The response error code is invalid or unknown"
+    );
+    assert!(!error.retryable);
+    assert_eq!(error.request_id.as_deref(), Some("req_original"));
+    assert!(error.mutation_outcome_unknown());
+    assert!(matches!(
+        error.source.as_deref(),
+        Some(super::super::ErrorSource::Decode(
+            storage_contract::client_protocol::ResponseDecodeError::Code(_)
+        ))
+    ));
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<json_codec::Error>()
+    );
+
+    let malformed = Error::from(storage_contract::client_protocol::ResponseError::new(
+        200,
+        storage_contract::ErrorCode::InvalidAdminResponse,
+        "malformed success",
+    ));
+    assert_eq!(malformed.status, 200);
+    assert_eq!(
+        malformed.code,
+        storage_contract::ErrorCode::InvalidAdminResponse
+    );
+    assert_eq!(malformed.message, "malformed success");
+    assert!(!malformed.retryable);
+    assert!(malformed.request_id.is_none());
+    assert!(malformed.source().is_none());
+    assert!(malformed.mutation_outcome_unknown());
+}

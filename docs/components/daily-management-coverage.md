@@ -49,6 +49,6 @@ Web 管理页使用 `src/web/src/admin/request.rs` 的 HTTP 请求构建器。�
 
 ## 检查
 
-运行 `cargo test --locked --offline -p storage-server --test http_engine`。`test/server/integration/http_engine/daily_management.rs` 使用 Web 同一组请求构建器及真实 Router/持久化 Engine，覆盖唯一管理员认证、已移除账户/ACL路由的拒绝、策略代数、SMB 绑定、分支、预览摘要、明确提交、取消及重试幂等。
+运行 `cargo test --locked --offline -p storage-server --test http_engine`。`test/server/integration/http_engine/daily_management.rs` 直接接入 Web 同一组请求构建器与响应契约，发送具名 `Request` 的 method/path/body，并校验真实 Router/持久化 Engine 成功响应的形状与捕获身份，覆盖唯一管理员认证、已移除账户/ACL路由的拒绝、策略代数、SMB 绑定、分支、预览摘要、明确提交、取消及重试幂等。
 
-`branch_namespace_batch_preserves_unselected_views_and_is_idempotent` 检查跨非默认分支批量操作与审计边界。独立 AuthStore 和数据存储不可用时的登录、注销、改密和恢复边界由管理运行时测试覆盖。HTTP 测试不能替代 WASM 编译、真实浏览器点击或视觉验收。
+`branch_namespace_batch_preserves_unselected_views_and_is_idempotent` 检查跨非默认分支批量操作与审计边界。独立 AuthStore 和数据存储不可用时的登录、注销、改密和恢复边界由管理运行时测试覆盖。请求／响应模块只依赖共享契约及 JSON，不依赖浏览器 API；共享 URI component 编码和协议错误由 Web adapter 转换，保留原状态、错误源及未知写入分类。HTTP 测试不能替代 WASM 编译、真实浏览器点击或视觉验收。

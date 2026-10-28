@@ -174,3 +174,17 @@ fn unknown_remote_code_is_an_explicit_decode_failure_with_source() {
     let failure = decode_response(200, b"{").unwrap_err();
     assert!(matches!(failure.source, Some(ResponseDecodeError::Json(_))));
 }
+
+#[test]
+fn uri_component_encoding_preserves_browser_semantics_without_a_browser() {
+    assert_eq!(uri_component_segment("AZaz09-_.!~*'()"), "AZaz09-_.!~*'()");
+    assert_eq!(
+        uri_component_segment("a/b c?d=e&f#%+\\\u{0}"),
+        "a%2Fb%20c%3Fd%3De%26f%23%25%2B%5C%00"
+    );
+    assert_eq!(
+        uri_component_segment("历史📁"),
+        "%E5%8E%86%E5%8F%B2%F0%9F%93%81"
+    );
+    assert_eq!(uri_component_segment(""), "");
+}

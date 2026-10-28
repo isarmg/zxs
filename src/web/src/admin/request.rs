@@ -445,7 +445,10 @@ pub(super) fn query(kind: QueryKind, fields: &Fields) -> Result<Request, InputEr
     };
     Ok(Request {
         method: "GET",
-        path: format!("{prefix}/{}{suffix}", crate::api::segment(id)),
+        path: format!(
+            "{prefix}/{}{suffix}",
+            storage_contract::client_protocol::uri_component_segment(id)
+        ),
         body: None,
         contract,
     })
@@ -454,7 +457,10 @@ pub(super) fn query(kind: QueryKind, fields: &Fields) -> Result<Request, InputEr
 pub(super) fn operation(id: &str) -> Request {
     Request {
         method: "GET",
-        path: format!("/api/operations/{}", crate::api::segment(id)),
+        path: format!(
+            "/api/operations/{}",
+            storage_contract::client_protocol::uri_component_segment(id)
+        ),
         body: None,
         contract: Contract::Operation { id: id.into() },
     }

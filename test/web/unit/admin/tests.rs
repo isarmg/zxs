@@ -348,7 +348,7 @@ fn missing_operation_identity_cannot_match_a_receipt_named_unknown() {
 }
 
 fn respond(model: &mut Model, request: &request::Request, value: Value) {
-    match request.contract.validate(value) {
+    match request.contract.validate(value).map_err(api::Error::from) {
         Ok(value) => accept(model, &request.contract, value),
         Err(error) => reject(model, &request.contract, &error),
     }
@@ -583,11 +583,14 @@ fn late_success_and_unauthorized_completion_cannot_change_a_new_session() {
             state,
             4,
             &request.contract,
-            request.contract.validate(operation_receipt(
-                "PUBLISHED",
-                "completed",
-                "NOT_APPLICABLE",
-            )),
+            request
+                .contract
+                .validate(operation_receipt(
+                    "PUBLISHED",
+                    "completed",
+                    "NOT_APPLICABLE",
+                ))
+                .map_err(api::Error::from),
         );
         let error = api::Error {
             code: storage_contract::ErrorCode::InvalidAdminResponse,
@@ -617,11 +620,14 @@ fn late_success_and_unauthorized_completion_cannot_change_a_new_session() {
             state,
             5,
             &request.contract,
-            request.contract.validate(operation_receipt(
-                "PUBLISHED",
-                "completed",
-                "NOT_APPLICABLE",
-            )),
+            request
+                .contract
+                .validate(operation_receipt(
+                    "PUBLISHED",
+                    "completed",
+                    "NOT_APPLICABLE",
+                ))
+                .map_err(api::Error::from),
         );
         assert!(state.with_untracked(|s| s.admin_console.busy));
     });
@@ -644,11 +650,14 @@ fn current_session_completion_releases_busy_and_unauthorized_session() {
             state,
             5,
             &request.contract,
-            request.contract.validate(operation_receipt(
-                "PUBLISHED",
-                "completed",
-                "NOT_APPLICABLE",
-            )),
+            request
+                .contract
+                .validate(operation_receipt(
+                    "PUBLISHED",
+                    "completed",
+                    "NOT_APPLICABLE",
+                ))
+                .map_err(api::Error::from),
         );
         assert!(!state.with_untracked(|s| s.admin_console.busy));
         assert!(!state.with_untracked(|s| s.admin_console.result.is_empty()));

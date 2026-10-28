@@ -2,6 +2,7 @@ use js_sys::futures::JsFuture;
 use js_sys::{Reflect, Uint8Array};
 use json_codec::{Value, json};
 use std::cell::RefCell;
+pub use storage_contract::client_protocol::uri_component_segment as segment;
 use wasm_bindgen::{JsCast, JsValue};
 use web_interface::i18n::t;
 use web_sys::{RequestCredentials, RequestInit, RequestMode, RequestRedirect, Response};
@@ -73,6 +74,12 @@ pub struct Error {
     pub request_id: Option<String>,
     #[source]
     pub source: Option<std::sync::Arc<ErrorSource>>,
+}
+
+impl From<storage_contract::client_protocol::ResponseError> for Error {
+    fn from(error: storage_contract::client_protocol::ResponseError) -> Self {
+        response::from_protocol(error)
+    }
 }
 
 impl Error {
@@ -164,23 +171,6 @@ pub fn operation_id() -> Result<String, Error> {
         "op_{}",
         bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
     ))
-}
-
-pub fn segment(value: &str) -> String {
-    // Match encodeURIComponent for UTF-8 Rust strings without depending on a
-    // browser runtime. Contract validation uses the same path encoding.
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {
-            encoded.push(char::from(byte));
-        } else {
-            encoded.push('%');
-            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-            encoded.push(char::from(HEX[usize::from(byte & 15)]));
-        }
-    }
-    encoded
 }
 
 fn validate_path(path: &str) -> Result<(), Error> {

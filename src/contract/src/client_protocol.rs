@@ -38,6 +38,23 @@ impl ResponseError {
     }
 }
 
+/// Encode one UTF-8 URI component using encodeURIComponent semantics.
+/// This does not validate or encode a complete API path.
+pub fn uri_component_segment(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 15)]));
+        }
+    }
+    encoded
+}
+
 /// Only an explicit client-error response proves that a submitted mutation was rejected.
 pub fn mutation_outcome_unknown(status: u16) -> bool {
     !(400..500).contains(&status)
