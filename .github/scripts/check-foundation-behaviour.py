@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run queue, lock, cancellation, close and ownership tests on local foundation sources.
+"""Run retained and project-authored behaviour tests on local foundation sources.
 
 Two kinds of suites run against the locally renamed implementations:
 
@@ -51,7 +51,7 @@ class Suite:
 
 
 # Root-workspace unit suites: lib-wired tests reached through #[cfg(test)] #[path]/include!.
-UNIT_SUITES = ('bytes', 'flag-set', 'futures-intrusive', 'guardian', 'once_cell', 'scopeguard',
+UNIT_SUITES = ('bytes', 'cmov', 'flag-set', 'futures-intrusive', 'guardian', 'httpdate', 'once_cell', 'scopeguard',
                'send_wrapper', 'signal-hook-registry', 'spin', 'thread_local')
 
 FOUNDATION_TESTS = 'test/foundation/'
@@ -81,11 +81,18 @@ INTEGRATION_SUITES = (
           ('rustc-hash',)),
     Suite('once_cell', (FOUNDATION_TESTS + 'once_cell/tests/it/main.rs',),
           examples=('examples/reentrant_init_deadlocks.rs',)),
+    Suite('cmov', tuple(FOUNDATION_TESTS + 'cmov/tests/' + name + '.rs'
+                       for name in ('core_impls', 'regression'))),
+    Suite('constant_time_eq', (FOUNDATION_TESTS + 'constant_time_eq/tests/exhaustive.rs',)),
 )
 
 # Retained material that stays unexecuted, with the concrete missing provider.
 NOT_EXECUTED = {
     'test/foundation/bytes/tests/test_serialization.rs': 'serde_test is not a local source',
+    'test/foundation/cmov/tests/proptests.rs': 'proptest is not a local source',
+    'test/foundation/constant_time_eq/tests/count_instructions.rs': 'count_instructions is not a local source',
+    'test/foundation/constant_time_eq/tests/count_instructions_classic.rs': 'count_instructions is not a local source',
+    'test/foundation/constant_time_eq/tests/count_instructions_generic.rs': 'count_instructions is not a local source',
     'test/foundation/hashlink/tests/data_serialization.rs': 'serde_test is not a local source',
     'test/foundation/parking/tests/loom.rs': 'loom is not a local source',
 }

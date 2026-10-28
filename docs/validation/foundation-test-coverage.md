@@ -65,8 +65,23 @@ test/ci/fixtures/foundation-test-coverage.json  与  docs/validation/foundation-
 | bytes（SQLite、HTTP、服务端） | `Bytes`/`BytesMut` 分割、冻结、共享 vtable 所有权 | 库内及十个集成测试 | `test_serialization.rs` 需要缺失的 `serde_test`，不执行 |
 | slab、hashlink、once_cell、thread_local、scopeguard、guardian、send_wrapper | 键复用、LRU、一次性初始化竞争、线程局部、守卫释放 | 库内或保留集成测试 | 无 |
 | flag-set（rustix） | 位标志全集 | 库内单元测试 | 修复 `#[path]` 文件中子模块解析为同级目录导致的 E0583 |
+| cmov（authentication → hmac → cryptographic-core → ctutils） | 整数、Ordering、数组与切片的条件移动／相等比较，长度不符拒绝、余数及历史回归 | 库内 `macros`／`slice`；保留 `core_impls.rs`、`regression.rs` | 无；无特性，不新增提供者 |
+| constant_time_eq（原生存储／客户端及 Web／SMB 契约依赖闭包 → blake3） | 等长切片的逐位差异、空切片与非对齐输入，默认分派和显式 generic 实现 | 保留 `exhaustive.rs` 的六项功能测试 | 无；生产解析 `std`，不启用 `count_instructions_test` |
+| httpdate（storage-server 静态资源 → tower-http ServeDir） | 三种 HTTP 日期格式、格式化、历法样例、排序与错误日期拒绝 | 库内 `test/foundation/httpdate/unit/src/lib/tests_64.rs` 的七项测试 | 无；无特性，不新增提供者 |
 
 明确不在本任务执行、原因写入生成映射的项目：async-notification 的保留 async-lock 测试（依赖 `futures_lite`、`waker_fn`，本地无等价实现；现有项目契约 `test/async-notification/contract.rs` 继续执行）、tokio 与 http-transport（受维护收据约束）、sharded-slab（`proptest`、`loom`）、futures 的 UNAVAILABLE 列表、rustls 族（缺失夹具）、tower-http。
+
+### 条件移动、字节比较与 HTTP 日期的覆盖边界
+
+上述三包仅增加现有门禁的套件接线；生产算法、API、Cargo 清单和保留 Rust 测试字节均不变。`cmov`、`httpdate` 使用根工作区单元入口；`cmov`、`constant_time_eq` 的集成入口只声明被测本地包，不增加提供者。所有实际名称与特性仍由完整 `--write` 运行生成，不能用源码测试属性数代替运行结果。
+
+`cmov` 的原生 x86_64 执行覆盖现有 x86 后端，不表示 AArch64、soft 后端或 Miri 已执行。`proptests.rs` 需要本地不存在的 `proptest`，明确保留为未执行材料。功能断言不证明指令选择或常数时间性质。
+
+`constant_time_eq` 的真实直接消费者是 `blake3`。其 `Hash` 与 `Hash`／`[u8; 32]` 的比较调用 `constant_time_eq_32`，与 `[u8]` 的比较调用切片入口；`platform-io` 的 payload 摘要校验实际使用 `Hash` 比较。依赖闭包还经 `storage-contract` 到达 `web-app`，不能把它记成仅原生组件。新增 `exhaustive.rs` 只调用公开切片入口与显式 generic 切片入口：在默认 x86_64 CI 中前者选 SSE2；测试长度包含 32 **不等于**直接验证了固定长度 `_32` API，也不代表全部 Blake3 消费行为覆盖。它不测试不同长度输入、classic 入口、ARM NEON／DIT、WASM 执行、Miri 或时序性质。三个 `count_instructions*.rs` 依赖缺失的 `count_instructions`，且需要非生产特性 `count_instructions_test`，仍未执行；库内测试在此原生配置下受相同特性或 AArch64 条件限制，因此不以 `--lib -p constant_time_eq` 的空套件冒充覆盖。
+
+`exhaustive.rs` 的工作量有明确源码上界：三种填充（全零、全一、固定种子 xorshift）分别检查两个比较入口，长度 `0..=128` 字节；每个测试使用两个 `[u128; 9]` 栈数组，各偏移一字节形成非对齐切片。每个长度 `n` 做 `2 + 16n` 次比较，共 `6 × Σ(2 + 16n, n=0..128) = 794,124` 次；比较调用数随最大长度为 O(L²)，线性扫描的总字节工作为 O(L³)。这些是源码预算而非耗时测量，不增加生产分配、锁或同步操作。
+
+`httpdate` 的测试直接验证日期原语；真实 `tower-http::services::ServeDir` 在静态资源处理中解析条件日期头并比较文件修改时间。原语通过不表示 tower-http 的完整 HTTP 条件请求、TLS 或浏览器端到端测试已执行。`http-transport` 清单中存在可选依赖也不等于其受维护收据约束的测试被本次接线执行。
 
 ## 防零测试与改名
 
@@ -98,13 +113,13 @@ test/ci/fixtures/foundation-test-coverage.json  与  docs/validation/foundation-
 
 ### 映射与分类
 
-`foundation_coverage.py --write` 在集成提交生成[覆盖映射](foundation-test-coverage-map.md)：活动 222 个包中已执行 94、需要但未执行 110（高／中／低风险 26／47／37）、仅参考 18；来源清单的 107 条退役与 3 条被取代记录均无残留测试根。每个包的消费者与特性来自各 profile 入口的 `cargo tree`，门禁来自已审阅登记 `tools/rust-sources/foundation-test-gates.json`（117 条，去掉了会漂移的行号）与本门禁套件表。登记中引用的脚本必须存在且被 CI 入口调用；`check-rust-syntax-migration.py` 未被任何入口调用，因此未计入。
+`foundation_coverage.py --write` 在集成提交生成[覆盖映射](foundation-test-coverage-map.md)，当前活动、执行、风险分层与退役数量以该生成表为准，不在本文维护第二份总数。每个包的消费者与特性来自各 profile 入口的 `cargo tree`，门禁来自已审阅登记 `tools/rust-sources/foundation-test-gates.json` 与本门禁套件表。登记中引用的脚本必须存在且被 CI 入口调用；`check-rust-syntax-migration.py` 未被任何入口调用，因此未计入。“已执行”只表示有针对该包的测试入口，不表示全部 API、目标或密码学性质已验证。
 
-需要但未执行的高风险项集中在 HTTP／TLS 栈（`rustls`、`rustls-webpki`、`tokio-rustls`、`hyper-rustls`、`tower-http`、`httparse`、`http` 等，缺失夹具或依赖 `serde_test`、`rcgen` 等不存在的提供者）与常数时间原语（`subtle`、`cmov`、`constant_time_eq`）。它们列在映射中，未在本任务执行。
+需要但未执行的高风险项仍包括 HTTP／TLS 栈（`rustls`、`rustls-webpki`、`tokio-rustls`、`hyper-rustls`、`tower-http`、`httparse`、`http` 等，缺失夹具或依赖 `serde_test`、`rcgen` 等不存在的提供者）与 `subtle`。`cmov`、`constant_time_eq` 和 `httpdate` 的限定功能接线不消除上节列出的提供者、目标与常数时间验证缺口。
 
-### 行为套件
+### 行为套件的初次集成记录
 
-`check-foundation-behaviour.py` 生成的清单共 20 个套件、1,837 个逐名测试，全部在本地实现上通过；`--list` 名称与清单逐一相等，`ignored`、`filtered out` 均为 0。
+初次集成时，`check-foundation-behaviour.py` 生成的清单共 20 个套件、1,837 个逐名测试，全部在本地实现上通过；`--list` 名称与清单逐一相等，`ignored`、`filtered out` 均为 0。下表保留该次历史记录，不含后续三包新增接线；当前完整套件、名称与特性以 `test/ci/fixtures/foundation-behaviour-tests.json` 为准，通过状态须对应实际提交的 CI 日志。
 
 | 套件 | 测试数 | 特性来源 |
 | --- | ---: | --- |
@@ -132,4 +147,5 @@ test/ci/fixtures/foundation-test-coverage.json  与  docs/validation/foundation-
 
 - async-notification 的保留 async-lock／event-listener 测试依赖 `futures_lite`、`waker_fn`，本地无等价实现，仍只由项目契约执行。
 - tokio、http-transport 的保留测试受维护收据约束；sharded-slab（`proptest`、`loom`）、futures 的 UNAVAILABLE 列表、rustls 族与 tower-http 缺失提供者或夹具。
+- cmov 的 `proptests.rs`、constant_time_eq 的指令计数测试仍缺提供者；新增功能测试不证明常数时间、非 x86_64 目标或固定长度比较 API 的完整覆盖。
 - 既有门禁中接受零测试的 `cargo test` 调用（如 `check-foundation.sh` 的 `--lib -p socket2 -p mio -p synchronization`）未逐一加名称清单；本任务只为新增套件提供逐名保护。

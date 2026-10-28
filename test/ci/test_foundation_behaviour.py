@@ -71,6 +71,50 @@ class FoundationBehaviourGateTests(unittest.TestCase):
                     self.assertFalse(path.startswith(f"test/foundation/{owner}/"), path)
         self.assertFalse(set(GATE.UNIT_SUITES) & set(PROOF_BOUND))
 
+    def test_comparison_and_date_suites_use_only_retained_functional_targets(self):
+        self.assertIn("cmov", GATE.UNIT_SUITES)
+        self.assertIn("httpdate", GATE.UNIT_SUITES)
+        # On x86_64 CI, lib tests are instruction-count gated or AArch64-only, not a functional suite.
+        self.assertNotIn("constant_time_eq", GATE.UNIT_SUITES)
+        suites = {suite.subject: suite for suite in GATE.INTEGRATION_SUITES}
+        expected = {
+            "cmov": ("test/foundation/cmov/tests/core_impls.rs",
+                     "test/foundation/cmov/tests/regression.rs"),
+            "constant_time_eq": ("test/foundation/constant_time_eq/tests/exhaustive.rs",),
+        }
+        for name, paths in expected.items():
+            with self.subTest(subject=name):
+                self.assertEqual(suites[name].tests, paths)
+                self.assertEqual(suites[name].providers, ())
+                self.assertEqual(suites[name].examples, ())
+
+    def test_comparison_and_date_features_match_real_consumers(self):
+        production = GATE.production_features()
+        inventory = json.loads(GATE.INVENTORY.read_text())["suites"]
+        for name in ("cmov", "httpdate"):
+            with self.subTest(subject=name):
+                self.assertEqual(production[name], [])
+                self.assertEqual(inventory["unit:" + name]["features"], [])
+        suites = {suite.subject: suite for suite in GATE.INTEGRATION_SUITES}
+        for name, features in (("cmov", []), ("constant_time_eq", ["std"])):
+            with self.subTest(subject=name):
+                self.assertEqual(production[name], features)
+                manifest = tomllib.loads(GATE.member_manifest(suites[name], production))
+                self.assertEqual(set(manifest["dependencies"]), {name})
+                self.assertEqual(manifest["dependencies"][name]["features"], features)
+                self.assertFalse(manifest["dependencies"][name]["default-features"])
+                self.assertEqual(manifest["features"]["default"], features)
+                self.assertEqual(inventory["integration:" + name]["features"], features)
+
+    def test_missing_comparison_providers_remain_explicitly_unexecuted(self):
+        expected = {"test/foundation/cmov/tests/proptests.rs": "proptest"}
+        expected.update({f"test/foundation/constant_time_eq/tests/{target}.rs": "count_instructions"
+                         for target in ("count_instructions", "count_instructions_classic",
+                                        "count_instructions_generic")})
+        for path, provider in expected.items():
+            with self.subTest(path=path):
+                self.assertIn(provider, GATE.NOT_EXECUTED[path])
+
     def test_retained_tests_use_local_providers_only(self):
         absent = re.compile(r"\b(?:rand|easy_parallel|futures_test|pin_utils|async_std|crossbeam_channel)::")
         for suite in GATE.INTEGRATION_SUITES:
