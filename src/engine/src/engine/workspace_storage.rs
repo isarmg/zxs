@@ -13,29 +13,42 @@ use std::{
 
 enum WorkspaceLocation {
     System(DiskRoot),
-    Primary(Arc<DiskHandle>),
+    Primary(DiskRoot),
 }
 
 impl WorkspaceLocation {
     fn root(&self) -> &DiskRoot {
         match self {
-            Self::System(root) => root,
-            Self::Primary(disk) => &disk.root,
+            Self::System(root) | Self::Primary(root) => root,
         }
     }
 
     fn directory(&self) -> PathBuf {
-        match self {
-            Self::System(root) => root.path().to_owned(),
-            Self::Primary(disk) => disk.root.path().join("staging/workspaces"),
-        }
+        self.root().path().to_owned()
     }
 
-    fn source(&self, path: PathBuf) -> ReadSource {
-        match self {
-            Self::System(_) => ReadSource::external(path),
-            Self::Primary(disk) => ReadSource::on_disk(disk, path),
+    fn source(&self, path: PathBuf) -> WorkspaceSource<'_> {
+        WorkspaceSource {
+            location: self,
+            path,
         }
+    }
+}
+
+/// A manifest address is bound to the same admitted private root used for
+/// discovery, not re-resolved through the member root after path replacement.
+struct WorkspaceSource<'a> {
+    location: &'a WorkspaceLocation,
+    path: PathBuf,
+}
+
+impl WorkspaceSource<'_> {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn open(&self) -> Result<fs::File> {
+        self.location.root().open_regular(&self.path)
     }
 }
 
@@ -61,7 +74,16 @@ fn workspace_locations(
     }
     for disk in config.disks.iter().filter(|disk| disk.level == 1) {
         if let Some(held) = disks.available(disk) {
-            locations.push(WorkspaceLocation::Primary(Arc::clone(held)));
+            // Restore the private base-directory boundary for every consumer,
+            // including cold point reads that do not enumerate the base. Keep
+            // this admitted FD for all relative probes and enumeration.
+            let directory = held.root.path().join("staging/workspaces");
+            let root = match held.root.private_child(&directory) {
+                Ok(root) => root,
+                Err(error) if workspace_absent(&error) => continue,
+                Err(error) => return Err(error),
+            };
+            locations.push(WorkspaceLocation::Primary(root));
         }
     }
     Ok(locations)
@@ -252,7 +274,7 @@ impl Engine {
     fn read_workspace_mirrors(
         &self,
         id: &str,
-        paths: &[ReadSource],
+        paths: &[WorkspaceSource<'_>],
         locations: &[WorkspaceLocation],
         authoritative: bool,
     ) -> Result<LoadedWorkspace> {
@@ -789,17 +811,27 @@ fn workspace_directory(root: &DiskRoot, path: &Path) -> Result<bool> {
     Ok(metadata.is_dir())
 }
 
-fn workspace_mirrors(paths: &[ReadSource]) -> Option<WorkspaceMirrors> {
+fn workspace_mirrors(paths: &[WorkspaceSource<'_>]) -> Option<WorkspaceMirrors> {
     match paths {
-        [ReadSource::External(_)] => Some(WorkspaceMirrors::System),
-        [ReadSource::Disk { .. }] => Some(WorkspaceMirrors::Primary),
-        [ReadSource::External(_), ReadSource::Disk { .. }]
-        | [ReadSource::Disk { .. }, ReadSource::External(_)] => Some(WorkspaceMirrors::Both),
+        [single] => Some(match single.location {
+            WorkspaceLocation::System(_) => WorkspaceMirrors::System,
+            WorkspaceLocation::Primary(_) => WorkspaceMirrors::Primary,
+        }),
+        [left, right] => match (left.location, right.location) {
+            (WorkspaceLocation::System(_), WorkspaceLocation::Primary(_))
+            | (WorkspaceLocation::Primary(_), WorkspaceLocation::System(_)) => {
+                Some(WorkspaceMirrors::Both)
+            }
+            _ => None,
+        },
         _ => None,
     }
 }
 
-fn workspace_paths(locations: &[WorkspaceLocation], id: &str) -> Result<Vec<ReadSource>> {
+fn workspace_paths<'a>(
+    locations: &'a [WorkspaceLocation],
+    id: &str,
+) -> Result<Vec<WorkspaceSource<'a>>> {
     let mut paths = Vec::new();
     for location in locations {
         let path = location.directory().join(id).join("workspace.json");
