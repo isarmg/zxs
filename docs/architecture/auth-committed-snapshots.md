@@ -31,7 +31,7 @@ Argon2、磁盘 I/O、JSON 编码或备份调用。读调用不获取写序列�
 SHA-256 token 检查和最多 64 个会话的 BTreeMap 查询在运行时线程执行；长度检查仍先于哈希。
 每次持久写发布克隆一次有硬上限的数据库，不随历史记录增长；每次读只增加 `Arc` 引用。
 文件及目录同步次数没有减少。4 个密码槽、8 个会话写任务槽、来源 10 次/60 秒、每账号单飞及后端与传输
-准入上限保持不变；登录键空间与已认证改密容量分离，具体上限见[登录准入](../components/server.md#反向代理登录限流)；不再由登录 fsync 阻塞纯 token 读取并耗尽其共享阻塞任务槽。
+准入上限保持不变；登录键空间与已认证改密容量分离，具体上限见[登录准入](../components/server.md#login-admission)；不再由登录 fsync 阻塞纯 token 读取并耗尽其共享阻塞任务槽。
 未对吞吐、尾延迟或系统级 fsync 性能作测量承诺。
 
 回归位于 `test/server/unit/auth/snapshot_tests.rs`、`password_change_tests.rs`、
