@@ -6,7 +6,10 @@ use wasm_bindgen::{JsCast, JsValue};
 use web_interface::i18n::t;
 use web_sys::{RequestCredentials, RequestInit, RequestMode, RequestRedirect, Response};
 
+mod browser;
 mod response;
+pub(crate) use browser::ReadCancellation;
+use browser::{AbortOnDrop, js_error};
 
 // Token and CSRF belong to one credential generation. A response from a
 // previous login may not clear or replace the current login's credentials.
@@ -55,8 +58,8 @@ pub enum ErrorSource {
     Decode(#[source] storage_contract::client_protocol::ResponseDecodeError),
     #[error("invalid Content-Length: {0}")]
     ContentLength(#[source] std::num::ParseIntError),
-    #[error("browser operation failed: {0:?}")]
-    Browser(JsValue),
+    #[error("{0}")]
+    Browser(#[source] browser::BrowserFailure),
 }
 
 #[derive(Clone, Debug, error_definition::Error)]
@@ -192,50 +195,12 @@ fn validate_path(path: &str) -> Result<(), Error> {
     })
 }
 
-fn js_error(value: JsValue) -> Error {
-    let message = value.as_string().unwrap_or_else(|| {
-        t(
-            "网络中断或系统操作失败；保存结果可能需要查询",
-            "The connection was interrupted. Check whether the save completed.",
-        )
-    });
-    let mut error = error(storage_contract::ErrorCode::TransportError, message);
-    error.source = Some(std::sync::Arc::new(ErrorSource::Browser(value)));
-    error
-}
-
-/// Cancellation is shared by the listing owner and the in-flight GET only.
-#[derive(Clone)]
-pub(crate) struct ReadCancellation(
-    std::sync::Arc<send_wrapper::SendWrapper<web_sys::AbortController>>,
-);
-impl ReadCancellation {
-    pub(crate) fn new() -> Result<Self, Error> {
-        web_sys::AbortController::new()
-            .map(|controller| {
-                Self(std::sync::Arc::new(send_wrapper::SendWrapper::new(
-                    controller,
-                )))
-            })
-            .map_err(js_error)
-    }
-    pub(crate) fn abort(&self) {
-        self.0.abort();
-    }
-}
-struct AbortOnDrop(ReadCancellation);
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
 struct Fetched {
     response: Response,
     credential_generation: u64,
     revoke_on_unauthorized: bool,
     _timeout: gloo_timers::callback::Timeout,
-    _abort: AbortOnDrop,
+    abort: AbortOnDrop,
 }
 
 async fn fetch(method: &str, path: &str, body: Option<Value>) -> Result<Fetched, Error> {
@@ -252,13 +217,12 @@ async fn fetch_authorized(
     validate_path(path)?;
     let cancellation = cancellation.map(Ok).unwrap_or_else(ReadCancellation::new)?;
     let abort = AbortOnDrop(cancellation.clone());
-    let controller = &*cancellation.0;
     let options = RequestInit::new();
     options.set_method(method);
     options.set_mode(RequestMode::SameOrigin);
     options.set_credentials(RequestCredentials::SameOrigin);
     options.set_redirect(RequestRedirect::Error);
-    options.set_signal(Some(&controller.signal()));
+    options.set_signal(Some(&cancellation.signal()));
     if let Some(body) = body {
         options.set_body(&JsValue::from_str(&body.to_string()));
     }
@@ -304,7 +268,8 @@ async fn fetch_authorized(
         }
         Ok::<_, Error>(credentials.generation)
     })?;
-    let timer = gloo_timers::callback::Timeout::new(120_000, move || cancellation.abort());
+    let timeout = cancellation.clone();
+    let timer = gloo_timers::callback::Timeout::new(120_000, move || timeout.timeout());
     let window = web_sys::window().ok_or_else(|| {
         error(
             storage_contract::ErrorCode::NoWindow,
@@ -313,23 +278,27 @@ async fn fetch_authorized(
     })?;
     let result = JsFuture::from(window.fetch_with_request(&request))
         .await
-        .map_err(js_error);
+        .map_err(|value| cancellation.request_error(value));
     Ok(Fetched {
         response: result?.dyn_into().map_err(js_error)?,
         credential_generation,
         revoke_on_unauthorized: bootstrap.is_none(),
         _timeout: timer,
-        _abort: abort,
+        abort,
     })
 }
 
-async fn read_body(response: &Response, limit: usize) -> Result<Vec<u8>, Error> {
-    read_body_inner(response, limit)
+async fn read_body(fetched: &Fetched, limit: usize) -> Result<Vec<u8>, Error> {
+    read_body_inner(&fetched.response, limit, &fetched.abort.0)
         .await
-        .map_err(|error| error.with_status(response.status()))
+        .map_err(|error| error.with_status(fetched.response.status()))
 }
 
-async fn read_body_inner(response: &Response, limit: usize) -> Result<Vec<u8>, Error> {
+async fn read_body_inner(
+    response: &Response,
+    limit: usize,
+    cancellation: &ReadCancellation,
+) -> Result<Vec<u8>, Error> {
     let Some(body) = response.body() else {
         return Ok(Vec::new());
     };
@@ -339,7 +308,9 @@ async fn read_body_inner(response: &Response, limit: usize) -> Result<Vec<u8>, E
         .map_err(|value| js_error(value.into()))?;
     let mut bytes = Vec::new();
     loop {
-        let part = JsFuture::from(reader.read()).await.map_err(js_error)?;
+        let part = JsFuture::from(reader.read())
+            .await
+            .map_err(|value| cancellation.request_error(value))?;
         if Reflect::get(&part, &"done".into())
             .map_err(js_error)?
             .as_bool()
@@ -357,7 +328,7 @@ async fn read_body_inner(response: &Response, limit: usize) -> Result<Vec<u8>, E
                 ),
             );
             if let Err(source) = JsFuture::from(reader.cancel()).await {
-                oversized.source = Some(std::sync::Arc::new(ErrorSource::Browser(source)));
+                oversized.source = js_error(source).source;
             }
             return Err(oversized);
         }
@@ -394,7 +365,7 @@ async fn decode(fetched: Fetched) -> Result<Value, Error> {
         }
     }
     let bytes = read_body(
-        &fetched.response,
+        &fetched,
         storage_contract::client_protocol::MAX_RESPONSE_BYTES,
     )
     .await

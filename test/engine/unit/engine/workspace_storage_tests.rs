@@ -110,24 +110,135 @@ fn workspace_evidence_distinguishes_absent_leaf_and_parent_from_json_damage() {
 }
 
 #[test]
-fn workspace_scan_rejects_unsafe_private_directory_without_chmod() {
+fn workspace_scans_reject_unsafe_private_directory_without_chmod_or_manifest_changes() {
     use platform_io::fs_safety::Error as FsError;
-    let root = tempfile::tempdir().unwrap();
-    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let held = DiskRoot::open(root.path()).unwrap();
-    let directory = root.path().join("staging/workspaces");
-    private_dir(&directory).unwrap();
+    for authoritative in [false, true] {
+        let (_temp, mut engine, workspace) = workspace_fixture(1);
+        let directory = engine.config.disks[0].root.join("staging/workspaces");
+        let manifests = [
+            engine
+                .root
+                .join("workspaces")
+                .join(&workspace.workspace_id)
+                .join("workspace.json"),
+            directory
+                .join(&workspace.workspace_id)
+                .join("workspace.json"),
+        ];
+        let before = manifests.each_ref().map(|path| fs::read(path).unwrap());
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+        let scan = if authoritative {
+            engine.load_workspaces()
+        } else {
+            engine.seed_workspace_recovery()
+        };
+        assert!(matches!(
+            scan,
+            Err(Error::Filesystem(FsError::UnsafePermissions(rejected))) if rejected == directory
+        ));
+        assert_eq!(
+            manifests.each_ref().map(|path| fs::read(path).unwrap()),
+            before
+        );
+        assert_eq!(
+            fs::metadata(directory).unwrap().permissions().mode() & 0o7777,
+            0o755
+        );
+    }
+}
+
+#[test]
+fn workspace_inventory_rejects_unsafe_private_directory_without_chmod_or_manifest_changes() {
+    use platform_io::fs_safety::Error as FsError;
+    let (_temp, engine, workspace) = workspace_fixture(1);
+    let root = engine.root.clone();
+    let directory = engine.config.disks[0].root.join("staging/workspaces");
+    let manifests = [
+        root.join("workspaces")
+            .join(&workspace.workspace_id)
+            .join("workspace.json"),
+        directory
+            .join(&workspace.workspace_id)
+            .join("workspace.json"),
+    ];
+    let before = manifests.each_ref().map(|path| fs::read(path).unwrap());
+    drop(engine);
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
-    let mut candidates = BTreeMap::new();
+    let scan = WorkspaceInventory::open(&root);
     assert!(matches!(
-        collect_workspace_paths(&held, &ReadSource::external(directory.clone()), 1, &mut candidates),
+        scan,
         Err(Error::Filesystem(FsError::UnsafePermissions(rejected))) if rejected == directory
     ));
-    assert!(candidates.is_empty());
+    assert_eq!(
+        manifests.each_ref().map(|path| fs::read(path).unwrap()),
+        before
+    );
     assert_eq!(
         fs::metadata(directory).unwrap().permissions().mode() & 0o7777,
         0o755
     );
+}
+
+#[test]
+fn cold_point_read_rejects_unsafe_private_base_without_chmod_or_manifest_changes() {
+    use platform_io::fs_safety::Error as FsError;
+    let (_temp, mut engine, workspace) = workspace_fixture(1);
+    engine
+        .abort_workspace(&workspace.workspace_id, "admin")
+        .unwrap();
+    let directory = engine.config.disks[0].root.join("staging/workspaces");
+    let manifest = directory
+        .join(&workspace.workspace_id)
+        .join("workspace.json");
+    let before = fs::read(&manifest).unwrap();
+    let capacity = engine.workspace_capacity("admin");
+    assert_eq!(capacity.principal.cold_records, 1);
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        engine.workspace(&workspace.workspace_id),
+        Err(Error::Filesystem(FsError::UnsafePermissions(rejected))) if rejected == directory
+    ));
+    assert_eq!(engine.workspace_capacity("admin"), capacity);
+    assert_eq!(fs::read(manifest).unwrap(), before);
+    assert_eq!(
+        fs::metadata(directory).unwrap().permissions().mode() & 0o7777,
+        0o755
+    );
+}
+
+#[test]
+fn workspace_scan_reads_the_admitted_private_base_after_path_replacement() {
+    let (_temp, engine, workspace) = workspace_fixture(1);
+    let locations = engine.workspace_locations().unwrap();
+    let location = locations
+        .iter()
+        .find(|location| matches!(location, WorkspaceLocation::Primary(_)))
+        .unwrap();
+    let directory = location.directory();
+    let moved = directory.with_extension("held");
+    fs::rename(&directory, &moved).unwrap();
+    private_dir(&directory).unwrap();
+    let replacement = directory
+        .join(&workspace.workspace_id)
+        .join("workspace.json");
+    let mut unrelated = workspace.clone();
+    unrelated.principal = "replacement-primary".into();
+    write_json(&replacement, &unrelated, false).unwrap();
+    let untouched = fs::read(&replacement).unwrap();
+    let entries = location
+        .root()
+        .entries(&directory)
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].as_os_str(), workspace.workspace_id.as_str());
+    let paths = workspace_paths(&locations, &workspace.workspace_id).unwrap();
+    let loaded = engine
+        .read_workspace_mirrors(&workspace.workspace_id, &paths, &locations, true)
+        .unwrap();
+    assert_eq!(loaded.canonical, canonical_json(&workspace).unwrap());
+    assert_eq!(fs::read(replacement).unwrap(), untouched);
 }
 
 fn workspace_fixture(disks: usize) -> (tempfile::TempDir, Engine, Workspace) {

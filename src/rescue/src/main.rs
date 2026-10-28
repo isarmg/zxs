@@ -66,6 +66,8 @@ enum Command {
     },
     /// Scan retained publication metadata and required full copies; stop ZXS first.
     Scrub,
+    /// Stream provisional physical workspace manifests, even when engine quotas are exhausted.
+    WorkspaceInventory,
     OfflineCheck {
         disk: PathBuf,
     },
@@ -249,6 +251,26 @@ fn run(args: Args) -> Result<()> {
             print(result?)
         }
         Command::Scrub => scrub::run(root, retained_workspace_limits),
+        Command::WorkspaceInventory => {
+            use std::io::Write;
+            let inventory = storage_engine::WorkspaceInventory::open(&root)?;
+            let mut output = std::io::stdout().lock();
+            let mut mirrors = 0u64;
+            for record in inventory {
+                let record = record?;
+                mirrors = mirrors
+                    .checked_add(1)
+                    .ok_or("workspace inventory count overflow")?;
+                writeln!(output, "{}", json_codec::to_string(&record)?)?;
+            }
+            writeln!(
+                output,
+                "{}",
+                json!({"complete":true,"physical_manifests":mirrors.to_string(),"authoritative":false})
+            )?;
+            output.flush()?;
+            Ok(())
+        }
         Command::OfflineCheck { disk } => {
             let report = storage_engine::offline_check(&disk)?;
             let healthy = report.issues.is_empty();

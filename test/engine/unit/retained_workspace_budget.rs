@@ -7,7 +7,7 @@ fn replace_configuration(engine: &mut Engine, change: impl FnOnce(&mut Config)) 
 }
 
 #[test]
-fn aborted_records_consume_global_and_principal_budgets_after_restart() {
+fn aborted_payload_records_consume_global_and_principal_budgets_after_restart() {
     let mut f = Fixture::new();
     f.config.max_retained_workspaces = 3;
     f.config.max_retained_workspaces_per_principal = 2;
@@ -15,6 +15,8 @@ fn aborted_records_consume_global_and_principal_budgets_after_restart() {
     let repo = repository(&mut e, 1);
     for _ in 0..2 {
         let w = e.create_workspace(&repo.main_branch_id, "writer").unwrap();
+        e.stage_bytes(&w.workspace_id, "retained", b"evidence")
+            .unwrap();
         e.abort_workspace(&w.workspace_id, "writer").unwrap();
     }
     e.assert_workspace_budget_consistent();
@@ -28,6 +30,8 @@ fn aborted_records_consume_global_and_principal_budgets_after_restart() {
         storage_contract::ErrorCode::ResourceLimit
     );
     let w = e.create_workspace(&repo.main_branch_id, "admin").unwrap();
+    e.stage_bytes(&w.workspace_id, "retained", b"evidence")
+        .unwrap();
     e.abort_workspace(&w.workspace_id, "admin").unwrap();
     assert_eq!(
         e.create_workspace(&repo.main_branch_id, "admin")
@@ -157,6 +161,8 @@ fn over_budget_restart_fails_without_discarding_records() {
     let repo = repository(&mut e, 1);
     for _ in 0..2 {
         let w = e.create_workspace(&repo.main_branch_id, "admin").unwrap();
+        e.stage_bytes(&w.workspace_id, "retained", b"evidence")
+            .unwrap();
         e.abort_workspace(&w.workspace_id, "admin").unwrap();
     }
     e.assert_workspace_budget_consistent();
@@ -268,7 +274,7 @@ fn retained_record_owner_cannot_move_its_charge_to_another_principal() {
     let charge = e.retained_workspace_metadata_bytes();
     w.principal = "another-writer".into();
     assert_eq!(
-        e.check_workspace_budget(&w).map(|_| ()).unwrap_err().code(),
+        e.persist_workspace(&w).map(|_| ()).unwrap_err().code(),
         storage_contract::ErrorCode::StateInvalid
     );
     assert_eq!(e.retained_workspace_metadata_bytes(), charge);
@@ -336,24 +342,26 @@ fn capacity_report(engine: &Engine, principal: &str) -> json_codec::Value {
 }
 
 #[test]
-fn capacity_reports_retained_lifecycle_counts_and_only_selected_principal() {
+fn capacity_reports_resident_lifecycle_counts_and_only_selected_principal() {
     let mut f = Fixture::new();
     f.config.max_retained_workspaces = 10;
     f.config.max_retained_workspaces_per_principal = 5;
     let mut e = f.initialize();
     let repo = repository(&mut e, 1);
     assert_eq!(capacity_report(&e, "admin")["warning"], "ok");
-    // Both successful commits and aborted sessions remain charged.
+    // Commits and aborted sessions with payloads remain resident and charged.
     save(&mut e, &repo.main_branch_id, "saved.txt", b"saved");
     for _ in 0..3 {
         let w = e.create_workspace(&repo.main_branch_id, "admin").unwrap();
+        e.stage_bytes(&w.workspace_id, "retained", b"evidence")
+            .unwrap();
         e.abort_workspace(&w.workspace_id, "admin").unwrap();
     }
     let report = capacity_report(&e, "admin");
     assert_eq!(report["global"]["records"]["used"], "4");
     assert_eq!(report["principal"]["records"]["remaining"], "1");
     assert_eq!(report["warning"], "near_limit");
-    assert_eq!(report["automatic_retirement"], false);
+    assert_eq!(report["automatic_retirement"], true);
     let unknown = capacity_report(&e, "absent-actor");
     assert_eq!(unknown["principal"]["records"]["used"], "0");
     assert_eq!(unknown["principal"]["metadata_bytes"]["used"], "0");
@@ -373,6 +381,8 @@ fn capacity_reports_retained_lifecycle_counts_and_only_selected_principal() {
     let mut e = Engine::open(&f.root).unwrap();
     assert_eq!(capacity_report(&e, "admin"), report);
     let w = e.create_workspace(&repo.main_branch_id, "admin").unwrap();
+    e.stage_bytes(&w.workspace_id, "retained", b"evidence")
+        .unwrap();
     e.abort_workspace(&w.workspace_id, "admin").unwrap();
     assert_eq!(capacity_report(&e, "admin")["warning"], "exhausted");
     assert_eq!(
@@ -445,6 +455,8 @@ fn admission_errors_identify_each_exhausted_dimension_without_changing_evidence(
         let mut e = f.initialize();
         let repo = repository(&mut e, 1);
         let w = e.create_workspace(&repo.main_branch_id, "admin").unwrap();
+        e.stage_bytes(&w.workspace_id, "retained", b"evidence")
+            .unwrap();
         e.abort_workspace(&w.workspace_id, "admin").unwrap();
         let used = e.retained_workspace_metadata_bytes();
         replace_configuration(&mut e, |config| match dimension {
@@ -484,5 +496,5 @@ fn typed_capacity_projection_always_contains_global_and_actor_scopes() {
     assert_eq!(report.global.metadata_bytes.used, 0);
     assert_eq!(report.principal.records.used, 0);
     assert_eq!(report.warning, CapacityWarning::Ok);
-    assert!(!report.automatic_retirement);
+    assert!(report.automatic_retirement);
 }

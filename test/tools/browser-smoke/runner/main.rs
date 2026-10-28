@@ -21,6 +21,7 @@ mod base64_compatibility_tests;
 mod accessibility;
 mod contours;
 mod diagnostics;
+mod error_feedback;
 mod file_pagination;
 mod file_rows;
 mod fixture;
@@ -35,6 +36,7 @@ use metadata::{assert_metadata_only, metadata_edit, open_fixture_directory};
 mod file_viewports;
 mod session_logout;
 mod single_account;
+mod stylesheets;
 mod tree_frames;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -284,6 +286,7 @@ fn exercise(
     println!("PASS engine-seeded file browsing in the real server namespace");
     file_rows::run(browser)?;
     file_pagination::run(browser)?;
+    error_feedback::run(browser)?;
     if let Some(path) = screenshot {
         // Save the real regression view without adding presentation-only data.
         wait_for("loaded screenshot fonts", || {
@@ -408,6 +411,7 @@ fn exercise(
     lifecycle::run(browser, origin)?;
     fonts::run(browser, origin)?;
     contours::run(browser, origin)?;
+    stylesheets::run(browser, origin)?;
     Ok(())
 }
 

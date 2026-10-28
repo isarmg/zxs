@@ -4338,7 +4338,7 @@ async fn workspace_capacity_is_live_for_the_single_administrator() {
     assert_eq!(current["global"]["records"]["used"], "1");
     assert_eq!(current["principal"]["records"]["used"], "1");
     assert_eq!(current["warning"], "exhausted");
-    assert_eq!(current["automatic_retirement"], false);
+    assert_eq!(current["automatic_retirement"], true);
     assert!(json_codec::from_value::<storage_contract::WorkspaceCapacity>(current.clone()).is_ok());
     // Arbitrary query selectors cannot create a second identity or hide global capacity.
     assert_eq!(

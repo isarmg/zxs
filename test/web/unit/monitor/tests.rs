@@ -118,13 +118,15 @@ fn valid_capacity_response() -> Value {
     json_codec::json!({
         "global": {
             "records":{"used":"8","limit":"10","remaining":"2"},
+            "cold_records":"3",
             "metadata_bytes":{"used":"2048","limit":"4096","remaining":"2048"}
         },
         "principal": {
             "records":{"used":"4","limit":"5","remaining":"1"},
+            "cold_records":"2",
             "metadata_bytes":{"used":"1024","limit":"2048","remaining":"1024"}
         },
-        "warning":"near_limit", "automatic_retirement":false
+        "warning":"near_limit", "automatic_retirement":true
     })
 }
 
@@ -150,6 +152,7 @@ fn capacity_summary_keeps_missing_values_unavailable() {
     let populated = capacity_summary(Some(&value.principal));
     assert!(!empty.contains("0 / 0"));
     assert!(populated.contains("4 / 5"));
+    assert!(populated.contains(": 2 ·"));
     assert!(capacity_summary(Some(&value.global)).contains("8 / 10"));
 }
 
@@ -160,7 +163,7 @@ fn malformed_capacity_responses_clear_previous_data_instead_of_showing_zero() {
     let mut cases = vec![Value::Null, missing_global];
     for (field, replacement) in [
         ("warning", Value::from("unexpected")),
-        ("automatic_retirement", Value::from(true)),
+        ("automatic_retirement", Value::from("true")),
         ("global", Value::Null),
         ("unknown", Value::from(false)),
     ] {

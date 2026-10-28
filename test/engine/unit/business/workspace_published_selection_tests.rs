@@ -518,7 +518,7 @@ fn published_workspace_completion_errors_keep_receipt_source_and_write_fence() {
         );
         assert!(
             native_workspace_commit_completed(
-                engine.workspace_ref(&request.workspace_id).unwrap(),
+                &engine.workspace_view(&request.workspace_id).unwrap(),
                 &request,
                 &result,
             )
@@ -644,7 +644,7 @@ fn native_workspace_completion_requires_bound_terminal_fence_not_global_readines
             .unwrap();
         assert!(
             native_workspace_commit_completed(
-                engine.workspace_ref(&workspace.workspace_id).unwrap(),
+                &engine.workspace_view(&workspace.workspace_id).unwrap(),
                 &request,
                 &receipt,
             )
@@ -655,7 +655,7 @@ fn native_workspace_completion_requires_bound_terminal_fence_not_global_readines
     let engine = Engine::open(&temporary.path().join("system")).unwrap();
     assert!(
         native_workspace_commit_completed(
-            engine.workspace_ref(&workspace.workspace_id).unwrap(),
+            &engine.workspace_view(&workspace.workspace_id).unwrap(),
             &request,
             &receipt,
         )

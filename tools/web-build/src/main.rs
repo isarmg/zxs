@@ -2,6 +2,7 @@
 //! and a generated generic module loader; product behavior lives in Rust.
 use anyhow::{Context, Result, bail};
 mod bootstrap;
+mod css_bundle;
 mod wasm_release;
 use sha2::{Digest, Sha256};
 use std::{
@@ -131,8 +132,8 @@ fn build_locked(root: &Path, web: &Path, build: &Path, command: &str) -> Result<
     if !status.success() {
         bail!("wasm-bindgen failed");
     }
-    fs::copy(web.join("styles.css"), staging.join("zxs.css"))?;
     copy_tree(&web.join("public"), &staging)?;
+    fs::write(staging.join("zxs.css"), css_bundle::bundle(web)?)?;
     copy_distribution_material(root, &staging)?;
     fs::write(staging.join("boot.js"), bootstrap::loader())?;
     fs::write(staging.join("index.html"), bootstrap::index())?;

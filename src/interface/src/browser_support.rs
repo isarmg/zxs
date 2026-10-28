@@ -21,8 +21,20 @@ pub(crate) fn require(view: &Window) -> Result<(), JsValue> {
         "requestAnimationFrame",
         "cancelAnimationFrame",
         "matchMedia",
+        "AbortController",
     ] {
         method(view.as_ref(), name)?;
+    }
+    // The request boundary identifies cancellation by this exact reason, not
+    // by an AbortError name or by undefined equalling an absent reason getter.
+    let controller = web_sys::AbortController::new()?;
+    let reason = JsValue::from(js_sys::Object::new());
+    controller.abort_with_reason(&reason);
+    let signal = controller.signal();
+    if !signal.aborted() || signal.reason() != reason {
+        return Err(JsValue::from_str(
+            "Unsupported browser: required AbortSignal.reason identity is unavailable",
+        ));
     }
     let encoder = js_sys::Reflect::get(view, &"TextEncoder".into())?;
     let prototype = js_sys::Reflect::get(&encoder, &"prototype".into())?;

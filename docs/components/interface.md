@@ -23,11 +23,11 @@
 
 只支持满足当前能力契约的现代浏览器，不按浏览器名称或发行版本兜底，不提供旧浏览器 polyfill、前缀替代或缺能力时的原生圆角兼容模式。WebAssembly、ES modules、FinalizationRegistry、WebAssembly.instantiateStreaming 和实际 DOM/SVG 是运行前提；不支持脚本语法／WASM 的浏览器无法运行本应用，资源引导错误不构成兼容实现。
 
-共享 `mount` 在创建组件、主题监听器及字体任务之前执行一次准入：要求 `TextEncoder.prototype.encodeInto`、`ResizeObserver`、`MutationObserver`、`requestAnimationFrame`、`cancelAnimationFrame`、`matchMedia`、`CSS.registerProperty` 与 `CSS.supports`；CSS 要求无前缀的 mask-image URL、clip-path path、`:has()` 和 inline-size container queries。缺失返回包含具体能力名的错误并进入 `failed`，不发布 ready，也不以原生 CSS 圆角继续运行。内部图表和版本树直接使用观察器契约，仍按 owner 清理。此准入是支持下限，不是对全部浏览器行为、CSP 或资源可用性的穷尽证明；实际 API 操作失败仍保留具体错误。
+共享 `mount` 在创建组件、主题监听器及字体任务之前执行一次准入：要求 `TextEncoder.prototype.encodeInto`、`ResizeObserver`、`MutationObserver`、`requestAnimationFrame`、`cancelAnimationFrame`、`matchMedia`、`AbortController`、`CSS.registerProperty` 与 `CSS.supports`；CSS 要求无前缀的 mask-image URL、clip-path path、`:has()` 和 inline-size container queries。取消契约还通过一次性 controller 和独立对象 reason 检查真实语义：`abort(reason)` 后 signal 必须已中止且 `signal.reason` 严格等于该对象；缺少 reason 或忽略参数均明确拒绝，不让 `undefined` 拒绝值与缺失 reason 误匹配。缺失返回包含具体能力名的错误并进入 `failed`，不发布 ready，也不以原生 CSS 圆角继续运行。内部请求信任该取消契约，不添加逐请求能力探测或降级；图表和版本树直接使用观察器契约，仍按 owner 清理。此准入是支持下限，不是对全部浏览器行为、CSP 或资源可用性的穷尽证明；实际 API 操作失败仍保留具体错误。
 
 G4 保持 CSS 自动发现的 Automatic 路径及现有 SVG 算法，不切换 CSS `corner-shape`。项目不再实现 forced-colors／high-contrast 专用原生圆角回退、媒体监听和专门配色，也不要求该模式的专项验收；浏览器自身的系统强制色行为不由项目覆盖或保证。普通键盘、焦点管理、语义化 HTML、减弱动态效果偏好和现有布局保持。以下保留原绘制的情形不是旧浏览器兼容：隐藏／零尺寸节点的正常生命周期、作者已有 mask／border-image 的绘制所有权、碎片 inline／table 布局及当前阴影／几何算法限制。它们仍有原有 `data-zxs-contour-*` 诊断，不能与缺 API 的启动拒绝混为一谈。字体资源加载失败、偏好存储被浏览器策略拒绝同样不等于浏览器版本不受支持，既有独立字体和存储语义不变。
 
-浏览器冒烟在真实 WASM 启动前分别移除 ResizeObserver、CSS.registerProperty、mask-image、FinalizationRegistry、instantiateStreaming 和 encodeInto 支持，要求明确失败、没有 ready／登录组件／轮廓降级，并在移除注入后验证正常重载。既有 G4、普通键盘焦点和卸载回归继续保留。仅编译测试夹具不代表这些场景已经实际通过。生成胶水直接使用 FinalizationRegistry 和 streaming，缺能力的导入／初始化错误由资源引导器接收；不在 Rust 挂载处再次探测它们，详见[绑定生成器](../tools/web-bindings.md#modern-web-runtime-contract)。
+浏览器冒烟在真实 WASM 启动前分别移除 ResizeObserver、AbortController、AbortSignal.reason、CSS.registerProperty、mask-image、FinalizationRegistry、instantiateStreaming 和 encodeInto 支持，并分别注入忽略 abort reason 参数、未报告 aborted 的取消实现，要求明确失败、没有 ready／登录组件／轮廓降级，并在移除注入后验证正常重载。既有 G4、普通键盘焦点和卸载回归继续保留。仅编译测试夹具不代表这些场景已经实际通过。生成胶水直接使用 FinalizationRegistry 和 streaming，缺能力的导入／初始化错误由资源引导器接收；不在 Rust 挂载处再次探测它们，详见[绑定生成器](../tools/web-bindings.md#modern-web-runtime-contract)。
 
 ## 生命周期与公共接口
 
