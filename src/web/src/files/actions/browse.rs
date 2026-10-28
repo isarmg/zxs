@@ -6,7 +6,7 @@ use crate::{
         model::Disk,
         page::{DirectoryKey, Entry, Page},
     },
-    ui::{State, accept_read_response, current_session, fail},
+    ui::{ErrorContext, State, accept_read_response, current_session, fail, fail_in},
 };
 use json_codec::Value;
 use web_interface::tasks::spawn_local;
@@ -65,7 +65,12 @@ pub(crate) fn load_disks(state: RwSignal<State>) {
             .and_then(|value| super::super::model::parse_disks(&value));
         match state.try_update(|s| complete_disk_load(s, epoch, generation, result)) {
             Some(Ok(true)) => load_disks(state),
-            Some(Err(error)) => fail(state, error),
+            Some(Err(error)) => fail_in(
+                state,
+                epoch,
+                ErrorContext::Read("/api/file-manager/disks".into()),
+                error,
+            ),
             Some(Ok(false)) | None => {}
         }
     });
@@ -300,7 +305,7 @@ fn request_page(state: RwSignal<State>, restarted: bool) {
                     s.files.listing_failed = true;
                     s.files.writable = false;
                 });
-                fail(state, error);
+                fail_in(state, epoch, ErrorContext::Read(endpoint), error);
             }
         }
         state.update(|s| {
@@ -407,23 +412,19 @@ pub(crate) fn load_file_history(state: RwSignal<State>) {
         s.files.history_generation = generation;
     });
     spawn_local(async move {
-        let result = api::request(
-            "GET",
-            &format!(
-                "/api/file-manager/files/{}/history{}",
-                api::segment(&id),
-                context
-                    .as_ref()
-                    .map(|(repository, path)| format!(
-                        "?repository_id={}&path={}",
-                        api::segment(repository),
-                        api::segment(path)
-                    ))
-                    .unwrap_or_default()
-            ),
-            None,
-        )
-        .await;
+        let endpoint = format!(
+            "/api/file-manager/files/{}/history{}",
+            api::segment(&id),
+            context
+                .as_ref()
+                .map(|(repository, path)| format!(
+                    "?repository_id={}&path={}",
+                    api::segment(repository),
+                    api::segment(path)
+                ))
+                .unwrap_or_default()
+        );
+        let result = api::request("GET", &endpoint, None).await;
         if !accept_read_response(state, epoch, &result)
             || !state.with_untracked(|s| {
                 s.files.history_generation == generation
@@ -446,7 +447,7 @@ pub(crate) fn load_file_history(state: RwSignal<State>) {
             Err(error) => {
                 // A failed refresh must not re-enable controls for stale heads.
                 state.update(|s| s.files.file_history = Value::Null.into());
-                fail(state, error);
+                fail_in(state, epoch, ErrorContext::Read(endpoint), error);
             }
         }
         state.update(|s| s.files.history_loading = false);

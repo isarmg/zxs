@@ -244,3 +244,90 @@ fn observations_replace_only_the_original_id_and_keep_the_ui_bound() {
         });
     });
 }
+
+fn poll_failure(request: &str, status: u16) -> api::Error {
+    api::Error {
+        code: storage_contract::ErrorCode::RecoveryRequired,
+        message: "query unavailable".into(),
+        status,
+        retryable: true,
+        request_id: Some(request.into()),
+        source: None,
+    }
+}
+
+#[test]
+fn repeated_poll_failures_keep_one_notice_and_the_original_recovery_fence() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            session_epoch: 7,
+            ..Default::default()
+        });
+        record_operation(state, FileOperation::unknown("original"));
+        for attempt in 0..10 {
+            state.update(|s| s.files.polling_operations.push("original".into()));
+            complete_poll(
+                state,
+                7,
+                "original",
+                Err(poll_failure(&format!("query-{attempt}"), 503)),
+            );
+            state.with_untracked(|s| {
+                assert_eq!(s.errors.len(), 1);
+                assert_eq!(
+                    s.errors[0].feedback.request_id,
+                    Some(format!("query-{attempt}"))
+                );
+                assert_eq!(s.files.operations, vec![FileOperation::unknown("original")]);
+                assert!(s.files.polling_operations.is_empty());
+                assert!(super::super::pending(s));
+                assert_eq!(poll_work(s), Some((7, vec!["original".into()])));
+            });
+        }
+        state.update(|s| s.files.polling_operations.push("original".into()));
+        complete_poll(state, 7, "original", Ok(published()));
+        state.with_untracked(|s| {
+            assert_eq!(s.files.operations[0].id(), "original");
+            assert_eq!(s.files.operations[0].status(), SaveStatus::Published);
+            assert!(s.files.polling_operations.is_empty());
+            assert!(!super::super::pending(s));
+            assert_eq!(poll_work(s), Some((7, vec![])));
+            assert_eq!(
+                s.errors.len(),
+                1,
+                "recovery does not silently dismiss diagnostic evidence"
+            );
+        });
+    });
+}
+
+#[test]
+fn poll_failures_cannot_cross_session_but_current_unauthorized_still_closes_admission() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            session_epoch: 8,
+            ..Default::default()
+        });
+        state.update(|s| {
+            s.files.operations.push(FileOperation::unknown("original"));
+            s.files.polling_operations.push("original".into());
+        });
+        complete_poll(state, 7, "original", Err(poll_failure("old", 401)));
+        state.with_untracked(|s| {
+            assert!(s.authenticated);
+            assert!(s.errors.is_empty());
+            assert_eq!(s.files.polling_operations, vec!["original"]);
+        });
+        complete_poll(state, 8, "original", Err(poll_failure("current", 401)));
+        state.with_untracked(|s| {
+            assert!(!s.authenticated);
+            assert_eq!(s.errors.len(), 1);
+            assert_eq!(s.errors[0].feedback.request_id.as_deref(), Some("current"));
+            assert!(s.files.polling_operations.is_empty());
+            assert_eq!(s.files.operations, vec![FileOperation::unknown("original")]);
+            assert!(super::super::pending(s));
+        });
+    });
+}

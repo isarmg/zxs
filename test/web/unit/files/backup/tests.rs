@@ -26,7 +26,10 @@ fn closed_backup_read_still_revokes_its_expired_session() {
             assert!(!s.session_active());
             assert!(s.files.backup.is_none());
             assert_eq!(s.errors.len(), 1);
-            assert_eq!(s.errors[0].request_id.as_deref(), Some("expired-backup"));
+            assert_eq!(
+                s.errors[0].feedback.request_id.as_deref(),
+                Some("expired-backup")
+            );
         });
     });
 }

@@ -7,6 +7,9 @@ use web_interface::components::{
 use web_interface::tasks::spawn_local;
 use web_interface::{i18n::t, prelude::*};
 
+mod errors;
+pub(crate) use errors::{ErrorContext, fail, fail_in};
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Page {
     #[default]
@@ -50,7 +53,9 @@ pub(crate) struct State {
     pub password_failure: Option<Feedback>,
     pub page: Page,
     pub login_in_flight: bool,
-    pub errors: Vec<Feedback>,
+    pub errors: Vec<errors::ErrorNotice>,
+    // Stable dismissal identity, independent of retry request IDs and list order.
+    pub(crate) next_error_id: u64,
     pub notice: String,
     pub files: files::Model,
     pub monitor: monitor::Model,
@@ -143,15 +148,6 @@ pub(crate) fn feedback(error: &api::Error) -> Feedback {
         request_id: error.request_id.clone(),
     }
 }
-pub(crate) fn fail(state: RwSignal<State>, error: api::Error) {
-    state.update(|s| {
-        if error.status == 401 {
-            s.authenticated = false;
-        }
-        s.errors.insert(0, feedback(&error));
-        s.errors.truncate(5);
-    });
-}
 /// Entropy failure prevents admission and is reported once at the UI boundary.
 pub(crate) fn operation_id(state: RwSignal<State>) -> Option<String> {
     match api::operation_id() {
@@ -228,9 +224,20 @@ pub fn app() -> impl IntoView {
         <AppShell product="zxs" session=session.into() pending_logout=logout_pending.into() on_logout=Callback::new(move |_|logout(state)) on_account=Callback::new(move |_|navigate(state,Page::Account)) on_restore=Callback::new(move |_|restore_session(state)) login=login>
             {workspace(state)}
             <Show when=move ||state.with(|s|!s.notice.is_empty())><p class="zxs-status zxs-row" role="status" aria-live="polite">{move ||state.with(|s|s.notice.clone())}</p></Show>
-            <Show when=move ||state.with(|s|!s.errors.is_empty())><aside class="zxs-error-center zxs-stack" aria-label=t("请求错误","Request errors")>{move ||state.with(|s|s.errors.clone()).into_iter().enumerate().map(move |(index,error)|view! {
-                <div class="zxs-inline-feedback zxs-flow"><ErrorState message=error.message request_id=error.request_id/><button class="zxs-button" aria-label=t("关闭错误提示","Dismiss error") on:click=move |_|state.update(|s|{if index<s.errors.len(){s.errors.remove(index);}})>"×"</button></div>
-            }).collect_view()}</aside></Show>
+            <Show when=move ||state.with(|s|!s.errors.is_empty())>
+                <aside class="zxs-error-center zxs-stack" aria-label=t("请求错误","Request errors")>
+                    {move ||state.with(|s|s.errors.clone()).into_iter().map(move |error| {
+                        let id = error.id;
+                        view! {
+                            <div class="zxs-inline-feedback zxs-flow">
+                                <ErrorState message=error.feedback.message request_id=error.feedback.request_id/>
+                                <button class="zxs-button" aria-label=t("关闭错误提示","Dismiss error")
+                                    on:click=move |_|state.update(|s|s.dismiss_error(id))>"×"</button>
+                            </div>
+                        }
+                    }).collect_view()}
+                </aside>
+            </Show>
         </AppShell>
     }
 }
