@@ -81,11 +81,11 @@ pub struct PreparedWorkspaceCommit {
 }
 
 impl Engine {
-    /// Inspect this original native save's local completion without I/O.
+    /// Inspect this original native save's completion and retained workspace.
     /// The server must still authorize the current identity and workspace.
     /// Missing publications and foreign operation owners remain explicit errors.
     pub fn native_workspace_commit_completed(&self, request: &CommitRequest) -> Result<bool> {
-        let workspace = self.workspace_ref(&request.workspace_id)?;
+        let workspace = self.workspace_view(&request.workspace_id)?;
         let operation = self
             .state
             .operations
@@ -102,7 +102,7 @@ impl Engine {
                 "operation belongs to another principal",
             ));
         }
-        native_workspace_commit_completed(workspace, request, operation)
+        native_workspace_commit_completed(&workspace, request, operation)
     }
 
     /// Structural binding also used during restart. Account authentication is

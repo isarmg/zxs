@@ -1,4 +1,5 @@
 use super::*;
+use crate::files::history::tests::branch;
 #[test]
 fn tag_deltas_preserve_heterogeneous_inherited_labels_and_do_not_mutate_the_parent() {
     let node = json!({"tags":["old","keep"]});
@@ -20,7 +21,9 @@ fn requests_distinguish_historical_source_nodes_from_frozen_branch_heads() {
         repository: "repo".into(),
         path: "a.txt".into(),
         nodes: vec![json!({"node_id":"old-node","version_id":"old-body","tags":["inherited"]})],
-        branches: vec![json!({"branch_id":"main","node_id":"newer-head"})],
+        branches: vec![branch(
+            json!({"branch_id":"main","file_node_id":"newer-head","node_id":"newer-head"}),
+        )],
         targets: vec![Target {
             source: "old-node".into(),
             branch: "main".into(),
@@ -50,7 +53,9 @@ fn one_invalid_tag_target_blocks_the_entire_batch() {
             json!({"node_id":"old","tags":[]}),
             json!({"node_id":"full","tags":labels}),
         ],
-        branches: vec![json!({"branch_id":"main","node_id":"head"})],
+        branches: vec![branch(
+            json!({"branch_id":"main","file_node_id":"head","node_id":"head"}),
+        )],
         targets: vec![
             Target {
                 source: "old".into(),
@@ -79,10 +84,12 @@ fn one_invalid_tag_target_blocks_the_entire_batch() {
             .len(),
         2
     );
-    draft.branches[0]["alias_of"] = "survivor".into();
+    draft.branches[0] = branch(
+        json!({"branch_id":"main","file_node_id":"head","node_id":"head","alias_of":"survivor","read_only":true}),
+    );
     assert!(
         request(&draft).is_err(),
-        "read-only aliases cannot target edits even without a redundant read_only flag"
+        "admitted read-only aliases cannot target edits"
     );
 }
 
@@ -92,7 +99,9 @@ fn draft_with_pending_input(input: &str) -> Draft {
         repository: "repo".into(),
         path: "a.txt".into(),
         nodes: vec![json!({"node_id":"source","tags":["old"]})],
-        branches: vec![json!({"branch_id":"main","node_id":"head"})],
+        branches: vec![branch(
+            json!({"branch_id":"main","file_node_id":"head","node_id":"head"}),
+        )],
         targets: vec![Target {
             source: "source".into(),
             branch: "main".into(),
@@ -166,4 +175,15 @@ fn pending_tag_input_rejection_preserves_an_editable_draft_without_starting_an_o
             assert!(s.files.operations.is_empty());
         });
     });
+}
+
+#[test]
+fn archived_migrated_and_merged_branch_targets_cannot_be_submitted() {
+    for state in ["archived", "migrated", "merged"] {
+        let mut draft = draft_with_pending_input("");
+        draft.branches[0] = branch(
+            json!({"branch_id":"main", "file_node_id":"head", "node_id":"head", "state":state, "read_only":true}),
+        );
+        assert!(request(&draft).is_err());
+    }
 }

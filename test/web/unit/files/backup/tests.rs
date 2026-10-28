@@ -1,5 +1,33 @@
 use super::*;
 
+#[test]
+fn navigation_discards_an_open_backup_review() {
+    use crate::files::model::{Model, Navigation};
+    for destination in [
+        Navigation::Root,
+        Navigation::Disk("B01".into()),
+        Navigation::Directory("other".into()),
+    ] {
+        let mut model = Model {
+            backup: Some(Draft {
+                id: "draft".into(),
+                repository: "repo".into(),
+                path: "old-path".into(),
+                configuration: Value::Null,
+                generation: String::new(),
+                scope_id: String::new(),
+                target: 0,
+                prefixes: BTreeMap::new(),
+                loading: true,
+            }),
+            ..Default::default()
+        };
+        assert!(model.backup.is_some());
+        model.navigate(destination);
+        assert!(model.backup.is_none());
+    }
+}
+
 fn unauthorized() -> api::Error {
     api::Error {
         code: storage_contract::ErrorCode::Unauthorized,
@@ -26,7 +54,10 @@ fn closed_backup_read_still_revokes_its_expired_session() {
             assert!(!s.session_active());
             assert!(s.files.backup.is_none());
             assert_eq!(s.errors.len(), 1);
-            assert_eq!(s.errors[0].request_id.as_deref(), Some("expired-backup"));
+            assert_eq!(
+                s.errors[0].feedback.request_id.as_deref(),
+                Some("expired-backup")
+            );
         });
     });
 }

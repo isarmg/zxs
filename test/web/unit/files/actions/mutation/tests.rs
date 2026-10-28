@@ -73,6 +73,7 @@ fn failed_editor_requests_record_only_their_original_outcome() {
             let state = RwSignal::new(State::default());
             record_failure(
                 state,
+                0,
                 "original",
                 api::Error {
                     status,
@@ -88,8 +89,11 @@ fn failed_editor_requests_record_only_their_original_outcome() {
                 assert_eq!(s.files.operations[0].status(), expected);
                 assert_eq!(super::super::pending(s), expected == SaveStatus::Unknown);
                 assert_eq!(s.errors.len(), 1);
-                assert_eq!(s.errors[0].request_id.as_deref(), Some("failure-request"));
-                assert!(s.errors[0].message.contains("request failed"));
+                assert_eq!(
+                    s.errors[0].feedback.request_id.as_deref(),
+                    Some("failure-request")
+                );
+                assert!(s.errors[0].feedback.message.contains("request failed"));
                 if expected == SaveStatus::Unknown {
                     assert_eq!(s.notice, crate::files::model::publication_notice(expected));
                 } else {
@@ -106,6 +110,7 @@ fn published_reconciliation_failure_keeps_the_original_operation_pending() {
         let state = RwSignal::new(State::default());
         record_failure(
             state,
+            0,
             "published-original",
             api::Error {
                 status: 503,
@@ -122,8 +127,8 @@ fn published_reconciliation_failure_keeps_the_original_operation_pending() {
             assert_eq!(s.files.operations[0].status(), SaveStatus::Unknown);
             assert!(super::super::pending(s));
             assert_eq!(s.errors.len(), 1);
-            assert_eq!(s.errors[0].request_id.as_deref(), Some("published-request"));
-            assert!(s.errors[0].message.contains("already published"));
+            assert_eq!(s.errors[0].feedback.request_id.as_deref(), Some("published-request"));
+            assert!(s.errors[0].feedback.message.contains("already published"));
             assert_eq!(s.notice, crate::files::model::publication_notice(SaveStatus::Unknown));
         });
     });

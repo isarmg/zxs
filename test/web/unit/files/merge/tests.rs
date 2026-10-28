@@ -1,13 +1,18 @@
 use super::*;
+use crate::files::history::tests::branch;
 fn draft() -> Draft {
     Draft {
         file: "file".into(),
         repository: "repo".into(),
         path: "a.txt".into(),
         branches: vec![
-            json!({"branch_id":"left","node_id":"fnode-left"}),
-            json!({"branch_id":"right","node_id":"fnode-right"}),
-            json!({"branch_id":"alias","node_id":"fnode-old","read_only":true}),
+            branch(json!({"branch_id":"left","file_node_id":"fnode-left","node_id":"fnode-left"})),
+            branch(
+                json!({"branch_id":"right","file_node_id":"fnode-right","node_id":"fnode-right"}),
+            ),
+            branch(
+                json!({"branch_id":"alias","file_node_id":"fnode-old","node_id":"fnode-old","read_only":true,"alias_of":"left"}),
+            ),
         ],
         nodes: vec![
             json!({"node_id":"fnode-unrelated","version_id":"body-old"}),
@@ -18,6 +23,25 @@ fn draft() -> Draft {
         survivor: String::new(),
     }
 }
+
+#[test]
+fn navigation_discards_an_open_merge_review() {
+    use crate::files::model::{Model, Navigation};
+    for destination in [
+        Navigation::Root,
+        Navigation::Disk("B01".into()),
+        Navigation::Directory("other".into()),
+    ] {
+        let mut model = Model {
+            merge: Some(draft()),
+            ..Default::default()
+        };
+        assert!(model.merge.is_some());
+        model.navigate(destination);
+        assert!(model.merge.is_none());
+    }
+}
+
 #[test]
 fn merging_requires_an_explicit_survivor_and_accepts_any_file_node() {
     let mut draft = draft();
@@ -37,6 +61,31 @@ fn aliases_and_missing_baselines_cannot_be_submitted() {
     draft.selected.insert("alias".into());
     assert!(request(&draft).is_err());
     draft.selected.remove("alias");
-    draft.branches[0]["node_id"] = Value::Null;
+    draft.branches[0] = branch(
+        json!({"branch_id":"left","node_id":null,"version_id":null,"own_version_id":null,"materialized":false}),
+    );
     assert!(request(&draft).is_err());
+}
+
+#[test]
+fn availability_counts_only_admitted_writable_branches_and_keeps_loading_fences() {
+    use crate::files::history::tests::{branch_wire, history};
+    for (state, alias, read_only) in [
+        ("active", None, false),
+        ("active", Some("left"), true),
+        ("archived", None, true),
+        ("migrated", None, true),
+        ("merged", Some("left"), true),
+    ] {
+        let mut model = Model {
+            file_history: history(json!({"branches":[
+                branch_wire(json!({"branch_id":"left"})),
+                branch_wire(json!({"branch_id":"right","state":state,"alias_of":alias,"read_only":read_only}))
+            ]})),
+            ..Default::default()
+        };
+        assert_eq!(available(&model), !read_only);
+        model.history_loading = true;
+        assert!(!available(&model));
+    }
 }

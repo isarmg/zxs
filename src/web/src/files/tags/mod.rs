@@ -1,14 +1,13 @@
 //! Node-scoped inherited labels. The editor borrows the chip/pressed-choice
 //! interaction of the referenced tag toolbar, with ZXS geometry and publication.
 use super::{
-    actions, merge,
+    actions,
+    history::FileBranch,
+    merge,
     model::{history_node_id, history_nodes, selected_branch},
     review,
 };
-use crate::{
-    api,
-    ui::{State, text},
-};
+use crate::{api, ui::State};
 use json_codec::{Value, json};
 use std::collections::BTreeSet;
 use web_interface::{i18n::t, prelude::*};
@@ -27,7 +26,7 @@ pub(crate) struct Draft {
     repository: String,
     path: String,
     nodes: Vec<Value>,
-    branches: Vec<Value>,
+    branches: Vec<FileBranch>,
     targets: Vec<Target>,
     add: BTreeSet<String>,
     remove: BTreeSet<String>,
@@ -106,18 +105,20 @@ pub(crate) fn start(state: RwSignal<State>) {
                 "The selected nodes have changed. Select them again before editing tags.",
             ));
         }
-        let branches = snapshot.files.file_history["branches"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|branch| merge::branch_writable(branch))
+        let branches = snapshot
+            .files
+            .file_history
+            .branches()
+            .iter()
+            .filter(|branch| branch.writable())
             .cloned()
             .collect::<Vec<_>>();
         let selected = selected_branch(&snapshot.files);
-        let branch = branches
-            .iter()
-            .find(|branch| text(branch, &["branch_id"]) == selected);
-        let expected = branch.map(super::merge::branch_head).unwrap_or_default();
+        let branch = branches.iter().find(|branch| branch.id() == selected);
+        let expected = branch
+            .and_then(FileBranch::head)
+            .unwrap_or_default()
+            .to_owned();
         let selected = if branch.is_some() {
             selected
         } else {
@@ -229,16 +230,14 @@ fn request(draft: &Draft) -> Result<Value, String> {
         let branch = draft
             .branches
             .iter()
-            .find(|branch| {
-                text(branch, &["branch_id"]) == target.branch && merge::branch_writable(branch)
-            })
+            .find(|branch| branch.id() == target.branch && branch.writable())
             .ok_or_else(|| {
                 t(
                     "请为每个节点选择可写的关联分支。",
                     "Choose a writable associated branch for each node.",
                 )
             })?;
-        if target.expected.is_empty() || target.expected != merge::branch_head(branch) {
+        if branch.head() != Some(target.expected.as_str()) {
             return Err(t(
                 "分支依据节点缺失，请取消并刷新。",
                 "A branch base node is missing. Cancel and refresh.",

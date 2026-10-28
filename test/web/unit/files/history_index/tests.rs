@@ -1,21 +1,21 @@
 use super::*;
+use crate::files::history::tests::{branch_wire, history, update_metadata};
 use json_codec::json;
 
 #[test]
 fn indexed_records_borrow_the_snapshot_and_keep_first_match_order() {
-    let snapshot: Snapshot<Value> = json!({
+    let snapshot = history(json!({
         "nodes": [{"node_id":"n", "note":"first"}, {"node_id":"n", "note":"second"}],
         "versions": [{"version_id":"v", "note":"body"}],
-        "branches": [{"branch_id":"b", "name":"first"}, {"branch_id":"b", "name":"second"}]
-    })
-    .into();
+        "branches": [branch_wire(json!({"branch_id":"b", "name":"first"}))]
+    }));
     let index = HistoryIndex::new(snapshot.clone());
     let (position, node) = index.node("n").unwrap();
     assert_eq!(position, 0);
     assert!(std::ptr::eq(node, &snapshot["nodes"][0]));
     assert!(std::ptr::eq(
         index.branch("b").unwrap(),
-        &snapshot["branches"][0]
+        &snapshot.branches()[0]
     ));
     assert!(std::ptr::eq(
         index.version("v").unwrap(),
@@ -35,7 +35,10 @@ fn shared_history_skips_unrelated_updates_and_replaces_positions_on_new_snapshot
     let owner = Owner::new();
     owner.with(|| {
         let state = RwSignal::new(State::default());
-        state.update(|s| s.files.file_history = json!({"nodes":[{"node_id":"old"}]}).into());
+        state.update(|s| {
+            s.files.file_history =
+                crate::files::history::tests::history(json!({"nodes":[{"node_id":"old"}]}))
+        });
         provide(state);
         let first = shared();
         let second = shared();
@@ -59,10 +62,17 @@ fn shared_history_skips_unrelated_updates_and_replaces_positions_on_new_snapshot
         });
         assert!(consumer.get().is_some());
         assert_eq!(runs.load(Ordering::Relaxed), 1);
-        state.update(|s| s.files.file_history["nodes"][0]["note"] = "updated".into());
+        state.update(|s| {
+            update_metadata(&mut s.files.file_history, |value| {
+                value["nodes"][0]["note"] = "updated".into()
+            })
+        });
         assert_eq!(consumer.get().unwrap()["note"], "updated");
         assert_eq!(runs.load(Ordering::Relaxed), 2);
-        state.update(|s| s.files.file_history = json!({"nodes":[{"node_id":"new"}]}).into());
+        state.update(|s| {
+            s.files.file_history =
+                crate::files::history::tests::history(json!({"nodes":[{"node_id":"new"}]}))
+        });
         assert!(consumer.get().is_none());
         assert_eq!(runs.load(Ordering::Relaxed), 3);
         second.with(|index| {
@@ -81,7 +91,7 @@ fn indexed_lookup_matches_the_previous_scan_for_large_reordered_history() {
         let nodes: Vec<_> = (0..count).rev().map(|i| json!({
             "node_id":format!("node-{i}"), "note":format!("note {i}"), "tags":[format!("tag-{i}")]
         })).collect();
-        let snapshot: Snapshot<Value> = json!({"nodes":nodes}).into();
+        let snapshot = history(json!({"nodes":nodes}));
         let index = HistoryIndex::new(snapshot.clone());
         for i in 0..count {
             let id = format!("node-{i}");

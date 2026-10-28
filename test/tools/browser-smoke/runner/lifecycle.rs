@@ -152,6 +152,16 @@ pub(super) fn run(browser: &Browser, origin: &str) -> Result<()> {
 fn required_browser_capabilities(browser: &Browser, origin: &str) -> Result<()> {
     for (capability, injection) in [
         ("ResizeObserver", "window.ResizeObserver = undefined;"),
+        ("AbortController", "window.AbortController = undefined;"),
+        ("AbortSignal.reason", "delete AbortSignal.prototype.reason;"),
+        (
+            "AbortSignal.reason",
+            "const abort = AbortController.prototype.abort; AbortController.prototype.abort = function() { return Reflect.apply(abort, this, []); };",
+        ),
+        (
+            "AbortSignal.reason",
+            "Object.defineProperty(AbortSignal.prototype, 'aborted', {get() { return false; }, configurable:true});",
+        ),
         (
             "FinalizationRegistry",
             "window.FinalizationRegistry = undefined;",

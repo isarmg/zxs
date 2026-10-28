@@ -36,9 +36,9 @@ fn rename_nodes_reuse_body_versions_but_keep_their_own_ancestry() {
         ]
     );
     let model = Model {
-        file_history:
-            json_codec::json!({"node_id":"fnode-rename","version_id":"ver-one","inherited":true})
-                .into(),
+        file_history: crate::files::history::tests::history(
+            json_codec::json!({"node_id":"fnode-rename","version_id":"ver-one","inherited":true}),
+        ),
         ..Default::default()
     };
     assert!(inherited_current(&model, "fnode-rename"));
@@ -378,15 +378,19 @@ fn inherited_current_markers_do_not_change_real_version_identity_or_ancestry() {
         json_codec::json!({"file_id":"file","node_id":"parent","version_id":"parent","created_at":"1970-01-01T00:00:01Z","current":true}),
     ];
     let mut model = Model {
-        file_history: json_codec::json!({"node_id":"parent","version_id":"parent","materialized":false,"inherited":true,"own_version_id":null,"source_version_id":"parent","nodes":versions}).into(),
+        file_history: crate::files::history::tests::history(
+            json_codec::json!({"node_id":"parent","version_id":"parent","materialized":false,"inherited":true,"own_version_id":null,"source_version_id":"parent","nodes":versions}),
+        ),
         ..Default::default()
     };
     let before = metadata(history_nodes_ref(&model.file_history), "file");
     assert!(inherited_current(&model, "parent"));
     assert!(!inherited_current(&model, "other"));
-    model.file_history["materialized"] = true.into();
-    model.file_history["inherited"] = false.into();
-    model.file_history["own_version_id"] = "parent".into();
+    crate::files::history::tests::update_metadata(&mut model.file_history, |value| {
+        value["materialized"] = true.into();
+        value["inherited"] = false.into();
+        value["own_version_id"] = "parent".into();
+    });
     assert!(!inherited_current(&model, "parent"));
     assert_eq!(
         metadata(history_nodes_ref(&model.file_history), "file"),
@@ -406,7 +410,10 @@ fn history_identity_indexes_payloads_once_and_preserves_node_keys_on_note_refres
         let baseline_payload_copies: usize = (0..count).map(|_| nodes.clone().len()).sum();
         assert_eq!(baseline_payload_copies, count * count);
         let state = RwSignal::new(State::default());
-        state.update(|s| s.files.file_history = json_codec::json!({"nodes":nodes}).into());
+        state.update(|s| {
+            s.files.file_history =
+                crate::files::history::tests::history(json_codec::json!({"nodes":nodes}))
+        });
         let history = Memo::new(move |_| state.with(|s| s.files.file_history.clone()));
         INDEX_COPIES.with(|c| c.set(0));
         let records = index_projection(history);
@@ -421,7 +428,11 @@ fn history_identity_indexes_payloads_once_and_preserves_node_keys_on_note_refres
             assert_eq!(records.with(BTreeMap::len), count);
         }
         assert_eq!(INDEX_COPIES.with(|c| c.get()), count);
-        state.update(|s| s.files.file_history["nodes"][0]["note"] = "updated".into());
+        state.update(|s| {
+            crate::files::history::tests::update_metadata(&mut s.files.file_history, |value| {
+                value["nodes"][0]["note"] = "updated".into()
+            })
+        });
         assert_eq!(records.with(|r| r["node-0"]["note"].clone()), "updated");
         assert_eq!(
             records.with(|r| r.keys().cloned().collect::<Vec<_>>()),

@@ -30,6 +30,7 @@ wasm-bindgen = {version = "=0.2.129", path = "../foundation/web-runtime/wasm-bin
 web-sys = { version = "=0.3.106", features = [
   "Window", "Document", "DocumentFragment", "HtmlElement", "Element", "Node", "NodeList", "HtmlCollection", "DomTokenList",
   "Storage", "Location", "Url", "UrlSearchParams", "Navigator", "MediaQueryList", "MediaQueryListEvent", "Event", "EventTarget",
+  "AbortController", "AbortSignal",
   "HtmlDialogElement", "HtmlInputElement", "HtmlButtonElement", "HtmlFormElement", "HtmlTextAreaElement", "HtmlTemplateElement",
   "KeyboardEvent", "MouseEvent", "PointerEvent", "FocusEvent", "SubmitEvent", "CustomEvent", "CustomEventInit", "Text",
   "CssStyleDeclaration", "FontFace", "FontFaceSet", "DomException", "DomMatrix", "DomMatrixReadOnly", "DomRect", "DomRectList",

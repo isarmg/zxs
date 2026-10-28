@@ -11,6 +11,73 @@ fn published() -> Value {
 }
 
 #[test]
+fn navigation_clears_the_local_review_but_preserves_original_operation_recovery() {
+    use crate::files::{model::Navigation, review};
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            ..Default::default()
+        });
+        state.update(|s| {
+            s.management.storage = crate::management::Storage::Ready;
+            s.files.writable = true;
+            s.files.selected = Some(crate::files::test_entries::entry(json!({})));
+            s.files.checked_nodes.insert("node".into());
+            s.files.file_history = crate::files::history::tests::history(
+                json!({"nodes":[{"node_id":"node","tags":[]}]}),
+            );
+        });
+        crate::files::tags::start(state);
+        assert!(state.with_untracked(|s| s.files.tag_edit.is_some()));
+        state.update(|s| {
+            s.files.publications.insert(
+                review::Kind::Tags,
+                review::Publication {
+                    operation_id: Some("original".into()),
+                    error: "unconfirmed".into(),
+                },
+            );
+            s.files.polling_operations.push("original".into());
+        });
+        assert_eq!(
+            record_receipt(state, "original", Value::Null),
+            SaveStatus::Unknown
+        );
+        for destination in [
+            Navigation::Disk("P01".into()),
+            Navigation::Directory("docs".into()),
+            Navigation::Root,
+        ] {
+            state.update(|s| s.files.navigate(destination));
+            state.with_untracked(|s| {
+                assert!(s.files.tag_edit.is_none() && s.files.checked_nodes.is_empty());
+                assert!(super::super::pending(s));
+                assert!(!super::super::write_allowed(s));
+                assert_eq!(s.files.operations, [FileOperation::unknown("original")]);
+                assert_eq!(s.files.polling_operations, ["original".to_owned()]);
+                assert_eq!(
+                    s.files.publications[&review::Kind::Tags]
+                        .operation_id
+                        .as_deref(),
+                    Some("original")
+                );
+            });
+        }
+        assert_eq!(state.with_untracked(poll_work), Some((0, vec![])));
+        // Navigation did not authorize another write or settle the receipt.
+        // Its original poll still settles normally, without resurrecting a panel.
+        complete_poll(state, 0, "original", Ok(published()));
+        state.with_untracked(|s| {
+            assert!(!super::super::pending(s));
+            assert!(s.files.publications.is_empty() && s.files.polling_operations.is_empty());
+            assert!(s.files.tag_edit.is_none());
+            assert_eq!(s.files.operations[0].status(), SaveStatus::Published);
+            assert!(!super::super::write_allowed(s), "root is never writable");
+        });
+    });
+}
+
+#[test]
 fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() {
     Owner::new().with(|| {
         let mut missing = published();
@@ -53,7 +120,9 @@ fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() 
                     json!({"file_id":"file", "name":"file.txt"}),
                 ));
                 s.files.checked_nodes.insert("node".into());
-                s.files.file_history = json!({"nodes":[{"node_id":"node", "tags":[]}]}).into();
+                s.files.file_history = crate::files::history::tests::history(
+                    json!({"nodes":[{"node_id":"node", "tags":[]}]}),
+                );
             });
             crate::files::tags::start(state);
             assert!(state.with_untracked(|s| s.files.tag_edit.is_some()));
@@ -170,7 +239,8 @@ fn poll_projection_copies_only_unpolled_operation_ids_and_keeps_session_epoch() 
         session_epoch: 17,
         ..Default::default()
     };
-    state.files.file_history = json!({"nodes":[{"note":"x".repeat(100_000)}]}).into();
+    state.files.file_history =
+        crate::files::history::tests::history(json!({"nodes":[{"note":"x".repeat(100_000)}]}));
     state.monitor.history = json!({"samples":[{"extra":"y".repeat(100_000)}]}).into();
     state.files.operations = vec![
         FileOperation::unknown("pending"),
@@ -240,6 +310,93 @@ fn observations_replace_only_the_original_id_and_keep_the_ui_bound() {
                     .count(),
                 1
             );
+            assert!(super::super::pending(s));
+        });
+    });
+}
+
+fn poll_failure(request: &str, status: u16) -> api::Error {
+    api::Error {
+        code: storage_contract::ErrorCode::RecoveryRequired,
+        message: "query unavailable".into(),
+        status,
+        retryable: true,
+        request_id: Some(request.into()),
+        source: None,
+    }
+}
+
+#[test]
+fn repeated_poll_failures_keep_one_notice_and_the_original_recovery_fence() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            session_epoch: 7,
+            ..Default::default()
+        });
+        record_operation(state, FileOperation::unknown("original"));
+        for attempt in 0..10 {
+            state.update(|s| s.files.polling_operations.push("original".into()));
+            complete_poll(
+                state,
+                7,
+                "original",
+                Err(poll_failure(&format!("query-{attempt}"), 503)),
+            );
+            state.with_untracked(|s| {
+                assert_eq!(s.errors.len(), 1);
+                assert_eq!(
+                    s.errors[0].feedback.request_id,
+                    Some(format!("query-{attempt}"))
+                );
+                assert_eq!(s.files.operations, vec![FileOperation::unknown("original")]);
+                assert!(s.files.polling_operations.is_empty());
+                assert!(super::super::pending(s));
+                assert_eq!(poll_work(s), Some((7, vec!["original".into()])));
+            });
+        }
+        state.update(|s| s.files.polling_operations.push("original".into()));
+        complete_poll(state, 7, "original", Ok(published()));
+        state.with_untracked(|s| {
+            assert_eq!(s.files.operations[0].id(), "original");
+            assert_eq!(s.files.operations[0].status(), SaveStatus::Published);
+            assert!(s.files.polling_operations.is_empty());
+            assert!(!super::super::pending(s));
+            assert_eq!(poll_work(s), Some((7, vec![])));
+            assert_eq!(
+                s.errors.len(),
+                1,
+                "recovery does not silently dismiss diagnostic evidence"
+            );
+        });
+    });
+}
+
+#[test]
+fn poll_failures_cannot_cross_session_but_current_unauthorized_still_closes_admission() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            session_epoch: 8,
+            ..Default::default()
+        });
+        state.update(|s| {
+            s.files.operations.push(FileOperation::unknown("original"));
+            s.files.polling_operations.push("original".into());
+        });
+        complete_poll(state, 7, "original", Err(poll_failure("old", 401)));
+        state.with_untracked(|s| {
+            assert!(s.authenticated);
+            assert!(s.errors.is_empty());
+            assert_eq!(s.files.polling_operations, vec!["original"]);
+        });
+        complete_poll(state, 8, "original", Err(poll_failure("current", 401)));
+        state.with_untracked(|s| {
+            assert!(!s.authenticated);
+            assert_eq!(s.errors.len(), 1);
+            assert_eq!(s.errors[0].feedback.request_id.as_deref(), Some("current"));
+            assert!(s.files.polling_operations.is_empty());
+            assert_eq!(s.files.operations, vec![FileOperation::unknown("original")]);
             assert!(super::super::pending(s));
         });
     });

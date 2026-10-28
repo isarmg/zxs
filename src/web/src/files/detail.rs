@@ -2,14 +2,14 @@ use super::page::Entry;
 use super::{
     actions, backup, batch, branch, inline, merge,
     model::{
-        Model, branch_name, branch_writable, history_nodes_ref, join_path, selected_branch,
+        Model, branch_name, history_nodes_ref, join_path, selected_branch,
         selected_entry_read_only, selected_file_branch_record,
     },
     tags, version_tree,
 };
 use crate::{
     icons::FileIcon,
-    ui::{State, list, text},
+    ui::{State, text},
 };
 use web_interface::components::{EmptyState, LoadingState, Select, SelectOption};
 use web_interface::{i18n::t, prelude::*};
@@ -95,20 +95,24 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
         state.with(|s| selection.with_value(|selection| selection.entry(s).cloned()))
     });
     let options = Signal::derive(move || {
-        list(&state.with(|s| s.files.file_history.clone()), "branches")
-            .into_iter()
-            .map(|branch| {
-                let readonly = !branch_writable(&branch);
-                let label = if readonly {
-                    format!("{} · {}", branch_name(&branch), t("只读", "Read only"))
-                } else {
-                    branch_name(&branch)
-                };
-                let mut option = SelectOption::new(text(&branch, &["branch_id"]), label);
-                option.disabled = readonly;
-                option
-            })
-            .collect::<Vec<_>>()
+        state.with(|s| {
+            s.files
+                .file_history
+                .branches()
+                .iter()
+                .map(|branch| {
+                    let readonly = !branch.writable();
+                    let label = if readonly {
+                        format!("{} · {}", branch_name(branch), t("只读", "Read only"))
+                    } else {
+                        branch_name(branch)
+                    };
+                    let mut option = SelectOption::new(branch.id(), label);
+                    option.disabled = readonly;
+                    option
+                })
+                .collect::<Vec<_>>()
+        })
     });
     let value = Signal::derive(move || state.with(|s| selected_branch(&s.files)));
     let rename_branch = Memo::new(move |_| state.with(|s| selected_file_branch_record(&s.files)));
@@ -116,7 +120,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
         state.with(|s| {
             !actions::write_allowed(s)
                 || s.files.history_loading
-                || list(&s.files.file_history, "branches").is_empty()
+                || s.files.file_history.branches().is_empty()
         })
     });
     let merge_disabled = Signal::derive(move || {

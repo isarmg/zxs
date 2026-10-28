@@ -6,7 +6,7 @@ use crate::{
         FileOperation,
         model::{SaveStatus, publication_notice},
     },
-    ui::{State, current_session, fail},
+    ui::{ErrorContext, State, current_session, fail_in},
 };
 use json_codec::Value;
 use web_interface::prelude::*;
@@ -76,18 +76,22 @@ pub(crate) fn poll(state: RwSignal<State>) {
                 None,
             )
             .await;
-            if !current_session(state, epoch) {
-                return;
-            }
-            match result {
-                Ok(value) => {
-                    record_receipt(state, &id, value);
-                }
-                Err(error) => fail(state, error),
-            }
-            state.update(|s| s.files.polling_operations.retain(|item| item != &id));
+            complete_poll(state, epoch, &id, result);
         });
     }
+}
+
+fn complete_poll(state: RwSignal<State>, epoch: u64, id: &str, result: Result<Value, api::Error>) {
+    if !current_session(state, epoch) {
+        return;
+    }
+    match result {
+        Ok(value) => {
+            record_receipt(state, id, value);
+        }
+        Err(error) => fail_in(state, epoch, ErrorContext::Operation(id.to_owned()), error),
+    }
+    state.update(|s| s.files.polling_operations.retain(|item| item != id));
 }
 
 #[cfg(test)]

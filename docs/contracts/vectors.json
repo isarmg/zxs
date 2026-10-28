@@ -1073,10 +1073,11 @@
             "used": "0",
             "limit": "18446744073709551615",
             "remaining": "18446744073709551615"
-          }
+          },
+          "cold_records": "0"
         },
         "warning": "ok",
-        "automatic_retirement": false,
+        "automatic_retirement": true,
         "global": {
           "records": {
             "used": "0",
@@ -1087,7 +1088,8 @@
             "used": "0",
             "limit": "18446744073709551615",
             "remaining": "18446744073709551615"
-          }
+          },
+          "cold_records": "0"
         }
       }
     },
@@ -4180,10 +4182,11 @@
             "used": 1,
             "limit": "18446744073709551615",
             "remaining": "18446744073709551615"
-          }
+          },
+          "cold_records": "0"
         },
         "warning": "ok",
-        "automatic_retirement": false,
+        "automatic_retirement": true,
         "global": {
           "records": {
             "used": "0",
@@ -4194,7 +4197,8 @@
             "used": "0",
             "limit": "18446744073709551615",
             "remaining": "18446744073709551615"
-          }
+          },
+          "cold_records": "0"
         }
       }
     },
@@ -4213,10 +4217,11 @@
             "used": "01",
             "limit": "18446744073709551615",
             "remaining": "18446744073709551615"
-          }
+          },
+          "cold_records": "0"
         },
         "warning": "ok",
-        "automatic_retirement": false,
+        "automatic_retirement": true,
         "global": {
           "records": {
             "used": "0",
@@ -4227,7 +4232,8 @@
             "used": "0",
             "limit": "18446744073709551615",
             "remaining": "18446744073709551615"
-          }
+          },
+          "cold_records": "0"
         }
       }
     },
@@ -4247,10 +4253,11 @@
             "limit": "18446744073709551615",
             "remaining": "18446744073709551615"
           },
-          "owner": "other"
+          "owner": "other",
+          "cold_records": "0"
         },
         "warning": "ok",
-        "automatic_retirement": false,
+        "automatic_retirement": true,
         "global": {
           "records": {
             "used": "0",
@@ -4261,7 +4268,8 @@
             "used": "0",
             "limit": "18446744073709551615",
             "remaining": "18446744073709551615"
-          }
+          },
+          "cold_records": "0"
         }
       }
     },
@@ -4280,10 +4288,11 @@
             "used": "0",
             "limit": "18446744073709551615",
             "remaining": "18446744073709551615"
-          }
+          },
+          "cold_records": "0"
         },
         "warning": "unknown",
-        "automatic_retirement": false,
+        "automatic_retirement": true,
         "global": {
           "records": {
             "used": "0",
@@ -4294,7 +4303,8 @@
             "used": "0",
             "limit": "18446744073709551615",
             "remaining": "18446744073709551615"
-          }
+          },
+          "cold_records": "0"
         }
       }
     },
@@ -4313,10 +4323,11 @@
             "used": "0",
             "limit": "18446744073709551615",
             "remaining": "18446744073709551615"
-          }
+          },
+          "cold_records": "0"
         },
         "warning": "ok",
-        "automatic_retirement": false,
+        "automatic_retirement": true,
         "global": null
       }
     },
@@ -4335,10 +4346,11 @@
             "used": "0",
             "limit": "18446744073709551615",
             "remaining": "18446744073709551615"
-          }
+          },
+          "cold_records": "0"
         },
         "warning": "ok",
-        "automatic_retirement": true,
+        "automatic_retirement": "true",
         "global": {
           "records": {
             "used": "0",
@@ -4349,7 +4361,8 @@
             "used": "0",
             "limit": "18446744073709551615",
             "remaining": "18446744073709551615"
-          }
+          },
+          "cold_records": "0"
         }
       }
     },
@@ -4466,10 +4479,11 @@
             "used": "0",
             "limit": "18446744073709551615",
             "remaining": "18446744073709551615"
-          }
+          },
+          "cold_records": "0"
         },
         "warning": "ok",
-        "automatic_retirement": false
+        "automatic_retirement": true
       }
     },
     {
@@ -7159,6 +7173,110 @@
           {}
         ],
         "count": 1
+      }
+    },
+    {
+      "name": "workspace-capacity-missing-cold-count",
+      "schema": "WorkspaceCapacity",
+      "layer": "schema",
+      "value": {
+        "principal": {
+          "records": {
+            "used": "0",
+            "limit": "18446744073709551615",
+            "remaining": "18446744073709551615"
+          },
+          "metadata_bytes": {
+            "used": "0",
+            "limit": "18446744073709551615",
+            "remaining": "18446744073709551615"
+          }
+        },
+        "warning": "ok",
+        "automatic_retirement": true,
+        "global": {
+          "records": {
+            "used": "0",
+            "limit": "18446744073709551615",
+            "remaining": "18446744073709551615"
+          },
+          "metadata_bytes": {
+            "used": "0",
+            "limit": "18446744073709551615",
+            "remaining": "18446744073709551615"
+          },
+          "cold_records": "0"
+        }
+      }
+    },
+    {
+      "name": "workspace-capacity-numeric-cold-count",
+      "schema": "WorkspaceCapacity",
+      "layer": "schema",
+      "value": {
+        "principal": {
+          "records": {
+            "used": "0",
+            "limit": "18446744073709551615",
+            "remaining": "18446744073709551615"
+          },
+          "metadata_bytes": {
+            "used": "0",
+            "limit": "18446744073709551615",
+            "remaining": "18446744073709551615"
+          },
+          "cold_records": 1
+        },
+        "warning": "ok",
+        "automatic_retirement": true,
+        "global": {
+          "records": {
+            "used": "0",
+            "limit": "18446744073709551615",
+            "remaining": "18446744073709551615"
+          },
+          "metadata_bytes": {
+            "used": "0",
+            "limit": "18446744073709551615",
+            "remaining": "18446744073709551615"
+          },
+          "cold_records": "0"
+        }
+      }
+    },
+    {
+      "name": "workspace-capacity-noncanonical-cold-count",
+      "schema": "WorkspaceCapacity",
+      "layer": "schema",
+      "value": {
+        "principal": {
+          "records": {
+            "used": "0",
+            "limit": "18446744073709551615",
+            "remaining": "18446744073709551615"
+          },
+          "metadata_bytes": {
+            "used": "0",
+            "limit": "18446744073709551615",
+            "remaining": "18446744073709551615"
+          },
+          "cold_records": "01"
+        },
+        "warning": "ok",
+        "automatic_retirement": true,
+        "global": {
+          "records": {
+            "used": "0",
+            "limit": "18446744073709551615",
+            "remaining": "18446744073709551615"
+          },
+          "metadata_bytes": {
+            "used": "0",
+            "limit": "18446744073709551615",
+            "remaining": "18446744073709551615"
+          },
+          "cold_records": "0"
+        }
       }
     }
   ],

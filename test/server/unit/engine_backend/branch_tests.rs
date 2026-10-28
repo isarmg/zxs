@@ -152,3 +152,131 @@ fn branch_projection_matches_fixed_legacy_shapes_and_pending_precedence() {
         }
     }
 }
+
+fn shared_branch_inputs() -> (State, Branch) {
+    use storage_contract::{BranchKind, Commit, ContentState, Entry, NamespaceEntryKind};
+    let mut state = State::default();
+    state.commits.insert(
+        "head".into(),
+        Commit {
+            commit_id: "head".into(),
+            history_tree_id: "history".into(),
+            kind: "file_branch_root".into(),
+            parent_commit_ids: vec!["fork".into()],
+            tree_id: "tree".into(),
+            sequence: 1,
+            operation_id: "op_00000000000000000000000000000001".parse().unwrap(),
+            author: "owner".into(),
+            message: String::new(),
+            entries: vec![Entry {
+                entry_id: "entry".into(),
+                path: name_policy::PortablePath::parse("file.txt").unwrap(),
+                kind: NamespaceEntryKind::File,
+                file_id: "file".into(),
+                version_id: "body".into(),
+                size: 7,
+            }],
+            namespace_deletions: None,
+            pending_file_versions: Default::default(),
+            provenance: None,
+        },
+    );
+    for version in ["body", "branch-source"] {
+        state
+            .content_states
+            .insert(version.into(), ContentState::Available);
+    }
+    let branch = Branch {
+        branch_id: "branch".into(),
+        history_tree_id: "history".into(),
+        name: "main".into(),
+        head_commit_id: "head".into(),
+        fork_commit_id: "fork".into(),
+        branch_kind: BranchKind::File,
+        file_id: Some("file".into()),
+        file_node_id: None,
+        pending_file_versions: Default::default(),
+        generation: u64::MAX,
+        state: BranchState::Active,
+    };
+    (state, branch)
+}
+
+fn shared_history_wire(case: &str) -> Value {
+    use crate::backend_file_history::{FileHistoryResponse, FileHistorySnapshot, HistoryBranch};
+    let (mut state, mut branch) = shared_branch_inputs();
+    if matches!(case, "merged-pending" | "empty-source") {
+        state.commits.get_mut("head").unwrap().pending_file_versions = [
+            ("file".into(), "commit-source".into()),
+            ("commit-only".into(), "commit-reservation".into()),
+        ]
+        .into();
+        branch.pending_file_versions = [
+            (
+                "file".into(),
+                if case == "empty-source" {
+                    ""
+                } else {
+                    "branch-source"
+                }
+                .into(),
+            ),
+            ("branch-only".into(), "branch-reservation".into()),
+        ]
+        .into();
+    }
+    let selected = match case {
+        "explicit-node" => {
+            branch.file_node_id = Some("file-node".into());
+            Some("branch")
+        }
+        "visible-node" | "no-selection" => None,
+        "merged-pending" => Some("branch"),
+        "empty-source" => {
+            branch.state = BranchState::Merged;
+            state
+                .file_branch_aliases
+                .insert("branch".into(), "survivor".into());
+            Some("full-branch")
+        }
+        "full-selection" => Some("full-branch"),
+        _ => panic!("unexpected shared branch fixture {case}"),
+    };
+    let branches = if matches!(case, "no-selection" | "full-selection") {
+        vec![]
+    } else {
+        vec![HistoryBranch {
+            current: selected == Some(branch.branch_id.as_str()),
+            branch: capture(&state, &branch),
+        }]
+    };
+    json_codec::to_value(FileHistoryResponse::from(FileHistorySnapshot {
+        file_id: "file".into(),
+        repository_id: "repository".into(),
+        path: None,
+        note: String::new(),
+        current_node_id: None,
+        selected_branch_id: selected.map(str::to_owned),
+        versions: vec![],
+        nodes: vec![],
+        branches,
+        merges: vec![],
+        content: None,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn actual_branch_capture_and_history_serializer_match_shared_web_fixtures() {
+    // This crosses the branch producer/consumer contract, not a complete HTTP
+    // history graph: unrelated node/version payloads deliberately stay empty.
+    let fixtures = storage_contract::strict_json(include_bytes!(
+        "../../../fixtures/file-history-branches.json"
+    ))
+    .unwrap();
+    let fixtures = fixtures.as_object().unwrap();
+    assert_eq!(fixtures.len(), 6);
+    for (case, expected) in fixtures {
+        assert_eq!(&shared_history_wire(case), expected, "{case}");
+    }
+}

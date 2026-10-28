@@ -19,7 +19,7 @@ wasm-bindgen = {version = "=0.2.129", path = "../foundation/web-runtime/wasm-bin
 js-sys = {version = "=0.3.106", path = "../foundation/web-runtime/js-sys"}
 gloo-timers = { version = "0.3", path = "../foundation/web-runtime/gloo-timers" }
 send_wrapper = {version = "0.6", path = "../foundation/concurrency/send_wrapper"}
-web-sys = { version = "=0.3.106", features = ["MutationRecord", "Window", "Document", "Element", "HtmlElement", "HtmlInputElement", "Crypto", "AbortController", "AbortSignal", "Request", "RequestInit", "RequestMode", "RequestCredentials", "RequestRedirect", "Response", "ReadableStream", "ReadableStreamDefaultReader", "Headers", "UrlSearchParams", "Storage", "Event", "MouseEvent", "SubmitEvent", "console"], path = "../foundation/web-runtime/web-sys"}
+web-sys = { version = "=0.3.106", features = ["MutationRecord", "Window", "Document", "Element", "HtmlElement", "HtmlInputElement", "Crypto", "AbortController", "AbortSignal", "DomException", "Request", "RequestInit", "RequestMode", "RequestCredentials", "RequestRedirect", "Response", "ReadableStream", "ReadableStreamDefaultReader", "Headers", "UrlSearchParams", "Storage", "Event", "MouseEvent", "SubmitEvent", "console"], path = "../foundation/web-runtime/web-sys"}
 
 [lints.rust]
 unsafe_code = "forbid"

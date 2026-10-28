@@ -9,13 +9,14 @@ fn capacity_roundtrip_requires_both_scopes_with_canonical_decimal_strings() {
     };
     let scope = WorkspaceCapacityScope {
         records: measure.clone(),
+        cold_records: 0,
         metadata_bytes: measure,
     };
     let value = WorkspaceCapacity {
         global: scope.clone(),
         principal: scope,
         warning: CapacityWarning::Ok,
-        automatic_retirement: false,
+        automatic_retirement: true,
     };
     let encoded = json_codec::to_value(&value).unwrap();
     assert_eq!(encoded["global"], encoded["principal"]);
@@ -42,8 +43,14 @@ fn capacity_roundtrip_requires_both_scopes_with_canonical_decimal_strings() {
     missing_scope.as_object_mut().unwrap().remove("global");
     assert!(json_codec::from_value::<WorkspaceCapacity>(missing_scope).is_err());
     let mut automatic = encoded.clone();
-    automatic["automatic_retirement"] = json!(true);
+    automatic["automatic_retirement"] = json!("true");
     assert!(json_codec::from_value::<WorkspaceCapacity>(automatic).is_err());
+    let mut missing_cold = encoded.clone();
+    missing_cold["principal"]
+        .as_object_mut()
+        .unwrap()
+        .remove("cold_records");
+    assert!(json_codec::from_value::<WorkspaceCapacity>(missing_cold).is_err());
     let mut unknown = encoded;
     unknown["warning"] = json!("unknown");
     assert!(json_codec::from_value::<WorkspaceCapacity>(unknown).is_err());

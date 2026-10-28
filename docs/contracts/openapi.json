@@ -5642,7 +5642,7 @@
     "/api/workspaces/capacity": {
       "get": {
         "operationId": "workspaceCapacity",
-        "description": "当前唯一管理员的工作区保留证据预算；global与principal均必填，warning考虑两者全部预算。终态工作区仍占用容量，不提供自动回收，不改变每主体或全池额度。所有计数与字节数使用UInt64十进制字符串。",
+        "description": "当前唯一管理员的工作区保留证据预算；global与principal均必填。records为未冷存驻留记录，cold_records为普通空Aborted冷存记录，metadata_bytes仍累计冷热全部清单。automatic_retirement仅表示此受限冷存，不删除证据；warning考虑两者全部预算。所有计数与字节数使用UInt64十进制字符串。",
         "responses": {
           "200": {
             "description": "当前容量快照，不保证后续写入准入。",
@@ -8450,11 +8450,15 @@
         "additionalProperties": false,
         "required": [
           "records",
+          "cold_records",
           "metadata_bytes"
         ],
         "properties": {
           "records": {
             "$ref": "#/components/schemas/CapacityMeasure"
+          },
+          "cold_records": {
+            "$ref": "#/components/schemas/UInt64"
           },
           "metadata_bytes": {
             "$ref": "#/components/schemas/CapacityMeasure"
@@ -8486,10 +8490,10 @@
             ]
           },
           "automatic_retirement": {
-            "const": false
+            "type": "boolean"
           }
         },
-        "description": "当前唯一管理员的全池与主体预算均必填；warning考虑两者全部预算，不改变计费或额度。"
+        "description": "当前唯一管理员的全池与主体预算均必填；records为未冷存驻留数，cold_records为冷存数，metadata_bytes仍包含全部完整清单与生命周期预留；automatic_retirement仅指普通空Aborted受限冷存，不删除证据。"
       },
       "AdministratorPrincipal": {
         "type": "string",

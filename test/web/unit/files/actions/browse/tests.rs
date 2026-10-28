@@ -1,4 +1,88 @@
 use super::*;
+use json_codec::Value;
+
+#[test]
+fn navigation_actions_keep_session_authority_and_only_change_the_file_view() {
+    use crate::ui::{Page, PasswordChangeState, SessionTransition};
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            session_epoch: 9,
+            session_transition: SessionTransition::LoggingOut,
+            password_change: PasswordChangeState::Unknown,
+            principal: "administrator".into(),
+            page: Page::Details,
+            notice: "unconfirmed save".into(),
+            ..Default::default()
+        });
+        // All three production actions execute their synchronous transition,
+        // but the existing inactive-session gates admit no browser request.
+        for (navigate, value, slot, directory) in [
+            (open_disk as fn(RwSignal<State>, String), "P01", "P01", ""),
+            (go_directory, "资料/子目录", "P01", "资料/子目录"),
+        ] {
+            navigate(state, value.into());
+            state.with_untracked(|s| {
+                assert_eq!(s.page, Page::Files);
+                assert_eq!((&*s.files.slot, &*s.files.directory), (slot, directory));
+                assert!(!s.files.loading && !s.files.loaded && !s.files.writable);
+            });
+        }
+        search(state, "new query".into());
+        go_root(state);
+        state.with_untracked(|s| {
+            assert_eq!(s.page, Page::Files);
+            assert!(s.files.slot.is_empty() && s.files.directory.is_empty());
+            assert_eq!(s.files.query, "new query");
+            assert_eq!(s.files.generation, 4);
+            assert!(!s.files.loading_disks && !s.files.loading);
+            assert!(s.authenticated);
+            assert_eq!(s.session_epoch, 9);
+            assert_eq!(s.session_transition, SessionTransition::LoggingOut);
+            assert_eq!(s.password_change, PasswordChangeState::Unknown);
+            assert_eq!(s.principal, "administrator");
+            assert_eq!(s.notice, "unconfirmed save");
+            assert!(!super::super::write_allowed(s));
+        });
+    });
+}
+
+#[test]
+fn navigation_away_and_back_rejects_old_listing_work_without_hiding_session_expiry() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            session_epoch: 3,
+            ..Default::default()
+        });
+        state.update(|s| s.files.navigate(Navigation::Disk("P01".into())));
+        let old_generation = state.with_untracked(|s| s.files.generation);
+        for destination in [
+            Navigation::Directory("docs".into()),
+            Navigation::Root,
+            Navigation::Disk("P01".into()),
+        ] {
+            state.update(|s| s.files.navigate(destination));
+            // Also rejects a queued debounce tick after returning to the same path.
+            assert!(!current_listing(state, 3, "P01", "", old_generation));
+        }
+        let generation = state.with_untracked(|s| s.files.generation);
+        assert!(current_listing(state, 3, "P01", "", generation));
+        assert!(!accept_read_response::<()>(
+            state,
+            2,
+            &Err(disk_read_error(401))
+        ));
+        assert!(state.with_untracked(State::session_active));
+        // Production checks session authority before the obsolete listing fence.
+        assert!(!accept_read_response::<()>(
+            state,
+            3,
+            &Err(disk_read_error(401))
+        ));
+        assert!(!state.with_untracked(State::session_active));
+    });
+}
 
 #[test]
 fn listing_responses_require_the_original_location_generation_and_active_session() {
@@ -391,7 +475,9 @@ fn admitted_page_applies_all_metadata_and_keeps_independent_selected_details() {
         files: crate::files::Model {
             selected: Some(selected.clone()),
             checked_entries: [entry_key(&row), "removed".into()].into_iter().collect(),
-            file_history: json_codec::json!({"note":"loaded history"}).into(),
+            file_history: crate::files::history::tests::history(
+                json_codec::json!({"note":"loaded history"}),
+            ),
             ..Default::default()
         },
         ..State::default()

@@ -43,7 +43,8 @@ pub use engine::{
     IntegrityScrubOutcome, IntegrityScrubPlan, IntegrityScrubReport, IntegrityScrubSchedule,
     IntegrityScrubTarget, MetadataMemberProbe, OpenedContent, OperationReadPlan, OperationRecord,
     RangeContent, ReadLease, RecoverySealContext, RecoverySealFailure, RecoveryWarnings,
-    RetainedWorkspaceLimits, ValidatedConfig, WorkspaceReadPlan,
+    RetainedWorkspaceLimits, ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord,
+    WorkspaceReadPlan,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
 pub use protection::{

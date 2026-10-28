@@ -2774,11 +2774,15 @@
       "additionalProperties": false,
       "required": [
         "records",
+        "cold_records",
         "metadata_bytes"
       ],
       "properties": {
         "records": {
           "$ref": "#/$defs/CapacityMeasure"
+        },
+        "cold_records": {
+          "$ref": "#/$defs/UInt64"
         },
         "metadata_bytes": {
           "$ref": "#/$defs/CapacityMeasure"
@@ -2810,10 +2814,10 @@
           ]
         },
         "automatic_retirement": {
-          "const": false
+          "type": "boolean"
         }
       },
-      "description": "当前唯一管理员的全池与主体预算均必填；warning考虑两者全部预算，不改变计费或额度。"
+      "description": "当前唯一管理员的全池与主体预算均必填；records为未冷存驻留数，cold_records为冷存数，metadata_bytes仍包含全部完整清单与生命周期预留；automatic_retirement仅指普通空Aborted受限冷存，不删除证据。"
     },
     "AdministratorPrincipal": {
       "type": "string",

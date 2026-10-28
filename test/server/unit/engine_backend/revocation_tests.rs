@@ -2111,7 +2111,7 @@ fn typed_workspace_abort_checks_owner_before_changing_workspace_or_journal() {
     assert_eq!(fixture.snapshot(), before);
     let engine = fixture.backend.engine.lock().unwrap();
     assert_eq!(
-        json_codec::to_value(engine.workspace_ref(&foreign.workspace_id).unwrap()).unwrap(),
+        json_codec::to_value(engine.workspace_view(&foreign.workspace_id).unwrap()).unwrap(),
         json_codec::to_value(&foreign).unwrap()
     );
 }

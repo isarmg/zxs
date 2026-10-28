@@ -1,6 +1,124 @@
 use super::*;
+use crate::files::history::tests::{branch as file_branch, branch_wire, history};
 use crate::files::test_entries::{branch, entry, update};
 use json_codec::json;
+
+#[test]
+fn navigation_resets_only_location_owned_state() {
+    use crate::files::review::{Kind, Publication};
+    for (destination, slot, directory, query, loaded) in [
+        (Navigation::Root, "", "", "old query", true),
+        (Navigation::Disk("B01".into()), "B01", "", "", false),
+        (
+            Navigation::Directory("资料/子目录".into()),
+            "P01",
+            "资料/子目录",
+            "",
+            false,
+        ),
+    ] {
+        let selected = entry(json!({"entry_id":"selected","path":"old/file.txt"}));
+        let disks = vec![Disk {
+            slot_id: "P01".into(),
+            online: true,
+            writable: true,
+            available_bytes: 4096,
+        }];
+        let degraded: Value = json_codec::from_str(DEGRADED).unwrap();
+        let operations = vec![
+            FileOperation::unknown("original"),
+            FileOperation::from_receipt(degraded["operation_id"].as_str().unwrap(), &degraded),
+        ];
+        // Enumerate the model so a new state owner requires an explicit choice.
+        let mut model = Model {
+            disks: disks.clone(),
+            disks_loaded: true,
+            loading_disks: true,
+            disks_generation: 5,
+            slot: "P01".into(),
+            directory: "old".into(),
+            writable: true,
+            entries: vec![selected.clone()].into(),
+            cursor: Some("current".into()),
+            next_cursor: Some("next".into()),
+            previous_cursor: Some("previous".into()),
+            total_entries: 205,
+            listing_failed: true,
+            listing_cancellation: None,
+            search_delay: None,
+            directory_branches: vec![branch(json!({"current":true}))],
+            directory_file_count: 210,
+            directory_branches_supported: true,
+            repository_id: "repository".into(),
+            repository_path: "old".into(),
+            default_branch_scope: true,
+            loaded: true,
+            loading: true,
+            generation: 7,
+            selected: Some(selected.clone()),
+            file_history: crate::files::history::tests::history(
+                json!({"nodes":[{"node_id":"old-node"}]}),
+            ),
+            history_loading: true,
+            history_generation: 11,
+            checked_entries: [entry_key(&selected)].into_iter().collect(),
+            batch: None,
+            merge: None,
+            backup: None,
+            tag_edit: None,
+            checked_nodes: ["old-node".into()].into_iter().collect(),
+            publications: [(
+                Kind::Tags,
+                Publication {
+                    operation_id: Some("original".into()),
+                    error: "unconfirmed".into(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            operations: operations.clone(),
+            polling_operations: vec!["original".into()],
+            mutation_pending: true,
+            query: "old query".into(),
+        };
+
+        model.navigate(destination);
+        assert_eq!((&*model.slot, &*model.directory), (slot, directory));
+        assert_eq!(model.query, query);
+        assert_eq!(model.loaded, loaded);
+        assert!(!model.writable && !model.loading && !model.listing_failed);
+        assert!(model.entries.is_empty());
+        assert!(model.cursor.is_none());
+        assert!(model.next_cursor.is_none() && model.previous_cursor.is_none());
+        assert_eq!(model.total_entries, 0);
+        assert!(model.search_delay.is_none() && model.listing_cancellation.is_none());
+        assert_eq!(model.generation, 8);
+        assert!(model.directory_branches.is_empty());
+        assert_eq!(model.directory_file_count, 0);
+        assert!(!model.directory_branches_supported && !model.default_branch_scope);
+        assert!(model.repository_id.is_empty() && model.repository_path.is_empty());
+        assert!(model.selected.is_none() && model.file_history.is_null());
+        assert!(!model.history_loading);
+        assert_eq!(model.history_generation, 12);
+        assert!(model.checked_entries.is_empty() && model.checked_nodes.is_empty());
+        assert!(model.batch.is_none() && model.merge.is_none());
+        assert!(model.backup.is_none() && model.tag_edit.is_none());
+
+        assert_eq!(model.disks, disks);
+        assert!(model.disks_loaded && model.loading_disks);
+        assert_eq!(model.disks_generation, 5);
+        assert_eq!(model.operations, operations);
+        assert_eq!(model.operations[1].status(), SaveStatus::Degraded);
+        assert_eq!(model.polling_operations, ["original".to_owned()]);
+        assert!(model.mutation_pending);
+        assert_eq!(model.publications.len(), 1);
+        assert_eq!(
+            model.publications[&Kind::Tags].operation_id.as_deref(),
+            Some("original")
+        );
+        assert_eq!(model.publications[&Kind::Tags].error, "unconfirmed");
+    }
+}
 
 #[test]
 fn refreshed_selection_invalidates_old_history_only_when_context_changes() {
@@ -10,7 +128,9 @@ fn refreshed_selection_invalidates_old_history_only_when_context_changes() {
     let mut model = Model {
         selected: Some(original.clone()),
         entries: vec![original.clone()].into(),
-        file_history: json_codec::json!({"selected_branch_id":"main"}).into(),
+        file_history: crate::files::history::tests::history(
+            json_codec::json!({"selected_branch_id":"main"}),
+        ),
         history_loading: true,
         ..Default::default()
     };
@@ -67,7 +187,9 @@ fn backup_history_keeps_its_stored_body_and_current_node() {
     let mut model = Model {
         writable: true,
         selected: Some(selected_entry),
-        file_history: json_codec::json!({"branches":[{"branch_id":"main","current":true}]}).into(),
+        file_history: crate::files::history::tests::history(
+            json!({"selected_branch_id":"main","branches":[branch_wire(json!({"branch_id":"main","current":true}))]}),
+        ),
         ..Default::default()
     };
     assert!(selected_entry_read_only(&model));
@@ -155,19 +277,21 @@ fn visible_inherited_content_is_readable_without_becoming_owned_content() {
         &json_codec::json!({"materialized":true,"inherited":false,"version_id":"saved","own_version_id":"saved","size":"0"})
     ));
     assert!(
-        branch_name(&json_codec::json!({"name":"draft","materialized":false}))
+        branch_name(&file_branch(json!({"name":"draft","materialized":false,"version_id":null,"own_version_id":null,"node_id":null})))
             .contains("Pending content")
     );
-    assert_eq!(branch_name(&json_codec::json!({"name":"legacy"})), "legacy");
+    assert_eq!(branch_name(&file_branch(json!({"name":"saved"}))), "saved");
 }
 #[test]
 fn current_branch_identity_does_not_require_a_content_version() {
     let mut model = Model {
-        file_history: json_codec::json!({"selected_branch_id":"pending","branches":[{"branch_id":"pending","materialized":false,"version_id":null}]}).into(),
+        file_history: history(
+            json!({"selected_branch_id":"pending","branches":[branch_wire(json!({"branch_id":"pending","current":true,"materialized":false,"version_id":null,"own_version_id":null,"node_id":null}))]}),
+        ),
         ..Default::default()
     };
     assert_eq!(selected_branch(&model), "pending");
-    model.file_history = Value::Null.into();
+    model.file_history = Default::default();
     model.selected = Some(entry(
         json_codec::json!({"selected_branch_id":"entry-pending","version_id":null,"source_version_id":""}),
     ));
@@ -193,12 +317,14 @@ fn generated_public_file_branch_names_are_editable_only_after_loading_a_real_rec
         ..Default::default()
     };
     assert!(selected_file_branch_record(&model).is_none());
-    model.file_history = json_codec::json!({"selected_branch_id":"generated-a","branches":[{"branch_id":"generated-a","name":"方案甲-7c2a","materialized":true},{"branch_id":"other","name":"other"}]}).into();
+    let mut wire = json!({"selected_branch_id":"generated-a","branches":[branch_wire(json!({"branch_id":"generated-a","name":"方案甲-7c2a","current":true})),branch_wire(json!({"branch_id":"other","name":"other"}))]});
+    model.file_history = history(wire.clone());
     assert_eq!(
         selected_file_branch_record(&model),
         Some(("file-a".into(), "generated-a".into(), "方案甲-7c2a".into()))
     );
-    model.file_history["branches"][0]["name"] = "用户改名".into();
+    wire["branches"][0]["name"] = "用户改名".into();
+    model.file_history = history(wire);
     assert_eq!(
         selected_file_branch_record(&model).unwrap().1,
         "generated-a"
@@ -240,6 +366,31 @@ fn root_default_selection_uses_real_directory_ids_and_subfolders_keep_names() {
     invalid["directory_branch_id"] = Value::Null;
     assert!(DirectoryBranch::parse(invalid).is_err());
 }
+
+#[test]
+fn selected_branch_rename_uses_the_admitted_state_and_alias_disposition() {
+    for (state, alias, read_only) in [
+        ("active", None, false),
+        ("active", Some("survivor"), true),
+        ("archived", None, true),
+        ("migrated", None, true),
+        ("merged", Some("survivor"), true),
+    ] {
+        let model = Model {
+            selected: Some(entry(
+                json!({"file_id":"file","selected_branch_id":"branch"}),
+            )),
+            file_history: history(
+                json!({"selected_branch_id":"branch","branches":[branch_wire(json!({
+                    "state":state,"alias_of":alias,"read_only":read_only,"current":true
+                }))]}),
+            ),
+            ..Default::default()
+        };
+        assert_eq!(selected_branch(&model), "branch");
+        assert_eq!(selected_file_branch_record(&model).is_some(), !read_only);
+    }
+}
 #[test]
 fn renaming_an_entry_preserves_selection_and_file_history() {
     let mut model = Model {
@@ -250,7 +401,9 @@ fn renaming_an_entry_preserves_selection_and_file_history() {
             json_codec::json!({"entry_id":"file-a","name":"new.txt","path":"new.txt"}),
         )]
         .into(),
-        file_history: json_codec::json!({"versions":[{"version_id":"v1"}]}).into(),
+        file_history: crate::files::history::tests::history(
+            json_codec::json!({"versions":[{"version_id":"v1"}]}),
+        ),
         ..Default::default()
     };
     model.reconcile_selection(model.entries.first().cloned());
@@ -298,7 +451,9 @@ fn two_aliases_of_one_file_keep_the_selected_logical_path() {
 fn a_removed_entry_discards_metadata() {
     let mut model = Model {
         selected: Some(entry(json_codec::json!({"entry_id":"file-a"}))),
-        file_history: json_codec::json!({"versions":[{"version_id":"v1"}]}).into(),
+        file_history: crate::files::history::tests::history(
+            json_codec::json!({"versions":[{"version_id":"v1"}]}),
+        ),
         history_loading: true,
         history_generation: 4,
 

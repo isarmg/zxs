@@ -1,6 +1,15 @@
 use super::*;
 
 #[test]
+fn workspace_inventory_is_an_explicit_read_only_command() {
+    let args =
+        Args::try_parse_from(["zxs-rescue", "--root", "/pool", "workspace-inventory"]).unwrap();
+    assert!(matches!(&args.command, Command::WorkspaceInventory));
+    assert_eq!(args.root, PathBuf::from("/pool"));
+    assert_eq!(args.workspace_limits().unwrap(), None);
+}
+
+#[test]
 fn restore_system_accepts_one_original_member_but_requires_a_path() {
     let args =
         Args::try_parse_from(["zxs-rescue", "restore-system", "--disks", "/disk/only"]).unwrap();

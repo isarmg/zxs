@@ -2,6 +2,7 @@
 //! opening the panel; the chosen result may be any node of this file.
 use super::{
     actions,
+    history::FileBranch,
     model::{Model, history_node_id, history_nodes, selected_branch},
     review,
 };
@@ -20,36 +21,21 @@ pub(crate) struct Draft {
     file: String,
     repository: String,
     path: String,
-    branches: Vec<Value>,
+    branches: Vec<FileBranch>,
     nodes: Vec<Value>,
     selected: BTreeSet<String>,
     chosen: String,
     survivor: String,
 }
-pub(crate) use super::model::branch_writable;
-fn branch_id(branch: &Value) -> String {
-    text(branch, &["branch_id"])
-}
-pub(super) fn branch_head(branch: &Value) -> String {
-    branch["node_id"]
-        .as_str()
-        .filter(|id| !id.is_empty())
-        .or_else(|| branch["head_node_id"].as_str())
-        .or_else(|| branch["version_id"].as_str())
-        .unwrap_or_default()
-        .to_owned()
-}
 pub(crate) fn available(model: &Model) -> bool {
     !model.history_loading
-        && model.file_history["branches"]
-            .as_array()
-            .is_some_and(|branches| {
-                branches
-                    .iter()
-                    .filter(|branch| branch_writable(branch))
-                    .count()
-                    >= 2
-            })
+        && model
+            .file_history
+            .branches()
+            .iter()
+            .filter(|branch| branch.writable())
+            .count()
+            >= 2
 }
 pub(crate) fn start(state: RwSignal<State>) {
     let Some(draft) = state.with_untracked(|snapshot| {
@@ -62,18 +48,19 @@ pub(crate) fn start(state: RwSignal<State>) {
         let entry = snapshot.files.selected.as_ref()?;
         let file = entry.file_id().to_owned();
         let (repository, path) = super::model::file_context(entry)?;
-        let branches = snapshot.files.file_history["branches"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|branch| branch_writable(branch))
+        let branches = snapshot
+            .files
+            .file_history
+            .branches()
+            .iter()
+            .filter(|branch| branch.writable())
             .cloned()
             .collect::<Vec<_>>();
         let current = selected_branch(&snapshot.files);
         let selected = branches
             .iter()
-            .filter(|branch| branch_id(branch) == current)
-            .map(branch_id)
+            .filter(|branch| branch.id() == current)
+            .map(|branch| branch.id().to_owned())
             .collect();
         let draft = Draft {
             file,
@@ -104,20 +91,19 @@ fn request(draft: &Draft) -> Result<Value, String> {
         let branch = draft
             .branches
             .iter()
-            .find(|branch| branch_id(branch) == *id && branch_writable(branch))
+            .find(|branch| branch.id() == id.as_str() && branch.writable())
             .ok_or_else(|| {
                 t(
                     "分支不可用，请取消后刷新。",
                     "A branch is unavailable. Cancel and refresh.",
                 )
             })?;
-        let head = branch_head(branch);
-        if head.is_empty() {
-            return Err(t(
+        let head = branch.head().ok_or_else(|| {
+            t(
                 "分支依据节点缺失，请取消后刷新。",
                 "A branch base node is missing. Cancel and refresh.",
-            ));
-        }
+            )
+        })?;
         inputs.push(json!({"branch_id":id,"expected_node_id":head}));
     }
     if !draft.nodes.iter().any(|node| {

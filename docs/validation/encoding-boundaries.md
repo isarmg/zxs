@@ -67,13 +67,24 @@ FD 的独立生命周期、错误入口不发送、不合法原始 JSON 后全 c
 
 ## 验证状态
 
-本次编辑环境禁止本地 Cargo、构建、测试、仓库脚本、CI 启动和推送。新增测试及
-特性矩阵是待执行的验收接线，不代表运行通过。交付前仅允许固定 Rust 1.99.0
-逐文件 rustfmt 和 Git 源码差异检查；编译、Clippy、完整 contracts／smb-protocol
-测试及真实 Samba SDK 消费者必须由授权的远端验证另行给出结果。没有真实部署、
-权限／凭据变更、数据迁移或运行池清理。
+本地仅进行源码修改、固定 Rust 1.99.0 逐文件 rustfmt 和 Git 差异检查；
+Cargo、构建、测试与来源治理生成均在 GitHub 执行。没有真实部署、权限／凭据变更、
+数据迁移或运行池清理。
 
-基线锁文件的 json-codec 条目尚未包含 `preserve_order` 所需的 `foldhash` 和
-`indexmap` 依赖边（两个包本身已在锁文件中）。本地不手写锁文件；合入运行前必须
-由授权远端使用 Cargo 对该显式特性解析，保留既有包版本／本地路径，并审查生成的
-锁文件及来源治理差异，再执行上述 `--locked` 矩阵。
+精确输入提交 `ebc86d170566c4bd14c9162ad4c7791dd0da6010` 的
+[正常产品验证](https://github.com/isarmg/zxs/actions/runs/40635350996) 已实际执行：
+
+- contracts job `122641918742` 的四种显式特性配置均使用 `--locked --offline`，
+  每轮四项对象排序回归通过；`preserve_order` 轮实际编译当前 indexmap 实现。
+- smb-protocol job `122641918828` 的 39 项测试通过，其中 client 20 项包含五项新增
+  admission 回归；真实 Samba SDK job `122641918672` 的 27 项测试与 release 消费者通过。
+- workspace job `122641918812` 再次执行对象排序回归，并通过全部 31 项 telemetry
+  测试。以上是指定输入和 job 的证据，不替代后续组合提交的完整验证。
+
+此前两次官方[生成](https://github.com/isarmg/zxs/actions/runs/40634223995)与
+[诊断](https://github.com/isarmg/zxs/actions/runs/40634796626)均通过：Cargo 1.99.0
+的 `metadata --offline --features json-codec/preserve_order` 解析图包含
+`foldhash`、`indexmap`，来源、架构、文档 refresh 和 static 检查通过；生成差异为空，
+包版本集合不变。根锁文件字节未变，其 json-codec 条目仍只有原四项依赖，不能把
+metadata 图中的可选边说成已写入锁文件。未手改锁文件或 catalog；上述真实
+`--locked` 特性矩阵是该输入能够构建并执行测试的证据。

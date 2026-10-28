@@ -724,7 +724,7 @@ fn index_nodes(history: &Value) -> BTreeMap<String, Value> {
 thread_local! { static INDEX_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 fn index_projection(
-    history: Memo<crate::snapshot::Snapshot<Value>>,
+    history: Memo<crate::snapshot::Snapshot<super::history::FileHistory>>,
 ) -> Memo<BTreeMap<String, Value>> {
     Memo::new(move |_| history.with(|history| index_nodes(history)))
 }

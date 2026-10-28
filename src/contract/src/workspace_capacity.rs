@@ -14,7 +14,11 @@ pub struct CapacityMeasure {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serialization(deny_unknown_fields)]
 pub struct WorkspaceCapacityScope {
+    /// Resident records: all except verified, empty, ordinary aborted records.
     pub records: CapacityMeasure,
+    #[serialization(with = "crate::u64_string")]
+    pub cold_records: u64,
+    /// Includes both resident and cold manifests and lifecycle reservations.
     pub metadata_bytes: CapacityMeasure,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -31,19 +35,8 @@ pub struct WorkspaceCapacity {
     pub global: WorkspaceCapacityScope,
     pub principal: WorkspaceCapacityScope,
     pub warning: CapacityWarning,
-    #[serialization(deserialize_with = "no_automatic_retirement")]
+    /// Only empty aborted full manifests can leave the resident working set.
     pub automatic_retirement: bool,
-}
-
-fn no_automatic_retirement<'de, D: data_serialization::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<bool, D::Error> {
-    if bool::deserialize(deserializer)? {
-        return Err(data_serialization::de::Error::custom(
-            "automatic workspace retirement is not supported",
-        ));
-    }
-    Ok(false)
 }
 
 #[cfg(test)]

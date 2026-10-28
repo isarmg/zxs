@@ -52,7 +52,7 @@ fn unrelated_updates_and_query_changes_do_not_reproject_a_server_page() {
                     s.notice = i.to_string();
                     s.files.selected = Some(s.files.entries[i % size].clone());
                     s.files.checked_entries.insert(i.to_string());
-                    s.files.file_history = json!({"history":i}).into();
+                    s.files.file_history = crate::files::history::tests::history(json!({"history":i}));
                 });
                 assert_eq!(rows.with_untracked(Vec::len), size);
             }

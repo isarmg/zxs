@@ -24,6 +24,19 @@ impl DiskRoot {
         Ok(Self { path, directory })
     }
 
+    /// Admit a private descendant and retain that exact directory descriptor.
+    /// Its diagnostic path remains relative to this held resource, not a fresh
+    /// named-path root; enumeration can reopen only "." beneath the admitted FD.
+    pub(crate) fn private_child(&self, path: &Path) -> Result<Self> {
+        let directory = self.directory(path)?;
+        let directory =
+            OpenAt2Root::from_directory(directory, MountPolicy::SameMount).map_err(fs_error)?;
+        Ok(Self {
+            path: path.to_owned(),
+            directory,
+        })
+    }
+
     fn relative(&self, path: &Path) -> Result<RelativePath> {
         let relative = path.strip_prefix(&self.path).map_err(|_| {
             Error::new(

@@ -1,0 +1,76 @@
+{
+  "explicit-node": {
+    "file_id": "file", "repository_id": "repository", "path": null, "note": "",
+    "node_id": null, "current_node_id": null, "selected_branch_id": "branch",
+    "versions": [], "nodes": [], "merges": [],
+    "branches": [{
+      "branch_id": "branch", "history_tree_id": "history", "name": "main",
+      "head_commit_id": "head", "fork_commit_id": "fork", "branch_kind": "file",
+      "file_id": "file", "file_node_id": "file-node", "pending_file_versions": {},
+      "generation": "18446744073709551615", "state": "active",
+      "materialized": true, "inherited": false, "content_state": "AVAILABLE",
+      "version_id": "body", "own_version_id": "body", "source_version_id": null,
+      "visible_content_state": "AVAILABLE", "read_only": false, "alias_of": null,
+      "node_id": "file-node", "current": true
+    }]
+  },
+  "visible-node": {
+    "file_id": "file", "repository_id": "repository", "path": null, "note": "",
+    "node_id": null, "current_node_id": null, "selected_branch_id": null,
+    "versions": [], "nodes": [], "merges": [],
+    "branches": [{
+      "branch_id": "branch", "history_tree_id": "history", "name": "main",
+      "head_commit_id": "head", "fork_commit_id": "fork", "branch_kind": "file",
+      "file_id": "file", "pending_file_versions": {},
+      "generation": "18446744073709551615", "state": "active",
+      "materialized": true, "inherited": false, "content_state": "AVAILABLE",
+      "version_id": "body", "own_version_id": "body", "source_version_id": null,
+      "visible_content_state": "AVAILABLE", "read_only": false, "alias_of": null,
+      "node_id": "body", "current": false
+    }]
+  },
+  "merged-pending": {
+    "file_id": "file", "repository_id": "repository", "path": null, "note": "",
+    "node_id": null, "current_node_id": null, "selected_branch_id": "branch",
+    "versions": [], "nodes": [], "merges": [],
+    "branches": [{
+      "branch_id": "branch", "history_tree_id": "history", "name": "main",
+      "head_commit_id": "head", "fork_commit_id": "fork", "branch_kind": "file",
+      "file_id": "file", "pending_file_versions": {
+        "file": "branch-source", "commit-only": "commit-reservation", "branch-only": "branch-reservation"
+      },
+      "generation": "18446744073709551615", "state": "active",
+      "materialized": false, "inherited": true, "content_state": "PENDING",
+      "version_id": "branch-source", "own_version_id": null, "source_version_id": "branch-source",
+      "visible_content_state": "AVAILABLE", "read_only": false, "alias_of": null,
+      "node_id": "body", "current": true
+    }]
+  },
+  "empty-source": {
+    "file_id": "file", "repository_id": "repository", "path": null, "note": "",
+    "node_id": null, "current_node_id": null, "selected_branch_id": "full-branch",
+    "versions": [], "nodes": [], "merges": [],
+    "branches": [{
+      "branch_id": "branch", "history_tree_id": "history", "name": "main",
+      "head_commit_id": "head", "fork_commit_id": "fork", "branch_kind": "file",
+      "file_id": "file", "pending_file_versions": {
+        "file": "", "commit-only": "commit-reservation", "branch-only": "branch-reservation"
+      },
+      "generation": "18446744073709551615", "state": "merged",
+      "materialized": false, "inherited": true, "content_state": "PENDING",
+      "version_id": null, "own_version_id": null, "source_version_id": "",
+      "visible_content_state": "LIVE", "read_only": true, "alias_of": "survivor",
+      "node_id": "body", "current": false
+    }]
+  },
+  "no-selection": {
+    "file_id": "file", "repository_id": "repository", "path": null, "note": "",
+    "node_id": null, "current_node_id": null, "selected_branch_id": null,
+    "versions": [], "nodes": [], "merges": [], "branches": []
+  },
+  "full-selection": {
+    "file_id": "file", "repository_id": "repository", "path": null, "note": "",
+    "node_id": null, "current_node_id": null, "selected_branch_id": "full-branch",
+    "versions": [], "nodes": [], "merges": [], "branches": []
+  }
+}

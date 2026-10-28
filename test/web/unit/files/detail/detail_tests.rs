@@ -1,6 +1,6 @@
 use super::*;
 use crate::files::test_entries::{entry, update};
-use json_codec::{Value, json};
+use json_codec::json;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -10,17 +10,18 @@ use std::sync::{
 fn an_unknown_or_loading_note_cannot_be_submitted_as_an_empty_note() {
     let mut model = Model::default();
     assert!(!file_note_ready(&model));
-    model.file_history = json_codec::json!({"note":"existing note"}).into();
+    model.file_history =
+        crate::files::history::tests::history(json_codec::json!({"note":"existing note"}));
     model.history_loading = true;
     assert!(!file_note_ready(&model));
     model.history_loading = false;
     assert!(file_note_ready(&model));
-    model.file_history = json_codec::json!({"note":""}).into();
+    model.file_history = crate::files::history::tests::history(json_codec::json!({"note":""}));
     assert!(
         file_note_ready(&model),
         "a known empty note remains editable"
     );
-    model.file_history = Value::Null.into();
+    model.file_history = Default::default();
     assert!(
         !file_note_ready(&model),
         "a failed first request never implies an empty note"
@@ -66,7 +67,10 @@ fn metadata_completion_keeps_the_current_detail_controls_mounted() {
         assert_eq!(mounts.load(Ordering::SeqCst), 1);
         state.update(|s| {
             s.files.file_history =
-                json_codec::json!({"branches":[{"name":"main"},{"name":"draft"}]}).into();
+                crate::files::history::tests::history(json!({"branches":[
+                    crate::files::history::tests::branch_wire(json!({"branch_id":"main","name":"main"})),
+                    crate::files::history::tests::branch_wire(json!({"branch_id":"draft","name":"draft"}))
+                ]}));
             s.files.history_loading = false;
             s.files.mutation_pending = false;
         });

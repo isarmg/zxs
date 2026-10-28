@@ -1134,7 +1134,7 @@ async fn background_reopen_uses_local_workspace_limits_and_authenticated_capacit
             .to_string()
     );
     assert_eq!(capacity["warning"], "ok");
-    assert_eq!(capacity["automatic_retirement"], false);
+    assert_eq!(capacity["automatic_retirement"], true);
     assert!(json_codec::from_value::<storage_contract::WorkspaceCapacity>(capacity).is_ok());
     assert_eq!(
         request(

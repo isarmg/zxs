@@ -44,9 +44,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                     draft
                         .branches
                         .iter()
-                        .map(|branch| {
-                            SelectOption::new(text(branch, &["branch_id"]), text(branch, &["name"]))
-                        })
+                        .map(|branch| SelectOption::new(branch.id(), branch.name()))
                         .collect()
                 })
                 .unwrap_or_default()
@@ -67,7 +65,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
         <p class="zxs-row">{t("标签编辑在所选节点后新增元数据子节点，继承原标签和正文。只有来源仍是当前节点的引用才推进，历史节点不会使较新内容回退。","Tag edits add metadata child nodes that inherit existing labels and content. Only references still at the source advance; editing history never rolls back newer content.")}</p>
         <div class="zxs-stack">{move ||source_nodes.get().into_iter().enumerate().map(move |(index,node)|{
             let source=StoredValue::new(history_node_id(&node));let selected=Signal::derive(move ||state.with(|s|s.files.tag_edit.as_ref().and_then(|draft|draft.targets.iter().find(|target|target.source==source.get_value())).map(|target|target.branch.clone()).unwrap_or_default()));
-            view!{<div class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{merge::node_label(&node,index)}</span><Select label=t("关联分支","Associated branch") options=branch_options value=selected disabled=disabled on_change=Callback::new(move |value:String|update(state,|draft|{let head=draft.branches.iter().find(|branch|text(branch,&["branch_id"])==value).map(merge::branch_head).unwrap_or_default();if let Some(target)=draft.targets.iter_mut().find(|target|target.source==source.get_value()){target.branch=value;target.expected=head;}}))/></div>}
+            view!{<div class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{merge::node_label(&node,index)}</span><Select label=t("关联分支","Associated branch") options=branch_options value=selected disabled=disabled on_change=Callback::new(move |value:String|update(state,|draft|{let head=draft.branches.iter().find(|branch|branch.id()==value).and_then(FileBranch::head).unwrap_or_default().to_owned();if let Some(target)=draft.targets.iter_mut().find(|target|target.source==source.get_value()){target.branch=value;target.expected=head;}}))/></div>}
         }).collect_view()}</div>
         <div class="zxs-file-toolbar zxs-flow"><label class="zxs-flow"><span class="zxs-row">{t("新增标签","Add tags")}</span><input class="zxs-input zxs-input--compact zxs-input--underline" aria-label=t("新增标签","Add tag") data-max-bytes=storage_contract::MAX_TAG_BYTES.to_string() disabled=move ||disabled.get() prop:value=move ||state.with(|s|s.files.tag_edit.as_ref().map(|draft|draft.input.clone()).unwrap_or_default()) on:input=move |event|update(state,|draft|draft.input=event_target_value(&event)) on:keydown=move |event:web_sys::KeyboardEvent|{if event.key()=="Enter"&&!event.is_composing(){event.prevent_default();add_input(state);}}/></label><button class="zxs-button" type="button" disabled=move ||disabled.get() on:click=move |_|add_input(state)>{t("添加标签","Add tag")}</button></div>
         <div class="zxs-node-tags zxs-flow">{move ||state.with(|s|s.files.tag_edit.as_ref().map(|draft|draft.add.clone()).unwrap_or_default()).into_iter().map(move |name|{let value=name.clone();view!{<button class="zxs-button zxs-tag-choice" aria-label=format!("{} {name}",t("移除新增标签","Remove added tag")) disabled=move ||disabled.get() on:click=move |_|update(state,|draft|{draft.add.remove(&value);})><span class="zxs-node-tag zxs-input zxs-input--compact">{name.clone()}</span></button>}}).collect_view()}</div>

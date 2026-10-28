@@ -1,4 +1,7 @@
-use super::page::{DirectoryBranch, Entry};
+use super::{
+    history::{FileBranch, FileHistory},
+    page::{DirectoryBranch, Entry},
+};
 use json_codec::Value;
 use std::{collections::BTreeSet, sync::Arc};
 use web_interface::i18n::t;
@@ -43,6 +46,14 @@ pub(crate) fn parse_disks(value: &Value) -> Result<Vec<Disk>, crate::api::Error>
     })
 }
 
+/// Owned destinations supplied by disk rows, directory rows or breadcrumbs.
+/// Directory navigation keeps the currently selected disk.
+pub(crate) enum Navigation {
+    Root,
+    Disk(String),
+    Directory(String),
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct Model {
     pub disks: Vec<Disk>,
@@ -71,7 +82,7 @@ pub(crate) struct Model {
     pub loading: bool,
     pub generation: u64,
     pub selected: Option<Entry>,
-    pub file_history: crate::snapshot::Snapshot<Value>,
+    pub file_history: crate::snapshot::Snapshot<FileHistory>,
     pub history_loading: bool,
     pub history_generation: u64,
     pub checked_entries: BTreeSet<String>,
@@ -87,6 +98,42 @@ pub(crate) struct Model {
     pub query: String,
 }
 impl Model {
+    /// Reset location-owned state without discarding disk reads or operation
+    /// recovery. Session admission and starting the next read belong to actions.
+    pub(crate) fn navigate(&mut self, destination: Navigation) {
+        self.cancel_listing();
+        self.reset_page();
+        match destination {
+            Navigation::Root => {
+                self.slot.clear();
+                self.directory.clear();
+                // The disk view does not consume the directory query/readiness.
+                // Opening a disk establishes them for the next directory read.
+            }
+            Navigation::Disk(slot) => {
+                self.slot = slot;
+                self.directory.clear();
+                self.query.clear();
+                self.loaded = false;
+            }
+            Navigation::Directory(directory) => {
+                self.directory = directory;
+                self.query.clear();
+                self.loaded = false;
+            }
+        }
+        self.writable = false;
+        self.entries = Default::default();
+        self.directory_branches.clear();
+        self.directory_file_count = 0;
+        self.directory_branches_supported = false;
+        self.repository_id.clear();
+        self.repository_path.clear();
+        self.default_branch_scope = false;
+        self.clear_selection();
+        self.batch = None;
+    }
+
     /// A recovered store needs a fresh disk snapshot, even if an older read is
     /// still in flight. Only this generation may mark the listing loaded again.
     pub(crate) fn invalidate_disks(&mut self) {
@@ -119,7 +166,7 @@ impl Model {
         self.tag_edit = None;
         self.checked_nodes.clear();
         self.selected = None;
-        self.file_history = Value::Null.into();
+        self.file_history = Default::default();
         self.history_loading = false;
         self.history_generation += 1;
     }
@@ -144,7 +191,7 @@ impl Model {
                 // A refreshed branch or renamed logical path invalidates both
                 // visible metadata and in-flight reads of the previous context.
                 if content_changed {
-                    self.file_history = Value::Null.into();
+                    self.file_history = Default::default();
                 }
                 self.history_loading = false;
                 self.history_generation += 1;
@@ -332,29 +379,12 @@ pub(crate) fn history_node_id(node: &Value) -> String {
         .to_owned()
 }
 pub(crate) fn selected_branch(model: &Model) -> String {
-    let selected = model.file_history["selected_branch_id"].as_str();
-    model.file_history["branches"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|branch| {
-            branch["current"] == true
-                || branch["selected"] == true
-                || selected.is_some_and(|id| branch["branch_id"] == id)
-        })
-        .and_then(|branch| branch["branch_id"].as_str())
-        .or(selected)
+    model
+        .file_history
+        .selected()
         .or_else(|| model.selected.as_ref().and_then(Entry::selected_branch_id))
         .unwrap_or_default()
         .to_owned()
-}
-pub(crate) fn branch_writable(branch: &Value) -> bool {
-    branch["read_only"] != true
-        && branch["is_alias"] != true
-        && branch["alias"] != true
-        && branch["alias_of"].as_str().is_none_or(str::is_empty)
-        && branch["status"] != "ARCHIVED"
-        && branch["status"] != "CONSUMED"
 }
 pub(crate) fn selected_file_branch_record(model: &Model) -> Option<(String, String, String)> {
     let file = model
@@ -363,19 +393,15 @@ pub(crate) fn selected_file_branch_record(model: &Model) -> Option<(String, Stri
         .filter(|entry| file_kind(entry))
         .map(Entry::file_id)?;
     let id = selected_branch(model);
-    let branch = model.file_history["branches"]
-        .as_array()?
+    let branch = model
+        .file_history
+        .branches()
         .iter()
-        .find(|branch| branch["branch_id"] == id)?;
-    let name = branch["name"].as_str()?;
-    if !branch_writable(branch) {
+        .find(|branch| branch.id() == id)?;
+    if !branch.writable() {
         return None;
     }
-    if id.is_empty() {
-        None
-    } else {
-        Some((file.to_owned(), id, name.to_owned()))
-    }
+    Some((file.to_owned(), id, branch.name().to_owned()))
 }
 pub(crate) fn directory_branch_name(branch: &DirectoryBranch) -> String {
     display_branch_name(branch.name())
@@ -387,9 +413,9 @@ fn display_branch_name(name: &str) -> String {
         name => name.to_owned(),
     }
 }
-pub(crate) fn branch_name(value: &Value) -> String {
-    let name = display_branch_name(value["name"].as_str().unwrap_or_default());
-    if value["materialized"] == false || value["content_state"] == "PENDING" {
+pub(crate) fn branch_name(branch: &FileBranch) -> String {
+    let name = display_branch_name(branch.name());
+    if branch.pending() {
         format!("{name} · {}", t("待写入", "Pending content"))
     } else {
         name

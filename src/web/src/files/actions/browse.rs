@@ -3,12 +3,12 @@ use super::disk_path;
 use crate::{
     api,
     files::{
-        model::Disk,
+        history::FileHistory,
+        model::{Disk, Navigation},
         page::{DirectoryKey, Entry, Page},
     },
-    ui::{State, accept_read_response, current_session, fail},
+    ui::{ErrorContext, State, accept_read_response, current_session, fail, fail_in},
 };
-use json_codec::Value;
 use web_interface::tasks::spawn_local;
 use web_interface::{i18n::t, prelude::*};
 
@@ -65,7 +65,12 @@ pub(crate) fn load_disks(state: RwSignal<State>) {
             .and_then(|value| super::super::model::parse_disks(&value));
         match state.try_update(|s| complete_disk_load(s, epoch, generation, result)) {
             Some(Ok(true)) => load_disks(state),
-            Some(Err(error)) => fail(state, error),
+            Some(Err(error)) => fail_in(
+                state,
+                epoch,
+                ErrorContext::Read("/api/file-manager/disks".into()),
+                error,
+            ),
             Some(Ok(false)) | None => {}
         }
     });
@@ -73,68 +78,22 @@ pub(crate) fn load_disks(state: RwSignal<State>) {
 
 pub(crate) fn open_disk(state: RwSignal<State>, slot: String) {
     state.update(|s| {
-        s.files.cancel_listing();
-        s.files.reset_page();
+        s.files.navigate(Navigation::Disk(slot));
         s.page = crate::ui::Page::Files;
-        s.files.slot = slot;
-        s.files.writable = false;
-        s.files.directory.clear();
-        s.files.query.clear();
-        s.files.directory_branches.clear();
-        s.files.directory_file_count = 0;
-        s.files.directory_branches_supported = false;
-        s.files.repository_id.clear();
-        s.files.repository_path.clear();
-        s.files.default_branch_scope = false;
-        s.files.clear_selection();
-        s.files.checked_entries.clear();
-        s.files.batch = None;
-        s.files.entries = Default::default();
-        s.files.loaded = false;
     });
     load_entries(state);
 }
 pub(crate) fn go_root(state: RwSignal<State>) {
     state.update(|s| {
-        s.files.cancel_listing();
-        s.files.reset_page();
+        s.files.navigate(Navigation::Root);
         s.page = crate::ui::Page::Files;
-        s.files.directory_branches.clear();
-        s.files.directory_file_count = 0;
-        s.files.directory_branches_supported = false;
-        s.files.repository_id.clear();
-        s.files.repository_path.clear();
-        s.files.default_branch_scope = false;
-        s.files.slot.clear();
-        s.files.writable = false;
-        s.files.loading = false;
-        s.files.directory.clear();
-        s.files.entries = Default::default();
-        s.files.clear_selection();
-        s.files.checked_entries.clear();
-        s.files.batch = None;
     });
     load_disks(state);
 }
 pub(crate) fn go_directory(state: RwSignal<State>, directory: String) {
     state.update(|s| {
-        s.files.cancel_listing();
-        s.files.reset_page();
+        s.files.navigate(Navigation::Directory(directory));
         s.page = crate::ui::Page::Files;
-        s.files.directory = directory;
-        s.files.writable = false;
-        s.files.entries = Default::default();
-        s.files.query.clear();
-        s.files.directory_branches.clear();
-        s.files.directory_file_count = 0;
-        s.files.directory_branches_supported = false;
-        s.files.repository_id.clear();
-        s.files.repository_path.clear();
-        s.files.default_branch_scope = false;
-        s.files.clear_selection();
-        s.files.checked_entries.clear();
-        s.files.batch = None;
-        s.files.loaded = false;
     });
     load_entries(state);
 }
@@ -300,7 +259,7 @@ fn request_page(state: RwSignal<State>, restarted: bool) {
                     s.files.listing_failed = true;
                     s.files.writable = false;
                 });
-                fail(state, error);
+                fail_in(state, epoch, ErrorContext::Read(endpoint), error);
             }
         }
         state.update(|s| {
@@ -407,23 +366,21 @@ pub(crate) fn load_file_history(state: RwSignal<State>) {
         s.files.history_generation = generation;
     });
     spawn_local(async move {
-        let result = api::request(
-            "GET",
-            &format!(
-                "/api/file-manager/files/{}/history{}",
-                api::segment(&id),
-                context
-                    .as_ref()
-                    .map(|(repository, path)| format!(
-                        "?repository_id={}&path={}",
-                        api::segment(repository),
-                        api::segment(path)
-                    ))
-                    .unwrap_or_default()
-            ),
-            None,
-        )
-        .await;
+        let endpoint = format!(
+            "/api/file-manager/files/{}/history{}",
+            api::segment(&id),
+            context
+                .as_ref()
+                .map(|(repository, path)| format!(
+                    "?repository_id={}&path={}",
+                    api::segment(repository),
+                    api::segment(path)
+                ))
+                .unwrap_or_default()
+        );
+        let result = api::request("GET", &endpoint, None)
+            .await
+            .and_then(|value| FileHistory::parse(value, &id));
         if !accept_read_response(state, epoch, &result)
             || !state.with_untracked(|s| {
                 s.files.history_generation == generation
@@ -436,17 +393,18 @@ pub(crate) fn load_file_history(state: RwSignal<State>) {
             return;
         }
         match result {
-            Ok(value) => state.update(|s| {
-                s.files.file_history = match s.files.selected.as_ref() {
-                    Some(entry) => crate::files::model::history_for_entry(value, entry),
-                    None => value,
-                }
-                .into();
+            Ok(history) => state.update(|s| {
+                let entry = s
+                    .files
+                    .selected
+                    .as_ref()
+                    .expect("invariant: accepted history still has its selected entry");
+                s.files.file_history = history.for_entry(entry).into();
             }),
             Err(error) => {
                 // A failed refresh must not re-enable controls for stale heads.
-                state.update(|s| s.files.file_history = Value::Null.into());
-                fail(state, error);
+                state.update(|s| s.files.file_history = Default::default());
+                fail_in(state, epoch, ErrorContext::Read(endpoint), error);
             }
         }
         state.update(|s| s.files.history_loading = false);

@@ -260,8 +260,8 @@ fn workspace_authorize<'a>(
     engine: &'a Engine,
     identity: &Identity,
     id: &str,
-) -> Result<&'a storage_engine::Workspace, ApiError> {
-    let workspace = engine.workspace_ref(id).map_err(error)?;
+) -> Result<std::borrow::Cow<'a, storage_engine::Workspace>, ApiError> {
+    let workspace = engine.workspace_view(id).map_err(error)?;
     if workspace.principal != identity.principal {
         return Err(ApiError::forbidden());
     }
@@ -427,7 +427,7 @@ impl Backend for EngineBackend {
     ) -> Result<storage_contract::Workspace, ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         let current = current_protected_identity(&engine, identity)?;
-        workspace_authorize(&engine, &current, workspace).cloned()
+        workspace_authorize(&engine, &current, workspace).map(std::borrow::Cow::into_owned)
     }
 
     fn require_native_workspace_commit_completion(
@@ -482,7 +482,8 @@ impl Backend for EngineBackend {
             storage_contract::WorkspaceState::Sealed | storage_contract::WorkspaceState::Committed
         ) {
             crate::PublishedUploadState::Sealed {
-                manifest_hash: storage_engine::workspace_manifest_hash(workspace).map_err(error)?,
+                manifest_hash: storage_engine::workspace_manifest_hash(&workspace)
+                    .map_err(error)?,
             }
         } else {
             crate::PublishedUploadState::Complete

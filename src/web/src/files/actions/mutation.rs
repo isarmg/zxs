@@ -7,7 +7,7 @@ use super::{
 use crate::{
     api,
     files::model::{FileOperation, NamespaceAction, SaveStatus, join_path},
-    ui::{State, current_session, fail, set_notice},
+    ui::{ErrorContext, State, current_session, fail_in, set_notice},
 };
 use json_codec::{Value, json};
 use web_interface::tasks::spawn_local;
@@ -49,7 +49,7 @@ pub(crate) fn namespace(
                 record_receipt(state, &id, value);
             }
             Err(error) => {
-                record_failure(state, &id, error);
+                record_failure(state, epoch, &id, error);
             }
         }
         state.update(|s| s.files.mutation_pending = false);
@@ -107,7 +107,7 @@ pub(crate) fn directory_branch(
                 }
             }
             Err(error) => {
-                record_failure(state, &operation_id, error);
+                record_failure(state, epoch, &operation_id, error);
             }
         }
         state.update(|s| s.files.mutation_pending = false);
@@ -202,7 +202,7 @@ fn record_mutation(
                 record_receipt(state, &operation_id, value);
             }
             Err(error) => {
-                record_failure(state, &operation_id, error);
+                record_failure(state, epoch, &operation_id, error);
             }
         }
         state.update(|s| s.files.mutation_pending = false);
@@ -257,7 +257,7 @@ pub(crate) fn update_note(
                 record_receipt(state, &operation_id, value);
             }
             Err(error) => {
-                record_failure(state, &operation_id, error);
+                record_failure(state, epoch, &operation_id, error);
             }
         }
         state.update(|s| s.files.mutation_pending = false);
@@ -368,7 +368,7 @@ fn file_mutation(
                 record_receipt(state, &id, value);
             }
             Err(error) => {
-                record_failure(state, &id, error);
+                record_failure(state, epoch, &id, error);
             }
         }
         state.update(|s| s.files.mutation_pending = false);
@@ -378,7 +378,7 @@ fn file_mutation(
 
 /// Definite HTTP rejection releases only this operation; ambiguous transport or
 /// malformed-success responses stay tied to the original ID for polling.
-fn record_failure(state: RwSignal<State>, id: &str, error: api::Error) {
+fn record_failure(state: RwSignal<State>, epoch: u64, id: &str, error: api::Error) {
     let unknown = error.mutation_outcome_unknown();
     let operation = if unknown {
         FileOperation::unknown(id)
@@ -391,7 +391,7 @@ fn record_failure(state: RwSignal<State>, id: &str, error: api::Error) {
         // Present its actual error without claiming any content was retained.
         set_notice(state, String::new());
     }
-    fail(state, error);
+    fail_in(state, epoch, ErrorContext::Operation(id.to_owned()), error);
 }
 
 #[cfg(test)]

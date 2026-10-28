@@ -33,10 +33,12 @@ fn invalid_names_never_become_branch_requests() {
 #[test]
 fn branching_from_a_path_node_keeps_the_body_id_and_explicit_node_parent_separate() {
     let model = super::super::model::Model {
-        selected: Some(
-            crate::files::test_entries::entry(json_codec::json!({"file_id":"file","version_id":"ver-one","node_id":"fnode-rename"})),
+        selected: Some(crate::files::test_entries::entry(
+            json_codec::json!({"file_id":"file","version_id":"ver-one","node_id":"fnode-rename"}),
+        )),
+        file_history: crate::files::history::tests::history(
+            json_codec::json!({"nodes":[{"node_id":"fnode-rename","version_id":"ver-one","kind":"rename"}]}),
         ),
-        file_history: json_codec::json!({"nodes":[{"node_id":"fnode-rename","version_id":"ver-one","kind":"rename"}]}).into(),
         ..Default::default()
     };
     assert_eq!(

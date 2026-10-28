@@ -117,6 +117,24 @@ fn draft(kind: Kind) -> Draft {
     }
 }
 #[test]
+fn navigation_discards_an_open_batch_review() {
+    use crate::files::model::{Model, Navigation};
+    for destination in [
+        Navigation::Root,
+        Navigation::Disk("B01".into()),
+        Navigation::Directory("other".into()),
+    ] {
+        let mut model = Model {
+            batch: Some(draft(Kind::Move)),
+            ..Default::default()
+        };
+        assert!(model.batch.is_some());
+        model.navigate(destination);
+        assert!(model.batch.is_none());
+    }
+}
+
+#[test]
 fn reviews_load_only_captured_source_facts_before_submission() {
     Owner::new().with(|| {
         for kind in [Kind::Move, Kind::Copy, Kind::Rename, Kind::Delete] {

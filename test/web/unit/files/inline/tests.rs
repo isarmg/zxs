@@ -111,7 +111,9 @@ fn clearing_a_note_is_distinct_from_cancelling_a_name() {
 #[test]
 fn a_path_nodes_generated_caption_is_display_only_and_note_input_starts_from_metadata() {
     let mut state = State::default();
-    state.files.file_history = json_codec::json!({"nodes":[{"node_id":"fnode-rename","version_id":"ver-one","kind":"rename","previous_path":"old/report.txt","path":"new/report.txt","note":""}]}).into();
+    state.files.file_history = crate::files::history::tests::history(
+        json_codec::json!({"nodes":[{"node_id":"fnode-rename","version_id":"ver-one","kind":"rename","previous_path":"old/report.txt","path":"new/report.txt","note":""}]}),
+    );
     let target = Target::NodeNote("fnode-rename".into());
     assert_eq!(target.initial(&state), "");
     assert_eq!(
@@ -121,7 +123,9 @@ fn a_path_nodes_generated_caption_is_display_only_and_note_input_starts_from_met
         "Path changed old/report.txt → new/report.txt"
     );
     assert!(target.input_kind() == InputKind::Note);
-    state.files.file_history["nodes"][0]["note"] = "Reviewed rename".into();
+    crate::files::history::tests::update_metadata(&mut state.files.file_history, |value| {
+        value["nodes"][0]["note"] = "Reviewed rename".into()
+    });
     assert_eq!(
         target.display(&super::super::history_index::HistoryIndex::new(
             state.files.file_history.clone()
@@ -137,11 +141,10 @@ fn a_path_nodes_generated_caption_is_display_only_and_note_input_starts_from_met
 fn legacy_notes_are_displayed_without_silent_truncation() {
     let original = format!("{}\nlegacy", "文".repeat(60));
     let mut state = State::default();
-    state.files.file_history = json_codec::json!({
+    state.files.file_history = crate::files::history::tests::history(json_codec::json!({
         "note": original,
         "versions": [{"version_id": "old", "note": original}],
-    })
-    .into();
+    }));
     assert_eq!(Target::FileNote.initial(&state), original);
     assert_eq!(Target::VersionNote("old".into()).initial(&state), original);
     assert_eq!(edit_value(&original, InputKind::Note), Edit::Invalid);
@@ -216,6 +219,30 @@ fn rejected_admission_keeps_the_draft_and_unsubmitted_edits_can_cancel() {
         draft.cancel_idle();
         assert!(!draft.editing.get_untracked());
         assert_eq!(draft.value.get_untracked(), "");
+    });
+}
+
+#[test]
+fn owned_navigation_invalidates_a_queued_editor_without_admitting_its_write() {
+    use crate::files::model::Navigation;
+    Owner::new().with(|| {
+        for destination in [
+            Navigation::Root,
+            Navigation::Disk("B01".into()),
+            Navigation::Directory("other".into()),
+        ] {
+            let state = RwSignal::new(active_state());
+            state.update(|s| {
+                s.files.slot = "P01".into();
+                s.files.directory = "docs".into();
+            });
+            let draft = Draft::unobserved(state);
+            draft.start("old location draft".into());
+            state.update(|s| s.files.navigate(destination));
+            draft.submit(|| panic!("navigation must invalidate the old editor context"));
+            assert!(!draft.editing.get_untracked());
+            assert!(!draft.pending());
+        }
     });
 }
 
