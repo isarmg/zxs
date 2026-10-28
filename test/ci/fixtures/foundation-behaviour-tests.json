@@ -1086,6 +1086,125 @@
         ]
       }
     },
+    "integration:cmov": {
+      "features": [],
+      "subject": "cmov",
+      "targets": {
+        "core_impls": [
+          "arrays::u8_cmoveq_works",
+          "arrays::u8_cmovne_works",
+          "arrays::u8_cmovnz_works",
+          "arrays::u8_cmovz_works",
+          "i128::cmoveq_works",
+          "i128::cmovne_works",
+          "i128::cmovnz_works",
+          "i128::cmovz_works",
+          "i16::cmoveq_works",
+          "i16::cmovne_works",
+          "i16::cmovnz_works",
+          "i16::cmovz_works",
+          "i32::cmoveq_works",
+          "i32::cmovne_works",
+          "i32::cmovnz_works",
+          "i32::cmovz_works",
+          "i64::cmoveq_works",
+          "i64::cmovne_works",
+          "i64::cmovnz_works",
+          "i64::cmovz_works",
+          "i8::cmoveq_works",
+          "i8::cmovne_works",
+          "i8::cmovnz_works",
+          "i8::cmovz_works",
+          "isize::cmoveq_works",
+          "isize::cmovne_works",
+          "isize::cmovnz_works",
+          "isize::cmovz_works",
+          "ordering::cmoveq_works",
+          "ordering::cmovnz_works",
+          "ordering::cmovz_works",
+          "slices::i128::cmoveq_works",
+          "slices::i128::cmovne_works",
+          "slices::i128::cmovnz_length_mismatch_panics",
+          "slices::i128::cmovnz_works",
+          "slices::i128::cmovz_works",
+          "slices::i16::cmoveq_works",
+          "slices::i16::cmovne_works",
+          "slices::i16::cmovnz_length_mismatch_panics",
+          "slices::i16::cmovnz_works",
+          "slices::i16::cmovz_works",
+          "slices::i32::cmoveq_works",
+          "slices::i32::cmovne_works",
+          "slices::i32::cmovnz_length_mismatch_panics",
+          "slices::i32::cmovnz_works",
+          "slices::i32::cmovz_works",
+          "slices::i64::cmoveq_works",
+          "slices::i64::cmovne_works",
+          "slices::i64::cmovnz_length_mismatch_panics",
+          "slices::i64::cmovnz_works",
+          "slices::i64::cmovz_works",
+          "slices::i8::cmoveq_works",
+          "slices::i8::cmovne_works",
+          "slices::i8::cmovnz_length_mismatch_panics",
+          "slices::i8::cmovnz_works",
+          "slices::i8::cmovz_works",
+          "slices::u128::cmoveq_works",
+          "slices::u128::cmovne_works",
+          "slices::u128::cmovnz_length_mismatch_panics",
+          "slices::u128::cmovnz_works",
+          "slices::u128::cmovz_works",
+          "slices::u16::cmoveq_works",
+          "slices::u16::cmovne_works",
+          "slices::u16::cmovnz_length_mismatch_panics",
+          "slices::u16::cmovnz_works",
+          "slices::u16::cmovz_works",
+          "slices::u32::cmoveq_works",
+          "slices::u32::cmovne_works",
+          "slices::u32::cmovnz_length_mismatch_panics",
+          "slices::u32::cmovnz_works",
+          "slices::u32::cmovz_works",
+          "slices::u64::cmoveq_works",
+          "slices::u64::cmovne_works",
+          "slices::u64::cmovnz_length_mismatch_panics",
+          "slices::u64::cmovnz_works",
+          "slices::u64::cmovz_works",
+          "slices::u8::cmoveq_works",
+          "slices::u8::cmovne_works",
+          "slices::u8::cmovnz_length_mismatch_panics",
+          "slices::u8::cmovnz_works",
+          "slices::u8::cmovz_works",
+          "u128::cmoveq_works",
+          "u128::cmovne_works",
+          "u128::cmovnz_works",
+          "u128::cmovz_works",
+          "u16::cmoveq_works",
+          "u16::cmovne_works",
+          "u16::cmovnz_works",
+          "u16::cmovz_works",
+          "u32::cmoveq_works",
+          "u32::cmovne_works",
+          "u32::cmovnz_works",
+          "u32::cmovz_works",
+          "u64::cmoveq_works",
+          "u64::cmovne_works",
+          "u64::cmovnz_works",
+          "u64::cmovz_works",
+          "u8::cmoveq_works",
+          "u8::cmovne_works",
+          "u8::cmovnz_works",
+          "u8::cmovz_works",
+          "usize::cmoveq_works",
+          "usize::cmovne_works",
+          "usize::cmovnz_works",
+          "usize::cmovz_works"
+        ],
+        "regression": [
+          "cmoveq_wrong_output_i16",
+          "cmoveq_wrong_output_u16",
+          "cmovz_wrong_output",
+          "u64_cmoveq"
+        ]
+      }
+    },
     "integration:concurrent-collections": {
       "features": [
         "alloc",
@@ -1167,6 +1286,22 @@
           "test_into_inner_poison",
           "try_write",
           "unsized_type"
+        ]
+      }
+    },
+    "integration:constant_time_eq": {
+      "features": [
+        "std"
+      ],
+      "subject": "constant_time_eq",
+      "targets": {
+        "exhaustive": [
+          "exhaustive_test_ones_generic",
+          "exhaustive_test_ones_simd",
+          "exhaustive_test_random_generic",
+          "exhaustive_test_random_simd",
+          "exhaustive_test_zeros_generic",
+          "exhaustive_test_zeros_simd"
         ]
       }
     },
@@ -1863,6 +1998,23 @@
         ]
       }
     },
+    "unit:cmov": {
+      "features": [],
+      "subject": "cmov",
+      "targets": {
+        "lib": [
+          "macros::tests::masknz_u128",
+          "macros::tests::masknz_u16",
+          "macros::tests::masknz_u32",
+          "macros::tests::masknz_u64",
+          "macros::tests::masknz_u8",
+          "macros::tests::masknz_usize",
+          "slice::tests::cmovnz_remainder",
+          "slice::tests::slice_to_word",
+          "slice::tests::word_to_slice"
+        ]
+      }
+    },
     "unit:flag-set": {
       "features": [
         "std"
@@ -1965,6 +2117,21 @@
           "tests::rc_rw_read",
           "tests::rc_rw_try",
           "tests::rc_rw_write"
+        ]
+      }
+    },
+    "unit:httpdate": {
+      "features": [],
+      "subject": "httpdate",
+      "targets": {
+        "lib": [
+          "tests::size_of",
+          "tests::test2",
+          "tests::test3",
+          "tests::test_date_comparison",
+          "tests::test_fmt",
+          "tests::test_parse_bad_date",
+          "tests::test_rfc_example"
         ]
       }
     },

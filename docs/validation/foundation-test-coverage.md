@@ -107,7 +107,7 @@ test/ci/fixtures/foundation-test-coverage.json  与  docs/validation/foundation-
 | `python3 tools/rust-sources/foundation_coverage.py --check` | 生成映射与当前仓库一致 |
 | `python3 -m unittest discover -s test/ci -p 'test_*.py'` | 通过 |
 | `python3 tools/rust-sources/manage.py verify --metadata` | 通过 |
-| `bash .github/scripts/check-foundation.sh foundation-async` | 在本环境可执行部分通过；需要 WASM 标准库的检查记为环境受限 |
+| `bash .github/scripts/check-foundation.sh foundation-async` | 最终提交在固定工具链、所需 WASM 目标的 GitHub 环境完整通过；缺失工具不能记为通过 |
 
 ## 实施结果
 
@@ -138,6 +138,12 @@ test/ci/fixtures/foundation-test-coverage.json  与  docs/validation/foundation-
 对保留测试的改动只限：`rand` → 本地 `fastrand`（9 个文件，各一到三处随机步数）、`easy_parallel` → `std::thread::scope`（parking 三处）、`futures_test` 的两个 waker → 项目新作 `tests/support/wakers.rs`、`pin_utils::pin_mut` → `futures::pin_mut`（futures-intrusive 七个文件）、删除 flume 测试中未使用的 `crossbeam_utils` 别名导入、flag-set `tests.rs` 为 33 个子模块写明 `#[path]`（修复 E0583）。spin 删除唯一一个调用本地实现中不存在的 `Once::init_from_ref` 的测试；为执行该测试而恢复此 API 需要新增生产 API，违反测试布局规则。本地仍保留私有的 `force_into_inner`，本次未修改该方法。flume 项目契约中“接收端释放后队列中元素由通道持有，直到最后一个发送端释放”按实际实现断言，这正是 SQLite 工作线程注释依赖的行为。
 
 `check-concurrent-collections.py` 不再保留 DORMANT 列表，原六份集成改由本门禁执行；其余特性矩阵、原有六项集成和消费者检查不变。
+
+### 固定工具链的追加执行记录
+
+[GitHub 运行 40707504143](https://github.com/isarmg/zxs/actions/runs/40707504143)在 Rust 1.99.0 上实际执行了输入提交 `b6f543fc621d91f55a1db5f10cd3947b8bd948fb` 的 24 个套件、1,968 项具名测试。原 20 个套件的主体、特性、目标和全部名称保持不变；新增 cmov 单元 9 项、core_impls 105 项及 regression 4 项，constant_time_eq exhaustive 6 项，httpdate 单元 7 项，共 131 项。全部名称清单由实际运行生成，未手写计数或启用缺失提供者的特性。
+
+该运行还通过了覆盖生成／检查、445 项 CI 工具回归、23 项性能工具回归及来源元数据验证。生成差异只涉及两份测试／覆盖清单和覆盖映射文档，Cargo.lock、来源 catalog 与正常 CI 工作流未变。此记录是追加覆盖证据，不代替最终提交的完整产品 CI，也不扩大上文限定的功能、API 或目标范围。
 
 ### 治理
 
