@@ -3,10 +3,11 @@
 use super::{
     actions as file_actions,
     model::{Model, entry_key, join_path, valid_name},
+    page::Entry,
 };
 use crate::{
     api,
-    ui::{State, accept_read_response, current_session, fail, list, text},
+    ui::{State, accept_read_response, current_session, fail},
 };
 use json_codec::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -67,14 +68,14 @@ pub(crate) struct Draft {
     repository: String,
     repository_path: String,
     disk_prefix: String,
-    entries: Vec<Value>,
+    entries: Vec<Entry>,
     names: BTreeMap<String, String>,
-    sources: Vec<Value>,
+    sources: Vec<ScopeBranch>,
     source_resolved: bool,
     scope_read: Option<std::sync::Arc<ScopeRead>>,
     selected_sources: BTreeSet<String>,
     target_path: String,
-    targets: Vec<Value>,
+    targets: Vec<ScopeBranch>,
     target_resolved: bool,
     mappings: Vec<Mapping>,
     loading: bool,
@@ -83,23 +84,25 @@ pub(crate) struct Draft {
     generation: u64,
     error: String,
 }
-fn branch_id(branch: &Value) -> String {
-    text(branch, &["directory_branch_id"])
+fn branch_id(branch: &ScopeBranch) -> String {
+    branch.summary().id().to_owned()
 }
-fn branch_label(branch: &Value) -> String {
-    text(branch, &["name"])
+fn branch_label(branch: &ScopeBranch) -> String {
+    branch.summary().name().to_owned()
 }
-fn entry_id(entry: &Value) -> String {
-    text(entry, &["entry_id"])
+fn entry_id(entry: &Entry) -> String {
+    entry.entry_id().to_owned()
 }
-fn selected_path(entry: &Value) -> &str {
-    entry["repository_path"]
-        .as_str()
-        .or_else(|| entry["path"].as_str())
-        .unwrap_or_default()
+fn selected_path(entry: &Entry) -> &str {
+    entry.repository_path().unwrap_or_else(|| entry.path())
 }
-fn source_branches(model: &Model) -> Vec<Value> {
-    model.directory_branches.clone()
+fn source_branches(model: &Model) -> Vec<ScopeBranch> {
+    model
+        .directory_branches
+        .iter()
+        .cloned()
+        .map(Into::into)
+        .collect()
 }
 
 pub(crate) fn available(model: &Model) -> bool {
@@ -112,9 +115,11 @@ pub(crate) fn available(model: &Model) -> bool {
 
 mod actions;
 mod request;
+mod scopes;
+use scopes::{Projection, ScopeBranch, Scopes, SelectedFact};
 mod view;
 pub(crate) use actions::{reload_registered_scope, start};
-use request::{request, valid_path};
+use request::{destination_endpoint, destination_path, request};
 pub(crate) use view::view;
 
 /// Keep uncertain transactions tied to their original operation. A namespace

@@ -22,8 +22,8 @@ pub(crate) struct Draft {
     prefixes: BTreeMap<String, String>,
     loading: bool,
 }
-pub(crate) fn start_entry(state: RwSignal<State>, entry: Value) {
-    let Some((repository, path)) = state.with_untracked(|s| file_context(&s.files, &entry)) else {
+pub(crate) fn start_entry(state: RwSignal<State>, entry: super::page::Entry) {
+    let Some((repository, path)) = file_context(&entry) else {
         return;
     };
     start(state, repository, path);

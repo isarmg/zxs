@@ -62,7 +62,8 @@ int fsync(int fd) {
         if (target == 1 && !strcmp(stage, "publish")) {
             /* Force a real publication conflict without intercepting rustix syscalls.
              * replace rejects the directory during its pre-rename type check. */
-            if (!strcmp(getenv("ZXS_ATOMIC_MODE"), "replace")) {
+            const char *mode = getenv("ZXS_ATOMIC_MODE");
+            if (!strcmp(mode, "replace") || !strcmp(mode, "replace-held")) {
                 if (unlink(destination) || mkdir(destination, 0700)) abort();
             } else {
                 int collision = open(destination, O_WRONLY | O_CREAT | O_EXCL, 0600);

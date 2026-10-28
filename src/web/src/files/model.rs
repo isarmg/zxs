@@ -1,3 +1,4 @@
+use super::page::{DirectoryBranch, Entry};
 use json_codec::Value;
 use std::{collections::BTreeSet, sync::Arc};
 use web_interface::i18n::t;
@@ -52,7 +53,7 @@ pub(crate) struct Model {
     pub directory: String,
     pub writable: bool,
     /// One bounded server page, shared by listing rows.
-    pub entries: Arc<[Value]>,
+    pub entries: Arc<[Entry]>,
     pub cursor: Option<String>,
     pub next_cursor: Option<String>,
     pub previous_cursor: Option<String>,
@@ -60,7 +61,7 @@ pub(crate) struct Model {
     pub listing_failed: bool,
     pub listing_cancellation: Option<crate::api::ReadCancellation>,
     pub search_delay: Option<Arc<send_wrapper::SendWrapper<gloo_timers::callback::Timeout>>>,
-    pub directory_branches: Vec<Value>,
+    pub directory_branches: Vec<DirectoryBranch>,
     pub directory_file_count: u64,
     pub directory_branches_supported: bool,
     pub repository_id: String,
@@ -69,7 +70,7 @@ pub(crate) struct Model {
     pub loaded: bool,
     pub loading: bool,
     pub generation: u64,
-    pub selected: Option<Value>,
+    pub selected: Option<Entry>,
     pub file_history: crate::snapshot::Snapshot<Value>,
     pub history_loading: bool,
     pub history_generation: u64,
@@ -123,17 +124,22 @@ impl Model {
         self.history_generation += 1;
     }
 
-    pub(crate) fn reconcile_selection(&mut self, entry: Option<Value>) {
+    pub(crate) fn prune_checked_entries(&mut self) {
         let visible = self.entries.iter().map(entry_key).collect::<BTreeSet<_>>();
         self.checked_entries.retain(|key| visible.contains(key));
+    }
+
+    pub(crate) fn reconcile_selection(&mut self, entry: Option<Entry>) {
+        self.prune_checked_entries();
         let Some(selected) = self.selected.as_ref() else {
             return;
         };
         if let Some(entry) = entry {
-            let content_changed = ["file_id", "version_id", "node_id", "selected_branch_id"]
-                .iter()
-                .any(|key| selected[*key] != entry[*key]);
-            let changed = content_changed || selected["path"] != entry["path"];
+            let content_changed = selected.file_id() != entry.file_id()
+                || selected.version_id() != entry.version_id()
+                || selected.node_id() != entry.node_id()
+                || selected.selected_branch_id() != entry.selected_branch_id();
+            let changed = content_changed || selected.path() != entry.path();
             if changed {
                 // A refreshed branch or renamed logical path invalidates both
                 // visible metadata and in-flight reads of the previous context.
@@ -235,8 +241,8 @@ pub(crate) fn breadcrumbs(path: &str) -> Vec<(String, String)> {
 pub(crate) fn valid_name(name: &str) -> bool {
     name_policy::validate_name(name).is_ok()
 }
-pub(crate) fn file_kind(value: &Value) -> bool {
-    value["kind"] == "file"
+pub(crate) fn file_kind(entry: &Entry) -> bool {
+    entry.kind() == storage_contract::NamespaceEntryKind::File
 }
 /// Readability follows the visible real version, including a pending branch's
 /// inherited parent. A missing version never falls back to a source ID locally.
@@ -258,78 +264,40 @@ pub(crate) fn inherited_content(value: &Value) -> bool {
 }
 /// A stable file ID can appear at several frozen logical paths. History and
 /// branch selection must carry the view path, independently of physical owner.
-pub(crate) fn entry_key(entry: &Value) -> String {
-    format!(
-        "{}\0{}",
-        entry["entry_id"].as_str().unwrap_or_default(),
-        entry["path"].as_str().unwrap_or_default()
-    )
+pub(crate) fn entry_key(entry: &Entry) -> String {
+    format!("{}\0{}", entry.entry_id(), entry.path())
 }
-pub(crate) fn file_context(model: &Model, entry: &Value) -> Option<(String, String)> {
-    // Backup names belong to a different logical namespace. An absent primary
-    // alias is authoritative, never a request to reconstruct one from its name.
-    if entry["historical_only"] == true
-        || entry["history_context_available"] == false
-        || entry.get("repository_path").is_some_and(Value::is_null)
-    {
-        return None;
-    }
-    if entry["backup"] == true {
-        let repository = entry["repository_id"]
-            .as_str()
-            .filter(|id| !id.is_empty())?;
-        let path = entry["repository_path"]
-            .as_str()
-            .filter(|path| !path.is_empty())?;
-        return Some((repository.to_owned(), path.to_owned()));
-    }
-    let repository = entry["repository_id"]
-        .as_str()
-        .filter(|id| !id.is_empty())
-        .unwrap_or(&model.repository_id);
-    let path = entry["repository_path"]
-        .as_str()
-        .filter(|path| !path.is_empty())
-        .map(str::to_owned)
-        .or_else(|| {
-            entry["name"]
-                .as_str()
-                .filter(|name| !name.is_empty())
-                .map(|name| join_path(&model.repository_path, name))
-        })?;
-    if repository.is_empty() {
-        None
-    } else {
-        Some((repository.to_owned(), path))
-    }
+pub(crate) fn file_context(entry: &Entry) -> Option<(String, String)> {
+    entry
+        .context()
+        .map(|(repository, path)| (repository.to_owned(), path.to_owned()))
 }
 
 pub(crate) fn selected_entry_read_only(model: &Model) -> bool {
-    model
-        .selected
-        .as_ref()
-        .is_some_and(|entry| entry["read_only"] == true || entry["backup"] == true)
+    model.selected.as_ref().is_some_and(Entry::read_only)
 }
 
 /// History metadata may describe a primary alias whose HEAD is newer than the
 /// body physically present on the selected backup disk. Keep backup inspection
 /// pinned to the exact entry while still displaying all historical nodes.
-pub(crate) fn history_for_entry(mut history: Value, entry: &Value) -> Value {
-    if entry["backup"] != true {
+pub(crate) fn history_for_entry(mut history: Value, entry: &Entry) -> Value {
+    if !entry.backup() {
         return history;
     }
-    let version = entry["version_id"].as_str().unwrap_or_default().to_owned();
-    let node = entry["node_id"]
-        .as_str()
-        .filter(|id| !id.is_empty())
-        .unwrap_or(&version)
+    let version = entry
+        .version_id()
+        .expect("invariant: backup file has its stored version")
+        .to_owned();
+    let node = entry
+        .node_id()
+        .expect("invariant: backup file has a node identity")
         .to_owned();
     history["version_id"] = version.clone().into();
     history["node_id"] = node.clone().into();
     history["current_node_id"] = node.clone().into();
     history["read_only"] = true.into();
-    history["inherited"] = entry["inherited"].as_bool().unwrap_or(false).into();
-    history["materialized"] = entry["materialized"].as_bool().unwrap_or(true).into();
+    history["inherited"] = entry.inherited().into();
+    history["materialized"] = entry.materialized().into();
     for (field, selected) in [("nodes", &node), ("versions", &version)] {
         if let Some(records) = history[field].as_array_mut() {
             for record in records {
@@ -376,12 +344,7 @@ pub(crate) fn selected_branch(model: &Model) -> String {
         })
         .and_then(|branch| branch["branch_id"].as_str())
         .or(selected)
-        .or_else(|| {
-            model
-                .selected
-                .as_ref()
-                .and_then(|entry| entry["selected_branch_id"].as_str())
-        })
+        .or_else(|| model.selected.as_ref().and_then(Entry::selected_branch_id))
         .unwrap_or_default()
         .to_owned()
 }
@@ -397,8 +360,8 @@ pub(crate) fn selected_file_branch_record(model: &Model) -> Option<(String, Stri
     let file = model
         .selected
         .as_ref()
-        .and_then(|entry| entry["file_id"].as_str())
-        .filter(|id| !id.is_empty())?;
+        .filter(|entry| file_kind(entry))
+        .map(Entry::file_id)?;
     let id = selected_branch(model);
     let branch = model.file_history["branches"]
         .as_array()?
@@ -414,44 +377,42 @@ pub(crate) fn selected_file_branch_record(model: &Model) -> Option<(String, Stri
         Some((file.to_owned(), id, name.to_owned()))
     }
 }
-pub(crate) fn directory_branch_name(value: &Value) -> String {
-    match value["name"].as_str().unwrap_or_default() {
+pub(crate) fn directory_branch_name(branch: &DirectoryBranch) -> String {
+    display_branch_name(branch.name())
+}
+fn display_branch_name(name: &str) -> String {
+    match name {
         "main" => t("主版本", "Main"),
         "" => t("未命名分支", "Unnamed branch"),
         name => name.to_owned(),
     }
 }
 pub(crate) fn branch_name(value: &Value) -> String {
-    let name = directory_branch_name(value);
+    let name = display_branch_name(value["name"].as_str().unwrap_or_default());
     if value["materialized"] == false || value["content_state"] == "PENDING" {
         format!("{name} · {}", t("待写入", "Pending content"))
     } else {
         name
     }
 }
-pub(crate) fn directory_branch_value(branch: &Value, default_scope: bool) -> String {
-    branch[if default_scope {
-        "directory_branch_id"
+pub(crate) fn directory_branch_value(branch: &DirectoryBranch, default_scope: bool) -> String {
+    if default_scope {
+        branch.id()
     } else {
-        "name"
-    }]
-    .as_str()
-    .unwrap_or_default()
+        branch.name()
+    }
     .to_owned()
 }
 pub(crate) fn selected_directory_branch(model: &Model) -> Option<(String, String, String)> {
-    if model.repository_id.is_empty() {
-        return None;
-    }
     let branch = model
         .directory_branches
         .iter()
-        .find(|branch| branch["current"] == true)?;
-    let id = branch["directory_branch_id"]
-        .as_str()
-        .filter(|id| !id.is_empty())?;
-    let name = branch["name"].as_str()?;
-    Some((model.repository_id.clone(), id.to_owned(), name.to_owned()))
+        .find(|branch| branch.current())?;
+    Some((
+        model.repository_id.clone(),
+        branch.id().to_owned(),
+        branch.name().to_owned(),
+    ))
 }
 
 #[cfg(test)]

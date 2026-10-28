@@ -1,4 +1,6 @@
 use super::*;
+use crate::files::test_entries::{entry, update};
+use json_codec::{Value, json};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -35,11 +37,11 @@ fn selected_state() -> State {
     state.files.directory = "docs".into();
     state.files.repository_id = "repository".into();
     state.files.repository_path = "docs".into();
-    state.files.selected = Some(json_codec::json!({
+    state.files.selected = Some(entry(json_codec::json!({
         "entry_id":"entry", "file_id":"file", "kind":"file", "name":"a.txt",
         "path":"docs/a.txt", "repository_id":"repository", "repository_path":"docs/a.txt",
         "version_id":"v1", "node_id":"v1", "selected_branch_id":"main", "note":"old"
-    }));
+    })));
     state
 }
 
@@ -73,22 +75,16 @@ fn metadata_completion_keeps_the_current_detail_controls_mounted() {
         // A real post-publication listing changes selected_entry.note, not just
         // file_history. Mutable payloads must not recreate editor/tree owners.
         state.update(|s| {
-            let entry = s.files.selected.as_mut().unwrap();
-            entry["note"] = "saved note".into();
-            entry["name"] = "refreshed display name".into();
-            entry["read_only"] = true.into();
-            entry["version_id"] = "v2".into();
-            entry["node_id"] = "v2".into();
-            entry["selected_branch_id"] = "other".into();
+            update(s.files.selected.as_mut().unwrap(), json!({"note":"saved note","read_only":true,"version_id":"v2","node_id":"v2","selected_branch_id":"other"}));
         });
         assert_eq!(detail.get().as_ref(), Some(&identity));
         assert_eq!(mounts.load(Ordering::SeqCst), 1);
         state.with_untracked(|s| {
             let current = identity.entry(s).unwrap();
-            assert_eq!(current["note"], "saved note");
-            assert_eq!(current["name"], "refreshed display name");
-            assert_eq!(current["version_id"], "v2");
-            assert_eq!(current["read_only"], true);
+            assert_eq!(current.note().unwrap(), "saved note");
+            assert_eq!(current.name(), "a.txt");
+            assert_eq!(current.version_id().unwrap(), "v2");
+            assert!(current.read_only());
             assert!(selected_entry_read_only(&s.files));
         });
     });
@@ -100,12 +96,42 @@ fn aliases_replacements_and_context_changes_retire_old_detail_actions() {
         |s| s.session_epoch += 1,
         |s| s.files.slot = "B01".into(),
         |s| s.files.directory = "elsewhere".into(),
-        |s| s.files.selected.as_mut().unwrap()["entry_id"] = "replacement".into(),
-        |s| s.files.selected.as_mut().unwrap()["file_id"] = "replacement".into(),
-        |s| s.files.selected.as_mut().unwrap()["path"] = "alias/a.txt".into(),
-        |s| s.files.selected.as_mut().unwrap()["kind"] = "directory".into(),
-        |s| s.files.selected.as_mut().unwrap()["repository_id"] = "other".into(),
-        |s| s.files.selected.as_mut().unwrap()["repository_path"] = "alias/a.txt".into(),
+        |s| {
+            update(
+                s.files.selected.as_mut().unwrap(),
+                json!({"entry_id":"replacement"}),
+            )
+        },
+        |s| {
+            update(
+                s.files.selected.as_mut().unwrap(),
+                json!({"file_id":"replacement"}),
+            )
+        },
+        |s| {
+            update(
+                s.files.selected.as_mut().unwrap(),
+                json!({"path":"alias/a.txt"}),
+            )
+        },
+        |s| {
+            update(
+                s.files.selected.as_mut().unwrap(),
+                json!({"kind":"directory"}),
+            )
+        },
+        |s| {
+            update(
+                s.files.selected.as_mut().unwrap(),
+                json!({"repository_id":"other"}),
+            )
+        },
+        |s| {
+            update(
+                s.files.selected.as_mut().unwrap(),
+                json!({"repository_path":"alias/a.txt"}),
+            )
+        },
     ];
     for change in changes {
         Owner::new().with(|| {
@@ -135,25 +161,11 @@ fn detail_identity_uses_the_selected_entries_actual_repository_context() {
     assert_eq!(Selection::capture(&state).as_ref(), Some(&selection));
     assert!(selection.entry(&state).is_some());
 
-    // Primary entries without explicit context use the containing listing.
-    // That inherited context is part of identity, not mutable display data.
+    // Missing primary location is rejected before a detail control can own it.
     for field in ["repository_id", "repository_path"] {
-        let mut state = selected_state();
-        state
-            .files
-            .selected
-            .as_mut()
-            .unwrap()
-            .as_object_mut()
-            .unwrap()
-            .remove(field);
-        let selection = Selection::capture(&state).unwrap();
-        if field == "repository_id" {
-            state.files.repository_id = "replacement repository".into();
-        } else {
-            state.files.repository_path = "replacement directory".into();
-        }
-        assert!(selection.action_entry(&state).is_none());
+        let mut value = crate::files::test_entries::wire(state.files.selected.as_ref().unwrap());
+        value.as_object_mut().unwrap().remove(field);
+        assert!(crate::files::test_entries::parse_entry(value).is_err());
     }
 }
 
@@ -163,18 +175,33 @@ fn retained_detail_actions_use_current_payload_and_write_permission() {
     state.management.storage = crate::management::Storage::Ready;
     state.files.writable = true;
     let selection = Selection::capture(&state).unwrap();
-    state.files.selected.as_mut().unwrap()["note"] = "refreshed note".into();
+    update(
+        state.files.selected.as_mut().unwrap(),
+        json!({"note":"refreshed note"}),
+    );
     assert_eq!(
-        selection.mutation_entry(&state).unwrap()["note"],
+        selection.mutation_entry(&state).unwrap().note().unwrap(),
         "refreshed note"
     );
-    state.files.selected.as_mut().unwrap()["read_only"] = true.into();
+    update(
+        state.files.selected.as_mut().unwrap(),
+        json!({"read_only":true}),
+    );
     assert!(selection.action_entry(&state).is_some());
     assert!(selection.mutation_entry(&state).is_none());
-    state.files.selected.as_mut().unwrap()["read_only"] = false.into();
-    state.files.selected.as_mut().unwrap()["backup"] = true.into();
+    update(
+        state.files.selected.as_mut().unwrap(),
+        json!({"read_only":false}),
+    );
+    update(
+        state.files.selected.as_mut().unwrap(),
+        json!({"backup":true}),
+    );
     assert!(selection.mutation_entry(&state).is_none());
-    state.files.selected.as_mut().unwrap()["backup"] = false.into();
+    update(
+        state.files.selected.as_mut().unwrap(),
+        json!({"backup":false}),
+    );
     state.files.mutation_pending = true;
     assert!(selection.mutation_entry(&state).is_none());
 }

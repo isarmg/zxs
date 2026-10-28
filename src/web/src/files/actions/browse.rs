@@ -2,8 +2,11 @@
 use super::disk_path;
 use crate::{
     api,
-    files::model::Disk,
-    ui::{State, accept_read_response, current_session, fail, list, text},
+    files::{
+        model::Disk,
+        page::{DirectoryKey, Entry, Page},
+    },
+    ui::{State, accept_read_response, current_session, fail},
 };
 use json_codec::Value;
 use web_interface::tasks::spawn_local;
@@ -248,16 +251,27 @@ fn request_page(state: RwSignal<State>, restarted: bool) {
     else {
         return;
     };
+    let directory_key = DirectoryKey::navigation(&directory);
     spawn_local(async move {
         let mut endpoint = page_endpoint(&slot, &directory, &query, cursor.as_deref());
         if let Some(selected) = &selected {
             endpoint.push_str(&format!(
                 "&selected_path={}&selected_entry_id={}",
-                api::segment(&text(selected, &["path"])),
-                api::segment(&text(selected, &["entry_id"]))
+                api::segment(selected.path()),
+                api::segment(selected.entry_id())
             ));
         }
-        let result = api::cancellable_get(&endpoint, cancellation).await;
+        let result = api::cancellable_get(&endpoint, cancellation)
+            .await
+            .and_then(|value| {
+                Page::parse(
+                    value,
+                    &slot,
+                    &directory_key,
+                    super::super::page::PAGE_SIZE,
+                    selected.as_ref(),
+                )
+            });
         if !accept_read_response(state, epoch, &result)
             || !current_listing(state, epoch, &slot, &directory, generation)
         {
@@ -278,49 +292,9 @@ fn request_page(state: RwSignal<State>, restarted: bool) {
             request_page(state, true);
             return;
         }
-        let result = result.and_then(|value| {
-            let page = super::super::page::Page::parse(&value)?;
-            let selected_entry = super::super::page::selected(&value, selected.as_ref())?;
-            Ok((value, page, selected_entry))
-        });
         let refreshed = result.is_ok();
         match result {
-            Ok((value, page, selected_entry)) => state.update(|s| {
-                s.files.entries = list(&value, "entries").into();
-                s.files.next_cursor = page.next;
-                s.files.previous_cursor = page.previous;
-                s.files.total_entries = page.total;
-                s.files.directory_branches = list(&value, "directory_branches");
-                s.files.repository_id = text(&value["context"], &["repository_id"]);
-                s.files.repository_path = text(&value["context"], &["repository_path"]);
-                s.files.default_branch_scope =
-                    value["default_branch_scope"].as_bool().unwrap_or(false);
-                s.files.directory_branches_supported = value["directory_branches_supported"]
-                    .as_bool()
-                    .unwrap_or(false);
-                s.files.directory_file_count =
-                    crate::format::parse_u64(&value["directory_file_count"]).unwrap_or(0);
-                s.files.writable = value["writable"].as_bool().unwrap_or(false);
-                s.files.loaded = true;
-                if selected.as_ref().map(super::super::model::entry_key)
-                    == s.files
-                        .selected
-                        .as_ref()
-                        .map(super::super::model::entry_key)
-                {
-                    s.files.reconcile_selection(selected_entry);
-                    if s.page == crate::ui::Page::Details && s.files.selected.is_none() {
-                        s.page = crate::ui::Page::Files;
-                    }
-                }
-                let keys = s
-                    .files
-                    .entries
-                    .iter()
-                    .map(super::super::model::entry_key)
-                    .collect::<std::collections::BTreeSet<_>>();
-                s.files.checked_entries.retain(|key| keys.contains(key));
-            }),
+            Ok(page) => state.update(|s| apply_page(s, page, selected.as_ref())),
             Err(error) => {
                 state.update(|s| {
                     s.files.listing_failed = true;
@@ -346,6 +320,43 @@ fn request_page(state: RwSignal<State>, restarted: bool) {
     });
 }
 
+fn apply_page(state: &mut State, page: Page, requested: Option<&Entry>) {
+    let page = page.into_parts();
+    state.files.entries = page.entries.into();
+    state.files.next_cursor = page.next;
+    state.files.previous_cursor = page.previous;
+    state.files.total_entries = page.total;
+    state.files.directory_branches = page.branches;
+    (state.files.repository_id, state.files.repository_path) = page
+        .context
+        .map(|context| {
+            (
+                context.repository_id().to_owned(),
+                context.repository_path().to_owned(),
+            )
+        })
+        .unwrap_or_default();
+    state.files.default_branch_scope = page.default_branch_scope;
+    state.files.directory_branches_supported = page.branches_supported;
+    state.files.directory_file_count = page.directory_file_count;
+    state.files.writable = page.writable;
+    state.files.loaded = true;
+    if requested.map(super::super::model::entry_key)
+        == state
+            .files
+            .selected
+            .as_ref()
+            .map(super::super::model::entry_key)
+    {
+        state.files.reconcile_selection(page.selected);
+        if state.page == crate::ui::Page::Details && state.files.selected.is_none() {
+            state.page = crate::ui::Page::Files;
+        }
+    } else {
+        state.files.prune_checked_entries();
+    }
+}
+
 fn current_listing(
     state: RwSignal<State>,
     epoch: u64,
@@ -360,13 +371,13 @@ fn current_listing(
                 && s.files.generation == generation
         })
 }
-pub(crate) fn select_entry(state: RwSignal<State>, entry: Value) {
+pub(crate) fn select_entry(state: RwSignal<State>, entry: Entry) {
     state.update(|s| {
         s.files.clear_selection();
         s.files.selected = Some(entry.clone());
         s.page = crate::ui::Page::Details;
     });
-    if entry["kind"] == "file" {
+    if super::super::model::file_kind(&entry) {
         load_file_history(state);
     }
 }
@@ -381,8 +392,8 @@ pub(crate) fn load_file_history(state: RwSignal<State>) {
             .as_ref()
             .map(|entry| {
                 (
-                    text(entry, &["file_id"]),
-                    crate::files::model::file_context(&s.files, entry),
+                    entry.file_id().to_owned(),
+                    crate::files::model::file_context(entry),
                 )
             })
             .unwrap_or_default()
@@ -419,7 +430,7 @@ pub(crate) fn load_file_history(state: RwSignal<State>) {
                     && s.files
                         .selected
                         .as_ref()
-                        .is_some_and(|entry| text(entry, &["file_id"]) == id)
+                        .is_some_and(|entry| entry.file_id() == id)
             })
         {
             return;

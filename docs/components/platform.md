@@ -66,18 +66,29 @@ create-only 在发布前保留单链接检查及临时名称到持有 inode 的�
 只复用私有 `rename_no_replace` 目录项步骤，不重新打开并同步同一临时文件。
 公共 `NoClobberPublish::publish` 接受未知持久性的 staging，仍独立完成打开、
 单链接准入、文件同步、NOREPLACE、发布身份检查和目录同步。
-三个入口都只接受同一持有目录内的单个名称，不新增跨目录发布能力。
+上述入口都只接受同一持有目录内的单个名称，不新增跨目录发布能力。
 
 rename 前失败保留原目标；内部临时文件由清理守卫回收，公共发布的 source
 由调用方拥有。rename 成功即解除临时清理；之后目录同步失败返回
 `PublishedDurabilityUnknown` 并保留已发布目标，不伪称回滚。replace、权限、
 现存对象重试屏障、锁文件与祖先目录持久化协议不变。
 
+`AtomicFile::replace_held` 与 `replace` 复用相同原子写、清理及全部屏障，
+仅在成功后移交原来的只写文件描述符，而非关闭后按路径重新打开。
+SMB 活动恢复记录用它绑定刚持久化的 inode；持有 FD 本身不证明后来的
+路径身份、字节或权限仍未改变，调用方仍承担复用时的核验。
+现有 `replace` 和 `create` 返回类型不变，仍立即释放该内部描述符。
+平台测试的 `replace-held` 模式覆盖相同的写、文件同步、发布及目录同步故障窗口。
+现有 `workspace` CI 在普通测试后通过 `check-platform-atomic-io.py` 从 Cargo
+当前 JSON 产物取得唯一成功的 platform-io libtest，再调用原 `atomic-io.sh`；
+不增加 job 或工作流。驱动先确认准确的 ignored 测试存在，每个隔离子进程
+必须同时给出对应模式／阶段的完成标记与 `1 passed`，零测试或未运行断言不能通过。
+
 普通 fresh create 的静态预算从两次文件同步加两次目录同步降为各一次
 （不计创建祖先目录）；这不是端到端性能实测。故意仅在被删除的第二次同步
 注入 EIO 时，错误表现当然不再逐调用相同；耐久顺序仍为文件先于 rename、
 目录后于 rename。根测试 `test/platform/unit/fs_safety/atomic-io.sh` 接受已编译的
-platform-io libtest 二进制，隔离运行 create/replace/public 的成功、写失败、
+platform-io libtest 二进制，隔离运行 create/replace/replace-held/public 的成功、写失败、
 文件同步失败、真实发布冲突和目录同步失败；断言命名空间、源保全与清理。
 replace 的目录冲突由 rename 前类型检查拒绝，create/public 由 NOREPLACE 拒绝；
 这不冒称每种发布冲突都到达了 rename 系统调用。

@@ -7,7 +7,7 @@ use super::{
 use crate::{
     api,
     files::model::{FileOperation, NamespaceAction, SaveStatus, join_path},
-    ui::{State, current_session, fail, set_notice, text},
+    ui::{State, current_session, fail, set_notice},
 };
 use json_codec::{Value, json};
 use web_interface::tasks::spawn_local;
@@ -222,7 +222,7 @@ pub(crate) fn update_note(
         s.files
             .selected
             .as_ref()
-            .map(|entry| text(entry, &["file_id"]))
+            .map(|entry| entry.file_id().to_owned())
             .unwrap_or_default()
     });
     let (collection, id) = match version {
@@ -277,7 +277,7 @@ pub(crate) fn update_node_note(
         s.files
             .selected
             .as_ref()
-            .map(|entry| text(entry, &["file_id"]))
+            .map(|entry| entry.file_id().to_owned())
             .unwrap_or_default()
     });
     if file.is_empty() {
@@ -307,7 +307,7 @@ pub(crate) fn create_branch(
         s.files
             .selected
             .as_ref()
-            .map(|entry| text(entry, &["file_id"]))
+            .map(|entry| entry.file_id().to_owned())
             .unwrap_or_default()
     });
     if file.is_empty() {
@@ -324,7 +324,7 @@ pub(crate) fn select_branch(state: RwSignal<State>, branch: String) {
         s.files
             .selected
             .as_ref()
-            .map(|entry| text(entry, &["file_id"]))
+            .map(|entry| entry.file_id().to_owned())
             .unwrap_or_default()
     });
     if file.is_empty() {
@@ -347,7 +347,7 @@ fn file_mutation(
             s.files
                 .selected
                 .as_ref()
-                .and_then(|entry| crate::files::model::file_context(&s.files, entry))
+                .and_then(|entry| crate::files::model::file_context(entry))
         })
     {
         body["repository_id"] = repository.into();

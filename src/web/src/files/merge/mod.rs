@@ -60,8 +60,8 @@ pub(crate) fn start(state: RwSignal<State>) {
             return None;
         }
         let entry = snapshot.files.selected.as_ref()?;
-        let file = text(entry, &["file_id"]);
-        let (repository, path) = super::model::file_context(&snapshot.files, entry)?;
+        let file = entry.file_id().to_owned();
+        let (repository, path) = super::model::file_context(entry)?;
         let branches = snapshot.files.file_history["branches"]
             .as_array()
             .into_iter()

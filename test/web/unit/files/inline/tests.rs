@@ -224,7 +224,7 @@ fn queued_edits_cannot_submit_after_session_navigation_alias_or_branch_changes()
     Owner::new().with(|| {
         for change in ["epoch", "logout", "page", "slot", "directory", "repository", "directory_branch", "path", "branch", "version"] {
             let mut initial = active_state();
-            initial.files.selected = Some(json_codec::json!({"entry_id":"same","file_id":"same","path":"docs/a","selected_branch_id":"main","version_id":"v1"}));
+            initial.files.selected = Some(crate::files::test_entries::entry(json_codec::json!({"entry_id":"same","file_id":"same","path":"docs/a","selected_branch_id":"main","version_id":"v1"})));
             let state = RwSignal::new(initial);
             let draft = Draft::unobserved(state);
             draft.start("old context".into());
@@ -235,10 +235,10 @@ fn queued_edits_cannot_submit_after_session_navigation_alias_or_branch_changes()
                 "slot" => s.files.slot = "other".into(),
                 "directory" => s.files.directory = "other".into(),
                 "repository" => s.files.repository_id = "other".into(),
-                "directory_branch" => s.files.directory_branches = vec![json_codec::json!({"current":true,"directory_branch_id":"other"})],
-                "path" => s.files.selected.as_mut().unwrap()["path"] = "docs/b".into(),
-                "branch" => s.files.selected.as_mut().unwrap()["selected_branch_id"] = "other".into(),
-                "version" => s.files.selected.as_mut().unwrap()["version_id"] = "v2".into(),
+                "directory_branch" => s.files.directory_branches = vec![crate::files::test_entries::branch(json_codec::json!({"current":true,"directory_branch_id":"other"}))],
+                "path" => crate::files::test_entries::update(s.files.selected.as_mut().unwrap(), json_codec::json!({"path":"docs/b"})),
+                "branch" => crate::files::test_entries::update(s.files.selected.as_mut().unwrap(), json_codec::json!({"selected_branch_id":"other"})),
+                "version" => crate::files::test_entries::update(s.files.selected.as_mut().unwrap(), json_codec::json!({"version_id":"v2"})),
                 _ => unreachable!(),
             });
             draft.submit(|| panic!("old editor must not submit into a new context"));

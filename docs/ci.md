@@ -10,7 +10,7 @@
 | `rust-sources` | 源码、manifest、全部特性边、锁文件、来源文档和退役记录校验；空 Cargo home 重新解析五个入口／目标闭包，拒绝无闭包使用的活动源码树；完整来源工具 Python 回归 |
 | `quality` | 自有 workspace 的格式与严格 Clippy；宿主机全部目标及 Web 的 WASM release 编译，所有本地依赖的 Rust warning/error 均失败；基础源码不自动格式化 |
 | `security` | 固定 cargo-audit 查询当前 RustSec 与 registry/yank 状态；独立扫描器锁、产品根锁和活动／已合并实现的原始身份均扫描，告警或扫描不完整失败；退役及已升级替换的旧身份单列历史记录 |
-| `workspace` | 服务端、核心、认证、平台、直接服务入口、离线救援工具、HTTP 与 socket 测试；另行串行运行真实大历史包用例 |
+| `workspace` | 服务端、核心、认证、平台、直接服务入口、离线救援工具、HTTP 与 socket 测试；同 job 对准确 platform-io libtest 运行原子写屏障／故障子进程，拒绝零测试通过；另行串行运行真实大历史包用例 |
 | `foundation` | Linux amd64 UAPI、libc ABI、rustix 双后端 syscall、系统/socket/mio、停车锁、搜索/进程及随机数后端回归；ring 预生成/本地生成的库、集成与 CAVP 矩阵；密码哈希、真实 storage-client 消费者启用的 IDNA 全标量及数值/集合等限定 lib 测试；不是全部上游测试 |
 | `web` | Web 应用、公共 runtime 与 CSR 内核/宏的单元、集成及 Rustdoc 测试；过程宏通过仅开发依赖的真实消费者验证文档 |
 | `contracts` | 契约工具测试及全仓 schema、配置、文档链接检查 |

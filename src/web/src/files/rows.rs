@@ -1,8 +1,8 @@
 //! Immutable bounded-page projections. Ordering and filtering belong to the
 //! server before pagination; selection never rebuilds display metadata.
 use super::model::{entry_key, file_kind};
-use crate::ui::{State, text};
-use json_codec::Value;
+use super::page::Entry;
+use crate::ui::State;
 use std::sync::Arc;
 use web_interface::prelude::*;
 
@@ -37,16 +37,17 @@ impl Row {
             && state.files.directory == self.key.context.directory
     }
 
-    pub fn current_entry<'a>(&self, state: &'a State) -> Option<&'a Value> {
+    pub fn current_entry<'a>(&self, state: &'a State) -> Option<&'a Entry> {
         if !self.current_context(state) {
             return None;
         }
         // Event-time identity lookup intentionally reads the current snapshot.
-        // Rows hold display data only, never old JSON or whole listing snapshots.
-        state.files.entries.iter().find(|entry| {
-            entry["entry_id"].as_str().unwrap_or_default() == self.key.entry_id
-                && entry["path"].as_str().unwrap_or_default() == self.key.path
-        })
+        // Rows hold display data only, never old entries or whole listing snapshots.
+        state
+            .files
+            .entries
+            .iter()
+            .find(|entry| entry.entry_id() == self.key.entry_id && entry.path() == self.key.path)
     }
 }
 impl PartialEq for Row {
@@ -66,7 +67,7 @@ struct Listing {
     epoch: u64,
     slot: String,
     directory: String,
-    entries: Arc<[Value]>,
+    entries: Arc<[Entry]>,
 }
 impl Listing {
     fn capture(state: &State) -> Self {
@@ -89,18 +90,18 @@ impl Listing {
             .iter()
             .map(|entry| {
                 let check_id = entry_key(entry);
-                let name = text(entry, &["name"]);
+                let name = entry.name().to_owned();
                 Arc::new(Row {
                     key: RowKey {
                         context: context.clone(),
-                        entry_id: text(entry, &["entry_id"]),
-                        path: text(entry, &["path"]),
+                        entry_id: entry.entry_id().to_owned(),
+                        path: entry.path().to_owned(),
                     },
                     check_id,
                     name,
                     directory: !file_kind(entry),
                     selection_id: entry_key(entry),
-                    size: crate::format::parse_u64(&entry["size"]),
+                    size: Some(entry.size()),
                 })
             })
             .collect()
@@ -109,7 +110,7 @@ impl Listing {
 
 pub(super) fn visible_rows(state: RwSignal<State>) -> Memo<Vec<Arc<Row>>> {
     // Arc equality short-circuits identical allocations. An unrelated State
-    // notification does not traverse or clone any entry JSON.
+    // notification does not traverse or clone any entry metadata.
     let listing = Memo::new(move |_| state.with(Listing::capture));
     Memo::new(move |_| listing.with(Listing::project))
 }

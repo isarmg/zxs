@@ -1,8 +1,9 @@
+use super::page::Entry;
 use super::{
     actions, backup, batch, branch, inline, merge,
     model::{
-        Model, branch_name, branch_writable, history_nodes_ref, inherited_content, join_path,
-        selected_branch, selected_entry_read_only, selected_file_branch_record, visible_content,
+        Model, branch_name, branch_writable, history_nodes_ref, join_path, selected_branch,
+        selected_entry_read_only, selected_file_branch_record,
     },
     tags, version_tree,
 };
@@ -10,7 +11,6 @@ use crate::{
     icons::FileIcon,
     ui::{State, list, text},
 };
-use json_codec::Value;
 use web_interface::components::{EmptyState, LoadingState, Select, SelectOption};
 use web_interface::{i18n::t, prelude::*};
 
@@ -41,48 +41,42 @@ struct Selection {
     entry_id: String,
     file_id: String,
     path: String,
-    kind: String,
+    kind: storage_contract::NamespaceEntryKind,
     repository: String,
     repository_path: String,
 }
 impl Selection {
     fn capture(state: &State) -> Option<Self> {
         let entry = state.files.selected.as_ref()?;
-        let (repository, repository_path) = super::model::file_context(&state.files, entry)
-            .unwrap_or_else(|| {
-                (
-                    text(entry, &["repository_id"]),
-                    text(entry, &["repository_path"]),
-                )
-            });
+        let repository = entry.repository_id().unwrap_or_default().to_owned();
+        let repository_path = entry.repository_path().unwrap_or_default().to_owned();
         Some(Self {
             epoch: state.session_epoch,
             slot: state.files.slot.clone(),
             directory: state.files.directory.clone(),
-            entry_id: text(entry, &["entry_id"]),
-            file_id: text(entry, &["file_id"]),
-            path: text(entry, &["path"]),
-            kind: text(entry, &["kind"]),
+            entry_id: entry.entry_id().to_owned(),
+            file_id: entry.file_id().to_owned(),
+            path: entry.path().to_owned(),
+            kind: entry.kind(),
             repository,
             repository_path,
         })
     }
 
-    fn entry<'a>(&self, state: &'a State) -> Option<&'a Value> {
+    fn entry<'a>(&self, state: &'a State) -> Option<&'a Entry> {
         (Self::capture(state).as_ref() == Some(self))
             .then_some(state.files.selected.as_ref())
             .flatten()
     }
 
     /// Event handlers must not redirect a queued old control to a new selection.
-    fn action_entry<'a>(&self, state: &'a State) -> Option<&'a Value> {
+    fn action_entry<'a>(&self, state: &'a State) -> Option<&'a Entry> {
         state.session_active().then(|| self.entry(state)).flatten()
     }
 
-    fn mutation_entry<'a>(&self, state: &'a State) -> Option<&'a Value> {
-        self.action_entry(state).filter(|entry| {
-            actions::write_allowed(state) && entry["read_only"] != true && entry["backup"] != true
-        })
+    fn mutation_entry<'a>(&self, state: &'a State) -> Option<&'a Entry> {
+        self.action_entry(state)
+            .filter(|entry| actions::write_allowed(state) && !entry.read_only())
     }
 }
 fn detail_selection(state: RwSignal<State>) -> Memo<Option<Selection>> {
@@ -93,14 +87,12 @@ fn file_note_ready(model: &Model) -> bool {
     !model.history_loading && model.file_history["note"].is_string()
 }
 fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
-    let is_file = selection.kind == "file";
+    let is_file = selection.kind == storage_contract::NamespaceEntryKind::File;
     let folder_path = selection.path.clone();
     let folder_select_path = folder_path.clone();
     let selection = StoredValue::new(selection);
     let entry = Memo::new(move |_| {
-        state.with(|s| {
-            selection.with_value(|selection| selection.entry(s).cloned().unwrap_or(Value::Null))
-        })
+        state.with(|s| selection.with_value(|selection| selection.entry(s).cloned()))
     });
     let options = Signal::derive(move || {
         list(&state.with(|s| s.files.file_history.clone()), "branches")
@@ -142,24 +134,35 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
         mutation_disabled.get() || state.with(|s| !file_note_ready(&s.files))
     });
     let content_ready = Signal::derive(move || {
-        state.with(|s| s.session_active() && s.files.selected.as_ref().is_some_and(visible_content))
+        state.with(|s| {
+            s.session_active()
+                && s.files
+                    .selected
+                    .as_ref()
+                    .is_some_and(Entry::visible_content)
+        })
     });
     let inherited = Signal::derive(move || {
-        state.with(|s| s.files.selected.as_ref().is_some_and(inherited_content))
+        state.with(|s| {
+            s.files
+                .selected
+                .as_ref()
+                .is_some_and(Entry::inherited_content)
+        })
     });
     let current_branch_disabled = Signal::derive(move || {
         mutation_disabled.get() || !content_ready.get() || state.with(|s| s.files.loading)
     });
     view! {
         <article class="zxs-content-panel zxs-entry-content zxs-frame zxs-stack" aria-label=t("文件详情","File details")>
-            <div class="zxs-file-heading zxs-flow"><h2 class="zxs-row">{move ||entry.with(|entry|text(entry,&["name"]))}</h2><div class="zxs-entry-actions zxs-flow">
-                {(!is_file).then(move ||view!{<button class="zxs-button" on:click=move |_|if let Some(path)=state.with_untracked(|s|selection.with_value(|key|key.action_entry(s).map(|entry|text(entry,&["path"])))){actions::go_directory(state,path);}><FileIcon name="folder"/>{t("打开文件夹","Open folder")}</button>})}
+            <div class="zxs-file-heading zxs-flow"><h2 class="zxs-row">{move ||entry.with(|entry|entry.as_ref().map(|entry|entry.name().to_owned()).unwrap_or_default())}</h2><div class="zxs-entry-actions zxs-flow">
+                {(!is_file).then(move ||view!{<button class="zxs-button" on:click=move |_|if let Some(path)=state.with_untracked(|s|selection.with_value(|key|key.action_entry(s).map(|entry|entry.path().to_owned()))){actions::go_directory(state,path);}><FileIcon name="folder"/>{t("打开文件夹","Open folder")}</button>})}
                 <Show when=move ||can_modify.get()><button class="zxs-button" disabled=move ||rename_disabled.get() on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.mutation_entry(s).cloned())){batch::start(state,batch::Kind::Rename,Some(entry));}><FileIcon name="rename"/>{t("重命名","Rename")}</button></Show>
-                <button class="zxs-button" disabled=move ||state.with(|s|actions::pending(s)||selection.with_value(|key|key.action_entry(s).and_then(|entry|super::model::file_context(&s.files,entry))).is_none()) on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.action_entry(s).cloned())){backup::start_entry(state,entry);}>{t("备份设置","Backup settings")}</button>
+                <button class="zxs-button" disabled=move ||state.with(|s|actions::pending(s)||selection.with_value(|key|key.action_entry(s).and_then(|entry|super::model::file_context(entry))).is_none()) on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.action_entry(s).cloned())){backup::start_entry(state,entry);}>{t("备份设置","Backup settings")}</button>
                 <Show when=move ||can_modify.get()><button class="zxs-button" disabled=move ||mutation_disabled.get() on:click=move |_|if let Some(entry)=state.with_untracked(|s|selection.with_value(|key|key.mutation_entry(s).cloned())){batch::start(state,batch::Kind::Delete,Some(entry));}><FileIcon name="delete"/>{t("删除","Delete")}</button></Show>
             </div></div>
             {backup::view(state)}
-            <dl class="zxs-file-properties"><div><dt class="zxs-row">{t("位置","Location")}</dt><dd class="zxs-row">{move ||entry.with(|entry|join_path(&state.with(|s|s.files.slot.clone()),&text(entry,&["path"])))}</dd></div><div><dt class="zxs-row">{t("类型","Type")}</dt><dd class="zxs-row">{if is_file{t("文件","File")}else{t("文件夹","Folder")}}</dd></div></dl>
+            <dl class="zxs-file-properties"><div><dt class="zxs-row">{t("位置","Location")}</dt><dd class="zxs-row">{move ||entry.with(|entry|entry.as_ref().map(|entry|join_path(&state.with(|s|s.files.slot.clone()),entry.path())).unwrap_or_default())}</dd></div><div><dt class="zxs-row">{t("类型","Type")}</dt><dd class="zxs-row">{if is_file{t("文件","File")}else{t("文件夹","Folder")}}</dd></div></dl>
             {(!is_file).then(move ||view!{<Show when=move ||can_modify.get()><section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("目录分支","Folder branches")}</h3><p class="zxs-row">{t("目录分支记录此目录及子目录的文件分支组合，不创建目录私有的文件分支。修改只在当前分支追加子树节点；切换恢复所选组合，未写入的文件继续显示父版本，目录外文件保持不变。","A folder branch records the shared file branch combination in this folder and its subfolders. Changes append subtree nodes within the current branch. Switching restores the selected combination; unwritten files inherit their parent versions and files outside the folder are unchanged.")}</p><div class="zxs-file-toolbar zxs-flow">{branch::control(state,t("创建目录分支","Create folder branch"),branch::Target::Directory{path:folder_path.clone(),select:false},mutation_disabled)}{branch::control(state,t("切换目录分支","Switch folder branch"),branch::Target::Directory{path:folder_select_path.clone(),select:true},mutation_disabled)}</div><p class="zxs-row">{t("目录分支合并待确认，暂不提供操作。","Folder branch merging awaits confirmation.")}</p></section></Show>})}
             {is_file.then(move ||view! {
                 <section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("文件备注","File note")}</h3><Show when=move ||can_modify.get() fallback=move ||view!{<p class="zxs-row">{move ||state.with(|s|text(&s.files.file_history,&["note"]))}</p>}>{inline::control(state,t("编辑文件备注","Edit file note"),None,inline::Target::FileNote,note_disabled)}</Show></section>

@@ -2,7 +2,7 @@
 use super::*;
 
 pub(super) fn recovery_record(
-    writer: &Writer,
+    writer: &mut Writer,
     principal: &str,
     branch: &str,
 ) -> Result<(), ApiError> {
@@ -10,15 +10,11 @@ pub(super) fn recovery_record(
 }
 
 fn write_recovery_record(
-    writer: &Writer,
+    writer: &mut Writer,
     principal: &str,
     branch: &str,
     detached: Option<(&ApiError, bool)>,
 ) -> Result<(), ApiError> {
-    writer
-        .directory
-        .verify_identity()
-        .map_err(crate::upload_fs_error)?;
     // `published` describes the last reconciled operation, not all bytes
     // currently reachable through the live writable descriptor. Recovery must
     // reconcile these bytes even when no Dirty request was received.
@@ -42,23 +38,31 @@ fn write_recovery_record(
         value["detach_error"] = json!({"code": error.code, "message": error.message});
         value["retained_bytes_synced"] = json!(synced);
     }
-    use platform_io::fs_safety::{AtomicFile, RelativePath};
+    use platform_io::fs_safety::{AtomicFile, EntryName};
     let record = writer.source.with_extension("work.json");
-    let name = RelativePath::new(Path::new(
+    let name = EntryName::new(
         record
             .file_name()
             .ok_or_else(|| ApiError::invalid("SMB record filename missing"))?,
-    ))
-    .map_err(crate::upload_fs_error)?;
-    AtomicFile::replace(
-        &writer.directory,
-        &name,
-        &json_codec::to_vec(&value).expect("invariant: internal JSON serialization succeeds"),
     )
-    .map_err(crate::upload_fs_error)
+    .map_err(crate::upload_fs_error)?;
+    let bytes =
+        json_codec::to_vec(&value).expect("invariant: internal JSON serialization succeeds");
+    if detached.is_some() {
+        writer
+            .directory
+            .verify_identity()
+            .map_err(crate::upload_fs_error)?;
+        AtomicFile::replace(&writer.directory, &name.as_relative(), &bytes)
+            .map_err(crate::upload_fs_error)
+    } else {
+        writer
+            .recovery_record
+            .persist(&writer.directory, &name, bytes)
+    }
 }
 
-fn retain_detached(writer: &Writer, principal: &str, branch: &str, reason: &ApiError) {
+fn retain_detached(writer: &mut Writer, principal: &str, branch: &str, reason: &ApiError) {
     // A Close error must not leave an unreachable active writer. Try to make
     // its latest bytes and detached state durable, but even on an I/O failure
     // keep the pre-existing source/record and release the live reservation.
@@ -377,11 +381,11 @@ impl Session {
             }
             Ok(())
         })();
-        if let Some(Handle::Write(writer)) = self.handles.remove(&handle) {
+        if let Some(Handle::Write(mut writer)) = self.handles.remove(&handle) {
             match &saved {
                 Ok(()) => cleanup_writer(&writer),
                 Err(error) => {
-                    retain_detached(&writer, &self.identity.principal, &self.branch, error);
+                    retain_detached(&mut writer, &self.identity.principal, &self.branch, error);
                 }
             }
             self.release_paths(&[writer.path.key().to_owned()]);
@@ -401,13 +405,13 @@ impl Session {
             )
         })?;
         let mut result = json!({"closed":true,"detached":true});
-        if let Handle::Write(writer) = entry {
+        if let Handle::Write(mut writer) = entry {
             let reason = ApiError::new(
                 ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::RecoveryRequired,
                 "SMB handle detached without saving; retained work requires reconciliation",
             );
-            retain_detached(&writer, &self.identity.principal, &self.branch, &reason);
+            retain_detached(&mut writer, &self.identity.principal, &self.branch, &reason);
             self.release_paths(&[writer.path.key().to_owned()]);
             result["operation_id"] = json!(writer.operation_id);
         }

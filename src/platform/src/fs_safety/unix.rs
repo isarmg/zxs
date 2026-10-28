@@ -322,7 +322,7 @@ pub(super) fn atomic_replace(
     directory: &PrivateDirectory,
     destination: &RelativePath,
     bytes: &[u8],
-) -> Result<(), Error> {
+) -> Result<File, Error> {
     atomic_write(directory, destination, bytes, false)
 }
 
@@ -331,7 +331,7 @@ pub(super) fn atomic_create(
     destination: &EntryName,
     bytes: &[u8],
 ) -> Result<(), Error> {
-    atomic_write(directory, &destination.as_relative(), bytes, true)
+    atomic_write(directory, &destination.as_relative(), bytes, true).map(drop)
 }
 
 struct StagingCleanup<'a> {
@@ -364,7 +364,7 @@ fn atomic_write(
     destination: &RelativePath,
     bytes: &[u8],
     create_only: bool,
-) -> Result<(), Error> {
+) -> Result<File, Error> {
     let name = entry_name(destination)?;
     validate_destination(directory, name)?;
     let temporary = temporary_name()?;
@@ -431,7 +431,7 @@ fn atomic_write(
             .map_err(Error::PublishedDurabilityUnknown)
     })();
     match result {
-        Ok(value) => Ok(value),
+        Ok(()) => Ok(file),
         Err(operation) => match cleanup.cleanup() {
             Ok(()) => Err(operation),
             Err(cleanup) => Err(Error::Cleanup {

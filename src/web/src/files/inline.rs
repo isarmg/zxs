@@ -64,13 +64,7 @@ impl Target {
             }
             Self::FileNote => state.files.file_history["note"]
                 .as_str()
-                .or_else(|| {
-                    state
-                        .files
-                        .selected
-                        .as_ref()
-                        .and_then(|entry| entry["note"].as_str())
-                })
+                .or_else(|| state.files.selected.as_ref().and_then(|entry| entry.note()))
                 .unwrap_or_default()
                 .to_owned(),
             Self::NodeNote(id) => super::model::history_nodes_ref(&state.files.file_history)
@@ -210,16 +204,16 @@ impl Context {
                 .files
                 .directory_branches
                 .iter()
-                .find(|branch| branch["current"] == true)
-                .map(|branch| text(branch, &["directory_branch_id"]))
+                .find(|branch| branch.current())
+                .map(|branch| branch.id().to_owned())
                 .unwrap_or_default(),
             selected: state.files.selected.as_ref().map(|entry| {
                 (
                     super::model::entry_key(entry),
-                    text(entry, &["file_id"]),
-                    text(entry, &["selected_branch_id"]),
-                    text(entry, &["version_id"]),
-                    text(entry, &["node_id"]),
+                    entry.file_id().to_owned(),
+                    entry.selected_branch_id().unwrap_or_default().to_owned(),
+                    entry.version_id().unwrap_or_default().to_owned(),
+                    entry.node_id().unwrap_or_default().to_owned(),
                 )
             }),
         }

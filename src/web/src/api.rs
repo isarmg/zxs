@@ -47,6 +47,8 @@ thread_local! { static CREDENTIALS: RefCell<Credentials> = RefCell::new(Credenti
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
+    #[error("invalid directory page: {0}")]
+    DirectoryPage(#[source] crate::files::DirectoryPageError),
     #[error("invalid service API path: {0}")]
     Path(#[source] storage_contract::Error),
     #[error("invalid API response: {0}")]

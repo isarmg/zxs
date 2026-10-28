@@ -1,4 +1,47 @@
 use super::*;
+use crate::files::test_entries;
+fn listed(mut value: Value) -> Entry {
+    value.as_object_mut().unwrap().remove("selected_path");
+    test_entries::entry(value)
+}
+fn scope(mut value: Value) -> ScopeBranch {
+    for entry in value["entries"].as_array_mut().unwrap() {
+        *entry = json!({"entry_id":entry["entry_id"],"path":entry["path"],"selected_path":entry["selected_path"]});
+    }
+    Scopes::parse(
+        json!({"repository_id":"repo","directory_branches":[value]}),
+        Projection::Selected,
+    )
+    .unwrap()
+    .branches
+    .remove(0)
+}
+fn scope_wire(branch: &ScopeBranch) -> Value {
+    let summary = branch.summary();
+    let mut value = test_entries::branch_wire(
+        json!({"directory_branch_id":summary.id(),"repository_id":summary.repository_id(),"name":summary.name(),"head_tree_id":summary.head_tree_id(),"path":summary.path(),"current":summary.current()}),
+    );
+    value["entries"] = branch.entries().iter().map(|entry| json!({"entry_id":entry.entry_id(),"path":entry.path(),"selected_path":entry.selected_path()})).collect::<Vec<_>>().into();
+    value
+}
+fn update_scope(branch: &mut ScopeBranch, patch: Value) {
+    let mut value = scope_wire(branch);
+    value
+        .as_object_mut()
+        .unwrap()
+        .extend(patch.as_object().unwrap().clone());
+    *branch = scope(value);
+}
+fn summary_response(mut value: Value) -> Value {
+    for branch in value["directory_branches"].as_array_mut().unwrap() {
+        branch.as_object_mut().unwrap().remove("entries");
+    }
+    value
+}
+fn admitted(value: Value) -> Scopes {
+    Scopes::parse(value, Projection::Selected).unwrap()
+}
+
 fn file(id: &str, path: &str, version: &str) -> Value {
     json!({"entry_id":id,"file_id":id,"path":path,"selected_path":path,"name":path.rsplit('/').next().unwrap(),"kind":"file","version_id":version})
 }
@@ -6,7 +49,11 @@ fn resolved(id: &str, path: &str, selected_path: &str) -> Value {
     json!({"entry_id":id,"path":path,"selected_path":selected_path})
 }
 fn branch(id: &str, path: &str, entries: Vec<Value>) -> Value {
-    json!({"directory_branch_id":id,"head_tree_id":format!("tree-{id}"),"name":id,"path":path,"entries":entries})
+    let mut value = test_entries::branch_wire(
+        json!({"directory_branch_id":id,"repository_id":"repo","head_tree_id":format!("tree-{id}"),"name":id,"path":path}),
+    );
+    value["entries"] = entries.into_iter().map(|entry| json!({"entry_id":entry["entry_id"],"path":entry["path"],"selected_path":entry["selected_path"]})).collect::<Vec<_>>().into();
+    value
 }
 fn draft(kind: Kind) -> Draft {
     let f = file("f", "a/old.txt", "F1");
@@ -17,10 +64,16 @@ fn draft(kind: Kind) -> Draft {
         repository: "repo".into(),
         repository_path: "a".into(),
         disk_prefix: String::new(),
-        entries: vec![f.clone(), g.clone()],
+        entries: vec![listed(f.clone()), listed(g.clone())],
         names: BTreeMap::from([
-            (entry_key(&file("f", "a/old.txt", "F1")), "new.txt".into()),
-            (entry_key(&file("g", "a/data.txt", "G1")), "data.txt".into()),
+            (
+                entry_key(&listed(file("f", "a/old.txt", "F1"))),
+                "new.txt".into(),
+            ),
+            (
+                entry_key(&listed(file("g", "a/data.txt", "G1"))),
+                "data.txt".into(),
+            ),
         ]),
         sources: vec![
             branch("m", "a", vec![f, g]),
@@ -33,13 +86,19 @@ fn draft(kind: Kind) -> Draft {
                 ],
             ),
             branch("r", "a", vec![]),
-        ],
+        ]
+        .into_iter()
+        .map(scope)
+        .collect(),
         source_resolved: true,
         scope_read: None,
         selected_sources: BTreeSet::from(["m".into(), "n".into()]),
         target_path: "b".into(),
         target_resolved: true,
-        targets: vec![branch("l", "b", vec![]), branch("p", "b", vec![])],
+        targets: vec![branch("l", "b", vec![]), branch("p", "b", vec![])]
+            .into_iter()
+            .map(scope)
+            .collect(),
         mappings: vec![
             Mapping {
                 source: "m".into(),
@@ -68,9 +127,9 @@ fn reviews_load_only_captured_source_facts_before_submission() {
             });
             let mut captured = draft(kind);
             let expected = request(&captured).unwrap();
-            let facts = captured.sources.clone();
+            let facts = captured.sources.iter().map(scope_wire).collect::<Vec<_>>();
             for source in &mut captured.sources {
-                source.as_object_mut().unwrap().remove("entries");
+                *source = source.summary().clone().into();
             }
             super::super::actions::open_draft(state, captured);
             state.with_untracked(|s| {
@@ -105,7 +164,7 @@ fn source_facts_reject_stale_reads_head_changes_and_cancellation() {
             ..Default::default()
         });
         let captured = draft(Kind::Delete);
-        let facts = captured.sources.clone();
+        let facts = captured.sources.iter().map(scope_wire).collect::<Vec<_>>();
         super::super::actions::open_draft(state, captured);
         let value = json!({"repository_id":"repo","directory_branches":facts});
         for (epoch, id, generation) in [(7, "draft", 1), (8, "replaced", 1), (8, "draft", 0)] {
@@ -135,13 +194,22 @@ fn source_facts_reject_stale_reads_head_changes_and_cancellation() {
 fn missing_selected_alias_cannot_resolve_to_another_selected_alias() {
     let mut draft = draft(Kind::Delete);
     draft.selected_sources = BTreeSet::from(["m".into()]);
-    draft.entries = vec![file("f", "a/first", "F1"), file("f", "a/second", "F1")];
-    draft.sources[0]["entries"] = json!([resolved("f", "a/first", "a/first")]);
+    draft.entries = vec![
+        listed(file("f", "a/first", "F1")),
+        listed(file("f", "a/second", "F1")),
+    ];
+    update_scope(
+        &mut draft.sources[0],
+        json!({"entries": json!([resolved("f", "a/first", "a/first")])}),
+    );
     assert!(request(&draft).is_err());
-    draft.sources[0]["entries"] = json!([
-        resolved("f", "a/first", "a/first"),
-        resolved("f", "a/second", "a/second")
-    ]);
+    update_scope(
+        &mut draft.sources[0],
+        json!({"entries": json!([
+            resolved("f", "a/first", "a/first"),
+            resolved("f", "a/second", "a/second")
+        ])}),
+    );
     assert_eq!(
         request(&draft).unwrap()["items"].as_array().unwrap().len(),
         2
@@ -245,8 +313,11 @@ fn multiple_aliases_of_one_identity_resolve_by_path_without_sharing_name_edits()
     draft.selected_sources = BTreeSet::from(["m".into()]);
     let first = file("f", "a/first.txt", "F1");
     let second = file("f", "a/second.txt", "F2");
-    draft.entries = vec![first.clone(), second.clone()];
-    draft.sources[0]["entries"] = json!([first, second]);
+    draft.entries = vec![listed(first.clone()), listed(second.clone())];
+    update_scope(
+        &mut draft.sources[0],
+        json!({"entries": json!([first, second])}),
+    );
     draft.names = BTreeMap::from([
         (entry_key(&draft.entries[0]), "renamed-first.txt".into()),
         (entry_key(&draft.entries[1]), "renamed-second.txt".into()),
@@ -303,12 +374,18 @@ fn copying_to_multiple_explicit_targets_never_infers_a_cartesian_product() {
 #[test]
 fn an_absent_entry_rejects_the_entire_selected_scope() {
     let mut draft = draft(Kind::Delete);
-    draft.sources[1]["entries"] = json!([resolved("f", "a/alias.txt", "a/old.txt")]);
+    update_scope(
+        &mut draft.sources[1],
+        json!({"entries": json!([resolved("f", "a/alias.txt", "a/old.txt")])}),
+    );
     assert!(request(&draft).is_err());
-    draft.sources[1]["entries"] = json!([
-        resolved("f", "a/alias.txt", "a/old.txt"),
-        file("g", "a/data.txt", "G2")
-    ]);
+    update_scope(
+        &mut draft.sources[1],
+        json!({"entries": json!([
+            resolved("f", "a/alias.txt", "a/old.txt"),
+            file("g", "a/data.txt", "G2")
+        ])}),
+    );
     assert_eq!(
         request(&draft).unwrap()["items"].as_array().unwrap().len(),
         4
@@ -336,9 +413,15 @@ fn no_mapping_missing_guard_or_invalid_utf8_byte_length_is_submitted() {
     draft.mappings[1].target.clear();
     assert!(request(&draft).is_err());
     draft.mappings[1].target = "p".into();
-    draft.sources[0]["head_tree_id"] = Value::Null;
-    assert!(request(&draft).is_err());
-    draft.sources[0]["head_tree_id"] = "tree-m".into();
+    let mut malformed = scope_wire(&draft.sources[0]);
+    malformed["head_tree_id"] = Value::Null;
+    assert!(
+        Scopes::parse(
+            json!({"repository_id":"repo","directory_branches":[malformed]}),
+            Projection::Selected
+        )
+        .is_err()
+    );
     draft
         .names
         .insert(entry_key(&draft.entries[0]), "文".repeat(81));
@@ -347,10 +430,29 @@ fn no_mapping_missing_guard_or_invalid_utf8_byte_length_is_submitted() {
         .names
         .insert(entry_key(&draft.entries[0]), "文".repeat(80));
     assert!(request(&draft).is_ok());
-    for bad in ["../b", "a//b", "a\\b", "a/./b"] {
-        assert!(!valid_path(bad));
+    for bad in ["../b", "a//b", "a\\b", "a/./b", "Cafe\u{301}"] {
+        assert!(destination_path(bad).is_err());
     }
-    assert!(valid_path("资料/报告"));
+    assert_eq!(
+        destination_path("资料/报告").unwrap().unwrap().as_str(),
+        "资料/报告"
+    );
+}
+
+#[test]
+fn destination_listing_uses_root_without_a_trailing_separator() {
+    for (prefix, target, expected) in [
+        ("Repository", "", "Repository"),
+        ("Repository", "docs/nested", "Repository%2Fdocs%2Fnested"),
+        ("", "", ""),
+        ("", "docs", "docs"),
+    ] {
+        let target = destination_path(target).unwrap();
+        assert_eq!(
+            destination_endpoint("P01", prefix, target.as_ref()),
+            format!("/api/file-manager/disks/P01/entries?path={expected}&limit=1")
+        );
+    }
 }
 
 #[test]
@@ -365,9 +467,9 @@ fn current_long_names_can_be_renamed_or_moved_and_copied_unchanged() {
             format!("a/{name}")
         };
         let entry = file("f", &source_path, "F1");
-        draft.entries = vec![entry.clone()];
-        draft.names = BTreeMap::from([(entry_key(&entry), name.clone())]);
-        draft.sources = vec![branch("m", "a", vec![entry])];
+        draft.entries = vec![listed(entry.clone())];
+        draft.names = BTreeMap::from([(entry_key(&listed(entry.clone())), name.clone())]);
+        draft.sources = vec![scope(branch("m", "a", vec![entry]))];
         draft.selected_sources = BTreeSet::from(["m".into()]);
         draft.mappings.truncate(1);
         let parent = if kind == Kind::Rename { "a" } else { "b" };
@@ -422,26 +524,26 @@ fn composed_destinations_obey_the_same_path_budget_as_the_engine() {
             ]);
         }
         for (parent, allowed) in cases {
-            assert!(valid_path(&parent));
+            assert!(destination_path(&parent).is_ok());
             if kind == Kind::Rename {
                 let source = format!("{parent}/x");
                 assert!(name_policy::validate_path(&source).is_ok());
                 let entry = file("f", &source, "F1");
-                draft.names = BTreeMap::from([(entry_key(&entry), "文字".into())]);
-                draft.entries = vec![entry.clone()];
-                draft.sources[0]["entries"] = json!([entry]);
-                draft.sources[0]["path"] = parent.clone().into();
+                draft.names = BTreeMap::from([(entry_key(&listed(entry.clone())), "文字".into())]);
+                draft.entries = vec![listed(entry.clone())];
+                update_scope(&mut draft.sources[0], json!({"entries": json!([entry])}));
+                update_scope(&mut draft.sources[0], json!({"path": parent.clone()}));
             } else {
-                draft.targets[0]["path"] = parent.clone().into();
+                update_scope(&mut draft.targets[0], json!({"path": parent.clone()}));
             }
             let destination = format!("{parent}/文字");
             assert_eq!(name_policy::validate_path(&destination).is_ok(), allowed);
             assert_eq!(request(&draft).is_ok(), allowed, "{destination}");
         }
     }
-    assert!(!valid_path(&"a".repeat(201)));
-    assert!(!valid_path(&vec!["a"; 33].join("/")));
-    assert!(valid_path(""));
+    assert!(destination_path(&"a".repeat(201)).is_err());
+    assert!(destination_path(&vec!["a"; 33].join("/")).is_err());
+    assert_eq!(destination_path("").unwrap(), None);
 }
 
 #[test]
@@ -460,8 +562,14 @@ fn stale_detail_rename_keeps_original_identity_and_tree_instead_of_retargeting_s
     );
     // If scope loading sees a replacement at the old path, fail closed rather
     // than constructing a path-only rename for the replacement identity.
-    draft.sources[0]["entries"] = json!([file("replacement", "a/old.txt", "replacement-version")]);
-    draft.sources[0]["head_tree_id"] = "replacement-tree".into();
+    update_scope(
+        &mut draft.sources[0],
+        json!({"entries": json!([file("replacement", "a/old.txt", "replacement-version")])}),
+    );
+    update_scope(
+        &mut draft.sources[0],
+        json!({"head_tree_id": "replacement-tree"}),
+    );
     assert!(request(&draft).is_err());
 }
 
@@ -500,7 +608,7 @@ fn destination_lookup_replaces_cached_targets_using_authoritative_directory_iden
         old["directory_id"] = "old-directory".into();
         let mut fresh = branch("fresh-directory-branch", "b", vec![]);
         fresh["directory_id"] = "fresh-directory".into();
-        batch.targets = vec![old];
+        batch.targets = vec![scope(old)];
         batch.target_resolved = true;
         let state = RwSignal::new(State {
             authenticated: true,
@@ -528,13 +636,15 @@ fn destination_lookup_replaces_cached_targets_using_authoritative_directory_iden
             0,
             "draft",
             generation,
-            Ok(json!({"repository_id":"repo","directory_branches":[fresh.clone()]})),
+            Ok(summary_response(
+                json!({"repository_id":"repo","directory_branches":[fresh.clone()]})
+            )),
         ));
         state.with_untracked(|s| {
             let batch = s.files.batch.as_ref().unwrap();
             assert!(!batch.loading);
             assert!(batch.target_resolved);
-            assert_eq!(batch.targets, vec![fresh]);
+            assert_eq!(batch.targets, vec![scope(fresh)]);
         });
     });
 }
@@ -587,19 +697,19 @@ fn target_scope_completion_ignores_superseded_reads_and_preserves_historical_sco
         state.update(|s| s.files.batch = Some(captured));
         let value = json!({"repository_id":"repo","directory_branches":[branch("historical", "old-path", vec![])]});
         for (epoch, id, generation) in [(7,"draft",3), (8,"old-draft",3), (8,"draft",2)] {
-            assert!(!super::super::actions::complete_target_scopes(state, epoch, id, generation, Ok(value.clone())));
+            assert!(!super::super::actions::complete_target_scopes(state, epoch, id, generation, Ok(summary_response(value.clone()))));
             assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
             assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().targets.is_empty()));
         }
-        assert!(!super::super::actions::complete_target_scopes(state, 8, "draft", 3, Ok(value)));
+        assert!(!super::super::actions::complete_target_scopes(state, 8, "draft", 3, Ok(summary_response(value))));
         state.with_untracked(|s| {
             let draft = s.files.batch.as_ref().unwrap();
-            assert_eq!(draft.targets[0]["directory_branch_id"], "historical");
+            assert_eq!(draft.targets[0].summary().id(), "historical");
             assert!(draft.target_resolved);
             assert!(!draft.loading);
         });
         state.update(|s| { let draft=s.files.batch.as_mut().unwrap(); draft.loading=true; draft.targets.clear(); draft.target_resolved=false; });
-        assert!(super::super::actions::complete_target_scopes(state, 8, "draft", 3, Ok(json!({"repository_id":"repo","directory_branches":[]}))));
+        assert!(super::super::actions::complete_target_scopes(state, 8, "draft", 3, Ok(summary_response(json!({"repository_id":"repo","directory_branches":[]})))));
         assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
         assert!(!state.with_untracked(|s| s.files.batch.as_ref().unwrap().target_resolved));
     });
@@ -714,7 +824,9 @@ fn published_registration_read_failure_retries_only_the_read_and_keeps_inputs() 
                 "draft",
                 "scope-original",
                 0,
-                Ok(json!({"repository_id":"repo","directory_branches":[registered.clone()]})),
+                Ok(admitted(
+                    json!({"repository_id":"repo","directory_branches":[registered.clone()]}),
+                )),
             );
             state.with_untracked(|s| {
                 let draft = s.files.batch.as_ref().unwrap();
@@ -723,10 +835,10 @@ fn published_registration_read_failure_retries_only_the_read_and_keeps_inputs() 
                 assert!(draft.error.is_empty());
                 assert_eq!(draft.names, original_names);
                 if destination {
-                    assert_eq!(draft.targets, vec![registered]);
+                    assert_eq!(draft.targets, vec![scope(registered)]);
                     assert!(draft.target_resolved);
                 } else {
-                    assert_eq!(draft.sources, vec![registered]);
+                    assert_eq!(draft.sources, vec![scope(registered)]);
                     assert_eq!(
                         draft.selected_sources,
                         BTreeSet::from(["registered".into()])
@@ -751,17 +863,17 @@ fn registration_receipts_and_reads_belong_only_to_the_original_draft_and_session
         file_actions::record_receipt(state, "scope-original", scope_receipt());
         let ready = json!({"repository_id":"repo","directory_branches":[branch("registered", "b", vec![])]});
         for (epoch, id, operation, generation) in [(6,"draft","scope-original",0),(7,"old-draft","scope-original",0),(7,"draft","other",0),(7,"draft","scope-original",1)] {
-            super::super::actions::complete_registered_scope(state, epoch, id, operation, generation, Ok(ready.clone()));
+            super::super::actions::complete_registered_scope(state, epoch, id, operation, generation, Ok(admitted(ready.clone())));
             assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
             assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().targets.is_empty()));
         }
         // Missing records after confirmed publication remain a read-retry, not
         // permission to register again under a new operation ID.
-        super::super::actions::complete_registered_scope(state, 7, "draft", "scope-original", 0, Ok(json!({"repository_id":"repo","directory_branches":[]})));
+        super::super::actions::complete_registered_scope(state, 7, "draft", "scope-original", 0, Ok(admitted(json!({"repository_id":"repo","directory_branches":[]}))));
         assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().registration.is_some()));
         assert!(!state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
         state.update(|s| s.files.batch = None);
-        super::super::actions::complete_registered_scope(state, 7, "draft", "scope-original", 0, Ok(ready));
+        super::super::actions::complete_registered_scope(state, 7, "draft", "scope-original", 0, Ok(admitted(ready)));
         assert!(state.with_untracked(|s| s.files.batch.is_none()));
         // Closing the review cannot hide expiry of its still-current session.
         super::super::actions::complete_registered_scope(state, 7, "draft", "scope-original", 0, Err(scope_read_error(401)));
@@ -806,7 +918,12 @@ fn a_replacement_source_without_own_scopes_stays_unregistered() {
     Owner::new().with(|| {
         let mut initial = State::default();
         initial.files.repository_path = "a".into();
-        initial.files.entries = vec![file("new-directory-file", "a/new.txt", "new-version")].into();
+        initial.files.entries = vec![listed(file(
+            "new-directory-file",
+            "a/new.txt",
+            "new-version",
+        ))]
+        .into();
         // The server's identity-aware listing has no scopes for the replacement
         // directory even though a frozen old directory once used the same path.
         initial.files.directory_branches.clear();
@@ -886,7 +1003,10 @@ fn confirmed_registration_cannot_be_downgraded_by_late_receipts() {
 #[test]
 fn selected_scope_query_carries_only_captured_heads_and_selection_pairs() {
     let mut draft = draft(Kind::Delete);
-    draft.entries[0]["repository_path"] = "a/logical.txt".into();
+    test_entries::update(
+        &mut draft.entries[0],
+        json!({"repository_path":"a/logical.txt"}),
+    );
     let body =
         super::super::actions::selected_scope_body(&draft, &draft.sources, &draft.repository_path);
     assert_eq!(body["path"], "a");
@@ -952,4 +1072,53 @@ fn batch_request_uses_the_shared_kind_without_changing_wire_tokens() {
         assert!(typed.items.iter().all(|item| item.target.is_none()
             == (expected == storage_contract::DirectoryBatchKind::Delete)));
     }
+}
+
+#[test]
+fn scope_boundary_rejects_duplicate_facts_and_partial_summaries_before_retention() {
+    let mut value = branch("source", "a", vec![resolved("file", "a/file", "a/file")]);
+    let original = value.clone();
+    value["entries"] = json!([
+        resolved("file", "a/file", "a/file"),
+        resolved("file", "a/alias", "a/file")
+    ]);
+    assert!(
+        Scopes::parse(
+            json!({"repository_id":"repo","directory_branches":[value]}),
+            Projection::Selected
+        )
+        .is_err()
+    );
+    for field in [
+        "repository_id",
+        "head_tree_id",
+        "current",
+        "sequence",
+        "file_count",
+    ] {
+        let mut partial = original.clone();
+        partial.as_object_mut().unwrap().remove(field);
+        assert!(
+            Scopes::parse(
+                json!({"repository_id":"repo","directory_branches":[partial]}),
+                Projection::Selected
+            )
+            .is_err(),
+            "{field}"
+        );
+    }
+    let mut malformed = original;
+    malformed["entries"][0]["path"] = "../escape".into();
+    let error = Scopes::parse(
+        json!({"repository_id":"repo","directory_branches":[malformed]}),
+        Projection::Selected,
+    )
+    .err()
+    .unwrap();
+    assert!(matches!(
+        error.source.as_deref(),
+        Some(api::ErrorSource::DirectoryPage(
+            crate::files::DirectoryPageError::Path { .. }
+        ))
+    ));
 }

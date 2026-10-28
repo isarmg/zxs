@@ -237,6 +237,20 @@ impl AtomicFile {
         destination: &RelativePath,
         bytes: &[u8],
     ) -> Result<(), Error> {
+        Self::replace_held(directory, destination, bytes).map(drop)
+    }
+
+    /// Replace an entry and retain the exact descriptor that crossed both
+    /// publication barriers. The returned descriptor is write-only; retaining
+    /// it does not prove that the name or bytes remain unchanged afterwards.
+    ///
+    /// # Errors
+    /// Uses the same path, link, cleanup and durability errors as [`Self::replace`].
+    pub fn replace_held(
+        directory: &PrivateDirectory,
+        destination: &RelativePath,
+        bytes: &[u8],
+    ) -> Result<File, Error> {
         unix::atomic_replace(directory, destination, bytes)
     }
 }

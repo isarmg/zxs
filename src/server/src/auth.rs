@@ -200,6 +200,17 @@ pub(crate) struct AuthReader {
 }
 
 impl AuthReader {
+    /// Capture the same committed credentials for admission classification and hashing.
+    pub(crate) fn login_challenge(&self, username: &str) -> Result<LoginChallenge, ApiError> {
+        // HTTP rejects invalid candidates before retaining any admission state.
+        let username = primitives::normalize_administrator_username(username)
+            .map_err(|source| ApiError::unauthorized().with_source(source))?;
+        Ok(LoginChallenge::new(
+            &self.database()?.administrator,
+            Some(username),
+        ))
+    }
+
     /// Map a trusted protocol handshake to the current sole administrator.
     /// This snapshot is not authentication or a reusable authorization proof.
     pub(crate) fn sole_identity(&self) -> Result<Identity, ApiError> {
@@ -268,6 +279,26 @@ pub(crate) struct VerifiedLogin {
     generation: u64,
 }
 impl LoginChallenge {
+    /// The caller already applied the canonical username policy at its boundary.
+    fn new(administrator: &Administrator, username: Option<String>) -> Self {
+        Self {
+            // Unknown names perform exactly the same password verification,
+            // but cannot receive a proof even if the supplied password matches.
+            generation: (username.as_deref() == Some(administrator.username.as_str()))
+                .then_some(administrator.generation),
+            username,
+            password_hash: administrator.password_hash.clone(),
+        }
+    }
+
+    pub(crate) fn is_known_account(&self) -> bool {
+        self.generation.is_some()
+    }
+
+    pub(crate) fn canonical_username(&self) -> Option<&str> {
+        self.username.as_deref()
+    }
+
     pub(crate) fn verify(self, password: &str) -> Result<VerifiedLogin, ApiError> {
         let valid = primitives::verify_password(password, &self.password_hash);
         let generation = self
@@ -796,14 +827,7 @@ impl AuthStore {
             Err(primitives::Error::InvalidAdministratorUsername) => None,
             Err(error) => return Err(ApiError::invalid_source(error)),
         };
-        Ok(LoginChallenge {
-            // Unknown names perform exactly the same password verification,
-            // but cannot receive a proof even if the supplied password matches.
-            generation: (username.as_deref() == Some(administrator.username.as_str()))
-                .then_some(administrator.generation),
-            username,
-            password_hash: administrator.password_hash.clone(),
-        })
+        Ok(LoginChallenge::new(administrator, username))
     }
 
     pub(crate) fn finish_login(

@@ -30,6 +30,7 @@ mod directory;
 mod handles;
 mod namespace;
 mod publication;
+mod recovery_record;
 mod session;
 mod transport;
 mod workers;
@@ -76,6 +77,7 @@ struct DirectoryCursor {
 }
 
 struct Writer {
+    recovery_record: recovery_record::ActiveRecord,
     reservation: budget::Lease,
     file: File,
     directory: platform_io::fs_safety::PrivateDirectory,

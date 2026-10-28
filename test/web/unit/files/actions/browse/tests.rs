@@ -57,7 +57,9 @@ fn selected_file_history_read_requires_an_active_session() {
                 ..Default::default()
             });
             state.update(|s| {
-                s.files.selected = Some(json_codec::json!({"file_id":"file-1"}));
+                s.files.selected = Some(crate::files::test_entries::entry(
+                    json_codec::json!({"file_id":"file-1"}),
+                ));
             });
             load_file_history(state);
             state.with_untracked(|s| {
@@ -349,7 +351,10 @@ fn query_change_resets_page_local_state_before_any_read() {
             s.files.next_cursor = Some("next".into());
             s.files.previous_cursor = Some("previous".into());
             s.files.checked_entries.insert("selected".into());
-            s.files.entries = vec![json_codec::json!({"entry_id":"old"})].into();
+            s.files.entries = vec![crate::files::test_entries::entry(
+                json_codec::json!({"entry_id":"old"}),
+            )]
+            .into();
             s.files.loaded = true;
         });
         search(state, "new query".into());
@@ -364,4 +369,93 @@ fn query_change_resets_page_local_state_before_any_read() {
             assert_eq!(s.files.generation, 1);
         });
     });
+}
+
+fn directory_response(entries: Vec<Value>, selected: Value) -> Value {
+    json_codec::json!({"slot_id":"P01","path":"","writable":true,
+        "entries":entries,"selected_entry":selected,"context":{"repository_id":"repo",
+        "repository_path":"","branch_id":"main","base_head":"head"},
+        "directory_file_count":"10","directory_branches":[],"directory_branches_supported":true,
+        "default_branch_scope":true,"total_entries":"10","snapshot":"snapshot",
+        "next_cursor":"next","previous_cursor":null})
+}
+
+#[test]
+fn admitted_page_applies_all_metadata_and_keeps_independent_selected_details() {
+    use crate::files::{model::entry_key, test_entries};
+    let selected =
+        test_entries::entry(json_codec::json!({"entry_id":"selected","path":"outside.txt"}));
+    let row = test_entries::entry(json_codec::json!({"entry_id":"row","path":"row.txt"}));
+    let mut state = State::default();
+    state.page = crate::ui::Page::Details;
+    state.files.selected = Some(selected.clone());
+    state.files.checked_entries = [entry_key(&row), "removed".into()].into_iter().collect();
+    state.files.file_history = json_codec::json!({"note":"loaded history"}).into();
+    let mut refreshed = test_entries::wire(&selected);
+    refreshed["note"] = "fresh entry note".into();
+    let page = Page::parse(
+        directory_response(vec![test_entries::wire(&row)], refreshed),
+        "P01",
+        &DirectoryKey::navigation(""),
+        200,
+        Some(&selected),
+    )
+    .unwrap();
+    apply_page(&mut state, page, Some(&selected));
+    assert_eq!(state.files.entries.as_ref(), std::slice::from_ref(&row));
+    assert_eq!(
+        state.files.selected.as_ref().unwrap().note(),
+        Some("fresh entry note")
+    );
+    assert_eq!(state.files.file_history["note"], "loaded history");
+    assert_eq!(
+        state.files.checked_entries,
+        [entry_key(&row)].into_iter().collect()
+    );
+    assert_eq!(state.files.next_cursor.as_deref(), Some("next"));
+    assert_eq!(state.files.total_entries, 10);
+    assert_eq!(state.files.directory_file_count, 10);
+    assert!(state.files.writable && state.files.loaded && state.files.default_branch_scope);
+}
+
+#[test]
+fn page_completion_does_not_replace_a_newer_selection_and_still_prunes_checks() {
+    use crate::files::{model::entry_key, test_entries};
+    let requested = test_entries::entry(json_codec::json!({"entry_id":"old","path":"old.txt"}));
+    let current = test_entries::entry(json_codec::json!({"entry_id":"new","path":"new.txt"}));
+    let mut state = State::default();
+    state.files.selected = Some(current.clone());
+    state.files.checked_entries.insert(entry_key(&requested));
+    let page = Page::parse(
+        directory_response(vec![test_entries::wire(&current)], Value::Null),
+        "P01",
+        &DirectoryKey::navigation(""),
+        200,
+        Some(&requested),
+    )
+    .unwrap();
+    apply_page(&mut state, page, Some(&requested));
+    assert_eq!(state.files.selected, Some(current));
+    assert!(state.files.checked_entries.is_empty());
+}
+
+#[test]
+fn malformed_page_never_installs_partial_entries_context_or_writeability() {
+    use crate::files::test_entries;
+    let old = test_entries::entry(json_codec::json!({"entry_id":"old","path":"old.txt"}));
+    let mut state = State::default();
+    state.files.entries = vec![old.clone()].into();
+    state.files.repository_id = "retained-context".into();
+    state.files.writable = false;
+    let mut value = directory_response(
+        vec![test_entries::entry_wire(json_codec::json!({}))],
+        Value::Null,
+    );
+    value["directory_file_count"] = "invalid".into();
+    let result = Page::parse(value, "P01", &DirectoryKey::navigation(""), 200, None)
+        .map(|page| apply_page(&mut state, page, None));
+    assert!(result.is_err());
+    assert_eq!(state.files.entries.as_ref(), &[old]);
+    assert_eq!(state.files.repository_id, "retained-context");
+    assert!(!state.files.writable);
 }

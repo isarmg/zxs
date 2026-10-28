@@ -65,9 +65,29 @@ fn address(last: u8) -> IpAddr {
     IpAddr::from([192, 0, 2, last])
 }
 
+fn account(username: &str) -> Result<LoginAccount, ApiError> {
+    let username = authentication::normalize_administrator_username(username)
+        .map_err(|source| ApiError::unauthorized().with_source(source))?;
+    Ok(if username == "admin" {
+        LoginAccount::Administrator
+    } else {
+        LoginAccount::Unknown(username)
+    })
+}
+
+fn admit_login(
+    admission: &Arc<LoginAdmission>,
+    ip: IpAddr,
+    username: &str,
+) -> Result<Duration, ApiError> {
+    let (pending, delay) = admission.admit(ip, account(username)?)?;
+    drop(pending);
+    Ok(delay)
+}
+
 #[test]
 fn distributed_normalized_username_attempts_slow_without_hard_lockout() {
-    let attempts = Mutex::new(HashMap::new());
+    let attempts = Arc::new(LoginAdmission::default());
     for index in 0..MAX_ATTEMPTS {
         let username = if index % 2 == 0 { " Admin " } else { "ADMIN" };
         assert_eq!(
@@ -89,7 +109,17 @@ fn distributed_normalized_username_attempts_slow_without_hard_lockout() {
             Duration::from_millis(millis)
         );
     }
-    assert_eq!(attempts.lock().unwrap()["user:admin"].count, 17);
+    assert_eq!(
+        attempts
+            .state
+            .lock()
+            .unwrap()
+            .administrator
+            .as_ref()
+            .unwrap()
+            .count,
+        17
+    );
     // An unrelated guessed username cannot amplify pressure on the administrator.
     assert_eq!(
         admit_login(&attempts, address(100), "reader").unwrap(),
@@ -99,7 +129,7 @@ fn distributed_normalized_username_attempts_slow_without_hard_lockout() {
 
 #[test]
 fn source_limit_cannot_be_evaded_by_rotating_username_guesses() {
-    let attempts = Mutex::new(HashMap::new());
+    let attempts = Arc::new(LoginAdmission::default());
     for index in 0..MAX_ATTEMPTS {
         admit_login(&attempts, address(1), &format!("user{index}")).unwrap();
     }
@@ -109,7 +139,14 @@ fn source_limit_cannot_be_evaded_by_rotating_username_guesses() {
             .status,
         429
     );
-    assert!(!attempts.lock().unwrap().contains_key("user:victim"));
+    assert!(
+        !attempts
+            .state
+            .lock()
+            .unwrap()
+            .unknown
+            .contains_key("victim")
+    );
     assert_eq!(
         admit_login(&attempts, address(2), "victim").unwrap(),
         Duration::ZERO
@@ -198,7 +235,7 @@ fn trusted_proxy_requires_exact_single_ip_and_transport_metadata() {
 
 #[test]
 fn proxy_clients_have_separate_budgets_but_cannot_rotate_guesses_to_bypass_source_limit() {
-    let attempts = Mutex::new(HashMap::new());
+    let attempts = Arc::new(LoginAdmission::default());
     let config = proxy_config();
     let first = client_ip(&request_from("127.0.0.1:1234", Some("192.0.2.1")), &config).unwrap();
     let second = client_ip(&request_from("127.0.0.1:1234", Some("192.0.2.2")), &config).unwrap();
@@ -230,8 +267,12 @@ fn proxy_configuration_requires_loopback_peer_and_valid_https_origin() {
 
 #[test]
 fn invalid_usernames_never_allocate_retained_pending_or_counter_keys() {
-    let pending = Arc::new(Mutex::new(HashSet::new()));
-    let attempts = Mutex::new(HashMap::new());
+    let root = crate::tests::private_tempdir();
+    let store =
+        crate::auth::AuthStore::initialize(root.path(), "admin", "test-login-admission-password")
+            .unwrap();
+    let reader = store.reader();
+    let admission = Arc::new(LoginAdmission::default());
     for username in [
         "x".repeat(1_000_000),
         "管理员".repeat(100_000),
@@ -240,87 +281,678 @@ fn invalid_usernames_never_allocate_retained_pending_or_counter_keys() {
         "".to_owned(),
         " admin ".repeat(100),
     ] {
-        assert_eq!(login_username_key(&username).unwrap_err().status, 401);
-        assert!(PendingLogin::acquire(&pending, &username).is_err());
-        assert_eq!(
-            admit_login(&attempts, address(1), &username)
-                .unwrap_err()
-                .status,
-            401
-        );
-        assert!(pending.lock().unwrap().is_empty());
-        assert!(attempts.lock().unwrap().is_empty());
+        let error = reader.login_challenge(&username).err().unwrap();
+        assert_eq!(error.status, 401);
+        assert!(std::error::Error::source(&error).is_some());
+        let state = admission.state.lock().unwrap();
+        assert!(!state.pending_administrator.load(Ordering::Acquire));
+        assert!(state.pending_unknown.is_empty());
+        assert!(state.sources.administrator.is_empty());
+        assert!(state.sources.unknown.is_empty());
+        assert!(state.unknown.is_empty());
+        assert!(state.administrator.is_none());
     }
-    assert_eq!(login_username_key(" Admin ").unwrap(), "user:admin");
+    let known = reader.login_challenge(" Admin ").unwrap();
+    assert_eq!(known.canonical_username(), Some("admin"));
+    assert!(matches!(
+        LoginAccount::from_challenge(&known),
+        LoginAccount::Administrator
+    ));
     let longest = "x".repeat(authentication::ADMINISTRATOR_USERNAME_MAX_BYTES);
+    let unknown = reader.login_challenge(&longest).unwrap();
+    let LoginAccount::Unknown(username) = LoginAccount::from_challenge(&unknown) else {
+        panic!("unknown name")
+    };
     assert_eq!(
-        login_username_key(&longest).unwrap().len(),
-        5 + authentication::ADMINISTRATOR_USERNAME_MAX_BYTES
+        username.len(),
+        authentication::ADMINISTRATOR_USERNAME_MAX_BYTES
     );
-    assert!(login_username_key(&(longest + "x")).is_err());
+    assert!(reader.login_challenge(&(longest + "x")).is_err());
 }
 
 #[test]
-fn pending_logins_are_per_canonical_username_bounded_and_release_on_drop() {
-    let pending = Arc::new(Mutex::new(HashSet::new()));
-    let first = PendingLogin::acquire(&pending, " Admin ").unwrap();
-    assert!(PendingLogin::acquire(&pending, "ADMIN").is_err());
-    let other = PendingLogin::acquire(&pending, "reader").unwrap();
-    drop(first);
-    let first = PendingLogin::acquire(&pending, "admin").unwrap();
-    let mut guards = vec![first, other];
-    for index in 2..MAX_PENDING_LOGINS {
-        guards.push(PendingLogin::acquire(&pending, &format!("user{index}")).unwrap());
+fn unknown_pending_capacity_cannot_consume_the_administrator_guard() {
+    let admission = Arc::new(LoginAdmission::default());
+    let mut guards = Vec::new();
+    for index in 0..MAX_PENDING_UNKNOWN_LOGINS {
+        guards.push(
+            admission
+                .admit(
+                    address(index as u8),
+                    account(&format!("user{index}")).unwrap(),
+                )
+                .unwrap()
+                .0,
+        );
     }
-    assert!(PendingLogin::acquire(&pending, "overflow").is_err());
-    assert_eq!(pending.lock().unwrap().len(), MAX_PENDING_LOGINS);
-    drop(guards);
-    assert!(pending.lock().unwrap().is_empty());
+    assert!(
+        admission
+            .admit(address(100), account("overflow").unwrap())
+            .is_err()
+    );
+    let first = admission
+        .admit(address(100), account(" Admin ").unwrap())
+        .unwrap()
+        .0;
+    assert!(
+        admission
+            .admit(address(101), account("ADMIN").unwrap())
+            .is_err()
+    );
+    drop(first);
+    let admin = admission
+        .admit(address(100), account("admin").unwrap())
+        .unwrap()
+        .0;
+    assert_eq!(
+        admission.state.lock().unwrap().pending_unknown.len(),
+        MAX_PENDING_UNKNOWN_LOGINS
+    );
+    drop((guards, admin));
+    let state = admission.state.lock().unwrap();
+    assert!(!state.pending_administrator.load(Ordering::Acquire));
+    assert!(
+        state
+            .pending_unknown
+            .values()
+            .all(|active| !active.load(Ordering::Acquire))
+    );
+}
+
+#[test]
+fn concurrent_known_requests_charge_only_the_single_admitted_waiter() {
+    let admission = Arc::new(LoginAdmission::default());
+    let start = std::sync::Barrier::new(8);
+    let admitted = std::sync::Barrier::new(8);
+    let successes = std::thread::scope(|scope| {
+        let mut workers = Vec::new();
+        for index in 0..8 {
+            let admission = &admission;
+            let start = &start;
+            let admitted = &admitted;
+            workers.push(scope.spawn(move || {
+                start.wait();
+                let result = admission.admit(address(index), LoginAccount::Administrator);
+                admitted.wait();
+                result.is_ok()
+            }));
+        }
+        workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .filter(|admitted| *admitted)
+            .count()
+    });
+    assert_eq!(successes, 1);
+    let state = admission.state.lock().unwrap();
+    assert_eq!(state.sources.administrator.len(), 1);
+    assert_eq!(state.administrator.as_ref().unwrap().count, 1);
+    assert!(!state.pending_administrator.load(Ordering::Acquire));
+}
+
+#[test]
+fn pending_release_does_not_wait_for_the_admission_mutex() {
+    let admission = Arc::new(LoginAdmission::default());
+    let (pending, _) = admission
+        .admit(address(1), LoginAccount::Administrator)
+        .unwrap();
+    let active = Arc::clone(&pending.active);
+    let state = admission.state.lock().unwrap();
+    let (released, result) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        drop(pending);
+        released.send(()).unwrap();
+    });
+    let release = result.recv_timeout(Duration::from_secs(3));
+    drop(state);
+    worker.join().unwrap();
+    release.expect("pending release must not wait for the admission mutex");
+    assert!(!active.load(Ordering::Acquire));
+    assert!(
+        admission
+            .admit(address(2), LoginAccount::Administrator)
+            .is_ok()
+    );
+}
+
+#[test]
+fn pending_release_does_not_panic_or_recover_poisoned_admission() {
+    let admission = Arc::new(LoginAdmission::default());
+    let (pending, _) = admission
+        .admit(address(1), account("reader").unwrap())
+        .unwrap();
+    let active = Arc::clone(&pending.active);
+    let poisoned = Arc::clone(&admission);
+    assert!(
+        std::thread::spawn(move || {
+            let _state = poisoned.state.lock().unwrap();
+            panic!("test poisons the admission mutex");
+        })
+        .join()
+        .is_err()
+    );
+    drop(pending);
+    assert!(!active.load(Ordering::Acquire));
+    assert!(admission.state.is_poisoned());
+}
+
+#[test]
+fn released_unknown_slots_are_reclaimed_without_evicting_active_work_or_counters() {
+    let admission = Arc::new(LoginAdmission::default());
+    let mut guards = Vec::new();
+    for index in 0..MAX_PENDING_UNKNOWN_LOGINS {
+        guards.push(
+            admission
+                .admit(
+                    address(index as u8),
+                    account(&format!("user{index}")).unwrap(),
+                )
+                .unwrap()
+                .0,
+        );
+    }
+    drop(guards.pop().unwrap());
+    assert_eq!(
+        admission.state.lock().unwrap().pending_unknown.len(),
+        MAX_PENDING_UNKNOWN_LOGINS
+    );
+    let next = admission
+        .admit(address(100), account("next").unwrap())
+        .unwrap()
+        .0;
+    assert!(
+        admission
+            .admit(address(101), account("USER0").unwrap())
+            .is_err()
+    );
+    {
+        let state = admission.state.lock().unwrap();
+        assert_eq!(state.pending_unknown.len(), MAX_PENDING_UNKNOWN_LOGINS);
+        assert!(
+            state
+                .pending_unknown
+                .values()
+                .all(|active| active.load(Ordering::Acquire))
+        );
+        assert_eq!(state.unknown["user0"].count, 1);
+        assert_eq!(state.unknown["user63"].count, 1);
+    }
+    drop((guards, next));
+    let last = admission
+        .admit(address(102), account("last").unwrap())
+        .unwrap()
+        .0;
+    {
+        let state = admission.state.lock().unwrap();
+        assert_eq!(state.pending_unknown.len(), 1);
+        assert_eq!(state.unknown.len(), MAX_PENDING_UNKNOWN_LOGINS + 2);
+    }
+    drop(last);
 }
 
 #[tokio::test]
-async fn cancelled_waiter_releases_username_guard_without_blocking_other_guesses() {
-    let pending = Arc::new(Mutex::new(HashSet::new()));
-    let waiting = pending.clone();
+async fn cancelled_login_job_retains_owned_slots_until_blocked_work_finishes() {
+    let root = crate::tests::private_tempdir();
+    let auth = Arc::new(Mutex::new(
+        crate::auth::AuthStore::initialize(
+            root.path(),
+            "admin",
+            "login-cancellation-test-password",
+        )
+        .unwrap(),
+    ));
+    let reader = auth.lock().unwrap().reader();
+    let challenge = reader.login_challenge("admin").unwrap();
+    let admission = Arc::new(LoginAdmission::default());
+    let (pending, _) = admission
+        .admit(address(1), LoginAccount::from_challenge(&challenge))
+        .unwrap();
+    let active = Arc::clone(&pending.active);
+    let slots = Arc::new(tokio::sync::Semaphore::new(1));
+    let (entered, started) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn({
+        let auth = Arc::clone(&auth);
+        move || {
+            let _held = auth.lock().unwrap();
+            entered.send(()).unwrap();
+            wait.recv_timeout(Duration::from_secs(10)).unwrap();
+        }
+    });
+    started.await.unwrap();
+    let job = tokio::spawn(login_job(
+        Arc::clone(&auth),
+        Arc::clone(&slots),
+        pending,
+        challenge,
+        "login-cancellation-test-password".into(),
+    ));
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while slots.available_permits() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    job.abort();
+    assert!(job.await.err().unwrap().is_cancelled());
+    assert!(active.load(Ordering::Acquire));
+    assert_eq!(slots.available_permits(), 0);
+    assert!(
+        admission
+            .admit(address(2), LoginAccount::Administrator)
+            .is_err()
+    );
+
+    let challenge = reader.login_challenge("unknown").unwrap();
+    let (pending, _) = admission
+        .admit(address(2), LoginAccount::from_challenge(&challenge))
+        .unwrap();
+    let unknown = Arc::clone(&pending.active);
+    let error = login_job(
+        Arc::clone(&auth),
+        Arc::clone(&slots),
+        pending,
+        challenge,
+        "wrong-password".into(),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(error.status, 429);
+    assert!(std::error::Error::source(&error).is_some());
+    assert!(!unknown.load(Ordering::Acquire));
+    assert!(active.load(Ordering::Acquire));
+
+    release.send(()).unwrap();
+    writer.join().unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while active.load(Ordering::Acquire) || slots.available_permits() != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        auth.lock().unwrap().snapshot().unwrap()["sessions"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        admission
+            .state
+            .lock()
+            .unwrap()
+            .administrator
+            .as_ref()
+            .unwrap()
+            .count,
+        1
+    );
+    assert!(
+        admission
+            .admit(address(3), LoginAccount::Administrator)
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn cancelled_waiter_releases_username_guard_without_resetting_pressure() {
+    let admission = Arc::new(LoginAdmission::default());
+    let waiting = admission.clone();
     let (ready, started) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
-        let _guard = PendingLogin::acquire(&waiting, "admin").unwrap();
+        let (_guard, _) = waiting
+            .admit(address(1), account("admin").unwrap())
+            .unwrap();
         ready.send(()).unwrap();
         tokio::time::sleep(Duration::from_secs(6)).await;
     });
     started.await.unwrap();
-    assert!(PendingLogin::acquire(&pending, "admin").is_err());
-    let other = PendingLogin::acquire(&pending, "reader").unwrap();
+    assert!(
+        admission
+            .admit(address(2), account("admin").unwrap())
+            .is_err()
+    );
+    let other = admission
+        .admit(address(2), account("reader").unwrap())
+        .unwrap()
+        .0;
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
-    let admin = PendingLogin::acquire(&pending, "admin").unwrap();
+    let admin = admission
+        .admit(address(2), account("admin").unwrap())
+        .unwrap()
+        .0;
     drop((admin, other));
-    assert!(pending.lock().unwrap().is_empty());
+    let state = admission.state.lock().unwrap();
+    assert!(!state.pending_administrator.load(Ordering::Acquire));
+    assert!(
+        state
+            .pending_unknown
+            .values()
+            .all(|active| !active.load(Ordering::Acquire))
+    );
+    assert_eq!(state.administrator.as_ref().unwrap().count, 2);
+    assert_eq!(state.sources.administrator[&address(1)].count, 1);
+    assert_eq!(state.sources.administrator[&address(2)].count, 2);
 }
 
 #[test]
 fn account_backoff_survives_active_window_boundary_and_cools_after_idle_minute() {
-    let attempts = Mutex::new(HashMap::from([(
-        "user:admin".into(),
-        Attempts {
-            since: Instant::now() - Duration::from_secs(59),
-            count: 20,
-        },
-    )]));
+    let admission = Arc::new(LoginAdmission::default());
+    admission.state.lock().unwrap().administrator = Some(Attempts {
+        since: Instant::now() - Duration::from_secs(59),
+        count: 20,
+    });
     assert_eq!(
-        admit_login(&attempts, address(1), "admin").unwrap(),
+        admit_login(&admission, address(1), "admin").unwrap(),
         Duration::from_secs(6)
     );
-    assert!(attempts.lock().unwrap()["user:admin"].since.elapsed() < Duration::from_secs(1));
-    attempts
+    assert!(
+        admission
+            .state
+            .lock()
+            .unwrap()
+            .administrator
+            .as_ref()
+            .unwrap()
+            .since
+            .elapsed()
+            < Duration::from_secs(1)
+    );
+    admission
+        .state
         .lock()
         .unwrap()
-        .get_mut("user:admin")
+        .administrator
+        .as_mut()
         .unwrap()
         .since = Instant::now() - ATTEMPT_WINDOW;
     assert_eq!(
-        admit_login(&attempts, address(2), "admin").unwrap(),
+        admit_login(&admission, address(2), "admin").unwrap(),
         Duration::ZERO
+    );
+}
+
+fn distinct_source(index: usize) -> IpAddr {
+    IpAddr::from(std::net::Ipv6Addr::from(index as u128 + 1))
+}
+
+#[test]
+fn unknown_name_and_source_capacity_leave_known_admission_available() {
+    let admission = Arc::new(LoginAdmission::default());
+    let now = Instant::now();
+    {
+        let mut state = admission.state.lock().unwrap();
+        for index in 0..MAX_ATTEMPT_KEYS {
+            state.sources.unknown.insert(
+                distinct_source(index),
+                Attempts {
+                    since: now,
+                    count: 1,
+                },
+            );
+            state.unknown.insert(
+                format!("user{index}"),
+                Attempts {
+                    since: now,
+                    count: 1,
+                },
+            );
+        }
+    }
+    assert_eq!(
+        admit_login(&admission, address(1), "overflow")
+            .unwrap_err()
+            .status,
+        429
+    );
+    assert_eq!(
+        admit_login(&admission, address(1), "admin").unwrap(),
+        Duration::ZERO
+    );
+    let state = admission.state.lock().unwrap();
+    assert_eq!(state.sources.unknown.len(), MAX_ATTEMPT_KEYS);
+    assert_eq!(state.unknown.len(), MAX_ATTEMPT_KEYS);
+    assert_eq!(state.sources.administrator.len(), 1);
+    assert_eq!(state.administrator.as_ref().unwrap().count, 1);
+    assert!(!state.pending_administrator.load(Ordering::Acquire));
+    assert!(state.pending_unknown.is_empty());
+}
+
+#[test]
+fn each_unknown_capacity_rejects_without_charging_the_other_dimension() {
+    let now = Instant::now();
+    let admission = Arc::new(LoginAdmission::default());
+    {
+        let mut state = admission.state.lock().unwrap();
+        for index in 0..MAX_ATTEMPT_KEYS {
+            state.sources.unknown.insert(
+                distinct_source(index),
+                Attempts {
+                    since: now,
+                    count: 1,
+                },
+            );
+        }
+    }
+    assert_eq!(
+        admit_login(&admission, address(1), "reader")
+            .unwrap_err()
+            .status,
+        429
+    );
+    assert!(admission.state.lock().unwrap().unknown.is_empty());
+    admit_login(&admission, address(1), "admin").unwrap();
+
+    let admission = Arc::new(LoginAdmission::default());
+    {
+        let mut state = admission.state.lock().unwrap();
+        for index in 0..MAX_ATTEMPT_KEYS {
+            state.unknown.insert(
+                format!("user{index}"),
+                Attempts {
+                    since: now,
+                    count: 1,
+                },
+            );
+        }
+    }
+    assert_eq!(
+        admit_login(&admission, address(1), "overflow")
+            .unwrap_err()
+            .status,
+        429
+    );
+    assert!(admission.state.lock().unwrap().sources.unknown.is_empty());
+    admit_login(&admission, address(1), "admin").unwrap();
+}
+
+#[test]
+fn unknown_account_backoff_remains_canonical_and_separate_from_known_pressure() {
+    let admission = Arc::new(LoginAdmission::default());
+    for index in 0..MAX_ATTEMPTS {
+        assert_eq!(
+            admit_login(&admission, address(index as u8), " Reader ").unwrap(),
+            Duration::ZERO
+        );
+    }
+    assert_eq!(
+        admit_login(&admission, address(100), "READER").unwrap(),
+        Duration::from_millis(250)
+    );
+    assert_eq!(
+        admit_login(&admission, address(101), "admin").unwrap(),
+        Duration::ZERO
+    );
+    let state = admission.state.lock().unwrap();
+    assert_eq!(state.unknown.len(), 1);
+    assert_eq!(state.unknown["reader"].count, MAX_ATTEMPTS + 1);
+    assert_eq!(state.administrator.as_ref().unwrap().count, 1);
+}
+
+#[test]
+fn login_pressure_and_authenticated_password_changes_have_independent_counters() {
+    let admission = Arc::new(LoginAdmission::default());
+    let password_attempts = Mutex::new(HashMap::new());
+    for _ in 0..MAX_ATTEMPTS {
+        admit_login(&admission, address(1), "admin").unwrap();
+        admit_attempts(
+            &password_attempts,
+            ["password:ip:192.0.2.1".into(), "password:user:admin".into()],
+            "capacity",
+            "attempts",
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        admit_login(&admission, address(1), "admin")
+            .unwrap_err()
+            .status,
+        429
+    );
+    assert_eq!(
+        admit_attempts(
+            &password_attempts,
+            ["password:ip:192.0.2.1".into(), "password:user:admin".into()],
+            "capacity",
+            "attempts",
+        )
+        .unwrap_err()
+        .status,
+        429
+    );
+    assert_eq!(password_attempts.lock().unwrap().len(), 2);
+    assert_eq!(
+        admission
+            .state
+            .lock()
+            .unwrap()
+            .administrator
+            .as_ref()
+            .unwrap()
+            .count,
+        MAX_ATTEMPTS
+    );
+}
+
+#[test]
+fn source_migration_and_alternating_names_preserve_one_fixed_window() {
+    let admission = Arc::new(LoginAdmission::default());
+    for index in 0..MAX_ATTEMPTS {
+        let username = if index % 2 == 0 { "reader" } else { " Admin " };
+        admit_login(&admission, address(1), username).unwrap();
+    }
+    let since = {
+        let state = admission.state.lock().unwrap();
+        assert_eq!(state.sources.administrator[&address(1)].count, MAX_ATTEMPTS);
+        assert!(!state.sources.unknown.contains_key(&address(1)));
+        state.sources.administrator[&address(1)].since
+    };
+    for username in ["reader", "admin", "another"] {
+        assert_eq!(
+            admit_login(&admission, address(1), username)
+                .unwrap_err()
+                .status,
+            429
+        );
+    }
+    let state = admission.state.lock().unwrap();
+    assert_eq!(state.sources.administrator[&address(1)].since, since);
+    assert_eq!(
+        state.administrator.as_ref().unwrap().count,
+        MAX_ATTEMPTS / 2
+    );
+    assert!(!state.unknown.contains_key("another"));
+}
+
+#[test]
+fn migration_preserves_original_age_and_exhaustion_until_source_window_expires() {
+    let mut state = LoginAdmissionState::default();
+    let since = Instant::now() - Duration::from_secs(59);
+    let now = since + Duration::from_secs(59);
+    state.sources.unknown.insert(
+        address(1),
+        Attempts {
+            since,
+            count: MAX_ATTEMPTS - 1,
+        },
+    );
+    state
+        .admit(address(1), &LoginAccount::Administrator, now)
+        .unwrap();
+    assert_eq!(state.sources.administrator[&address(1)].since, since);
+    assert_eq!(
+        state
+            .admit(address(1), &LoginAccount::Unknown("reader".into()), now)
+            .err()
+            .unwrap()
+            .status,
+        429
+    );
+    state
+        .admit(
+            address(1),
+            &LoginAccount::Unknown("reader".into()),
+            since + ATTEMPT_WINDOW,
+        )
+        .unwrap();
+    assert!(!state.sources.administrator.contains_key(&address(1)));
+    assert_eq!(state.sources.unknown[&address(1)].count, 1);
+    assert_eq!(state.administrator.as_ref().unwrap().count, 1);
+}
+
+#[test]
+fn targeted_known_source_capacity_fails_closed_without_migrating_or_resetting() {
+    let admission = Arc::new(LoginAdmission::default());
+    let now = Instant::now();
+    {
+        let mut state = admission.state.lock().unwrap();
+        for index in 0..MAX_ATTEMPT_KEYS {
+            state.sources.administrator.insert(
+                distinct_source(index),
+                Attempts {
+                    since: now,
+                    count: 1,
+                },
+            );
+        }
+        state.sources.unknown.insert(
+            address(1),
+            Attempts {
+                since: now,
+                count: 3,
+            },
+        );
+    }
+    assert_eq!(
+        admit_login(&admission, address(1), "admin")
+            .unwrap_err()
+            .status,
+        429
+    );
+    assert_eq!(
+        admit_login(&admission, address(2), "admin")
+            .unwrap_err()
+            .status,
+        429
+    );
+    {
+        let state = admission.state.lock().unwrap();
+        assert_eq!(state.sources.administrator.len(), MAX_ATTEMPT_KEYS);
+        assert_eq!(state.sources.unknown[&address(1)].count, 3);
+        assert_eq!(state.sources.unknown[&address(1)].since, now);
+        assert!(state.administrator.is_none());
+        assert!(!state.pending_administrator.load(Ordering::Acquire));
+    }
+    // An existing reserved source still uses its remaining budget; no LRU eviction.
+    admit_login(&admission, distinct_source(0), "admin").unwrap();
+    assert_eq!(
+        admission.state.lock().unwrap().sources.administrator[&distinct_source(0)].count,
+        2
     );
 }
 

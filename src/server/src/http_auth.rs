@@ -13,44 +13,207 @@ use http_routing::{
 };
 use json_codec::{Value, json};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 const ATTEMPT_WINDOW: Duration = Duration::from_secs(60);
 const MAX_ATTEMPT_KEYS: usize = 4096;
 const MAX_ATTEMPTS: u32 = 10;
-const MAX_PENDING_LOGINS: usize = 64;
+const MAX_PENDING_UNKNOWN_LOGINS: usize = 64;
 
-/// At most one verifier or sleeper per canonical account, without reserving global hash slots.
-struct PendingLogin {
-    pending: Arc<Mutex<HashSet<String>>>,
-    account: String,
+enum LoginAccount {
+    Administrator,
+    Unknown(String),
 }
 
-impl PendingLogin {
-    fn acquire(pending: &Arc<Mutex<HashSet<String>>>, username: &str) -> Result<Self, ApiError> {
-        let account = login_username_key(username)?;
-        let mut active = lock(pending);
-        if active.len() >= MAX_PENDING_LOGINS || active.contains(&account) {
+impl LoginAccount {
+    fn from_challenge(challenge: &crate::auth::LoginChallenge) -> Self {
+        if challenge.is_known_account() {
+            Self::Administrator
+        } else {
+            Self::Unknown(
+                challenge
+                    .canonical_username()
+                    .expect("invariant: HTTP challenges contain a canonical username")
+                    .to_owned(),
+            )
+        }
+    }
+}
+
+/// Source windows move between partitions without resetting their count or age.
+#[derive(Default)]
+struct LoginSources {
+    administrator: HashMap<IpAddr, Attempts>,
+    unknown: HashMap<IpAddr, Attempts>,
+}
+
+impl LoginSources {
+    fn charge(&mut self, ip: IpAddr, account: &LoginAccount, now: Instant) -> Result<(), ApiError> {
+        let source = self
+            .administrator
+            .get(&ip)
+            .or_else(|| self.unknown.get(&ip));
+        if source.is_some_and(|attempt| attempt.count >= MAX_ATTEMPTS) {
+            return Err(ApiError::limit(
+                "too many login attempts; retry after 60 seconds",
+            ));
+        }
+        let reserved =
+            matches!(account, LoginAccount::Administrator) || self.administrator.contains_key(&ip);
+        let destination = if reserved {
+            &self.administrator
+        } else {
+            &self.unknown
+        };
+        if !destination.contains_key(&ip) && destination.len() == MAX_ATTEMPT_KEYS {
+            return Err(ApiError::limit("login source admission capacity reached"));
+        }
+        let attempt = if reserved {
+            // A known-name request promotes its source only after every check.
+            // Later unknown-name requests share this exact window too.
+            self.administrator.entry(ip).or_insert_with(|| {
+                self.unknown.remove(&ip).unwrap_or(Attempts {
+                    since: now,
+                    count: 0,
+                })
+            })
+        } else {
+            self.unknown.entry(ip).or_insert(Attempts {
+                since: now,
+                count: 0,
+            })
+        };
+        attempt.count += 1;
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct LoginAdmissionState {
+    sources: LoginSources,
+    administrator: Option<Attempts>,
+    unknown: HashMap<String, Attempts>,
+    pending_administrator: Arc<AtomicBool>,
+    pending_unknown: HashMap<String, Arc<AtomicBool>>,
+}
+
+impl LoginAdmissionState {
+    fn admit(
+        &mut self,
+        ip: IpAddr,
+        account: &LoginAccount,
+        now: Instant,
+    ) -> Result<(PendingLogin, Duration), ApiError> {
+        // Busy requests do not scan the retained counters or charge a source.
+        let busy = match account {
+            LoginAccount::Administrator => self.pending_administrator.load(Ordering::Acquire),
+            LoginAccount::Unknown(username) => {
+                // Cancellation releases only the owned slot. Reclaim names at
+                // the next admission; active work is never evicted.
+                self.pending_unknown
+                    .retain(|_, active| active.load(Ordering::Acquire));
+                self.pending_unknown.len() == MAX_PENDING_UNKNOWN_LOGINS
+                    || self.pending_unknown.contains_key(username)
+            }
+        };
+        if busy {
             return Err(ApiError::limit("login verification is busy"));
         }
-        active.insert(account.clone());
-        Ok(Self {
-            pending: pending.clone(),
-            account,
-        })
+        self.sources
+            .administrator
+            .retain(|_, attempt| now.duration_since(attempt.since) < ATTEMPT_WINDOW);
+        self.sources
+            .unknown
+            .retain(|_, attempt| now.duration_since(attempt.since) < ATTEMPT_WINDOW);
+        self.unknown
+            .retain(|_, attempt| now.duration_since(attempt.since) < ATTEMPT_WINDOW);
+        if self
+            .administrator
+            .as_ref()
+            .is_some_and(|attempt| now.duration_since(attempt.since) >= ATTEMPT_WINDOW)
+        {
+            self.administrator = None;
+        }
+        if let LoginAccount::Unknown(username) = account
+            && !self.unknown.contains_key(username)
+            && self.unknown.len() == MAX_ATTEMPT_KEYS
+        {
+            return Err(ApiError::limit("unknown login admission capacity reached"));
+        }
+        // Account/pending and source capacity are checked before charging either.
+        // Failed admission cannot amplify another account's pressure.
+        self.sources.charge(ip, account, now)?;
+        let attempt = match account {
+            LoginAccount::Administrator => self.administrator.get_or_insert(Attempts {
+                since: now,
+                count: 0,
+            }),
+            LoginAccount::Unknown(username) => {
+                self.unknown.entry(username.clone()).or_insert(Attempts {
+                    since: now,
+                    count: 0,
+                })
+            }
+        };
+        // Distributed account pressure cools only after an idle minute.
+        attempt.since = now;
+        attempt.count = attempt.count.saturating_add(1);
+        let excess = attempt.count.saturating_sub(MAX_ATTEMPTS);
+        let delay = if excess == 0 {
+            Duration::ZERO
+        } else {
+            Duration::from_millis((250 * (1_u64 << (excess - 1).min(5))).min(6000))
+        };
+        // Claims are serialized by the admission mutex. The atomic release is
+        // owned by the actual sleeper/worker, which need not hold that mutex.
+        let active = match account {
+            LoginAccount::Administrator => {
+                self.pending_administrator.store(true, Ordering::Relaxed);
+                Arc::clone(&self.pending_administrator)
+            }
+            LoginAccount::Unknown(username) => {
+                let active = Arc::new(AtomicBool::new(true));
+                self.pending_unknown
+                    .insert(username.clone(), Arc::clone(&active));
+                active
+            }
+        };
+        Ok((PendingLogin { active }, delay))
     }
+}
+
+/// Arbitrary names/sources cannot consume the singleton administrator's key space.
+/// The hash semaphore remains a separate bound shared by actual password work.
+#[derive(Default)]
+pub(crate) struct LoginAdmission {
+    state: Mutex<LoginAdmissionState>,
+}
+
+impl LoginAdmission {
+    fn admit(
+        &self,
+        ip: IpAddr,
+        account: LoginAccount,
+    ) -> Result<(PendingLogin, Duration), ApiError> {
+        lock(&self.state).admit(ip, &account, Instant::now())
+    }
+}
+
+/// The owner spans backoff and real hashing, including detached blocking work.
+struct PendingLogin {
+    active: Arc<AtomicBool>,
 }
 
 impl Drop for PendingLogin {
     fn drop(&mut self) {
-        {
-            let mut active = self.pending.lock().expect("service state lock poisoned");
-            active.remove(&self.account);
-        }
+        self.active.store(false, Ordering::Release);
     }
 }
 
@@ -59,96 +222,37 @@ pub(crate) struct Attempts {
     count: u32,
 }
 
-fn login_username_key(username: &str) -> Result<String, ApiError> {
-    // Rate limiting must identify the same account as password verification,
-    // including the canonical policy's accepted outer ASCII spaces.
-    // Validate before retaining any input in pending/counter maps. The shared
-    // policy bounds raw candidate bytes before normalization can allocate.
-    let canonical = authentication::normalize_administrator_username(username)
-        .map_err(|source| ApiError::unauthorized().with_source(source))?;
-    Ok(format!("user:{canonical}"))
-}
-
-/// Charge all keys atomically. Rejected requests never poison another account's budget.
-fn charge_attempts<const N: usize>(
-    attempts: &Mutex<HashMap<String, Attempts>>,
-    keys: [(String, Option<u32>); N],
-    capacity_message: &str,
-    attempt_message: &str,
-) -> Result<[u32; N], ApiError> {
-    let mut attempts = lock(attempts);
-    attempts.retain(|_, attempt| attempt.since.elapsed() < ATTEMPT_WINDOW);
-    let additional = keys
-        .iter()
-        .filter(|(key, _)| !attempts.contains_key(key))
-        .count();
-    if attempts.len().saturating_add(additional) > MAX_ATTEMPT_KEYS {
-        return Err(ApiError::limit(capacity_message));
-    }
-    if keys.iter().any(|(key, limit)| {
-        limit.is_some_and(|limit| {
-            attempts
-                .get(key)
-                .is_some_and(|attempt| attempt.count >= limit)
-        })
-    }) {
-        return Err(ApiError::limit(attempt_message));
-    }
-    Ok(keys.map(|(key, limit)| {
-        let attempt = attempts.entry(key).or_insert(Attempts {
-            since: Instant::now(),
-            count: 0,
-        });
-        attempt.count = attempt.count.saturating_add(1);
-        if limit.is_none() {
-            // Distributed account pressure cools down only after an idle minute,
-            // rather than allowing a new burst at every fixed-window boundary.
-            attempt.since = Instant::now();
-        }
-        attempt.count
-    }))
-}
-
+/// Charge all keys atomically. Rejected requests never poison another budget.
 fn admit_attempts<const N: usize>(
     attempts: &Mutex<HashMap<String, Attempts>>,
     keys: [String; N],
     capacity_message: &str,
     attempt_message: &str,
 ) -> Result<(), ApiError> {
-    charge_attempts(
-        attempts,
-        keys.map(|key| (key, Some(MAX_ATTEMPTS))),
-        capacity_message,
-        attempt_message,
-    )?;
+    let mut attempts = lock(attempts);
+    attempts.retain(|_, attempt| attempt.since.elapsed() < ATTEMPT_WINDOW);
+    let additional = keys
+        .iter()
+        .filter(|key| !attempts.contains_key(*key))
+        .count();
+    if attempts.len().saturating_add(additional) > MAX_ATTEMPT_KEYS {
+        return Err(ApiError::limit(capacity_message));
+    }
+    if keys.iter().any(|key| {
+        attempts
+            .get(key)
+            .is_some_and(|attempt| attempt.count >= MAX_ATTEMPTS)
+    }) {
+        return Err(ApiError::limit(attempt_message));
+    }
+    for key in keys {
+        let attempt = attempts.entry(key).or_insert(Attempts {
+            since: Instant::now(),
+            count: 0,
+        });
+        attempt.count += 1;
+    }
     Ok(())
-}
-
-fn admit_login(
-    attempts: &Mutex<HashMap<String, Attempts>>,
-    ip: IpAddr,
-    username: &str,
-) -> Result<Duration, ApiError> {
-    let account = login_username_key(username)?;
-    let counts = charge_attempts(
-        attempts,
-        [
-            (format!("ip:{ip}"), Some(MAX_ATTEMPTS)),
-            (format!("source:{ip}:{account}"), Some(MAX_ATTEMPTS)),
-            (account, None),
-        ],
-        "login admission capacity reached",
-        "too many login attempts; retry after 60 seconds",
-    )?;
-    // Account-wide pressure slows distributed guesses but cannot hard-lock a victim.
-    // A single bounded pending-account guard spans delay and verification.
-    // Global password slots are reserved for hashing, never for this sleep.
-    let excess = counts[2].saturating_sub(MAX_ATTEMPTS);
-    Ok(if excess == 0 {
-        Duration::ZERO
-    } else {
-        Duration::from_millis((250 * (1_u64 << (excess - 1).min(5))).min(6000))
-    })
 }
 
 fn client_ip(request: &Request, config: &ServerConfig) -> Result<IpAddr, ApiError> {
@@ -353,6 +457,28 @@ struct Login {
     username: String,
     password: String,
 }
+
+/// The blocking worker owns both admission resources through final publication.
+async fn login_job(
+    auth: Arc<Mutex<crate::auth::AuthStore>>,
+    slots: Arc<tokio::sync::Semaphore>,
+    pending: PendingLogin,
+    challenge: crate::auth::LoginChallenge,
+    password: String,
+) -> Result<crate::auth::LoginResult, ApiError> {
+    let permit = slots
+        .try_acquire_owned()
+        .map_err(|source| ApiError::limit("password verification is busy").with_source(source))?;
+    tokio::task::spawn_blocking(move || {
+        let _pending = pending;
+        let _permit = permit;
+        let verified = challenge.verify(&password)?;
+        lock(&auth).finish_login(verified)
+    })
+    .await
+    .map_err(ApiError::join)?
+}
+
 pub(crate) async fn login(
     State(state): State<AppState>,
     request: Request,
@@ -362,24 +488,18 @@ pub(crate) async fn login(
     // Legal JSON Unicode escapes can use six bytes per decoded password byte.
     let bytes = crate::http_boundary::read_body(request, 8 * 1024).await?;
     let body: Login = storage_contract::decode_strict(&bytes).map_err(ApiError::invalid_source)?;
-    let pending = PendingLogin::acquire(&state.pending_logins, &body.username)?;
-    let delay = admit_login(&state.attempts, ip, &body.username)?;
+    let challenge = state.auth_reader.login_challenge(&body.username)?;
+    let account = LoginAccount::from_challenge(&challenge);
+    let (pending, delay) = state.login_admission.admit(ip, account)?;
     tokio::time::sleep(delay).await;
-    let permit = state
-        .password_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("password verification is busy").with_source(source))?;
-    let auth = state.auth.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let _pending = pending;
-        let _permit = permit;
-        let challenge = lock(&auth).login_challenge(&body.username)?;
-        let verified = challenge.verify(&body.password)?;
-        lock(&auth).finish_login(verified)
-    })
-    .await
-    .map_err(ApiError::join)??;
+    let result = login_job(
+        state.auth,
+        state.password_slots,
+        pending,
+        challenge,
+        body.password,
+    )
+    .await?;
     let cookie = format!(
         "zxs_session={}; Path=/api; HttpOnly; SameSite=Strict; Max-Age={}{}",
         result.token,
@@ -445,7 +565,7 @@ pub(crate) async fn change_password(
     )
     .map_err(ApiError::invalid_source)?;
     admit_attempts(
-        &state.attempts,
+        &state.password_attempts,
         [
             format!("password:ip:{ip}"),
             format!("password:user:{}", identity.principal),

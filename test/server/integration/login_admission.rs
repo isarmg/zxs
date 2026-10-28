@@ -138,3 +138,43 @@ async fn invalid_username_requests_do_not_consume_valid_source_budget() {
         StatusCode::OK
     );
 }
+
+#[tokio::test]
+async fn alternating_unknown_and_known_names_share_the_same_source_budget() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path(), true);
+    for index in 0..10 {
+        let username = if index % 2 == 0 { "unknown" } else { " Admin " };
+        assert_eq!(
+            login_as(&app, Some("192.0.2.1"), username, "wrong-password").await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    for username in ["unknown", "admin", "another"] {
+        assert_eq!(
+            login_as(
+                &app,
+                Some("192.0.2.1"),
+                username,
+                "integration-test-password"
+            )
+            .await,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+    // The real password cannot turn an unknown-name challenge into a session.
+    assert_eq!(
+        login_as(
+            &app,
+            Some("192.0.2.2"),
+            "unknown",
+            "integration-test-password"
+        )
+        .await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        login(&app, Some("192.0.2.2"), "integration-test-password").await,
+        StatusCode::OK
+    );
+}

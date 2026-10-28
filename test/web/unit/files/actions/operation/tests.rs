@@ -49,7 +49,9 @@ fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() 
                 s.management.storage = crate::management::Storage::Ready;
                 s.files.writable = true;
                 s.files.repository_id = "repository".into();
-                s.files.selected = Some(json!({"file_id":"file", "name":"file.txt"}));
+                s.files.selected = Some(crate::files::test_entries::entry(
+                    json!({"file_id":"file", "name":"file.txt"}),
+                ));
                 s.files.checked_nodes.insert("node".into());
                 s.files.file_history = json!({"nodes":[{"node_id":"node", "tags":[]}]}).into();
             });

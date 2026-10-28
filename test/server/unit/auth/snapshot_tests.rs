@@ -261,3 +261,76 @@ fn sole_identity_rejects_store_drop_even_with_in_flight_channel_owners() {
     let replacement = AuthStore::open(root.path()).unwrap();
     assert_eq!(replacement.sole_identity().unwrap().principal, "owner");
 }
+
+#[test]
+fn reader_login_challenges_bind_classification_to_committed_credentials() {
+    let root = crate::tests::private_tempdir();
+    let mut store = AuthStore::initialize(root.path(), "owner", PASSWORD).unwrap();
+    let reader = store.reader();
+    let known = reader.login_challenge(" Owner ").unwrap();
+    let unknown = reader.login_challenge("other").unwrap();
+    assert!(known.is_known_account());
+    assert!(!unknown.is_known_account());
+    assert!(unknown.verify(PASSWORD).is_err());
+    let login = store.login("owner", PASSWORD).unwrap();
+    store
+        .change_password(
+            &login.token,
+            PASSWORD,
+            "replacement-login-snapshot-password",
+        )
+        .unwrap();
+    // Hashing still uses the captured credentials, but cannot publish an old proof.
+    let verified = known.verify(PASSWORD).unwrap();
+    assert_eq!(store.finish_login(verified).err().unwrap().status, 401);
+    let current = reader.login_challenge("owner").unwrap();
+    assert!(current.is_known_account());
+    let verified = current
+        .verify("replacement-login-snapshot-password")
+        .unwrap();
+    store.blocked.store(true, Ordering::SeqCst);
+    assert_eq!(
+        store.finish_login(verified).err().unwrap().code,
+        storage_contract::ErrorCode::RecoveryRequired
+    );
+    assert_eq!(
+        reader.login_challenge("owner").err().unwrap().code,
+        storage_contract::ErrorCode::RecoveryRequired
+    );
+}
+
+#[cfg(feature = "core")]
+#[test]
+fn reader_login_classification_does_not_change_under_a_captured_challenge() {
+    let root = crate::tests::private_tempdir();
+    let mut store = AuthStore::initialize_management(root.path(), "owner", PASSWORD).unwrap();
+    let reader = store.reader();
+    let previous = reader.login_challenge("owner").unwrap();
+    let unknown = reader.login_challenge("other").unwrap();
+    let replacement_root = crate::tests::private_tempdir();
+    let replacement =
+        AuthStore::initialize_management(replacement_root.path(), "other", PASSWORD).unwrap();
+    store.replace_authority(replacement);
+    assert!(previous.is_known_account());
+    assert!(!unknown.is_known_account());
+    assert!(unknown.verify(PASSWORD).is_err());
+    assert_eq!(
+        store
+            .finish_login(previous.verify(PASSWORD).unwrap())
+            .err()
+            .unwrap()
+            .status,
+        401
+    );
+    let current = reader.login_challenge("other").unwrap();
+    assert!(current.is_known_account());
+    assert_eq!(
+        store
+            .finish_login(current.verify(PASSWORD).unwrap())
+            .unwrap()
+            .principal,
+        "other"
+    );
+    drop(store);
+    assert_eq!(reader.login_challenge("other").err().unwrap().status, 401);
+}

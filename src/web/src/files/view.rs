@@ -5,11 +5,7 @@ use super::{
     },
     rows::{Row, visible_rows},
 };
-use crate::{
-    format,
-    icons::FileIcon,
-    ui::{State, text},
-};
+use crate::{format, icons::FileIcon, ui::State};
 use web_interface::components::{EmptyState, LoadingState, Select, SelectOption};
 use web_interface::{i18n::t, prelude::*};
 
@@ -90,7 +86,7 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
             s.files
                 .directory_branches
                 .iter()
-                .find(|branch| branch["current"] == true)
+                .find(|branch| branch.current())
                 .map(|branch| directory_branch_value(branch, s.files.default_branch_scope))
                 .unwrap_or_default()
         })
@@ -173,7 +169,7 @@ fn activate_row(
     let entry = row.with_untracked(|row| state.with_untracked(|s| row.current_entry(s).cloned()));
     if let Some(entry) = entry {
         if open_directory && !super::model::file_kind(&entry) {
-            actions::go_directory(state, text(&entry, &["path"]));
+            actions::go_directory(state, entry.path().to_owned());
         } else {
             actions::select_entry(state, entry);
         }

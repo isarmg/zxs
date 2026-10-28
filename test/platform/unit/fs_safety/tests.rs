@@ -146,6 +146,33 @@ fn atomic_replace_keeps_the_held_parent_after_its_path_is_replaced() {
 }
 
 #[test]
+fn atomic_replace_can_retain_the_exact_published_descriptor() {
+    use std::os::unix::fs::MetadataExt;
+    let temp = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::create(temp.path().join("private")).unwrap();
+    let name = EntryName::new("record").unwrap();
+    let first = AtomicFile::replace_held(&directory, &name.as_relative(), b"one").unwrap();
+    directory.verify_payload(&name, &first).unwrap();
+    let second = AtomicFile::replace_held(&directory, &name.as_relative(), b"two").unwrap();
+    assert_ne!(
+        first.metadata().unwrap().ino(),
+        second.metadata().unwrap().ino()
+    );
+    assert!(matches!(
+        directory.verify_payload(&name, &first),
+        Err(Error::IdentityChanged(_))
+    ));
+    directory.verify_payload(&name, &second).unwrap();
+    assert_eq!(directory.read_bounded(&name, 3).unwrap(), b"two");
+    fs::remove_file(directory.path().join(name.as_path())).unwrap();
+    fs::create_dir(directory.path().join(name.as_path())).unwrap();
+    assert!(matches!(
+        AtomicFile::replace_held(&directory, &name.as_relative(), b"bad"),
+        Err(Error::UnsafeFileType(_))
+    ));
+}
+
+#[test]
 fn raw_directory_admission_and_atomic_writes_keep_the_supplied_handle() {
     use std::os::fd::AsRawFd;
     let temp = tempfile::tempdir().unwrap();
@@ -594,7 +621,8 @@ fn atomic_io_barriers_and_failures() {
     let directory = PrivateDirectory::open_existing(&root).unwrap();
     let destination = EntryName::new("destination").unwrap();
     let source = RelativePath::new("source").unwrap();
-    if mode == "replace" {
+    let replaces = matches!(mode.as_str(), "replace" | "replace-held");
+    if replaces {
         fs::write(root.join("destination"), b"old").unwrap();
     } else if mode == "public" {
         fs::write(root.join("source"), b"new").unwrap();
@@ -604,6 +632,9 @@ fn atomic_io_barriers_and_failures() {
     let result = match mode.as_str() {
         "create" => AtomicFile::create(&directory, &destination, b"new"),
         "replace" => AtomicFile::replace(&directory, &destination.as_relative(), b"new"),
+        "replace-held" => {
+            AtomicFile::replace_held(&directory, &destination.as_relative(), b"new").map(drop)
+        }
         "public" => NoClobberPublish::publish(&directory, &source, &destination.as_relative()),
         _ => panic!("unknown test mode"),
     };
@@ -640,7 +671,7 @@ fn atomic_io_barriers_and_failures() {
                     "file-sync\n"
                 }
             );
-            if mode == "replace" {
+            if replaces {
                 assert_eq!(fs::read(root.join("destination")).unwrap(), b"old");
             } else {
                 assert!(!root.join("destination").exists());
@@ -648,7 +679,7 @@ fn atomic_io_barriers_and_failures() {
         }
         "publish" => {
             assert_eq!(events, "file-sync\n");
-            if mode == "replace" {
+            if replaces {
                 assert!(
                     matches!(result, Err(Error::UnsafeFileType(ref path)) if path == std::path::Path::new("destination"))
                 );
@@ -671,6 +702,7 @@ fn atomic_io_barriers_and_failures() {
             .to_string_lossy()
             .starts_with(".state-atomic-")
     }));
+    println!("\nZXS_ATOMIC_IO_COMPLETE mode={mode} stage={stage}");
 }
 
 #[test]

@@ -34,7 +34,7 @@ fn invalid_names_never_become_branch_requests() {
 fn branching_from_a_path_node_keeps_the_body_id_and_explicit_node_parent_separate() {
     let model = super::super::model::Model {
         selected: Some(
-            json_codec::json!({"file_id":"file","version_id":"ver-one","node_id":"fnode-rename"}),
+            crate::files::test_entries::entry(json_codec::json!({"file_id":"file","version_id":"ver-one","node_id":"fnode-rename"})),
         ),
         file_history: json_codec::json!({"nodes":[{"node_id":"fnode-rename","version_id":"ver-one","kind":"rename"}]}).into(),
         ..Default::default()
@@ -51,9 +51,13 @@ fn branching_from_a_path_node_keeps_the_body_id_and_explicit_node_parent_separat
 #[test]
 fn a_missing_visible_version_never_uses_the_source_id_for_a_branch_request() {
     Owner::new().with(|| {
-            let state=RwSignal::new(State::default());
-            state.update(|s|s.files.selected=Some(json_codec::json!({"file_id":"file","materialized":false,"version_id":null,"source_version_id":"source"})));
-            let _ = Target::CurrentFileVersion.submit(state,"another".into());
-            assert!(!state.with_untracked(|s|s.files.mutation_pending));
+        let state = RwSignal::new(State::default());
+        state.update(|s| {
+            s.files.selected = Some(crate::files::test_entries::entry(json_codec::json!({
+                "file_id":"file", "materialized":false, "version_id":null, "source_version_id":""
+            })));
         });
+        let _ = Target::CurrentFileVersion.submit(state, "another".into());
+        assert!(!state.with_untracked(|s| s.files.mutation_pending));
+    });
 }

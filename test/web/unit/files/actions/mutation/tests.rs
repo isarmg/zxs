@@ -15,7 +15,8 @@ fn business_mutations_require_an_active_session_before_browser_work() {
             state.update(|s| {
                 s.files.writable = true;
                 s.files.slot = "P01".into();
-                s.files.selected = Some(json!({"file_id":"file"}));
+                s.files.selected =
+                    Some(crate::files::test_entries::entry(json!({"file_id":"file"})));
             });
             // No browser ID generation or server request may start after
             // sign-out admission closes, even while credentials are kept
@@ -48,7 +49,7 @@ fn refreshed_or_navigating_directories_block_writes_at_the_action_boundary() {
         state.update(|s| {
             s.files.writable = true;
             s.files.loading = true;
-            s.files.selected = Some(json!({"file_id":"file"}));
+            s.files.selected = Some(crate::files::test_entries::entry(json!({"file_id":"file"})));
         });
         // These must return before generating IDs or spawning browser work.
         let _ = namespace(state, NamespaceAction::CreateDirectory, "new".into());

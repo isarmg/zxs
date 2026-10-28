@@ -1,4 +1,5 @@
 use super::*;
+use crate::files::test_entries::update;
 use json_codec::json;
 use std::cell::Cell;
 
@@ -14,7 +15,7 @@ fn reset_counts() {
     PROJECTIONS.set(0);
     PROJECTED.set(0);
 }
-fn state(entries: Vec<Value>) -> State {
+fn state(entries: Vec<Entry>) -> State {
     let mut state = State {
         authenticated: true,
         session_epoch: 7,
@@ -25,8 +26,10 @@ fn state(entries: Vec<Value>) -> State {
     state.files.entries = entries.into();
     state
 }
-fn entry(id: &str, path: &str, name: &str, kind: &str) -> Value {
-    json!({"entry_id":id,"path":path,"name":name,"kind":kind,"version_id":"old","size":1})
+fn entry(id: &str, path: &str, name: &str, kind: &str) -> Entry {
+    crate::files::test_entries::entry(
+        json!({"entry_id":id,"path":path,"name":name,"kind":kind,"size":if kind == "file" { "1" } else { "0" }}),
+    )
 }
 
 // Synthetic response metadata only: these tests neither import real files nor
@@ -69,9 +72,9 @@ fn server_order_is_preserved_without_local_sorting_or_filtering() {
     owner.with(|| {
         let state = RwSignal::new(state(vec![
             entry("f1", "docs/z", "z", "file"),
-            entry("f2", "docs/a", "A", "file"),
-            entry("d1", "docs/Z", "Z", "directory"),
-            entry("f3", "docs/a2", "a", "file"),
+            entry("f2", "docs/A", "A", "file"),
+            entry("d1", "docs/folder-z", "folder-z", "directory"),
+            entry("f3", "docs/a2", "a2", "file"),
             entry("d2", "docs/b", "b", "directory"),
         ]));
         let rows = visible_rows(state);
@@ -132,26 +135,29 @@ fn replacing_pages_drops_old_keys_and_projects_only_the_new_response() {
 fn retained_key_refreshes_payload_and_pending_handlers_resolve_current_data() {
     let owner = Owner::new();
     owner.with(|| {
-        let state = RwSignal::new(state(vec![entry("f", "docs/a", "old name", "file")]));
+        let state = RwSignal::new(state(vec![entry("f", "docs/a", "a", "file")]));
         let rows = visible_rows(state);
         let old = rows.get_untracked().remove(0);
         state.update(|s| {
             let mut refreshed = s.files.entries[0].clone();
-            refreshed["name"] = "new name".into();
-            refreshed["version_id"] = "new".into();
-            refreshed["size"] = 42.into();
+            update(&mut refreshed, json!({"version_id":"new","size":"42"}));
             s.files.entries = vec![refreshed].into();
         });
         // Even before recomputing the row signal, queued handlers cannot use
         // the old version. Current server metadata is authoritative.
         assert_eq!(
-            state.with_untracked(|s| old.current_entry(s).unwrap()["version_id"].clone()),
+            state.with_untracked(|s| old
+                .current_entry(s)
+                .unwrap()
+                .version_id()
+                .unwrap()
+                .to_owned()),
             "new"
         );
         let new = rows.get_untracked().remove(0);
         assert_eq!(old.key, new.key);
         assert_ne!(old, new);
-        assert_eq!(new.name, "new name");
+        assert_eq!(new.name, "a");
         assert_eq!(new.size, Some(42));
         state.update(|s| s.files.entries = Default::default());
         assert!(state.with_untracked(|s| old.current_entry(s).is_none()));
@@ -195,15 +201,20 @@ fn aliases_sessions_and_navigation_do_not_reuse_wrong_identity() {
 fn copy_on_write_cannot_hide_changed_listing_from_memo() {
     let owner = Owner::new();
     owner.with(|| {
-        let state = RwSignal::new(state(vec![entry("f", "docs/a", "before", "file")]));
+        let state = RwSignal::new(state(vec![entry("f", "docs/a", "a", "file")]));
         let rows = visible_rows(state);
         let before = rows.get_untracked().remove(0);
-        state.update(|s| Arc::make_mut(&mut s.files.entries)[0]["name"] = "after".into());
+        state.update(|s| {
+            update(
+                &mut Arc::make_mut(&mut s.files.entries)[0],
+                json!({"size":"42"}),
+            )
+        });
         let after = rows.get_untracked().remove(0);
         assert_eq!(before.key, after.key);
         assert_ne!(before, after);
-        assert_eq!(after.name, "after");
-        assert_eq!(before.name, "before");
+        assert_eq!(after.size, Some(42));
+        assert_eq!(before.size, Some(1));
     });
 }
 
@@ -213,7 +224,7 @@ fn display_rows_do_not_retain_old_full_snapshots_or_stale_hidden_metadata() {
     let old_snapshot = Arc::downgrade(&state.files.entries);
     let old = Listing::capture(&state).project().remove(0);
     let mut updated = state.files.entries[0].clone();
-    updated["version_id"] = "new-version".into();
+    update(&mut updated, json!({"version_id":"new-version"}));
     state.files.entries = vec![updated].into();
     let new = Listing::capture(&state).project().remove(0);
     assert_eq!(
@@ -225,7 +236,7 @@ fn display_rows_do_not_retain_old_full_snapshots_or_stale_hidden_metadata() {
         "retained rows must not pin whole old listings"
     );
     assert_eq!(
-        old.current_entry(&state).unwrap()["version_id"],
+        old.current_entry(&state).unwrap().version_id().unwrap(),
         "new-version"
     );
 }

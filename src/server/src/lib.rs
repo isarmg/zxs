@@ -1657,12 +1657,12 @@ struct AppState {
     backend: Arc<dyn Backend>,
     auth: Arc<Mutex<AuthStore>>,
     config: Arc<AdmittedServerConfig>,
-    attempts: Arc<Mutex<HashMap<String, http_auth::Attempts>>>,
+    login_admission: Arc<http_auth::LoginAdmission>,
+    password_attempts: Arc<Mutex<HashMap<String, http_auth::Attempts>>>,
     #[cfg(feature = "core")]
     setup_attempts: Arc<Mutex<HashMap<String, http_auth::Attempts>>>,
     #[cfg(feature = "core")]
     recovery_attempts: Arc<Mutex<HashMap<String, http_auth::Attempts>>>,
-    pending_logins: Arc<Mutex<std::collections::HashSet<String>>>,
     password_slots: Arc<tokio::sync::Semaphore>,
     authorization_slots: Arc<tokio::sync::Semaphore>,
     backend_slots: Arc<tokio::sync::Semaphore>,
@@ -1768,12 +1768,12 @@ fn router_shared(
         telemetry,
         config: Arc::clone(&config),
         spool_budget,
-        attempts: Arc::new(Mutex::new(HashMap::new())),
+        login_admission: Arc::new(http_auth::LoginAdmission::default()),
+        password_attempts: Arc::new(Mutex::new(HashMap::new())),
         #[cfg(feature = "core")]
         setup_attempts: Arc::new(Mutex::new(HashMap::new())),
         #[cfg(feature = "core")]
         recovery_attempts: Arc::new(Mutex::new(HashMap::new())),
-        pending_logins: Arc::new(Mutex::new(std::collections::HashSet::new())),
         password_slots: Arc::new(tokio::sync::Semaphore::new(4)),
         authorization_slots: Arc::new(tokio::sync::Semaphore::new(8)),
         backend_slots: Arc::new(tokio::sync::Semaphore::new(HTTP_BACKEND_SLOTS)),

@@ -1,7 +1,25 @@
 //! Pure scope validation and transaction payload construction.
 use super::*;
-pub(super) fn valid_path(path: &str) -> bool {
-    path.is_empty() || name_policy::validate_path(path).is_ok()
+pub(super) fn destination_path(
+    path: &str,
+) -> name_policy::Result<Option<name_policy::PortablePath>> {
+    if path.is_empty() {
+        Ok(None)
+    } else {
+        name_policy::PortablePath::parse(path).map(Some)
+    }
+}
+pub(super) fn destination_endpoint(
+    slot: &str,
+    prefix: &str,
+    path: Option<&name_policy::PortablePath>,
+) -> String {
+    let directory = path.map(|path| join_path(prefix, path.as_str()));
+    format!(
+        "/api/file-manager/disks/{}/entries?path={}&limit=1",
+        api::segment(slot),
+        api::segment(directory.as_deref().unwrap_or(prefix))
+    )
 }
 fn error_missing() -> String {
     t(
@@ -9,42 +27,31 @@ fn error_missing() -> String {
         "An entry or its base subtree is missing in a selected branch. Cancel and refresh before retrying.",
     )
 }
-fn branch_ref(branch: &Value, entry: &Value) -> Result<Value, String> {
-    let id = branch_id(branch);
-    let tree = text(branch, &["head_tree_id"]);
-    let entry_id = entry_id(entry);
-    let path = text(entry, &["path"]);
-    if id.is_empty() || tree.is_empty() || entry_id.is_empty() || path.is_empty() {
-        return Err(error_missing());
-    }
-    Ok(json!({"directory_branch_id":id,"expected_tree_id":tree,"path":path,"entry_id":entry_id}))
+fn branch_ref(branch: &ScopeBranch, entry: &SelectedFact) -> Value {
+    let id = branch.summary().id();
+    let tree = branch.summary().head_tree_id();
+    let entry_id = entry.entry_id();
+    let path = entry.path();
+    json!({"directory_branch_id":id,"expected_tree_id":tree,"path":path,"entry_id":entry_id})
 }
-fn find_entry<'a>(branch: &'a Value, chosen: &Value) -> Result<&'a Value, String> {
-    let id = entry_id(chosen);
-    let logical_path = selected_path(chosen);
-    branch["entries"]
-        .as_array()
-        .and_then(|entries| {
-            let mut matches = entries
-                .iter()
-                .filter(|entry| entry["entry_id"] == id && entry["selected_path"] == logical_path);
-            let first = matches.next()?;
-            matches.next().is_none().then_some(first)
+fn find_entry<'a>(branch: &'a ScopeBranch, chosen: &Entry) -> Result<&'a SelectedFact, String> {
+    branch
+        .entries()
+        .iter()
+        .find(|entry| {
+            entry.entry_id() == chosen.entry_id() && entry.selected_path() == selected_path(chosen)
         })
         .ok_or_else(error_missing)
 }
-fn target_ref(branch: &Value, path: String) -> Result<Value, String> {
+fn target_ref(branch: &ScopeBranch, path: String) -> Result<Value, String> {
     if name_policy::validate_path(&path).is_err() {
         return Err(t(
             "目标路径不符合共享命名规则。",
             "The destination path does not meet the shared naming rules.",
         ));
     }
-    let id = branch_id(branch);
-    let tree = text(branch, &["head_tree_id"]);
-    if id.is_empty() || tree.is_empty() {
-        return Err(error_missing());
-    }
+    let id = branch.summary().id();
+    let tree = branch.summary().head_tree_id();
     Ok(json!({"directory_branch_id":id,"expected_tree_id":tree,"path":path}))
 }
 /// Scope and identity are captured before submission. Never infer all possible
@@ -108,7 +115,7 @@ pub(super) fn request(draft: &Draft) -> Result<Value, String> {
                     .get(&entry_key(chosen))
                     .ok_or_else(error_missing)?;
                 validate_name(name)?;
-                let destination = join_path(&text(target, &["path"]), name);
+                let destination = join_path(target.summary().path(), name);
                 let key = (
                     mapping.source.clone(),
                     id,
@@ -121,7 +128,7 @@ pub(super) fn request(draft: &Draft) -> Result<Value, String> {
                         "Remove the duplicate mapping.",
                     ));
                 }
-                items.push(json!({"source":branch_ref(source,entry)?,"target":target_ref(target,destination)?}));
+                items.push(json!({"source":branch_ref(source,entry),"target":target_ref(target,destination)?}));
             }
         }
     } else {
@@ -133,14 +140,14 @@ pub(super) fn request(draft: &Draft) -> Result<Value, String> {
                 .ok_or_else(error_missing)?;
             for chosen in &draft.entries {
                 let entry = find_entry(source, chosen)?;
-                let mut item = json!({"source":branch_ref(source,entry)?});
+                let mut item = json!({"source":branch_ref(source,entry)});
                 if draft.kind == Kind::Rename {
                     let name = draft
                         .names
                         .get(&entry_key(chosen))
                         .ok_or_else(error_missing)?;
                     validate_name(name)?;
-                    let path = text(entry, &["path"]);
+                    let path = entry.path();
                     let parent = path
                         .rsplit_once('/')
                         .map(|(parent, _)| parent)

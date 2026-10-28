@@ -245,7 +245,9 @@ fn business_reads_do_not_start_outside_a_settled_session() {
             });
             state.update(|s| {
                 s.files.slot = "P01".into();
-                s.files.selected = Some(json!({"kind":"file","file_id":"file-1"}));
+                s.files.selected = Some(crate::files::test_entries::entry(
+                    json!({"kind":"file","file_id":"file-1"}),
+                ));
             });
             files::load_disks(state);
             files::load_entries(state);

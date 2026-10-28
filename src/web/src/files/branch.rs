@@ -29,35 +29,24 @@ impl Target {
 }
 
 fn file_source(model: &super::model::Model, target: &Target) -> Option<(String, Option<String>)> {
-    let record = match target {
-        Target::CurrentFileVersion => model
-            .selected
-            .as_ref()
-            .filter(|entry| super::model::visible_content(entry))?,
-        Target::HistoryNode(id) => super::model::history_nodes_ref(&model.file_history)
-            .iter()
-            .find(|node| super::model::history_node_id(node) == *id)?,
-        Target::CurrentDirectory | Target::Directory { .. } => return None,
-    };
-    let version = record["version_id"]
-        .as_str()
-        .filter(|id| !id.is_empty())?
-        .to_owned();
-    let node = record["node_id"]
-        .as_str()
-        .filter(|id| !id.is_empty())
-        .map(str::to_owned)
-        .or_else(|| {
-            if matches!(target, Target::CurrentFileVersion) {
-                model.file_history["node_id"]
-                    .as_str()
-                    .filter(|id| !id.is_empty())
-                    .map(str::to_owned)
-            } else {
-                None
-            }
-        });
-    Some((version, node))
+    match target {
+        Target::CurrentFileVersion => {
+            let entry = model.selected.as_ref()?;
+            Some((
+                entry.version_id()?.to_owned(),
+                entry.node_id().map(str::to_owned),
+            ))
+        }
+        Target::HistoryNode(id) => {
+            let record = super::model::history_nodes_ref(&model.file_history)
+                .iter()
+                .find(|node| super::model::history_node_id(node) == *id)?;
+            let version = record["version_id"].as_str().filter(|id| !id.is_empty())?;
+            let node = record["node_id"].as_str().filter(|id| !id.is_empty());
+            Some((version.to_owned(), node.map(str::to_owned)))
+        }
+        Target::CurrentDirectory | Target::Directory { .. } => None,
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

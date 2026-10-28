@@ -39,7 +39,9 @@ fn disk_roots_preserve_order_access_capacity_and_ignore_directory_state() {
         ..Model::default()
     };
     model.directory = "unrelated/path".into();
-    model.selected = Some(json_codec::json!({"name": "unrelated"}));
+    model.selected = Some(crate::files::test_entries::entry(
+        json_codec::json!({"name": "unrelated"}),
+    ));
     model.operations = vec![FileOperation::unknown("unrelated")];
     model.checked_entries.insert("unrelated".into());
     assert_eq!(disk_roots_projection(&model), DiskRoots::Disks(disks));

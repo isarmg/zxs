@@ -85,10 +85,10 @@ pub(crate) fn start(state: RwSignal<State>) {
         let Some(entry) = snapshot.files.selected.as_ref() else {
             return Ok(None);
         };
-        let Some((repository, path)) = super::model::file_context(&snapshot.files, entry) else {
+        let Some((repository, path)) = super::model::file_context(entry) else {
             return Ok(None);
         };
-        let file = text(entry, &["file_id"]);
+        let file = entry.file_id().to_owned();
         let nodes = history_nodes(&snapshot.files.file_history)
             .into_iter()
             .filter(|node| {

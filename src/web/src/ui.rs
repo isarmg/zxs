@@ -107,10 +107,10 @@ pub(crate) fn current_session(state: RwSignal<State>, epoch: u64) -> bool {
 /// Check session ownership before a read's resource/draft ownership. Closing a
 /// panel or superseding a read cannot hide expiry of that same session. An old
 /// session's response, however, must never revoke a replacement login.
-pub(crate) fn accept_read_response(
+pub(crate) fn accept_read_response<T>(
     state: RwSignal<State>,
     epoch: u64,
-    result: &Result<Value, api::Error>,
+    result: &Result<T, api::Error>,
 ) -> bool {
     if !current_session(state, epoch) {
         return false;

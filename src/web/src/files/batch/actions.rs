@@ -1,7 +1,7 @@
 //! Captured scope reads and publication with session/generation fences.
 use super::*;
 use crate::files::model::FileOperation;
-pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Value>) {
+pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Entry>) {
     let draft = state.with_untracked(|snapshot| {
         if !file_actions::write_allowed(snapshot) {
             return Ok(None);
@@ -28,7 +28,7 @@ pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Value>) {
         let sources = source_branches(&snapshot.files);
         let selected_sources = sources
             .iter()
-            .filter(|branch| branch["current"] == true)
+            .filter(|branch| branch.summary().current())
             .map(branch_id)
             .collect::<BTreeSet<_>>();
         let id = api::operation_id()?;
@@ -53,7 +53,7 @@ pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Value>) {
             disk_prefix,
             names: entries
                 .iter()
-                .map(|entry| (entry_key(entry), text(entry, &["name"])))
+                .map(|entry| (entry_key(entry), entry.name().to_owned()))
                 .collect(),
             entries,
             mappings: selected_sources
@@ -99,13 +99,13 @@ pub(super) fn open_draft(state: RwSignal<State>, mut draft: Draft) {
     });
     load_sources(state);
 }
-pub(super) fn selected_scope_body(draft: &Draft, sources: &[Value], path: &str) -> Value {
+pub(super) fn selected_scope_body(draft: &Draft, sources: &[ScopeBranch], path: &str) -> Value {
     let sources = sources
         .iter()
         .map(|source| {
             json!({
-                "directory_branch_id":branch_id(source),
-                "expected_tree_id":text(source, &["head_tree_id"])
+                "directory_branch_id":source.summary().id(),
+                "expected_tree_id":source.summary().head_tree_id()
             })
         })
         .collect::<Vec<_>>();
@@ -114,7 +114,7 @@ pub(super) fn selected_scope_body(draft: &Draft, sources: &[Value], path: &str) 
         .iter()
         .map(|entry| {
             json!({
-                "entry_id":entry_id(entry), "path":selected_path(entry)
+                "entry_id":entry.entry_id(), "path":selected_path(entry)
             })
         })
         .collect::<Vec<_>>();
@@ -195,11 +195,10 @@ pub(super) fn complete_source_scopes(
         draft.loading = false;
         draft.scope_read = None;
     });
-    match result {
-        Ok(value) => update(state, |draft| {
-            let sources = list(&value, "directory_branches");
-            if value["repository_id"] != draft.repository
-                || !same_source_heads(&draft.sources, &sources)
+    match result.and_then(|value| Scopes::parse(value, Projection::Selected)) {
+        Ok(scopes) => update(state, |draft| {
+            let sources = scopes.branches;
+            if scopes.repository != draft.repository || !same_source_heads(&draft.sources, &sources)
             {
                 draft.error = t(
                     "源目录分支已改变，请取消并刷新后重试。",
@@ -217,15 +216,16 @@ pub(super) fn complete_source_scopes(
         }
     }
 }
-fn same_source_heads(expected: &[Value], actual: &[Value]) -> bool {
-    let heads = |values: &[Value]| {
+fn same_source_heads(expected: &[ScopeBranch], actual: &[ScopeBranch]) -> bool {
+    fn heads(values: &[ScopeBranch]) -> BTreeSet<(&str, &str)> {
         values
             .iter()
-            .map(|branch| (branch_id(branch), text(branch, &["head_tree_id"])))
-            .collect::<BTreeSet<_>>()
-    };
-    expected.len() == actual.len() && heads(expected) == heads(actual)
+            .map(|branch| (branch.summary().id(), branch.summary().head_tree_id()))
+            .collect()
+    }
+    heads(expected) == heads(actual)
 }
+
 fn same_draft(state: RwSignal<State>, id: &str) -> bool {
     state.with_untracked(|s| s.files.batch.as_ref().is_some_and(|draft| draft.id == id))
 }
@@ -280,16 +280,16 @@ pub(super) fn complete_target_scopes(
     if !accept_read_response(state, epoch, &result) || !current_target(state, id, generation) {
         return false;
     }
-    match result {
-        Ok(value) => {
+    match result.and_then(|value| Scopes::parse(value, Projection::Summary)) {
+        Ok(scopes) => {
             let mut needs_directory = false;
             update(state, |draft| {
                 draft.scope_read = None;
-                if value["repository_id"] != draft.repository {
+                if scopes.repository != draft.repository {
                     draft.loading = false;
                     draft.error = t("目标目录范围无效。", "Invalid destination folder scope.");
                 } else {
-                    let targets = list(&value, "directory_branches");
+                    let targets = scopes.branches;
                     if targets.is_empty() {
                         needs_directory = true;
                     } else {
@@ -335,12 +335,17 @@ pub(super) fn load_target(state: RwSignal<State>) {
     else {
         return;
     };
-    if !valid_path(&target) {
-        update(state, |draft| {
-            draft.error = t("目录路径无效。", "Invalid directory path.")
-        });
-        return;
-    }
+    let target_path = match destination_path(&target) {
+        Ok(path) => path,
+        Err(_) => {
+            update(state, |draft| {
+                draft.error = t("目录路径无效。", "Invalid directory path.")
+            });
+            return;
+        }
+    };
+    let directory_key =
+        crate::files::page::DirectoryKey::destination(&disk_prefix, target_path.as_ref());
     update(state, |draft| {
         draft.target_path = target.clone();
         draft.targets.clear();
@@ -353,11 +358,7 @@ pub(super) fn load_target(state: RwSignal<State>) {
         }
     });
     let scoped_endpoint = scope_endpoint(&repository, &target);
-    let entries_endpoint = format!(
-        "/api/file-manager/disks/{}/entries?path={}&limit=1",
-        api::segment(&slot),
-        api::segment(&join_path(&disk_prefix, &target))
-    );
+    let entries_endpoint = destination_endpoint(&slot, &disk_prefix, target_path.as_ref());
     spawn_local(async move {
         let cancellation = match start_scope_read(state, epoch, &id, generation) {
             Ok(Some(value)) => value,
@@ -381,24 +382,30 @@ pub(super) fn load_target(state: RwSignal<State>) {
                 return;
             }
         };
-        let result = api::cancellable_get(&entries_endpoint, cancellation).await;
+        let result = api::cancellable_get(&entries_endpoint, cancellation)
+            .await
+            .and_then(|value| {
+                crate::files::page::Page::parse(value, &slot, &directory_key, 1, None)
+            });
         if !accept_read_response(state, epoch, &result) || !current_target(state, &id, generation) {
             return;
         }
         match result {
-            Ok(value) => update(state, |draft| {
+            Ok(page) => update(state, |draft| {
+                let page = page.into_parts();
                 draft.scope_read = None;
                 draft.loading = false;
-                if value["context"]["repository_id"] != draft.repository
-                    || value["context"]["repository_path"] != target
-                    || value["writable"] != true
+                if !page.context.as_ref().is_some_and(|context| {
+                    context.repository_id() == draft.repository
+                        && context.repository_path() == target
+                }) || !page.writable
                 {
                     draft.error = t(
                         "目标必须是同一文件目录中的可写目录。",
                         "Choose a writable destination in the same file namespace.",
                     );
                 } else {
-                    draft.targets = list(&value, "directory_branches");
+                    draft.targets = page.branches.into_iter().map(Into::into).collect();
                     draft.target_resolved = true;
                     if draft.targets.is_empty() {
                         draft.error = t(
@@ -559,13 +566,14 @@ pub(crate) fn reload_registered_scope(state: RwSignal<State>) {
             {
                 return Err(api::session_changed());
             }
-            if registration.destination || value["repository_id"] != draft.repository {
-                return Ok(value);
+            let scopes = Scopes::parse(value, Projection::Summary)?;
+            if registration.destination
+                || scopes.repository != draft.repository
+                || scopes.branches.is_empty()
+            {
+                return Ok(scopes);
             }
-            let branches = list(&value, "directory_branches");
-            if branches.is_empty() {
-                return Ok(value);
-            }
+            let branches = scopes.branches;
             let cancellation = start_scope_read(state, epoch, &draft.id, registration.generation)?
                 .ok_or_else(api::session_changed)?;
             api::cancellable_request(
@@ -575,6 +583,7 @@ pub(crate) fn reload_registered_scope(state: RwSignal<State>) {
                 cancellation,
             )
             .await
+            .and_then(|value| Scopes::parse(value, Projection::Selected))
         }
         .await;
         complete_registered_scope(
@@ -594,7 +603,7 @@ pub(super) fn complete_registered_scope(
     id: &str,
     operation_id: &str,
     generation: u64,
-    result: Result<Value, api::Error>,
+    result: Result<Scopes, api::Error>,
 ) {
     if !accept_read_response(state, epoch, &result)
         || !state.with_untracked(|s| {
@@ -610,11 +619,11 @@ pub(super) fn complete_registered_scope(
         return;
     }
     match result {
-        Ok(value) => update(state, |draft| {
+        Ok(scopes) => update(state, |draft| {
             draft.loading = false;
             draft.scope_read = None;
-            let branches = list(&value, "directory_branches");
-            if value["repository_id"] != draft.repository || branches.is_empty() {
+            let branches = scopes.branches;
+            if scopes.repository != draft.repository || branches.is_empty() {
                 draft.error = t(
                     "目录分支记录尚未读取成功，请重试读取。",
                     "Folder branch records could not be loaded. Retry the read.",
@@ -635,7 +644,7 @@ pub(super) fn complete_registered_scope(
                 draft.selected_sources = draft
                     .sources
                     .iter()
-                    .filter(|branch| branch["current"] == true)
+                    .filter(|branch| branch.summary().current())
                     .map(branch_id)
                     .collect();
                 draft.mappings = draft

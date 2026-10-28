@@ -1,9 +1,12 @@
 use super::*;
+use crate::files::test_entries::{branch, entry, update};
 use json_codec::json;
 
 #[test]
 fn refreshed_selection_invalidates_old_history_only_when_context_changes() {
-    let original = json_codec::json!({"entry_id":"entry", "file_id":"file", "path":"a.txt", "version_id":"v1", "selected_branch_id":"main"});
+    let original = entry(
+        json_codec::json!({"entry_id":"entry", "file_id":"file", "path":"a.txt", "version_id":"v1", "selected_branch_id":"main"}),
+    );
     let mut model = Model {
         selected: Some(original.clone()),
         entries: vec![original.clone()].into(),
@@ -13,11 +16,13 @@ fn refreshed_selection_invalidates_old_history_only_when_context_changes() {
     };
     model.reconcile_selection(model.entries.first().cloned());
     assert_eq!(model.history_generation, 0);
-    Arc::make_mut(&mut model.entries)[0]["selected_branch_id"] = "draft".into();
-    Arc::make_mut(&mut model.entries)[0]["version_id"] = "v2".into();
+    update(
+        &mut Arc::make_mut(&mut model.entries)[0],
+        json!({"selected_branch_id":"draft","version_id":"v2"}),
+    );
     model.checked_nodes.insert("old-node".into());
     model.reconcile_selection(model.entries.first().cloned());
-    assert_eq!(model.selected.as_ref().unwrap()["version_id"], "v2");
+    assert_eq!(model.selected.as_ref().unwrap().version_id().unwrap(), "v2");
     assert!(model.file_history.is_null());
     assert!(!model.history_loading);
     assert!(model.checked_nodes.is_empty());
@@ -25,31 +30,27 @@ fn refreshed_selection_invalidates_old_history_only_when_context_changes() {
 }
 #[test]
 fn backup_context_never_guesses_a_primary_alias_from_its_prefix() {
-    let model = Model {
-        repository_id: "wrong-listing-repo".into(),
-        repository_path: "wrong-prefix".into(),
-        ..Default::default()
-    };
-    let mut backup = json_codec::json!({"backup":true,"read_only":true,"name":"f.txt","path":"我的备份/f.txt","repository_id":"repo","repository_path":"actual/primary/f.txt"});
+    let mut backup = entry(
+        json_codec::json!({"backup":true,"read_only":true,"name":"f.txt","path":"我的备份/f.txt","repository_id":"repo","repository_path":"actual/primary/f.txt"}),
+    );
     assert_eq!(
-        file_context(&model, &backup),
+        file_context(&backup),
         Some(("repo".into(), "actual/primary/f.txt".into()))
     );
-    backup["repository_path"] = Value::Null;
-    assert!(file_context(&model, &backup).is_none());
-    backup["repository_path"] = "stale/alias.txt".into();
-    backup["historical_only"] = true.into();
-    assert!(file_context(&model, &backup).is_none());
-    backup.as_object_mut().unwrap().remove("historical_only");
-    backup.as_object_mut().unwrap().remove("repository_path");
-    assert!(file_context(&model, &backup).is_none());
+    update(
+        &mut backup,
+        json!({"repository_path":null,"historical_only":true,"selected_branch_id":null}),
+    );
+    assert!(file_context(&backup).is_none());
 }
 
 #[test]
 fn backup_history_keeps_its_stored_body_and_current_node() {
-    let entry = json_codec::json!({"backup":true,"read_only":true,"version_id":"stored-old","node_id":"stored-old"});
+    let selected_entry = entry(
+        json_codec::json!({"backup":true,"read_only":true,"version_id":"stored-old","node_id":"stored-old"}),
+    );
     let history = json_codec::json!({"version_id":"primary-new","node_id":"primary-new","nodes":[{"node_id":"stored-old","version_id":"stored-old","current":false},{"node_id":"primary-new","version_id":"primary-new","current":true}],"versions":[{"version_id":"stored-old"},{"version_id":"primary-new","current":true}]});
-    let result = history_for_entry(history.clone(), &entry);
+    let result = history_for_entry(history.clone(), &selected_entry);
     assert_eq!(result["version_id"], "stored-old");
     assert_eq!(result["current_node_id"], "stored-old");
     assert_eq!(result["nodes"][0]["current"], true);
@@ -59,18 +60,18 @@ fn backup_history_keeps_its_stored_body_and_current_node() {
     assert_eq!(
         history_for_entry(
             history.clone(),
-            &json_codec::json!({"version_id":"stored-old"})
+            &entry(json_codec::json!({"version_id":"stored-old"}))
         ),
         history
     );
     let mut model = Model {
         writable: true,
-        selected: Some(entry),
+        selected: Some(selected_entry),
         file_history: json_codec::json!({"branches":[{"branch_id":"main","current":true}]}).into(),
         ..Default::default()
     };
     assert!(selected_entry_read_only(&model));
-    model.selected = Some(json_codec::json!({"read_only":true}));
+    model.selected = Some(entry(json_codec::json!({"read_only":true})));
     assert!(selected_entry_read_only(&model));
 }
 const DEGRADED: &str = include_str!("../fixtures/degraded-save-operation.json");
@@ -167,7 +168,9 @@ fn current_branch_identity_does_not_require_a_content_version() {
     };
     assert_eq!(selected_branch(&model), "pending");
     model.file_history = Value::Null.into();
-    model.selected = Some(json_codec::json!({"selected_branch_id":"entry-pending"}));
+    model.selected = Some(entry(
+        json_codec::json!({"selected_branch_id":"entry-pending","version_id":null,"source_version_id":""}),
+    ));
     assert_eq!(selected_branch(&model), "entry-pending");
 }
 #[test]
@@ -184,7 +187,9 @@ fn an_authoritative_history_node_list_does_not_duplicate_its_body_versions() {
 #[test]
 fn generated_public_file_branch_names_are_editable_only_after_loading_a_real_record() {
     let mut model = Model {
-        selected: Some(json_codec::json!({"file_id":"file-a","selected_branch_id":"generated-a"})),
+        selected: Some(entry(
+            json_codec::json!({"file_id":"file-a","selected_branch_id":"generated-a"}),
+        )),
         ..Default::default()
     };
     assert!(selected_file_branch_record(&model).is_none());
@@ -202,7 +207,9 @@ fn generated_public_file_branch_names_are_editable_only_after_loading_a_real_rec
 }
 #[test]
 fn root_default_selection_uses_real_directory_ids_and_subfolders_keep_names() {
-    let branch = json_codec::json!({"directory_branch_id":"directory-a","name":"auto-generated","current":true,"materialized":false});
+    let branch = branch(
+        json_codec::json!({"directory_branch_id":"directory-a","name":"auto-generated","current":true,"materialized":false}),
+    );
     assert_eq!(directory_branch_value(&branch, true), "directory-a");
     assert_eq!(directory_branch_value(&branch, false), "auto-generated");
     assert_eq!(
@@ -228,22 +235,26 @@ fn root_default_selection_uses_real_directory_ids_and_subfolders_keep_names() {
         selected_directory_branch(&model).is_none(),
         "initial namespace main has no invented rename target"
     );
-    model
-        .directory_branches
-        .push(json_codec::json!({"name":"main","current":true,"directory_branch_id":null}));
-    assert!(selected_directory_branch(&model).is_none());
+    let mut invalid =
+        crate::files::test_entries::branch_wire(json!({"name":"main","current":true}));
+    invalid["directory_branch_id"] = Value::Null;
+    assert!(DirectoryBranch::parse(invalid).is_err());
 }
 #[test]
 fn renaming_an_entry_preserves_selection_and_file_history() {
     let mut model = Model {
-        selected: Some(json_codec::json!({"entry_id":"file-a","name":"old.txt","path":"old.txt"})),
-        entries: vec![json_codec::json!({"entry_id":"file-a","name":"new.txt","path":"new.txt"})]
-            .into(),
+        selected: Some(entry(
+            json_codec::json!({"entry_id":"file-a","name":"old.txt","path":"old.txt"}),
+        )),
+        entries: vec![entry(
+            json_codec::json!({"entry_id":"file-a","name":"new.txt","path":"new.txt"}),
+        )]
+        .into(),
         file_history: json_codec::json!({"versions":[{"version_id":"v1"}]}).into(),
         ..Default::default()
     };
     model.reconcile_selection(model.entries.first().cloned());
-    assert_eq!(model.selected.unwrap()["name"], "new.txt");
+    assert_eq!(model.selected.unwrap().name(), "new.txt");
     assert_eq!(model.file_history["versions"][0]["version_id"], "v1");
     assert_eq!(
         model.history_generation, 1,
@@ -252,46 +263,41 @@ fn renaming_an_entry_preserves_selection_and_file_history() {
 }
 #[test]
 fn file_context_uses_the_logical_alias_instead_of_the_container_owner() {
-    let model = Model {
-        repository_id: "repo".into(),
-        repository_path: "a".into(),
-        ..Default::default()
-    };
-    let alias = json_codec::json!({"entry_id":"f","file_id":"f","name":"old.txt","path":"disk/a/old.txt","repository_id":"repo","repository_path":"a/old.txt","container_path":"b/new.txt"});
+    let alias = entry(
+        json!({"entry_id":"f","file_id":"f","name":"old.txt","path":"disk/a/old.txt","repository_id":"repo","repository_path":"a/old.txt"}),
+    );
     assert_eq!(
-        file_context(&model, &alias),
+        file_context(&alias),
         Some(("repo".into(), "a/old.txt".into()))
     );
-    assert_eq!(
-        file_context(&model, &json_codec::json!({"name":"fallback.txt"})),
-        Some(("repo".into(), "a/fallback.txt".into()))
-    );
-    assert_ne!(
-        entry_key(&alias),
-        entry_key(&json_codec::json!({"entry_id":"f","path":"b/new.txt"}))
-    );
+    let other = entry(json!({"entry_id":"f","file_id":"f","path":"b/new.txt"}));
+    assert_ne!(entry_key(&alias), entry_key(&other));
 }
+
 #[test]
 fn two_aliases_of_one_file_keep_the_selected_logical_path() {
     let mut model = Model {
-        selected: Some(json_codec::json!({"entry_id":"f","path":"b/f.txt"})),
+        selected: Some(entry(json_codec::json!({"entry_id":"f","path":"b/f.txt"}))),
         entries: vec![
-            json_codec::json!({"entry_id":"f","path":"a/f.txt","version_id":"F1"}),
-            json_codec::json!({"entry_id":"f","path":"b/f.txt","version_id":"F2"}),
+            entry(json_codec::json!({"entry_id":"f","path":"a/f.txt","version_id":"F1"})),
+            entry(json_codec::json!({"entry_id":"f","path":"b/f.txt","version_id":"F2"})),
         ]
         .into(),
         ..Default::default()
     };
     model.reconcile_selection(model.entries.get(1).cloned());
-    assert_eq!(model.selected.as_ref().unwrap()["version_id"], "F2");
-    model.selected.as_mut().unwrap()["path"] = "missing/f.txt".into();
+    assert_eq!(model.selected.as_ref().unwrap().version_id().unwrap(), "F2");
+    update(
+        model.selected.as_mut().unwrap(),
+        json!({"path":"missing/f.txt"}),
+    );
     model.reconcile_selection(None);
     assert!(model.selected.is_none());
 }
 #[test]
 fn a_removed_entry_discards_metadata() {
     let mut model = Model {
-        selected: Some(json_codec::json!({"entry_id":"file-a"})),
+        selected: Some(entry(json_codec::json!({"entry_id":"file-a"}))),
         file_history: json_codec::json!({"versions":[{"version_id":"v1"}]}).into(),
         history_loading: true,
         history_generation: 4,
@@ -325,10 +331,10 @@ fn disk_list_accepts_current_contract_and_rejects_legacy_or_partial_records() {
 
 #[test]
 fn refreshed_checked_entries_preserve_exact_alias_paths() {
-    let kept = json!({"entry_id":"shared", "path":"a/file.txt"});
-    let removed = json!({"entry_id":"shared", "path":"b/file.txt"});
-    let new_alias = json!({"entry_id":"shared", "path":"c/file.txt"});
-    let unrelated = json!({"entry_id":"other", "path":"other.txt"});
+    let kept = entry(json!({"entry_id":"shared", "path":"a/file.txt"}));
+    let removed = entry(json!({"entry_id":"shared", "path":"b/file.txt"}));
+    let new_alias = entry(json!({"entry_id":"shared", "path":"c/file.txt"}));
+    let unrelated = entry(json!({"entry_id":"other", "path":"other.txt"}));
     let mut model = Model {
         checked_entries: [entry_key(&kept), entry_key(&removed), entry_key(&unrelated)]
             .into_iter()
@@ -350,8 +356,8 @@ fn refreshed_checked_entries_preserve_exact_alias_paths() {
 
 #[test]
 fn empty_checked_entries_still_reconcile_the_detail_selection() {
-    let old = json!({"entry_id":"file", "path":"old.txt", "file_id":"file"});
-    let renamed = json!({"entry_id":"file", "path":"new.txt", "file_id":"file"});
+    let old = entry(json!({"entry_id":"file", "path":"old.txt", "file_id":"file"}));
+    let renamed = entry(json!({"entry_id":"file", "path":"new.txt", "file_id":"file"}));
     let mut model = Model {
         selected: Some(old),
         entries: vec![renamed.clone()].into(),
@@ -365,10 +371,10 @@ fn empty_checked_entries_still_reconcile_the_detail_selection() {
 
 #[test]
 fn targeted_refresh_preserves_details_outside_the_loaded_page() {
-    let selected = json!({"entry_id":"outside", "path":"other.txt", "version_id":"v2"});
+    let selected = entry(json!({"entry_id":"outside", "path":"other.txt", "version_id":"v2"}));
     let mut model = Model {
         selected: Some(selected.clone()),
-        entries: vec![json!({"entry_id":"page", "path":"first.txt"})].into(),
+        entries: vec![entry(json!({"entry_id":"page", "path":"first.txt"}))].into(),
         ..Default::default()
     };
     model.reconcile_selection(Some(selected.clone()));

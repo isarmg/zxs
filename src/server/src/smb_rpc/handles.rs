@@ -213,7 +213,8 @@ impl Session {
                 }
                 let fd = OwnedFd::from(file.try_clone().map_err(ApiError::io)?);
                 let workspace_id = workspace.workspace_id.clone();
-                let writer = Writer {
+                let mut writer = Writer {
+                    recovery_record: recovery_record::ActiveRecord::default(),
                     reservation: pending_reservation.take().unwrap(),
                     file,
                     directory,
@@ -227,11 +228,9 @@ impl Session {
                     operation_id: OperationId::generate(),
                     write_through,
                 };
-                if let Err(error) =
-                    writer.file.sync_all().map_err(ApiError::io).and_then(|()| {
-                        recovery_record(&writer, &self.identity.principal, &self.branch)
-                    })
-                {
+                if let Err(error) = writer.file.sync_all().map_err(ApiError::io).and_then(|()| {
+                    recovery_record(&mut writer, &self.identity.principal, &self.branch)
+                }) {
                     publication::cleanup_writer(&writer);
                     return Err(error);
                 }

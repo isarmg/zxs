@@ -90,7 +90,7 @@ fn inherited_current(model: &Model, version: &str) -> bool {
         || model
             .selected
             .as_ref()
-            .is_some_and(|entry| inherited_content(entry) && history_node_id(entry) == version)
+            .is_some_and(|entry| entry.inherited_content() && entry.node_id() == Some(version))
 }
 
 /// Iterative Kosaraju traversal: each adjacency is visited once in each
@@ -736,7 +736,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             s.files
                 .selected
                 .as_ref()
-                .map(|entry| text(entry, &["file_id", "entry_id"]))
+                .map(|entry| entry.file_id().to_owned())
                 .unwrap_or_default()
         })
     });
