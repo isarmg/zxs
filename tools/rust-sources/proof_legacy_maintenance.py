@@ -1,4 +1,4 @@
-"""Pinned HTTP demand maintenance before the existing exact layout inverse."""
+"""Pinned same-owner HTTP source maintenance before the exact layout inverse."""
 from copy import deepcopy
 import os
 from pathlib import Path
@@ -18,25 +18,28 @@ TERMINAL = '9a4a44802e8f493dcc1a1546caa723ea774c956de5d18c474076f85fd1280ac4'
 
 
 class Maintenance:
-    def __init__(self, layout, catalog, sha, prospective):
+    def __init__(self, layout, catalog, prospective):
         self.layout = layout
-        self.sha = sha
-        self.row = maintenance._read(layout.root, sha)
-        row = self.row
-        physical = OWNER + '/' + FILE
+        self.receipt_ids = tuple(RECEIPTS)
+        self.steps = []
         installation = layout.rows[LOGICAL]
         terminal = catalog.get('consolidations', {}).get(TERMINAL)
-        if (row['terminal'] != TERMINAL or row['parent'] is not None
-                or not isinstance(terminal, dict)
+        if (not isinstance(terminal, dict)
                 or source_consolidation.receipt_id(terminal) != TERMINAL
                 or catalog.get('consolidation_records_sha256', {}).get(TERMINAL) != TERMINAL
                 or terminal.get('destination_directory') != LOGICAL
-                or installation['destination_directory'] != OWNER
-                or row['layout'] != {key: catalog.get(key) for key in
-                                     (source_layout.KEY, source_layout_corrections.KEY)}
-                or row['layout'][source_layout.KEY] != layout.receipt_id):
+                or installation['destination_directory'] != OWNER):
             raise ValueError('legacy maintenance terminal/layout binding differs')
-        old, new, roots = maintenance._transition(layout.root, row['before'], row['after'])
+        for sha in self.receipt_ids:
+            row = maintenance._read(layout.root, sha)
+            self._append(sha, row, catalog, installation)
+        # Consumers that need the current owner use the tip; receipt material
+        # consumers must preserve receipt_ids, not just this last receipt.
+        self.sha, self.row = self.steps[-1][:2]
+        self.validate_catalog(catalog, prospective)
+        self._verify_live()
+
+    def _installation_state(self, installation):
         expected = dict(package=deepcopy(installation['package']),
                         merges=deepcopy(installation['merged_packages']),
                         external=deepcopy(installation['destination_external_tests']))
@@ -45,33 +48,48 @@ class Maintenance:
             if package.get('merged_into') == LOGICAL:
                 package['merged_into'] = OWNER
             package['files_sha256'] = deepcopy(installation['files_sha256'])
-        before = deepcopy(row['before'])
-        if layout.corrections is not None and before['external'] is not None:
-            for entry in before['external']['files']:
-                before['external']['bytes'] -= layout.corrections.delta(entry['path'], entry['sha256'])
-                entry['sha256'] = layout.corrections.project_hash(entry['path'], entry['sha256'])
-        if before != expected or set(old) != set(new) or {p for p in old if old[p] != new[p]} != {physical}:
-            raise ValueError('legacy maintenance changed owner, roots or unapproved file')
-        if len(row['files']) != 1:
-            raise ValueError('legacy maintenance requires exact demand patch coverage')
-        file = row['files'][0]
-        if (not isinstance(file, dict)
-                or set(file) != {'before', 'after', 'before_sha256', 'after_sha256', 'replacements'}
-                or file['before'] != physical or file['after'] != physical
-                or file['before_sha256'] != old[physical] or file['after_sha256'] != new[physical]):
-            raise ValueError('legacy maintenance patch path/hash differs')
-        self.file = file
-        self.validate_catalog(catalog, prospective)
+        return expected
+
+    def _append(self, sha, row, catalog, installation):
+        parent = self.steps[-1][0] if self.steps else None
+        if (row['terminal'] != TERMINAL or row['parent'] != parent
+                or row['layout'] != {key: catalog.get(key) for key in
+                                    (source_layout.KEY, source_layout_corrections.KEY)}
+                or row['layout'][source_layout.KEY] != self.layout.receipt_id):
+            raise ValueError('legacy maintenance ancestry/terminal/layout binding differs')
+        old, new, roots = maintenance._transition(self.layout.root, row['before'], row['after'])
+        if (set(old) != set(new) or row['before']['external'] != row['after']['external']):
+            raise ValueError('legacy maintenance requires unchanged file sets and external tests')
+        patches = maintenance._patches(row, old, new)
+        if any(not path.startswith(OWNER + '/src/') or not path.endswith('.rs') for path in patches):
+            raise ValueError('legacy maintenance only supports existing owner Rust source content')
+        before = row['before']
+        if self.steps:
+            if before != self.steps[-1][1]['after']:
+                raise ValueError('legacy maintenance full owner ancestry differs')
+        else:
+            before = deepcopy(before)
+            if self.layout.corrections is not None and before['external'] is not None:
+                for entry in before['external']['files']:
+                    before['external']['bytes'] -= self.layout.corrections.delta(entry['path'], entry['sha256'])
+                    entry['sha256'] = self.layout.corrections.project_hash(entry['path'], entry['sha256'])
+            if (before != self._installation_state(installation)
+                    or set(patches) != {OWNER + '/' + FILE}):
+                raise ValueError('legacy maintenance changed initial owner or demand proof')
+        self.steps.append((sha, row, old, new, roots, patches))
+
+    def _verify_live(self):
+        _, tip, _, inventory, roots, _ = self.steps[-1]
         data, hashes = {}, {}
         total = 0
         for base in roots:
-            target = routing.safe(layout.root, base)
+            target = routing.safe(self.layout.root, base)
             if not target.is_dir():
                 raise ValueError('missing legacy maintenance root')
             for directory, children, names in os.walk(target, followlinks=False):
                 for name in children + names:
-                    path = (Path(directory) / name).relative_to(layout.root).as_posix()
-                    current = routing.safe(layout.root, path)
+                    path = (Path(directory) / name).relative_to(self.layout.root).as_posix()
+                    current = routing.safe(self.layout.root, path)
                     if current.is_file():
                         with current.open('rb') as stream:
                             value = stream.read(routing.MAX_LIVE_BYTES - total + 1)
@@ -82,16 +100,21 @@ class Maintenance:
                         hashes[path] = routing.digest(value)
                     elif not current.is_dir():
                         raise ValueError('legacy maintenance special file')
-        maintenance._bytes_match(data, hashes, row['after'], new)
-        data[physical] = self.read(LOGICAL + '/' + FILE, data[physical])
-        hashes[physical] = routing.digest(data[physical])
-        maintenance._bytes_match(data, hashes, row['before'], old)
+        maintenance._bytes_match(data, hashes, tip['after'], inventory)
+        for _, row, old, _, _, patches in reversed(self.steps):
+            for path, file in patches.items():
+                data[path] = routing.inverse_replacements(data[path], file)
+                hashes[path] = file['before_sha256']
+            maintenance._bytes_match(data, hashes, row['before'], old)
 
     def validate_catalog(self, catalog, prospective=False):
         registered = catalog.get(KEY, [])
-        expected = self.row['before'] if prospective and registered == [] else self.row['after']
-        if (registered != list(RECEIPTS) and not (prospective and registered == [])
-                or maintenance.state(catalog, OWNER) != expected):
+        complete = list(self.receipt_ids)
+        if (not isinstance(registered, list)
+                or (registered != complete and not (prospective and registered == complete[:-1]))):
+            raise ValueError('legacy maintenance registration must be complete or one immediate predecessor')
+        expected = self.steps[len(registered) - 1][1]['after'] if registered else self.steps[0][1]['before']
+        if maintenance.state(catalog, OWNER) != expected:
             raise ValueError('legacy maintenance registration/current owner differs')
 
     def validate_refresh(self, previous, current):
@@ -99,15 +122,24 @@ class Maintenance:
         self.validate_catalog(current)
 
     def read(self, path, data):
-        if path != LOGICAL + '/' + FILE:
+        if not path.startswith(LOGICAL + '/'):
             return data
-        if routing.digest(data) != self.file['after_sha256']:
-            raise ValueError('legacy maintenance live demand bytes differ')
-        return routing.inverse_replacements(data, self.file)
+        physical = OWNER + path[len(LOGICAL):]
+        if routing.digest(data) != self.steps[-1][3].get(physical):
+            raise ValueError('legacy maintenance live owner bytes differ')
+        for _, _, _, _, _, patches in reversed(self.steps):
+            if physical in patches:
+                data = routing.inverse_replacements(data, patches[physical])
+        return data
 
     def project_hash(self, path, sha):
-        if path == LOGICAL + '/' + FILE and sha == self.file['after_sha256']:
-            return self.file['before_sha256']
+        if not path.startswith(LOGICAL + '/'):
+            return sha
+        physical = OWNER + path[len(LOGICAL):]
+        for _, _, _, _, _, patches in reversed(self.steps):
+            file = patches.get(physical)
+            if file is not None and sha == file['after_sha256']:
+                sha = file['before_sha256']
         return sha
 
 
@@ -116,6 +148,4 @@ def load(layout, catalog, prospective=False):
         if catalog.get(KEY):
             raise ValueError('legacy maintenance registered without supported owner')
         return None
-    if len(RECEIPTS) != 1:
-        raise ValueError('legacy maintenance supports only the reviewed initial HTTP step')
-    return Maintenance(layout, catalog, RECEIPTS[0], prospective)
+    return Maintenance(layout, catalog, prospective)

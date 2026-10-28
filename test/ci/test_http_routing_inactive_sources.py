@@ -48,7 +48,8 @@ class InactiveHttpSources(unittest.TestCase):
         if layout.legacy_maintenance is not None:
             from proof_maintenance import _inventory
             adapter = layout.legacy_maintenance
-            cls.maintenance_evidence.add('compliance/proof-maintenance/' + adapter.sha + '.json.gz')
+            cls.maintenance_evidence.update('compliance/proof-maintenance/' + sha + '.json.gz'
+                                            for sha in adapter.receipt_ids)
             inventory, _ = _inventory(ROOT, adapter.row['after'])
             cls.maintenance_evidence.update(inventory)
         with GATE.source_layout.activate(layout):

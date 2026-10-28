@@ -144,6 +144,29 @@ def _bytes_match(data, hashes, snapshot, expected):
         raise ValueError('maintenance external byte count drift')
 
 
+def _patches(row, old, new):
+    """Validate exact changed-file coverage and the existing receipt patch budget."""
+    import proof_routing as routing
+    changed = {path for path in old if old[path] != new.get(path)}
+    patches = {}
+    count = size = 0
+    for file in row['files']:
+        if (not isinstance(file, dict) or set(file) != {'before', 'after', 'before_sha256', 'after_sha256', 'replacements'}
+                or file['before'] != file['after'] or file['before'] in patches
+                or file['before'] not in changed or file['before_sha256'] != old[file['before']]
+                or file['after_sha256'] != new[file['after']] or not isinstance(file['replacements'], list)):
+            raise ValueError('maintenance exact changed-file coverage differs')
+        patches[file['before']] = file
+        count += len(file['replacements'])
+        for edit in file['replacements']:
+            if not isinstance(edit, dict) or set(edit) != {'old', 'new'}:
+                raise ValueError('invalid maintenance replacement')
+            size += sum(len(base64.b64decode(edit[k], validate=True)) for k in ('old', 'new'))
+    if set(patches) != changed or count > routing.MAX_REPLACEMENTS or size > routing.MAX_PATCH_BYTES:
+        raise ValueError('maintenance patch coverage/bound differs')
+    return patches
+
+
 def restore(root, catalog, prospective=False):
     """Authenticate live tips and return exact terminal catalog and byte views."""
     import proof_routing as routing
@@ -182,22 +205,7 @@ def restore(root, catalog, prospective=False):
         if (row['layout'] != layout_identity or row['before']['package']['directory'] != source_layout.current_path(root, bound['after']['directory'])
                 or row['parent'] != (chain[-1][0] if chain else None) or before != expected):
             raise ValueError('maintenance ancestry/layout discontinuity')
-        changed = {path for path in old if old[path] != new.get(path)}
-        seen = set(); count = size = 0
-        for file in row['files']:
-            if (not isinstance(file, dict) or set(file) != {'before', 'after', 'before_sha256', 'after_sha256', 'replacements'}
-                    or file['before'] != file['after'] or file['before'] in seen
-                    or file['before'] not in changed or file['before_sha256'] != old[file['before']]
-                    or file['after_sha256'] != new[file['after']] or not isinstance(file['replacements'], list)):
-                raise ValueError('maintenance exact changed-file coverage differs')
-            seen.add(file['before'])
-            count += len(file['replacements'])
-            for edit in file['replacements']:
-                if not isinstance(edit, dict) or set(edit) != {'old', 'new'}:
-                    raise ValueError('invalid maintenance replacement')
-                size += sum(len(base64.b64decode(edit[k], validate=True)) for k in ('old', 'new'))
-        if seen != changed or count > routing.MAX_REPLACEMENTS or size > routing.MAX_PATCH_BYTES:
-            raise ValueError('maintenance patch coverage/bound differs')
+        _patches(row, old, new)
         chain.append((sha, row, old, new, roots)); records.append((sha, row))
     restored = {}
     for terminal, chain in chains.items():

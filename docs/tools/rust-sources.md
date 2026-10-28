@@ -62,6 +62,29 @@ python3 tools/rust-sources/collect_notices.py --output /tmp/rust-notice-review
 
 扫描器在产品工作区之外按独立审阅锁构建，安装过程核对官方源码、原始锁及精确允许的锁变化；不增加产品工作区或产品锁文件。扫描使用隔离的固定策略，当前公告与 registry/yank 状态须实时读取，不能将工具缓存或历史通过结果当作本次安全结论。安装、网络要求和证据边界见[安全扫描器说明](../../.github/security-tools/README.md)。
 
+<a id="http-owner-source-maintenance-chain"></a>
+
+## HTTP 同所有者源码维护链
+
+`proof_legacy_maintenance.py` 只为 `src/foundation/networking/http-transport` 提供
+同路径、同身份的连续源码内容维护。既有首张 demand 比较修正收据保持原字节及摘要；
+后继仍采用 schema 1，完整 `before` / `after` 所有者快照和精确补丁共同受收据摘要约束，
+`parent` 必须指向紧邻前序，`before` 必须等于其完整 `after`。
+经审阅的收据 ID 显式追加到工具的 `RECEIPTS`，普通 refresh 不发现或自动接受未知收据。
+
+后继只允许已有 `src/*.rs` 文件内容变化；生产文件集合、包名、版本、上游身份、
+许可证、布局和外置测试完整快照不变。Cargo 清单、增加/移除/移动文件、升级、退役、
+重命名及其它所有者均不在此适配器的授权范围。每次 refresh 只接受一个紧邻后继，
+重复 refresh 必须保持同一最终快照；verify 要求完整已登记链。验证从真实当前文件
+逐步逆向重建到原维护和布局证明，逐步核对完整集合与摘要，不用归档替代缺失活动文件。
+沿用既有单收据解压、文件、补丁与活动字节预算，不新增维护次数上限。
+
+本适配器**不支持外置测试内容变更**，包括已有外部路径修正证明覆盖的测试。
+这类维护需要另行设计维护、外部路径修正和布局证明的认证组合，不能跳过先执行的
+外部路径修正字节检查。工具测试中的后继仅为临时合成夹具，不是新上游修复、
+安全 backport 或完整组件升级的验收。源码治理、实际消费者回归及公告扫描仍分别验证；
+任何公告 finding 的处理政策不因增加这条源码维护链而改变。
+
 ## 依赖文档导航
 
 [依赖文档](../dependencies/README.md)按当前职责聚合本地原文、维护说明及源码 API；不把退役来源或上游已删除能力列为可用接口。`python3 tools/rust-sources/documentation.py refresh` 更新索引，`verify` 检查内容与覆盖是否过期；静态及来源门禁都执行验证。上游原件与其来源收据继续受原有完整性规则保护。
