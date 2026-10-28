@@ -76,7 +76,7 @@ fn removed_open_descriptor_is_closed_on_poisoned_lock_and_remote_save_failure() 
         let (descriptor, mut peer) = UnixStream::pair().unwrap();
         peer.set_read_timeout(Some(std::time::Duration::from_secs(1)))
             .unwrap();
-        let lock = Arc::new(Mutex::new(()));
+        let lock = Arc::new(Mutex::new(WriteSequence::new(false)));
         if poisoned {
             let _ = std::panic::catch_unwind(|| {
                 let _guard = lock.lock().unwrap();
@@ -251,7 +251,7 @@ fn readdir_keeps_one_page_and_rewind_requests_a_fresh_snapshot() {
         }),
         fd: descriptor,
         writable: false,
-        io: Arc::new(Mutex::new(())),
+        io: Arc::new(Mutex::new(WriteSequence::new(false))),
     };
     let context = Box::new(Context {
         samba_username: "alice".into(),
@@ -416,7 +416,7 @@ fn directory_cleanup_preserves_admission_failure_and_is_terminal_after_errors() 
             // SAFETY: Successful pipe2 returned this unique write endpoint.
             fd: unsafe { OwnedFd::from_raw_fd(descriptors[1]) },
             writable: false,
-            io: Arc::new(Mutex::new(())),
+            io: Arc::new(Mutex::new(WriteSequence::new(false))),
         };
         let context = Box::new(Context {
             samba_username: "alice".into(),
@@ -531,7 +531,7 @@ fn revoked_close_detaches_without_publishing_and_releases_descriptor() {
         }),
         fd: descriptor.into(),
         writable: true,
-        io: Arc::new(Mutex::new(())),
+        io: Arc::new(Mutex::new(WriteSequence::new(false))),
     };
     let context = Box::new(Context {
         samba_username: "alice".into(),
@@ -575,7 +575,7 @@ fn removed_open_owns_descriptor_through_success_and_unwind() {
             }),
             fd: descriptor.into(),
             writable: true,
-            io: Arc::new(Mutex::new(())),
+            io: Arc::new(Mutex::new(WriteSequence::new(false))),
         };
         let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             close_opened(opened, |request| {
@@ -652,7 +652,7 @@ fn context_cleanup_closes_owned_records_without_publishing_and_snapshot_outlives
                 }),
                 fd: descriptor.into(),
                 writable: true,
-                io: Arc::new(Mutex::new(())),
+                io: Arc::new(Mutex::new(WriteSequence::new(false))),
             },
         );
     }

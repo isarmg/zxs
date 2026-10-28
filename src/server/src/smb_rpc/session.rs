@@ -173,19 +173,7 @@ impl Session {
             } => return self.open(path, writable, create, truncate, exclusive, write_through),
             Request::AuthorizeRead { handle } => self.authorize_read(handle)?,
             Request::PrepareWrite { handle, end, bytes } => {
-                let Some(Handle::Write(writer)) = self.handles.get_mut(&handle) else {
-                    return Err(ApiError::forbidden());
-                };
-                self.shared.backend.authorize_workspace_selection(
-                    &self.identity,
-                    &writer.workspace.workspace_id,
-                    &writer.path,
-                )?;
-                let current = writer.file.metadata().map_err(ApiError::io)?.len();
-                writer
-                    .reservation
-                    .before_write(end, bytes.max(end.saturating_sub(current)))?;
-                json!({"ready":true})
+                self.prepare_write(handle, end, bytes)?
             }
             Request::Dirty { handle } => self.dirty(handle)?,
             Request::Flush { handle } => self.flush(handle)?,

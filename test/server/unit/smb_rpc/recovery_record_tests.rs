@@ -22,6 +22,7 @@ fn unchanged_dirty_records_replace_once_and_keep_authorization_and_budget_growth
         let source = writer(&client, opened.handle).source.clone();
         let operation = writer(&client, opened.handle).operation_id;
         let start = persist::replacements();
+        let grows = crate::smb_rpc::budget::persist::record_writes().1;
         backend.take_authorizations();
         for index in 0..count {
             let end = 4 + index as u64;
@@ -34,13 +35,23 @@ fn unchanged_dirty_records_replace_once_and_keep_authorization_and_budget_growth
                 .unwrap();
             file.write_all_at(b"x", end - 1).unwrap();
             client.dirty(opened.handle).unwrap();
+            // The first growth grants up to the 4096-byte handle maximum
+            // durably; later writes inside it reuse that record.
             let budget: Value =
                 json_codec::from_slice(&fs::read(source.with_extension("budget.json")).unwrap())
                     .unwrap();
-            assert_eq!(budget["admitted_end"], end.to_string());
+            assert_eq!(budget["admitted_end"], "4096");
         }
+        assert_eq!(
+            crate::smb_rpc::budget::persist::record_writes().1 - grows,
+            1
+        );
         assert_eq!(persist::replacements() - start, 1);
-        assert_eq!(backend.take_authorizations(), vec![branch.clone(); count]);
+        // PrepareWrite and Dirty each revalidate current branch admission.
+        assert_eq!(
+            backend.take_authorizations(),
+            vec![branch.clone(); 2 * count]
+        );
         assert_eq!(writer(&client, opened.handle).operation_id, operation);
         assert_eq!(record(&source)["dirty"], true);
         assert_eq!(record(&source)["descriptor_changes_unconfirmed"], true);

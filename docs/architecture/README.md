@@ -13,6 +13,7 @@
 - [读取投影](read-projections.md)：请求上下文、复杂度与冻结响应。
 - [文件列表投影](file-list-projections.md)：不可变快照、键控行与事件安全。
 - [浏览器响应式运行时](reactive-browser-runtime.md)：CSR、客户端模板与生命周期。
+- [G4 轮廓失效与布局批次](contour-invalidation.md)：触发源、失效集合、读写批次与清理。
 - [组件与插槽属性](view-prop-parser.md)：选项语法与诊断。
 
 ## 基础能力

@@ -54,53 +54,6 @@ pub(crate) fn canonical_fully_decomposed(c: char) -> Option<&'static [char]> {
     .map(|(start, len)| &CANONICAL_DECOMPOSED_CHARS[start as usize..][..len as usize])
 }
 
-pub(crate) fn compatibility_fully_decomposed(c: char) -> Option<&'static [char]> {
-    mph_lookup(
-        c.into(),
-        COMPATIBILITY_DECOMPOSED_SALT,
-        COMPATIBILITY_DECOMPOSED_KV,
-        pair_lookup_fk,
-        pair_lookup_fv_opt,
-        None,
-    )
-    .map(|(start, len)| &COMPATIBILITY_DECOMPOSED_CHARS[start as usize..][..len as usize])
-}
-
-pub(crate) fn cjk_compat_variants_fully_decomposed(c: char) -> Option<&'static [char]> {
-    mph_lookup(
-        c.into(),
-        CJK_COMPAT_VARIANTS_DECOMPOSED_SALT,
-        CJK_COMPAT_VARIANTS_DECOMPOSED_KV,
-        pair_lookup_fk,
-        pair_lookup_fv_opt,
-        None,
-    )
-    .map(|(start, len)| &CJK_COMPAT_VARIANTS_DECOMPOSED_CHARS[start as usize..][..len as usize])
-}
-
-/// Return whether the given character is a combining mark (`General_Category=Mark`)
-pub fn is_combining_mark(c: char) -> bool {
-    mph_lookup(
-        c.into(),
-        COMBINING_MARK_SALT,
-        COMBINING_MARK_KV,
-        bool_lookup_fk,
-        bool_lookup_fv,
-        false,
-    )
-}
-
-pub fn stream_safe_trailing_nonstarters(c: char) -> usize {
-    mph_lookup(
-        c.into(),
-        TRAILING_NONSTARTERS_SALT,
-        TRAILING_NONSTARTERS_KV,
-        u8_lookup_fk,
-        u8_lookup_fv,
-        0,
-    ) as usize
-}
-
 /// Extract the key in a 24 bit key and 8 bit value packed in a u32.
 #[inline]
 fn u8_lookup_fk(kv: u32) -> u32 {
@@ -111,18 +64,6 @@ fn u8_lookup_fk(kv: u32) -> u32 {
 #[inline]
 fn u8_lookup_fv(kv: u32) -> u8 {
     (kv & 0xff) as u8
-}
-
-/// Extract the key for a boolean lookup.
-#[inline]
-fn bool_lookup_fk(kv: u32) -> u32 {
-    kv
-}
-
-/// Extract the value for a boolean lookup.
-#[inline]
-fn bool_lookup_fv(_kv: u32) -> bool {
-    true
 }
 
 /// Extract the key in a pair.

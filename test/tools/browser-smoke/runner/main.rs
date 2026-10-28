@@ -19,6 +19,7 @@ use std::{
 mod base64_compatibility_tests;
 
 mod accessibility;
+mod contour_evidence;
 mod contours;
 mod diagnostics;
 mod error_feedback;
@@ -420,6 +421,7 @@ fn run() -> Result<()> {
     let mut cli_binary = PathBuf::from("target/native/debug/zxs");
     let mut web = PathBuf::from("build/web");
     let mut screenshot: Option<PathBuf> = None;
+    let mut contour_evidence: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--cli-bin" => cli_binary = args.next().ok_or("--cli-bin requires a path")?.into(),
@@ -427,13 +429,23 @@ fn run() -> Result<()> {
             "--screenshot" => {
                 screenshot = Some(args.next().ok_or("--screenshot requires a path")?.into());
             }
+            "--contour-evidence" => {
+                contour_evidence = Some(
+                    args.next()
+                        .ok_or("--contour-evidence requires a directory")?
+                        .into(),
+                );
+            }
             _ => {
                 return Err(format!(
-                    "unknown argument {arg}; usage: browser-smoke [--cli-bin PATH] [--web-dir PATH] [--screenshot PNG]"
+                    "unknown argument {arg}; usage: browser-smoke [--cli-bin PATH] [--web-dir PATH] [--screenshot PNG] [--contour-evidence DIR]"
                 )
                 .into());
             }
         }
+    }
+    if contour_evidence.is_some() && screenshot.is_some() {
+        return Err("--contour-evidence and --screenshot are separate validation modes".into());
     }
     let cli_binary = cli_binary.canonicalize()?;
     let web = web.canonicalize()?;
@@ -521,11 +533,18 @@ fn run() -> Result<()> {
                 .ok_or("missing WebDriver session")?
                 .to_owned(),
         };
-        let result = exercise(&browser, &origin, &password, screenshot.as_deref())
-            .and_then(|()| management::run(&browser, &cli_binary, &web, &pool, root, &password))
-            .and_then(|()| management::setup(&browser, &cli_binary, &web, root, &password));
+        let result = if let Some(directory) = &contour_evidence {
+            contour_evidence::run(&browser, &origin, &web, directory)
+        } else {
+            exercise(&browser, &origin, &password, screenshot.as_deref())
+                .and_then(|()| management::run(&browser, &cli_binary, &web, &pool, root, &password))
+                .and_then(|()| management::setup(&browser, &cli_binary, &web, root, &password))
+        };
         if result.is_err() {
-            let diagnostics_dir = PathBuf::from("artifacts/browser-smoke/diagnostics");
+            let diagnostics_dir = contour_evidence.as_ref().map_or_else(
+                || PathBuf::from("artifacts/browser-smoke/diagnostics"),
+                |directory| directory.join("diagnostics"),
+            );
             diagnostics::failure(&browser, &diagnostics_dir, &password);
         }
         result

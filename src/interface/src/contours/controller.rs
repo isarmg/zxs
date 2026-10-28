@@ -1,6 +1,7 @@
-use super::{geometry, membership, mutations, paint};
+use super::{frame, geometry, membership, mutations, paint};
+use frame::{FrameWork, Invalidation, Step, TransitionLists, TransitionScope, Trigger};
 use mutations::OutputWrites;
-use paint::{CssSnapshot, Separator, fmt, number, owned_paint_property, split};
+use paint::{CssSnapshot, fmt, number, owned_paint_property};
 use std::{
     cell::{Cell, OnceCell, RefCell},
     collections::{BTreeMap, BTreeSet},
@@ -97,6 +98,7 @@ pub fn start(document: &Document) -> Result<ContourController, JsValue> {
         all_properties,
         color_scheme,
         state: RefCell::new(State::default()),
+        invalidation: RefCell::new(Invalidation::default()),
         membership: RefCell::new(membership::Membership::new(document)?),
         stopped: Cell::new(false),
         updating: Cell::new(false),
@@ -181,6 +183,8 @@ struct Inner {
     all_properties: Vec<String>,
     color_scheme: MediaQueryList,
     state: RefCell<State>,
+    // Work accumulated by triggers and taken once per frame.
+    invalidation: RefCell<Invalidation<Element>>,
     membership: RefCell<membership::Membership>,
     stopped: Cell<bool>,
     // Custom-element attribute callbacks can synchronously reenter public APIs
@@ -238,7 +242,7 @@ impl Inner {
         let weak = Rc::downgrade(self);
         let mutation = Closure::wrap(Box::new(move |_: js_sys::Array, _: MutationObserver| {
             if let Some(inner) = weak.upgrade() {
-                inner.invalidate_transitions();
+                inner.invalidate(Trigger::Author);
                 inner.schedule();
             }
         })
@@ -255,7 +259,7 @@ impl Inner {
                         .membership
                         .borrow_mut()
                         .reconcile(&inner.document, &mutations::records(records));
-                    inner.invalidate_transitions();
+                    inner.invalidate(Trigger::Structure);
                     inner.schedule();
                 }
             },
@@ -266,6 +270,7 @@ impl Inner {
         let weak = Rc::downgrade(self);
         let resize_callback = Closure::wrap(Box::new(move |_: js_sys::Array, _: ResizeObserver| {
             if let Some(inner) = weak.upgrade() {
+                inner.invalidate(Trigger::Passive);
                 inner.schedule();
             }
         })
@@ -417,22 +422,20 @@ impl Inner {
             match kind {
                 EventKind::Interaction => {
                     if event.type_() == "scroll" {
-                        for record in &state.records {
-                            if let Err(error) = position_foreground(record) {
-                                web_sys::console::warn_2(
-                                    &"Could not reposition contour foreground".into(),
-                                    &error,
-                                );
-                            }
-                        }
+                        reposition_foregrounds(&state.records, |error| {
+                            web_sys::console::warn_2(
+                                &"Could not reposition contour foreground".into(),
+                                error,
+                            );
+                        });
                     }
+                    let mut chain = Vec::new();
                     let mut element = target;
                     while let Some(node) = element {
-                        if let Some(index) = state.index(&node) {
-                            state.records[index].transition_dirty = true;
-                        }
                         element = node.parent_element();
+                        chain.push(node);
                     }
+                    self.invalidate(Trigger::Interaction(chain));
                 }
                 EventKind::AnimationStart | EventKind::AnimationEnd => {
                     if owner_instance(&self.view, event.as_ref(), "TransitionEvent")
@@ -467,6 +470,9 @@ impl Inner {
                 EventKind::Schedule | EventKind::PageHide => {}
             }
         }
+        if !matches!(kind, EventKind::Interaction) {
+            self.invalidate(Trigger::Passive);
+        }
         self.schedule();
     }
     fn schedule(&self) {
@@ -485,10 +491,8 @@ impl Inner {
             }
         }
     }
-    fn invalidate_transitions(&self) {
-        for record in &mut self.state.borrow_mut().records {
-            record.transition_dirty = true;
-        }
+    fn invalidate(&self, trigger: Trigger<Element>) {
+        self.invalidation.borrow_mut().add(trigger);
     }
     fn refresh_now(&self) -> Result<(), JsValue> {
         if self.updating.get() {
@@ -534,11 +538,12 @@ impl Inner {
             .borrow_mut()
             .reconcile(&self.document, &records);
         if !records.is_empty() {
-            self.invalidate_transitions();
+            self.invalidate(Trigger::Structure);
         }
         setup.observer.disconnect();
+        let work = self.invalidation.borrow_mut().take();
         let mut writes = OutputWrites::new(Some(&setup.discovery));
-        let result = self.state.borrow_mut().update(self, &mut writes);
+        let result = self.state.borrow_mut().update(self, work, &mut writes);
         let batch = writes.finish();
         self.membership
             .borrow_mut()
@@ -550,7 +555,7 @@ impl Inner {
             return result;
         }
         if self.deferred_dirty.replace(false) || author_changes {
-            self.invalidate_transitions();
+            self.invalidate(Trigger::Author);
         }
         let observed = self.observe();
         if self.deferred_refresh.replace(false)
@@ -586,6 +591,7 @@ impl Inner {
             }
         }
         self.membership.borrow_mut().clear();
+        self.invalidation.borrow_mut().take();
         let mut state = self.state.borrow_mut();
         state.active.clear();
         let mut writes = OutputWrites::new(None);
@@ -802,142 +808,52 @@ impl State {
         });
         &mut self.records[index]
     }
-    fn prepare_transitions(
-        &mut self,
-        inner: &Inner,
-        node: &HtmlElement,
-        measured: Option<&CssStyleDeclaration>,
+    /// Write back the author's own transition declarations before reading them.
+    fn restore_transitions(
+        record: &mut Record,
+        draft: &CssStyleDeclaration,
     ) -> Result<(), JsValue> {
-        if self
-            .index(node)
-            .is_some_and(|index| !self.records[index].transition_dirty)
-        {
-            return Ok(());
-        }
-        let style = node.style();
-        if let Some(index) = self.index(node) {
-            let previous = &mut self.records[index];
-            inner.draft.set_css_text(&style.css_text());
-            for name in TRANSITIONS {
-                if let Some(saved) = previous.saved.get_mut(name) {
-                    let current = style.get_property_value(name)?;
-                    let priority = style.get_property_priority(name);
-                    if saved.applied.as_ref() != Some(&current) || priority != "important" {
-                        saved.value = current;
-                        saved.priority = priority;
-                    }
-                    if saved.value.is_empty() {
-                        inner.draft.remove_property(name)?;
-                    } else {
-                        inner.draft.set_property_with_priority(
-                            name,
-                            &saved.value,
-                            &saved.priority,
-                        )?;
-                    }
-                    saved.applied = None;
+        let style = record.node.style();
+        draft.set_css_text(&style.css_text());
+        for name in TRANSITIONS {
+            if let Some(saved) = record.saved.get_mut(name) {
+                let current = style.get_property_value(name)?;
+                let priority = style.get_property_priority(name);
+                if saved.applied.as_ref() != Some(&current) || priority != "important" {
+                    saved.value = current;
+                    saved.priority = priority;
                 }
-            }
-            if style.css_text() != inner.draft.css_text() {
-                style.set_css_text(&inner.draft.css_text());
-            }
-        }
-        let computed;
-        let css = if let Some(css) = measured {
-            css
-        } else {
-            computed = inner
-                .view
-                .get_computed_style(node)?
-                .ok_or_else(|| JsValue::from_str("Computed element style is unavailable"))?;
-            &computed
-        };
-        let properties = split(
-            &css.get_property_value("transition-property")?,
-            Separator::Comma,
-        );
-        let lists: Vec<Vec<String>> = TRANSITIONS[1..]
-            .iter()
-            .map(|name| {
-                css.get_property_value(name)
-                    .map(|value| split(&value, Separator::Comma))
-            })
-            .collect::<Result<_, _>>()?;
-        let at = |list: &[String], index: usize| {
-            if list.is_empty() {
-                String::new()
-            } else {
-                list[index % list.len()].clone()
-            }
-        };
-        if !properties.iter().enumerate().any(|(index, name)| {
-            (name == "all" || owned_paint_property(name)) && number(&at(&lists[0], index)) > 0.0
-        }) {
-            if let Some(index) = self.index(node) {
-                self.records[index].transition_dirty = false;
-            }
-            return Ok(());
-        }
-        let mut retained = Vec::new();
-        for (index, name) in properties.iter().enumerate() {
-            if name == "all" {
-                retained.extend(
-                    inner
-                        .all_properties
-                        .iter()
-                        .map(|name| (name.clone(), index)),
-                );
-            } else if !owned_paint_property(name) && name != "none" {
-                retained.push((name.clone(), index));
+                if saved.value.is_empty() {
+                    draft.remove_property(name)?;
+                } else {
+                    draft.set_property_with_priority(name, &saved.value, &saved.priority)?;
+                }
+                saved.applied = None;
             }
         }
+        if style.css_text() != draft.css_text() {
+            style.set_css_text(&draft.css_text());
+        }
+        Ok(())
+    }
+    /// Apply transition overrides to the record of `node`, creating it when absent.
+    fn apply_transitions(
+        &mut self,
+        node: &HtmlElement,
+        overrides: [String; 5],
+        draft: &CssStyleDeclaration,
+    ) -> Result<(), JsValue> {
         let record = self.record(node);
-        let value = retained
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect::<Vec<_>>()
-            .join(",");
-        record.put(
-            "transition-property",
-            if value.is_empty() { "none" } else { &value },
-        )?;
-        for (index, list) in lists.iter().enumerate() {
-            let fallback = if index == 2 {
-                "ease"
-            } else if index == 3 {
-                "normal"
-            } else {
-                "0s"
-            };
-            let value = retained
-                .iter()
-                .map(|(_, source)| {
-                    let value = at(list, *source);
-                    if value.is_empty() {
-                        if index == 3 {
-                            "normal".to_owned()
-                        } else {
-                            "0s".to_owned()
-                        }
-                    } else {
-                        value
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            record.put(
-                TRANSITIONS[index + 1],
-                if value.is_empty() { fallback } else { &value },
-            )?;
+        for (name, value) in TRANSITIONS.iter().zip(overrides) {
+            record.put(name, value)?;
         }
         record.transition_dirty = false;
-        inner.draft.set_css_text(&style.css_text());
+        let style = record.node.style();
+        draft.set_css_text(&style.css_text());
         for (name, value) in &record.pending {
-            inner
-                .draft
-                .set_property_with_priority(name, value, "important")?;
+            draft.set_property_with_priority(name, value, "important")?;
         }
-        style.set_css_text(&inner.draft.css_text());
+        style.set_css_text(&draft.css_text());
         for name in record.pending.keys() {
             if let Some(saved) = record.saved.get_mut(name) {
                 saved.applied = Some(style.get_property_value(name)?);
@@ -960,84 +876,138 @@ impl State {
         self.images.push((source, url.clone()));
         Ok(format!("url(\"{url}\")"))
     }
-    fn update(&mut self, inner: &Inner, writes: &mut OutputWrites<'_>) -> Result<(), JsValue> {
-        self.used_images.clear();
-        let connected: Vec<_> = self
-            .records
-            .iter()
-            .filter(|record| record.node.is_connected())
-            .map(|record| record.node.clone())
-            .collect();
-        for node in connected {
-            self.prepare_transitions(inner, &node, None)?;
-        }
-        let mut keep = Vec::new();
-        for mut record in self.records.drain(..) {
-            let detached = !record.node.is_connected();
-            if detached && let Some(setup) = inner.setup.get() {
-                setup.resize.unobserve(&record.node);
-            }
-            restore(&mut record, &inner.draft, detached, writes)?;
-            if !detached {
-                keep.push(record);
-            }
-        }
-        self.records = keep;
-        self.reindex();
-        let members = inner.membership.borrow();
-        let mut candidates = Vec::new();
-        for node in members.nodes() {
-            if node.has_attribute("data-zxs-contour-decoration") {
-                continue;
-            }
-            let Some(live) = inner.view.get_computed_style(node)? else {
-                continue;
-            };
-            if number(
-                &node
-                    .get_attribute("data-zxs-contour-extent")
-                    .unwrap_or(live.get_property_value("--zxs-contour-extent")?),
-            ) <= 0.0
-            {
-                continue;
-            }
-            if self.index(node).is_none() {
-                self.prepare_transitions(inner, node, Some(&live))?;
-            }
-            let css = paint::snapshot(&live)?;
-            let width = measured_dimension(node, &css, "width");
-            let height = measured_dimension(node, &css, "height");
-            let fragments = node.get_client_rects().length();
-            candidates.push(Candidate {
-                node: node.clone(),
-                css,
-                width,
-                height,
-                fragmented: fragments > 1,
-                visible: fragments > 0,
-            });
-        }
-        drop(members);
-        let selected = js_sys::Set::default();
-        for candidate in candidates {
-            self.paint_candidate(inner, candidate, &selected, writes)?;
-        }
-        let mut keep = Vec::new();
-        for mut record in self.records.drain(..) {
-            if selected.has(record.node.as_ref()) {
-                record.commit_pending(&inner.draft)?;
-                keep.push(record);
-            } else {
-                restore(&mut record, &inner.draft, true, writes)?;
-                if let Some(setup) = inner.setup.get() {
-                    setup.resize.unobserve(&record.node);
+    fn update(
+        &mut self,
+        inner: &Inner,
+        work: FrameWork<Element>,
+        writes: &mut OutputWrites<'_>,
+    ) -> Result<(), JsValue> {
+        match work.transitions {
+            TransitionScope::All => {
+                for record in &mut self.records {
+                    record.transition_dirty = true;
                 }
             }
+            TransitionScope::Chains(chain) => {
+                for node in chain {
+                    if let Some(index) = self.index(&node) {
+                        self.records[index].transition_dirty = true;
+                    }
+                }
+            }
+            TransitionScope::Unchanged => {}
         }
-        self.records = keep;
-        self.reindex();
-        for record in &self.records {
-            position_foreground(record)?;
+        self.used_images.clear();
+        let dirty: Vec<usize> = (0..self.records.len())
+            .filter(|&index| {
+                self.records[index].transition_dirty && self.records[index].node.is_connected()
+            })
+            .collect();
+        let mut transitions = Vec::new();
+        let mut candidates = Vec::new();
+        let mut foregrounds = Vec::new();
+        // Preserve the original record order and finish each transition policy
+        // before restoring the next. Inline-style selectors (including sibling
+        // combinators and :has()) can depend on another record's override, so
+        // ancestry alone cannot establish an independent batch.
+        let steps = dirty
+            .iter()
+            .flat_map(|index| {
+                frame::TRANSITION_RECORD.map(|step| (std::slice::from_ref(index), step))
+            })
+            .chain(frame::FRAME.map(|step| (&[][..], step)));
+        for (record_indices, step) in steps {
+            match step {
+                Step::TransitionRestore => {
+                    for &index in record_indices {
+                        Self::restore_transitions(&mut self.records[index], &inner.draft)?;
+                    }
+                }
+                Step::TransitionRead => {
+                    for &index in record_indices {
+                        let css = inner
+                            .view
+                            .get_computed_style(&self.records[index].node)?
+                            .ok_or_else(|| {
+                                JsValue::from_str("Computed element style is unavailable")
+                            })?;
+                        transitions.push(read_transitions(&css)?);
+                    }
+                }
+                Step::TransitionWrite => {
+                    for (&index, lists) in record_indices.iter().zip(transitions.drain(..)) {
+                        match frame::transition_overrides(&lists, &inner.all_properties) {
+                            Some(overrides) => {
+                                let node = self.records[index].node.clone();
+                                self.apply_transitions(&node, overrides, &inner.draft)?;
+                            }
+                            None => self.records[index].transition_dirty = false,
+                        }
+                    }
+                }
+                Step::PaintRestore => {
+                    let mut keep = Vec::new();
+                    for mut record in self.records.drain(..) {
+                        let detached = !record.node.is_connected();
+                        if detached && let Some(setup) = inner.setup.get() {
+                            setup.resize.unobserve(&record.node);
+                        }
+                        restore(&mut record, &inner.draft, detached, writes)?;
+                        if !detached {
+                            keep.push(record);
+                        }
+                    }
+                    self.records = keep;
+                    self.reindex();
+                }
+                Step::Qualify => self.qualify(inner, &mut candidates)?,
+                Step::Paint => {
+                    let selected = js_sys::Set::default();
+                    for candidate in candidates.drain(..) {
+                        self.paint_candidate(inner, candidate, &selected, writes)?;
+                    }
+                    let mut keep = Vec::new();
+                    for mut record in self.records.drain(..) {
+                        if selected.has(record.node.as_ref()) {
+                            record.commit_pending(&inner.draft)?;
+                            keep.push(record);
+                        } else {
+                            restore(&mut record, &inner.draft, true, writes)?;
+                            if let Some(setup) = inner.setup.get() {
+                                setup.resize.unobserve(&record.node);
+                            }
+                        }
+                    }
+                    self.records = keep;
+                    self.reindex();
+                }
+                Step::ForegroundRead => {
+                    for record in &self.records {
+                        if let Some(offset) = foreground_offset(record)? {
+                            foregrounds.push(offset);
+                        }
+                    }
+                }
+                Step::ForegroundWrite => {
+                    for offset in foregrounds.drain(..) {
+                        offset.write()?;
+                    }
+                }
+                Step::ForegroundVerify => {
+                    for record in &self.records {
+                        if let Some(offset) = foreground_offset(record)?
+                            && offset.moves()
+                        {
+                            foregrounds.push(offset);
+                        }
+                    }
+                }
+                Step::ForegroundCorrect => {
+                    for offset in foregrounds.drain(..) {
+                        offset.write()?;
+                    }
+                }
+            }
         }
         let inactive = self
             .images
@@ -1062,6 +1032,51 @@ impl State {
         self.active.retain(|(target, _)| {
             target.is_connected() && target.owner_document().as_ref() == Some(&inner.document)
         });
+        Ok(())
+    }
+    /// Read every registered node's qualification, snapshot, size and
+    /// fragments in document order. A first-seen candidate whose author
+    /// transitions include an owned paint property gets its override written
+    /// before its own snapshot is read, exactly as before: the override can
+    /// cancel a running paint transition and so change what this node and
+    /// later (inheriting) nodes report.
+    fn qualify(&mut self, inner: &Inner, candidates: &mut Vec<Candidate>) -> Result<(), JsValue> {
+        let mut members = inner.membership.borrow_mut();
+        for member in members.members() {
+            if member.node.has_attribute("data-zxs-contour-decoration") {
+                continue;
+            }
+            let Some(live) = member.style(&inner.view)? else {
+                continue;
+            };
+            let node = &member.node;
+            if number(
+                &node
+                    .get_attribute("data-zxs-contour-extent")
+                    .unwrap_or(live.get_property_value("--zxs-contour-extent")?),
+            ) <= 0.0
+            {
+                continue;
+            }
+            if self.index(node).is_none()
+                && let Some(overrides) =
+                    frame::transition_overrides(&read_transitions(&live)?, &inner.all_properties)
+            {
+                self.apply_transitions(node, overrides, &inner.draft)?;
+            }
+            let css = paint::snapshot(&live)?;
+            let width = measured_dimension(node, &css, "width");
+            let height = measured_dimension(node, &css, "height");
+            let fragments = node.get_client_rects().length();
+            candidates.push(Candidate {
+                node: node.clone(),
+                css,
+                width,
+                height,
+                fragmented: fragments > 1,
+                visible: fragments > 0,
+            });
+        }
         Ok(())
     }
     fn paint_candidate(
@@ -1424,6 +1439,19 @@ struct Candidate {
     fragmented: bool,
     visible: bool,
 }
+fn read_transitions(css: &CssStyleDeclaration) -> Result<TransitionLists, JsValue> {
+    Ok(TransitionLists::parse(
+        &css.get_property_value(TRANSITIONS[0])?,
+        [
+            css.get_property_value(TRANSITIONS[1])?,
+            css.get_property_value(TRANSITIONS[2])?,
+            css.get_property_value(TRANSITIONS[3])?,
+            css.get_property_value(TRANSITIONS[4])?,
+        ]
+        .each_ref()
+        .map(String::as_str),
+    ))
+}
 fn measured_dimension(node: &HtmlElement, css: &CssSnapshot, axis: &str) -> f64 {
     let value = css.get(axis);
     let definite = value.strip_suffix("px").filter(|number| {
@@ -1455,7 +1483,50 @@ fn measured_dimension(node: &HtmlElement, css: &CssSnapshot, axis: &str) -> f64 
         rect.height()
     }
 }
-fn position_foreground(record: &Record) -> Result<(), JsValue> {
+/// A foreground offset computed from reads only. The SVG is fixed and out of
+/// flow, so writing it normally moves nothing else; inside a transformed or
+/// filtered scroll container it can still change scrollable overflow, so the
+/// frame re-reads every foreground once and corrects those that moved.
+struct ForegroundOffset {
+    style: CssStyleDeclaration,
+    current: (f64, f64),
+    left: f64,
+    top: f64,
+}
+impl ForegroundOffset {
+    fn moves(&self) -> bool {
+        fmt(self.left) != fmt(self.current.0) || fmt(self.top) != fmt(self.current.1)
+    }
+    fn write(self) -> Result<(), JsValue> {
+        self.style.set_property_with_priority(
+            "left",
+            &format!("{}px", fmt(self.left)),
+            "important",
+        )?;
+        self.style
+            .set_property_with_priority("top", &format!("{}px", fmt(self.top)), "important")
+    }
+}
+/// Reposition every foreground with all reads before the first write, then
+/// re-read once and correct the foregrounds that the first writes moved.
+fn reposition_foregrounds(records: &[Record], mut warn: impl FnMut(&JsValue)) {
+    for verify in [false, true] {
+        let mut offsets = Vec::new();
+        for record in records {
+            match foreground_offset(record) {
+                Ok(Some(offset)) if !verify || offset.moves() => offsets.push(offset),
+                Ok(_) => {}
+                Err(error) => warn(&error),
+            }
+        }
+        for offset in offsets {
+            if let Err(error) = offset.write() {
+                warn(&error);
+            }
+        }
+    }
+}
+fn foreground_offset(record: &Record) -> Result<Option<ForegroundOffset>, JsValue> {
     let Some(foreground) = record.foreground.as_ref().filter(|foreground| {
         foreground.is_connected()
             && foreground
@@ -1464,10 +1535,10 @@ fn position_foreground(record: &Record) -> Result<(), JsValue> {
                 .unwrap_or_default()
                 != "none"
     }) else {
-        return Ok(());
+        return Ok(None);
     };
     let Some(matrix) = foreground.get_screen_ctm() else {
-        return Ok(());
+        return Ok(None);
     };
     let (a, b, c, d, e, f) = (
         f64::from(matrix.a()),
@@ -1479,31 +1550,24 @@ fn position_foreground(record: &Record) -> Result<(), JsValue> {
     );
     let determinant = a * d - b * c;
     if !determinant.is_finite() || determinant.abs() < 1e-12 {
-        return Ok(());
+        return Ok(None);
     }
     let Some(viewbox) = foreground.view_box().base_val() else {
-        return Ok(());
+        return Ok(None);
     };
     let (width, height) = (f64::from(viewbox.width()), f64::from(viewbox.height()));
     let rect = record.node.get_bounding_client_rect();
     let x = rect.left() - (a * width).min(0.0) - (c * height).min(0.0) - e;
     let y = rect.top() - (b * width).min(0.0) - (d * height).min(0.0) - f;
     let style = foreground.style();
-    style.set_property_with_priority(
-        "left",
-        &format!(
-            "{}px",
-            fmt(number(&style.get_property_value("left")?) + (d * x - c * y) / determinant)
-        ),
-        "important",
-    )?;
-    style.set_property_with_priority(
-        "top",
-        &format!(
-            "{}px",
-            fmt(number(&style.get_property_value("top")?) + (a * y - b * x) / determinant)
-        ),
-        "important",
-    )?;
-    Ok(())
+    let current = (
+        number(&style.get_property_value("left")?),
+        number(&style.get_property_value("top")?),
+    );
+    Ok(Some(ForegroundOffset {
+        style,
+        current,
+        left: current.0 + (d * x - c * y) / determinant,
+        top: current.1 + (a * y - b * x) / determinant,
+    }))
 }

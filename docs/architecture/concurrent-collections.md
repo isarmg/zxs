@@ -22,10 +22,10 @@
 
 ## 验证与限制
 
-六份需要缺失 `rand` 开发依赖的集成源码继续保留，不计作执行。Loom 测试源码与配置分支保留，但没有 Loom 提供者，不宣称运行了 Loom 或 Miri。WASM 结果仅为编译检查，不是浏览器线程执行。这些检查不证明穷尽调度，也不证明性能改善。
+原先因缺失 `rand` 而休眠的六份集成（`array_queue`、`seg_queue`、`deque` 的 `fifo`／`lifo`／`injector`、`sharded_lock`）改用本地 `fastrand` 取随机步数，由 `check-foundation-behaviour.py` 以逐名清单执行（见[基础组件测试覆盖](../validation/foundation-test-coverage.md)）。Loom 测试源码与配置分支保留，但没有 Loom 提供者，不宣称运行了 Loom 或 Miri。WASM 结果仅为编译检查，不是浏览器线程执行。这些检查不证明穷尽调度，也不证明性能改善。
 
 <a id="maintained-verification"></a>
 
 ## 持续验证
 
-运行 `python3 .github/scripts/check-concurrent-collections.py`。基础 CI 调用此门禁，执行原生/WASM 特性构建、分配 API 拒绝、保留单元/集成/文档测试，以及并发、Rayon、析构和窃取回归。临时 manifest 和锁文件不改变根锁或受治理源码字节。缺失 rand 的六项集成、Loom、Miri 和穷尽调度仍明确未验证。
+运行 `python3 .github/scripts/check-concurrent-collections.py`。基础 CI 调用此门禁，执行原生/WASM 特性构建、分配 API 拒绝、保留单元/集成/文档测试，以及并发、Rayon、析构和窃取回归。临时 manifest 和锁文件不改变根锁或受治理源码字节。队列、双端队列与分片锁的六项保留集成由 `check-foundation-behaviour.py` 执行；Loom、Miri 和穷尽调度仍明确未验证。

@@ -40,6 +40,8 @@ mod published_selection_tests;
 mod reconciliation_tests;
 #[path = "recovery_record_tests.rs"]
 mod recovery_record_tests;
+#[path = "write_generation_tests.rs"]
+mod write_generation_tests;
 
 const RECONCILIATION_SNAPSHOT: usize = 1;
 const RECONCILIATION_CONTENT: usize = 2;
@@ -2315,7 +2317,8 @@ fn flush_disconnect_cycles_keep_full_spool_reservations() {
     assert_eq!(records.len(), 2);
     for record in records {
         let value: Value = json_codec::from_slice(&fs::read(record.path()).unwrap()).unwrap();
-        assert_eq!(value["admitted_end"].as_str(), Some("11"));
+        // The growth grant reaches this fixture's 4096-byte handle maximum.
+        assert_eq!(value["admitted_end"].as_str(), Some("4096"));
     }
 }
 
@@ -2349,6 +2352,10 @@ fn hello_rejects_missing_write_reservations_before_admitting_a_session() {
             smb_protocol::protocol::WRITE_RESERVATION_CAPABILITY
         ])),
         Some(json!([
+            smb_protocol::protocol::AUTHENTICATED_ACCOUNT_CAPABILITY
+        ])),
+        Some(json!([
+            smb_protocol::protocol::WRITE_RESERVATION_CAPABILITY,
             smb_protocol::protocol::AUTHENTICATED_ACCOUNT_CAPABILITY
         ])),
     ] {

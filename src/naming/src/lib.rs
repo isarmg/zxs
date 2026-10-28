@@ -128,7 +128,7 @@ impl From<PortablePath> for LookupPath {
         }
     }
 }
-pub const UNICODE_VERSION: &str = "16.0.0";
+pub const UNICODE_VERSION: &str = unicode16::UNICODE_VERSION;
 pub const NAME_POLICY: &str = "PortableName";
 fn in_ranges(cp: u32, ranges: &[(u32, u32)]) -> bool {
     let i = ranges.partition_point(|(_, end)| *end < cp);
@@ -279,6 +279,10 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../test/naming/unit/key_tests.rs"]
 mod key_tests;
+
+#[cfg(test)]
+#[path = "../../../test/naming/unit/golden_tests.rs"]
+mod golden_tests;
 
 impl std::ops::Deref for PortablePath {
     type Target = str;

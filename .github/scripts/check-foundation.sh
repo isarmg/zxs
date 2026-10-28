@@ -73,6 +73,7 @@ case "${1:-}" in
     python3 .github/scripts/check-service-stack.py
     python3 .github/scripts/check-http-routing.py
     python3 .github/scripts/check-http-transport.py
+    python3 .github/scripts/check-foundation-behaviour.py
     ;;
   *)
     echo 'Usage: check-foundation.sh {foundation|foundation-platform|foundation-crypto|foundation-data|foundation-language|foundation-async}' >&2

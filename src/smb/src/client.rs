@@ -336,10 +336,10 @@ pub fn error_errno(error: &io::Error) -> i32 {
 /// Close is terminal even when publication fails. If a worker poisoned the I/O
 /// lock, detach instead: neither publishing suspect bytes nor aborting/deleting
 /// them is safe. The guard still serializes against outstanding FD users.
-pub fn close_descriptor(
+pub fn close_descriptor<T>(
     handle: u64,
     descriptor: OwnedFd,
-    io_lock: &Mutex<()>,
+    io_lock: &Mutex<T>,
     finish: impl FnOnce(Request) -> io::Result<()>,
 ) -> io::Result<()> {
     let (guard, poisoned) = match io_lock.lock() {
@@ -367,6 +367,66 @@ pub fn close_descriptor(
         Some(error) => Err(error),
         None if poisoned => Err(io::Error::from_raw_os_error(libc::EIO)),
         None => Ok(()),
+    }
+}
+
+/// Whether a descriptor mutation changed the file and must open a generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Mutation {
+    Changed,
+    Unchanged,
+}
+
+/// Write sequencing for one writable remote handle, owned by its I/O lock.
+///
+/// Every mutation is admitted by `PrepareWrite` before it happens. The server
+/// keeps a handle dirty from its first successful `Dirty` until a save path
+/// (Flush, write-through Dirty or Close) publishes it, so later changes in the
+/// same generation need no further notice. Write-through handles report every
+/// change because their `Dirty` performs the save.
+#[derive(Debug)]
+pub struct WriteSequence {
+    write_through: bool,
+    generation_announced: bool,
+}
+
+impl WriteSequence {
+    pub fn new(write_through: bool) -> Self {
+        Self {
+            write_through,
+            generation_announced: false,
+        }
+    }
+
+    /// Admit, perform and report one descriptor mutation. A failed admission
+    /// leaves the descriptor untouched; a failed or unknown `Dirty` leaves the
+    /// generation unannounced so the next change reports it again.
+    pub fn mutate<T>(
+        &mut self,
+        handle: u64,
+        end: u64,
+        bytes: u64,
+        mut call: impl FnMut(Request) -> io::Result<Value>,
+        mutation: impl FnOnce() -> io::Result<(T, Mutation)>,
+    ) -> io::Result<T> {
+        call(Request::PrepareWrite { handle, end, bytes })?;
+        let (value, outcome) = mutation()?;
+        if outcome == Mutation::Changed && (self.write_through || !self.generation_announced) {
+            self.generation_announced = false;
+            call(Request::Dirty { handle })?;
+            self.generation_announced = !self.write_through;
+        }
+        Ok(value)
+    }
+
+    /// Flush may publish and end the generation even when it fails.
+    pub fn flush(
+        &mut self,
+        handle: u64,
+        call: impl FnOnce(Request) -> io::Result<Value>,
+    ) -> io::Result<Value> {
+        self.generation_announced = false;
+        call(Request::Flush { handle })
     }
 }
 
@@ -400,7 +460,7 @@ impl Client {
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "SMB bridge did not negotiate authenticated single-account sessions and durable write reservations",
+                "SMB bridge did not negotiate authenticated single-account sessions, durable write reservations and generation Dirty writes",
             ));
         }
         Ok(client)

@@ -1,4 +1,5 @@
 // Fixed Unicode 16.0.0 tables; regenerate only as an explicit naming policy change.
+pub const UNICODE_VERSION: &str = "16.0.0";
 pub const ALLOWED: &[(u32, u32)] = &[
     (0x30, 0x39),
     (0x41, 0x5a),

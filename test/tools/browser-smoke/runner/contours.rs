@@ -32,6 +32,7 @@ const done=arguments[arguments.length-1];
   const takeRecordsDescriptor=Object.getOwnPropertyDescriptor(MutationObserver.prototype,'takeRecords');
   const originalAppend=Node.prototype.appendChild, originalInsert=Node.prototype.insertBefore, originalRemove=Node.prototype.removeChild;
   const originalConsoleError=console.error;
+  const originalScreenCtm=SVGGraphicsElement.prototype.getScreenCTM, originalSetProperty=CSSStyleDeclaration.prototype.setProperty;
   let failAfterInsert=null, insertedBeforeFailure=null;
   const expectedHostFailures=[];
   const hostFailureMarker='synthetic insert-then-error probe';
@@ -62,7 +63,7 @@ const done=arguments[arguments.length-1];
   };
   const resetJournal=()=>{takeRecordsCalls=0;outputCalls={append:0,insert:0,remove:0};journalTrace=[];};
   const outputNode=node=>node instanceof Element && node.hasAttribute('data-zxs-contour-decoration');
-  let scans=0, handleAcquisitions=0, propertyReads=0, decoyReads=0, stableReads=0, activeReads=0, totalHandleAcquisitions=0;
+  let scans=0, handleAcquisitions=0, propertyReads=0, decoyReads=0, stableReads=0, activeReads=0, totalHandleAcquisitions=0, totalPropertyReads=0;
   let orderNodes=null, orderReads=[];
   const reset=()=>{subtreeQueries=0;subtreeEntries=0;scans=0;positionComparisons=0;handleAcquisitions=0;propertyReads=0;decoyReads=0;stableReads=0;activeReads=0;};
   const counts=()=>({scans,subtreeQueries,subtreeEntries,handleAcquisitions,propertyReads,positionComparisons,decoyReads,stableReads,activeReads});
@@ -92,16 +93,18 @@ const done=arguments[arguments.length-1];
   };
   // Only browser-returned live handles obtained by production reads are tagged.
   // Inline style declarations and the probe's originalStyle calls stay excluded.
+  // The registry keeps one live handle per element, so read order and
+  // "a frame ran" are observed on property reads, not on acquisitions.
   window.getComputedStyle=function(node,...rest){
     handleAcquisitions++;totalHandleAcquisitions++;
-    if(orderNodes?.has(node))orderReads.push(node);
     const live=Reflect.apply(originalStyle,this,[node,...rest]);
     measuredHandles.add(live);handleOwners.set(live,node);return live;
   };
   CSSStyleDeclaration.prototype.getPropertyValue=function(name){
     if(measuredHandles.has(this)){
-      propertyReads++;
+      propertyReads++;totalPropertyReads++;
       const node=handleOwners.get(this);
+      if(orderNodes?.has(node) && name==='--zxs-contour-extent')orderReads.push(node);
       if(decoys.has(node))decoyReads++;if(node===stable)stableReads++;if(node===active)activeReads++;
     }
     return Reflect.apply(originalProperty,this,[name]);
@@ -136,7 +139,8 @@ const done=arguments[arguments.length-1];
     active.style.setProperty('--zxs-contour-extent','48px');
     await frames(4);reset();await frames(8);
     const animation=counts();
-    check(handleAcquisitions>0 && propertyReads>0 && activeReads>0,'actual extent-animation handle acquisition and property reads');
+    check(propertyReads>0 && activeReads>0,'extent animation re-reads live computed styles every frame');
+    check(handleAcquisitions<decoys.size,'animation frames reuse registry handles instead of acquiring one per registered element');
     check(Reflect.apply(originalStyle,window,[stable]).borderImageSource===stableImage,'static paint output stays unchanged during another contour animation');
     active.style.setProperty('transition','none');await frames(5);
     // Both nodes start at zero. A positive delay must not exclude the parent
@@ -178,6 +182,21 @@ const done=arguments[arguments.length-1];
     const center=[...context.getImageData(Math.floor(canvas.width/2),Math.floor(canvas.height/2),1,1).data];
     check(center.join(',')==='200,10,20,255','animated child must inherit original parent background, not controller-owned transparent paint');
     colorChild.style.setProperty('transition','none');await frames(4);
+    // Transition policy writes can affect a same-depth sibling's author CSS.
+    // Restoring both siblings before either is read loses this dependency.
+    const policyA=document.createElement('div'), policyB=document.createElement('div');
+    policyA.id='p5-policy-a';policyB.id='p5-policy-b';
+    for(const node of [policyA,policyB]){shape(node);node.style.setProperty('--zxs-contour-extent','12px');}
+    rule('#p5-policy-a, #p5-policy-b { transition:background-color 1s; }');
+    rule('#p5-policy-a[style*="transition"] + #p5-policy-b { transition:opacity 2s; }');
+    host.append(policyA,policyB);await frames(5);
+    check(policyA.dataset.zxsContourState==='paint' && policyB.dataset.zxsContourState==='paint',
+      'sibling transition-policy fixtures paint');
+    const siblingPolicy=()=>Reflect.apply(originalStyle,window,[policyB]).transitionProperty==='opacity';
+    check(siblingPolicy(),'initial sibling selector sees the preceding transition override');
+    policyA.setAttribute('data-p5-author-change','1');await frames(4);
+    check(siblingPolicy(),'author invalidation keeps sibling-dependent opacity transition');
+    policyA.remove();policyB.remove();await frames(4);
     reset();text.data='changed observer text';await frames(4);
     const textUpdate=counts();
     check(scans===0 && decoyReads>0 && stableReads>0,'text still reconciles all CSS properties without repeating document discovery');
@@ -209,6 +228,97 @@ const done=arguments[arguments.length-1];
     check(dormant.dataset.zxsContourState==='paint','attribute activates previously zero extent');
     dormant.removeAttribute('data-zxs-contour-extent');await frames(4);
     restoredPaint(dormant,dormantOriginal,'attribute removal restores original paint',true);
+    // Pseudo-class state changes without any DOM mutation.
+    const focusable=document.createElement('div');focusable.id='p5-focus';focusable.tabIndex=0;shape(focusable);
+    rule('#p5-focus:focus { --zxs-contour-extent:14px; }');
+    host.appendChild(focusable);await frames(4);
+    check(!focusable.hasAttribute('data-zxs-contour-state'),'unfocused selector-only fixture stays unpainted');
+    focusable.focus();await frames(4);
+    check(document.activeElement===focusable && focusable.dataset.zxsContourState==='paint','focus activates a :focus-only contour');
+    focusable.blur();await frames(4);
+    check(!focusable.hasAttribute('data-zxs-contour-state'),'blur restores the :focus-only candidate');
+    // Hide and show keep the same G4 output once the box is back.
+    const hidden=document.createElement('div');shape(hidden);hidden.style.setProperty('--zxs-contour-extent','15px');
+    host.appendChild(hidden);await frames(4);
+    check(hidden.dataset.zxsContourState==='paint','hide/show fixture paints');
+    const shownImage=Reflect.apply(originalStyle,window,[hidden]).borderImageSource;
+    hidden.style.display='none';await frames(4);
+    const hiddenState=hidden.getAttribute('data-zxs-contour-state');
+    hidden.style.display='';await frames(4);
+    check(hidden.dataset.zxsContourState==='paint' && Reflect.apply(originalStyle,window,[hidden]).borderImageSource===shownImage,
+      'show after hide restores the identical G4 paint');
+    // Observe the real read/write/verify/correct phases, including identities.
+    let foregroundTrace=null;
+    const foregroundStyles=new WeakMap(), foregroundIds=new WeakMap();
+    let perturbForeground=null;
+    SVGGraphicsElement.prototype.getScreenCTM=function(){
+      if(foregroundTrace && foregroundIds.has(this))foregroundTrace.push({op:'read',id:foregroundIds.get(this)});
+      return Reflect.apply(originalScreenCtm,this,[]);
+    };
+    CSSStyleDeclaration.prototype.setProperty=function(name,...rest){
+      if(foregroundTrace && foregroundStyles.has(this) && (name==='left' || name==='top'))
+        foregroundTrace.push({op:'write',id:foregroundStyles.get(this),axis:name});
+      const result=Reflect.apply(originalSetProperty,this,[name,...rest]);
+      // A separate fault-injection pass displaces one real SVG after its first
+      // offset pair; native CTM reads must discover and correct the displacement.
+      if(this===perturbForeground && name==='top'){
+        perturbForeground=null;
+        const left=parseFloat(Reflect.apply(originalProperty,this,['left']));
+        Reflect.apply(originalSetProperty,this,['left',`${left+3}px`,'important']);
+      }
+      return result;
+    };
+    const outlined=[0,1].map(()=>{
+      const node=document.createElement('div');shape(node);node.style.overflow='hidden';
+      node.style.setProperty('--zxs-contour-foreground','1');node.style.setProperty('--zxs-contour-extent','12px');
+      host.appendChild(node);return node;
+    });
+    await frames(5);
+    const outlines=outlined.map(node=>node.querySelector(':scope > svg[data-zxs-contour-decoration="foreground"]'));
+    check(outlines.every(Boolean),'foreground fixture paints SVG outlines');
+    [...document.querySelectorAll('svg[data-zxs-contour-decoration="foreground"]')].forEach((svg,id)=>{
+      foregroundIds.set(svg,id);foregroundStyles.set(svg.style,id);
+    });
+    const traceScroll=()=>{
+      foregroundTrace=[];document.dispatchEvent(new Event('scroll'));
+      const trace=foregroundTrace;foregroundTrace=null;return trace;
+    };
+    const checkForegroundPhases=(trace,label,correctedId=null)=>{
+      let cursor=0;
+      const phase=op=>{const entries=[];while(trace[cursor]?.op===op)entries.push(trace[cursor++]);return entries;};
+      const reads=phase('read'), writes=phase('write'), verification=phase('read'), corrections=phase('write');
+      const ids=reads.map(entry=>entry.id);
+      check(cursor===trace.length && ids.length>=2 && new Set(ids).size===ids.length &&
+        JSON.stringify(verification.map(entry=>entry.id))===JSON.stringify(ids),
+        label+': complete read/write/verify/correct batches '+JSON.stringify(trace));
+      const pairs=entries=>{
+        check(entries.length%2===0,label+': complete offset pairs');
+        const written=[];
+        for(let index=0;index<entries.length;index+=2){
+          const left=entries[index],top=entries[index+1];
+          check(left.axis==='left' && top.axis==='top' && left.id===top.id && ids.includes(left.id),
+            label+': paired offsets belong to a measured foreground');
+          written.push(left.id);
+        }
+        check(new Set(written).size===written.length && written.every((id,index)=>
+          index===0 || ids.indexOf(written[index-1])<ids.indexOf(id)),label+': each batch keeps record order');
+        return written;
+      };
+      const written=pairs(writes),corrected=pairs(corrections);
+      check(outlines.every(svg=>written.includes(foregroundIds.get(svg))),label+': both fixtures receive initial offsets');
+      check(corrected.every(id=>written.includes(id)),label+': corrections only follow initial writes');
+      if(correctedId!==null)check(corrected.includes(correctedId),label+': displaced foreground is corrected');
+    };
+    const scrollTrace=traceScroll();checkForegroundPhases(scrollTrace,'scroll');
+    perturbForeground=outlines[0].style;
+    const scrollCorrectionTrace=traceScroll();
+    check(perturbForeground===null,'foreground displacement injection ran');
+    checkForegroundPhases(scrollCorrectionTrace,'displaced scroll',foregroundIds.get(outlines[0]));
+    const correctedRect=outlines[0].getBoundingClientRect(), outlinedRect=outlined[0].getBoundingClientRect();
+    check(Math.abs(correctedRect.left-outlinedRect.left)<0.1 && Math.abs(correctedRect.top-outlinedRect.top)<0.1,
+      'verification corrects the real SVG position, not only the call sequence');
+    for(const node of outlined)node.remove();
+    hidden.remove();focusable.remove();await frames(4);
     // Structural membership includes dormant HTML, independent of paint records.
     const branch=document.createElement('div'), left=document.createElement('div'), right=document.createElement('div');
     const first=document.createElement('div'), second=document.createElement('div'), third=document.createElement('div');
@@ -352,9 +462,9 @@ const done=arguments[arguments.length-1];
     // All extent transitions above were canceled before these observations.
     const quietWindow=async label=>{
       await frames(8);
-      const before=totalHandleAcquisitions;await frames(4);
-      check(totalHandleAcquisitions===before,label+': first quiet window');
-      await frames(4);check(totalHandleAcquisitions===before,label+': second quiet window');
+      const before=totalHandleAcquisitions, reads=totalPropertyReads;await frames(4);
+      check(totalHandleAcquisitions===before && totalPropertyReads===reads,label+': first quiet window');
+      await frames(4);check(totalHandleAcquisitions===before && totalPropertyReads===reads,label+': second quiet window');
       return before;
     };
     // Author removal of a known output is not a controller write. The source
@@ -435,17 +545,18 @@ const done=arguments[arguments.length-1];
     const errorsBefore=window.__zxsSmokeErrors.length;
     host.append(late);
     window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:false}));
-    const stoppedHandles=totalHandleAcquisitions;
+    const stoppedHandles=totalHandleAcquisitions, stoppedReads=totalPropertyReads;
     await frames(4);
-    check(totalHandleAcquisitions===stoppedHandles && !late.hasAttribute('data-zxs-contour-state'),
+    check(totalHandleAcquisitions===stoppedHandles && totalPropertyReads===stoppedReads && !late.hasAttribute('data-zxs-contour-state'),
       'closed controller ignores queued discovery and paints no late candidate in four-frame window');
     restoredPaint(adopted,adoptedOriginal,'pagehide restores connected author paint and markers',false);
     check(window.__zxsSmokeErrors.length===errorsBefore,'pagehide late observation window has no new uncaught errors');
-    return {passed:true,decoys:decoys.size,animation,textUpdate,reparentReads,reparentDiscovery,insertions,authorRemovals,
-      authorOutputRepair,stableRefreshJournal,decorationCreationJournal,decorationRemovalJournal,
+    return {passed:true,decoys:decoys.size,animation,textUpdate,reparentReads,reparentDiscovery,hiddenState,scrollTrace,insertions,authorRemovals,
+      scrollCorrectionTrace,authorOutputRepair,stableRefreshJournal,decorationCreationJournal,decorationRemovalJournal,
       afterDecoration,afterDecorationRemoval,expectedHostFailures,failedWriteJournal,stoppedHandles,lateObservationFrames:4,finalCounters:counts()};
   } finally {
     window.getComputedStyle=originalStyle;Document.prototype.querySelectorAll=originalQuery;
+    SVGGraphicsElement.prototype.getScreenCTM=originalScreenCtm;CSSStyleDeclaration.prototype.setProperty=originalSetProperty;
     Element.prototype.querySelectorAll=originalElementQuery;
     CSSStyleDeclaration.prototype.getPropertyValue=originalProperty;
     Node.prototype.compareDocumentPosition=originalPosition;

@@ -7,7 +7,7 @@
 - `foundation-crypto`：密码学、系统熵、随机数失败处理和 ring 保留测试。
 - `foundation-data`：SQLite、数值类型及精度消费链。
 - `foundation-language`：序列化、错误派生、命令行、绑定工具及 Unicode。
-- `foundation-async`：运行时任务、futures 行为和 HTTP body 能力边界。
+- `foundation-async`：运行时任务、futures 行为和 HTTP body 能力边界；`check-foundation-behaviour.py` 以逐名清单执行队列、锁、取消、关闭与所有权转移相关的基础组件测试。
 
 TOML/正则门禁归入 language，futures/并发集合门禁归入 async。新增门禁
 必须在其实际集成时加入相应套件和测试库存；不存在的候选检查不会被假装执行，

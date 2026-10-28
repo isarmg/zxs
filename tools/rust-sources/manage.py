@@ -995,7 +995,7 @@ def document(catalog, policy):
                         for path in item["files_sha256"]}
     production_count = len(production_paths)
     lines += ["", "## 根测试目录的来源核算", "",
-              f"包内当前文件 {production_count} 个，另有 {len(external)} 个归属目录登记的外置测试文件 {external_count} 个、{external_bytes} 字节；当前来源文件总计 {production_count + external_count} 个。外置测试同时包含迁移保留的上游测试和明确标记为 project-authored 的本地新写回归；目录分离不表示删除、裁剪或空间优化，材料仍完整计入来源覆盖、许可及安全审计。", "",
+              f"包内当前文件 {production_count} 个，另有 {len(external)} 个归属目录登记的外置测试文件 {external_count} 个、{external_bytes} 字节；当前来源文件总计 {production_count + external_count} 个。外置测试包含迁移保留的上游测试、以独立固定收据登记的 upstream-fixture 数据夹具和明确标记为 project-authored 的本地新写回归；目录分离不表示删除、裁剪或空间优化，材料仍完整计入来源覆盖、许可及安全审计。", "",
               "JSON external_tests 按源码归属登记精确根目录、初始路径、当前路径及逐文件摘要；项目新作记录首次本地路径与字节，不冒充上游抽取。external_test_mappings_sha256 固定当前映射文档。refresh 先验证外置清单，不能静默吞入新增文件或因目录迁移缩减来源核算。独立说明见 docs/EXTERNAL_TEST_SOURCES.md。", ""]
     lines += ["", "## 完整来源证据", "",
               "已替换或移除的来源不属于当前实现清单，也不参与当前依赖公告扫描；原始身份、法律材料和最后文件摘要仍必须保留。来源账本的 superseded / retired 保存这些证据，renames / source_moves / consolidations 保存名称、路径及合并的可核验关系。它们是完整性门禁的输入，不是当前功能或行为等价证明。当前活动及合并实现仍全部扫描，不设公告豁免；重新引入来源必须显式登记。", ""]

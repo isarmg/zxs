@@ -1,0 +1,1049 @@
+{
+  "schema": 1,
+  "description": "Reviewed gates that execute tests aimed at a foundation package, other than check-foundation-behaviour.py whose suites are read from the script itself. kind: U executes retained upstream material, P executes only project-authored tests or fixtures, F is a companion proc-macro whose expansion an executed suite exercises, I only compiles or links the package for another package's tests and never counts as executed.",
+  "entries": [
+    {
+      "package": "ahash",
+      "kind": "P",
+      "shard": "foundation-crypto",
+      "scripts": [
+        ".github/scripts/check-entropy-consumers.py"
+      ],
+      "detail": "entropy-fail-closed.rs (2 tests); ahash retained tests NOT run"
+    },
+    {
+      "package": "argon2",
+      "kind": "U",
+      "shard": "foundation-crypto",
+      "scripts": [
+        "test/ci/crypto_vectors.py",
+        ".github/scripts/check-crypto-consolidation.py"
+      ],
+      "detail": "tests/kat.rs and tests/phc_strings.rs (hex! rewritten) run in --release"
+    },
+    {
+      "package": "async-notification",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-async-notification.py"
+      ],
+      "detail": "test/async-notification/contract.rs (>=13) and consumer.rs; retained event-listener/async-lock tests NOT run"
+    },
+    {
+      "package": "base64ct",
+      "kind": "P",
+      "shard": "foundation-crypto",
+      "scripts": [
+        ".github/scripts/check-crypto-consolidation.py"
+      ],
+      "detail": "crypto-capabilities.rs / consumers.rs only"
+    },
+    {
+      "package": "bindgen",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-foundation-consumers.py"
+      ],
+      "detail": "foundation-consumers.rs"
+    },
+    {
+      "package": "bindgen",
+      "kind": "U",
+      "shard": "foundation-data",
+      "scripts": [
+        ".github/scripts/check-binding-expressions.py"
+      ],
+      "detail": "test/foundation/bindgen/cexpr/tests/clang.rs (#[path] to src/cexpr) with clang-sys; --clang only in foundation-data"
+    },
+    {
+      "package": "bit-set",
+      "kind": "U",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-foundation.sh"
+      ],
+      "detail": "cargo test --lib -p bit-set"
+    },
+    {
+      "package": "bit-vec",
+      "kind": "U",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-foundation.sh"
+      ],
+      "detail": "cargo test --lib -p bit-vec"
+    },
+    {
+      "package": "blake2",
+      "kind": "U",
+      "shard": "foundation-crypto",
+      "scripts": [
+        "test/ci/crypto_vectors.py",
+        ".github/scripts/check-crypto-consolidation.py"
+      ],
+      "detail": "test/foundation/blake2/tests/data/*.blb vectors regenerated into tests/vectors.rs (518 vectors) and run"
+    },
+    {
+      "package": "blake3",
+      "kind": "P",
+      "shard": "foundation-crypto",
+      "scripts": [
+        ".github/scripts/check-crypto-consolidation.py"
+      ],
+      "detail": "test/ci/fixtures/crypto-consumers.rs (--test consumers); blake3 lib unit tests NOT run"
+    },
+    {
+      "package": "cc",
+      "kind": "U",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-native-c-toolchain.py"
+      ],
+      "detail": "cargo test (lib+doc) on standalone cc workspace; plus fixture main executed"
+    },
+    {
+      "package": "clang-sys",
+      "kind": "I",
+      "shard": "foundation-data",
+      "scripts": [
+        ".github/scripts/check-binding-expressions.py"
+      ],
+      "detail": "dependency of cexpr clang.rs test; own tests NOT run"
+    },
+    {
+      "package": "cmov",
+      "kind": "I",
+      "shard": "foundation-crypto",
+      "scripts": [
+        ".github/scripts/check-ctutils.py"
+      ],
+      "detail": "compiled as ctutils dependency only"
+    },
+    {
+      "package": "command-derive",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-command-line-family.py"
+      ],
+      "detail": "feature regression (debug_error_contains_real_backtrace) and derive fixtures"
+    },
+    {
+      "package": "command-line",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-command-line-family.py"
+      ],
+      "detail": "runtime fixture and feature regression"
+    },
+    {
+      "package": "command-line",
+      "kind": "U",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-command-line-family.py"
+      ],
+      "detail": "cargo test --lib on the package (count-checked similarity 88+8+9) + 11 similarity doctests"
+    },
+    {
+      "package": "compression",
+      "kind": "U",
+      "shard": "foundation-data",
+      "scripts": [
+        ".github/scripts/check-compression-family.py"
+      ],
+      "detail": "--tests (5 feature sets) + --doc --all-features; checkpoint test"
+    },
+    {
+      "package": "concurrent-collections",
+      "kind": "U",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-concurrent-collections.py"
+      ],
+      "detail": "--lib, --doc, and 6 retained integrations (atomic_cell, cache_padded, parker, thread, wait_group, steal)"
+    },
+    {
+      "package": "crc32fast",
+      "kind": "I",
+      "shard": "foundation-data",
+      "scripts": [
+        ".github/scripts/check-compression-family.py"
+      ],
+      "detail": "streams dependency of executed compression tests"
+    },
+    {
+      "package": "cryptographic-core",
+      "kind": "U",
+      "shard": "foundation-crypto",
+      "scripts": [
+        "test/ci/crypto_core_checks.py"
+      ],
+      "detail": "buffer/tests/mod.rs (11 cases, hex! rewritten) and hash/tests/dummy_fixed.rs + doctests"
+    },
+    {
+      "package": "ctutils",
+      "kind": "U",
+      "shard": "foundation-crypto",
+      "scripts": [
+        ".github/scripts/check-ctutils.py"
+      ],
+      "detail": "rustc --test ctutils src/lib.rs (default; alloc+subtle)"
+    },
+    {
+      "package": "data-serialization",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-serialization-family.py"
+      ],
+      "detail": "serialization-family.rs (6)"
+    },
+    {
+      "package": "data-serialization",
+      "kind": "U",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-serialization-consolidation.py"
+      ],
+      "detail": "error-path tests via #[path]; source harness --lib and --doc (full features)"
+    },
+    {
+      "package": "date-time",
+      "kind": "P",
+      "shard": "foundation-data",
+      "scripts": [
+        ".github/scripts/check-date-time-family.py"
+      ],
+      "detail": "test/date-time/{contracts,serialization,tracing}.rs; retained date-time unit tests NOT run"
+    },
+    {
+      "package": "derive-where",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-serialization-family.py"
+      ],
+      "detail": "serialization-family.rs only"
+    },
+    {
+      "package": "dom-helpers",
+      "kind": "P",
+      "shard": "web-production",
+      "scripts": [
+        ".github/scripts/check-csr-scope.py"
+      ],
+      "detail": "csr-template.rs fixture lib test (1)"
+    },
+    {
+      "package": "error-definition",
+      "kind": "U",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-error-definition-family.py"
+      ],
+      "detail": "test/foundation/error-definition/tests/test_*.rs as [[test]] + crate docs as doctests; stable and RUSTC_BOOTSTRAP nightly cfg"
+    },
+    {
+      "package": "error-definition-macros",
+      "kind": "F",
+      "scripts": [],
+      "detail": "derive exercised by executed test/foundation/error-definition/tests/test_*.rs"
+    },
+    {
+      "package": "error-definition-macros",
+      "kind": "I",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-error-definition-family.py"
+      ],
+      "detail": "derive exercised by executed error-definition tests"
+    },
+    {
+      "package": "fancy-regex",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-pattern-matching.py"
+      ],
+      "detail": "test/regex-family/consumers.rs only; 315 lib-wired tests NOT run"
+    },
+    {
+      "package": "flag-set",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-serialization-family.py"
+      ],
+      "detail": "serialization-family.rs only; retained tests NOT run (and modules/src/tests.rs wiring is broken)"
+    },
+    {
+      "package": "form-codec",
+      "kind": "U",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-form-floats.py"
+      ],
+      "detail": "test/foundation/form-codec/tests/test_{serialize,deserialize}.rs + test/architecture/form-floats/behavior.rs"
+    },
+    {
+      "package": "futures",
+      "kind": "U",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-futures-consolidation.py"
+      ],
+      "detail": "lib + every tests/*.rs except 36 UNAVAILABLE_TESTS + doctests, --all-features, minimum counts"
+    },
+    {
+      "package": "futures-intrusive",
+      "kind": "P",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-synchronization.py"
+      ],
+      "detail": "consumers.rs fixture only; retained tests NOT run"
+    },
+    {
+      "package": "futures-macro",
+      "kind": "F",
+      "scripts": [],
+      "detail": "join!/select! exercised by executed futures retained tests (--all-features)"
+    },
+    {
+      "package": "futures-macro",
+      "kind": "I",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-futures-consolidation.py"
+      ],
+      "detail": "async-await-macro enabled by --all-features in executed futures tests"
+    },
+    {
+      "package": "hash-table",
+      "kind": "P",
+      "shard": "foundation-data",
+      "scripts": [
+        ".github/scripts/check-sqlite-family.py"
+      ],
+      "detail": "test/engine/integration/hash_table_compatibility.rs (consumer [[test]])"
+    },
+    {
+      "package": "hashlink",
+      "kind": "I",
+      "shard": "foundation-data",
+      "scripts": [
+        ".github/scripts/check-sqlite-family.py"
+      ],
+      "detail": "dev-dependency of sqlite consumer; retained tests NOT run"
+    },
+    {
+      "package": "hmac",
+      "kind": "P",
+      "shard": "foundation-crypto",
+      "scripts": [
+        ".github/scripts/check-crypto-consolidation.py"
+      ],
+      "detail": "crypto-consumers.rs only; retained hmac tests/data NOT run"
+    },
+    {
+      "package": "http-body",
+      "kind": "U",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-http-body-consolidation.py"
+      ],
+      "detail": "cargo test --all-features incl. tests/is_end_stream.rs"
+    },
+    {
+      "package": "http-routing",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-http-routing.py"
+      ],
+      "detail": "test/architecture/http-routing/behavior.rs (exactly 5)"
+    },
+    {
+      "package": "http-transport",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-http-transport.py"
+      ],
+      "detail": "behavior (25) and ffi (2)"
+    },
+    {
+      "package": "http-transport",
+      "kind": "U",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-http-transport.py"
+      ],
+      "detail": "retained atomic-waker/tests/basic.rs + project primitives contracts (exactly 18; race x3)"
+    },
+    {
+      "package": "icu_collections",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-serialization-family.py"
+      ],
+      "detail": "serialization-family.rs only"
+    },
+    {
+      "package": "id-arena",
+      "kind": "U",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-foundation.sh"
+      ],
+      "detail": "cargo test --lib -p id-arena"
+    },
+    {
+      "package": "json-codec",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-serialization-family.py"
+      ],
+      "detail": "serialization-family.rs; also synchronization behavior.rs; storage-contract object_ordering (contracts gate, check.sh:73-80); retained json-codec tests NOT run"
+    },
+    {
+      "package": "libc",
+      "kind": "P",
+      "shard": "foundation-platform",
+      "scripts": [
+        "tools/rust-sources/check_libc_abi.py"
+      ],
+      "detail": "C-vs-Rust ABI probes compiled/run with rustc; libc's own retained tests NOT run"
+    },
+    {
+      "package": "libsqlite3-sys",
+      "kind": "I",
+      "shard": "foundation-data",
+      "scripts": [
+        ".github/scripts/check-sqlite-family.py"
+      ],
+      "detail": "linked by executed sqlite-access tests"
+    },
+    {
+      "package": "linux-raw-sys",
+      "kind": "U",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-linux-uapi.py"
+      ],
+      "detail": "rustc --test src/lib.rs (std and no_std); all lib-wired unit tests"
+    },
+    {
+      "package": "log",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-terminal-style.py"
+      ],
+      "detail": "terminal-style-consumers.rs only"
+    },
+    {
+      "package": "logging",
+      "kind": "U",
+      "shard": "build-tools",
+      "scripts": [
+        ".github/scripts/check-logging.py"
+      ],
+      "detail": "cargo test (lib + logging_contracts + doc) x6 feature sets"
+    },
+    {
+      "package": "memchr",
+      "kind": "P",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-linux-search-process.py"
+      ],
+      "detail": "fixture byte_and_substring_boundaries; memchr lib unit tests NOT run"
+    },
+    {
+      "package": "mio",
+      "kind": "P",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-linux-system-backends.py"
+      ],
+      "detail": "fixture poll_waker_pipe_and_network / shell_keeps_common_api (epoll, poll, pipe, poll-pipe, shell)"
+    },
+    {
+      "package": "mio",
+      "kind": "U",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-foundation.sh"
+      ],
+      "detail": "cargo test --lib -p mio"
+    },
+    {
+      "package": "numeric",
+      "kind": "U",
+      "shard": "foundation-data",
+      "scripts": [
+        ".github/scripts/check-foundation.sh"
+      ],
+      "detail": "cargo test --tests -p numeric (lib + 11 [[test]] targets)"
+    },
+    {
+      "package": "once_cell",
+      "kind": "P",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-synchronization.py"
+      ],
+      "detail": "consumers.rs fixture only"
+    },
+    {
+      "package": "password-hash",
+      "kind": "U",
+      "shard": "foundation-crypto",
+      "scripts": [
+        ".github/scripts/check-foundation.sh"
+      ],
+      "detail": "cargo test --lib -p password-hash"
+    },
+    {
+      "package": "random-generator-core",
+      "kind": "U",
+      "shard": "foundation-crypto",
+      "scripts": [
+        "test/entropy/check.py"
+      ],
+      "detail": "cargo test --lib (no-default, +system-entropy, +std)"
+    },
+    {
+      "package": "rayon",
+      "kind": "I",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-concurrent-collections.py"
+      ],
+      "detail": "dependency of integration probe; rayon tests NOT run"
+    },
+    {
+      "package": "reactive-state",
+      "kind": "U",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-async-notification.py"
+      ],
+      "detail": "test/foundation/reactive-state/tests/async_derived.rs"
+    },
+    {
+      "package": "reactive-state",
+      "kind": "U",
+      "shard": "web-production",
+      "scripts": [
+        ".github/scripts/check-csr-scope.py"
+      ],
+      "detail": "--lib (default, effects), asserts >=14 passed"
+    },
+    {
+      "package": "regex",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-pattern-matching.py"
+      ],
+      "detail": "test/regex-family/consumers.rs"
+    },
+    {
+      "package": "regex",
+      "kind": "U",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-pattern-matching.py"
+      ],
+      "detail": "--lib (2 feature sets), --test retained-regressions (+ ignored fuzz1 explicitly), --doc"
+    },
+    {
+      "package": "reqwest",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-form-floats.py"
+      ],
+      "detail": "behavior.rs reqwest_form_and_query_use_encoded_plus only; reqwest lib tests NOT run"
+    },
+    {
+      "package": "ring",
+      "kind": "U",
+      "shard": "foundation-crypto",
+      "scripts": [
+        "tools/rust-sources/check_ring_tests.py"
+      ],
+      "detail": "cargo test -p ring (lib+integration+doc), debug/release x default/std + release std,slow_tests, packaged and localgen"
+    },
+    {
+      "package": "rust-syntax",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-foundation-consumers.py"
+      ],
+      "detail": "foundation-consumers.rs only"
+    },
+    {
+      "package": "rustc-demangle",
+      "kind": "U",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-foundation.sh"
+      ],
+      "detail": "cargo test --lib -p rustc-demangle"
+    },
+    {
+      "package": "rustix",
+      "kind": "P",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-linux-syscalls.py"
+      ],
+      "detail": "rustc --test build.rs (target guard) + test/tools/rust-sources/fixtures/linux_syscalls.rs (4 tests) against all-apis linux-raw and use-libc builds; rustix lib unit tests NOT run"
+    },
+    {
+      "package": "schema-validation",
+      "kind": "P",
+      "shard": "foundation-data",
+      "scripts": [
+        ".github/scripts/check-numeric-precision.py"
+      ],
+      "detail": "numeric-precision.rs fixture lib tests"
+    },
+    {
+      "package": "schema-validation",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-schema-validation.py"
+      ],
+      "detail": "test/schema-validation/{canonical,uuid_format,capabilities}.rs (canonical-suite JSON read from test/foundation/schema-validation)"
+    },
+    {
+      "package": "serialization-derive",
+      "kind": "F",
+      "scripts": [],
+      "detail": "derive exercised by executed data-serialization lib/error-path tests and serialization-family fixture"
+    },
+    {
+      "package": "serialization-derive",
+      "kind": "I",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-serialization-consolidation.py"
+      ],
+      "detail": "derive used by executed data-serialization tests"
+    },
+    {
+      "package": "service-stack",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-runtime-join-map.py"
+      ],
+      "detail": "runtime-adapters.rs service_buffer_and_concurrency_use_runtime_permits"
+    },
+    {
+      "package": "service-stack",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-service-stack.py"
+      ],
+      "detail": "test/architecture/service-stack/behavior.rs (exactly 4)"
+    },
+    {
+      "package": "sha2",
+      "kind": "P",
+      "shard": "foundation-crypto",
+      "scripts": [
+        ".github/scripts/check-crypto-consolidation.py"
+      ],
+      "detail": "crypto-consumers.rs only; retained sha2 tests/data NOT run"
+    },
+    {
+      "package": "shell-tokenizer",
+      "kind": "I",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-native-c-toolchain.py"
+      ],
+      "detail": "dependency of executed native-c-toolchain binary and cc; own tests NOT run"
+    },
+    {
+      "package": "socket2",
+      "kind": "P",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-linux-system-backends.py"
+      ],
+      "detail": "fixture socket_abi_tcp_udp_unix"
+    },
+    {
+      "package": "socket2",
+      "kind": "U",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-foundation.sh"
+      ],
+      "detail": "cargo test --lib -p socket2"
+    },
+    {
+      "package": "spin",
+      "kind": "P",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-synchronization.py"
+      ],
+      "detail": "consumers.rs fixture only (spin_consumer.rs is check-only)"
+    },
+    {
+      "package": "sqlite-access",
+      "kind": "P",
+      "shard": "foundation-data",
+      "scripts": [
+        ".github/scripts/check-sqlite-family.py"
+      ],
+      "detail": "test/engine/integration/hash_table_compatibility.rs, test/platform/integration/sqlite_foundation.rs, platform-io sqlite:: lib tests"
+    },
+    {
+      "package": "sqlite-access",
+      "kind": "U",
+      "shard": "foundation-data",
+      "scripts": [
+        ".github/scripts/check-foundation.sh"
+      ],
+      "detail": "cargo test --lib -p sqlite-access"
+    },
+    {
+      "package": "sqlite-access",
+      "kind": "U",
+      "shard": "foundation-data",
+      "scripts": [
+        ".github/scripts/check-sqlite-family.py"
+      ],
+      "detail": "--doc types::Type, --lib (sqlite-bundled; +url; --all-features) with minimum counts"
+    },
+    {
+      "package": "subtle",
+      "kind": "I",
+      "shard": "foundation-crypto",
+      "scripts": [
+        ".github/scripts/check-ctutils.py"
+      ],
+      "detail": "compiled as ctutils dependency only"
+    },
+    {
+      "package": "synchronization",
+      "kind": "P",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-linux-parking.py"
+      ],
+      "detail": "fixture linux-parking.rs (2)"
+    },
+    {
+      "package": "synchronization",
+      "kind": "P",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-synchronization.py"
+      ],
+      "detail": "fixtures behavior.rs (6), consumers.rs (1), crypto_namespace.rs (3)"
+    },
+    {
+      "package": "synchronization",
+      "kind": "U",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-foundation.sh"
+      ],
+      "detail": "cargo test --lib -p synchronization"
+    },
+    {
+      "package": "sysinfo",
+      "kind": "P",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-linux-system-backends.py"
+      ],
+      "detail": "test/ci/fixtures/linux-system-backends.rs (4 tests) x5 backend modes"
+    },
+    {
+      "package": "system-entropy",
+      "kind": "P",
+      "shard": "foundation-crypto",
+      "scripts": [
+        ".github/scripts/check-linux-random-backends.py"
+      ],
+      "detail": "isolated consumer x7 backend modes"
+    },
+    {
+      "package": "system-entropy",
+      "kind": "U",
+      "shard": "foundation-crypto",
+      "scripts": [
+        "test/entropy/check.py"
+      ],
+      "detail": "doc tests + tests/mod.rs as [[test]] system_entropy_source"
+    },
+    {
+      "package": "task-dispatch",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-task-dispatch.py"
+      ],
+      "detail": "test/task-dispatch/{uninitialized,futures,tokio}.rs (min count)"
+    },
+    {
+      "package": "terminal-style",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-terminal-style.py"
+      ],
+      "detail": "terminal-style-consumers.rs"
+    },
+    {
+      "package": "terminal-style",
+      "kind": "U",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-terminal-style.py"
+      ],
+      "detail": "--lib (count-checked utf8 module) + cargo test x7 feature sets"
+    },
+    {
+      "package": "tokio",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-runtime-join-map.py"
+      ],
+      "detail": "test/foundation/tokio/tests/fs_asyncify.rs (1 test; registered source_kind project-authored) as [[test]]; no retained upstream tokio test is executed"
+    },
+    {
+      "package": "tokio",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-runtime-join-map.py"
+      ],
+      "detail": "fixtures runtime-join-map.rs (5), runtime-adapters.rs (8)"
+    },
+    {
+      "package": "tokio",
+      "kind": "P",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-linux-search-process.py"
+      ],
+      "detail": "fixture linux_process_and_unix_ipc"
+    },
+    {
+      "package": "tokio",
+      "kind": "P",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-synchronization.py"
+      ],
+      "detail": "consumers.rs (tokio rt/sync with parking)"
+    },
+    {
+      "package": "tokio-macros",
+      "kind": "F",
+      "scripts": [],
+      "detail": "#[tokio::test] used by executed fixtures (runtime-join-map.rs, runtime-adapters.rs, consumer.rs)"
+    },
+    {
+      "package": "toml",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-foundation-consumers.py"
+      ],
+      "detail": "foundation-consumers.rs"
+    },
+    {
+      "package": "toml",
+      "kind": "U",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-toml-consolidation.py"
+      ],
+      "detail": "--lib + --test capabilities (project test/tools/toml/capabilities.rs) + --doc"
+    },
+    {
+      "package": "tracing",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-tracing-family.py"
+      ],
+      "detail": "static levels, parking registry probes"
+    },
+    {
+      "package": "tracing",
+      "kind": "U",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-tracing-family.py"
+      ],
+      "detail": "--lib --tests full features incl. primitives/tests/*.rs and log_bridge/{log_tracer,reexport_log_crate}.rs"
+    },
+    {
+      "package": "unicode-display-width",
+      "kind": "U",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-foundation.sh"
+      ],
+      "detail": "cargo test -p unicode-display-width"
+    },
+    {
+      "package": "unicode-normalizer",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-unicode-data-family.py"
+      ],
+      "detail": "test/unicode-data/normalizer.rs"
+    },
+    {
+      "package": "unicode-normalizer",
+      "kind": "U",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-unicode-data-family.py"
+      ],
+      "detail": "--doc only"
+    },
+    {
+      "package": "unicode-properties",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-unicode-data-family.py"
+      ],
+      "detail": "test/unicode-data/properties.rs"
+    },
+    {
+      "package": "unicode-properties",
+      "kind": "U",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-unicode-data-family.py"
+      ],
+      "detail": "--lib -p unicode-properties + --doc"
+    },
+    {
+      "package": "url-encoding",
+      "kind": "U",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-url-encoding.py"
+      ],
+      "detail": "--lib --tests (parser,std,serialization; asserts >0 passed) + --doc"
+    },
+    {
+      "package": "uuid",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-uuid-format.py"
+      ],
+      "detail": "test/ci/fixtures/uuid-features.rs (exactly 1 test)"
+    },
+    {
+      "package": "view-renderer",
+      "kind": "P",
+      "shard": "web-production",
+      "scripts": [
+        ".github/scripts/check-csr-scope.py"
+      ],
+      "detail": "csr-template.rs fixture lib test (1)"
+    },
+    {
+      "package": "wasm-bindgen",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-wasm-binding-macros.py"
+      ],
+      "detail": "test/wasm-binding-macros/{native,async-runtime}.rs native tests"
+    },
+    {
+      "package": "wasm-bindgen-cli-support",
+      "kind": "U",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-foundation.sh"
+      ],
+      "detail": "cargo test -p wasm-bindgen-cli-support --lib (workspace member)"
+    },
+    {
+      "package": "wasm-binding-macros",
+      "kind": "U",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-wasm-binding-macros.py"
+      ],
+      "detail": "--lib default and --all-features, asserts '38 passed'"
+    },
+    {
+      "package": "wasm-text-parser",
+      "kind": "U",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-foundation.sh"
+      ],
+      "detail": "cargo test -p wasm-text-parser (all targets; workspace member)"
+    },
+    {
+      "package": "wasm-text-printer",
+      "kind": "U",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-foundation.sh"
+      ],
+      "detail": "cargo test -p wasm-text-printer"
+    },
+    {
+      "package": "winnow",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-foundation-consumers.py"
+      ],
+      "detail": "foundation-consumers.rs only"
+    },
+    {
+      "package": "zeroize",
+      "kind": "P",
+      "shard": "foundation-crypto",
+      "scripts": [
+        "test/ci/crypto_core_checks.py"
+      ],
+      "detail": "crypto-core-zeroize.rs via cryptographic_core::zeroize re-export; zeroize retained tests NOT run"
+    },
+    {
+      "package": "zmij",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-form-floats.py"
+      ],
+      "detail": "test/architecture/form-floats/behavior.rs canonical_wire_uses_zmij_positive_exponent_sign, float-bit round trips"
+    }
+  ]
+}

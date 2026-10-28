@@ -3027,21 +3027,21 @@
         {
           "origin_directory": "vendor/rust/crossbeam-deque-0.8.8",
           "path": "test/foundation/concurrent-collections/deque/tests/fifo.rs",
-          "sha256": "91838dc9fd975e43d750bdb991f3b12ad5874e82e5e2f7b447cc5f6ffce3a63f",
+          "sha256": "a2031cbcffeb20109b5a5f14e9a14fa962cef95398cf698f24951451515dc664",
           "source": "src/foundation/crossbeam-deque/tests/fifo.rs",
           "source_sha256_before": "3d98e0d4ca7cfddf10708b71642cf1ff05543d067ad837e48401d63cc31c0a18"
         },
         {
           "origin_directory": "vendor/rust/crossbeam-deque-0.8.8",
           "path": "test/foundation/concurrent-collections/deque/tests/injector.rs",
-          "sha256": "a7eb112f8e6db93868eb47d6a5a800e46657cc4e75b050b35ab855299780fbb7",
+          "sha256": "1247efe3e5a5dfeb67879f44a7b9e1be030bf8bb3d866be8c505271d27c448a4",
           "source": "src/foundation/crossbeam-deque/tests/injector.rs",
           "source_sha256_before": "859a0e6fd306e844e8fd660104a994aa894a165f20fa326f4b807e660eaf7878"
         },
         {
           "origin_directory": "vendor/rust/crossbeam-deque-0.8.8",
           "path": "test/foundation/concurrent-collections/deque/tests/lifo.rs",
-          "sha256": "93cab8c16f8b30453cb75befa456f5bc0e919d32cedebfde42ca95c60ac4a89a",
+          "sha256": "0091a8fecdcf6ff4fe6bf27d48af049d198a0ed488df6b7030c43ea62d274a49",
           "source": "src/foundation/crossbeam-deque/tests/lifo.rs",
           "source_sha256_before": "57abdb3fc5920a422f785ba308b658bdc5400947532eeffb799f2395a2061549"
         },
@@ -3118,14 +3118,14 @@
         {
           "origin_directory": "vendor/rust/crossbeam-queue-0.3.14",
           "path": "test/foundation/concurrent-collections/queue/tests/array_queue.rs",
-          "sha256": "1ea2eb6deaa19c1c2bde07ec9d77ba73ddf6ef51c2a0a323ecdc77e8e89e4d0d",
+          "sha256": "ad485cf9d5a960ad4a87f1861b5cb960de72cb5435747013f24585827cd0950f",
           "source": "src/foundation/crossbeam-queue/tests/array_queue.rs",
           "source_sha256_before": "f091dc5a4fdaaf47c05c24202a553e96a765110cd77929048ec37351484e820d"
         },
         {
           "origin_directory": "vendor/rust/crossbeam-queue-0.3.14",
           "path": "test/foundation/concurrent-collections/queue/tests/seg_queue.rs",
-          "sha256": "2c1df29232b89dbb7206aec78a8c94fd250ecf62eccb2513de499d46ec828043",
+          "sha256": "f28c93f6a8b88ae6f2e94fe169b26b766b79969374759976385e7b64de9e3a55",
           "source": "src/foundation/crossbeam-queue/tests/seg_queue.rs",
           "source_sha256_before": "09f4189e0cad196f369ea0abeadc2e58c34cf7c95f2087c595e3790928654268"
         },
@@ -3153,7 +3153,7 @@
         {
           "origin_directory": "vendor/rust/crossbeam-utils-0.8.23",
           "path": "test/foundation/concurrent-collections/utilities/tests/sharded_lock.rs",
-          "sha256": "01299ce2e1dd7da4d1ec60e423eab970b7f883cfa984d7f6b6999de9dc81cda9",
+          "sha256": "8d57351d6a3827e3eb5131565d69b3c52ba194612545f2ffe733c7da54ac3837",
           "source": "src/foundation/crossbeam-utils/tests/sharded_lock.rs",
           "source_sha256_before": "6f1c2359ebf409c576a2ae74f37b182503d368d65f357f0f6fb4fcdb2a4e2b2a"
         },
@@ -5400,7 +5400,7 @@
       "files": [
         {
           "path": "test/foundation/flag-set/modules/src/tests.rs",
-          "sha256": "98d87786aa2c3b851e9560d8a130c9e53b170fd98c22ea48ff7c9b624420526a",
+          "sha256": "59d6a217f623f523a1e2eda52aeece8a55927c3d2375de98d04c4446a742034f",
           "source": "src/foundation/bitflags-2.13.2/src/tests.rs",
           "source_sha256_before": "98d87786aa2c3b851e9560d8a130c9e53b170fd98c22ea48ff7c9b624420526a"
         },
@@ -5668,7 +5668,7 @@
         },
         {
           "path": "test/foundation/flume/tests/array.rs",
-          "sha256": "ef2c2b886f81e7ea37a382823ee0432fad7176cc2d7f253b9f6fbc4c2928d9c9",
+          "sha256": "dd013411123f100d7a32a5d93f33b226e4e3e60d128962f707ceb4c824d4670e",
           "source": "src/foundation/flume/tests/array.rs",
           "source_sha256_before": "84a8d680b22b70e2446ec073d94f4572c68de6a51444d9a74ad8186730861df4"
         },
@@ -5698,13 +5698,13 @@
         },
         {
           "path": "test/foundation/flume/tests/iter.rs",
-          "sha256": "4e8883d4149163cca8baaf51747dde8c12d0f8017e1360dbbb0c96f3596c7bfb",
+          "sha256": "f5afe1b2262c0f309f442d4852a0f7684dec466c84e2fcb3cfb2e91893bf8169",
           "source": "src/foundation/flume/tests/iter.rs",
           "source_sha256_before": "052154989f6c1f0f8ddb0d807e250ec23c1b7552357e2fe5a57df289c16f1c47"
         },
         {
           "path": "test/foundation/flume/tests/list.rs",
-          "sha256": "40c65b8c3367af26eb9088073e294d06d05195088276928a9d21d40a3fc007f8",
+          "sha256": "f99e191fde514076047febbbbaf6ad974dd2e5c9dac26e3a344c81efc06e94c6",
           "source": "src/foundation/flume/tests/list.rs",
           "source_sha256_before": "8ff1496b8551af6702536a900e58568f3b91cf74532d5d23e28976505b4517ba"
         },
@@ -5770,7 +5770,7 @@
         },
         {
           "path": "test/foundation/flume/tests/zero.rs",
-          "sha256": "65f8ddf0b28e91e54f38ab3070680eb645114e0e3e9d46ea8ae566b728d07b78",
+          "sha256": "632ce628eb693f63830518c26f4ab14488c6789689765f32b74a0349702639b1",
           "source": "src/foundation/flume/tests/zero.rs",
           "source_sha256_before": "782c9e537a2dc92214c655eb310ddacc34dbf33d6e9ea6480c9f300ff9541a50"
         }
@@ -6867,43 +6867,50 @@
       "files": [
         {
           "path": "test/foundation/futures-intrusive/tests/manual_reset_event.rs",
-          "sha256": "b972bb26439be2d30f090011451f8598df11a044352eb6ae46b77f4f362f6e8d",
+          "sha256": "25503d539805a440007d62a71acb3170a8e3a2ac7f56c14539ad1bbb98a11a6d",
           "source": "src/foundation/futures-intrusive/tests/manual_reset_event.rs",
           "source_sha256_before": "b972bb26439be2d30f090011451f8598df11a044352eb6ae46b77f4f362f6e8d"
         },
         {
           "path": "test/foundation/futures-intrusive/tests/mpmc_channel.rs",
-          "sha256": "e9b70d5a7d306f48f8320ad90f9e63246239f275f656094de535e7d9d0f5d670",
+          "sha256": "2a9fe3065d29a172ef77c66777014cd84280e37cbeb8c43e42bfb93a37d882b7",
           "source": "src/foundation/futures-intrusive/tests/mpmc_channel.rs",
           "source_sha256_before": "47935945afd6a9621cca8c16ae901906fa1f4da3498fc9dc9b4d69688e34bcd7"
         },
         {
           "path": "test/foundation/futures-intrusive/tests/mutex.rs",
-          "sha256": "5e0e13a0aa3c96c0d86b973495a38abf82d1c3039929cbfc28cfd7222980af39",
+          "sha256": "1b3cf4b11484c4dc863b5dc28f70f065c54f4e43af662dd64bde68273280b6a2",
           "source": "src/foundation/futures-intrusive/tests/mutex.rs",
           "source_sha256_before": "5e0e13a0aa3c96c0d86b973495a38abf82d1c3039929cbfc28cfd7222980af39"
         },
         {
           "path": "test/foundation/futures-intrusive/tests/oneshot_channel.rs",
-          "sha256": "01fa47e4418b1795d327b210495628612d6e6b4cf951b430b6801f729064f90a",
+          "sha256": "2fde627700cf0569ba0f8f314604f4e4d0667eabb0797bb0585d952bd2dcf3f2",
           "source": "src/foundation/futures-intrusive/tests/oneshot_channel.rs",
           "source_sha256_before": "01fa47e4418b1795d327b210495628612d6e6b4cf951b430b6801f729064f90a"
         },
         {
           "path": "test/foundation/futures-intrusive/tests/semaphore.rs",
-          "sha256": "ca2adad9accc2bef2b091d197f3c93fce904c3a54a74761fa5092352e9f8a15b",
+          "sha256": "2cfa98e8a378985c3d112667d38c91d80fea872358280bb73b2c98ef31c41c87",
           "source": "src/foundation/futures-intrusive/tests/semaphore.rs",
           "source_sha256_before": "ca2adad9accc2bef2b091d197f3c93fce904c3a54a74761fa5092352e9f8a15b"
         },
         {
           "path": "test/foundation/futures-intrusive/tests/state_broadcast_channel.rs",
-          "sha256": "915236fa9e445d6cc303481f3fa25a50d1cfd6b53524b34827c1ab8b991caaa6",
+          "sha256": "a3c9aa9b41ec8146d1af374424b149289a669b6d2d8c7d9b1a9d2b7792ab84ba",
           "source": "src/foundation/futures-intrusive/tests/state_broadcast_channel.rs",
           "source_sha256_before": "915236fa9e445d6cc303481f3fa25a50d1cfd6b53524b34827c1ab8b991caaa6"
         },
         {
+          "path": "test/foundation/futures-intrusive/tests/support/wakers.rs",
+          "sha256": "88ea8c7a07f29781241344d4c545c0f9caaa2fc011bc1051be977206b3d21f23",
+          "source": "test/foundation/futures-intrusive/tests/support/wakers.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "88ea8c7a07f29781241344d4c545c0f9caaa2fc011bc1051be977206b3d21f23"
+        },
+        {
           "path": "test/foundation/futures-intrusive/tests/timer.rs",
-          "sha256": "edf6a9e0d72b91eacd93665847e3191ba81b053cbe5ce55b1f227354b3d18386",
+          "sha256": "c1654692d937c7289076328bdaff9ce086ac1d0e0eebacd9d0dfe3082452107e",
           "source": "src/foundation/futures-intrusive/tests/timer.rs",
           "source_sha256_before": "edf6a9e0d72b91eacd93665847e3191ba81b053cbe5ce55b1f227354b3d18386"
         },
@@ -11300,7 +11307,7 @@
         },
         {
           "path": "test/foundation/parking/tests/parking.rs",
-          "sha256": "63fafaf40f613bdcadf3fd5238ae72ce00cd7540f05d77888c7ae0d362eadc52",
+          "sha256": "96a6d99f0f4c40e0471b15f98614e83b5251b887edbe602b204a072585a1d375",
           "source": "src/foundation/parking/tests/parking.rs",
           "source_sha256_before": "63fafaf40f613bdcadf3fd5238ae72ce00cd7540f05d77888c7ae0d362eadc52"
         }
@@ -17446,7 +17453,7 @@
         },
         {
           "path": "test/foundation/spin/unit/src/once/tests_532.rs",
-          "sha256": "bb4426b5f36fbfacea6c5d66cb3b6a61722d0e15dcaf219a041a892813b5f0de",
+          "sha256": "c82d6ead11db5836eeb5814598b39ba05795e1a4eb9a24f519cc3bddab227f86",
           "source": "src/foundation/spin/src/once.rs",
           "source_sha256_before": "c86c9afe81413257620377160ed20aee929c6421506cf31163a70bbb37f1fa62"
         },

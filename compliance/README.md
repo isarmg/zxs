@@ -10,6 +10,8 @@
 
 字体资源的原始版权与三组 SIL OFL 1.1 全文见 [`licenses/fonts/UPSTREAM-NOTICES.md`](licenses/fonts/UPSTREAM-NOTICES.md)。字体文件本身保留在 `src/web/public/fonts/`，原始字节和资源收据继续由 Web 构建校验。
 
+命名表输入（`src/naming/data/`）与 NormalizationTest 夹具（`test/naming/data/`）来自 Unicode Character Database 16.0.0，Unicode License v3 全文见 [`licenses/upstream/unicode-ucd-16.0.0/LICENSE`](licenses/upstream/unicode-ucd-16.0.0/LICENSE)；逐文件摘要与官方地址见 [`sources.tsv`](../src/naming/data/sources.tsv)。夹具以 `upstream-fixture` 登记，实际取件提交及不可变来源快照见[导入收据](fixtures/unicode-ucd-16.0.0-normalization.json)，不是项目新作。`NOTICE.md` 是布局收据固定的证据文件，不随此项改写。
+
 ## 集中材料与可追溯关系
 
 | 位置 | 含义 |

@@ -5,7 +5,6 @@ use std::sync::{Arc, TryLockError};
 use std::thread;
 
 use concurrent_collections::utilities::sync::ShardedLock;
-use rand::Rng;
 
 #[derive(Eq, PartialEq, Debug)]
 struct NonCopy(i32);
@@ -34,9 +33,9 @@ fn frob() {
         let tx = tx.clone();
         let r = r.clone();
         thread::spawn(move || {
-            let mut rng = rand::thread_rng();
+            let mut rng = fastrand::Rng::new();
             for _ in 0..M {
-                if rng.gen_bool(1.0 / (N as f64)) {
+                if rng.f64() < 1.0 / (N as f64) {
                     drop(r.write().unwrap());
                 } else {
                     drop(r.read().unwrap());

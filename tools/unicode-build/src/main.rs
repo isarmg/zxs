@@ -1,157 +1,323 @@
-//! Reproducibly generate the fixed naming tables from checked-in Unicode data.
+//! Reproducibly generate the fixed naming tables from pinned Unicode data.
+//!
+//! `src/naming/data/sources.tsv` is the only authority for the Unicode version,
+//! every input and test-fixture digest and every generated output digest.
 #![forbid(unsafe_code)]
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
     error::Error,
     fmt::Write as _,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
+
+mod normalization;
+mod properties;
+
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-fn source(root: &Path, name: &str, expected: &str) -> Result<String> {
-    let bytes = fs::read(root.join("src/naming/data").join(name))?;
-    let mut hash = String::with_capacity(64);
-    for byte in Sha256::digest(&bytes) {
-        write!(&mut hash, "{byte:02x}").expect("writing to String cannot fail");
-    }
-    if hash != expected {
-        return Err(format!("Unicode 16 input checksum differs: {name}").into());
-    }
-    Ok(String::from_utf8(bytes)?)
-}
+const MANIFEST: &str = "src/naming/data/sources.tsv";
+const INPUTS: [&str; 4] = [
+    "unicode-data",
+    "derived-core-properties",
+    "case-folding",
+    "derived-normalization-props",
+];
+const FIXTURES: [&str; 1] = ["normalization-test"];
+const OUTPUTS: [&str; 2] = ["properties", "normalization"];
+
 fn cp(value: &str) -> Result<u32> {
     Ok(u32::from_str_radix(value.trim(), 16)?)
 }
-fn compact(mut ranges: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
-    ranges.sort_unstable();
-    let mut out: Vec<(u32, u32)> = Vec::new();
-    for (start, end) in ranges {
-        if let Some(last) = out.last_mut()
-            && start <= last.1 + 1
-        {
-            last.1 = last.1.max(end);
-            continue;
-        }
-        out.push((start, end));
+
+fn sha256(bytes: &[u8]) -> String {
+    let mut hash = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        write!(&mut hash, "{byte:02x}").expect("invariant: writing to a String cannot fail");
     }
-    out
+    hash
 }
-fn generate(root: &Path) -> Result<String> {
-    let unicode = source(
-        root,
-        "unicode-data-16.0.0.txt",
-        "ff58e5823bd095166564a006e47d111130813dcf8bf234ef79fa51a870edb48f",
-    )?;
-    let derived = source(
-        root,
-        "derived-core-properties-16.0.0.txt",
-        "39d35161f2954497f69e08bdb9e701493f476a3d30222de20028feda36c1dabd",
-    )?;
-    let folding = source(
-        root,
-        "case-folding-16.0.0.txt",
-        "6f1f9c588eb4a5c718d9e8f93b782685e5c7fec872cf05e8e6878053599e09bb",
-    )?;
-    let mut allowed = Vec::new();
-    let mut first = None;
-    for line in unicode.lines().filter(|line| !line.is_empty()) {
-        let f = line.split(';').collect::<Vec<_>>();
-        if f.len() < 3 {
-            return Err("invalid UnicodeData record".into());
-        }
-        let code = cp(f[0])?;
-        let allowed_category = matches!(f[2].as_bytes().first(), Some(b'L' | b'M' | b'N'));
-        if f[1].ends_with(", First>") {
-            first = Some((code, allowed_category));
-        } else if f[1].ends_with(", Last>") {
-            let (start, include) = first.take().ok_or("unpaired Unicode range")?;
-            if include != allowed_category || code < start {
-                return Err("invalid Unicode range".into());
-            }
-            if include {
-                allowed.push((start, code));
-            }
-        } else if allowed_category {
-            allowed.push((code, code));
-        }
-    }
-    if first.is_some() {
-        return Err("unterminated Unicode range".into());
-    }
-    let mut ignored = Vec::new();
-    for line in derived.lines() {
-        let fields = line
-            .split('#')
-            .next()
-            .expect("invariant: split yields at least one segment")
-            .split(';')
-            .map(str::trim)
-            .collect::<Vec<_>>();
-        if fields.len() < 2 || fields[1] != "Default_Ignorable_Code_Point" {
-            continue;
-        }
-        let (start, end) = fields[0].split_once("..").unwrap_or((fields[0], fields[0]));
-        ignored.push((cp(start)?, cp(end)?));
-    }
-    let mut fold = BTreeMap::new();
-    for line in folding.lines() {
-        let fields = line
-            .split('#')
-            .next()
-            .expect("invariant: split yields at least one segment")
-            .split(';')
-            .map(str::trim)
-            .collect::<Vec<_>>();
-        if fields.len() < 3 || !matches!(fields[1], "C" | "F") {
-            continue;
-        }
-        let mut mapped = String::new();
-        for value in fields[2].split_whitespace() {
-            write!(mapped, "\\u{{{:04x}}}", cp(value)?)?;
-        }
-        fold.insert(cp(fields[0])?, mapped);
-    }
-    let mut out = String::from(
-        "// Fixed Unicode 16.0.0 tables; regenerate only as an explicit naming policy change.\n",
-    );
-    ignored.sort_unstable();
-    for (name, ranges) in [("ALLOWED", compact(allowed)), ("IGNORED", ignored)] {
-        writeln!(out, "pub const {name}: &[(u32, u32)] = &[")?;
-        for (start, end) in ranges {
-            writeln!(out, "    (0x{start:x}, 0x{end:x}),")?;
-        }
-        out.push_str("];\n");
-    }
-    out.push_str("pub const FOLD: &[(u32, &str)] = &[\n");
-    for (code, mapped) in fold {
-        writeln!(out, "    (0x{code:x}, \"{mapped}\"),")?;
-    }
-    out.push_str("];\n");
-    Ok(out)
+
+#[derive(Clone, Debug, PartialEq)]
+enum Kind {
+    Input,
+    Fixture,
+    Output,
 }
+
+/// One manifest record: a repository-relative file and its pinned SHA-256.
+#[derive(Clone, Debug)]
+struct Entry {
+    kind: Kind,
+    role: String,
+    path: PathBuf,
+    sha256: String,
+}
+
+#[derive(Debug)]
+struct Manifest {
+    text: String,
+    version: String,
+    entries: Vec<Entry>,
+}
+
+impl Manifest {
+    fn parse(text: &str) -> Result<Self> {
+        let mut version = None;
+        let mut entries: Vec<Entry> = Vec::new();
+        for line in text.lines() {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let fields = line.split('\t').collect::<Vec<_>>();
+            match fields[..] {
+                ["version", value] if version.is_none() => {
+                    if value.split('.').count() != 3
+                        || !value.split('.').all(|part| part.parse::<u8>().is_ok())
+                    {
+                        return Err(format!("invalid Unicode version {value:?}").into());
+                    }
+                    version = Some(value.to_owned());
+                }
+                [kind, role, path, sha256, ..] => {
+                    let kind = match (kind, fields.len()) {
+                        ("input", 5) => Kind::Input,
+                        ("fixture", 5) => Kind::Fixture,
+                        ("output", 4) => Kind::Output,
+                        _ => return Err(format!("invalid manifest record: {line}").into()),
+                    };
+                    let known = match kind {
+                        Kind::Input => INPUTS.contains(&role),
+                        Kind::Fixture => FIXTURES.contains(&role),
+                        Kind::Output => OUTPUTS.contains(&role),
+                    };
+                    let path = PathBuf::from(path);
+                    let relative = path
+                        .components()
+                        .all(|component| matches!(component, Component::Normal(_)));
+                    let digest = sha256.len() == 64
+                        && sha256
+                            .bytes()
+                            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+                    if !known || !relative || !digest || entries.iter().any(|e| e.role == role) {
+                        return Err(format!("invalid manifest record: {line}").into());
+                    }
+                    entries.push(Entry {
+                        kind,
+                        role: role.to_owned(),
+                        path,
+                        sha256: sha256.to_owned(),
+                    });
+                }
+                _ => return Err(format!("invalid manifest record: {line}").into()),
+            }
+        }
+        let version = version.ok_or("manifest lacks a Unicode version")?;
+        if entries.len() != INPUTS.len() + FIXTURES.len() + OUTPUTS.len() {
+            return Err("manifest must list every input, fixture and output once".into());
+        }
+        Ok(Self {
+            text: text.to_owned(),
+            version,
+            entries,
+        })
+    }
+
+    fn entry(&self, role: &str) -> &Entry {
+        self.entries
+            .iter()
+            .find(|entry| entry.role == role)
+            .expect("invariant: parse admitted every known role exactly once")
+    }
+
+    fn of(&self, kind: Kind) -> impl Iterator<Item = &Entry> {
+        self.entries.iter().filter(move |entry| entry.kind == kind)
+    }
+
+    /// The same manifest text with output digests replaced.
+    fn with_outputs(&self, outputs: &[(Entry, String)]) -> String {
+        let mut text = String::new();
+        for line in self.text.split_inclusive('\n') {
+            let fields = line.trim_end_matches('\n').split('\t').collect::<Vec<_>>();
+            match outputs
+                .iter()
+                .find(|(entry, _)| fields.first() == Some(&"output") && fields[1] == entry.role)
+            {
+                Some((entry, content)) => {
+                    let path = entry.path.to_str().expect("invariant: parsed from UTF-8");
+                    let digest = sha256(content.as_bytes());
+                    writeln!(text, "output\t{}\t{path}\t{digest}", entry.role)
+                        .expect("invariant: writing to a String cannot fail");
+                }
+                None => text.push_str(line),
+            }
+        }
+        text
+    }
+}
+
+/// Read a pinned file below `root`, failing on any digest difference.
+fn pinned(root: &Path, entry: &Entry) -> Result<String> {
+    let bytes = fs::read(root.join(&entry.path))
+        .map_err(|error| format!("{}: {error}", entry.path.display()))?;
+    if sha256(&bytes) != entry.sha256 {
+        return Err(format!("pinned digest differs: {}", entry.path.display()).into());
+    }
+    Ok(String::from_utf8(bytes)?)
+}
+
+/// Generate every output from the manifest's inputs below `root` only.
+fn generate(root: &Path, manifest: &Manifest) -> Result<Vec<(Entry, String)>> {
+    let read = |role| pinned(root, manifest.entry(role));
+    let unicode = read("unicode-data")?;
+    let properties = properties::generate(
+        &unicode,
+        &read("derived-core-properties")?,
+        &read("case-folding")?,
+        &manifest.version,
+    )?;
+    let normalization = normalization::generate(&normalization::parse(
+        &unicode,
+        &read("derived-normalization-props")?,
+    )?)?;
+    Ok(vec![
+        (manifest.entry("properties").clone(), properties),
+        (manifest.entry("normalization").clone(), normalization),
+    ])
+}
+
+/// Compare generated outputs with the files below `tree` and the manifest.
+fn differences(tree: &Path, outputs: &[(Entry, String)]) -> Vec<String> {
+    let mut problems = Vec::new();
+    for (entry, content) in outputs {
+        if sha256(content.as_bytes()) != entry.sha256 {
+            problems.push(format!(
+                "{} differs from its manifest digest",
+                entry.path.display()
+            ));
+        }
+        match fs::read(tree.join(&entry.path)) {
+            Ok(bytes) if bytes == content.as_bytes() => {}
+            Ok(_) => problems.push(format!(
+                "{} differs from the generated bytes",
+                entry.path.display()
+            )),
+            Err(error) => problems.push(format!("{}: {error}", entry.path.display())),
+        }
+    }
+    problems
+}
+
+fn write_atomically(path: &Path, content: &str) -> Result<()> {
+    let pending = path.with_extension("pending");
+    fs::write(&pending, content)?;
+    fs::rename(pending, path)?;
+    Ok(())
+}
+
+/// Copy only the manifest and its inputs into an empty directory, generate
+/// there, and compare the replayed outputs with the tree and the manifest.
+fn replay(root: &Path, manifest: &Manifest, directory: &Path) -> Result<Vec<String>> {
+    if fs::read_dir(directory)?.next().is_some() {
+        return Err(format!("replay directory is not empty: {}", directory.display()).into());
+    }
+    for path in std::iter::once(Path::new(MANIFEST))
+        .chain(manifest.of(Kind::Input).map(|entry| entry.path.as_path()))
+    {
+        let target = directory.join(path);
+        fs::create_dir_all(
+            target
+                .parent()
+                .expect("invariant: relative file paths have parents"),
+        )?;
+        fs::copy(root.join(path), target)?;
+    }
+    let copied = Manifest::parse(&fs::read_to_string(directory.join(MANIFEST))?)?;
+    let outputs = generate(directory, &copied)?;
+    for (entry, content) in &outputs {
+        let target = directory.join(&entry.path);
+        fs::create_dir_all(
+            target
+                .parent()
+                .expect("invariant: relative file paths have parents"),
+        )?;
+        fs::write(target, content)?;
+    }
+    let mut problems = differences(root, &outputs);
+    problems.extend(differences(directory, &outputs));
+    Ok(problems)
+}
+
+enum Mode {
+    Check,
+    Write,
+    Replay(PathBuf),
+}
+
+fn run(root: &Path, mode: Mode) -> Result<String> {
+    let manifest = Manifest::parse(&fs::read_to_string(root.join(MANIFEST))?)?;
+    for fixture in manifest.of(Kind::Fixture) {
+        pinned(root, fixture)?;
+    }
+    let version = &manifest.version;
+    match mode {
+        Mode::Check => {
+            let problems = differences(root, &generate(root, &manifest)?);
+            if !problems.is_empty() {
+                return Err(format!(
+                    "generated Unicode tables differ; review inputs and explicitly regenerate:\n{}",
+                    problems.join("\n")
+                )
+                .into());
+            }
+            Ok(format!(
+                "ZXS Unicode {version} inputs and generated tables: PASS"
+            ))
+        }
+        Mode::Write => {
+            let outputs = generate(root, &manifest)?;
+            for (entry, content) in &outputs {
+                write_atomically(&root.join(&entry.path), content)?;
+            }
+            write_atomically(&root.join(MANIFEST), &manifest.with_outputs(&outputs))?;
+            Ok(format!("ZXS Unicode {version} tables written"))
+        }
+        Mode::Replay(directory) => {
+            let problems = replay(root, &manifest, &directory)?;
+            if !problems.is_empty() {
+                return Err(
+                    format!("clean-directory replay differs:\n{}", problems.join("\n")).into(),
+                );
+            }
+            Ok(format!(
+                "ZXS Unicode {version} clean-directory replay in {}: PASS",
+                directory.display()
+            ))
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut write = false;
+    let mut mode = Mode::Check;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--write" => write = true,
-            "--check" => write = false,
+            "--write" => mode = Mode::Write,
+            "--check" => mode = Mode::Check,
+            "--replay" => {
+                mode = Mode::Replay(PathBuf::from(
+                    args.next().ok_or("missing replay directory")?,
+                ))
+            }
             "--product-root" => root = PathBuf::from(args.next().ok_or("missing product root")?),
             _ => return Err(format!("unknown argument: {arg}").into()),
         }
     }
-    let generated = generate(&root)?;
-    let target = root.join("src/naming/src/unicode16.rs");
-    if write {
-        let pending = target.with_extension("rs.pending");
-        fs::write(&pending, &generated)?;
-        fs::rename(pending, &target)?;
-    } else if fs::read_to_string(&target)? != generated {
-        return Err("fixed Unicode table differs; review inputs and explicitly regenerate".into());
-    }
-    println!("ZXS Unicode 16.0.0 inputs and generated tables: PASS");
+    println!("{}", run(&root, mode)?);
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../test/tools/unicode-build/tests.rs"]
+mod tests;

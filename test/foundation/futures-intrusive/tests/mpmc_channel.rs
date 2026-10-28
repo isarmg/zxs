@@ -6,8 +6,11 @@ use futures::{
 use futures_intrusive::channel::{
     ChannelSendError, LocalChannel, LocalUnbufferedChannel,
 };
-use futures_test::task::{new_count_waker, panic_waker};
-use pin_utils::pin_mut;
+use futures::pin_mut;
+use wakers::{new_count_waker, panic_waker};
+
+#[path = "support/wakers.rs"]
+mod wakers;
 
 #[derive(Debug)]
 struct DropCounterInner {

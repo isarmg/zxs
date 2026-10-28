@@ -1,8 +1,11 @@
 use futures::future::{FusedFuture, Future};
 use futures::task::{Context, Poll};
 use futures_intrusive::sync::LocalMutex;
-use futures_test::task::{new_count_waker, panic_waker};
-use pin_utils::pin_mut;
+use futures::pin_mut;
+use wakers::{new_count_waker, panic_waker};
+
+#[path = "support/wakers.rs"]
+mod wakers;
 
 macro_rules! gen_mutex_tests {
     ($mod_name:ident, $mutex_type:ident) => {

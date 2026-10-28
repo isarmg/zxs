@@ -7,21 +7,13 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
-use core::fmt::{self, Write};
 use core::iter::{Fuse, FusedIterator};
 use core::ops::Range;
 use tinyvec::TinyVec;
 
-#[derive(Clone)]
-enum DecompositionType {
-    Canonical,
-    Compatible,
-}
-
-/// External iterator for a string decomposition's characters.
+/// External iterator for a string's canonical decomposition (NFD) characters.
 #[derive(Clone)]
 pub struct Decompositions<I> {
-    kind: DecompositionType,
     iter: Fuse<I>,
 
     // This buffer stores pairs of (canonical combining class, character),
@@ -37,28 +29,10 @@ pub struct Decompositions<I> {
 }
 
 impl<I: Iterator<Item = char>> Decompositions<I> {
-    /// Create a new decomposition iterator for canonical decompositions (NFD)
-    ///
-    /// Note that this iterator can also be obtained by directly calling [`.nfd()`](crate::unicode::UnicodeNormalization::nfd)
-    /// on the iterator.
+    /// Create a new decomposition iterator for canonical decompositions (NFD).
     #[inline]
     pub fn new_canonical(iter: I) -> Decompositions<I> {
         Decompositions {
-            kind: self::DecompositionType::Canonical,
-            iter: iter.fuse(),
-            buffer: TinyVec::new(),
-            ready: 0..0,
-        }
-    }
-
-    /// Create a new decomposition iterator for compatability decompositions (NFkD)
-    ///
-    /// Note that this iterator can also be obtained by directly calling [`.nfd()`](crate::unicode::UnicodeNormalization::nfd)
-    /// on the iterator.
-    #[inline]
-    pub fn new_compatible(iter: I) -> Decompositions<I> {
-        Decompositions {
-            kind: self::DecompositionType::Compatible,
             iter: iter.fuse(),
             buffer: TinyVec::new(),
             ready: 0..0,
@@ -116,14 +90,11 @@ impl<I: Iterator<Item = char>> Iterator for Decompositions<I> {
     #[inline]
     fn next(&mut self) -> Option<char> {
         while self.ready.end == 0 {
-            match (self.iter.next(), &self.kind) {
-                (Some(ch), &DecompositionType::Canonical) => {
+            match self.iter.next() {
+                Some(ch) => {
                     super::char::decompose_canonical(ch, |d| self.push_back(d));
                 }
-                (Some(ch), &DecompositionType::Compatible) => {
-                    super::char::decompose_compatible(ch, |d| self.push_back(d));
-                }
-                (None, _) => {
+                None => {
                     if self.buffer.is_empty() {
                         return None;
                     } else {
@@ -162,12 +133,3 @@ impl<I: Iterator<Item = char>> Iterator for Decompositions<I> {
 }
 
 impl<I: Iterator<Item = char> + FusedIterator> FusedIterator for Decompositions<I> {}
-
-impl<I: Iterator<Item = char> + Clone> fmt::Display for Decompositions<I> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        for c in self.clone() {
-            f.write_char(c)?;
-        }
-        Ok(())
-    }
-}

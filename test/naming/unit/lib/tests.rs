@@ -36,7 +36,9 @@ fn normalized_and_folded() {
         validate_name("e\u{301}").unwrap_err(),
         crate::Error::NotNormalized(_)
     ));
-    assert_eq!(unicode::UNICODE_VERSION, (16, 0, 0));
+    // The policy version is the one the generated tables were built from.
+    assert_eq!(UNICODE_VERSION, unicode16::UNICODE_VERSION);
+    assert_eq!(UNICODE_VERSION, "16.0.0");
 }
 #[test]
 fn path_budgets() {

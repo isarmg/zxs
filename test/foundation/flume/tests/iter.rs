@@ -1,7 +1,5 @@
 //! Tests for iteration over receivers.
 
-use concurrent_collections::utilities as crossbeam_utils;
-
 use concurrent_collections::utilities::thread::scope;
 use flume::unbounded;
 

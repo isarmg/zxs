@@ -2,8 +2,11 @@ use core::time::Duration;
 use futures::future::{FusedFuture, Future};
 use futures::task::Context;
 use futures_intrusive::timer::{LocalTimerService, MockClock};
-use futures_test::task::{new_count_waker, panic_waker};
-use pin_utils::pin_mut;
+use futures::pin_mut;
+use wakers::{new_count_waker, panic_waker};
+
+#[path = "support/wakers.rs"]
+mod wakers;
 
 macro_rules! gen_timer_tests {
     ($mod_name:ident, $timer_type:ident, $timer_trait_type:ident) => {

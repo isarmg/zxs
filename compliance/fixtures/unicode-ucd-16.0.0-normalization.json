@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "directory": "src/naming",
+  "owner_origin": "vendor/dependencies/unicode-normalization-0.1.24",
+  "path": "test/naming/data/normalization-test-16.0.0.txt",
+  "source": "unicodetools/data/ucd/16.0.0/NormalizationTest.txt",
+  "sha256": "d811971453e7075e1ad56fb1b301eece5aa80757b81f6156e74a1bfb3ae5ceb1",
+  "upstream": "Unicode Consortium",
+  "version": "16.0.0",
+  "official_url": "https://www.unicode.org/Public/16.0.0/ucd/NormalizationTest.txt",
+  "repository": "https://github.com/unicode-org/unicodetools",
+  "revision": "578f6c0516f5f268292ebda50b51848407a06478",
+  "retrieved_url": "https://raw.githubusercontent.com/unicode-org/unicodetools/578f6c0516f5f268292ebda50b51848407a06478/unicodetools/data/ucd/16.0.0/NormalizationTest.txt",
+  "license": "Unicode-3.0",
+  "license_path": "compliance/licenses/upstream/unicode-ucd-16.0.0/LICENSE",
+  "license_sha256": "fe5c62b543e287981db198f2acfa0ca732d12591a1024536dc8fd85dacd77104"
+}

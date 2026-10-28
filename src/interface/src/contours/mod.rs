@@ -1,6 +1,8 @@
 //! CSS-driven contour geometry, paint and browser lifecycle.
 #[cfg(target_arch = "wasm32")]
 mod controller;
+#[cfg(any(target_arch = "wasm32", test))]
+mod frame;
 pub mod geometry;
 #[cfg(target_arch = "wasm32")]
 mod membership;

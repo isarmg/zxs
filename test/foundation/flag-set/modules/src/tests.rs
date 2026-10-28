@@ -1,35 +1,68 @@
+#[path = "tests/all.rs"]
 mod all;
+#[path = "tests/all_named.rs"]
 mod all_named;
+#[path = "tests/bitflags_match.rs"]
 mod bitflags_match;
+#[path = "tests/bits.rs"]
 mod bits;
+#[path = "tests/clear.rs"]
 mod clear;
+#[path = "tests/complement.rs"]
 mod complement;
+#[path = "tests/contains.rs"]
 mod contains;
+#[path = "tests/difference.rs"]
 mod difference;
+#[path = "tests/empty.rs"]
 mod empty;
+#[path = "tests/eq.rs"]
 mod eq;
+#[path = "tests/extend.rs"]
 mod extend;
+#[path = "tests/flag_name.rs"]
 mod flag_name;
+#[path = "tests/flags.rs"]
 mod flags;
+#[path = "tests/fmt.rs"]
 mod fmt;
+#[path = "tests/from_bits.rs"]
 mod from_bits;
+#[path = "tests/from_bits_retain.rs"]
 mod from_bits_retain;
+#[path = "tests/from_bits_truncate.rs"]
 mod from_bits_truncate;
+#[path = "tests/from_name.rs"]
 mod from_name;
+#[path = "tests/insert.rs"]
 mod insert;
+#[path = "tests/intersection.rs"]
 mod intersection;
+#[path = "tests/intersects.rs"]
 mod intersects;
+#[path = "tests/is_all.rs"]
 mod is_all;
+#[path = "tests/is_empty.rs"]
 mod is_empty;
+#[path = "tests/iter.rs"]
 mod iter;
+#[path = "tests/iter_equal_names.rs"]
 mod iter_equal_names;
+#[path = "tests/known_bits.rs"]
 mod known_bits;
+#[path = "tests/parser.rs"]
 mod parser;
+#[path = "tests/remove.rs"]
 mod remove;
+#[path = "tests/symmetric_difference.rs"]
 mod symmetric_difference;
+#[path = "tests/truncate.rs"]
 mod truncate;
+#[path = "tests/union.rs"]
 mod union;
+#[path = "tests/unknown.rs"]
 mod unknown;
+#[path = "tests/unknown_bits.rs"]
 mod unknown_bits;
 
 mod custom {

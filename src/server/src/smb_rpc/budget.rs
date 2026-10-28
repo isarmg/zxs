@@ -3,6 +3,11 @@
 //! A peer can retain a writable descriptor after disconnect. Its highest
 //! admitted extent stays charged until explicit successful cleanup, including
 //! across restart. Flush is not cleanup and never earns capacity back.
+//!
+//! A growing write is admitted with a bounded extent grant ahead of its end
+//! (see ADR 0010), so later writes inside the grant reuse one durable record.
+//! The unused grant is charged exactly like written extent; only the live
+//! grant pool that limits the total of such grants is process-local.
 use super::*;
 use crate::SpoolLimits;
 use data_serialization::{Deserialize, Serialize};
@@ -13,10 +18,13 @@ mod persistence;
 use persistence as persist;
 #[cfg(test)]
 #[path = "../../../../test/server/unit/smb_rpc/budget_persist.rs"]
-mod persist;
+pub(super) mod persist;
 
 const OVERHEAD: u64 = 64 * 1024;
 const RECORD_LIMIT: u64 = 16 * 1024;
+const GRANT_MIN: u64 = 1 << 20;
+const GRANT_MAX: u64 = 64 << 20;
+const GRANT_POOL_MAX: u64 = 1 << 30;
 
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -37,6 +45,9 @@ struct Ledger {
     total: u64,
     unknown: u64,
     accounts: BTreeMap<String, u64>,
+    /// Extent granted beyond requested ends by live leases. It sizes future
+    /// grants only; the charges in `files` already include these bytes.
+    granted: u64,
 }
 impl Ledger {
     fn rebuild(&mut self) -> Result<(), ApiError> {
@@ -111,6 +122,8 @@ pub(super) struct Lease {
     source: PathBuf,
     max_length: u64,
     principal: String,
+    /// This lease's share of `Ledger::granted` from its latest growth.
+    granted: u64,
 }
 // A charged extent may already have reached disk when I/O fails or unwinds.
 // Keep that charge and close admission until startup inventories the evidence.
@@ -149,6 +162,14 @@ fn invalid(message: &str) -> ApiError {
 }
 fn record_path(source: &Path) -> PathBuf {
     source.with_extension("budget.json")
+}
+/// Extent admitted ahead of a growing write: a quarter of its end, between
+/// 1 MiB and 64 MiB, never past the handle maximum or the free grant pool.
+fn grant(end: u64, max_length: u64, pool_left: u64) -> u64 {
+    (end / 4)
+        .clamp(GRANT_MIN, GRANT_MAX)
+        .min(max_length - end)
+        .min(pool_left)
 }
 fn charge(length: u64) -> Result<u64, ApiError> {
     length
@@ -343,6 +364,7 @@ impl Budget {
             source: source.to_owned(),
             max_length,
             principal: principal.to_owned(),
+            granted: 0,
         })
     }
     fn check_admission(
@@ -379,6 +401,9 @@ impl Budget {
             return Err(ApiError::limit("SMB spool must preserve recovery headroom"));
         }
         Ok(())
+    }
+    fn grant_pool(&self) -> u64 {
+        (self.limits.bytes_total / 64).min(GRANT_POOL_MAX)
     }
     fn available(&self) -> Result<u64, ApiError> {
         let info = rustix::fs::statvfs(&self.root)
@@ -419,15 +444,43 @@ impl Lease {
             .get(&self.source)
             .ok_or_else(|| invalid("SMB reservation missing"))?;
         if charge(end)? > previous.bytes {
-            self.budget
-                .check_admission(&ledger, &self.principal, &self.source, end, available)?;
+            // Only quota/headroom rejection of optional credit falls back to
+            // the exact end; accounting failures retain their original error.
+            let others = ledger.granted - self.granted;
+            let slack = grant(end, self.max_length, self.budget.grant_pool() - others);
+            let ceiling = end + slack;
+            let admitted = match self.budget.check_admission(
+                &ledger,
+                &self.principal,
+                &self.source,
+                ceiling,
+                available,
+            ) {
+                Ok(()) => ceiling,
+                Err(error)
+                    if slack > 0
+                        && error.code == storage_contract::ErrorCode::ResourceLimitExceeded =>
+                {
+                    self.budget.check_admission(
+                        &ledger,
+                        &self.principal,
+                        &self.source,
+                        end,
+                        available,
+                    )?;
+                    end
+                }
+                Err(error) => return Err(error),
+            };
             ledger.replace(
                 self.source.clone(),
                 Some(Charge {
                     principal: Some(self.principal.clone()),
-                    bytes: charge(end)?,
+                    bytes: charge(admitted)?,
                 }),
             )?;
+            self.granted = admitted - end;
+            ledger.granted = others + self.granted;
             let pending = Pending {
                 budget: &self.budget,
                 complete: false,
@@ -441,7 +494,7 @@ impl Lease {
                 &Owner {
                     principal: self.principal.clone(),
                     source: self.source.file_name().unwrap().to_str().unwrap().into(),
-                    admitted_end: end,
+                    admitted_end: admitted,
                 },
             )?;
             pending.finish()?;
@@ -466,13 +519,18 @@ impl Lease {
 impl Drop for Lease {
     fn drop(&mut self) {
         let mut ledger = match self.budget.ledger.lock() {
-            Ok(ledger) if !ledger.uncertain => ledger,
-            Ok(_) => return,
+            Ok(ledger) => ledger,
             Err(error) => {
                 tracing::error!(%error, "SMB cleanup skipped; ledger remains poisoned");
                 return;
             }
         };
+        // Only the live pool forgets this grant; its durable charge below stays
+        // until cleanup removes the record. The pool always includes it.
+        ledger.granted -= self.granted;
+        if ledger.uncertain {
+            return;
+        }
         match self.evidence_absent() {
             Ok(false) => return,
             Err(error) => {

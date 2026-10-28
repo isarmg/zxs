@@ -1,10 +1,31 @@
 //! Structural discovery only. CSS qualification remains a full ordered read pass.
 use std::cmp::Ordering;
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{Document, Element, HtmlElement, MutationRecord, Node};
+use web_sys::{CssStyleDeclaration, Document, Element, HtmlElement, MutationRecord, Node, Window};
 
 pub(super) struct Membership {
-    ordered: Vec<HtmlElement>,
+    ordered: Vec<Member>,
+}
+
+/// A registered element and its live computed-style handle. The handle is
+/// acquired on the first qualification read and dropped with the entry; every
+/// frame still reads current values through it, nothing caches a value.
+pub(super) struct Member {
+    pub(super) node: HtmlElement,
+    style: Option<CssStyleDeclaration>,
+}
+
+impl Member {
+    fn new(node: HtmlElement) -> Self {
+        Self { node, style: None }
+    }
+
+    pub(super) fn style(&mut self, view: &Window) -> Result<Option<CssStyleDeclaration>, JsValue> {
+        if self.style.is_none() {
+            self.style = view.get_computed_style(&self.node)?;
+        }
+        Ok(self.style.clone())
+    }
 }
 
 impl Membership {
@@ -17,14 +38,14 @@ impl Membership {
                 .expect("invariant: static selector result index exists")
                 .unchecked_into::<Element>();
             if let Some(node) = html(node) {
-                ordered.push(node);
+                ordered.push(Member::new(node));
             }
         }
         Ok(Self { ordered })
     }
 
-    pub(super) fn nodes(&self) -> &[HtmlElement] {
-        &self.ordered
+    pub(super) fn members(&mut self) -> &mut [Member] {
+        &mut self.ordered
     }
 
     pub(super) fn clear(&mut self) {
@@ -78,14 +99,14 @@ impl Membership {
         }
         // Only a structural batch reconciles the ordered vector. Retained
         // elements are not rediscovered; same-document moves rejoin in DOM order.
-        self.ordered.retain(|node| !changed.has(node));
+        self.ordered.retain(|member| !changed.has(&member.node));
         pending.sort_by(document_order);
         let mut retained = std::mem::take(&mut self.ordered).into_iter().peekable();
         let mut ordered = Vec::with_capacity(retained.len() + pending.len());
         for node in pending {
             while retained
                 .peek()
-                .is_some_and(|old| document_order(old, &node).is_lt())
+                .is_some_and(|old| document_order(&old.node, &node).is_lt())
             {
                 ordered.push(
                     retained
@@ -93,7 +114,7 @@ impl Membership {
                         .expect("invariant: retained element was peeked"),
                 );
             }
-            ordered.push(node);
+            ordered.push(Member::new(node));
         }
         ordered.extend(retained);
         self.ordered = ordered;

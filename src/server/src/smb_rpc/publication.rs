@@ -165,6 +165,42 @@ pub(super) fn finish_publication(
 }
 
 impl Session {
+    /// Admit one descriptor mutation before the VFS performs it. This is the
+    /// per-mutation authorization point: the peer announces only the first
+    /// change of a generation with Dirty (every change when write-through).
+    pub(super) fn prepare_write(
+        &mut self,
+        handle: u64,
+        end: u64,
+        bytes: u64,
+    ) -> Result<Value, ApiError> {
+        let Some(Handle::Write(writer)) = self.handles.get_mut(&handle) else {
+            return Err(ApiError::forbidden());
+        };
+        self.shared
+            .backend
+            .authorize_current(&self.identity, &self.branch)?;
+        self.shared.backend.authorize_workspace_selection(
+            &self.identity,
+            &writer.workspace.workspace_id,
+            &writer.path,
+        )?;
+        // A published generation has no open workspace to write into; the
+        // following Dirty creates and authorizes its successor.
+        if !writer.committed {
+            self.shared.backend.authorize_upload(
+                &self.identity,
+                &writer.workspace.workspace_id,
+                None,
+            )?;
+        }
+        let current = writer.file.metadata().map_err(ApiError::io)?.len();
+        writer
+            .reservation
+            .before_write(end, bytes.max(end.saturating_sub(current)))?;
+        Ok(json!({"ready":true}))
+    }
+
     pub(super) fn dirty(&mut self, handle: u64) -> Result<Value, ApiError> {
         // The FD has already been modified. Preserve it even when current
         // authorization or rebase validation rejects the operation.

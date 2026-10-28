@@ -14,8 +14,10 @@ TARGETS = ('x86_64-unknown-linux-gnu', 'wasm32-unknown-unknown')
 FEATURES = ((), ('alloc',), ('std',))
 INTEGRATIONS = tuple(('utilities', name) for name in
     ('atomic_cell', 'cache_padded', 'parker', 'thread', 'wait_group')) + (('deque', 'steal'),)
-DORMANT = ('deque/tests/fifo.rs', 'deque/tests/injector.rs', 'deque/tests/lifo.rs',
-           'queue/tests/array_queue.rs', 'queue/tests/seg_queue.rs', 'utilities/tests/sharded_lock.rs')
+# The queue, deque and sharded-lock integrations use the local fastrand and run
+# with exact name inventories in check-foundation-behaviour.py.
+BEHAVIOUR_GATE = ('deque/tests/fifo.rs', 'deque/tests/injector.rs', 'deque/tests/lifo.rs',
+                  'queue/tests/array_queue.rs', 'queue/tests/seg_queue.rs', 'utilities/tests/sharded_lock.rs')
 PROFILE = '\n[profile.dev]\ndebug=0\nincremental=false\n'
 
 
@@ -80,8 +82,8 @@ def check_retained(root, temporary, target):
     common = ['--locked', '--offline', '--manifest-path', str(manifest), '--target-dir', str(target), '--jobs', '2']
     run(['cargo', 'test', *common, '--lib'])
     run(['cargo', 'test', *common, '--doc'])
-    # Original tests remain in the governed tree; the independent harness adds only
-    # actual local providers, never fake rand, Loom, Miri or scheduling coverage.
+    # The independent harness adds only actual local providers, never fake rand,
+    # Loom, Miri or scheduling coverage.
     work = temporary / 'integrations'
     (work / 'src').mkdir(parents=True)
     (work / 'src/lib.rs').write_text('')
@@ -95,10 +97,11 @@ def check_retained(root, temporary, target):
     manifest.write_text(text)
     run(['cargo', 'generate-lockfile', '--offline', '--manifest-path', str(manifest)])
     run(['cargo', 'test', '--locked', '--offline', '--manifest-path', str(manifest), '--target-dir', str(target), '--jobs', '2'])
-    for path in DORMANT:
+    for path in BEHAVIOUR_GATE:
         if not (root / 'test/foundation/concurrent-collections' / path).is_file():
-            raise AssertionError('Missing preserved dormant test: ' + path)
-    print('Six missing-rand integrations preserved but not executed; Loom/Miri not claimed.', flush=True)
+            raise AssertionError('Missing retained integration: ' + path)
+    print('Queue, deque and sharded-lock integrations run in check-foundation-behaviour.py; Loom/Miri not claimed.',
+          flush=True)
 
 
 def check_consumers():

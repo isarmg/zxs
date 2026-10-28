@@ -1,8 +1,5 @@
 //! Tests for the list channel flavor.
 
-use concurrent_collections::utilities as crossbeam_utils;
-extern crate rand;
-
 use std::any::Any;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -13,7 +10,6 @@ use concurrent_collections::utilities::thread::scope;
 use flume::{unbounded, Receiver};
 use flume::{RecvTimeoutError, TryRecvError};
 use flume::{SendError, SendTimeoutError, TrySendError};
-use rand::{thread_rng, Rng};
 
 fn ms(ms: u64) -> Duration {
     Duration::from_millis(ms)
@@ -387,11 +383,11 @@ fn drops() {
         }
     }
 
-    let mut rng = thread_rng();
+    let mut rng = fastrand::Rng::new();
 
     for _ in 0..100 {
-        let steps = rng.gen_range(0..10_000);
-        let additional = rng.gen_range(0..1000);
+        let steps = rng.usize(0..10_000);
+        let additional = rng.usize(0..1000);
 
         DROPS.store(0, Ordering::SeqCst);
         let (s, r) = unbounded::<DropCounter>();

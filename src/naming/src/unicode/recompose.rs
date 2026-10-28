@@ -9,10 +9,7 @@
 // except according to those terms.
 
 use crate::unicode::decompose::Decompositions;
-use core::{
-    fmt::{self, Write},
-    iter::FusedIterator,
-};
+use core::iter::FusedIterator;
 use tinyvec::TinyVec;
 
 #[derive(Clone)]
@@ -41,21 +38,6 @@ impl<I: Iterator<Item = char>> Recompositions<I> {
     pub fn new_canonical(iter: I) -> Self {
         Recompositions {
             iter: Decompositions::new_canonical(iter),
-            state: self::RecompositionState::Composing,
-            buffer: TinyVec::new(),
-            composee: None,
-            last_ccc: None,
-        }
-    }
-
-    /// Create a new recomposition iterator for compatability compositions (NFkC)
-    ///
-    /// Note that this iterator can also be obtained by directly calling [`.nfkc()`](crate::unicode::UnicodeNormalization::nfkc)
-    /// on the iterator.
-    #[inline]
-    pub fn new_compatible(iter: I) -> Self {
-        Recompositions {
-            iter: Decompositions::new_compatible(iter),
             state: self::RecompositionState::Composing,
             buffer: TinyVec::new(),
             composee: None,
@@ -158,12 +140,3 @@ impl<I: Iterator<Item = char>> Iterator for Recompositions<I> {
 }
 
 impl<I: Iterator<Item = char> + FusedIterator> FusedIterator for Recompositions<I> {}
-
-impl<I: Iterator<Item = char> + Clone> fmt::Display for Recompositions<I> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        for c in self.clone() {
-            f.write_char(c)?;
-        }
-        Ok(())
-    }
-}

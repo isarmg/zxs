@@ -78,6 +78,16 @@ jobs:
       - name: Verify isolated system SQLite consumer
         if: matrix.suite == 'foundation-data'
         run: python3 .github/scripts/check-sqlite-system.py
+      - name: Retain exact foundation behaviour test evidence
+        if: always() && matrix.suite == 'foundation-async'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: foundation-behaviour-evidence
+          path: |
+            target/foundation-behaviour/logs/
+            target/foundation-behaviour/summary.json
+          if-no-files-found: warn
+          retention-days: 7
 
   web-production:
     name: Production WASM build

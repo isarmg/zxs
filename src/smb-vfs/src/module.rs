@@ -14,7 +14,7 @@
 use data_serialization::Deserialize;
 use json_codec::Value;
 use smb_protocol::{
-    client::{Client, error_errno},
+    client::{Client, Mutation, WriteSequence, error_errno},
     protocol::{DirectoryPage, NamespaceOperation, OpenResult, Request as RawRequest},
 };
 
@@ -60,7 +60,8 @@ struct Open {
     info: Arc<OpenResult>,
     fd: OwnedFd,
     writable: bool,
-    io: Arc<Mutex<()>>,
+    // Serializes descriptor I/O and owns the handle's write generation state.
+    io: Arc<Mutex<WriteSequence>>,
 }
 struct Context {
     samba_username: String,
@@ -269,13 +270,14 @@ unsafe extern "C" fn openat(
         // SAFETY: The owning host callback supplies a live handle; Context access stays on this
         // event-loop thread and does not escape the callback.
         let context = unsafe { context(handle) }?;
+        let write_through = flags & (libc::O_SYNC | libc::O_DSYNC) != 0;
         let (info, fd) = context.client.open(Request::Open {
             path,
             writable,
             create: flags & libc::O_CREAT != 0,
             truncate: flags & libc::O_TRUNC != 0,
             exclusive: flags & libc::O_EXCL != 0,
-            write_through: flags & (libc::O_SYNC | libc::O_DSYNC) != 0,
+            write_through,
         })?;
         let raw_fd = fd.as_raw_fd();
         context.files.insert(
@@ -284,7 +286,7 @@ unsafe extern "C" fn openat(
                 info: Arc::new(info),
                 fd,
                 writable,
-                io: Arc::new(Mutex::new(())),
+                io: Arc::new(Mutex::new(WriteSequence::new(write_through))),
             },
         );
         Ok(raw_fd)
@@ -347,9 +349,10 @@ unsafe extern "C" fn pwrite(
             // event-loop thread and does not escape the callback.
             let context = unsafe { context(handle) }?;
             let opened = context.files.get(&(fsp as usize)).ok_or_else(bad)?;
-            let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
+            let mut sequence = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
             write_data(
                 &context.client,
+                &mut sequence,
                 &opened.info,
                 opened.fd.as_fd(),
                 opened.writable,
@@ -375,6 +378,7 @@ unsafe extern "C" fn pwrite(
 }
 fn write_data(
     client: &Client,
+    sequence: &mut WriteSequence,
     info: &OpenResult,
     fd: BorrowedFd<'_>,
     writable: bool,
@@ -405,23 +409,27 @@ fn write_data(
     {
         return Err(std::io::Error::from_raw_os_error(libc::EFBIG));
     }
-    client.call(Request::PrepareWrite {
-        handle: info.handle,
-        end: offset as u64 + count as u64,
-        bytes: count as u64,
-    })?;
-    // SAFETY: The borrowed slice supplies count initialized bytes and remains live throughout
-    // pwrite; the caller serializes descriptor I/O.
-    let result = unsafe { libc::pwrite(fd.as_raw_fd(), data.as_ptr().cast(), count, offset) };
-    if result < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    if result > 0 {
-        client.call(Request::Dirty {
-            handle: info.handle,
-        })?;
-    }
-    Ok(result)
+    sequence.mutate(
+        info.handle,
+        offset as u64 + count as u64,
+        count as u64,
+        |request| client.call(request),
+        || {
+            // SAFETY: The borrowed slice supplies count initialized bytes and remains live
+            // throughout pwrite; the caller serializes descriptor I/O.
+            let result =
+                unsafe { libc::pwrite(fd.as_raw_fd(), data.as_ptr().cast(), count, offset) };
+            if result < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let outcome = if result > 0 {
+                Mutation::Changed
+            } else {
+                Mutation::Unchanged
+            };
+            Ok((result, outcome))
+        },
+    )
 }
 unsafe extern "C" fn truncate(
     handle: *mut sdk::vfs_handle_struct,
@@ -436,21 +444,21 @@ unsafe extern "C" fn truncate(
         if !opened.writable || length < 0 || length as u64 > opened.info.max_file_bytes {
             return Err(bad());
         }
-        let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
-        context.client.call(Request::PrepareWrite {
-            handle: opened.info.handle,
-            end: length as u64,
-            bytes: 0,
-        })?;
-        // SAFETY: The descriptor remains owned while the I/O lock is held; length has been
-        // validated.
-        if unsafe { libc::ftruncate(opened.fd.as_raw_fd(), length) } < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        context.client.call(Request::Dirty {
-            handle: opened.info.handle,
-        })?;
-        Ok(0)
+        let mut sequence = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
+        sequence.mutate(
+            opened.info.handle,
+            length as u64,
+            0,
+            |request| context.client.call(request),
+            || {
+                // SAFETY: The descriptor remains owned while the I/O lock is held; length has
+                // been validated.
+                if unsafe { libc::ftruncate(opened.fd.as_raw_fd(), length) } < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok((0, Mutation::Changed))
+            },
+        )
     })
 }
 unsafe extern "C" fn pread_send(
@@ -542,9 +550,10 @@ unsafe extern "C" fn pwrite_send(
             0,
             prepare,
             move |(opened, bytes)| {
-                let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
+                let mut sequence = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
                 write_data(
                     &opened.client,
+                    &mut sequence,
                     &opened.info,
                     opened.fd.as_fd(),
                     opened.writable,
@@ -620,10 +629,8 @@ unsafe extern "C" fn fsync_send(
             0,
             prepare,
             move |opened| {
-                let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
-                opened.client.call(Request::Flush {
-                    handle: opened.info.handle,
-                })?;
+                let mut sequence = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
+                sequence.flush(opened.info.handle, |request| opened.client.call(request))?;
                 Ok(asynchronous::Completion::done(0))
             },
         )

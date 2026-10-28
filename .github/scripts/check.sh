@@ -23,6 +23,7 @@ case "${1:-}" in
     ;;
   rust-sources)
     python3 tools/rust-sources/manage.py verify --metadata
+    python3 tools/rust-sources/foundation_coverage.py --check
     python3 tools/rust-sources/architecture.py verify
     python3 tools/rust-sources/documentation.py verify
     python3 -m unittest discover -s test/tools/rust-sources -p 'test_*.py' -v
@@ -87,6 +88,9 @@ case "${1:-}" in
     python3 -m unittest discover -s test/ci -p 'test_offline_builds.py'
     python3 -m unittest discover -s test/tools/perf-check -p 'test_*.py'
     cargo run --locked --offline -p unicode-build -- --check
+    unicode_replay="$(mktemp -d)"
+    cargo run --locked --offline -p unicode-build -- --replay "$unicode_replay"
+    rm -rf "$unicode_replay"
     ;;
   smb-protocol)
     cargo test --locked --offline -p smb-protocol

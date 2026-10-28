@@ -11,8 +11,8 @@ Rust include 保留所属包的特性开关与私有模块语义；不建立独�
 
 ## 当前清单与刷新
 
-`compliance/external-tests/*.json` 按所属源码目录（owner）登记当前第三方测试材料
-及明确标记的项目新作。每个 owner 列出精确目标根、当前文件哈希和原始来源路径，
+`compliance/external-tests/*.json` 按所属源码目录（owner）登记当前第三方测试材料、
+独立导入的上游数据夹具及明确标记的项目新作。每个 owner 列出精确目标根、当前文件哈希和原始来源路径，
 包括从仍然存在的生产文件中抽取的片段。`compliance/rust-sources.json` 将这些映射
 绑定到原始上游身份，并记录映射文件摘要；本地新作的标记不表示它来自上游。
 
@@ -64,6 +64,29 @@ Rust include 保留所属包的特性开关与私有模块语义；不建立独�
 退役归档规则继续适用。此支持仅覆盖本 owner 下的新作登记和后续内容
 编辑，不授权跨 owner 转移或根重命名；这些变更未有专门证明时保持拒绝，
 不能通过删除标记或重写初始来源绕过。
+
+<a id="imported-upstream-fixtures"></a>
+
+## 独立导入的上游数据夹具
+
+Unicode Consortium 的 `NormalizationTest-16.0.0.txt` 不是本项目创作，
+也不是 `unicode-normalization` 发布包中抽取的测试。它以
+`source_kind: "upstream-fixture"` 登记在实际消费者 `src/naming` 下，
+`source` 保留 `unicodetools` 仓库内的原始路径，`source_receipt` 指向
+[`compliance/fixtures/unicode-ucd-16.0.0-normalization.json`](../compliance/fixtures/unicode-ucd-16.0.0-normalization.json)。
+收据保存 Unicode 身份、版本、官方 URL、实际取件仓库及固定提交、原始字节摘要和许可证摘要；
+所属 Rust owner 的原身份不因此改写为 Unicode 数据来源。
+
+`external_fixtures.py` 只接受显式登记的精确路径和固定收据 SHA-256，
+普通 refresh 不发现、不接受新的夹具收据。映射必须与收据的 owner、原始路径、
+初始及当前哈希、收据路径完全一致，许可证必须保留原字节；夹具当前内容继续由
+外置清单精确盘点。已登记夹具不得伪装成 `project-authored`，不得取得跨 owner
+转移或抵消原生产文件移除的权限。不同数据版本须另行审阅，不能刷新原收据接受新字节。
+
+既有历史行的身份仍不可重写。归档处置即使移走了当前夹具，也必须保留原来源收据
+和许可证；该机制不改写 origins、布局、测试分离或 NOTICE 的既有不可变证据。
+`sources.tsv` 继续是生成器的当前输入／输出摘要权威记录；导入收据保存的是
+不可变的来源快照，不随生成器 `--write` 更新。
 
 ## 不可变分离与路由证明
 

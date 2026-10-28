@@ -46,6 +46,13 @@
           "source_sha256_before": "ce98cea42803fc3a36960d1743f30e6b675825d8b1ed11e03acd239e98da4e4f"
         },
         {
+          "path": "test/interface/unit/contours/frame/tests.rs",
+          "sha256": "24d5ceac6ac264310e9c78d32f16df6af8bf1b5ec450a031a6a3262c97ee44b9",
+          "source": "test/interface/unit/contours/frame/tests.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "24d5ceac6ac264310e9c78d32f16df6af8bf1b5ec450a031a6a3262c97ee44b9"
+        },
+        {
           "path": "test/interface/unit/contours/geometry/tests.rs",
           "sha256": "49d8a77fbdac00f7a13ef0c143bf8064eba4ef9c94e219a3702627c71f601b0e",
           "source": "src/interface/src/contours/geometry.rs",
@@ -109,14 +116,29 @@
       "directory": "src/naming",
       "files": [
         {
+          "path": "test/naming/data/normalization-test-16.0.0.txt",
+          "sha256": "d811971453e7075e1ad56fb1b301eece5aa80757b81f6156e74a1bfb3ae5ceb1",
+          "source": "unicodetools/data/ucd/16.0.0/NormalizationTest.txt",
+          "source_kind": "upstream-fixture",
+          "source_receipt": "compliance/fixtures/unicode-ucd-16.0.0-normalization.json",
+          "source_sha256_before": "d811971453e7075e1ad56fb1b301eece5aa80757b81f6156e74a1bfb3ae5ceb1"
+        },
+        {
+          "path": "test/naming/unit/golden_tests.rs",
+          "sha256": "0305a7dd7b8323bf29a44169563e3099af1a1fd7a45a0f960ca78e791c44327d",
+          "source": "test/naming/unit/golden_tests.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "0305a7dd7b8323bf29a44169563e3099af1a1fd7a45a0f960ca78e791c44327d"
+        },
+        {
           "path": "test/naming/unit/key_tests.rs",
-          "sha256": "df159c50d848f115a14966edd3dd5494d8fd6d68faddaf84d9a88f0ffe522303",
+          "sha256": "6bd66c9ecbb84e2003301f8540545ab0782917e27e23561854dff0126ba7ff2b",
           "source": "src/naming/src/key_tests.rs",
           "source_sha256_before": "b7769845ea159b121934cd4e721d445177731fe90df5fd6ba8ae20c9093dd75d"
         },
         {
           "path": "test/naming/unit/lib/tests.rs",
-          "sha256": "cae6478d304b39c8762145bbc262fa5d8f121d7b52dae092f5ec296505e05236",
+          "sha256": "6a8cc62572fd612619f24dd3771c1efc068fdce5a071c84f9552bd290662e8a1",
           "source": "src/naming/src/lib.rs",
           "source_sha256_before": "619a98004dc108746a51157455bbf031c0f2c7112946e04b535b7391f87d20ad"
         },
@@ -134,7 +156,7 @@
         },
         {
           "path": "test/naming/unit/unicode/quick_check/tests.rs",
-          "sha256": "d1e2a69640b7b5f11d4fe433913e1243ce9ed38247e11f4d53f8952704ef1791",
+          "sha256": "2bd92b52eece9a1598ef3ad30f981ef3ea8da4a103d4000eebb36c43ada1c7ac",
           "source": "src/naming/src/unicode/quick_check.rs",
           "source_sha256_before": "f3c84c146d005c446771386a33cd2ee7e2d812e28c2f054bdc8175e3b87e8056"
         },
@@ -146,7 +168,7 @@
         },
         {
           "path": "test/naming/unit/unicode/test.rs",
-          "sha256": "52d8ab65bcecf464b50fa3106e91e35bf7608eaf6d8aaff09171d9e46113d24b",
+          "sha256": "5d4ca7ff31464f33147881e0f7237bbcccce3cc53c95239b37c1167cbc4742a5",
           "source": "src/naming/src/unicode/test.rs",
           "source_sha256_before": "52d8ab65bcecf464b50fa3106e91e35bf7608eaf6d8aaff09171d9e46113d24b"
         }

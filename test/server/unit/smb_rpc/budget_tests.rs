@@ -233,7 +233,9 @@ fn failed_growth_record_keeps_data_and_blocks_new_admission() {
     fs::remove_file(record_path(&lease.source)).unwrap();
     fs::create_dir(record_path(&lease.source)).unwrap();
     assert!(lease.before_write_available(20, 17, u64::MAX).is_err());
-    assert_eq!(total(&budget), OVERHEAD + 20);
+    // The admissible grant reaches the handle maximum and stays charged even
+    // though its record could not be persisted.
+    assert_eq!(total(&budget), OVERHEAD + 100);
     assert!(reserve(&budget, "bob", "other", 0).is_err());
     assert_eq!(fs::read(&lease.source).unwrap(), b"old");
     drop(lease);
@@ -499,4 +501,216 @@ fn failed_budget_cleanup_keeps_accounted_high_water() {
     drop(lease);
     assert_eq!(total(&budget), OVERHEAD + 100);
     assert!(root.path().join("copy.budget.json").is_dir());
+}
+
+fn grown_end(root: &Path, name: &str) -> u64 {
+    let owner: Owner = storage_contract::decode_strict(
+        &fs::read(root.join(format!("{name}.budget.json"))).unwrap(),
+    )
+    .unwrap();
+    owner.admitted_end
+}
+
+#[test]
+fn growth_grants_a_bounded_extent_that_later_writes_reuse() {
+    const MIB: u64 = 1 << 20;
+    let root = crate::tests::private_tempdir();
+    let budget = Budget::recover(root.path(), limits(1 << 40, 1 << 40)).unwrap();
+    let mut lease = budget
+        .reserve_available("alice", &root.path().join("copy"), 0, 1 << 40, u64::MAX)
+        .unwrap();
+    let start = persist::record_writes().1;
+    // Small ends receive the 1 MiB minimum; the grant is durable before ready.
+    lease
+        .before_write_available(65536, 65536, u64::MAX)
+        .unwrap();
+    assert_eq!(grown_end(root.path(), "copy"), 65536 + MIB);
+    assert_eq!(persist::record_writes().1 - start, 1);
+    for end in (2..=17).map(|index| index * 65536) {
+        lease.before_write_available(end, 65536, u64::MAX).unwrap();
+    }
+    assert_eq!(
+        persist::record_writes().1 - start,
+        1,
+        "writes inside the grant reuse it"
+    );
+    // Beyond the grant: a quarter of the new end, capped at 64 MiB.
+    lease
+        .before_write_available(18 * 65536, 65536, u64::MAX)
+        .unwrap();
+    assert_eq!(grown_end(root.path(), "copy"), 18 * 65536 + MIB);
+    lease
+        .before_write_available(40 * MIB, MIB, u64::MAX)
+        .unwrap();
+    assert_eq!(grown_end(root.path(), "copy"), 50 * MIB);
+    lease
+        .before_write_available(1024 * MIB, MIB, u64::MAX)
+        .unwrap();
+    assert_eq!(grown_end(root.path(), "copy"), 1088 * MIB);
+    assert_eq!(persist::record_writes().1 - start, 4);
+    assert_eq!(total(&budget), OVERHEAD + 1088 * MIB);
+    assert_eq!(budget.ledger.lock().unwrap().granted, 64 * MIB);
+    // A retained copy keeps the whole grant charged across restart.
+    fs::write(&lease.source, b"bytes").unwrap();
+    drop(lease);
+    assert_eq!(budget.ledger.lock().unwrap().granted, 0);
+    drop(budget);
+    let budget = Budget::recover(root.path(), limits(1 << 40, 1 << 40)).unwrap();
+    assert_eq!(total(&budget), OVERHEAD + 1088 * MIB);
+    assert_eq!(budget.ledger.lock().unwrap().granted, 0);
+}
+
+#[test]
+fn grants_never_reject_a_write_that_its_exact_end_admits() {
+    const MIB: u64 = 1 << 20;
+    let root = crate::tests::private_tempdir();
+    // The account admits exactly 10 MiB of extent: no room for any grant.
+    let budget = Budget::recover(root.path(), limits(OVERHEAD + 10 * MIB, 1 << 40)).unwrap();
+    let mut lease = budget
+        .reserve_available("alice", &root.path().join("copy"), 0, 1 << 30, u64::MAX)
+        .unwrap();
+    lease
+        .before_write_available(10 * MIB, MIB, u64::MAX)
+        .unwrap();
+    assert_eq!(grown_end(root.path(), "copy"), 10 * MIB);
+    assert!(
+        lease
+            .before_write_available(10 * MIB + 1, 1, u64::MAX)
+            .is_err()
+    );
+    assert_eq!(budget.ledger.lock().unwrap().granted, 0);
+    // Free space admits the exact end plus recovery headroom but not the grant.
+    let other = crate::tests::private_tempdir();
+    let budget = Budget::recover(other.path(), limits(1 << 40, 1 << 40)).unwrap();
+    let mut lease = budget
+        .reserve_available("alice", &other.path().join("copy"), 0, 1 << 30, u64::MAX)
+        .unwrap();
+    let exact = OVERHEAD + 4 * MIB + 1;
+    lease.before_write_available(4 * MIB, MIB, exact).unwrap();
+    assert_eq!(grown_end(other.path(), "copy"), 4 * MIB);
+    assert_eq!(total(&budget), OVERHEAD + 4 * MIB);
+}
+
+#[test]
+fn optional_grant_accounting_overflow_is_not_hidden_by_exact_end_fallback() {
+    let root = crate::tests::private_tempdir();
+    let budget = Budget::recover(root.path(), limits(u64::MAX, u64::MAX)).unwrap();
+    let source = root.path().join("copy");
+    let mut lease = budget
+        .reserve_available("alice", &source, 0, u64::MAX, u64::MAX)
+        .unwrap();
+    fs::write(&source, b"").unwrap();
+    let end = u64::MAX - OVERHEAD;
+    // Admitted external u64 limits can make the optional ceiling overflow its
+    // metadata charge even though the exact requested end is representable.
+    budget
+        .check_admission(&budget.lock_ledger(), "alice", &source, end, u64::MAX)
+        .unwrap();
+    let grows = persist::record_writes().1;
+    let error = lease.before_write_available(end, 1, u64::MAX).unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::SmbSpoolUnavailable);
+    assert_eq!(error.message, "SMB spool accounting overflow");
+    assert_eq!(persist::record_writes().1, grows);
+    assert_eq!(grown_end(root.path(), "copy"), 0);
+    assert_eq!(total(&budget), OVERHEAD);
+    assert_eq!(budget.ledger.lock().unwrap().granted, 0);
+    assert_eq!(fs::read(&source).unwrap(), b"");
+}
+
+#[test]
+fn every_write_inside_a_grant_still_checks_actual_space() {
+    let root = crate::tests::private_tempdir();
+    let budget = Budget::recover(root.path(), limits(1 << 40, 1 << 40)).unwrap();
+    let mut lease = budget
+        .reserve_available("alice", &root.path().join("copy"), 0, 1 << 30, u64::MAX)
+        .unwrap();
+    lease.before_write_available(4096, 4096, u64::MAX).unwrap();
+    let start = persist::record_writes().1;
+    // Overwrites and writes inside the granted extent need no growth, but the
+    // bytes plus recovery headroom must still fit the current free space.
+    let error = lease.before_write_available(4096, 4096, 4096).unwrap_err();
+    assert_eq!(
+        error.code,
+        storage_contract::ErrorCode::ResourceLimitExceeded
+    );
+    lease.before_write_available(4096, 4096, 4097).unwrap();
+    assert_eq!(persist::record_writes().1, start);
+}
+
+#[test]
+fn the_live_grant_pool_bounds_outstanding_grants_and_returns_them_on_drop() {
+    const MIB: u64 = 1 << 20;
+    let root = crate::tests::private_tempdir();
+    // bytes_total / 64 leaves a 2 MiB pool: two minimum grants.
+    let budget = Budget::recover(root.path(), limits(128 * MIB, 128 * MIB)).unwrap();
+    let mut leases = ["a", "b", "c"]
+        .map(|name| {
+            budget
+                .reserve_available("alice", &root.path().join(name), 0, 1 << 30, u64::MAX)
+                .unwrap()
+        })
+        .into_iter()
+        .collect::<Vec<_>>();
+    for lease in &mut leases {
+        lease.before_write_available(1, 1, u64::MAX).unwrap();
+    }
+    assert_eq!(grown_end(root.path(), "a"), 1 + MIB);
+    assert_eq!(grown_end(root.path(), "b"), 1 + MIB);
+    assert_eq!(
+        grown_end(root.path(), "c"),
+        1,
+        "an exhausted pool admits the exact end"
+    );
+    assert_eq!(budget.ledger.lock().unwrap().granted, 2 * MIB);
+    drop(leases.remove(0));
+    assert_eq!(budget.ledger.lock().unwrap().granted, MIB);
+    leases[1].before_write_available(2, 1, u64::MAX).unwrap();
+    assert_eq!(grown_end(root.path(), "c"), 2 + MIB);
+    // Regrowing replaces, not accumulates, a lease's share of the pool.
+    leases[0]
+        .before_write_available(2 * MIB, MIB, u64::MAX)
+        .unwrap();
+    assert_eq!(grown_end(root.path(), "b"), 3 * MIB);
+    assert_eq!(budget.ledger.lock().unwrap().granted, 2 * MIB);
+}
+
+#[test]
+fn retained_grants_can_exceed_the_live_pool_but_remain_charged_after_restart() {
+    const MIB: u64 = 1 << 20;
+    const LIMIT: u64 = 128 * MIB;
+    let root = crate::tests::private_tempdir();
+    let budget = Budget::recover(root.path(), limits(LIMIT, LIMIT)).unwrap();
+    for name in ["a", "b", "c"] {
+        let mut lease = budget
+            .reserve_available("alice", &root.path().join(name), 0, LIMIT, u64::MAX)
+            .unwrap();
+        lease.before_write_available(1, 1, u64::MAX).unwrap();
+        fs::write(&lease.source, b"x").unwrap();
+        drop(lease);
+        assert_eq!(budget.ledger.lock().unwrap().granted, 0);
+    }
+    let retained = 3 * (OVERHEAD + MIB + 1);
+    assert!(3 * MIB > budget.grant_pool());
+    assert_eq!(total(&budget), retained);
+    assert_eq!(budget.ledger.lock().unwrap().accounts["alice"], retained);
+    drop(budget);
+    let budget = Budget::recover(root.path(), limits(LIMIT, LIMIT)).unwrap();
+    assert_eq!(total(&budget), retained);
+    assert_eq!(budget.ledger.lock().unwrap().accounts["alice"], retained);
+    assert_eq!(budget.ledger.lock().unwrap().granted, 0);
+    // Another account may use only the real remaining global reservation budget.
+    let remaining = LIMIT - retained - OVERHEAD;
+    let _other = reserve(&budget, "bob", "other", remaining).unwrap();
+    assert_eq!(total(&budget), LIMIT);
+    assert_eq!(
+        reserve(&budget, "charlie", "blocked", 0)
+            .err()
+            .unwrap()
+            .code,
+        storage_contract::ErrorCode::ResourceLimitExceeded
+    );
+    for name in ["a", "b", "c"] {
+        assert_eq!(fs::read(root.path().join(name)).unwrap(), b"x");
+        assert_eq!(grown_end(root.path(), name), MIB + 1);
+    }
 }

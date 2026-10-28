@@ -30,11 +30,18 @@ class ConcurrentCollectionsGateTests(unittest.TestCase):
         for module, name in GATE.INTEGRATIONS:
             self.assertTrue((ROOT / "test/foundation/concurrent-collections" / module / "tests" / (name + ".rs")).is_file())
 
-    def test_dormant_material_is_not_discarded_or_counted(self):
-        self.assertEqual(len(GATE.DORMANT), 6)
-        for path in GATE.DORMANT:
-            self.assertTrue((ROOT / "test/foundation/concurrent-collections" / path).is_file())
-        self.assertFalse(set(GATE.DORMANT) & {f"{module}/tests/{name}.rs" for module, name in GATE.INTEGRATIONS})
+    def test_formerly_dormant_integrations_run_once_in_the_behaviour_gate(self):
+        spec = importlib.util.spec_from_file_location(
+            "behaviour_gate", ROOT / ".github/scripts/check-foundation-behaviour.py")
+        behaviour = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(behaviour)
+        suite, = [s for s in behaviour.INTEGRATION_SUITES if s.subject == "concurrent-collections"]
+        executed = {path.removeprefix("test/foundation/concurrent-collections/") for path in suite.tests}
+        self.assertEqual(executed, set(GATE.BEHAVIOUR_GATE))
+        self.assertFalse(set(GATE.BEHAVIOUR_GATE) & {f"{module}/tests/{name}.rs" for module, name in GATE.INTEGRATIONS})
+        for path in GATE.BEHAVIOUR_GATE:
+            source = (ROOT / "test/foundation/concurrent-collections" / path).read_text()
+            self.assertNotRegex(source, r"\brand::")
 
     def test_semantics_fixture_covers_four_real_cases(self):
         source = (ROOT / "test/tools/concurrent-collections/semantics.rs").read_text()

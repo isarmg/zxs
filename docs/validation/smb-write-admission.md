@@ -1,0 +1,58 @@
+# SMB 写入准入分代与额度授予验证
+
+[ADR 0010](../adr/0010-smb-write-generations-and-extent-grants.md) · [SMB 组件](../components/smb.md)
+
+本记录只描述下列命令在验证环境中实际得到的结果：2 vCPU、7 GiB 内存的 Linux 虚拟机，测试临时目录位于 ext4 根文件系统（`TMPDIR=/tmp/zt`）。工具链为本机可用的 Rust 1.97.0（`--ignore-rust-version`），仓库固定的 1.99.0 无法在此环境下载。计数与延迟来自同一进程内的真实核心引擎会话和 spool，不包含 Samba、网络或客户端；不是物理盘、实际 SDK 或吞吐验收。
+
+交接证据范围：下列数字来自提交作者的 Rust 1.97.0 报告。Release `123` 的 `zxs-tasks-4-7.1.zip` 包含提交 `955580ef` 的源码，但不含报告所述 `evidence/` 原始日志及未提交的基线测量补丁。因此这些数字保留为待复核的历史测量，不作为固定工具链、当前集成提交或真实 SMB 性能的采用证明。
+
+## 方法
+
+- 基线：提交 `39fbb997`，测量代码只作为工作树临时补丁加入（未提交），驱动旧 VFS 序列：每次写入 `PrepareWrite` + `pwrite` + `Dirty`。
+- 变更后：交接分支，`test/server/unit/smb_rpc/write_generation_tests.rs` 的 `measurement` 模块以 VFS 实际使用的 `WriteSequence` 驱动同一工作负载。测试直接调用 `Session::dispatch`，不经过 socketpair 或 RPC 编解码；下述 RPC 数字是按类型统计的请求次数，不是实测网络往返。
+- 两侧均以 `CARGO_PROFILE_TEST_OPT_LEVEL=2` 构建测试二进制，按 `--ignored --exact --test-threads=1` 单独运行。
+- 计数：RPC 与预算／恢复记录写入由测试统计（后两者来自仅 `cfg(test)` 的真实持久化包装）；文件／目录同步来自 `strace -f -y -e trace=fsync,fdatasync,getppid`，以测试中的 `getppid` 分隔写入、Flush、Close 阶段，并按路径在运行后是否为目录分类。计时在不挂 `strace` 的独立运行中取得。
+- Flush／Close 尾延迟：每轮 40 次「新建 8 MiB 文件（64 KiB 写）→ Flush → 再写 64 KiB → Close」，两侧交替运行三轮以分离环境漂移。
+
+## 写入阶段计数与耗时
+
+| 工作负载 | 版本 | PrepareWrite | Dirty | 预算记录写入 | 恢复记录替换 | 文件／目录同步 | 写入阶段耗时 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 新文件顺序追加 1 GiB，64 KiB 写 | 基线 | 16,384 | 16,384 | 16,384 | 0 | 16,384／16,384 | 14,922 ms |
+| | 变更后 | 16,384 | 1 | 35 | 0 | 35／35 | 853 ms |
+| 新文件顺序追加 64 MiB，4 KiB 写 | 基线 | 16,384 | 16,384 | 16,384 | 0 | 16,384／16,384 | 14,308 ms |
+| | 变更后 | 16,384 | 1 | 17 | 0 | 17／17 | 123 ms |
+| 已发布 256 MiB 文件原位覆盖，64 KiB 写 | 基线 | 4,096 | 4,096 | 0 | 2 | 4／8 | 200 ms |
+| | 变更后 | 4,096 | 1 | 0 | 2 | 4／8 | 85 ms |
+
+每 GiB（64 KiB 写）：RPC 由 32,768 次降为 16,385 次；预算记录原子替换由 16,384 次降为 35 次；写入阶段文件与目录同步各由 16,384 次降为 35 次；`Dirty` 引起的恢复记录复用核验由 16,384 次降为 1 次。新建文件在 Open 时已是 dirty，因此两侧恢复记录替换均为 0；覆盖已发布文件的 2 次替换来自 Open 与首次 Dirty 换代，两侧相同。
+
+覆盖写不增长文件，两侧都没有预算增长；但每次写入仍执行 `PrepareWrite` 的空间检查，变更后的差别来自省略同代 `Dirty`。
+
+## Flush 与 Close
+
+Flush 阶段的同步次数在 1 GiB 工作负载两侧相同（文件 175、目录 237）；64 MiB 工作负载为 237 与 243 次目录同步，差异来自引擎元数据按内容哈希分片的目录是否新建（各次运行的随机标识不同），对应路径均位于核心 `metadata/objects`，SMB 写入路径的改动不参与 Flush。
+
+| 轮次 | 版本 | Flush p50／p95／p99 | Close p50／p95／p99 |
+| --- | --- | --- | --- |
+| 1 | 基线 | 291／357／371 ms | 273／313／339 ms |
+| 1 | 变更后 | 283／348／367 ms | 267／327／373 ms |
+| 2 | 基线 | 297／372／411 ms | 278／334／378 ms |
+| 2 | 变更后 | 291／350／404 ms | 268／306／322 ms |
+| 3 | 基线 | 292／374／420 ms | 269／326／343 ms |
+| 3 | 变更后 | 302／373／390 ms | 282／331／362 ms |
+
+40 个样本的 p99 即最大值。两侧差异在轮间波动范围内：本改动没有改变 Flush／Close 的工作，也没有观察到尾延迟回退或改善。单次非交替运行曾得到变更后 p50 高约 13% 的结果，交替重测未复现，判定为环境漂移。
+
+## 回归
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test --locked --offline -p storage-server --lib` | 726 通过，7 忽略（含两项测量） |
+| `cargo test --locked --offline -p smb-protocol` | 45 通过 |
+| `cargo clippy --locked --offline -p storage-server -p smb-protocol --all-targets -- -D warnings` | 无诊断 |
+
+## 未执行或受限
+
+- `smb-vfs` 需要固定的 Samba 4.23.0 SDK；验证环境缺少其构建依赖，VFS 模块与其单元测试未编译。改动的 VFS 函数在临时类型检查工程中按原文抽取，与真实 `smb-protocol` 一起通过 `cargo check`／`clippy`；这不能替代 CI 的 `smb-sdk` 任务。
+- 未执行真实 Samba 客户端、断网、掉电或多客户端互操作验收。

@@ -16,9 +16,14 @@ pub const WRITE_RESERVATION_CAPABILITY: &str = "durable-write-reservations";
 /// Upgrade gate, not an authentication proof. Only a trusted local Samba peer
 /// may attest this behavior after checking its actual authenticated session.
 pub const AUTHENTICATED_ACCOUNT_CAPABILITY: &str = "authenticated-single-account";
-pub const REQUIRED_CAPABILITIES: [&str; 2] = [
+/// `PrepareWrite` authorizes every descriptor mutation; `Dirty` is sent only
+/// when a mutation opens a save generation (first change after open or Flush)
+/// and for every write-through change. See `client::WriteSequence`.
+pub const GENERATION_DIRTY_CAPABILITY: &str = "generation-dirty-writes";
+pub const REQUIRED_CAPABILITIES: [&str; 3] = [
     WRITE_RESERVATION_CAPABILITY,
     AUTHENTICATED_ACCOUNT_CAPABILITY,
+    GENERATION_DIRTY_CAPABILITY,
 ];
 
 /// A single exact Samba account name, never an alias-to-principal mapping.
@@ -64,7 +69,8 @@ pub enum Request<O = String> {
         exclusive: bool,
         write_through: bool,
     },
-    /// Check the already-reserved write ceiling and recovery headroom before FD I/O.
+    /// Admit one descriptor mutation before FD I/O: current authorization,
+    /// the durable write ceiling and recovery headroom for these bytes.
     PrepareWrite {
         #[serialization(with = "storage_contract::u64_string")]
         handle: u64,

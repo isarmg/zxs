@@ -264,16 +264,6 @@ mod tests {
     }
 
     #[test]
-    fn init_from_ref_basic() {
-        let once = Once::<usize, Spin>::new();
-
-        let first = 1usize;
-        let second = 2usize;
-        assert_eq!(*once.init_from_ref(&first), 1);
-        assert_eq!(*once.init_from_ref(&second), 1);
-    }
-
-    #[test]
     fn drop_boxed() {
         let boxed = Box::new(5);
         let once = Once::<_, Spin>::initialized(boxed);

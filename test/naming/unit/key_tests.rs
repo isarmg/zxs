@@ -47,7 +47,13 @@ fn canonical_equivalence_and_long_sequences_preserve_keys() {
     ] {
         let expected = materialized_key(input);
         assert_eq!(lookup_key(input), expected, "{input:?}");
-        assert_eq!(lookup_key(&input.nfd().collect::<String>()), expected);
+        // Replace each scalar by its full canonical decomposition: a
+        // canonically equivalent spelling of the same name.
+        let mut decomposed = String::new();
+        for c in input.chars() {
+            unicode::char::decompose_canonical(c, |d| decomposed.push(d));
+        }
+        assert_eq!(lookup_key(&decomposed), expected);
         assert_eq!(lookup_key(&input.nfc().collect::<String>()), expected);
     }
     // Do not silently insert stream-safe CGJ or truncate long sequences. Public

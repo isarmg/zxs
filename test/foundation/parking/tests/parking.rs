@@ -1,9 +1,8 @@
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
-use std::thread::sleep;
+use std::thread::{self, sleep};
 use std::time::{Duration, Instant};
 
-use easy_parallel::Parallel;
 use parking::Parker;
 
 #[test]
@@ -29,15 +28,13 @@ fn park_timeout_unpark_called_other_thread() {
         let p = Parker::new();
         let u = p.unparker();
 
-        Parallel::new()
-            .add(move || {
+        thread::scope(|scope| {
+            scope.spawn(move || {
                 sleep(Duration::from_millis(50));
                 u.unpark();
-            })
-            .add(move || {
-                p.park_timeout(Duration::from_millis(u32::MAX as u64));
-            })
-            .run();
+            });
+            p.park_timeout(Duration::from_millis(u32::MAX as u64));
+        });
     }
 }
 
@@ -47,16 +44,14 @@ fn park_deadline_unpark_called_other_thread() {
         let p = Parker::new();
         let u = p.unparker();
 
-        Parallel::new()
-            .add(move || {
+        thread::scope(|scope| {
+            scope.spawn(move || {
                 sleep(Duration::from_millis(50));
                 u.unpark();
-            })
-            .add(move || {
-                let deadline = Instant::now() + Duration::from_micros(u32::MAX as u64);
-                p.park_deadline(deadline);
-            })
-            .run();
+            });
+            let deadline = Instant::now() + Duration::from_micros(u32::MAX as u64);
+            p.park_deadline(deadline);
+        });
     }
 }
 
@@ -65,17 +60,15 @@ fn park_then_wake_from_other_thread() {
     for _ in 0..10 {
         let (p, u) = parking::pair();
 
-        Parallel::new()
-            .add(move || {
+        thread::scope(|scope| {
+            scope.spawn(move || {
                 sleep(Duration::from_millis(50));
                 u.unpark();
-            })
-            .add(move || {
-                let start = Instant::now();
-                p.park();
-                assert!(Instant::now().duration_since(start) >= Duration::from_millis(50));
-            })
-            .run();
+            });
+            let start = Instant::now();
+            p.park();
+            assert!(Instant::now().duration_since(start) >= Duration::from_millis(50));
+        });
     }
 }
 

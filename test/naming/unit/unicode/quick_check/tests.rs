@@ -1,19 +1,30 @@
-use super::{IsNormalized, is_nfc_stream_safe_quick, is_nfd_stream_safe_quick};
+use super::{IsNormalized, is_nfc, is_nfc_quick};
 
 #[test]
-fn test_stream_safe_nfd() {
-    let okay = "Da\u{031b}\u{0316}\u{0317}\u{0318}\u{0319}\u{031c}\u{031d}\u{0300}\u{0301}\u{0302}\u{0303}\u{0304}\u{0305}\u{0306}\u{0307}\u{0308}\u{0309}\u{030a}\u{030b}\u{030c}\u{030d}\u{030e}\u{030f}\u{0310}\u{0311}\u{0312}\u{0313}\u{0314}\u{0315}\u{031a}ngerzone";
-    assert_eq!(is_nfd_stream_safe_quick(okay.chars()), IsNormalized::Yes);
-
-    let too_much = "Da\u{031b}\u{0316}\u{0317}\u{0318}\u{0319}\u{031c}\u{031d}\u{031e}\u{0300}\u{0301}\u{0302}\u{0303}\u{0304}\u{0305}\u{0306}\u{0307}\u{0308}\u{0309}\u{030a}\u{030b}\u{030c}\u{030d}\u{030e}\u{030f}\u{0310}\u{0311}\u{0312}\u{0313}\u{0314}\u{0315}\u{031a}ngerzone";
-    assert_eq!(is_nfd_stream_safe_quick(too_much.chars()), IsNormalized::No);
+fn quick_check_classifies_nfc_yes_no_and_maybe() {
+    for (input, expected) in [
+        ("abc", IsNormalized::Yes),
+        ("\u{e9}\u{1e0d}\u{4e2d}", IsNormalized::Yes),
+        // Out-of-order combining marks (ccc 230 before 220).
+        ("a\u{301}\u{323}", IsNormalized::No),
+        // Singleton and composition-excluded characters never occur in NFC.
+        ("\u{2126}", IsNormalized::No),
+        ("\u{958}", IsNormalized::No),
+        // Combining marks that may compose with the preceding starter.
+        ("a\u{301}", IsNormalized::Maybe),
+        ("\u{1161}", IsNormalized::Maybe),
+        // Unicode 16 Tulu-Tigalari vowel sign with NFC_QC=Maybe.
+        ("\u{113c9}", IsNormalized::Maybe),
+    ] {
+        assert_eq!(is_nfc_quick(input.chars()), expected, "{input:?}");
+    }
 }
 
 #[test]
-fn test_stream_safe_nfc() {
-    let okay = "ok\u{e0}\u{031b}\u{0316}\u{0317}\u{0318}\u{0319}\u{031c}\u{031d}\u{0301}\u{0302}\u{0303}\u{0304}\u{0305}\u{0306}\u{0307}\u{0308}\u{0309}\u{030a}\u{030b}\u{030c}\u{030d}\u{030e}\u{030f}\u{0310}\u{0311}\u{0312}\u{0313}\u{0314}\u{0315}\u{031a}y";
-    assert_eq!(is_nfc_stream_safe_quick(okay.chars()), IsNormalized::Maybe);
-
-    let too_much = "not ok\u{e0}\u{031b}\u{0316}\u{0317}\u{0318}\u{0319}\u{031c}\u{031d}\u{031e}\u{0301}\u{0302}\u{0303}\u{0304}\u{0305}\u{0306}\u{0307}\u{0308}\u{0309}\u{030a}\u{030b}\u{030c}\u{030d}\u{030e}\u{030f}\u{0310}\u{0311}\u{0312}\u{0313}\u{0314}\u{0315}\u{031a}y";
-    assert_eq!(is_nfc_stream_safe_quick(too_much.chars()), IsNormalized::No);
+fn maybe_results_are_resolved_by_full_composition() {
+    assert!(!is_nfc("a\u{301}"));
+    assert!(is_nfc("\u{301}"));
+    assert!(!is_nfc("\u{1100}\u{1161}"));
+    assert!(!is_nfc("\u{113c2}\u{113c9}"));
+    assert!(is_nfc("\u{113c8}"));
 }

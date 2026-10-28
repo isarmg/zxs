@@ -3,7 +3,7 @@ use super::{Context, Open, authentication, bad, context, sdk};
 
 type Request = RawRequest<storage_contract::OperationId>;
 use smb_protocol::{
-    client::{Client, close_descriptor},
+    client::{Client, WriteSequence, close_descriptor},
     protocol::{OpenResult, Request as RawRequest},
 };
 use std::{
@@ -16,7 +16,7 @@ pub(super) struct Snapshot {
     pub(super) info: Arc<OpenResult>,
     pub(super) fd: OwnedFd,
     pub(super) writable: bool,
-    pub(super) io: Arc<Mutex<()>>,
+    pub(super) io: Arc<Mutex<WriteSequence>>,
 }
 /// # Safety
 /// handle obeys the module host contract and its Context is exclusively accessed

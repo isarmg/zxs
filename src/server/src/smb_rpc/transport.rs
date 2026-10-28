@@ -91,7 +91,7 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
             .all(|required| capabilities.iter().any(|value| value == required))
         {
             return Err(ApiError::invalid(
-                "SMB bridge requires authenticated single-account sessions and durable write reservations",
+                "SMB bridge requires authenticated single-account sessions, durable write reservations and generation Dirty writes",
             ));
         }
         if username != shared.username {
