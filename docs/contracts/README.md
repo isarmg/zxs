@@ -74,3 +74,5 @@ Rust 依赖源码已包含在仓库中，首次构建也使用唯一根锁文件
 
 规范 JSON 整数写出优化的边界、差分测试与完整编码测量方法见
 [规范 JSON 编码验证](../validation/canonical-number-encoding.md)。
+
+工作区 capacity 的两个 scope 均新增必填 `cold_records`（规范 UInt64 十进制字符串）；`records` 只计未冷存驻留记录，`metadata_bytes` 仍含全部完整清单与生命周期预留。`automatic_retirement` 是布尔能力字段，当前 Engine 返回 true，仅指普通空 Aborted 原路径冷存，不能推断通用清理或无限历史。缺少新字段的旧响应不兼容；Schema、OpenAPI、固定正反向量与 Rust/Web DTO 同步，仍须执行契约验证后才能声称通过。

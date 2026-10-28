@@ -1216,7 +1216,7 @@ fn assert_workspace_limits(engine: &Engine, limits: RetainedWorkspaceLimits) {
         capacity.principal.metadata_bytes.limit,
         limits.max_retained_workspace_metadata_bytes_per_principal
     );
-    assert!(!capacity.automatic_retirement);
+    assert!(capacity.automatic_retirement);
 }
 
 #[test]

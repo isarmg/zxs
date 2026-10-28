@@ -155,10 +155,12 @@ fn capacity_summary(scope: Option<&WorkspaceCapacityScope>) -> String {
         return t("不可用", "Unavailable");
     };
     format!(
-        "{}: {} / {} · {}: {} / {}",
-        t("记录", "Records"),
+        "{}: {} / {} · {}: {} · {}: {} / {}",
+        t("驻留记录", "Resident records"),
         scope.records.used,
         scope.records.limit,
+        t("冷存记录", "Cold records"),
+        scope.cold_records,
         t("预留元数据", "Reserved metadata"),
         format::bytes(scope.metadata_bytes.used),
         format::bytes(scope.metadata_bytes.limit)
@@ -453,7 +455,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                     <p role="status">{move || state.with(|s| capacity_warning(s.monitor.capacity.as_ref()))}</p>
                     <p>{move || state.with(|s| format!("{}：{}", t("全池", "Pool"), capacity_summary(s.monitor.capacity.as_ref().map(|capacity| &capacity.global))))}</p>
                     <p>{move || state.with(|s| format!("{}：{}", t("当前账户", "Current account"), capacity_summary(s.monitor.capacity.as_ref().map(|capacity| &capacity.principal))))}</p>
-                    <p>{t("这是累计生命周期额度，不是活动工作区数。成功提交、中止和过期均不会释放证据名额；当前无自动退休或既有池配额调整。元数据额度不是磁盘剩余空间。", "These are lifetime evidence quotas, not active workspace counts. Committed, aborted and expired records remain charged. Automatic retirement and existing-pool quota changes are not available. Metadata quota is not free disk space.")}</p>
+                    <p>{t("仅经核验的普通空中止记录退出驻留计数；完整清单仍可查询并累计占用元数据额度。已提交、含请求或正文的记录继续驻留；冷存不等于删除或无限历史。元数据额度不是磁盘剩余空间。", "Only verified empty ordinary aborted records leave the resident count. Full manifests remain queryable and charged to cumulative metadata. Committed records and records with request or payload evidence remain resident. Cold storage is not deletion or unlimited history; metadata quota is not free disk space.")}</p>
                 </article>
                 {move || state.with(|s| disk_sampling_notice(&s.monitor.snapshot)).map(|message| view!{<p class="zxs-row" role="status">{message}</p>})}
                 <div class="zxs-metric-grid zxs-surface-start"><For each=move ||available_metrics.get() key=Metric::key children=move |metric|metric_card(state,metric)/></div>

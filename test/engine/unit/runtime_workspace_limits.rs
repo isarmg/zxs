@@ -180,6 +180,9 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
         .create_workspace(&repo.main_branch_id, "admin")
         .unwrap();
     engine
+        .stage_bytes(&aborted.workspace_id, "retained", b"evidence")
+        .unwrap();
+    engine
         .abort_workspace(&aborted.workspace_id, "admin")
         .unwrap();
     let error = engine
@@ -211,7 +214,7 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
     assert_eq!(report.global.records.used, 3);
     assert_eq!(report.global.records.limit, 3);
     assert_eq!(report.principal.records.used, 2);
-    assert!(!report.automatic_retirement);
+    assert!(report.automatic_retirement);
     engine.assert_workspace_budget_consistent();
     drop(engine);
     let before = files(f.temp.path());

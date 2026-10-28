@@ -157,12 +157,12 @@ fn workspace_authorization_borrows_records_and_preserves_owner_checks() {
         .unwrap();
     let borrowed = workspace_authorize(&engine, &owner, &workspace.workspace_id).unwrap();
     assert!(std::ptr::eq(
-        borrowed,
-        engine.workspace_ref(&workspace.workspace_id).unwrap()
+        &*borrowed,
+        &*engine.workspace_view(&workspace.workspace_id).unwrap()
     ));
     assert_eq!(borrowed.files.len(), 1);
     let snapshot = engine.workspace(&workspace.workspace_id).unwrap();
-    assert!(!std::ptr::eq(&snapshot, borrowed));
+    assert!(!std::ptr::eq(&snapshot, &*borrowed));
     assert_eq!(snapshot.files.len(), borrowed.files.len());
     let mut stranger = owner.clone();
     stranger.principal = "stranger".into();
@@ -184,11 +184,25 @@ fn workspace_authorization_borrows_records_and_preserves_owner_checks() {
     assert_eq!(snapshot.files.len(), 1);
     assert_eq!(
         engine
-            .workspace_ref(&workspace.workspace_id)
+            .workspace_view(&workspace.workspace_id)
             .unwrap()
             .files
             .len(),
         2
+    );
+    let cold = engine
+        .create_workspace(&repo.main_branch_id, "owner")
+        .unwrap();
+    engine.abort_workspace(&cold.workspace_id, "owner").unwrap();
+    assert!(matches!(
+        workspace_authorize(&engine, &owner, &cold.workspace_id).unwrap(),
+        std::borrow::Cow::Owned(_)
+    ));
+    assert_eq!(
+        workspace_authorize(&engine, &stranger, &cold.workspace_id)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Forbidden
     );
 }
 

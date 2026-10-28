@@ -1264,6 +1264,7 @@ fn probe_capacity() -> storage_contract::WorkspaceCapacity {
     };
     let scope = storage_contract::WorkspaceCapacityScope {
         records: measure.clone(),
+        cold_records: 0,
         metadata_bytes: measure,
     };
     storage_contract::WorkspaceCapacity {

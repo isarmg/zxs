@@ -458,8 +458,8 @@ impl Engine {
         path: &name_policy::PortablePath,
     ) -> Result<()> {
         let key = path.key();
-        let workspace = self.workspace_ref(workspace)?;
-        validate_directory_selection_key(&self.state, workspace, key)?;
+        let workspace = self.workspace_view(workspace)?;
+        validate_directory_selection_key(&self.state, &workspace, key)?;
         let mut entry = self
             .commit_namespace(&workspace.base_head)
             .and_then(|tree| tree.get_key(key));
@@ -488,7 +488,7 @@ impl Engine {
             );
         }
         if let Some(entry) = entry {
-            validate_file_context(&self.state, workspace, &entry.file_id, key)?;
+            validate_file_context(&self.state, &workspace, &entry.file_id, key)?;
         }
         Ok(())
     }
@@ -1121,9 +1121,7 @@ impl Engine {
         }
         w.state = WorkspaceState::Aborted;
         w.fencing_token = w.fencing_token.saturating_add(1);
-        self.persist_workspace(&w)?;
-        self.workspaces.insert(id.into(), w);
-        Ok(())
+        self.persist_aborted_workspace(w)
     }
     pub fn commit_workspace(&mut self, request: CommitRequest) -> Result<OperationResult> {
         self.commit_workspace_inner(request, None)

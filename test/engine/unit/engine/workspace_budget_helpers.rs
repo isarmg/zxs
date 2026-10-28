@@ -7,20 +7,40 @@ impl Engine {
 
     pub(crate) fn assert_workspace_budget_consistent(&self) {
         let mut expected = WorkspaceBudget::default();
-        for workspace in self.workspaces.values() {
-            let charge = self.workspace_metadata_charge(workspace).unwrap();
+        for id in self.workspace_budget.records.keys() {
+            let workspace = self.workspace(id).unwrap();
+            let canonical = canonical_json(&workspace).unwrap();
+            let charge = self
+                .workspace_metadata_charge(&workspace, canonical.len())
+                .unwrap();
+            let resident = self.workspaces.contains_key(id);
+            let retention = if resident {
+                WorkspaceRetention::Resident
+            } else {
+                WorkspaceRetention::Cold {
+                    fingerprint: blake3::hash(&canonical),
+                    mirrors: match self.workspace_budget.records[id].retention {
+                        WorkspaceRetention::Cold { mirrors, .. } => mirrors,
+                        WorkspaceRetention::Resident => panic!("missing resident workspace"),
+                    },
+                }
+            };
             expected.records.insert(
-                workspace.workspace_id.clone(),
-                (workspace.principal.clone(), charge),
+                id.clone(),
+                WorkspaceCharge {
+                    principal: workspace.principal.clone(),
+                    bytes: charge,
+                    retention,
+                },
             );
             expected.bytes += charge;
-            let principal = expected
-                .principals
-                .entry(workspace.principal.clone())
-                .or_default();
-            principal.0 += 1;
-            principal.1 += charge;
+            expected.resident += usize::from(resident);
+            let principal = expected.principals.entry(workspace.principal).or_default();
+            principal.resident += usize::from(resident);
+            principal.cold += usize::from(!resident);
+            principal.bytes += charge;
         }
+        assert_eq!(self.workspace_budget.resident, expected.resident);
         assert_eq!(self.workspace_budget.records, expected.records);
         assert_eq!(self.workspace_budget.principals, expected.principals);
         assert_eq!(self.workspace_budget.bytes, expected.bytes);

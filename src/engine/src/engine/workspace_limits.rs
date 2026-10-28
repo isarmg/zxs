@@ -3,7 +3,7 @@ use super::Engine;
 use crate::{Error, Result, ValidatedConfig};
 
 /// Explicit finite retained-evidence limits. These may raise, but never lower,
-/// the persisted pool baseline; terminal records remain charged as before.
+/// the persisted pool baseline; all metadata and non-cold records stay charged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RetainedWorkspaceLimits {
     pub max_retained_workspaces: usize,

@@ -4146,6 +4146,7 @@ fn upload_preparation_rejects_copied_bytes_not_matching_verified_stream() {
         }));
     }
 }
+mod cold_workspace_records;
 #[path = "retained_workspace_budget.rs"]
 mod retained_workspace_budget;
 #[path = "runtime_workspace_limits.rs"]

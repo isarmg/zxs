@@ -91,3 +91,14 @@ zxs-rescue configuration register-disk --config /srv/private-layout/custom.json 
 ## 检查
 
 运行 `cargo test --locked --offline -p storage-rescue`。`test/rescue/startup.rs` 覆盖命令边界、损失确认、元数据恢复、历史包字节一致性及拒绝覆盖/损坏证明；`test/rescue/unit` 覆盖草稿拓扑、权限、锁和原子备份，以及巡检的真实信号、取消、future 销毁、线程失败和 Engine 锁释放；巡检集成用例实际运行命令并检查健康、缺盘和准入失败结果。测试不替代真实设备及生产恢复演练。
+
+## 超额工作区只读库存
+
+停止守护进程后运行 `zxs-rescue --root /absolute/private-system-root workspace-inventory`。
+命令读取现有配置、校验磁盘身份并持有原写锁，但不构造 Engine、检查准入额度、重放 journal 或修复数据。
+每个可用位置的物理 `workspace.json` 单独输出一行 JSON（路径、ID、主体、状态、canonical 长度），
+全部枚举结束才输出 `complete:true, authoritative:false` 和物理清单数。镜像不去重；长度不含生命周期预留，
+不能代替 capacity 计费或权威发布核验。缺盘只表示未列出相应可用根，不宣称完整物理池健康。
+格式、路径或 I/O 错误中断命令，不输出完整成功标记；已有输出仍是部分诊断，不得据此清理数据。
+枚举器只保留配置根、一个目录游标和当前受单清单上限约束的内容，无每 ID 集合；因此既有超额池也可查看。
+除原有 writer lock 文件可能被创建外，不修改配置锚、清单、正文或索引；该命令不授予超额池写入能力。

@@ -746,12 +746,19 @@ impl Fixture {
 }
 
 pub(super) fn fixture() -> (Fixture, Arc<Shared>, Arc<LostCommitReply>, String) {
+    fixture_configure(|_| {})
+}
+
+fn fixture_configure(
+    configure: impl FnOnce(&mut Config),
+) -> (Fixture, Arc<Shared>, Arc<LostCommitReply>, String) {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
+    let mut config = Config::development([
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("c"),
     ]);
+    configure(&mut config);
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -2105,6 +2112,84 @@ fn unchanged_writable_close_cleans_up_but_disconnect_remains_uncertain() {
         assert_eq!(source.exists(), disconnect);
         assert_eq!(source.with_extension("work.json").exists(), disconnect);
         assert_eq!(backend.uploads.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence() {
+    let (temp, shared, backend, branch) = fixture_configure(|config| {
+        config.max_retained_workspaces = 2;
+        config.max_retained_workspaces_per_principal = 2;
+    });
+    let actor = identity(&shared);
+    let sequence = backend
+        .inner
+        .test_with_engine_locked(|engine| engine.state().sequence);
+    let mut client = session(shared.clone(), &branch);
+    let before = client
+        .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+        .unwrap()
+        .unwrap();
+    let mut closed = Vec::new();
+    for _ in 0..16 {
+        let (opened, file) = open_file(&mut client, true);
+        let workspace = opened.workspace_id.clone().unwrap();
+        assert_eq!(
+            backend.workspace(&actor, &workspace).unwrap().state,
+            storage_contract::WorkspaceState::Open
+        );
+        assert_eq!(client.flush(opened.handle).unwrap()["changed"], false);
+        drop(file);
+        client.close(opened.handle, false).unwrap();
+        closed.push(workspace);
+        let capacity = backend.workspace_capacity(&actor).unwrap();
+        assert_eq!(capacity.principal.records.used, 1); // Original published payload remains resident.
+        assert_eq!(capacity.principal.cold_records, closed.len() as u64);
+    }
+    assert_eq!(backend.uploads.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        backend
+            .inner
+            .test_with_engine_locked(|engine| engine.state().sequence),
+        sequence
+    );
+    assert_eq!(
+        client
+            .find(&name_policy::LookupPath::parse("report.txt").unwrap())
+            .unwrap()
+            .unwrap()
+            .version_id,
+        before.version_id
+    );
+    let (opened, file) = open_file(&mut client, true);
+    let source = match &client.handles[&opened.handle] {
+        Handle::Write(writer) => writer.source.clone(),
+        _ => unreachable!(),
+    };
+    file.write_all_at(b"unconfirmed", 0).unwrap();
+    drop(client);
+    assert!(source.is_file());
+    assert!(source.with_extension("work.json").is_file());
+    let capacity = backend.workspace_capacity(&actor).unwrap();
+    assert_eq!(capacity.principal.records.used, 2);
+    assert_eq!(capacity.principal.cold_records, 16);
+    assert_eq!(
+        backend
+            .workspace(&actor, opened.workspace_id.as_deref().unwrap())
+            .unwrap()
+            .state,
+        storage_contract::WorkspaceState::Open
+    );
+    drop(file);
+    drop(shared);
+    drop(backend);
+    let engine = Engine::open(&temp.path().join("state")).unwrap();
+    assert_eq!(engine.workspace_capacity(&actor.principal), capacity);
+    for id in closed {
+        assert_eq!(
+            engine.workspace(&id).unwrap().state,
+            storage_contract::WorkspaceState::Aborted
+        );
     }
 }
 

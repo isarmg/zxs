@@ -43,6 +43,7 @@ mod source;
 mod workspace_storage;
 use config::acquire_locks;
 pub(crate) use source::ReadSource;
+pub use workspace_storage::{WorkspaceInventory, WorkspaceInventoryRecord};
 
 /// Nonfatal checkpoint failures from the latest recovery invocation.
 #[derive(Debug, Default)]
@@ -582,17 +583,24 @@ impl Engine {
     }
     /// Own a workspace snapshot for planning that outlives a shared engine borrow.
     pub fn workspace(&self, id: &str) -> Result<Workspace> {
-        self.workspace_ref(id).cloned()
+        self.workspace_view(id).map(std::borrow::Cow::into_owned)
     }
-    /// Inspect a workspace without copying its staged-file and namespace records.
-    /// The view cannot outlive the engine borrow or span a mutation.
-    pub fn workspace_ref(&self, id: &str) -> Result<&Workspace> {
-        self.workspaces.get(id).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::WorkspaceNotFound,
-                "workspace does not exist",
-            )
-        })
+    /// Borrow resident evidence or own a verified, bounded cold-record point read.
+    /// The view cannot span an engine mutation. Cold reads can return filesystem
+    /// or reconciliation errors; they never populate a permanent manifest cache.
+    pub fn workspace_view(&self, id: &str) -> Result<std::borrow::Cow<'_, Workspace>> {
+        if let Some(workspace) = self.workspaces.get(id) {
+            return Ok(std::borrow::Cow::Borrowed(workspace));
+        }
+        if let Some(admitted) = self.cold_workspace_retention(id) {
+            return self
+                .read_cold_workspace(id, admitted)
+                .map(std::borrow::Cow::Owned);
+        }
+        Err(Error::new(
+            storage_contract::ErrorCode::WorkspaceNotFound,
+            "workspace does not exist",
+        ))
     }
     /// Deterministic injection only, never enabled by network or environment input.
     #[cfg(feature = "fault-injection")]
