@@ -114,24 +114,38 @@ fn terminal_mirror_failure_retains_active_and_detached_smb_work_after_publicatio
         assert_eq!(fs::read(&source).unwrap(), b"new");
 
         if !close_first {
-            let writer = match &client.handles[&opened.handle] {
-                Handle::Write(writer) => writer,
-                _ => unreachable!(),
+            let assert_active = |client: &Session, expected_bytes: &[u8]| {
+                let writer = match &client.handles[&opened.handle] {
+                    Handle::Write(writer) => writer,
+                    _ => unreachable!(),
+                };
+                assert!(writer.dirty && !writer.committed);
+                assert_eq!(writer.operation_id, operation);
+                assert_eq!(writer.workspace.workspace_id, workspace.workspace_id);
+                assert_eq!(writer.workspace.fencing_token, workspace.fencing_token);
+                assert_eq!(writer.workspace.base_head, workspace.base_head);
+                assert_eq!(writer.source, source);
+                assert_eq!(fs::read(&source).unwrap(), expected_bytes);
+                let active: Value =
+                    json_codec::from_slice(&fs::read(source.with_extension("work.json")).unwrap())
+                        .unwrap();
+                assert_eq!(active["handle_state"], "active");
+                assert_eq!(active["dirty"], true);
+                assert_eq!(active["published"], false);
+                assert_eq!(active["operation_id"], operation.to_string());
+                assert_eq!(active["workspace_id"], workspace.workspace_id);
+                assert_eq!(active["expected_head"], workspace.base_head);
+                assert_eq!(active["fencing_token"], workspace.fencing_token.to_string());
+                assert_eq!(active["source_path"], source.to_str().unwrap());
             };
-            assert!(writer.dirty && !writer.committed);
-            assert_eq!(writer.operation_id, operation);
-            let active: Value =
-                json_codec::from_slice(&fs::read(source.with_extension("work.json")).unwrap())
-                    .unwrap();
-            assert_eq!(active["handle_state"], "active");
-            assert_eq!(active["operation_id"], operation.to_string());
+            assert_active(&client, b"new");
 
-            // A live FD can change after the published failure. Neither Dirty
-            // nor a query-Published Flush may mint a new ID or clean it up while
-            // this exact workspace's terminal reconciliation is still pending.
+            // Dirty acknowledges changed bytes, not publication. It may succeed
+            // while reconciliation is pending, but must retain this generation.
             if change_after_error {
                 file.write_all_at(b"end", 0).unwrap();
-                client.dirty(opened.handle).unwrap_err();
+                assert_eq!(client.dirty(opened.handle).unwrap(), json!({"dirty": true}));
+                assert_active(&client, b"end");
             }
             for request in [
                 Request::Flush {
@@ -141,6 +155,7 @@ fn terminal_mirror_failure_retains_active_and_detached_smb_work_after_publicatio
                     handle: opened.handle,
                 },
             ] {
+                let is_flush = matches!(request, Request::Flush { .. });
                 let failure = client.dispatch(request).unwrap_err();
                 assert_eq!(failure.code, storage_contract::ErrorCode::RecoveryRequired);
                 assert_eq!(failure.status, ::http::StatusCode::SERVICE_UNAVAILABLE);
@@ -149,6 +164,9 @@ fn terminal_mirror_failure_retains_active_and_detached_smb_work_after_publicatio
                     failure.operation_id.as_deref(),
                     Some(operation.to_string().as_str())
                 );
+                if is_flush {
+                    assert_active(&client, if change_after_error { b"end" } else { b"new" });
+                }
             }
         }
 
