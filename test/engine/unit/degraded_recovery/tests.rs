@@ -521,7 +521,8 @@ fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
             fs::create_dir(&path).unwrap();
             path
         } else {
-            let path = root.join("workspaces").join("broken-workspace");
+            // Admit the directory identity so the failure comes from the manifest.
+            let path = root.join("workspaces").join(new_id("ws"));
             fs::create_dir_all(&path).unwrap();
             fs::write(path.join("workspace.json"), b"{}").unwrap();
             path
@@ -567,15 +568,13 @@ fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
             }
         );
         if !fail_index {
-            assert_eq!(
-                source
-                    .source()
-                    .unwrap()
-                    .downcast_ref::<Error>()
-                    .unwrap()
-                    .code(),
-                ErrorCode::InvalidJson
-            );
+            let cause = source
+                .source()
+                .unwrap()
+                .downcast_ref::<Box<Error>>()
+                .unwrap();
+            assert_eq!(cause.code(), ErrorCode::InvalidJson);
+            assert!(cause.source().unwrap().is::<json_codec::Error>());
         }
         // zxs-rescue's outer error formatter uses this native Display, not the
         // generic offline HTTP diagnostic that previously hid publication.

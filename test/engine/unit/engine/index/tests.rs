@@ -1481,10 +1481,17 @@ fn index_close_failure_retains_primary_source_and_never_authorizes_quarantine() 
         panic!("expected close database I/O source");
     };
     assert_eq!(close.raw_os_error(), Some(13));
-    assert!(
+    assert_eq!(
         std::error::Error::source(&failure.source)
             .unwrap()
-            .is::<Error>()
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap()
+            .raw_os_error(),
+        Some(5)
     );
 }
 
