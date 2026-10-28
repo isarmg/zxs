@@ -1,13 +1,32 @@
 use super::*;
+use crate::admin::request::{self, Kind, QueryKind};
 use json_codec::json;
-fn contract(path: &str, body: Value) -> Contract {
-    Contract::new(
-        "POST",
-        path,
-        Some(&body),
-        "op_00000000000000000000000000000001",
+const OPERATION: &str = "op_00000000000000000000000000000001";
+fn contract(kind: Kind, fields: &[(&str, &str)]) -> Contract {
+    request::build(
+        kind,
+        &fields
+            .iter()
+            .map(|(key, value)| ((*key).into(), (*value).into()))
+            .collect(),
+        OPERATION,
         "admin",
     )
+    .unwrap()
+    .contract
+}
+fn plan_contract(commit: bool) -> Contract {
+    request::plan_action(
+        &json!({"plan_id":"p","state":"ready","digest":"digest"}),
+        commit,
+        true,
+        OPERATION,
+    )
+    .unwrap()
+    .contract
+}
+fn plan() -> Value {
+    json!({"plan_id":"p","kind":"purge","principal":"admin","expected_sequence":"4","digest":"digest","input":{"history_tree_id":"h"},"state":"ready"})
 }
 fn raw_operation() -> Value {
     json!({"operation_id":"op_00000000000000000000000000000001", "kind":"plan.cancel", "commit_id":null,"history_tree_id":null,"branch_id":null,"commit_state":"PUBLISHED","protection_at_publish":"NOT_APPLICABLE","current_health":"UNKNOWN","request_digest":"digest","sequence":"4","result":{}})
@@ -22,8 +41,8 @@ fn wire_operation() -> Value {
 }
 #[test]
 fn operation_contracts_reject_missing_wrong_and_nonterminal_receipts() {
-    for path in ["/api/plans/p/commit", "/api/plans/p/cancel"] {
-        let c = contract(path, Value::Null);
+    for commit in [true, false] {
+        let c = plan_contract(commit);
         assert!(c.validate(raw_operation()).is_ok());
         for value in [Value::Null, json!({}), wire_operation()] {
             assert!(c.validate(value).is_err());
@@ -34,12 +53,18 @@ fn operation_contracts_reject_missing_wrong_and_nonterminal_receipts() {
             assert!(c.validate(value).is_err());
         }
     }
-    for path in [
-        "/api/repositories/r/smb-binding",
-        "/api/policies/p",
-        "/api/primary-placement-rules/r",
-    ] {
-        let c = contract(path, Value::Null);
+    for kind in [Kind::Smb, Kind::Policy, Kind::Rule] {
+        let c = contract(
+            kind,
+            &[
+                ("repository", "r"),
+                ("branch", "b"),
+                ("generation", "1"),
+                ("copies", "1"),
+                ("id", "p"),
+                ("slot", "P01"),
+            ],
+        );
         assert!(c.validate(wire_operation()).is_ok());
         assert!(c.validate(raw_operation()).is_err());
         let mut value = wire_operation();
@@ -49,14 +74,9 @@ fn operation_contracts_reject_missing_wrong_and_nonterminal_receipts() {
 }
 #[test]
 fn inspection_must_match_original_operation_and_terminal_state() {
-    let c = Contract::new(
-        "GET",
-        "/api/operations/op_00000000000000000000000000000001",
-        None,
-        "",
-        "admin",
-    );
+    let c = request::operation(OPERATION).contract;
     assert!(c.validate(wire_operation()).is_ok());
+    assert!(c.validate(raw_operation()).is_err());
     assert!(terminal(
         &wire_operation(),
         "op_00000000000000000000000000000001"
@@ -76,13 +96,7 @@ fn inspection_must_match_original_operation_and_terminal_state() {
 #[test]
 fn administration_uses_the_shared_current_wire_evidence() {
     use storage_contract::client_protocol::{OperationStatus, operation_status};
-    let c = Contract::new(
-        "GET",
-        "/api/operations/op_00000000000000000000000000000001",
-        None,
-        "",
-        "admin",
-    );
+    let c = request::operation(OPERATION).contract;
     let mut content: Value = json_codec::from_str(include_str!(
         "../files/fixtures/damaged-published-save-operation.json"
     ))
@@ -118,8 +132,8 @@ fn administration_uses_the_shared_current_wire_evidence() {
 fn domain_and_preview_contracts_accept_real_shapes_not_generic_receipts() {
     let repository = json!({"repository_id":"r", "name":"Repo", "history_tree_id":"h", "main_branch_id":"b", "primary_slot_id":"P01", "target_copies":1,"name_policy":"portable", "unicode_version":"17","smb_enabled":true,"smb_binding_generation":"1"});
     let c = contract(
-        "/api/repositories",
-        json!({"name":"Repo","primary_slot_id":"P01","target_copies":1}),
+        Kind::Repository,
+        &[("name", "Repo"), ("slot", "P01"), ("copies", "1")],
     );
     assert!(c.validate(repository.clone()).is_ok());
     let mut missing_binding_state = repository.clone();
@@ -128,35 +142,84 @@ fn domain_and_preview_contracts_accept_real_shapes_not_generic_receipts() {
         .unwrap()
         .remove("smb_enabled");
     assert!(c.validate(missing_binding_state).is_err());
-    let mut wrong = repository;
-    wrong["name"] = "Other".into();
-    assert!(c.validate(wrong).is_err());
+    for (key, bad) in [
+        ("name", json!("Other")),
+        ("primary_slot_id", json!("P02")),
+        ("target_copies", json!(2)),
+        ("repository_id", json!("")),
+        ("history_tree_id", json!("")),
+        ("main_branch_id", json!("")),
+        ("smb_binding_generation", json!(1)),
+        ("unexpected", json!(true)),
+    ] {
+        let mut wrong = repository.clone();
+        wrong[key] = bad;
+        assert!(
+            c.validate(wrong).is_err(),
+            "repository accepted wrong {key}"
+        );
+    }
     let branch = json!({"branch_id":"b","history_tree_id":"h","name":"Branch","head_commit_id":"new","fork_commit_id":"source","branch_kind":"full","generation":"1","state":"active","pending_file_versions":{},"materialized":true,"inherited":false,"content_state":"LIVE"});
     assert!(
         contract(
-            "/api/repositories/r/branches",
-            json!({"name":"Branch","source_commit_id":"source"})
+            Kind::Branch,
+            &[
+                ("repository", "r"),
+                ("name", "Branch"),
+                ("commit", "source")
+            ]
         )
         .validate(branch)
         .is_ok()
     );
     let link = json!({"merge_link_id":"m","history_tree_id":"h","source_branch_id":"s","source_commit_id":"sc","target_branch_id":"t","target_commit_id":"tc","author":"admin","operation_id":"op_00000000000000000000000000000001"});
     assert!(
-        contract("/api/history-trees/h/merge-links", link.clone())
-            .validate(link)
-            .is_ok()
+        contract(
+            Kind::Link,
+            &[
+                ("history", "h"),
+                ("source_branch", "s"),
+                ("source_commit", "sc"),
+                ("target_branch", "t"),
+                ("target_commit", "tc")
+            ]
+        )
+        .validate(link)
+        .is_ok()
     );
-    for (suffix, kind) in [
-        ("purge-plans", "purge"),
-        ("split-plans", "split"),
-        ("historical-save-plans", "historical_save"),
+    for (action, kind) in [
+        (Kind::Purge, "purge"),
+        (Kind::Split, "split"),
+        (Kind::Save, "historical_save"),
     ] {
-        let c = contract(&format!("/api/history-trees/h/{suffix}"), Value::Null);
+        let c = contract(
+            action,
+            &[
+                ("history", "h"),
+                ("versions", "v"),
+                ("commit", "c"),
+                ("name", "saved"),
+            ],
+        );
         let plan = json!({"plan_id":"p","kind":kind,"principal":"admin","expected_sequence":"4","digest":"digest","input":{"history_tree_id":"h"},"state":"ready"});
         assert!(c.validate(plan.clone()).is_ok());
-        let mut wrong = plan;
+        let mut wrong = plan.clone();
         wrong["input"]["history_tree_id"] = "other".into();
         assert!(c.validate(wrong).is_err());
+        for (key, bad) in [
+            ("kind", "unknown"),
+            ("principal", "other"),
+            ("state", "committed"),
+            ("digest", ""),
+            ("plan_id", ""),
+        ] {
+            let mut wrong = plan.clone();
+            wrong[key] = bad.into();
+            assert!(
+                c.validate(wrong).is_err(),
+                "{action:?} accepted wrong {key}"
+            );
+        }
         assert!(c.validate(raw_operation()).is_err());
     }
 }
@@ -164,8 +227,12 @@ fn domain_and_preview_contracts_accept_real_shapes_not_generic_receipts() {
 #[test]
 fn branch_creation_accepts_wire_projection_without_relaxing_domain_validation() {
     let c = contract(
-        "/api/repositories/r/branches",
-        json!({"name":"Branch","source_commit_id":"source"}),
+        Kind::Branch,
+        &[
+            ("repository", "r"),
+            ("name", "Branch"),
+            ("commit", "source"),
+        ],
     );
     // branch_wire always adds these three fields, including for empty branches.
     let empty = json!({"branch_id":"b","history_tree_id":"h","name":"Branch","head_commit_id":"new","fork_commit_id":"source","branch_kind":"full","generation":"1","state":"active","pending_file_versions":{},"materialized":true,"inherited":false,"content_state":"LIVE"});
@@ -185,6 +252,10 @@ fn branch_creation_accepts_wire_projection_without_relaxing_domain_validation() 
             ("materialized", valid["inherited"].clone()),
             ("inherited", valid["materialized"].clone()),
             ("content_state", "UNKNOWN".into()),
+            ("name", "Other".into()),
+            ("fork_commit_id", "other".into()),
+            ("branch_id", "".into()),
+            ("history_tree_id", "".into()),
             ("generation", json!(1)),
             ("unexpected", true.into()),
         ] {
@@ -196,10 +267,90 @@ fn branch_creation_accepts_wire_projection_without_relaxing_domain_validation() 
 }
 
 #[test]
-fn retired_account_and_acl_writes_have_no_success_contract() {
-    for path in ["/api/admin/accounts", "/api/repositories/r/grants"] {
-        for value in [json!({"updated":true}), raw_operation(), wire_operation()] {
-            assert!(contract(path, Value::Null).validate(value).is_err());
-        }
+fn plan_query_checks_identity_and_shape_without_requiring_ready() {
+    let request = request::query(
+        QueryKind::Plan,
+        &[("id".into(), "p".into())].into_iter().collect(),
+    )
+    .unwrap();
+    let c = request.contract;
+    for state in ["ready", "committed", "cancelled", "completed"] {
+        let mut value = plan();
+        value["state"] = state.into();
+        assert!(c.validate(value).is_ok(), "GET plan rejected {state}");
     }
+    for (key, bad) in [
+        ("plan_id", json!("other")),
+        ("digest", json!("")),
+        ("input", Value::Null),
+        ("input", json!([])),
+        ("expected_sequence", json!(4)),
+        ("state", json!("unknown")),
+    ] {
+        let mut value = plan();
+        value[key] = bad;
+        assert!(c.validate(value).is_err(), "GET plan accepted wrong {key}");
+    }
+    for key in [
+        "plan_id",
+        "kind",
+        "principal",
+        "expected_sequence",
+        "digest",
+        "input",
+        "state",
+    ] {
+        let mut value = plan();
+        value.as_object_mut().unwrap().remove(key);
+        assert!(c.validate(value).is_err(), "GET plan accepted absent {key}");
+    }
+}
+
+#[test]
+fn merge_link_response_must_match_every_captured_endpoint_identity() {
+    let c = contract(
+        Kind::Link,
+        &[
+            ("history", "h"),
+            ("source_branch", "s"),
+            ("source_commit", "sc"),
+            ("target_branch", "t"),
+            ("target_commit", "tc"),
+        ],
+    );
+    let link = json!({"merge_link_id":"m","history_tree_id":"h","source_branch_id":"s","source_commit_id":"sc","target_branch_id":"t","target_commit_id":"tc","author":"admin","operation_id":OPERATION});
+    assert!(c.validate(link.clone()).is_ok());
+    for key in [
+        "history_tree_id",
+        "source_branch_id",
+        "source_commit_id",
+        "target_branch_id",
+        "target_commit_id",
+        "operation_id",
+    ] {
+        let mut value = link.clone();
+        value[key] = if key == "operation_id" {
+            "op_00000000000000000000000000000002"
+        } else {
+            "other"
+        }
+        .into();
+        assert!(
+            c.validate(value).is_err(),
+            "merge-link accepted wrong {key}"
+        );
+    }
+}
+
+#[test]
+fn malformed_success_keeps_the_existing_unknown_mutation_classification() {
+    use std::error::Error as _;
+    let error = plan_contract(true).validate(Value::Null).unwrap_err();
+    assert_eq!(
+        error.code,
+        storage_contract::ErrorCode::InvalidAdminResponse
+    );
+    assert_eq!(error.status, 200);
+    assert!(error.source().is_none());
+    assert!(error.mutation_outcome_unknown());
 }

@@ -4,146 +4,166 @@ use crate::api;
 use json_codec::Value;
 use storage_contract::{Branch, MergeLink, OperationResult, Plan, Repository};
 
-pub(super) struct Contract {
-    method: &'static str,
-    path: String,
-    operation: String,
-    principal: String,
-    // Only non-secret identity fields needed to correlate domain responses.
-    expected: Value,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PreviewKind {
+    Purge,
+    Split,
+    HistoricalSave,
+}
+impl PreviewKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Purge => "purge",
+            Self::Split => "split",
+            Self::HistoricalSave => "historical_save",
+        }
+    }
+}
+
+/// Captured at request construction; never inferred from a URL or JSON body.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Contract {
+    Inspect,
+    Operation {
+        id: String,
+    },
+    Plan {
+        id: String,
+    },
+    Repository {
+        operation: String,
+        name: String,
+        primary_slot_id: String,
+        target_copies: u32,
+    },
+    Branch {
+        operation: String,
+        name: String,
+        source_commit_id: String,
+    },
+    MergeLink {
+        operation: String,
+        history_tree_id: String,
+        source_branch_id: String,
+        source_commit_id: String,
+        target_branch_id: String,
+        target_commit_id: String,
+    },
+    Preview {
+        kind: PreviewKind,
+        history_tree_id: String,
+        principal: String,
+    },
+    PlanReceipt {
+        operation: String,
+    },
+    MutationReceipt {
+        operation: String,
+    },
 }
 impl Contract {
-    pub(super) fn new(
-        method: &'static str,
-        path: &str,
-        body: Option<&Value>,
-        operation: &str,
-        principal: &str,
-    ) -> Self {
-        let mut expected = json_codec::json!({});
-        if let Some(body) = body {
-            for key in [
-                "name",
-                "primary_slot_id",
-                "target_copies",
-                "source_commit_id",
-                "source_branch_id",
-                "target_branch_id",
-                "target_commit_id",
-            ] {
-                if let Some(value) = body.get(key) {
-                    expected[key] = value.clone();
-                }
+    pub(super) fn is_write(&self) -> bool {
+        match self {
+            Self::Inspect | Self::Operation { .. } | Self::Plan { .. } => false,
+            Self::Repository { .. }
+            | Self::Branch { .. }
+            | Self::MergeLink { .. }
+            | Self::Preview { .. }
+            | Self::PlanReceipt { .. }
+            | Self::MutationReceipt { .. } => true,
+        }
+    }
+
+    pub(super) fn mutation_operation(&self) -> Option<&str> {
+        match self {
+            Self::Inspect | Self::Operation { .. } | Self::Plan { .. } | Self::Preview { .. } => {
+                None
             }
-        }
-        Self {
-            method,
-            path: path.into(),
-            operation: operation.into(),
-            principal: principal.into(),
-            expected,
+            Self::Repository { operation, .. }
+            | Self::Branch { operation, .. }
+            | Self::MergeLink { operation, .. }
+            | Self::PlanReceipt { operation }
+            | Self::MutationReceipt { operation } => Some(operation),
         }
     }
-    fn same(&self, value: &Value, keys: &[&str]) -> bool {
-        keys.iter().all(|key| {
-            self.expected
-                .get(*key)
-                .is_some_and(|expected| value.get(*key) == Some(expected))
-        })
-    }
+
     pub(super) fn validate(&self, value: Value) -> Result<Value, api::Error> {
-        let path = self.path.as_str();
-        let valid =
-            if path.starts_with("/api/operations/") && self.method == "GET" {
-                operation_shape(&value)
-                    && path
-                        == format!(
-                            "/api/operations/{}",
-                            api::segment(
-                                value["operation_id"]
-                                    .as_str()
-                                    .expect("invariant: operation receipt identity was validated")
-                            )
-                        )
-            } else if path.starts_with("/api/plans/") && self.method == "GET" {
+        let valid = match self {
+            Self::Inspect => true,
+            Self::Operation { id } => {
+                operation_shape(&value) && value["operation_id"].as_str() == Some(id.as_str())
+            }
+            Self::Plan { id } => {
                 json_codec::from_value::<Plan>(value.clone()).is_ok()
                     && value["input"].is_object()
                     && nonempty(&value["digest"])
-                    && path
-                        == format!(
-                            "/api/plans/{}",
-                            api::segment(
-                                value["plan_id"]
-                                    .as_str()
-                                    .expect("invariant: decoded plan identity is a string")
-                            )
-                        )
-            } else if self.method == "GET" {
-                true // Other inspect-only responses never release a mutation fence.
-            } else if path == "/api/repositories" {
+                    && value["plan_id"].as_str() == Some(id.as_str())
+            }
+            Self::Repository {
+                name,
+                primary_slot_id,
+                target_copies,
+                ..
+            } => {
                 json_codec::from_value::<Repository>(value.clone()).is_ok()
                     && nonempty(&value["repository_id"])
                     && nonempty(&value["history_tree_id"])
                     && nonempty(&value["main_branch_id"])
-                    && self.same(&value, &["name", "primary_slot_id", "target_copies"])
-            } else if path.ends_with("/branches") {
+                    && value["name"].as_str() == Some(name.as_str())
+                    && value["primary_slot_id"].as_str() == Some(primary_slot_id.as_str())
+                    && value["target_copies"].as_u64() == Some(u64::from(*target_copies))
+            }
+            Self::Branch {
+                name,
+                source_commit_id,
+                ..
+            } => {
                 branch_creation_shape(&value)
                     && nonempty(&value["branch_id"])
                     && nonempty(&value["history_tree_id"])
-                    && self.same(&value, &["name"])
-                    && value["fork_commit_id"] == self.expected["source_commit_id"]
-            } else if path.ends_with("/merge-links") {
+                    && value["name"].as_str() == Some(name.as_str())
+                    && value["fork_commit_id"].as_str() == Some(source_commit_id.as_str())
+            }
+            Self::MergeLink {
+                operation,
+                history_tree_id,
+                source_branch_id,
+                source_commit_id,
+                target_branch_id,
+                target_commit_id,
+            } => {
                 json_codec::from_value::<MergeLink>(value.clone()).is_ok()
                     && nonempty(&value["merge_link_id"])
-                    && value["operation_id"].as_str() == Some(self.operation.as_str())
-                    && self.same(
-                        &value,
-                        &[
-                            "source_branch_id",
-                            "source_commit_id",
-                            "target_branch_id",
-                            "target_commit_id",
-                        ],
-                    )
-                    && path
-                        == format!(
-                            "/api/history-trees/{}/merge-links",
-                            api::segment(value["history_tree_id"].as_str().expect(
-                                "invariant: decoded merge-link history identity is a string"
-                            ))
-                        )
-            } else if let Some(kind) = [
-                ("/purge-plans", "purge"),
-                ("/split-plans", "split"),
-                ("/historical-save-plans", "historical_save"),
-            ]
-            .into_iter()
-            .find_map(|(suffix, kind)| path.ends_with(suffix).then_some(kind))
-            {
+                    && value["operation_id"].as_str() == Some(operation.as_str())
+                    && value["history_tree_id"].as_str() == Some(history_tree_id.as_str())
+                    && value["source_branch_id"].as_str() == Some(source_branch_id.as_str())
+                    && value["source_commit_id"].as_str() == Some(source_commit_id.as_str())
+                    && value["target_branch_id"].as_str() == Some(target_branch_id.as_str())
+                    && value["target_commit_id"].as_str() == Some(target_commit_id.as_str())
+            }
+            Self::Preview {
+                kind,
+                history_tree_id,
+                principal,
+            } => {
                 json_codec::from_value::<Plan>(value.clone()).is_ok()
                     && nonempty(&value["plan_id"])
                     && nonempty(&value["digest"])
-                    && value["kind"] == kind
+                    && value["kind"] == kind.as_str()
                     && value["state"] == "ready"
-                    && value["principal"] == self.principal
-                    && value["input"]["history_tree_id"]
-                        .as_str()
-                        .is_some_and(|id| {
-                            path.starts_with(&format!("/api/history-trees/{}/", api::segment(id)))
-                        })
-            } else if path.ends_with("/commit") || path.ends_with("/cancel") {
+                    && value["principal"].as_str() == Some(principal.as_str())
+                    && value["input"]["history_tree_id"].as_str() == Some(history_tree_id.as_str())
+            }
+            Self::PlanReceipt { operation } => {
                 json_codec::from_value::<OperationResult>(value.clone()).is_ok()
                     && nonempty(&value["kind"])
                     && nonempty(&value["request_digest"])
-                    && confirmed(&value, &self.operation)
-            } else if path.ends_with("/smb-binding")
-                || path.starts_with("/api/policies/")
-                || path.starts_with("/api/primary-placement-rules/")
-            {
-                operation_shape(&value) && confirmed(&value, &self.operation)
-            } else {
-                false
-            };
+                    && confirmed(&value, operation)
+            }
+            Self::MutationReceipt { operation } => {
+                operation_shape(&value) && confirmed(&value, operation)
+            }
+        };
         if valid {
             Ok(value)
         } else {
