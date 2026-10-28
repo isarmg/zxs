@@ -386,11 +386,16 @@ fn admitted_page_applies_all_metadata_and_keeps_independent_selected_details() {
     let selected =
         test_entries::entry(json_codec::json!({"entry_id":"selected","path":"outside.txt"}));
     let row = test_entries::entry(json_codec::json!({"entry_id":"row","path":"row.txt"}));
-    let mut state = State::default();
-    state.page = crate::ui::Page::Details;
-    state.files.selected = Some(selected.clone());
-    state.files.checked_entries = [entry_key(&row), "removed".into()].into_iter().collect();
-    state.files.file_history = json_codec::json!({"note":"loaded history"}).into();
+    let mut state = State {
+        page: crate::ui::Page::Details,
+        files: crate::files::Model {
+            selected: Some(selected.clone()),
+            checked_entries: [entry_key(&row), "removed".into()].into_iter().collect(),
+            file_history: json_codec::json!({"note":"loaded history"}).into(),
+            ..Default::default()
+        },
+        ..State::default()
+    };
     let mut refreshed = test_entries::wire(&selected);
     refreshed["note"] = "fresh entry note".into();
     let page = Page::parse(

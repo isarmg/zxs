@@ -347,7 +347,7 @@ fn file_mutation(
             s.files
                 .selected
                 .as_ref()
-                .and_then(|entry| crate::files::model::file_context(entry))
+                .and_then(crate::files::model::file_context)
         })
     {
         body["repository_id"] = repository.into();

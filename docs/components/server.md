@@ -210,6 +210,8 @@ Unix socket 测试需要运行环境允许本机 socket。[集成回归](../../t
 
 保护规则必填 `inheritable`，现行规则为 `true`，文件绑定保留设置为 `false`。后者不参加 scope／祖先查找，GET 返回 `inherited:false`，但其份数和路径仍经文件绑定生效。重配只推进现行规则的原 ID／代数，将范围外绑定独立保留；父目录不能覆盖这些保留设置。通用策略 PUT 对稳定 scope 或保留设置返回 `400 BACKUP_CONFIGURATION_REQUIRED`，要求使用文件／目录备份配置，不通过通用入口绕过历史回填。
 
+<a id="login-admission"></a>
+
 ### 反向代理登录限流
 
 默认忽略 `X-Forwarded-For`，按实际 TCP 对端限流。若使用同机 TLS 反向代理，可显式增加 `--trusted-proxy-ip 127.0.0.1`（IPv6 代理则为 `--trusted-proxy-ip ::1`；可重复）。必须同时设置 `--external-origin https://storage.example.org`。仅接受指定的精确回环代理地址，不接受网段或非回环代理；监听地址仍必须是回环地址。这是可选部署配置，升级不会自动启用信任。
