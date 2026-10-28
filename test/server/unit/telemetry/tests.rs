@@ -38,16 +38,8 @@ struct ObserveGate {
 #[derive(Default)]
 struct MonitorBackend {
     observe_gate: Mutex<Option<ObserveGate>>,
-    dropped: Option<std::sync::mpsc::Sender<()>>,
-}
-
-impl Drop for MonitorBackend {
-    fn drop(&mut self) {
-        if let Some(dropped) = &self.dropped {
-            // The lifecycle assertion is in the receiver, not in Drop.
-            let _ = dropped.send(());
-        }
-    }
+    // Receiver disconnection observes destruction without fallible Drop code.
+    _dropped: Option<std::sync::mpsc::Sender<()>>,
 }
 
 impl Backend for MonitorBackend {
@@ -689,7 +681,7 @@ fn active_periodic_refresh_releases_weak_service_and_backend_after_completion() 
     let (dropped_tx, dropped_rx) = mpsc::channel();
     let backend = Arc::new(MonitorBackend {
         observe_gate: Mutex::new(None),
-        dropped: Some(dropped_tx),
+        _dropped: Some(dropped_tx),
     });
     let weak_backend = Arc::downgrade(&backend);
     let service = Telemetry::start(backend.clone(), &root.path().join("cache")).unwrap();
@@ -708,7 +700,10 @@ fn active_periodic_refresh_releases_weak_service_and_backend_after_completion() 
     assert!(weak_service.upgrade().is_some());
     assert!(weak_backend.upgrade().is_some());
     release_tx.send(()).unwrap();
-    dropped_rx.recv_timeout(Duration::from_secs(15)).unwrap();
+    assert!(matches!(
+        dropped_rx.recv_timeout(Duration::from_secs(15)),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    ));
     assert!(weak_service.upgrade().is_none());
     assert!(weak_backend.upgrade().is_none());
     // This proves resource release after the active refresh, not thread join or
