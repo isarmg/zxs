@@ -3,7 +3,6 @@ use crate::protocol::{
 };
 
 type Request = RawRequest<storage_contract::OperationId>;
-use data_serialization::Deserialize;
 use json_codec::Value;
 use std::{
     io,
@@ -18,6 +17,11 @@ use storage_contract::ErrorCode;
 
 #[derive(Clone)]
 pub struct Client(Arc<Mutex<Option<FrameStream>>>);
+
+enum AdmittedResult {
+    Value(Value),
+    Open(OpenResult, OwnedFd),
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RemoteErrorCode {
@@ -373,7 +377,7 @@ impl Client {
     }
     fn connect_stream(stream: UnixStream, username: &str, repository_id: &str) -> io::Result<Self> {
         let client = Self(Arc::new(Mutex::new(Some(FrameStream::new(stream)?))));
-        let (result, _) = client.call(Request::Hello {
+        let result = client.call(Request::Hello {
             protocol: PROTOCOL.into(),
             capabilities: REQUIRED_CAPABILITIES
                 .iter()
@@ -401,7 +405,22 @@ impl Client {
         }
         Ok(client)
     }
-    pub fn call(&self, request: Request) -> io::Result<(Value, Option<OwnedFd>)> {
+    /// Exchange a request without transferring a descriptor; use `open` for Open.
+    pub fn call(&self, request: Request) -> io::Result<Value> {
+        if matches!(request, Request::Open { .. }) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "open requests require Client::open",
+            ));
+        }
+        match self.exchange(request)? {
+            AdmittedResult::Value(value) => Ok(value),
+            AdmittedResult::Open(..) => {
+                unreachable!("invariant: non-open requests cannot admit an open result")
+            }
+        }
+    }
+    fn exchange(&self, request: Request) -> io::Result<AdmittedResult> {
         let mut connection = self.0.lock().expect("RPC connection lock poisoned");
         let stream = connection.as_mut().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotConnected, "RPC connection is closed")
@@ -422,22 +441,38 @@ impl Client {
                         "RPC response descriptor does not match the request",
                     ));
                 }
-                if expects_fd {
-                    let Response::Ok { result } = &response else {
-                        unreachable!(
-                            "invariant: descriptor expectation requires a successful open response"
-                        );
-                    };
-                    // The remote handle already exists. If its metadata cannot
-                    // be decoded, no caller can close it by identity. Terminate
-                    // the session while holding the shared lock so the server
-                    // releases it and no clone continues a partially adopted open.
-                    OpenResult::deserialize(result)
-                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-                }
-                Ok((response, fd))
+                // The outer result admits the frame and descriptor; the inner
+                // result preserves a complete remote business error without
+                // disconnecting this otherwise valid session.
+                Ok(match response {
+                    Response::Ok { result } => Ok(if expects_fd {
+                        // Decode once while locked. Invalid metadata must close
+                        // the session before any clone can use the remote handle.
+                        let result: OpenResult = json_codec::from_value(result)
+                            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                        AdmittedResult::Open(
+                            result,
+                            fd.expect("invariant: successful open response has a descriptor"),
+                        )
+                    } else {
+                        AdmittedResult::Value(result)
+                    }),
+                    Response::Error {
+                        code,
+                        message,
+                        operation_id,
+                        retryable,
+                    } => Err(RemoteError {
+                        code: RemoteErrorCode::Server(code),
+                        message,
+                        operation_id,
+                        retryable,
+                        errno: remote_errno(code),
+                        source: None,
+                    }),
+                })
             });
-        let (response, fd) = match exchange {
+        let response = match exchange {
             Ok(response) => response,
             Err(error) => {
                 // A partial request/response or invalid frame loses message
@@ -462,29 +497,12 @@ impl Client {
                 });
             }
         };
-        match response {
-            Response::Ok { result } => Ok((result, fd)),
-            Response::Error {
-                code,
-                message,
-                operation_id,
-                retryable,
-            } => {
-                let errno = remote_errno(code);
-                Err(io::Error::new(
-                    io::Error::from_raw_os_error(errno).kind(),
-                    RemoteError {
-                        code: RemoteErrorCode::Server(code),
-                        message,
-                        operation_id,
-                        retryable,
-                        errno,
-                        source: None,
-                    },
-                ))
-            }
-        }
+        response.map_err(|error| {
+            io::Error::new(io::Error::from_raw_os_error(error.errno).kind(), error)
+        })
     }
+    /// Open a remote handle and transfer its admitted metadata and owned FD.
+    /// Non-Open requests fail before sending; malformed replies close all clones.
     pub fn open(&self, request: Request) -> io::Result<(OpenResult, OwnedFd)> {
         if !matches!(request, Request::Open { .. }) {
             return Err(io::Error::new(
@@ -492,13 +510,12 @@ impl Client {
                 "expected open request",
             ));
         }
-        let (result, fd) = self.call(request)?;
-        let result = json_codec::from_value(result)
-            .expect("invariant: Client::call already validated the open result");
-        Ok((
-            result,
-            fd.expect("invariant: successful open response has a descriptor"),
-        ))
+        match self.exchange(request)? {
+            AdmittedResult::Open(result, descriptor) => Ok((result, descriptor)),
+            AdmittedResult::Value(_) => {
+                unreachable!("invariant: successful open requests admit typed metadata and an FD")
+            }
+        }
     }
 }
 

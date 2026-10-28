@@ -1,5 +1,8 @@
 # 规范 JSON 整数写出回归与测量
 
+后续对象键排序捷径及其 Map 特性矩阵见[编码边界回归](encoding-boundaries.md)；
+本文保留原整数写出测量，不能把其数字用于后续对象排序变化。
+
 [`baseline.rs`](../../test/contract/unit/encoding/baseline.rs) 冻结 `23dd3639` 的完整 emitter，并保留 `integer_json::validate`，仅用于测试。
 [`number_emission.rs`](../../test/contract/unit/encoding/number_emission.rs) 对完整公开编码路径做差分，另有固定 UTF-16 键序、控制字符、
 安全整数上下界及拒绝错误的断言。原有 `vectors.json`、字节和哈希向量不修改。

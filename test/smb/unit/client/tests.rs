@@ -1,6 +1,8 @@
 use super::*;
 use storage_contract::ErrorCode;
 
+mod admission;
+
 #[test]
 fn module_client_requires_authenticated_account_and_durable_reservations() {
     for response in [
@@ -362,8 +364,7 @@ fn remote_business_error_preserves_the_stream_for_the_next_call() {
             .call(Request::Stat {
                 path: "exists".into()
             })
-            .unwrap()
-            .0["found"],
+            .unwrap()["found"],
         true
     );
     server.join().unwrap();
@@ -438,9 +439,16 @@ fn response_descriptor_contract_failure_disconnects_every_clone() {
                 path: "file".into(),
             }
         };
+        let error = if mode == "missing_open_fd" {
+            client.open(request).unwrap_err()
+        } else {
+            client.call(request).unwrap_err()
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert_eq!(
-            client.call(request).unwrap_err().kind(),
-            io::ErrorKind::InvalidData
+            error.to_string(),
+            "RPC response descriptor does not match the request",
+            "descriptor admission must precede malformed open metadata"
         );
         assert_eq!(
             clone
@@ -505,13 +513,12 @@ fn successful_open_descriptor_keeps_the_shared_connection_reusable() {
     assert_eq!(opened.handle, 1);
     let file = std::fs::File::from(descriptor);
     assert!(file.metadata().unwrap().is_file());
-    let (result, descriptor) = clone
+    let result = clone
         .call(Request::Stat {
             path: "next".into(),
         })
         .unwrap();
     assert_eq!(result["found"], true);
-    assert!(descriptor.is_none());
     // The subsequent exchange must not consume or close the caller-owned FD.
     assert!(file.metadata().unwrap().is_file());
     server.join().unwrap();

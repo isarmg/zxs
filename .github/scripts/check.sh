@@ -70,6 +70,14 @@ case "${1:-}" in
     python3 test/tools/contract-check/check_document_scan.py
     cargo test --locked --offline -p contract-check
     cargo run --locked --offline -p contract-check -- --root .
+    cargo test --locked --offline -p storage-contract --lib encoding::tests::object_ordering
+    # Exercise both Map backends and the production encoding feature union.
+    for features in \
+      json-codec/raw_value,json-codec/float_roundtrip \
+      json-codec/preserve_order \
+      json-codec/preserve_order,json-codec/raw_value,json-codec/float_roundtrip; do
+      cargo test --locked --offline -p storage-contract --lib encoding::tests::object_ordering --features "$features"
+    done
     ;;
   build-tools)
     cargo test --locked --offline -p web-bindings -p release-tools -p web-build -p unicode-build -p perf-check -p browser-smoke

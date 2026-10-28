@@ -700,7 +700,7 @@ unsafe extern "C" fn stat(
         // SAFETY: The host supplies live filename/directory objects and their string fields for
         // this callback; optional nulls are rejected or handled by the helper.
         let path = unsafe { name(handle, file) }?;
-        let (node, _) = context.client.call(Request::Stat { path: path.clone() })?;
+        let node = context.client.call(Request::Stat { path: path.clone() })?;
         // The host does folded lookup through get_real_filename_at. Its POSIX
         // stat probe must distinguish spelling for case-only rename.
         if node.get("path").and_then(Value::as_str) != Some(path.as_str()) {
@@ -761,7 +761,7 @@ unsafe extern "C" fn fstatat(
         // SAFETY: The owning host callback supplies a live handle; Context access stays on this
         // event-loop thread and does not escape the callback.
         let context = unsafe { context(handle) }?;
-        let (node, _) = context.client.call(Request::Stat { path: path.clone() })?;
+        let node = context.client.call(Request::Stat { path: path.clone() })?;
         if node.get("path").and_then(Value::as_str) != Some(path.as_str()) {
             return Err(std::io::Error::from_raw_os_error(libc::ENOENT));
         }
@@ -808,7 +808,7 @@ unsafe extern "C" fn real_filename(
         };
         // SAFETY: The owning host callback supplies a live handle; Context access stays on this
         // event-loop thread and does not escape the callback.
-        let (entry, _) = unsafe { context(handle) }?
+        let entry = unsafe { context(handle) }?
             .client
             .call(Request::Stat { path })?;
         let name = entry.get("name").and_then(Value::as_str).ok_or_else(bad)?;
@@ -959,7 +959,7 @@ unsafe extern "C" fn fdopendir(
 }
 impl Directory {
     fn load_page(&mut self) -> std::io::Result<()> {
-        let (value, _) = self.client.call(Request::ReadDirectory {
+        let value = self.client.call(Request::ReadDirectory {
             handle: self.handle,
             restart: self.restart,
         })?;

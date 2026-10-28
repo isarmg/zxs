@@ -61,6 +61,22 @@ class SuiteCoverageTests(unittest.TestCase):
         self.assertIn("--offline", call["args"])
         self.assertFalse({"--tests", "--lib", "--bins", "--no-run", "--doc"}.intersection(call["args"]))
 
+    def test_contracts_exercise_both_json_map_backends_and_feature_unions(self):
+        calls = self.suite("contracts")
+        prefix = [
+            "test", "--locked", "--offline", "-p", "storage-contract", "--lib",
+            "encoding::tests::object_ordering",
+        ]
+        expected = [{"tool": "cargo", "args": prefix}]
+        for features in (
+            "json-codec/raw_value,json-codec/float_roundtrip",
+            "json-codec/preserve_order",
+            "json-codec/preserve_order,json-codec/raw_value,json-codec/float_roundtrip",
+        ):
+            expected.append({"tool": "cargo", "args": prefix + ["--features", features]})
+        actual = [call for call in calls if "storage-contract" in call["args"]]
+        self.assertEqual(actual, expected)
+
     def test_workspace_checks_native_capabilities_before_product_tests(self):
         calls = self.suite("workspace")
         self.assertEqual(calls[0], {

@@ -89,6 +89,18 @@ pub fn canonical_json_value(value: &Value) -> Result<Vec<u8>> {
     emit_canonical_json(value)
 }
 
+fn ascii_keys_are_ordered(object: &Map<String, Value>) -> bool {
+    // The default Map is a BTreeMap; preserve_order instead uses insertion
+    // order. Check the actual iteration so feature unification cannot change
+    // canonical bytes. ASCII byte order and UTF-16 order are identical.
+    let mut previous: Option<&str> = None;
+    object.keys().all(|key| {
+        let ordered = key.is_ascii() && previous.is_none_or(|previous| previous < key.as_str());
+        previous = Some(key);
+        ordered
+    })
+}
+
 fn emit_canonical_json(value: &Value) -> Result<Vec<u8>> {
     fn number(n: &Number, out: &mut Vec<u8>) -> Result<()> {
         const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
@@ -104,6 +116,14 @@ fn emit_canonical_json(value: &Value) -> Result<Vec<u8>> {
         }
         json_codec::to_writer(out, n)?;
         Ok(())
+    }
+    fn member(index: usize, key: &str, value: &Value, out: &mut Vec<u8>) -> Result<()> {
+        if index > 0 {
+            out.push(b',');
+        }
+        json_codec::to_writer(&mut *out, key)?;
+        out.push(b':');
+        emit(value, out)
     }
     fn emit(v: &Value, out: &mut Vec<u8>) -> Result<()> {
         match v {
@@ -124,15 +144,16 @@ fn emit_canonical_json(value: &Value) -> Result<Vec<u8>> {
             }
             Value::Object(o) => {
                 out.push(b'{');
-                let mut keys = o.keys().collect::<Vec<_>>();
-                keys.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
-                for (i, k) in keys.into_iter().enumerate() {
-                    if i > 0 {
-                        out.push(b',');
+                if ascii_keys_are_ordered(o) {
+                    for (i, (key, value)) in o.iter().enumerate() {
+                        member(i, key, value, out)?;
                     }
-                    json_codec::to_writer(&mut *out, k)?;
-                    out.push(b':');
-                    emit(&o[k], out)?;
+                } else {
+                    let mut keys = o.keys().collect::<Vec<_>>();
+                    keys.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+                    for (i, key) in keys.into_iter().enumerate() {
+                        member(i, key, &o[key], out)?;
+                    }
                 }
                 out.push(b'}');
             }
