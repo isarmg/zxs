@@ -29,10 +29,12 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             if(!state.template){const response=await original.apply(this,args);if(!response.ok)throw new Error('real listing seed failed');state.template=await response.json();}
             const template=state.template,base=template.entries[0],directory=url.searchParams.get('path');
             if(!base||url.searchParams.get('limit')!=='200')throw new Error('invalid pagination fixture request');
-            const all=Array.from({length:205},(_,i)=>{const name='paged-'+String(i).padStart(3,'0')+'.txt';return {...base,entry_id:'fixture-'+i,name,path:directory+'/'+name};});
-            const found=query.startsWith('slow')?[{...all[0],name:'stale-response.txt'}]:all.filter(e=>e.name.includes(query));
+            const join=(parent,name)=>parent?parent+'/'+name:name;
+            const entry=(name,id)=>({...base,entry_id:id,name,path:join(directory,name),repository_path:join(template.context.repository_path,name)});
+            const all=Array.from({length:205},(_,i)=>entry('paged-'+String(i).padStart(3,'0')+'.txt','fixture-'+i));
+            const found=query.startsWith('slow')?[entry('stale-response.txt','fixture-0')]:all.filter(e=>e.name.includes(query));
             const offset=cursor==='synthetic-next'?200:0;
-            const body={...template,entries:found.slice(offset,offset+200),snapshot:'synthetic-snapshot',total_entries:String(found.length),previous_cursor:offset?'synthetic-first':null,next_cursor:found.length>offset+200?'synthetic-next':null,selected_entry:null};
+            const body={...template,entries:found.slice(offset,offset+200),snapshot:'synthetic-snapshot',total_entries:String(found.length),directory_file_count:String(all.length),previous_cursor:offset?'synthetic-first':null,next_cursor:found.length>offset+200?'synthetic-next':null,selected_entry:null};
             if(query.startsWith('slow')){
                 let release;const gate=new Promise(resolve=>release=resolve);
                 const pending={release,signal:request.signal};state.pending.push(pending);
