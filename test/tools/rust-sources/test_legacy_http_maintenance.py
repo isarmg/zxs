@@ -21,6 +21,13 @@ import source_layout
 import source_layout_corrections
 
 
+# The comment also appears in Giver; include its owner for a unique patch span.
+DEMAND_SUCCESSOR_OLD = (b'impl SharedGiver {\n'
+                        b'    /// Check if the `Taker` has called `want()` without parking a task.')
+DEMAND_SUCCESSOR_NEW = (b'impl SharedGiver {\n'
+                        b'    /// Check whether the `Taker` has called `want()` without parking a task.')
+
+
 def write_receipt(root, row):
     raw = gzip.compress(json.dumps(row, sort_keys=True).encode(), mtime=0)
     sha = routing.digest(raw)
@@ -143,8 +150,7 @@ class LegacyHttpMaintenance(unittest.TestCase):
         self.current[legacy.KEY] = list(ids)
 
     def append_successor(self, relative=legacy.FILE,
-                         old=b'/// Check if the `Taker` has called `want()` without parking a task.',
-                         new=b'/// Check whether the `Taker` has called `want()` without parking a task.'):
+                         old=DEMAND_SUCCESSOR_OLD, new=DEMAND_SUCCESSOR_NEW):
         row = successor(self.root, self.current, self.sha, relative, old, new)
         self.rows.append(row)
         self.register()
@@ -374,8 +380,7 @@ class LegacyHttpMaintenance(unittest.TestCase):
 
     def test_one_successor_must_cover_both_changed_sources(self):
         first = successor(self.root, self.current, self.sha, legacy.FILE,
-                          b'/// Check if the `Taker` has called `want()` without parking a task.',
-                          b'/// Check whether the `Taker` has called `want()` without parking a task.')
+                          DEMAND_SUCCESSOR_OLD, DEMAND_SUCCESSOR_NEW)
         second = successor(self.root, self.current, self.sha, 'src/lib.rs',
                            b'//! # HTTP transport', b'//! # HTTP transport fixture')
         first['after'] = second['after']
