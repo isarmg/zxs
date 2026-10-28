@@ -737,29 +737,68 @@ fn descriptors_do_not_omit_source_reads_without_a_periodic_owner() {
 }
 
 #[test]
-fn changed_history_index_failure_cannot_publish_its_new_descriptor() {
+fn changed_history_index_failure_preserves_new_descriptor_until_a_metadata_fault() {
     let (_temp, mut engine) = fixture();
     let _owner = covered(&mut engine);
     let base = engine.published_state_base.clone().unwrap();
+    let epoch = engine.metadata_integrity.capture();
+    let config_hash = object_hash("publication-config", &engine.config).unwrap();
+    let history = engine.state.histories.keys().next().unwrap().clone();
     let prepared = prepare_history_change(&engine);
     assert!(prepared.reused_dependencies.is_some());
+    let expected = prepared
+        .history_basis
+        .catalog_binding(&history)
+        .unwrap()
+        .clone();
     let sequence = prepared.candidate.sequence;
     let operation = prepared.result.operation_id;
     let index = engine.root.join("index.sqlite");
     std::fs::rename(&index, engine.root.join("saved-index.sqlite")).unwrap();
     std::fs::create_dir(&index).unwrap();
-    assert!(engine.decide_publication(prepared).is_err());
-    assert!(engine.blocked);
+    let result = engine.decide_publication(prepared).unwrap();
+    assert_eq!(result.operation_id, operation);
+    assert_eq!(result.commit_state, CommitState::Published);
+    assert!(!engine.blocked);
     assert_eq!(engine.state.sequence, sequence);
     assert!(engine.state.operations.contains_key(&operation));
     assert_eq!(accepts(&engine, sequence), engine.members().len());
+    assert!(epoch.matches(&engine.metadata_integrity));
+    assert!(engine.has_current_integrity_scrub_coverage());
+    let current = engine.published_state_base.clone().unwrap();
+    assert!(!Arc::ptr_eq(&base, &current));
+    assert!(!base.matches(&engine.planning_context(), &config_hash));
+    assert!(current.matches(&engine.planning_context(), &config_hash));
+    let published = current.roots.catalog_binding(&history).unwrap();
+    assert_eq!(published.hash, expected.hash);
     assert!(Arc::ptr_eq(
-        &base,
-        engine.published_state_base.as_ref().unwrap()
+        published.encoder.as_ref().unwrap(),
+        expected.encoder.as_ref().unwrap()
     ));
-    assert!(!base.matches(
-        &engine.planning_context(),
-        &object_hash("publication-config", &engine.config).unwrap()
+    let crate::IndexHealth::Unavailable(failure) = engine.index_health() else {
+        panic!("expected retained index update failure");
+    };
+    assert_eq!(failure.stage(), crate::IndexFailureStage::Update);
+    assert_eq!(failure.sequence(), sequence);
+    assert_eq!(failure.cause().code(), ErrorCode::UnsafePath);
+
+    // Reuse remains available, but it cannot bypass a real member seal failure.
+    let next = prepare_history_change(&engine);
+    assert!(next.reused_dependencies.is_some());
+    let rejected_sequence = next.candidate.sequence;
+    std::fs::write(engine.members()[0].root.join("disk.json"), b"broken seal").unwrap();
+    assert_eq!(
+        engine.decide_publication(next).unwrap_err().code(),
+        ErrorCode::PreparationStale
+    );
+    assert_eq!(engine.state.sequence, sequence);
+    assert_eq!(accepts(&engine, rejected_sequence), 0);
+    assert!(!epoch.matches(&engine.metadata_integrity));
+    assert!(!current.matches(&engine.planning_context(), &config_hash));
+    assert!(!engine.has_current_integrity_scrub_coverage());
+    assert!(Arc::ptr_eq(
+        &current,
+        engine.published_state_base.as_ref().unwrap()
     ));
 }
 

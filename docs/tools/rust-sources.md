@@ -62,6 +62,8 @@ python3 tools/rust-sources/collect_notices.py --output /tmp/rust-notice-review
 
 扫描器在产品工作区之外按独立审阅锁构建，安装过程核对官方源码、原始锁及精确允许的锁变化；不增加产品工作区或产品锁文件。扫描使用隔离的固定策略，当前公告与 registry/yank 状态须实时读取，不能将工具缓存或历史通过结果当作本次安全结论。安装、网络要求和证据边界见[安全扫描器说明](../../.github/security-tools/README.md)。
 
+<a id="http-owner-source-maintenance-chain"></a>
+
 ## HTTP 同所有者源码维护链
 
 `proof_legacy_maintenance.py` 只为 `src/foundation/networking/http-transport` 提供
