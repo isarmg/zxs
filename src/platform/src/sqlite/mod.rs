@@ -26,12 +26,10 @@ pub use native_security::{ConnectionSecurityError, disable_checkpoint_on_close, 
 mod trusted_ddl;
 pub use trusted_ddl::{DdlFingerprintError, fingerprint_trusted_ddl};
 
-#[cfg(target_os = "linux")]
 mod validation_snapshot;
-#[cfg(target_os = "linux")]
 pub use validation_snapshot::{SnapshotError, SnapshotLimits, ValidationSnapshot};
 
-#[cfg(all(target_os = "linux", feature = "sqlite-pool"))]
+#[cfg(feature = "sqlite-pool")]
 pub use validation_snapshot::{
     ValidationSnapshotPool, open_validation_snapshot,
     open_validation_snapshot_with_connection_limits,

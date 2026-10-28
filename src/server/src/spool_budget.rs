@@ -10,6 +10,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
     io::Write,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -247,12 +248,8 @@ impl SpoolBudget {
             if !info.is_file() {
                 return Err(invalid_state("spool contains a non-regular file"));
             }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                if info.nlink() != 1 {
-                    return Err(invalid_state("spool contains an aliased data file"));
-                }
+            if info.nlink() != 1 {
+                return Err(invalid_state("spool contains an aliased data file"));
             }
             if name == ".budget.lock" {
                 continue;
@@ -491,12 +488,7 @@ impl Reservation {
     pub(crate) fn persist_owner(&self) -> Result<(), ApiError> {
         let path = self.budget.root.join(format!("{}.owner.json", self.name));
         let mut options = OpenOptions::new();
-        options.create_new(true).write(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
+        options.create_new(true).write(true).mode(0o600);
         let mut file = match options.open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {

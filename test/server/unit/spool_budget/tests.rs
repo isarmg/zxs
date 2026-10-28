@@ -217,6 +217,9 @@ fn sidecar_only_crash_remains_charged_and_rebuilds_without_a_payload() {
         .reserve_with_available("alice", "missing.data", 10, u64::MAX)
         .unwrap();
     reservation.persist_owner().unwrap();
+    let owner = fs::metadata(root.path().join("missing.data.owner.json")).unwrap();
+    assert_eq!(owner.mode() & 0o777, 0o600);
+    assert_eq!(owner.nlink(), 1);
     drop(reservation);
     assert_eq!(total(&budget), METADATA_ALLOWANCE);
     drop(budget);

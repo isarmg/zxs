@@ -126,6 +126,14 @@ fn bootstrap_rejects_missing_bad_public_or_symlink_key() {
             .authorize_bootstrap("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
             .is_err()
     );
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let alias = f.service.management_root.join("bootstrap-alias.key");
+    fs::hard_link(&path, &alias).unwrap();
+    assert!(
+        f.service
+            .authorize_bootstrap("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+            .is_err()
+    );
     fs::remove_file(&path).unwrap();
     std::os::unix::fs::symlink("missing", &path).unwrap();
     assert!(

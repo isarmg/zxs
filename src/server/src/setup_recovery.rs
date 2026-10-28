@@ -8,6 +8,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::{Read, Write},
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 use storage_engine::{Config, Engine, Mode, RetainedWorkspaceLimits, ValidatedConfig};
@@ -676,12 +677,7 @@ impl SetupRecovery {
         }
         let path = self.data_root.join(name);
         let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
+        options.write(true).create_new(true).mode(0o600);
         let mut file = options.open(path).map_err(ApiError::io)?;
         file.write_all(&bytes).map_err(ApiError::io)?;
         file.sync_all().map_err(ApiError::io)?;
@@ -1029,14 +1025,10 @@ fn private_file(path: &Path, create: bool) -> Result<File, ApiError> {
     if !metadata.is_file() {
         return Err(ApiError::invalid("invalid private control file"));
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if metadata.mode() & 0o777 != 0o600 || metadata.nlink() != 1 {
-            return Err(ApiError::invalid(
-                "private control file requires mode 0600 and one link",
-            ));
-        }
+    if metadata.mode() & 0o777 != 0o600 || metadata.nlink() != 1 {
+        return Err(ApiError::invalid(
+            "private control file requires mode 0600 and one link",
+        ));
     }
     Ok(file)
 }

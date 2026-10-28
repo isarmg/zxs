@@ -12,6 +12,7 @@ use std::{
     collections::BTreeMap,
     fs,
     io::Write,
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -83,12 +84,7 @@ pub struct ManagementOptions {
 pub fn claim_authority(data_root: &Path) -> Result<(), ApiError> {
     let path = data_root.join("management-authority.json");
     let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
+    options.write(true).create_new(true).mode(0o600);
     match options.open(&path) {
         Ok(mut file) => {
             file.write_all(b"{\"authority\":\"system-management-auth\"}\n")
@@ -115,12 +111,8 @@ pub fn claim_authority(data_root: &Path) -> Result<(), ApiError> {
             if !metadata.is_file() {
                 return Err(ApiError::invalid("invalid management authority marker"));
             }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                if metadata.nlink() != 1 || metadata.mode() & 0o077 != 0 {
-                    return Err(ApiError::invalid("unsafe management authority marker"));
-                }
+            if metadata.nlink() != 1 || metadata.mode() & 0o077 != 0 {
+                return Err(ApiError::invalid("unsafe management authority marker"));
             }
             // A prior interrupted claim may have left an unsynced file. The
             // fence is valid only after both file and directory are durable.
@@ -224,12 +216,7 @@ pub fn open_service_with_options(
 }
 fn create_private_directory(path: &Path) -> Result<(), ApiError> {
     let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
+    builder.recursive(true).mode(0o700);
     builder.create(path).map_err(ApiError::io)
 }
 #[derive(Debug, error_definition::Error)]

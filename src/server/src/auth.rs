@@ -8,6 +8,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
     io::Write,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::{
         Arc, RwLock, Weak,
@@ -426,11 +427,7 @@ fn absolute_root(root: &Path) -> Result<PathBuf, ApiError> {
 
 fn private_directory(root: &Path) -> Result<PrivateDirectory, ApiError> {
     let root = absolute_root(root)?;
-    #[cfg(unix)]
-    let directory = PrivateDirectory::open_trusted(root);
-    #[cfg(not(unix))]
-    let directory = PrivateDirectory::open_existing(root);
-    directory.map_err(ApiError::invalid_source)
+    PrivateDirectory::open_trusted(root).map_err(ApiError::invalid_source)
 }
 
 fn read_credentials(path: &Path) -> Result<Vec<u8>, ApiError> {
@@ -582,14 +579,7 @@ impl AuthStore {
                 "credentials already exist",
             ));
         }
-        #[cfg(unix)]
         PrivateDirectory::create_trusted(absolute_root(root)?).map_err(ApiError::invalid_source)?;
-        #[cfg(not(unix))]
-        {
-            fs::create_dir_all(root).map_err(ApiError::io)?;
-            PrivateDirectory::open_existing(absolute_root(root)?)
-                .map_err(ApiError::invalid_source)?;
-        }
         let auth_lock = Self::acquire_lock(root)?;
         let username = primitives::normalize_administrator_username(username)
             .map_err(ApiError::invalid_source)?;
@@ -657,14 +647,10 @@ impl AuthStore {
                 if !metadata.is_file() || metadata.file_type().is_symlink() {
                     return Err(ApiError::invalid("invalid credential store"));
                 }
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::MetadataExt;
-                    if metadata.mode() & 0o077 != 0 || metadata.nlink() != 1 {
-                        return Err(ApiError::invalid(
-                            "credential store must have mode 0600 and a single link",
-                        ));
-                    }
+                if metadata.mode() & 0o077 != 0 || metadata.nlink() != 1 {
+                    return Err(ApiError::invalid(
+                        "credential store must have mode 0600 and a single link",
+                    ));
                 }
                 if authoritative.is_some() {
                     // Safety checks still apply, but a recovered authoritative
@@ -730,12 +716,7 @@ impl AuthStore {
             primitives::random_token().map_err(ApiError::invalid_source)?
         ));
         let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
+        options.write(true).create_new(true).mode(0o600);
         let mut file = options.open(&temporary).map_err(ApiError::io)?;
         let mut local_published = false;
         let result = (|| {

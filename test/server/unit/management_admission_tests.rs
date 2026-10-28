@@ -2,7 +2,7 @@
 use super::*;
 use std::{
     io::{Read, Seek},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
 };
 use storage_contract::ErrorCode;
 
@@ -149,6 +149,31 @@ fn startup_reports_authority_io_failure_once_and_preserves_the_fence() {
         fs::read_link(marker).unwrap(),
         Path::new("missing-authority")
     );
+}
+
+#[test]
+fn authority_marker_stays_private_and_rejects_public_or_aliased_files() {
+    let root = crate::tests::private_tempdir();
+    let data = root.path().join("data");
+    create_private_directory(&data).unwrap();
+    assert_eq!(fs::metadata(&data).unwrap().mode() & 0o777, 0o700);
+    claim_authority(&data).unwrap();
+    let marker = data.join("management-authority.json");
+    let metadata = fs::metadata(&marker).unwrap();
+    assert_eq!(metadata.mode() & 0o777, 0o600);
+    assert_eq!(metadata.nlink(), 1);
+    let bytes = fs::read(&marker).unwrap();
+    claim_authority(&data).unwrap();
+
+    fs::set_permissions(&marker, fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(claim_authority(&data).unwrap_err().status, 400);
+    assert_eq!(fs::read(&marker).unwrap(), bytes);
+    fs::set_permissions(&marker, fs::Permissions::from_mode(0o600)).unwrap();
+    let alias = data.join("authority-alias.json");
+    fs::hard_link(&marker, &alias).unwrap();
+    assert_eq!(claim_authority(&data).unwrap_err().status, 400);
+    assert_eq!(fs::read(&marker).unwrap(), bytes);
+    assert_eq!(fs::read(alias).unwrap(), bytes);
 }
 
 fn commands() -> Vec<(&'static str, Value, bool)> {
