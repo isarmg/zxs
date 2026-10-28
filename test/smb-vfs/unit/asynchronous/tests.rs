@@ -220,7 +220,7 @@ fn sync_and_async_reads_bound_immutable_extents_but_allow_workspace_growth() {
         }),
         fd: file.try_clone().unwrap().into(),
         writable: false,
-        io: Arc::new(Mutex::new(())),
+        io: Arc::new(Mutex::new(vfs::WriteSequence::new(false))),
     };
     let context = Box::new(vfs::Context {
         samba_username: "alice".into(),

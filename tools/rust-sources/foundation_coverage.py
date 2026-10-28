@@ -61,7 +61,8 @@ def consumers(profiles):
         for manifest in profile['manifests']:
             member = package_name(Path(manifest).parent)
             for target in profile['targets']:
-                command = ['cargo', 'tree', '--locked', '--offline', '-p', member, '--target', target,
+                command = ['cargo', 'tree', '--locked', '--offline', '--color', 'never',
+                           '-p', member, '--target', target,
                            '-e', 'normal,build', '--prefix', 'none', '-f', '{p}|{f}']
                 for feature in profile.get('features', []):
                     command += ['--features', feature]

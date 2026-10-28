@@ -1,8 +1,11 @@
 """Invariants of the generated foundation coverage map (no Cargo needed)."""
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 MAP = json.loads((ROOT / "test/ci/fixtures/foundation-test-coverage.json").read_text())
@@ -12,6 +15,38 @@ PRODUCTION = {profile["id"] for profile in WORKSPACES["profiles"] if profile["pr
 SPEC = importlib.util.spec_from_file_location("behaviour_gate", ROOT / ".github/scripts/check-foundation-behaviour.py")
 BEHAVIOUR = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BEHAVIOUR)
+COVERAGE_SPEC = importlib.util.spec_from_file_location(
+    "foundation_coverage", ROOT / "tools/rust-sources/foundation_coverage.py")
+COVERAGE = importlib.util.module_from_spec(COVERAGE_SPEC)
+COVERAGE_SPEC.loader.exec_module(COVERAGE)
+
+
+class FoundationCoverageConsumerTests(unittest.TestCase):
+    def test_cargo_tree_disables_forced_ci_color_at_process_boundary(self):
+        profile = {
+            "id": "sqlite-pool-validation", "manifests": ["src/platform/Cargo.toml"],
+            "targets": ["x86_64-unknown-linux-gnu"], "features": ["platform-io/sqlite-pool"],
+        }
+        directory = "src/foundation/code-generation/proc-macro2"
+        dependency = f"proc-macro2 v1.0.107 ({ROOT / directory})|default,proc-macro"
+        output = (f"platform-io v0.1.0 ({ROOT / 'src/platform'})|sqlite-pool\n"
+                  f"{dependency}\n{dependency} (*)\n")
+        result = subprocess.CompletedProcess([], 0, output, "")
+        with patch.dict(os.environ, {"CARGO_TERM_COLOR": "always"}), \
+                patch.object(COVERAGE.subprocess, "run", return_value=result) as run:
+            actual = COVERAGE.consumers([profile])
+            self.assertEqual(os.environ["CARGO_TERM_COLOR"], "always")
+        run.assert_called_once_with(
+            ["cargo", "tree", "--locked", "--offline", "--color", "never",
+             "-p", "platform-io", "--target", "x86_64-unknown-linux-gnu",
+             "-e", "normal,build", "--prefix", "none", "-f", "{p}|{f}",
+             "--features", "platform-io/sqlite-pool"],
+            cwd=ROOT, text=True, capture_output=True, check=True,
+        )
+        self.assertEqual(actual, {directory: [{
+            "profile": "sqlite-pool-validation", "target": "x86_64-unknown-linux-gnu",
+            "features": ["default", "proc-macro"], "consumers": ["platform-io"],
+        }]})
 
 
 class FoundationCoverageMapTests(unittest.TestCase):
