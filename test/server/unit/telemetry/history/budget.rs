@@ -13,11 +13,11 @@ fn full_encoding_bytes(queue: &SampleQueue) -> usize {
     total
 }
 
-fn assert_budget(cache: &HistoryStore) -> usize {
+pub(super) fn assert_budget(cache: &HistoryStore) -> usize {
     full_encoding_bytes(&cache.minutes) + full_encoding_bytes(&cache.recent)
 }
 
-fn oracle_prune(cache: &mut HistoryStore, now: i64) {
+fn oracle_prune(cache: &mut HistoryFixture, now: i64) {
     let mut recent = cache.recent.iter().cloned().collect::<VecDeque<_>>();
     let mut minutes = cache.minutes.iter().cloned().collect::<VecDeque<_>>();
     while recent
@@ -34,7 +34,7 @@ fn oracle_prune(cache: &mut HistoryStore, now: i64) {
     {
         minutes.pop_front();
     }
-    if cache.last_maintenance_minute != now / 60 {
+    if cache.writer.last_maintenance_minute != now / 60 {
         let encoded_bytes = |sample: &Sample| json_codec::to_vec(sample).unwrap().len();
         let mut total = minutes
             .iter()
@@ -74,7 +74,7 @@ fn oracle_prune(cache: &mut HistoryStore, now: i64) {
     assert_budget(cache);
 }
 
-fn sized_sample(at: i64, encoded_bytes: usize) -> Sample {
+pub(super) fn sized_sample(at: i64, encoded_bytes: usize) -> Sample {
     let mut point = sample(at, None);
     point.status.disks.push(crate::telemetry::DiskStatus {
         id: "P01".into(),
@@ -102,7 +102,7 @@ fn sized_sample(at: i64, encoded_bytes: usize) -> Sample {
 #[test]
 fn accounting_tracks_minutes_overlap_and_rejected_observations() {
     let now = 1_800_000_120;
-    let mut cache = HistoryStore::memory(now);
+    let mut cache = HistoryFixture::memory(now);
     for offset in (0..130).step_by(5) {
         cache
             .record(sample(now + offset, (offset % 10 == 0).then_some(10.0)))
@@ -114,15 +114,18 @@ fn accounting_tracks_minutes_overlap_and_rejected_observations() {
     // Both retained resolutions are charged, even though queries avoid counting
     // overlapping observations twice; the pending-minute clone is not charged.
     assert_eq!(cache.samples(now, now + 125, 60).len(), 3);
-    assert_eq!(cache.pending_minute.len(), 2);
+    assert_eq!(cache.writer.pending_minute.len(), 2);
     let before = assert_budget(&cache);
-    let pending = json_codec::to_vec(&cache.pending_minute).unwrap();
-    let maintenance = cache.last_maintenance_minute;
+    let pending = json_codec::to_vec(&cache.writer.pending_minute).unwrap();
+    let maintenance = cache.writer.last_maintenance_minute;
     cache.record(sample(now + 125, Some(99.0))).unwrap();
     cache.record(sample(now - 60, Some(99.0))).unwrap();
     assert_eq!(assert_budget(&cache), before);
-    assert_eq!(json_codec::to_vec(&cache.pending_minute).unwrap(), pending);
-    assert_eq!(cache.last_maintenance_minute, maintenance);
+    assert_eq!(
+        json_codec::to_vec(&cache.writer.pending_minute).unwrap(),
+        pending
+    );
+    assert_eq!(cache.writer.last_maintenance_minute, maintenance);
     let error = cache.record(sample(now + 130, Some(f64::NAN))).unwrap_err();
     assert_eq!(error.to_string(), "invalid telemetry sample");
     assert_eq!(assert_budget(&cache), before);
@@ -136,7 +139,7 @@ fn recovery_charges_canonical_survivors_after_duplicate_replacement() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("cache");
     let now = 1_800_000_120;
-    let cache = HistoryStore::open(&path, now).unwrap();
+    let cache = HistoryFixture::open(&path, now).unwrap();
     let recent = [
         sample(now - 115, None),
         sample(now - 115, Some(30.0)),
@@ -160,10 +163,10 @@ fn recovery_charges_canonical_survivors_after_duplicate_replacement() {
         .append_file(false, &sample(now - 54, Some(50.0)))
         .unwrap();
     drop(cache);
-    let restored = HistoryStore::open(&path, now).unwrap();
+    let restored = HistoryFixture::open(&path, now).unwrap();
     assert_eq!(restored.recent.len(), 4);
     assert_eq!(restored.minutes.len(), 2);
-    assert_eq!(restored.pending_minute.len(), 1);
+    assert_eq!(restored.writer.pending_minute.len(), 1);
     assert_eq!(
         restored.recent.front().unwrap().status.cpu.power_watts,
         Some(30.0)
@@ -177,7 +180,7 @@ fn recovery_charges_canonical_survivors_after_duplicate_replacement() {
     let bytes = assert_budget(&restored);
     let query = json_codec::to_vec(&restored.samples(now - 120, now, 60)).unwrap();
     drop(restored);
-    let reloaded = HistoryStore::open(&path, now).unwrap();
+    let reloaded = HistoryFixture::open(&path, now).unwrap();
     assert_eq!(assert_budget(&reloaded), bytes);
     assert_eq!(
         json_codec::to_vec(&reloaded.samples(now - 120, now, 60)).unwrap(),
@@ -188,7 +191,7 @@ fn recovery_charges_canonical_survivors_after_duplicate_replacement() {
 #[test]
 fn point_and_age_trimming_subtracts_each_removed_envelope() {
     let now = 1_800_000_120;
-    let mut cache = HistoryStore::memory(now);
+    let mut cache = HistoryFixture::memory(now);
     cache
         .recent
         .push_back(sample(now - RECENT_SECONDS - 1, None));
@@ -222,7 +225,7 @@ fn exact_byte_boundary_keeps_equal_budget_and_evicts_only_above_it() {
     let now = 1_800_000_120;
     let points = MAX_MEMORY_BYTES / MAX_CACHE_LINE;
     for extra in [0, 1] {
-        let mut cache = HistoryStore::memory(now);
+        let mut cache = HistoryFixture::memory(now);
         for index in 0..points - 1 {
             cache.minutes.push_back(sized_sample(
                 now - (points - index) as i64 * 60,
@@ -250,7 +253,7 @@ fn exact_byte_boundary_keeps_equal_budget_and_evicts_only_above_it() {
 #[test]
 fn budget_eviction_removes_minutes_before_recent_and_keeps_last_recent() {
     let now = 1_800_000_120;
-    let mut cache = HistoryStore::memory(now);
+    let mut cache = HistoryFixture::memory(now);
     cache.minutes.push_back(sample(now - 60, None));
     cache.recent.push_back(sample(now - 5, None));
     cache
@@ -286,9 +289,9 @@ fn encoding_failure_retains_the_existing_conservative_charge() {
             .to_string()
             .contains("deliberate encoding failure")
     );
-    assert_eq!(memory_charge(failure), MAX_CACHE_LINE);
+    assert_eq!(memory_charge(&failure), MAX_CACHE_LINE);
     assert_eq!(
-        memory_charge(json_codec::to_vec(&sample(1_800_000_120, None))),
+        memory_charge(&json_codec::to_vec(&sample(1_800_000_120, None))),
         json_codec::to_vec(&sample(1_800_000_120, None))
             .unwrap()
             .len()
@@ -300,7 +303,7 @@ fn real_write_failures_keep_recent_error_priority_and_memory_accounting() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("cache");
     let now = 1_800_000_120;
-    let mut cache = HistoryStore::open(&path, now).unwrap();
+    let mut cache = HistoryFixture::open(&path, now).unwrap();
     // The minute append will fail at open (a directory occupies its filename).
     fs::create_dir(path.join(format!("minute-{}.jsonl", now / 86400))).unwrap();
     cache.record(sample(now, None)).unwrap();
@@ -320,7 +323,7 @@ fn real_write_failures_keep_recent_error_priority_and_memory_accounting() {
     assert_budget(&cache);
 
     let path = root.path().join("unwritable-cache-file");
-    let mut cache = HistoryStore::open(&path, now).unwrap();
+    let mut cache = HistoryFixture::open(&path, now).unwrap();
     fs::create_dir(path.join(format!("recent-{}.jsonl", now / 3600))).unwrap();
     let error = cache.record(sample(now, None)).unwrap_err();
     assert!(error.raw_os_error().is_some());

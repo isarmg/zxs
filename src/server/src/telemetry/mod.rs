@@ -5,7 +5,7 @@ mod statistics;
 
 use crate::{ApiError, AppState, Backend, auth::Identity, http_boundary::ApiQuery};
 use data_serialization::{Deserialize, Serialize};
-use history::{HistoryStore, Sample};
+use history::{HistoryStore, HistoryWriter, Sample};
 use http_routing::{Extension, Json, extract::State};
 use power::CpuPowerSampler;
 use std::{
@@ -177,23 +177,25 @@ impl Telemetry {
         directory: &Path,
     ) -> Result<Arc<Self>, ApiError> {
         let now = date_time::OffsetDateTime::now_utc().unix_timestamp();
+        let sampler = SystemSampler::new();
+        let (history, mut writer) = match HistoryWriter::open(directory, now) {
+            Ok(history) => history,
+            Err(error) => {
+                // Unsafe cache paths remain rejected and untouched. The
+                // optional persistence failure must not veto management.
+                tracing::warn!(error = ?error, "monitoring cache unavailable; using bounded memory history");
+                HistoryWriter::memory(now)
+            }
+        };
         let service = Arc::new(Self {
             backend,
             request_slots: Arc::new(tokio::sync::Semaphore::new(2)),
-            sampler: Mutex::new(SystemSampler::new()),
-            history: Mutex::new(match HistoryStore::open(directory, now) {
-                Ok(history) => history,
-                Err(error) => {
-                    // Unsafe cache paths remain rejected and untouched. The
-                    // optional persistence failure must not veto management.
-                    tracing::warn!(error = ?error, "monitoring cache unavailable; using bounded memory history");
-                    HistoryStore::memory(now)
-                }
-            }),
+            sampler: Mutex::new(sampler),
+            history: Mutex::new(history),
         });
         // Synchronous initialization guarantees a usable first snapshot. A
         // backend without monitor support can still serve its other routes.
-        if let Err(error) = service.refresh() {
+        if let Err(error) = service.refresh(&mut writer) {
             tracing::warn!(error = ?error, "initial host sample is unavailable");
         }
         let weak = Arc::downgrade(&service);
@@ -205,7 +207,7 @@ impl Telemetry {
                     let Some(service) = weak.upgrade() else {
                         break;
                     };
-                    if let Err(error) = service.refresh() {
+                    if let Err(error) = service.refresh(&mut writer) {
                         tracing::warn!(error = ?error, "periodic host sample is unavailable");
                     }
                     // Release the service while sleeping. Dropping its router
@@ -249,14 +251,9 @@ impl Telemetry {
         })
     }
 
-    fn refresh(&self) -> Result<(), ApiError> {
+    fn refresh(&self, writer: &mut HistoryWriter) -> Result<(), ApiError> {
         let sample = self.collect()?;
-        if let Err(error) = self
-            .history
-            .lock()
-            .expect("service state lock poisoned")
-            .record(sample)
-        {
+        if let Err(error) = writer.record(sample, &self.history) {
             // Cache failure cannot stop live monitoring or business storage.
             tracing::warn!(error = ?error, "monitoring cache persistence failed; current samples remain in memory");
         }

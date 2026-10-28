@@ -3,6 +3,62 @@ use crate::telemetry::{CpuStatus, MemoryStatus};
 
 #[path = "budget.rs"]
 mod budget;
+#[path = "writer.rs"]
+mod writer;
+
+// Keep state-inspecting tests local to the two owners. Each record still uses
+// the production writer and publication lock; this fixture owns no extra writer.
+struct HistoryFixture {
+    store: HistoryStore,
+    writer: HistoryWriter,
+}
+
+impl HistoryFixture {
+    fn open(directory: &Path, now: i64) -> io::Result<Self> {
+        let (store, writer) = HistoryWriter::open(directory, now)?;
+        Ok(Self { store, writer })
+    }
+
+    fn memory(now: i64) -> Self {
+        let (store, writer) = HistoryWriter::memory(now);
+        Self { store, writer }
+    }
+
+    fn record(&mut self, sample: Sample) -> io::Result<()> {
+        let history = Mutex::new(std::mem::take(&mut self.store));
+        let result = self.writer.record(sample, &history);
+        self.store = history.into_inner().unwrap();
+        result
+    }
+
+    fn prune(&mut self, now: i64) {
+        self.store
+            .prune(now, self.writer.last_maintenance_minute != now / 60);
+    }
+
+    fn is_persistent(&self) -> bool {
+        self.writer.directory.is_some()
+    }
+
+    fn append_file(&self, recent: bool, sample: &Sample) -> io::Result<()> {
+        self.writer
+            .append_file(recent, sample.unix_seconds, json_codec::to_vec(sample))
+    }
+}
+
+impl std::ops::Deref for HistoryFixture {
+    type Target = HistoryStore;
+
+    fn deref(&self) -> &Self::Target {
+        &self.store
+    }
+}
+
+impl std::ops::DerefMut for HistoryFixture {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.store
+    }
+}
 
 fn sample(at: i64, value: Option<f64>) -> Sample {
     Sample {
@@ -35,12 +91,12 @@ fn restart_recovers_real_samples_and_keeps_missing_values_absent() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("cache");
     let now = 1_800_000_120;
-    let mut cache = HistoryStore::open(&path, now).unwrap();
+    let mut cache = HistoryFixture::open(&path, now).unwrap();
     for offset in (0..80).step_by(5) {
         cache.record(sample(now + offset, None)).unwrap();
     }
     drop(cache);
-    let cache = HistoryStore::open(&path, now + 80).unwrap();
+    let cache = HistoryFixture::open(&path, now + 80).unwrap();
     let result = cache.samples(now, now + 80, 5);
     assert_eq!(result.len(), 16);
     assert!(
@@ -56,7 +112,7 @@ fn restart_recovers_real_samples_and_keeps_missing_values_absent() {
 fn range_averages_real_observations_without_duplicate_resolution_or_fake_gaps() {
     let root = tempfile::tempdir().unwrap();
     let now = 1_800_000_120;
-    let mut cache = HistoryStore::open(&root.path().join("cache"), now).unwrap();
+    let mut cache = HistoryFixture::open(&root.path().join("cache"), now).unwrap();
     for offset in (0..180).step_by(5) {
         cache
             .record(sample(now + offset, Some(offset as f64)))
@@ -79,7 +135,7 @@ fn cleanup_only_removes_recognized_expired_regular_cache_files() {
     fs::write(path.join("keep.txt"), b"foreign").unwrap();
     fs::create_dir(path.join("recent-1.jsonl")).unwrap();
     let now = 1_800_000_120;
-    let cache = HistoryStore::open(&path, now).unwrap();
+    let cache = HistoryFixture::open(&path, now).unwrap();
     assert!(cache.recent.is_empty());
     assert!(!path.join("minute-1.jsonl").exists());
     assert!(path.join("keep.txt").exists());
@@ -90,7 +146,7 @@ fn cleanup_only_removes_recognized_expired_regular_cache_files() {
 fn month_range_stays_bounded_and_weights_multiple_resolutions_by_real_observations() {
     let root = tempfile::tempdir().unwrap();
     let now = 1_800_000_120;
-    let mut cache = HistoryStore::open(&root.path().join("cache"), now).unwrap();
+    let mut cache = HistoryFixture::open(&root.path().join("cache"), now).unwrap();
     for at in ((now - RETENTION_SECONDS - 120)..=now).step_by(60) {
         let mut point = sample(at, Some(20.0));
         point = average(&vec![point; 12]);
@@ -154,11 +210,11 @@ fn mixed_null_metrics_remain_exact_after_two_aggregations_and_persistence() {
     assert!(minute_a.valid_at(now + 120));
     assert!(minute_b.valid_at(now + 120));
     // Round trip through the actual cache serializer before recombining.
-    let cache = HistoryStore::open(&root.path().join("cache"), now + 120).unwrap();
+    let cache = HistoryFixture::open(&root.path().join("cache"), now + 120).unwrap();
     cache.append_file(false, &minute_a).unwrap();
     cache.append_file(false, &minute_b).unwrap();
     drop(cache);
-    let cache = HistoryStore::open(&root.path().join("cache"), now + 120).unwrap();
+    let cache = HistoryFixture::open(&root.path().join("cache"), now + 120).unwrap();
     assert_eq!(cache.minutes.len(), 2);
     let twice = average(&cache.minutes.iter().cloned().collect::<Vec<_>>());
     let direct = average(&a.into_iter().chain(b).collect::<Vec<_>>());
@@ -207,7 +263,7 @@ fn old_aggregates_without_metric_statistics_are_ignored_but_raw_points_recover()
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("cache");
     let now = 1_800_000_120;
-    let cache = HistoryStore::open(&path, now).unwrap();
+    let cache = HistoryFixture::open(&path, now).unwrap();
     let mut old = sample(now - 60, Some(100.0));
     old.observations = 12;
     assert!(!old.valid_at(now));
@@ -216,7 +272,7 @@ fn old_aggregates_without_metric_statistics_are_ignored_but_raw_points_recover()
         .append_file(true, &sample(now - 55, Some(20.0)))
         .unwrap();
     drop(cache);
-    let cache = HistoryStore::open(&path, now).unwrap();
+    let cache = HistoryFixture::open(&path, now).unwrap();
     assert_eq!(cache.minutes.len(), 1);
     assert_eq!(
         cache.minutes.front().unwrap().status.cpu.power_watts,
@@ -267,7 +323,7 @@ fn recovery_ignores_partial_invalid_and_future_samples() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("cache");
     let now = 1_800_000_120;
-    let mut cache = HistoryStore::open(&path, now).unwrap();
+    let mut cache = HistoryFixture::open(&path, now).unwrap();
     cache.record(sample(now, Some(1.0))).unwrap();
     drop(cache);
     let path_file = path.join(format!("recent-{}.jsonl", now / 3600));
@@ -281,7 +337,7 @@ fn recovery_ignores_partial_invalid_and_future_samples() {
     .unwrap();
     write!(file, "{{\"unix_seconds\":").unwrap();
     drop(file);
-    let cache = HistoryStore::open(&path, now + 1).unwrap();
+    let cache = HistoryFixture::open(&path, now + 1).unwrap();
     assert_eq!(cache.samples(now, now + 1, 5).len(), 1);
 }
 
@@ -293,9 +349,9 @@ fn symlink_cache_directory_and_files_are_not_followed() {
     let target = root.path().join("target");
     fs::create_dir(&target).unwrap();
     symlink(&target, root.path().join("linked")).unwrap();
-    assert!(HistoryStore::open(&root.path().join("linked"), 1_800_000_120).is_err());
+    assert!(HistoryFixture::open(&root.path().join("linked"), 1_800_000_120).is_err());
     let path = root.path().join("cache");
-    let mut cache = HistoryStore::open(&path, 1_800_000_120).unwrap();
+    let mut cache = HistoryFixture::open(&path, 1_800_000_120).unwrap();
     let external = root.path().join("external");
     fs::write(&external, b"untouched").unwrap();
     symlink(
@@ -313,7 +369,7 @@ fn cache_recovery_rejects_bad_byte_encodings_and_out_of_range_statistics() {
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().join("cache");
     let now = 1_800_000_120;
-    let mut cache = HistoryStore::open(&directory, now).unwrap();
+    let mut cache = HistoryFixture::open(&directory, now).unwrap();
     cache.record(sample(now, Some(1.0))).unwrap();
     drop(cache);
     let mut file = OpenOptions::new()
@@ -341,7 +397,7 @@ fn cache_recovery_rejects_bad_byte_encodings_and_out_of_range_statistics() {
     assert!(!poisoned.valid_at(now + 10));
     writeln!(file, "{encoded}").unwrap();
     drop(file);
-    let cache = HistoryStore::open(&directory, now + 10).unwrap();
+    let cache = HistoryFixture::open(&directory, now + 10).unwrap();
     assert_eq!(cache.recent.len(), 1);
     assert_eq!(cache.recent.front().unwrap().unix_seconds, now);
     assert_eq!(

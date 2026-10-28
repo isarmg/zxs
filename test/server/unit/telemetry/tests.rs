@@ -30,7 +30,26 @@ fn real_host_sampler_starts_with_a_baseline_and_reads_memory() {
     );
 }
 
-struct MonitorBackend;
+struct ObserveGate {
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+#[derive(Default)]
+struct MonitorBackend {
+    observe_gate: Mutex<Option<ObserveGate>>,
+    dropped: Option<std::sync::mpsc::Sender<()>>,
+}
+
+impl Drop for MonitorBackend {
+    fn drop(&mut self) {
+        if let Some(dropped) = &self.dropped {
+            // The lifecycle assertion is in the receiver, not in Drop.
+            let _ = dropped.send(());
+        }
+    }
+}
+
 impl Backend for MonitorBackend {
     fn operation(
         &self,
@@ -569,6 +588,11 @@ impl Backend for MonitorBackend {
         &self,
         _: &crate::InternalDiskObservation,
     ) -> Result<Vec<crate::DiskSample>, ApiError> {
+        let gate = self.observe_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.entered.send(()).unwrap();
+            gate.release.recv_timeout(Duration::from_secs(15)).unwrap();
+        }
         Ok(vec![])
     }
     fn upload(
@@ -613,13 +637,13 @@ fn unavailable_cache_falls_back_to_bounded_memory_without_losing_live_metrics() 
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().join("cache");
     std::fs::write(&directory, b"unwritable cache path").unwrap();
-    let service = Telemetry::start(Arc::new(MonitorBackend), &directory).unwrap();
+    let service = Telemetry::start(Arc::new(MonitorBackend::default()), &directory).unwrap();
     let live = service.current().unwrap();
     assert!(live.cpu.logical_count > 0);
     assert!(live.memory.total_bytes.is_some());
     let history = service.history.lock().unwrap();
-    assert!(!history.is_persistent());
     let now = date_time::OffsetDateTime::now_utc().unix_timestamp();
+    assert!(HistoryWriter::open(&directory, now).is_err());
     assert!(!history.samples(now - 60, now, 5).is_empty());
     assert_eq!(std::fs::read(directory).unwrap(), b"unwritable cache path");
 }
@@ -628,11 +652,20 @@ fn unavailable_cache_falls_back_to_bounded_memory_without_losing_live_metrics() 
 #[test]
 fn read_only_sysfs_cache_falls_back_to_live_memory_monitoring() {
     let service = Telemetry::start(
-        Arc::new(MonitorBackend),
+        Arc::new(MonitorBackend::default()),
         Path::new("/sys/zxs-telemetry-cache-unit-test"),
     )
     .unwrap();
-    assert!(!service.history.lock().unwrap().is_persistent());
+    let now = date_time::OffsetDateTime::now_utc().unix_timestamp();
+    assert!(HistoryWriter::open(Path::new("/sys/zxs-telemetry-cache-unit-test"), now).is_err());
+    assert!(
+        !service
+            .history
+            .lock()
+            .unwrap()
+            .samples(now - 60, now, 5)
+            .is_empty()
+    );
     assert!(service.current().unwrap().memory.total_bytes.is_some());
 }
 
@@ -646,6 +679,40 @@ fn supported_ranges_bound_chart_points_and_reject_other_strings() {
     }
     assert!(json_codec::from_value::<HistoryRange>(json!("1year")).is_err());
     assert!(json_codec::from_value::<HistoryRange>(json!("../1h")).is_err());
+}
+
+#[test]
+fn active_periodic_refresh_releases_weak_service_and_backend_after_completion() {
+    use std::sync::mpsc;
+
+    let root = tempfile::tempdir().unwrap();
+    let (dropped_tx, dropped_rx) = mpsc::channel();
+    let backend = Arc::new(MonitorBackend {
+        observe_gate: Mutex::new(None),
+        dropped: Some(dropped_tx),
+    });
+    let weak_backend = Arc::downgrade(&backend);
+    let service = Telemetry::start(backend.clone(), &root.path().join("cache")).unwrap();
+    let weak_service = Arc::downgrade(&service);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    *backend.observe_gate.lock().unwrap() = Some(ObserveGate {
+        entered: entered_tx,
+        release: release_rx,
+    });
+    drop(backend);
+    // Wait for the real periodic thread, without timing a guessed sleep or
+    // inserting a production hook. Its active refresh temporarily owns service.
+    entered_rx.recv_timeout(Duration::from_secs(15)).unwrap();
+    drop(service);
+    assert!(weak_service.upgrade().is_some());
+    assert!(weak_backend.upgrade().is_some());
+    release_tx.send(()).unwrap();
+    dropped_rx.recv_timeout(Duration::from_secs(15)).unwrap();
+    assert!(weak_service.upgrade().is_none());
+    assert!(weak_backend.upgrade().is_none());
+    // This proves resource release after the active refresh, not thread join or
+    // a shutdown flush: the native worker has no exposed JoinHandle.
 }
 
 #[test]
@@ -688,7 +755,7 @@ async fn telemetry_admission_survives_cancellation_without_consuming_management_
     let root = crate::tests::private_tempdir();
     let config = crate::ServerConfig::loopback(root.path());
     config.prepare_spool().unwrap();
-    let backend = Arc::new(MonitorBackend);
+    let backend = Arc::new(MonitorBackend::default());
     let service = Telemetry::start(backend.clone(), &root.path().join("cache")).unwrap();
     let mut auth =
         crate::auth::AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
@@ -782,16 +849,24 @@ async fn rejected_symlink_cache_preserves_target_and_management_across_restarts(
     for _ in 0..3 {
         // Exercise fallback directly, including a history write, before
         // constructing the complete router with the same rejected cache.
-        let service = Telemetry::start(Arc::new(MonitorBackend), &cache).unwrap();
-        assert!(!service.history.lock().unwrap().is_persistent());
-        service.refresh().unwrap();
+        let service = Telemetry::start(Arc::new(MonitorBackend::default()), &cache).unwrap();
+        let now = date_time::OffsetDateTime::now_utc().unix_timestamp();
+        assert!(HistoryWriter::open(&cache, now).is_err());
+        assert!(
+            !service
+                .history
+                .lock()
+                .unwrap()
+                .samples(now - 60, now, 5)
+                .is_empty()
+        );
         assert!(service.current().unwrap().memory.total_bytes.is_some());
         drop(service);
 
         let mut config = crate::ServerConfig::loopback(root.path());
         config.web_dir = Some(web.clone());
         let app = crate::router(
-            Arc::new(MonitorBackend),
+            Arc::new(MonitorBackend::default()),
             crate::auth::AuthStore::open(&auth_root).unwrap(),
             config,
         )

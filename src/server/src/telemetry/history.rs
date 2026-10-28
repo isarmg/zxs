@@ -6,6 +6,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 
 pub(super) const RETENTION_SECONDS: i64 = 31 * 24 * 60 * 60;
@@ -72,12 +73,16 @@ struct SampleQueue {
 
 impl SampleQueue {
     fn push_back(&mut self, sample: Sample) {
-        let encoded_bytes = memory_charge(json_codec::to_vec(&sample));
-        self.encoded_bytes += encoded_bytes;
-        self.entries.push_back(ChargedSample {
+        let encoded_bytes = memory_charge(&json_codec::to_vec(&sample));
+        self.push_charged(ChargedSample {
             sample,
             encoded_bytes,
         });
+    }
+
+    fn push_charged(&mut self, sample: ChargedSample) {
+        self.encoded_bytes += sample.encoded_bytes;
+        self.entries.push_back(sample);
     }
 
     fn pop_front(&mut self) {
@@ -125,46 +130,57 @@ impl FromIterator<Sample> for SampleQueue {
     }
 }
 
-fn memory_charge(encoded: json_codec::Result<Vec<u8>>) -> usize {
+fn memory_charge(encoded: &json_codec::Result<Vec<u8>>) -> usize {
     // Retain the existing conservative accounting fallback. Persistence reports
     // its own encoding/I/O failure; accounting must not change that precedence.
-    encoded.map_or(MAX_CACHE_LINE, |bytes| bytes.len())
+    encoded.as_ref().map_or(MAX_CACHE_LINE, |bytes| bytes.len())
 }
 
+#[derive(Default)]
 pub(super) struct HistoryStore {
-    directory: Option<PathBuf>,
     recent: SampleQueue,
     minutes: SampleQueue,
-    pending_minute: Vec<Sample>,
-    last_maintenance_minute: i64,
 }
 
-impl HistoryStore {
-    pub(super) fn memory(now: i64) -> Self {
-        Self {
-            directory: None,
-            recent: SampleQueue::default(),
-            minutes: SampleQueue::default(),
-            pending_minute: Vec::new(),
-            last_maintenance_minute: now / 60,
-        }
+// Startup owns this value until its first refresh, then moves it into the single
+// sampling thread. HTTP handles hold only HistoryStore, never a writer.
+pub(super) struct HistoryWriter {
+    directory: Option<PathBuf>,
+    pending_minute: Vec<Sample>,
+    last_maintenance_minute: i64,
+    last_recorded_seconds: Option<i64>,
+}
+
+struct PreparedRecord {
+    minute: Option<ChargedSample>,
+    recent: ChargedSample,
+    prune_bytes: bool,
+    persistence: io::Result<()>,
+}
+
+impl HistoryWriter {
+    pub(super) fn memory(now: i64) -> (HistoryStore, Self) {
+        (
+            HistoryStore::default(),
+            Self {
+                directory: None,
+                pending_minute: Vec::new(),
+                last_maintenance_minute: now / 60,
+                last_recorded_seconds: None,
+            },
+        )
     }
 
-    #[cfg(test)]
-    pub(super) fn is_persistent(&self) -> bool {
-        self.directory.is_some()
-    }
-
-    pub(super) fn open(directory: &Path, now: i64) -> io::Result<Self> {
+    pub(super) fn open(directory: &Path, now: i64) -> io::Result<(HistoryStore, Self)> {
         ensure_private_directory(directory)?;
-        let mut result = Self {
+        let mut writer = Self {
             directory: Some(directory.into()),
-            recent: SampleQueue::default(),
-            minutes: SampleQueue::default(),
             pending_minute: Vec::new(),
             last_maintenance_minute: -1,
+            last_recorded_seconds: None,
         };
-        result.maintenance(now)?;
+        writer.maintenance(now)?;
+        let mut result = HistoryStore::default();
         let mut files = fs::read_dir(directory)?
             .filter_map(Result::ok)
             .filter(|entry| {
@@ -241,71 +257,124 @@ impl HistoryStore {
         }
         for (minute, samples) in recovered {
             if minute == now / 60 {
-                result.pending_minute = samples;
+                writer.pending_minute = samples;
             } else if !result
                 .minutes
                 .iter()
                 .any(|sample| sample.unix_seconds / 60 == minute)
             {
                 let sample = average(&samples);
-                if let Err(error) = result.append_file(false, &sample) {
+                let (sample, persistence) = writer.prepare_sample(false, sample);
+                if let Err(error) = persistence {
                     tracing::warn!(error = ?error, "monitoring cache recovery is read-only; using bounded memory history");
-                    result.directory = None;
+                    writer.directory = None;
                 }
-                result.minutes.push_back(sample);
+                result.minutes.push_charged(sample);
             }
         }
         result.minutes.sort_by_time();
-        result.last_maintenance_minute = -1;
-        result.prune(now);
-        result.last_maintenance_minute = now / 60;
-        Ok(result)
+        result.prune(now, -1 != now / 60);
+        writer.last_maintenance_minute = now / 60;
+        writer.last_recorded_seconds = result.recent.back().map(|sample| sample.unix_seconds);
+        Ok((result, writer))
     }
 
-    pub(super) fn record(&mut self, sample: Sample) -> io::Result<()> {
+    pub(super) fn record(
+        &mut self,
+        sample: Sample,
+        history: &Mutex<HistoryStore>,
+    ) -> io::Result<()> {
+        let Some(prepared) = self.prepare(sample)? else {
+            return Ok(());
+        };
+        // The sole writer synchronously publishes every accepted record, even
+        // after I/O failure. No competing writer can invalidate its preparation.
+        history
+            .lock()
+            .expect("service state lock poisoned")
+            .publish(prepared)
+    }
+
+    fn prepare(&mut self, sample: Sample) -> io::Result<Option<PreparedRecord>> {
         let now = sample.unix_seconds;
         if !sample.valid_at(now) {
             return Err(io::Error::other("invalid telemetry sample"));
         }
         // Repeated observations in the same second never multiply history points.
         if self
-            .recent
-            .back()
-            .is_some_and(|previous| previous.unix_seconds >= now)
+            .last_recorded_seconds
+            .is_some_and(|previous| previous >= now)
         {
-            return Ok(());
+            return Ok(None);
         }
         let mut error = None;
-        if self
+        let minute = if self
             .pending_minute
             .first()
             .is_some_and(|pending| pending.unix_seconds / 60 != now / 60)
         {
             let minute = average(&self.pending_minute);
-            if let Err(failure) = self.append_file(false, &minute) {
+            let (minute, persistence) = self.prepare_sample(false, minute);
+            if let Err(failure) = persistence {
                 error = Some(failure);
             }
-            self.minutes.push_back(minute);
             self.pending_minute.clear();
-        }
+            Some(minute)
+        } else {
+            None
+        };
         self.pending_minute.push(sample.clone());
-        if let Err(failure) = self.append_file(true, &sample) {
+        let (recent, persistence) = self.prepare_sample(true, sample);
+        if let Err(failure) = persistence {
             error = Some(failure);
         }
-        self.recent.push_back(sample);
-        self.prune(now);
+        // Preserve the old minute's byte gate even when maintenance succeeds
+        // before publication. A maintenance-only failure leaves this gate due.
+        let prune_bytes = self.last_maintenance_minute != now / 60;
         if error.is_some() {
             self.directory = None;
         }
-        if self.last_maintenance_minute != now / 60
-            && let Err(failure) = self.maintenance(now)
-        {
+        if prune_bytes && let Err(failure) = self.maintenance(now) {
             error = Some(failure);
         }
-        match error {
-            Some(error) => Err(error),
-            None => Ok(()),
+        self.last_recorded_seconds = Some(now);
+        Ok(Some(PreparedRecord {
+            minute,
+            recent,
+            prune_bytes,
+            persistence: error.map_or(Ok(()), Err),
+        }))
+    }
+
+    fn prepare_sample(&self, recent: bool, sample: Sample) -> (ChargedSample, io::Result<()>) {
+        let encoded = json_codec::to_vec(&sample);
+        let encoded_bytes = memory_charge(&encoded);
+        let persistence = self.append_file(recent, sample.unix_seconds, encoded);
+        (
+            ChargedSample {
+                sample,
+                encoded_bytes,
+            },
+            persistence,
+        )
+    }
+}
+
+impl HistoryStore {
+    fn publish(&mut self, prepared: PreparedRecord) -> io::Result<()> {
+        let PreparedRecord {
+            minute,
+            recent,
+            prune_bytes,
+            persistence,
+        } = prepared;
+        let now = recent.sample.unix_seconds;
+        if let Some(minute) = minute {
+            self.minutes.push_charged(minute);
         }
+        self.recent.push_charged(recent);
+        self.prune(now, prune_bytes);
+        persistence
     }
 
     pub(super) fn samples(&self, from: i64, to: i64, interval: i64) -> Vec<Snapshot> {
@@ -344,7 +413,7 @@ impl HistoryStore {
             .collect()
     }
 
-    fn prune(&mut self, now: i64) {
+    fn prune(&mut self, now: i64, prune_bytes: bool) {
         while self
             .recent
             .front()
@@ -363,7 +432,7 @@ impl HistoryStore {
         }
         // Check memory admission only once per minute; the point-count bound is
         // enforced on every observation. 3-drive installations retain 31 days.
-        if self.last_maintenance_minute != now / 60 {
+        if prune_bytes {
             while self.minutes.encoded_bytes + self.recent.encoded_bytes > MAX_MEMORY_BYTES
                 && !self.minutes.is_empty()
             {
@@ -376,16 +445,23 @@ impl HistoryStore {
             }
         }
     }
+}
 
-    fn append_file(&self, recent: bool, sample: &Sample) -> io::Result<()> {
+impl HistoryWriter {
+    fn append_file(
+        &self,
+        recent: bool,
+        unix_seconds: i64,
+        encoded: json_codec::Result<Vec<u8>>,
+    ) -> io::Result<()> {
         let Some(directory) = &self.directory else {
             return Ok(());
         };
-        let bytes = json_codec::to_vec(sample)?;
+        let bytes = encoded?;
         if bytes.len() > MAX_CACHE_LINE {
             return Err(io::Error::other("telemetry sample exceeds cache admission"));
         }
-        let bucket = sample.unix_seconds / if recent { 3600 } else { 86400 };
+        let bucket = unix_seconds / if recent { 3600 } else { 86400 };
         let name = format!(
             "{}-{bucket}.jsonl",
             if recent { "recent" } else { "minute" }
