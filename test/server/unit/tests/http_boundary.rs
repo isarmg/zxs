@@ -27,6 +27,105 @@ async fn assert_error(
 }
 
 #[tokio::test]
+async fn contract_input_routes_keep_exact_error_envelopes() {
+    let root = crate::tests::private_tempdir();
+    let app = application(root.path());
+    let (token, _, _) = authenticated(&app).await;
+    let operation = storage_contract::OperationId::generate();
+    let invalid_id = || "bad".parse::<storage_contract::OperationId>().unwrap_err();
+    let long_name = "x".repeat(129);
+    let invalid_note = || storage_contract::Note::parse(long_name.clone()).unwrap_err();
+    for (method, path, input, expected) in [
+        (
+            "POST",
+            "/api/repositories",
+            json!({"name":"../bad","primary_slot_id":"P01","target_copies":1,"operation_id":"bad"}),
+            invalid_id(),
+        ),
+        (
+            "POST",
+            "/api/repositories/repository/branches",
+            json!({"source_commit_id":"source","name":"../bad","operation_id":"bad"}),
+            invalid_id(),
+        ),
+        (
+            "POST",
+            "/api/file-manager/files/file/metadata",
+            json!({"note":long_name,"operation_id":operation}),
+            invalid_note(),
+        ),
+        (
+            "POST",
+            "/api/file-manager/versions/version/metadata",
+            json!({"note":long_name,"operation_id":operation}),
+            invalid_note(),
+        ),
+        (
+            "PATCH",
+            "/api/file-manager/files/file/nodes/node",
+            json!({"note":long_name,"operation_id":operation}),
+            invalid_note(),
+        ),
+        (
+            "PATCH",
+            "/api/file-manager/files/file/branches/branch",
+            json!({"name":long_name,"operation_id":operation}),
+            storage_contract::BranchName::parse(&long_name).unwrap_err(),
+        ),
+        (
+            "PUT",
+            "/api/policies/policy",
+            json!({"repository_id":"repository","path_prefix":"","target_copies":1,"expected_generation":"0","operation_id":"bad"}),
+            invalid_id(),
+        ),
+        (
+            "PUT",
+            "/api/primary-placement-rules/rule",
+            json!({"repository_id":"repository","path_prefix":"","primary_slot_id":"P01","expected_generation":"0","operation_id":"bad"}),
+            invalid_id(),
+        ),
+        (
+            "POST",
+            "/api/branches/branch/archive",
+            json!({"operation_id":"bad"}),
+            invalid_id(),
+        ),
+        (
+            "POST",
+            "/api/repositories/repository/directory-scopes",
+            json!({"path":"","operation_id":"bad"}),
+            invalid_id(),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json_codec::to_vec(&input).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = assert_error(
+            response,
+            StatusCode::BAD_REQUEST,
+            expected.code().as_str(),
+            false,
+        )
+        .await;
+        assert_eq!(
+            body["error"]["message"],
+            expected.message().as_ref(),
+            "{path}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn query_and_path_rejections_use_the_api_envelope_after_authorization() {
     let root = crate::tests::private_tempdir();
     let app = application(root.path());

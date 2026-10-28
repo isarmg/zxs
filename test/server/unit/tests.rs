@@ -5,6 +5,24 @@ use http_routing::{
 };
 use service_stack::ServiceExt;
 use std::time::Duration;
+
+pub(crate) fn assert_contract_input(error: &ApiError, expected: &storage_contract::Error) {
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    assert_eq!(error.code, expected.code());
+    assert_eq!(error.message, expected.message());
+    assert!(!error.retryable);
+    let Some(crate::http_boundary::ApiErrorSource::Contract(source)) = error.source.as_deref()
+    else {
+        panic!("contract input lost its concrete source");
+    };
+    assert_eq!(source.code(), expected.code());
+    assert_eq!(source.to_string(), expected.to_string());
+    assert_eq!(
+        std::error::Error::source(source).map(ToString::to_string),
+        std::error::Error::source(expected).map(ToString::to_string)
+    );
+}
+
 // Authentication roots obey the same 0700 contract as deployed control state.
 // tempfile's default directory mode is 0777 filtered by umask, not 0700.
 pub(crate) fn private_tempdir() -> tempfile::TempDir {

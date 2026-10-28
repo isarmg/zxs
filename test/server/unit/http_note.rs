@@ -52,3 +52,28 @@ fn note_routes_distinguish_clear_from_missing_null_and_preserve_error_order() {
         );
     }
 }
+
+#[test]
+fn note_routes_preserve_contract_error_details_and_sources() {
+    for route in [NoteRoute::File, NoteRoute::Version, NoteRoute::Node] {
+        let error = decode(
+            json!({"note":"x".repeat(129),"operation_id":storage_contract::OperationId::generate()}),
+            route,
+        ).err().unwrap();
+        crate::tests::assert_contract_input(
+            &error,
+            &storage_contract::Note::parse("x".repeat(129)).unwrap_err(),
+        );
+        let error = decode(json!({"note":"x".repeat(129),"operation_id":"bad"}), route)
+            .err()
+            .unwrap();
+        assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
+        assert_eq!(
+            error.message,
+            "bad"
+                .parse::<storage_contract::OperationId>()
+                .unwrap_err()
+                .to_string()
+        );
+    }
+}

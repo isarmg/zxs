@@ -26,11 +26,22 @@ use wire::{current_entry_source, field};
 pub(crate) use wire::{error, error_response};
 
 pub(crate) fn report_recovery_warnings(engine: &mut Engine) {
-    let warnings = engine.take_recovery_warnings();
-    if let Some(error) = warnings.checkpoint_load {
+    let storage_engine::RecoveryWarnings {
+        seals,
+        checkpoint_load,
+        checkpoint_save,
+    } = engine.take_recovery_warnings();
+    for failure in seals {
+        tracing::warn!(
+            context = ?failure.context(),
+            error = ?failure.cause(),
+            "recovery seal verification failed; recovery evidence remains restricted"
+        );
+    }
+    if let Some(error) = checkpoint_load {
         tracing::warn!(error = ?error, "recovery checkpoint unavailable; authoritative journal replay completed");
     }
-    if let Some(error) = warnings.checkpoint_save {
+    if let Some(error) = checkpoint_save {
         tracing::warn!(error = ?error, "recovery completed without refreshing its optional checkpoint");
     }
 }

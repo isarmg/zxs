@@ -100,6 +100,14 @@
 
 本次没有 PublishedGraphEpoch 旧依赖免读，也没有删除 compare/fsync 屏障。应分别测新编码数、旧对象读验/安装数、峰值内存、同步次数和延迟；不得把 bounded roots、schema 通过或路径复制等同于整体 O(delta)、性能提升或物理盘验收。
 
+### 发布元数据编码复用的局部边界
+
+本地发布证明的预检保留每份 commit proof 原有的独立编码、大小检查和错误顺序，只编码第一份真实 `LocalPublicationRef`，用其长度减去对应 proof 长度取得共同外壳字节数；后续逐份检查共同长度与该 proof 长度的加法溢出及上限。没有硬编码字段开销、假 `null` 外壳或平均 proof；恢复仍先按健康盘位筛选，空 proof 集合不构造本地发布外壳。设共同字段编码量为 C、P 份 proof 编码量为 Lᵢ，此阶段消除的是反复编码共同字段的 P×C 项，额外保留 P 个长度值而非 P 份编码字节；不省略各 proof 的编码/哈希，也不改变组合证明的实际字节限额。
+
+正常 PREPARE 的 Candidate，以及正常和已有发布恢复的 Publication，在原哈希位置各构造一份 `PreparedMetadataObject`，复用同一规范字节和域哈希。M 个成员的对象编码由原 `1 + 2M` 次变为 1 次，字节只保留到该轮成员安装结束；每个成员仍严格执行原位置的“对象安装 → 日志追加 → 故障边界”，不把全部对象写入提到所有日志之前。原不可变对象碰撞比对、文件/目录同步、seal/设备身份检查、commit-proof 磁盘读回、全成员发布及恢复验证均保留。这是源码复杂度与分配范围说明，不是吞吐、延迟或同步次数减少的实测结论。
+
+回归入口为独立[冻结 R29 编码 schema](../test/engine/unit/journal/r29_local_publication.rs)、[精确预算差分](../test/engine/unit/metadata_budget/tests.rs)、[逐成员故障顺序](../test/engine/unit/engine/publication/omission_tests.rs)、[准备对象编码/碰撞](../test/engine/unit/journal/replication_tests.rs)及[降级恢复](../test/engine/unit/degraded_recovery/tests.rs)。测试源码、已执行测试和物理盘验收分别报告。
+
 <a id="s19-05"></a>
 
 ## 19.5 优化顺序

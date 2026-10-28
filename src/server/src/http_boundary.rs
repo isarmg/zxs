@@ -116,6 +116,14 @@ impl ApiError {
         let source = source.into();
         Self::invalid(source.to_string()).with_source(source)
     }
+    pub(crate) fn contract_input(source: storage_contract::Error) -> Self {
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            source.code(),
+            source.message().into_owned(),
+        )
+        .with_source(source)
+    }
     pub(crate) fn with_source(mut self, source: impl Into<ApiErrorSource>) -> Self {
         self.source = Some(Box::new(source.into()));
         self

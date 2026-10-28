@@ -57,14 +57,7 @@ fn fields(mut body: Map<String, Value>, allowed: &[&str]) -> Result<(String, Val
 }
 fn operation(id: &str) -> Result<storage_contract::OperationId, ApiError> {
     id.parse::<storage_contract::OperationId>()
-        .map_err(|source| {
-            ApiError::new(
-                http::StatusCode::BAD_REQUEST,
-                source.code(),
-                source.message().into_owned(),
-            )
-            .with_source(source)
-        })
+        .map_err(ApiError::contract_input)
 }
 fn parse_policy(body: Map<String, Value>) -> Result<crate::UpdateProtectionPolicy, ApiError> {
     let (repository_id, body) = fields(

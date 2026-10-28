@@ -40,9 +40,10 @@ fn archive_ingress_preserves_field_unknown_and_operation_error_order() {
         "unknown field unexpected"
     );
     let invalid = decode(json!({"operation_id":"bad"})).err().unwrap();
-    assert_eq!(invalid.code, storage_contract::ErrorCode::InvalidId);
-    assert_eq!(invalid.status, http::StatusCode::BAD_REQUEST);
-    assert!(std::error::Error::source(&invalid).is_some());
+    crate::tests::assert_contract_input(
+        &invalid,
+        &"bad".parse::<storage_contract::OperationId>().unwrap_err(),
+    );
     assert!(storage_contract::strict_json(br#"{"operation_id":"a","operation_id":"b"}"#).is_err());
     assert!(decode(json!([])).is_err());
 }

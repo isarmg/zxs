@@ -550,11 +550,14 @@ fn torn_journal_tail_disables_checkpoint_replay_skip() {
 #[test]
 fn checkpoint_save_failure_is_nonfatal_and_reported_once() {
     let (_temp, root, config) = setup();
-    let checkpoint = path(&config.disks[0]);
-    std::fs::create_dir(&checkpoint).unwrap();
+    for disk in &config.disks {
+        std::fs::create_dir(path(disk)).unwrap();
+    }
     let (mut engine, count) = reopen(&root);
     assert!(count >= 6);
     let warnings = engine.take_recovery_warnings();
+    assert!(warnings.seals.is_empty());
+    assert!(warnings.checkpoint_load.is_some());
     assert!(warnings.checkpoint_save.is_some());
     let consumed = engine.take_recovery_warnings();
     assert!(consumed.checkpoint_load.is_none());

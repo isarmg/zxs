@@ -112,8 +112,21 @@ impl Database {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
+/// An in-process caller identity whose public projection is output-only.
+/// Authentication and current-authority checks remain the caller's responsibility.
+///
+/// ```
+/// use storage_server::auth::Identity;
+/// fn public_projection(identity: &Identity) -> String {
+///     json_codec::to_string(identity).unwrap()
+/// }
+/// ```
+///
+/// ```compile_fail,E0277
+/// use storage_server::auth::Identity;
+/// let _: Identity = json_codec::from_str(r#"{"principal":"admin"}"#).unwrap();
+/// ```
+#[derive(Clone, Debug, Serialize)]
 pub struct Identity {
     /// Internal session hash, never part of the wire identity.
     #[serialization(skip)]

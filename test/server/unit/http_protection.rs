@@ -82,8 +82,12 @@ fn protection_parser_preserves_unknown_repository_and_operation_precedence() {
             json!({"rule_id":"rule","repository_id":"repo","path_prefix":"","primary_slot_id":"P01","expected_generation":"0","operation_id":"invalid"})
         };
         let error = parse(value.clone()).unwrap_err();
-        assert_eq!(error.code, storage_contract::ErrorCode::InvalidId);
-        assert!(std::error::Error::source(&error).is_some());
+        crate::tests::assert_contract_input(
+            &error,
+            &"invalid"
+                .parse::<storage_contract::OperationId>()
+                .unwrap_err(),
+        );
         value["expected_generation"] = json!(0);
         assert_eq!(
             parse(value).unwrap_err().code,

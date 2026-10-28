@@ -11,6 +11,21 @@ fn creation_decodes_name_key_and_operation_once() {
     assert_eq!(request.name.key(), "café");
 }
 #[test]
+fn creation_preserves_contract_error_details_and_sources() {
+    let mut invalid_name = body();
+    invalid_name.insert("name".into(), "x".repeat(129).into());
+    crate::tests::assert_contract_input(
+        &parse(invalid_name).err().unwrap(),
+        &storage_contract::BranchName::parse(&"x".repeat(129)).unwrap_err(),
+    );
+    let mut invalid_operation = body();
+    invalid_operation.insert("operation_id".into(), "bad".into());
+    crate::tests::assert_contract_input(
+        &parse(invalid_operation).err().unwrap(),
+        &"bad".parse::<storage_contract::OperationId>().unwrap_err(),
+    );
+}
+#[test]
 fn creation_preserves_static_failure_order() {
     let mut input = body();
     input.insert("extra".into(), Value::Null);

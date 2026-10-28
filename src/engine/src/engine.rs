@@ -44,9 +44,39 @@ mod workspace_storage;
 use config::acquire_locks;
 pub(crate) use source::ReadSource;
 
-/// Nonfatal checkpoint failures from the latest recovery invocation.
+/// The seal boundary that kept a recovery invocation from admitting evidence.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RecoverySealContext {
+    /// Revalidation on the admitted member's held root.
+    Member { disk_id: String, slot_id: String },
+    /// Aggregate barrier failure; the verifier does not identify a replica.
+    Publication { candidate_hash: String },
+}
+
+/// A retained concrete cause, separate from recovery decisions and current health.
+#[derive(Debug, error_definition::Error)]
+#[error("recovery seal verification failed: {context:?}")]
+pub struct RecoverySealFailure {
+    context: RecoverySealContext,
+    #[source]
+    source: Error,
+}
+
+impl RecoverySealFailure {
+    pub fn context(&self) -> &RecoverySealContext {
+        &self.context
+    }
+
+    pub fn cause(&self) -> &Error {
+        &self.source
+    }
+}
+
+/// Handled failures from the latest recovery invocation, drained by the application.
 #[derive(Debug, Default)]
 pub struct RecoveryWarnings {
+    /// At most one failure per configured metadata member and one publication barrier.
+    pub seals: Vec<RecoverySealFailure>,
     pub checkpoint_load: Option<Error>,
     pub checkpoint_save: Option<Error>,
 }

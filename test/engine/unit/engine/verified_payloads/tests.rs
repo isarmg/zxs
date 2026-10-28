@@ -170,6 +170,23 @@ fn held_proof_rejects_in_place_content_changes() {
     assert!(epoch.matches(&engine.metadata_integrity));
 }
 #[test]
+fn held_proof_rejects_mode_changes_without_content_changes() {
+    let (_temp, engine, candidate) = fixture();
+    let proof = VerifiedPayloadSet::prepare(&engine, &candidate).unwrap();
+    let body = &proof.entries[0].body.file;
+    use std::os::unix::fs::PermissionsExt;
+    let mode = body.metadata().unwrap().permissions().mode();
+    body.set_permissions(std::fs::Permissions::from_mode(mode ^ 0o100))
+        .unwrap();
+    assert_eq!(
+        proof
+            .validate(&engine.config, &candidate)
+            .unwrap_err()
+            .code(),
+        storage_contract::ErrorCode::PreparationStale
+    );
+}
+#[test]
 fn held_proof_rejects_replaced_checksum_inode() {
     let (_temp, engine, candidate) = fixture();
     let epoch = engine.metadata_integrity.capture();

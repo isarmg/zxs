@@ -1,30 +1,6 @@
 use super::*;
 
-// Frozen R29 (6da614ccb133b3f036f0be52d815d11519d06f76) owned schema.
-// Keep this independent of LocalPublication's new Serialize delegation.
-mod r29_local_publication {
-    use super::*;
-
-    #[derive(data_serialization::Serialize)]
-    struct LocalPublication {
-        candidate: Candidate,
-        publication: Publication,
-        commit_proof: CommitProof,
-        publication_receipts: Vec<Receipt>,
-    }
-
-    pub(super) fn encode(local: &super::LocalPublication, maximum: usize) -> Result<Vec<u8>> {
-        encode_metadata(
-            &LocalPublication {
-                candidate: local.candidate.clone(),
-                publication: local.publication.clone(),
-                commit_proof: local.commit_proof.clone(),
-                publication_receipts: local.publication_receipts.clone(),
-            },
-            maximum,
-        )
-    }
-}
+use crate::r29_local_publication;
 
 fn assert_local_publication_encoding(local: &LocalPublication) -> Vec<u8> {
     let expected = r29_local_publication::encode(local, MAX_METADATA).unwrap();
@@ -328,6 +304,18 @@ fn local_publication_borrowed_encoding_keeps_invalid_json_before_size_error() {
     let mut local: LocalPublication = read_json(&directory.join("publication-proof.json")).unwrap();
     for invalid in [json_codec::json!(1.5), json_codec::json!(u64::MAX)] {
         local.publication.result.result = invalid;
+        // With no retained slot, the old loop never encoded a local envelope.
+        assert_eq!(
+            preflight_local_publications(
+                &local.candidate,
+                &local.publication,
+                &local.publication_receipts,
+                &[],
+                0,
+            )
+            .unwrap(),
+            0
+        );
         let view = LocalPublicationRef {
             candidate: &local.candidate,
             publication: &local.publication,
@@ -337,9 +325,23 @@ fn local_publication_borrowed_encoding_keeps_invalid_json_before_size_error() {
         for maximum in [0, MAX_METADATA] {
             let old_error = r29_local_publication::encode(&local, maximum).unwrap_err();
             assert_ne!(old_error.code(), storage_contract::ErrorCode::ResourceLimit);
+            let proofs = vec![(
+                local.commit_proof.clone(),
+                encode_metadata(&local.commit_proof, MAX_METADATA)
+                    .unwrap()
+                    .len(),
+            )];
             for new_error in [
                 encode_metadata(&view, maximum).unwrap_err(),
                 encode_metadata(&local, maximum).unwrap_err(),
+                preflight_local_publications(
+                    &local.candidate,
+                    &local.publication,
+                    &local.publication_receipts,
+                    &proofs,
+                    maximum,
+                )
+                .unwrap_err(),
             ] {
                 assert_eq!(new_error.code(), old_error.code());
                 assert_eq!(new_error.to_string(), old_error.to_string());
@@ -349,6 +351,97 @@ fn local_publication_borrowed_encoding_keeps_invalid_json_before_size_error() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn local_publication_budget_reuses_exact_common_bytes_against_frozen_r29_schema() {
+    let (_temp, mut engine, repo) = fixture();
+    let id = save(&mut engine, &repo.main_branch_id, b"common envelope bytes");
+    let version = &engine.state.versions[&id];
+    let slot = &engine.state.placements[&id].route_slot_ids[0];
+    let directory = version_dir(engine.disk(slot).unwrap(), &version.history_tree_id, &id);
+    let mut local: LocalPublication = read_json(&directory.join("publication-proof.json")).unwrap();
+    // Codec-only variants, not forged persistence evidence: exercise escaping,
+    // decimal-width transitions and a nonuniform proof size/order.
+    local.publication.result.result = json_codec::json!({
+        "\u{10000}": ["目录\n\"\\", null, true],
+        "\u{e000}": "UTF-16 key order",
+    });
+    for sequence in [0, 9, 10, 99, 100, u64::MAX] {
+        local.candidate.sequence = sequence;
+        local.publication.result.sequence = sequence;
+        let mut proofs = Vec::new();
+        let long_suffix = "longer".repeat(40);
+        for suffix in ["a", "目录\n\"\\", long_suffix.as_str()] {
+            let mut proof = local.commit_proof.clone();
+            proof.disk_id = suffix.into();
+            proof.slot_id = suffix.into();
+            proof.route_slot_ids.push(suffix.into());
+            for receipt in &mut proof.finalize.accepts {
+                receipt.record.sequence = sequence;
+            }
+            let bytes = encode_metadata(&proof, MAX_METADATA).unwrap().len();
+            proofs.push((proof, bytes));
+        }
+        assert!(proofs.windows(2).all(|pair| pair[0].1 < pair[1].1));
+        // Recovery can exclude the original first slot, or every slot. The
+        // common envelope must come from the first retained real proof only.
+        for selected in [vec![0, 1, 2], vec![2, 0, 1], vec![1], vec![]] {
+            let selected = selected
+                .iter()
+                .map(|i| proofs[*i].clone())
+                .collect::<Vec<_>>();
+            let oracle = |maximum| -> Result<usize> {
+                let mut largest = 0;
+                for (proof, _) in &selected {
+                    let mut original = local.clone();
+                    original.commit_proof = proof.clone();
+                    largest = largest.max(r29_local_publication::encode(&original, maximum)?.len());
+                }
+                Ok(largest)
+            };
+            let preflight = |maximum| {
+                preflight_local_publications(
+                    &local.candidate,
+                    &local.publication,
+                    &local.publication_receipts,
+                    &selected,
+                    maximum,
+                )
+            };
+            let largest = oracle(MAX_METADATA).unwrap();
+            assert_eq!(preflight(MAX_METADATA).unwrap(), largest);
+            assert_eq!(preflight(largest).unwrap(), largest);
+            if largest > 0 {
+                let expected = oracle(largest - 1).unwrap_err();
+                let actual = preflight(largest - 1).unwrap_err();
+                assert_eq!(actual.code(), expected.code());
+                assert_eq!(actual.to_string(), expected.to_string());
+            } else {
+                assert_eq!(preflight(0).unwrap(), 0);
+            }
+        }
+        // No allocation can represent this length; checked composition must
+        // reject overflow with the same budget error instead of wrapping.
+        proofs[1].1 = usize::MAX;
+        let error = preflight_local_publications(
+            &local.candidate,
+            &local.publication,
+            &local.publication_receipts,
+            &proofs,
+            MAX_METADATA,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::ResourceLimit);
+        assert_eq!(
+            error.to_string(),
+            Error::new(
+                ErrorCode::ResourceLimit,
+                format!("serialized metadata exceeds {MAX_METADATA} byte reader limit"),
+            )
+            .to_string()
+        );
     }
 }
 

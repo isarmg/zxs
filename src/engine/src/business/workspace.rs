@@ -3,13 +3,14 @@ use super::*;
 use crate::{
     disk::*,
     engine::{MutationPlan, Prepared, ReadSource},
+    file_stamp::FileStamp,
 };
 use json_codec::json;
 use platform_io::fs_safety::{
     EntryName, RelativePath,
     linux::{MountPolicy, OpenAt2Root},
 };
-use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
+use std::os::unix::ffi::OsStrExt;
 use std::{
     collections::BTreeMap,
     io::{Read, Write},
@@ -131,33 +132,9 @@ pub struct PreparedUpload {
     verified: Option<VerifiedUploadFile>,
 }
 
-#[derive(PartialEq, Eq)]
-struct UploadFileStamp {
-    device: u64,
-    inode: u64,
-    size: u64,
-    links: u64,
-    mode: u32,
-    modified: (i64, i64),
-    changed: (i64, i64),
-}
-impl UploadFileStamp {
-    fn of(file: &std::fs::File) -> Result<Self> {
-        let metadata = file.metadata()?;
-        Ok(Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            size: metadata.len(),
-            links: metadata.nlink(),
-            mode: metadata.mode(),
-            modified: (metadata.mtime(), metadata.mtime_nsec()),
-            changed: (metadata.ctime(), metadata.ctime_nsec()),
-        })
-    }
-}
 struct VerifiedUploadFile {
     file: std::fs::File,
-    stamp: UploadFileStamp,
+    stamp: FileStamp,
 }
 impl Drop for PreparedUpload {
     fn drop(&mut self) {
@@ -187,9 +164,9 @@ impl UploadPreparation {
 
     fn verify_retained(&self, size: u64, hash: &ContentHash) -> Result<VerifiedUploadFile> {
         let file = self.retained_file()?;
-        let stamp = UploadFileStamp::of(&file)?;
+        let stamp = FileStamp::of(&file)?;
         let actual = upload_fingerprint_file(file.try_clone()?, self.max_file_bytes)?;
-        if actual.0 != size || actual.1 != *hash || UploadFileStamp::of(&file)? != stamp {
+        if actual.0 != size || actual.1 != *hash || FileStamp::of(&file)? != stamp {
             return Err(Error::new(
                 storage_contract::ErrorCode::ChecksumMismatch,
                 "retained upload generation no longer matches its receipt",
@@ -292,7 +269,7 @@ impl UploadPreparation {
         prepared.size = size;
         prepared.hash = Some(hash);
         prepared.verified = Some(VerifiedUploadFile {
-            stamp: UploadFileStamp::of(&file)?,
+            stamp: FileStamp::of(&file)?,
             file,
         });
         Ok(prepared)
@@ -927,8 +904,8 @@ impl Engine {
             // The single-pass copy retains the inode it wrote. Validate both
             // that handle and its pathname before publishing its receipt;
             // readonly permissions alone do not prove unchanged contents.
-            if UploadFileStamp::of(&verified.file)? != verified.stamp
-                || UploadFileStamp::of(&current)? != verified.stamp
+            if FileStamp::of(&verified.file)? != verified.stamp
+                || FileStamp::of(&current)? != verified.stamp
             {
                 return Err(Error::new(
                     storage_contract::ErrorCode::ChecksumMismatch,

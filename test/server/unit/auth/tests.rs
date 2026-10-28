@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn identity_serialization_omits_both_admission_constraints() {
+    let identity = Identity {
+        admission_session: Some("private-session-hash".into()),
+        smb_binding: Some(SmbBinding {
+            repository_id: "private-repository".into(),
+            branch_id: "private-branch".into(),
+            generation: 7,
+        }),
+        principal: "admin".into(),
+    };
+    assert_eq!(
+        json_codec::to_value(identity).unwrap(),
+        json_codec::json!({"principal":"admin"})
+    );
+}
+
+#[test]
 fn the_initialized_username_is_the_only_identity_and_cannot_be_reinitialized() {
     let root = crate::tests::private_tempdir();
     let mut store =

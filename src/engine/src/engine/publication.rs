@@ -205,7 +205,8 @@ impl Engine {
         let members = self.members();
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_payloads")?;
-        let hash = object_hash("candidate", &candidate)?;
+        let candidate_object = PreparedMetadataObject::new("candidate", &candidate, MAX_METADATA)?;
+        let hash = candidate_object.hash.clone();
         self.next_slot = candidate.sequence.checked_add(1).ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::ResourceLimit,
@@ -215,12 +216,7 @@ impl Engine {
         #[cfg(feature = "fault-injection")]
         let mut prepared = 0;
         for d in &members {
-            store_object_at(
-                &self.disk_resources.get(d)?.root,
-                d,
-                "candidate",
-                &candidate,
-            )?;
+            candidate_object.store_at(&self.disk_resources, std::slice::from_ref(d))?;
             self.append_journal(
                 d,
                 RecordType::Prepare,
@@ -234,6 +230,7 @@ impl Engine {
                 self.failpoint(&format!("after_prepare_{prepared}"))?;
             }
         }
+        drop(candidate_object);
         #[cfg(feature = "fault-injection")]
         self.failpoint("before_decision_admission")?;
         // PREPARE can take time after the complete payload check. Check all
@@ -348,15 +345,12 @@ impl Engine {
             &self.state,
             next,
         )?;
-        let pub_hash = object_hash("publication", &publication)?;
+        let publication_object =
+            PreparedMetadataObject::new("publication", &publication, MAX_METADATA)?;
+        let pub_hash = publication_object.hash.clone();
         let mut publication_receipts = Vec::new();
         for d in self.members() {
-            store_object_at(
-                &self.disk_resources.get(&d)?.root,
-                &d,
-                "publication",
-                &publication,
-            )?;
+            publication_object.store_at(&self.disk_resources, std::slice::from_ref(&d))?;
             publication_receipts.push(append_receipt(self, &d, &pub_hash)?);
             #[cfg(feature = "fault-injection")]
             if publication.recovery.is_some() {
@@ -366,6 +360,7 @@ impl Engine {
                 ))?;
             }
         }
+        drop(publication_object);
         let seal = PublicationSeal {
             candidate_hash: hash.into(),
             publication_hash: pub_hash,
@@ -610,15 +605,12 @@ impl Engine {
                     )
                 })?,
         };
-        let pub_hash = object_hash("publication", &publication)?;
+        let publication_object =
+            PreparedMetadataObject::new("publication", &publication, MAX_METADATA)?;
+        let pub_hash = publication_object.hash.clone();
         let mut publication_receipts = Vec::new();
         for d in &members {
-            store_object_at(
-                &self.disk_resources.get(d)?.root,
-                d,
-                "publication",
-                &publication,
-            )?;
+            publication_object.store_at(&self.disk_resources, std::slice::from_ref(d))?;
             publication_receipts.push(append(
                 self,
                 d,
@@ -630,6 +622,7 @@ impl Engine {
             #[cfg(feature = "fault-injection")]
             self.failpoint(&format!("after_publication_{}", publication_receipts.len()))?;
         }
+        drop(publication_object);
         let seal = PublicationSeal {
             candidate_hash: hash.into(),
             publication_hash: pub_hash,

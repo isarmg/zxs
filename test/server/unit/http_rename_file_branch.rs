@@ -57,3 +57,27 @@ fn branch_rename_parses_once_and_preserves_operation_before_name_error_priority(
     assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
     assert!(std::error::Error::source(&error).is_some());
 }
+
+#[test]
+fn branch_rename_preserves_contract_error_details_and_sources() {
+    let error = decode(
+        json!({"name":"x".repeat(129),"operation_id":storage_contract::OperationId::generate()}),
+    )
+    .err()
+    .unwrap();
+    crate::tests::assert_contract_input(
+        &error,
+        &storage_contract::BranchName::parse(&"x".repeat(129)).unwrap_err(),
+    );
+    let error = decode(json!({"name":"x".repeat(129),"operation_id":"bad"}))
+        .err()
+        .unwrap();
+    assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
+    assert_eq!(
+        error.message,
+        "bad"
+            .parse::<storage_contract::OperationId>()
+            .unwrap_err()
+            .to_string()
+    );
+}

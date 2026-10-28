@@ -3285,6 +3285,65 @@ fn dropped_upload_preparation_cleans_only_owned_scratch_and_releases_claim() {
 }
 
 #[test]
+fn upload_preparation_rejects_changed_held_and_reopened_files() {
+    use std::os::unix::fs::PermissionsExt;
+    for retained in [false, true] {
+        for replace in [false, true] {
+            let fixture = Fixture::new();
+            let mut engine = fixture.initialize();
+            let repo = repository(&mut engine, 1);
+            let workspace = engine
+                .create_workspace(&repo.main_branch_id, "admin")
+                .unwrap();
+            let input = fixture.temp.path().join("upload-input");
+            fs::write(&input, b"original").unwrap();
+            let item = new_id("entry");
+            let prepare = |engine: &mut Engine| {
+                engine
+                    .prepare_upload(&workspace.workspace_id, &item, "prepared", &input, 1)
+                    .unwrap()
+                    .execute()
+                    .unwrap()
+            };
+            let retained_path = retained.then(|| {
+                let prepared = prepare(&mut engine);
+                engine.finish_upload(prepared).unwrap().source_path
+            });
+            let prepared = prepare(&mut engine);
+            let path = retained_path.unwrap_or_else(|| {
+                fs::read_dir(engine.workspace_data_directory(&workspace).unwrap())
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .find(|path| {
+                        path.extension()
+                            .is_some_and(|extension| extension == "prepared")
+                    })
+                    .unwrap()
+            });
+            if replace {
+                fs::rename(&path, path.with_extension("old")).unwrap();
+                fs::write(&path, b"original").unwrap();
+            } else {
+                let mode = fs::metadata(&path).unwrap().permissions().mode();
+                fs::set_permissions(&path, fs::Permissions::from_mode(mode ^ 0o100)).unwrap();
+            }
+            assert_eq!(
+                engine.finish_upload(prepared).unwrap_err().code(),
+                storage_contract::ErrorCode::ChecksumMismatch
+            );
+            assert_eq!(
+                engine
+                    .workspace(&workspace.workspace_id)
+                    .unwrap()
+                    .files
+                    .len(),
+                usize::from(retained)
+            );
+        }
+    }
+}
+
+#[test]
 fn upload_preparation_counts_crash_scratch_and_rechecks_final_quota() {
     let mut fixture = Fixture::new();
     fixture.config.max_file_bytes = 8;

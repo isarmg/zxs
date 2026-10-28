@@ -42,3 +42,30 @@ fn initialization_parses_root_and_canonical_path_once() {
         assert!(decode(body).is_err());
     }
 }
+
+#[test]
+fn initialization_preserves_contract_errors_and_path_before_operation_priority() {
+    let invalid = decode(json!({"path":"","operation_id":"bad"}))
+        .err()
+        .unwrap();
+    crate::tests::assert_contract_input(
+        &invalid,
+        &"bad".parse::<storage_contract::OperationId>().unwrap_err(),
+    );
+    let invalid = decode(json!({"path":"../bad","operation_id":"bad"}))
+        .err()
+        .unwrap();
+    assert_eq!(invalid.code, storage_contract::ErrorCode::InvalidRequest);
+    let path_error: storage_contract::Error = name_policy::PortablePath::parse("../bad")
+        .unwrap_err()
+        .into();
+    assert_eq!(invalid.message, path_error.to_string());
+    assert!(std::error::Error::source(&invalid).is_some());
+    assert_eq!(
+        decode(json!({"path":null,"operation_id":"bad","unexpected":true}))
+            .err()
+            .unwrap()
+            .message,
+        "unknown field unexpected"
+    );
+}

@@ -28,14 +28,7 @@ fn parse(mut body: Map<String, Value>) -> Result<RenameFileBranch, ApiError> {
         _ => return Err(ApiError::invalid("missing string field operation_id")),
     };
     let operation_id = operation.parse().map_err(ApiError::invalid_source)?;
-    let name = storage_contract::BranchName::parse(&raw_name).map_err(|source| {
-        ApiError::new(
-            http::StatusCode::BAD_REQUEST,
-            source.code(),
-            source.message().into_owned(),
-        )
-        .with_source(source)
-    })?;
+    let name = storage_contract::BranchName::parse(&raw_name).map_err(ApiError::contract_input)?;
     Ok(RenameFileBranch {
         file_id,
         branch_id,

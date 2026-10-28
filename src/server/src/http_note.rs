@@ -43,14 +43,7 @@ fn parse(mut body: Map<String, Value>, route: NoteRoute) -> Result<UpdateNote, A
         _ => return Err(ApiError::invalid("missing string field operation_id")),
     };
     let operation_id = operation.parse().map_err(ApiError::invalid_source)?;
-    let note = storage_contract::Note::parse(note).map_err(|source| {
-        ApiError::new(
-            http::StatusCode::BAD_REQUEST,
-            source.code(),
-            source.message().into_owned(),
-        )
-        .with_source(source)
-    })?;
+    let note = storage_contract::Note::parse(note).map_err(ApiError::contract_input)?;
     Ok(UpdateNote {
         target,
         note,

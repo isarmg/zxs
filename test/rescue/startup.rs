@@ -50,6 +50,90 @@ fn recovery_requires_explicit_loss_acknowledgement_before_opening_pool() {
 }
 
 #[test]
+fn recovery_commands_report_returned_engine_seal_failure_once_before_command_rejection() {
+    use storage_engine::{CommitState, Config, Engine, OperationId, RepositoryName};
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("system");
+    let disks = ["a", "b", "c"].map(|name| directory.path().join(name));
+    let mut engine = Engine::initialize(&root, Config::development(disks.clone())).unwrap();
+    let operation = OperationId::generate();
+    engine
+        .create_repository(
+            &RepositoryName::parse("unsealed").unwrap(),
+            "P01",
+            1,
+            "admin",
+            operation,
+        )
+        .unwrap();
+    drop(engine);
+    let seals: Vec<_> = std::fs::read_dir(disks[0].join("metadata/publication-seals"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(seals.len(), 1);
+    let candidate = seals[0].file_stem().unwrap().to_str().unwrap();
+    let seal_name = seals[0].file_name().unwrap();
+    std::fs::rename(&disks[2], directory.path().join("offline")).unwrap();
+    let journals: Vec<_> = disks[..2]
+        .iter()
+        .map(|disk| std::fs::read(disk.join("metadata/application-log/journal.bin")).unwrap())
+        .collect();
+    for disk in &disks[..2] {
+        std::fs::remove_file(disk.join("metadata/publication-seals").join(seal_name)).unwrap();
+    }
+    for args in [
+        vec![
+            "recovery-preview".to_owned(),
+            operation.to_string(),
+            "--reason".into(),
+            "inspect missing barrier".into(),
+        ],
+        vec![
+            "recovery-commit".to_owned(),
+            storage_engine::new_id("recovery"),
+            "--digest".into(),
+            "unused".into(),
+            "--accept-permanent-loss".into(),
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+            .arg("--root")
+            .arg(&root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty());
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(
+            error.matches("recovery seal verification failed").count(),
+            1,
+            "{error}"
+        );
+        assert!(error.contains("Publication"), "{error}");
+        assert!(error.contains(candidate), "{error}");
+        assert!(error.contains("Filesystem(Io("), "{error}");
+        assert!(error.contains("NotFound"), "{error}");
+        assert!(error.contains("zxs-rescue:"), "{error}");
+        let engine = Engine::open_for_recovery(&root).unwrap();
+        assert!(engine.is_read_only());
+        assert!(engine.state().repositories.is_empty());
+        assert_eq!(
+            engine.operation(operation).unwrap().commit_state,
+            CommitState::InDoubt
+        );
+        for (disk, expected) in disks[..2].iter().zip(&journals) {
+            assert_eq!(
+                std::fs::read(disk.join("metadata/application-log/journal.bin")).unwrap(),
+                *expected
+            );
+        }
+    }
+}
+
+#[test]
 fn package_restore_rejects_zero_copies_before_opening_pool_or_package() {
     let directory = tempfile::tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))

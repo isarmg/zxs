@@ -190,14 +190,16 @@ fn preflight_inner(
                 slot_id: slot.clone(),
                 route_slot_ids: evidence.placement.route_slot_ids.clone(),
             };
-            check(encode_metadata(&proof, maximum)?);
+            let proof_bytes = encode_metadata(&proof, maximum)?;
+            let proof_len = proof_bytes.len();
+            check(proof_bytes);
             payload_receipts.push(PayloadReceipt {
                 version_id: evidence.version.version_id.clone(),
                 disk_id: disk.disk_id.clone(),
                 slot_id: slot.clone(),
                 proof_hash: object_hash("commit-proof", &proof)?,
             });
-            proofs.push(proof);
+            proofs.push((proof, proof_len));
         }
     }
     let publication = Publication {
@@ -309,18 +311,56 @@ fn preflight_inner(
         0
     };
 
-    for proof in proofs {
-        check(encode_metadata(
-            &LocalPublicationRef {
-                candidate,
-                publication: &publication,
-                commit_proof: &proof,
-                publication_receipts: &publication_receipts,
-            },
-            maximum,
-        )?);
+    let local_size = preflight_local_publications(
+        candidate,
+        &publication,
+        &publication_receipts,
+        &proofs,
+        maximum,
+    )?;
+    Ok(largest
+        .max(package_size)
+        .max(tombstone_size)
+        .max(local_size))
+}
+
+/// Each proof was independently encoded and bounded before this envelope stage.
+/// Canonical JSON embeds those same bytes, so only the first real envelope needs
+/// encoding; its remaining fields are shared unchanged by every local proof.
+fn preflight_local_publications(
+    candidate: &Candidate,
+    publication: &Publication,
+    publication_receipts: &[Receipt],
+    proofs: &[(CommitProof, usize)],
+    maximum: usize,
+) -> Result<usize> {
+    let Some(((first, first_len), remaining)) = proofs.split_first() else {
+        return Ok(0);
+    };
+    let mut largest = encode_metadata(
+        &LocalPublicationRef {
+            candidate,
+            publication,
+            commit_proof: first,
+            publication_receipts,
+        },
+        maximum,
+    )?
+    .len();
+    let common_bytes = largest - *first_len;
+    for (_, proof_len) in remaining {
+        let bytes = common_bytes
+            .checked_add(*proof_len)
+            .filter(|bytes| *bytes <= maximum)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::ResourceLimit,
+                    format!("serialized metadata exceeds {maximum} byte reader limit"),
+                )
+            })?;
+        largest = largest.max(bytes);
     }
-    Ok(largest.max(package_size).max(tombstone_size))
+    Ok(largest)
 }
 
 #[cfg(test)]

@@ -24,22 +24,16 @@ fn parse(mut body: Map<String, Value>) -> Result<CreateRepository, ApiError> {
     };
     let name = field("name")?;
     let primary_slot_id = field("primary_slot_id")?;
-    let operation_id = field("operation_id")?.parse().map_err(contract_input)?;
-    let name = storage_contract::RepositoryName::parse(&name).map_err(contract_input)?;
+    let operation_id = field("operation_id")?
+        .parse()
+        .map_err(ApiError::contract_input)?;
+    let name = storage_contract::RepositoryName::parse(&name).map_err(ApiError::contract_input)?;
     Ok(CreateRepository {
         name,
         primary_slot_id,
         target_copies,
         operation_id,
     })
-}
-fn contract_input(source: storage_contract::Error) -> ApiError {
-    ApiError::new(
-        http::StatusCode::BAD_REQUEST,
-        source.code(),
-        source.message().into_owned(),
-    )
-    .with_source(source)
 }
 pub(crate) async fn create(
     State(state): State<AppState>,

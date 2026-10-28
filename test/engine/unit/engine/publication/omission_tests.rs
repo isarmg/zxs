@@ -166,6 +166,96 @@ fn prepare_auth(engine: &Engine) -> DetachedPublication {
         .prepare_publication(*next, prepared, result, MAX_METADATA)
         .unwrap()
 }
+
+#[test]
+fn prepared_metadata_keeps_each_member_store_before_its_journal_and_failpoint() {
+    for (phase, kind) in [
+        (RecordType::Prepare, "candidate"),
+        (RecordType::Publication, "publication"),
+    ] {
+        for completed in 1..3 {
+            let (_temp, mut engine) = fixture();
+            let detached = prepare_auth(&engine);
+            let candidate = detached.candidate.clone();
+            let candidate_hash = object_hash("candidate", &candidate).unwrap();
+            let sequence = candidate.sequence;
+            let result = detached.result.clone();
+            let point = match phase {
+                RecordType::Prepare => format!("after_prepare_{completed}"),
+                RecordType::Publication => format!("after_publication_{completed}"),
+                _ => unreachable!(),
+            };
+            engine.inject_fault_once(&point);
+            let error = engine.decide_publication(detached).unwrap_err();
+            assert_eq!(
+                error.code(),
+                if phase == RecordType::Prepare {
+                    ErrorCode::InjectedFailure
+                } else {
+                    ErrorCode::InDoubt
+                }
+            );
+            let members = engine.members();
+            let (hash, expected) = if phase == RecordType::Prepare {
+                (candidate_hash.clone(), canonical_json(&candidate).unwrap())
+            } else {
+                let records = crate::journal::scan(&members[0]).unwrap();
+                let record = &records.records.last().unwrap().0;
+                assert_eq!(record.record_type, RecordType::Publication);
+                let publication: Publication =
+                    load_object(&members[0], kind, &record.object_hash).unwrap();
+                assert_eq!(object_hash(kind, &publication).unwrap(), record.object_hash);
+                (
+                    record.object_hash.clone(),
+                    canonical_json(&publication).unwrap(),
+                )
+            };
+            for (index, disk) in members.iter().enumerate() {
+                let path = object_path(disk, kind, &hash);
+                assert_eq!(path.exists(), index < completed, "{point}: {index}");
+                if index < completed {
+                    assert_eq!(std::fs::read(path).unwrap(), expected);
+                }
+                assert_eq!(
+                    crate::journal::scan(disk)
+                        .unwrap()
+                        .records
+                        .iter()
+                        .any(|(record, _)| {
+                            record.sequence == sequence && record.record_type == phase
+                        }),
+                    index < completed,
+                    "{point}: {index}"
+                );
+                assert!(!publication_seal_path(disk, &candidate_hash).exists());
+            }
+            let root = engine.root.clone();
+            drop(engine);
+            let recovered = Engine::open(&root).unwrap();
+            if phase == RecordType::Prepare {
+                assert_eq!(
+                    recovered.operation(result.operation_id).unwrap_err().code(),
+                    ErrorCode::OperationNotFound
+                );
+            } else {
+                assert_eq!(
+                    canonical_json(&recovered.operation(result.operation_id).unwrap()).unwrap(),
+                    canonical_json(&result).unwrap()
+                );
+                for disk in recovered.members() {
+                    assert_eq!(
+                        std::fs::read(object_path(&disk, kind, &hash)).unwrap(),
+                        expected
+                    );
+                    let seal: PublicationSeal =
+                        read_json(&publication_seal_path(&disk, &candidate_hash)).unwrap();
+                    let publication: Publication = load_object(&disk, kind, &hash).unwrap();
+                    verify_publication_seal(&candidate, &publication, &seal).unwrap();
+                }
+            }
+        }
+    }
+}
 // Exercise the history descriptor path rather than only the snapshot auth map.
 fn prepare_history_change(engine: &Engine) -> DetachedPublication {
     try_prepare_history_change(engine).unwrap()

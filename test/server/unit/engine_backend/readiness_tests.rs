@@ -42,8 +42,63 @@ fn backend_reports_and_consumes_nonfatal_recovery_checkpoint_warnings() {
     let engine = Engine::open(&root).unwrap();
     let backend = EngineBackend::new(engine);
     let warnings = backend.engine.lock().unwrap().take_recovery_warnings();
+    assert!(warnings.seals.is_empty());
     assert!(warnings.checkpoint_load.is_none());
     assert!(warnings.checkpoint_save.is_none());
+}
+
+#[test]
+fn returned_read_only_engine_reports_the_publication_seal_cause_only_once() {
+    use std::io::{Read, Seek};
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("system");
+    let disks: Vec<_> = (0..3)
+        .map(|i| temp.path().join(format!("disk-{i}")))
+        .collect();
+    let mut engine = Engine::initialize(&root, Config::development(disks.clone())).unwrap();
+    engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("unsealed").unwrap(),
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    drop(engine);
+    std::fs::rename(&disks[2], temp.path().join("offline")).unwrap();
+    for disk in &disks[..2] {
+        for entry in std::fs::read_dir(disk.join("metadata/publication-seals")).unwrap() {
+            std::fs::remove_file(entry.unwrap().path()).unwrap();
+        }
+    }
+    let mut engine = Engine::open_for_recovery(&root).unwrap();
+    assert!(engine.is_read_only());
+    assert!(engine.state().repositories.is_empty());
+    let mut capture = tempfile::tempfile().unwrap();
+    let subscriber = tracing::collector::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(Arc::new(capture.try_clone().unwrap()))
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        report_recovery_warnings(&mut engine);
+        report_recovery_warnings(&mut engine);
+    });
+    capture.rewind().unwrap();
+    let mut log = String::new();
+    capture.read_to_string(&mut log).unwrap();
+    assert_eq!(log.matches("recovery seal verification failed").count(), 1);
+    assert!(log.contains("Publication"));
+    assert!(log.contains("candidate_hash"));
+    assert!(log.contains("NotFound"));
+    let consumed = engine.take_recovery_warnings();
+    assert!(consumed.seals.is_empty());
+    assert!(consumed.checkpoint_load.is_none());
+    assert!(consumed.checkpoint_save.is_none());
+    assert!(engine.is_read_only());
+    assert!(engine.state().repositories.is_empty());
 }
 
 #[test]

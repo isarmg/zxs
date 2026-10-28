@@ -23,14 +23,7 @@ fn parse(mut body: Map<String, Value>) -> Result<ArchiveBranch, ApiError> {
     };
     let operation_id = operation
         .parse::<storage_contract::OperationId>()
-        .map_err(|source| {
-            ApiError::new(
-                http::StatusCode::BAD_REQUEST,
-                source.code(),
-                source.message().into_owned(),
-            )
-            .with_source(source)
-        })?;
+        .map_err(ApiError::contract_input)?;
     Ok(ArchiveBranch {
         branch_id,
         operation_id,

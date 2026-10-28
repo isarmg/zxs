@@ -1,4 +1,5 @@
 use super::*;
+use crate::r29_local_publication;
 fn fixture(point: &str) -> (tempfile::TempDir, Engine, OperationId, Candidate) {
     fixture_with_history(point, 0)
 }
@@ -295,7 +296,7 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
         .filter(|e| e.version.creation_name == "healthy.txt")
         .flat_map(|e| e.placement.route_slot_ids.iter().map(move |slot| (e, slot)))
         .map(|(e, slot)| {
-            fs::read(
+            let bytes = fs::read(
                 version_dir(
                     engine.disk(slot).unwrap(),
                     &e.version.history_tree_id,
@@ -303,12 +304,28 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
                 )
                 .join("publication-proof.json"),
             )
-            .unwrap()
-            .len()
+            .unwrap();
+            let local: LocalPublication = decode_strict(&bytes).unwrap();
+            assert!(local.publication.recovery.is_some());
+            let expected = r29_local_publication::encode(&local, MAX_METADATA).unwrap();
+            assert_eq!(bytes, expected);
+            expected.len()
         })
         .max()
         .unwrap();
     assert_eq!(bound, actual);
+    assert_eq!(
+        crate::metadata_budget::preflight_publication(
+            &engine,
+            &candidate,
+            &publication.result,
+            &original,
+            publication.recovery.clone(),
+            bound
+        )
+        .unwrap(),
+        bound
+    );
     assert_eq!(
         crate::metadata_budget::preflight_publication(
             &engine,
@@ -704,6 +721,30 @@ fn degraded_recovery_resumes_the_same_plan_after_each_durable_boundary() {
                 .is_err(),
             "{point}"
         );
+        if point == "after_recovery_publication_1" {
+            let members = engine.members();
+            let records = scan(&members[0]).unwrap();
+            let record = &records.records.last().unwrap().0;
+            assert_eq!(record.record_type, RecordType::Publication);
+            let publication: Publication =
+                load_object(&members[0], "publication", &record.object_hash).unwrap();
+            assert!(publication.recovery.is_some());
+            assert_eq!(
+                object_hash("publication", &publication).unwrap(),
+                record.object_hash
+            );
+            assert_eq!(
+                fs::read(object_path(&members[0], "publication", &record.object_hash)).unwrap(),
+                canonical_json(&publication).unwrap()
+            );
+            for member in &members[1..] {
+                assert!(!object_path(member, "publication", &record.object_hash).exists());
+                assert!(!scan(member).unwrap().records.iter().any(|(record, _)| {
+                    record.sequence == candidate.sequence
+                        && record.record_type == RecordType::Publication
+                }));
+            }
+        }
         drop(engine);
         if point == "after_recovery_reprotect_1" {
             fs::remove_file(plan_path(&root, &plan.recovery_id)).unwrap();

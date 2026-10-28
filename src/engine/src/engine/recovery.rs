@@ -124,13 +124,20 @@ impl Engine {
             let Some(handle) = self.disk_resources.available(d) else {
                 continue;
             };
-            if super::provenance::validate_owned_seal(
+            if let Err(source) = super::provenance::validate_owned_seal(
                 &self.disk_resources,
                 d,
                 &self.metadata_integrity,
-            )
-            .is_err()
-            {
+            ) {
+                self.recovery_warnings
+                    .seals
+                    .push(super::RecoverySealFailure {
+                        context: super::RecoverySealContext::Member {
+                            disk_id: d.disk_id.clone(),
+                            slot_id: d.slot_id.clone(),
+                        },
+                        source,
+                    });
                 continue;
             }
             let opened = OpenJournal::scan_at(&handle.root, d)?;
@@ -452,10 +459,17 @@ impl Engine {
                 // A PUBLICATION object or a single frame is not the complete
                 // barrier. Preserve the old visible state until all configured
                 // synchronized receipts can be checked after restart.
-                let sealed =
+                if let Err(source) =
                     verified_publication_seal_at(&self.disk_resources, &online, &candidate, &p)
-                        .is_ok();
-                if !sealed {
+                {
+                    self.recovery_warnings
+                        .seals
+                        .push(super::RecoverySealFailure {
+                            context: super::RecoverySealContext::Publication {
+                                candidate_hash: hash,
+                            },
+                            source,
+                        });
                     self.blocked = true;
                     break;
                 }
@@ -579,3 +593,7 @@ thread_local! {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/recovery/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/engine/recovery/diagnostics_tests.rs"]
+mod diagnostics_tests;

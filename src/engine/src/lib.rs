@@ -15,6 +15,7 @@ mod container_storage;
 mod degraded_recovery;
 mod disk;
 mod engine;
+mod file_stamp;
 mod historical_save;
 pub use engine::{PreparedWorkspaceCommit, WorkspaceCommitPreparation};
 mod history_package;
@@ -41,8 +42,8 @@ pub use engine::{
     IntegrityScrubCancellation, IntegrityScrubCompletion, IntegrityScrubIssue,
     IntegrityScrubOutcome, IntegrityScrubPlan, IntegrityScrubReport, IntegrityScrubSchedule,
     IntegrityScrubTarget, MetadataMemberProbe, OpenedContent, OperationReadPlan, OperationRecord,
-    RangeContent, ReadLease, RecoveryWarnings, RetainedWorkspaceLimits, ValidatedConfig,
-    WorkspaceReadPlan,
+    RangeContent, ReadLease, RecoverySealContext, RecoverySealFailure, RecoveryWarnings,
+    RetainedWorkspaceLimits, ValidatedConfig, WorkspaceReadPlan,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
 pub use protection::{
@@ -51,6 +52,9 @@ pub use protection::{
 };
 pub use storage_contract::*;
 pub use wire::{commit_request_digest, manifest_hash as workspace_manifest_hash};
+#[cfg(test)]
+#[path = "../../../test/engine/unit/journal/r29_local_publication.rs"]
+mod r29_local_publication;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/tests.rs"]
 mod tests;

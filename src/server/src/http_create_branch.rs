@@ -21,22 +21,14 @@ fn parse(mut body: Map<String, Value>) -> Result<CreateBranch, ApiError> {
     if let Some(key) = body.keys().next() {
         return Err(ApiError::invalid(format!("unknown field {key}")));
     }
-    let operation_id = operation.parse().map_err(contract_input)?;
-    let name = storage_contract::BranchName::parse(&name).map_err(contract_input)?;
+    let operation_id = operation.parse().map_err(ApiError::contract_input)?;
+    let name = storage_contract::BranchName::parse(&name).map_err(ApiError::contract_input)?;
     Ok(CreateBranch {
         repository_id,
         source_commit_id,
         name,
         operation_id,
     })
-}
-fn contract_input(source: storage_contract::Error) -> ApiError {
-    ApiError::new(
-        http::StatusCode::BAD_REQUEST,
-        source.code(),
-        source.message().into_owned(),
-    )
-    .with_source(source)
 }
 pub(crate) async fn create(
     State(state): State<AppState>,

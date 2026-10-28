@@ -139,13 +139,21 @@ fn main() {
     }
 }
 fn report_recovery_warnings(engine: &mut Engine) {
-    let warnings = engine.take_recovery_warnings();
+    let storage_engine::RecoveryWarnings {
+        seals,
+        checkpoint_load,
+        checkpoint_save,
+    } = engine.take_recovery_warnings();
+    for failure in seals {
+        tracing::warn!(
+            context = ?failure.context(),
+            error = ?failure.cause(),
+            "recovery seal verification failed; recovery evidence remains restricted"
+        );
+    }
     for (action, warning) in [
-        (
-            "checkpoint load failed; used full replay",
-            warnings.checkpoint_load,
-        ),
-        ("checkpoint save skipped", warnings.checkpoint_save),
+        ("checkpoint load failed; used full replay", checkpoint_load),
+        ("checkpoint save skipped", checkpoint_save),
     ] {
         if let Some(error) = warning {
             let mut message = error.to_string();

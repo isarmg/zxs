@@ -110,6 +110,56 @@ fn prepared_metadata_serializes_only_at_preflight_and_reuses_exact_bytes() {
 }
 
 #[test]
+fn prepared_publication_objects_encode_once_across_individual_held_member_stores() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = Config::development([
+        temp.path().join("one"),
+        temp.path().join("two"),
+        temp.path().join("three"),
+    ]);
+    let engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
+    for kind in ["candidate", "publication"] {
+        let value = CountedValue {
+            value: json_codec::json!({"width": "18446744073709551615", "名字": ["\n\"\\", null]}),
+            serializations: Cell::new(0),
+        };
+        let prepared = PreparedMetadataObject::new(kind, &value, MAX_METADATA).unwrap();
+        let expected = encode_metadata(&value.value, MAX_METADATA).unwrap();
+        let hash = object_hash(kind, &value.value).unwrap();
+        assert_eq!(prepared.hash, hash);
+        let members = engine.members();
+        for (index, disk) in members.iter().enumerate() {
+            assert_eq!(
+                prepared
+                    .store_at(&engine.disk_resources, std::slice::from_ref(disk))
+                    .unwrap(),
+                hash
+            );
+            assert_eq!(
+                std::fs::read(object_path(disk, kind, &hash)).unwrap(),
+                expected
+            );
+            for pending in &members[index + 1..] {
+                assert!(!object_path(pending, kind, &hash).exists());
+            }
+        }
+        // Canonical encoding validates then serializes once; store_at does neither.
+        assert_eq!(value.serializations.get(), 2);
+        let path = object_path(&members[1], kind, &hash);
+        std::fs::write(&path, b"damaged immutable object").unwrap();
+        assert_eq!(
+            prepared
+                .store_at(&engine.disk_resources, std::slice::from_ref(&members[1]))
+                .unwrap_err()
+                .code(),
+            ErrorCode::ObjectCollision
+        );
+        assert_eq!(std::fs::read(path).unwrap(), b"damaged immutable object");
+        assert_eq!(value.serializations.get(), 2);
+    }
+}
+
+#[test]
 fn replicated_metadata_rejects_oversize_before_creating_any_object() {
     let temp = tempfile::tempdir().unwrap();
     let config = Config::development([

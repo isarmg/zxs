@@ -1,52 +1,28 @@
 //! Owned, non-serializable evidence for the live prepare/decide path only.
 //! Recovery cannot construct a proof without reading the complete payload.
 use crate::engine::provenance::MetadataIntegrity;
+use crate::file_stamp::FileStamp;
 use crate::{disk::*, journal::*, *};
 use std::{
     fs::File,
     io::Read,
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-#[derive(Debug, PartialEq, Eq)]
-struct Stamp {
-    dev: u64,
-    ino: u64,
-    size: u64,
-    links: u64,
-    mode: u32,
-    modified: (i64, i64),
-    changed: (i64, i64),
-}
-impl Stamp {
-    fn of(file: &File) -> Result<Self> {
-        let m = file.metadata()?;
-        Ok(Self {
-            dev: m.dev(),
-            ino: m.ino(),
-            size: m.len(),
-            links: m.nlink(),
-            mode: m.mode(),
-            modified: (m.mtime(), m.mtime_nsec()),
-            changed: (m.ctime(), m.ctime_nsec()),
-        })
-    }
-}
 struct HeldFile {
     file: File,
-    stamp: Stamp,
+    stamp: FileStamp,
 }
 impl HeldFile {
     fn open(root: &DiskRoot, path: &Path) -> Result<Self> {
         let file = root.open_regular(path)?;
-        let stamp = Stamp::of(&file)?;
+        let stamp = FileStamp::of(&file)?;
         Ok(Self { file, stamp })
     }
     fn validate(&self, root: &DiskRoot, path: &Path) -> Result<()> {
         let current = root.open_regular(path)?;
-        if Stamp::of(&self.file)? != self.stamp || Stamp::of(&current)? != self.stamp {
+        if FileStamp::of(&self.file)? != self.stamp || FileStamp::of(&current)? != self.stamp {
             return Err(Error::new(
                 storage_contract::ErrorCode::PreparationStale,
                 "verified payload or metadata changed after preparation",
