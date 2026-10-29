@@ -27,7 +27,34 @@ pub(crate) fn routes() -> Router<AppState> {
             "/api/file-manager/disks/{slot}/directory-select",
             post(http_disk_directory::select),
         )
-        .route("/api/file-manager/files/{file}/history", get(file_history))
+        .route(
+            "/api/file-manager/files/{file}/history",
+            get(http_file_history::nodes),
+        )
+        .route(
+            "/api/file-manager/files/{file}/history/nodes/{node}/parents",
+            get(http_file_history::node_parents),
+        )
+        .route(
+            "/api/file-manager/files/{file}/history/nodes/{node}/fields/{field}",
+            get(http_file_history::node_field),
+        )
+        .route(
+            "/api/file-manager/files/{file}/history/branches",
+            get(http_file_history::branches),
+        )
+        .route(
+            "/api/file-manager/files/{file}/history/merges",
+            get(http_file_history::merges),
+        )
+        .route(
+            "/api/file-manager/files/{file}/history/merges/{merge}/inputs",
+            get(http_file_history::merge_inputs),
+        )
+        .route(
+            "/api/file-manager/files/{file}/history/merges/{merge}/parents",
+            get(http_file_history::merge_parents),
+        )
         .route(
             "/api/file-manager/files/{file}/branches",
             post(http_create_file_branch::create),
@@ -100,34 +127,6 @@ async fn history(
             backend
                 .activity_history(&identity)
                 .and_then(backend_activity::ActivityHistoryResponse::try_from)
-        })
-        .await
-        .map(Json)
-}
-async fn file_history(
-    State(state): State<AppState>,
-    http_routing::Extension(identity): http_routing::Extension<Identity>,
-    ApiPath(file): ApiPath<String>,
-    ApiQuery(mut query): ApiQuery<BTreeMap<String, String>>,
-) -> Result<Json<backend_file_history::FileHistoryResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| {
-            if let Some(key) = query
-                .keys()
-                .find(|key| !matches!(key.as_str(), "repository_id" | "path"))
-            {
-                return Err(ApiError::invalid(format!("unknown field {key}")));
-            }
-            let request =
-                ReadFileHistory::parse(file, query.remove("repository_id"), query.remove("path"))?;
-            backend
-                .file_history_snapshot(&identity, request)
-                .map(backend_file_history::FileHistoryResponse::from)
         })
         .await
         .map(Json)

@@ -824,14 +824,63 @@ impl Backend for PanickingBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadFileHistory,
-    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+    ) -> Result<crate::FileHistoryPage, crate::ApiError> {
         panic!("private file history panic detail")
     }
-    fn file_history(
+    fn file_history_node_parents(
         &self,
         _identity: &crate::auth::Identity,
-        _file: &str,
-    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
+        _request: crate::ReadNodeParents,
+    ) -> Result<crate::NodeParentsPage, crate::ApiError> {
+        panic!("private file history panic detail")
+    }
+    fn file_history_branches(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadHistoryBranches,
+    ) -> Result<crate::HistoryBranchesPage, crate::ApiError> {
+        panic!("private file history panic detail")
+    }
+    fn file_history_merges(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadHistoryMerges,
+    ) -> Result<crate::HistoryMergesPage, crate::ApiError> {
+        panic!("private file history panic detail")
+    }
+    fn file_history_merge_inputs(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadMergeInputs,
+    ) -> Result<crate::MergeInputsPage, crate::ApiError> {
+        panic!("private file history panic detail")
+    }
+    fn file_history_merge_parents(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadMergeParents,
+    ) -> Result<crate::MergeParentsPage, crate::ApiError> {
+        panic!("private file history panic detail")
+    }
+    fn file_history_node_field(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadNodeField,
+    ) -> Result<crate::NodeFieldSlice, crate::ApiError> {
+        panic!("private file history panic detail")
+    }
+    fn file_version_page(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadVersionPage,
+    ) -> Result<crate::VersionPage, crate::ApiError> {
+        panic!("private file history panic detail")
+    }
+    fn file_version_sources(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadVersionSources,
+    ) -> Result<crate::VersionSourcesPage, crate::ApiError> {
         panic!("private file history panic detail")
     }
     fn topology_snapshot(
@@ -1002,6 +1051,41 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
     let (token, _, _) = authenticated(&app).await;
     for (method, path, body) in [
         ("GET", "/api/file-manager/files/file/history", None),
+        (
+            "GET",
+            "/api/file-manager/files/file/history/nodes/node/parents?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        ),
+        (
+            "GET",
+            "/api/file-manager/files/file/history/nodes/node/fields/message?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        ),
+        (
+            "GET",
+            "/api/file-manager/files/file/history/branches?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        ),
+        (
+            "GET",
+            "/api/file-manager/files/file/history/merges?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        ),
+        (
+            "GET",
+            "/api/file-manager/files/file/history/merges/merge/inputs?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        ),
+        (
+            "GET",
+            "/api/file-manager/files/file/history/merges/merge/parents?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        ),
+        (
+            "GET",
+            "/api/files/file/history/versions/version/sources?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        ),
         ("GET", "/api/capabilities", None),
         ("GET", "/readyz", None),
         ("GET", "/api/workspaces/capacity", None),

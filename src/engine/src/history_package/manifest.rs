@@ -103,8 +103,16 @@ impl HistoryManifest {
         history_id: &str,
         source: &dyn crate::namespace::NamespaceSource,
     ) -> Result<Self> {
-        let manifest = Self::project_state(state, history_id, source)?;
-        manifest.validate(source)?;
+        // Projection walks directory entries, so admit external graphs first.
+        let directory_ids = Self::validate_namespaces(
+            state
+                .commits
+                .values()
+                .filter(|commit| commit.history_tree_id == history_id),
+            source,
+        )?;
+        let manifest = Self::project_with_directories(state, history_id, &directory_ids)?;
+        manifest.validate_contents(source, &directory_ids)?;
         Ok(manifest)
     }
 
@@ -114,23 +122,6 @@ impl HistoryManifest {
         history_id: &str,
         source: &dyn crate::namespace::NamespaceSource,
     ) -> Result<Self> {
-        let history = state.histories.get(history_id).cloned().ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::HistoryNotFound,
-                "history does not exist",
-            )
-        })?;
-        let repository = state
-            .repositories
-            .get(&history.repository_id)
-            .cloned()
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::StateInvalid,
-                    "history repository missing",
-                )
-            })?;
-        let repository_id = history.repository_id.clone();
         // Exports are whole-history by definition: every commit's namespace
         // streams once through the paged source; nothing else is expanded.
         let directory_ids = {
@@ -152,9 +143,27 @@ impl HistoryManifest {
                     },
                 )?;
             }
-            ids.insert(repository_id.clone());
             ids
         };
+        Self::project_with_directories(state, history_id, &directory_ids)
+    }
+
+    fn project_with_directories(
+        state: &State,
+        history_id: &str,
+        directory_ids: &BTreeSet<String>,
+    ) -> Result<Self> {
+        let history = state
+            .histories
+            .get(history_id)
+            .cloned()
+            .ok_or_else(|| Error::new(ErrorCode::HistoryNotFound, "history does not exist"))?;
+        let repository = state
+            .repositories
+            .get(&history.repository_id)
+            .cloned()
+            .ok_or_else(|| Error::new(ErrorCode::StateInvalid, "history repository missing"))?;
+        let repository_id = history.repository_id.clone();
         let versions = state
             .versions
             .iter()
@@ -263,7 +272,9 @@ impl HistoryManifest {
             directory_tree_selections: state
                 .directory_tree_selections
                 .iter()
-                .filter(|(directory, _)| directory_ids.contains(directory.as_str()))
+                .filter(|(directory, _)| {
+                    *directory == &repository_id || directory_ids.contains(directory.as_str())
+                })
                 .map(|(directory, tree)| (directory.clone(), tree.clone()))
                 .collect(),
             file_notes: state
@@ -315,7 +326,9 @@ impl HistoryManifest {
             directory_selection_generations: state
                 .directory_selection_generations
                 .iter()
-                .filter(|(directory, _)| directory_ids.contains(directory.as_str()))
+                .filter(|(directory, _)| {
+                    *directory == &repository_id || directory_ids.contains(directory.as_str())
+                })
                 .map(|(directory, generation)| (directory.clone(), *generation))
                 .collect(),
             branches: state
@@ -861,6 +874,33 @@ impl HistoryManifest {
         Ok(())
     }
     pub(super) fn validate(&self, source: &dyn crate::namespace::NamespaceSource) -> Result<()> {
+        let directory_ids = Self::validate_namespaces(self.commits.values(), source)?;
+        self.validate_contents(source, &directory_ids)
+    }
+
+    fn validate_namespaces<'a>(
+        commits: impl Iterator<Item = &'a Commit>,
+        source: &dyn crate::namespace::NamespaceSource,
+    ) -> Result<BTreeSet<String>> {
+        let mut directory_ids = BTreeSet::new();
+        for commit in commits {
+            let admitted = crate::namespace::admit_namespace(&commit.namespace, source, 1_000_000)
+                .map_err(|error| {
+                    error.context(
+                        ErrorCode::HistoryPackageInvalid,
+                        "commit entries are not in canonical namespace form",
+                    )
+                })?;
+            directory_ids.extend(admitted.into_directory_ids());
+        }
+        Ok(directory_ids)
+    }
+
+    fn validate_contents(
+        &self,
+        source: &dyn crate::namespace::NamespaceSource,
+        directory_ids: &BTreeSet<String>,
+    ) -> Result<()> {
         let invalid =
             |message| Error::new(storage_contract::ErrorCode::HistoryPackageInvalid, message);
         let history = &self.history.history_tree_id;
@@ -924,16 +964,6 @@ impl HistoryManifest {
                     })?;
                 }
             }
-            // Full admission re-verification: the complete paged graph is
-            // re-read, re-counted and structure-checked for every commit.
-            crate::namespace::verify_namespace(&commit.namespace, source, 1_000_000).map_err(
-                |error| {
-                    error.context(
-                        ErrorCode::HistoryPackageInvalid,
-                        "commit entries are not in canonical namespace form",
-                    )
-                },
-            )?;
             let mut commit_files = BTreeSet::new();
             crate::namespace::NamespaceView::new(&commit.namespace, source).walk(
                 |location, page_entry| {
@@ -1234,23 +1264,6 @@ impl HistoryManifest {
                 ));
             }
         }
-        let directory_ids = {
-            let mut ids = BTreeSet::new();
-            for commit in self.commits.values() {
-                crate::namespace::NamespaceView::new(&commit.namespace, source).walk(
-                    |_, entry| {
-                        if let storage_contract::NamespacePageEntry::Directory {
-                            entry_id, ..
-                        } = entry
-                        {
-                            ids.insert(entry_id.clone());
-                        }
-                        Ok(true)
-                    },
-                )?;
-            }
-            ids
-        };
         for directory in self.directory_selection_generations.keys() {
             if directory == &self.repository.repository_id {
                 continue;

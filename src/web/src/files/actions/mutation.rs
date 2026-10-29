@@ -229,7 +229,11 @@ pub(crate) fn update_note(
         Some(version) => ("versions", version),
         None => ("files", file),
     };
-    if id.is_empty() || !state.with_untracked(write_allowed) {
+    if id.is_empty()
+        || !state.with_untracked(|s| {
+            write_allowed(s) && crate::files::model::history_root(&s.files).is_some()
+        })
+    {
         return None;
     }
     let operation_id = crate::ui::operation_id(state)?;
@@ -273,13 +277,14 @@ pub(crate) fn update_node_note(
     if node.is_empty() || storage_contract::validate_note(&note).is_err() {
         return None;
     }
+    // Node notes are edited from the resident page; a stale page cannot write.
     let file = state.with_untracked(|s| {
+        crate::files::model::history_root(&s.files)?;
         s.files
             .selected
             .as_ref()
             .map(|entry| entry.file_id().to_owned())
-            .unwrap_or_default()
-    });
+    })?;
     if file.is_empty() {
         return None;
     }

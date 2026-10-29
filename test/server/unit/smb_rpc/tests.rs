@@ -609,15 +609,64 @@ impl Backend for LostCommitReply {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadFileHistory,
-    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+    ) -> Result<crate::FileHistoryPage, crate::ApiError> {
         self.inner.file_history_snapshot(identity, request)
     }
-    fn file_history(
+    fn file_history_node_parents(
         &self,
         identity: &crate::auth::Identity,
-        file: &str,
-    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
-        self.inner.file_history(identity, file)
+        request: crate::ReadNodeParents,
+    ) -> Result<crate::NodeParentsPage, crate::ApiError> {
+        self.inner.file_history_node_parents(identity, request)
+    }
+    fn file_history_branches(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadHistoryBranches,
+    ) -> Result<crate::HistoryBranchesPage, crate::ApiError> {
+        self.inner.file_history_branches(identity, request)
+    }
+    fn file_history_merges(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadHistoryMerges,
+    ) -> Result<crate::HistoryMergesPage, crate::ApiError> {
+        self.inner.file_history_merges(identity, request)
+    }
+    fn file_history_merge_inputs(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadMergeInputs,
+    ) -> Result<crate::MergeInputsPage, crate::ApiError> {
+        self.inner.file_history_merge_inputs(identity, request)
+    }
+    fn file_history_merge_parents(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadMergeParents,
+    ) -> Result<crate::MergeParentsPage, crate::ApiError> {
+        self.inner.file_history_merge_parents(identity, request)
+    }
+    fn file_history_node_field(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadNodeField,
+    ) -> Result<crate::NodeFieldSlice, crate::ApiError> {
+        self.inner.file_history_node_field(identity, request)
+    }
+    fn file_version_page(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadVersionPage,
+    ) -> Result<crate::VersionPage, crate::ApiError> {
+        self.inner.file_version_page(identity, request)
+    }
+    fn file_version_sources(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadVersionSources,
+    ) -> Result<crate::VersionSourcesPage, crate::ApiError> {
+        self.inner.file_version_sources(identity, request)
     }
     fn topology_snapshot(
         &self,
@@ -890,6 +939,54 @@ fn fixture_configure(
         repo.main_branch_id,
     )
 }
+/// Body versions of one file through the bounded advanced page, as a probe
+/// for SMB tests that assert how many versions a workflow published.
+pub(super) fn version_count(backend: &dyn Backend, identity: &Identity, file: &str) -> usize {
+    let page = backend
+        .file_version_page(
+            identity,
+            crate::ReadVersionPage::parse(file.into(), BTreeMap::new()).unwrap(),
+        )
+        .unwrap();
+    assert!(
+        page.continuation.seed.root.len() == 64,
+        "version pages carry the exact history root"
+    );
+    assert!(!page.continuation.more_after, "SMB fixtures fit one page");
+    page.versions.len()
+}
+
+/// The bounded main history page as a JSON value plus its branch page, as a
+/// probe for the inherited/materialized facts SMB saves must publish.
+pub(super) fn history_probe(backend: &dyn Backend, identity: &Identity, file: &str) -> Value {
+    let page = backend
+        .file_history_snapshot(
+            identity,
+            crate::ReadFileHistory::parse(file.into(), BTreeMap::new()).unwrap(),
+        )
+        .unwrap();
+    let encoded = page
+        .encode(crate::backend_file_history::PageBudget::PROTOCOL)
+        .unwrap();
+    let mut value: Value = json_codec::from_slice(encoded.body()).unwrap();
+    let branches = backend
+        .file_history_branches(
+            identity,
+            crate::ReadHistoryBranches::parse(
+                file.into(),
+                BTreeMap::from([("history_root".to_owned(), page.history_root.clone())]),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let branches = branches
+        .encode(crate::backend_file_history::PageBudget::PROTOCOL)
+        .unwrap();
+    let branches: Value = json_codec::from_slice(branches.body()).unwrap();
+    value["branches"] = branches["branches"].clone();
+    value
+}
+
 fn identity(shared: &Shared) -> Identity {
     shared.auth.sole_identity().unwrap()
 }
@@ -1417,21 +1514,19 @@ fn unwritten_branch_reads_parent_and_materializes_only_on_dirty_save() {
     let (_temp, shared, backend, branch) = fixture();
     let file = select_pending_file(&shared, &branch);
     let history = || {
-        shared
-            .backend
-            .file_history_snapshot(
-                &identity(&shared),
-                crate::ReadFileHistory::parse(file.clone(), None, None).unwrap(),
-            )
-            .map(crate::backend_file_history::FileHistoryResponse::from)
-            .map(|response| json_codec::to_value(response).unwrap())
-            .unwrap()
+        let mut value = history_probe(shared.backend.as_ref(), &identity(&shared), &file);
+        // Roots and cursors change with every publication; compare the facts.
+        value["history_root"] = Value::Null;
+        for node in value["nodes"].as_array_mut().unwrap() {
+            node["parents"]["cursor"] = Value::Null;
+        }
+        value
     };
     let before = history();
-    assert_eq!(before["versions"].as_array().unwrap().len(), 1);
+    assert_eq!(before["nodes"].as_array().unwrap().len(), 1);
     let mut session = session(shared.clone(), &branch);
-    assert_eq!(before["inherited"], true);
-    assert!(before["own_version_id"].is_null());
+    assert_eq!(before["context"]["inherited"], true);
+    assert!(before["context"]["own_version_id"].is_null());
     let (parent_read, parent_content) = open_file(&mut session, false);
     let mut parent_bytes = [0u8; 3];
     parent_content.read_exact_at(&mut parent_bytes, 0).unwrap();
@@ -1440,7 +1535,7 @@ fn unwritten_branch_reads_parent_and_materializes_only_on_dirty_save() {
     assert_eq!(opened.size, 3);
     assert_eq!(
         opened.version_id.as_deref(),
-        before["versions"][0]["version_id"].as_str()
+        before["nodes"][0]["version_id"].as_str()
     );
     assert_eq!(staged.metadata().unwrap().len(), 3);
     let mut copied = [0u8; 3];
@@ -1465,28 +1560,55 @@ fn unwritten_branch_reads_parent_and_materializes_only_on_dirty_save() {
     session.dirty(opened.handle).unwrap();
     session.close(opened.handle, false).unwrap();
     let after = history();
-    assert_eq!(after["versions"].as_array().unwrap().len(), 2);
-    let current = after["versions"]
+    assert_eq!(after["nodes"].as_array().unwrap().len(), 2);
+    let current = after["nodes"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|version| version["current"] == true)
+        .find(|node| node["node_id"] == after["context"]["current_node_id"])
         .unwrap();
     assert_eq!(
         current["content_hash"],
         blake3::hash(b"Xld").to_hex().as_str()
     );
+    // True lineage lives on the body-version sources route, not the node page.
+    let sources = shared
+        .backend
+        .file_version_sources(
+            &identity(&shared),
+            crate::ReadVersionSources(
+                crate::backend_file_history::ReadIndexedSlice::parse(
+                    file.clone(),
+                    "version_id",
+                    current["version_id"].as_str().unwrap().into(),
+                    BTreeMap::from([(
+                        "history_root".to_owned(),
+                        shared
+                            .backend
+                            .file_version_page(
+                                &identity(&shared),
+                                crate::ReadVersionPage::parse(file.clone(), BTreeMap::new())
+                                    .unwrap(),
+                            )
+                            .unwrap()
+                            .history_root,
+                    )]),
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap();
     assert_eq!(
-        current["source_version_ids"],
-        json!([before["versions"][0]["version_id"]])
+        sources.items,
+        [before["nodes"][0]["version_id"].as_str().unwrap()]
     );
     let (read, mut content) = open_file(&mut session, false);
     let mut bytes = Vec::new();
     content.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, b"Xld");
-    assert_eq!(after["inherited"], false);
-    assert_eq!(after["materialized"], true);
-    assert_eq!(after["own_version_id"], current["version_id"]);
+    assert_eq!(after["context"]["inherited"], false);
+    assert_eq!(after["context"]["materialized"], true);
+    assert_eq!(after["context"]["own_version_id"], current["version_id"]);
     parent_content.read_exact_at(&mut parent_bytes, 0).unwrap();
     assert_eq!(
         &parent_bytes, b"old",
@@ -1507,21 +1629,13 @@ fn explicit_truncation_materializes_an_empty_pending_branch() {
     let opened: OpenResult = json_codec::from_value(opened).unwrap();
     drop(descriptor);
     session.close(opened.handle, false).unwrap();
-    let history = shared
-        .backend
-        .file_history_snapshot(
-            &identity(&shared),
-            crate::ReadFileHistory::parse(file.clone(), None, None).unwrap(),
-        )
-        .map(crate::backend_file_history::FileHistoryResponse::from)
-        .map(|response| json_codec::to_value(response).unwrap())
-        .unwrap();
-    assert_eq!(history["versions"].as_array().unwrap().len(), 2);
-    let current = history["versions"]
+    let history = history_probe(shared.backend.as_ref(), &identity(&shared), &file);
+    assert_eq!(history["nodes"].as_array().unwrap().len(), 2);
+    let current = history["nodes"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|version| version["current"] == true)
+        .find(|node| node["node_id"] == history["context"]["current_node_id"])
         .unwrap();
     assert_eq!(current["size"], "0");
     assert_eq!(current["content_hash"], blake3::hash(b"").to_hex().as_str());
@@ -1589,8 +1703,10 @@ fn lost_commit_reply_reconciles_same_operation_without_restaging_or_second_versi
         .into_iter()
         .find(|entry| entry.path == "report.txt")
         .unwrap();
-    let history = backend.file_history(&one.identity, &entry.file_id).unwrap();
-    assert_eq!(history.len(), 2);
+    assert_eq!(
+        version_count(backend.as_ref(), &one.identity, &entry.file_id),
+        2
+    );
     one.close(opened.handle, false).unwrap();
 }
 

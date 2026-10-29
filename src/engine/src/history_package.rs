@@ -971,11 +971,7 @@ impl Engine {
                 )
                 .map_err(CopyFailure::into_error)?;
                 write_json(&dir.join("version.json"), version, false)?;
-                write_atomic(
-                    &dir.join("checksums.bin"),
-                    &copied.checksums().encode()?,
-                    false,
-                )?;
+                write_atomic(&dir.join("checksums.bin"), copied.checksum_bytes(), false)?;
                 sync_dir(&dir)?;
             }
             for object in &graph_objects {

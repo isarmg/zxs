@@ -144,15 +144,10 @@ async fn select(app: &Router, token: &str, file: &str, branch: &str) {
     )
     .await;
 }
+/// The bounded node page plus its branch and merge pages, so the regressions
+/// below still compare the whole visible history of their small fixtures.
 async fn history(app: &Router, token: &str, file: &str) -> Value {
-    success(
-        app,
-        token,
-        "GET",
-        &format!("/api/file-manager/files/{file}/history"),
-        None,
-    )
-    .await
+    history_page(app, token, file).await
 }
 
 #[tokio::test]
@@ -446,8 +441,8 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     let tag_node = tagged["result"]["nodes"][0]["node_id"].as_str().unwrap();
     assert!(tag_node.starts_with("fmeta_"));
     let initial = history(&app, &token, file).await;
-    assert_eq!(initial["versions"].as_array().unwrap().len(), 1);
-    assert_eq!(initial["node_id"], tag_node);
+    assert_eq!(content_nodes(&initial).len(), 1);
+    assert_eq!(initial["context"]["current_node_id"], tag_node);
     let snapshot = initial["nodes"]
         .as_array()
         .unwrap()
@@ -456,7 +451,11 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
         .unwrap();
     assert_eq!(snapshot["kind"], "tags");
     assert_eq!(snapshot["tags"], json!(["work", "已审核"]));
-    assert_eq!(snapshot["parent_node_ids"], json!([base]));
+    assert_eq!(
+        snapshot["parents"]["edges"],
+        json!([{"node_id":base,"in_window":true}])
+    );
+    assert_eq!(snapshot["parents"]["status"], "complete");
     success(
         &app,
         &token,
@@ -467,15 +466,21 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     .await;
     manager_namespace(&app, &token, "rename", "report.txt", Some("renamed.txt")).await;
     let renamed = history(&app, &token, file).await;
-    let path_node = renamed["node_id"].as_str().unwrap();
+    let path_node = renamed["context"]["current_node_id"].as_str().unwrap();
     manager_upload(&app, &token, "renamed.txt", b"left body").await;
     let written = history(&app, &token, file).await;
-    let left_node = written["node_id"].as_str().unwrap();
+    let left_node = written["context"]["current_node_id"].as_str().unwrap();
     assert_eq!(written["nodes"][0]["tags"], json!(["work", "已审核"]));
-    assert_eq!(written["nodes"][0]["parent_node_ids"], json!([path_node]));
+    assert_eq!(
+        written["nodes"][0]["parents"]["edges"],
+        json!([{"node_id":path_node,"in_window":true}])
+    );
     let historical=success(&app,&token,"POST",&tag_route,Some(json!({"targets":[{"branch_id":left,"source_node_id":tag_node,"expected_node_id":left_node}],"add":["归档"],"remove":["work"],"operation_id":new_id("op")}))).await;
     assert_eq!(historical["result"]["nodes"][0]["advanced"], false);
-    assert_eq!(history(&app, &token, file).await["node_id"], left_node);
+    assert_eq!(
+        history(&app, &token, file).await["context"]["current_node_id"],
+        left_node
+    );
     let before_invalid = history(&app, &token, file).await;
     for bad in [" bad".to_string(), "bad\nlabel".into(), "文".repeat(43)] {
         assert_eq!(send(&app,Some(&token),"POST",&tag_route,Some(json!({"targets":[{"branch_id":left,"source_node_id":left_node,"expected_node_id":left_node}],"add":[bad],"remove":[],"operation_id":new_id("op")}))).await.0,StatusCode::BAD_REQUEST);
@@ -484,7 +489,9 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     select(&app, &token, file, &right).await;
     manager_upload(&app, &token, "renamed.txt", b"right body").await;
     let right_history = history(&app, &token, file).await;
-    let right_node = right_history["node_id"].as_str().unwrap();
+    let right_node = right_history["context"]["current_node_id"]
+        .as_str()
+        .unwrap();
     let merge_route = format!("/api/file-manager/files/{file}/merge");
     let request = json!({"inputs":[{"branch_id":left,"expected_node_id":left_node},{"branch_id":right,"expected_node_id":right_node}],"chosen_node_id":tag_node,"surviving_branch_id":left,"confirmed":true,"repository_id":repo,"path":"renamed.txt","operation_id":new_id("op")});
     let mut unconfirmed = request.clone();
@@ -511,9 +518,9 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     let node = merged["result"]["node_id"].as_str().unwrap();
     assert!(node.starts_with("fmeta_"));
     let after = history(&app, &token, file).await;
-    assert_eq!(after["versions"].as_array().unwrap().len(), 3);
-    assert_eq!(after["node_id"], node);
-    assert_eq!(after["version_id"], base);
+    assert_eq!(content_nodes(&after).len(), 3);
+    assert_eq!(after["context"]["current_node_id"], node);
+    assert_eq!(after["context"]["version_id"], base);
     let result = after["nodes"]
         .as_array()
         .unwrap()
@@ -535,7 +542,39 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     assert_eq!(alias["read_only"], true);
     assert_eq!(alias["alias_of"], left);
     assert_eq!(alias["node_id"], right_node);
+    assert!(alias.get("pending_file_versions").is_none());
     assert_eq!(after["merges"].as_array().unwrap().len(), 1);
+    let merge = &after["merges"][0];
+    assert_eq!(merge["result_node_id"], node);
+    assert_eq!(merge["chosen_node_id"], tag_node);
+    assert_eq!(merge["reused_node"], false);
+    assert_eq!(merge["input_count"], 2);
+    assert_eq!(merge["parent_count"], 3);
+    let merge_id = merge["merge_id"].as_str().unwrap();
+    let history_root = after["history_root"].as_str().unwrap();
+    let inputs = success(&app, &token, "GET", &format!("/api/file-manager/files/{file}/history/merges/{merge_id}/inputs?history_root={history_root}&limit=1"), None).await;
+    assert_eq!(inputs["total"], 2);
+    assert_eq!(
+        inputs["inputs"],
+        json!([{"index":0,"branch_id":left,"node_id":left_node}])
+    );
+    assert_eq!(inputs["next_offset"], 1);
+    let rest = success(&app, &token, "GET", &format!("/api/file-manager/files/{file}/history/merges/{merge_id}/inputs?history_root={history_root}&offset=1"), None).await;
+    assert_eq!(
+        rest["inputs"],
+        json!([{"index":1,"branch_id":right,"node_id":right_node}])
+    );
+    assert!(rest["next_offset"].is_null());
+    let stored_parents = success(&app, &token, "GET", &format!("/api/file-manager/files/{file}/history/merges/{merge_id}/parents?history_root={history_root}"), None).await;
+    assert_eq!(stored_parents["total"], 3);
+    assert_eq!(
+        node_parents(&app, &token, &after, node)
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
     assert_eq!(version_bytes(&app, &token, base).await, b"base body");
     assert_eq!(
         send(
@@ -563,7 +602,10 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     );
 
     let session = login(&app, "admin", "integration-test-password").await;
-    assert_eq!(history(&app, &session, file).await["node_id"], node);
+    assert_eq!(
+        history(&app, &session, file).await["context"]["current_node_id"],
+        node
+    );
     success(&app, &session, "POST", "/api/auth/logout", None).await;
     assert_eq!(
         send(
@@ -587,7 +629,31 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
                 .any(|event| event["action"] == action)
         );
     }
-    capture_wire("file-merge-tag-history.json", &after);
+    // Reviewed contract fixtures are the exact wire pages, never the
+    // assembled regression view built by `history_page`.
+    let wire_root = after["history_root"].as_str().unwrap();
+    for (name, route) in [
+        (
+            "file-merge-tag-history.json",
+            format!("/api/file-manager/files/{file}/history?limit=200"),
+        ),
+        (
+            "file-merge-tag-history-branches.json",
+            format!("/api/file-manager/files/{file}/history/branches?history_root={wire_root}"),
+        ),
+        (
+            "file-merge-tag-history-merges.json",
+            format!("/api/file-manager/files/{file}/history/merges?history_root={wire_root}"),
+        ),
+        (
+            "file-merge-tag-history-merge-inputs.json",
+            format!(
+                "/api/file-manager/files/{file}/history/merges/{merge_id}/inputs?history_root={wire_root}"
+            ),
+        ),
+    ] {
+        capture_wire(name, &success(&app, &token, "GET", &route, None).await);
+    }
     drop(app);
     let engine = reopen_after_router_drop(&root.path().join("system")).await;
     assert_eq!(engine.file_branch_head(&left).unwrap(), node);

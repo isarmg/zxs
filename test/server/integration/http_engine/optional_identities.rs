@@ -1392,28 +1392,75 @@ async fn typed_raw_file_history_http_preserves_version_records_and_path_binding(
         assert!(commit["namespace"]["root"]["hash"].is_string());
     }
     let file = entries[0]["file_id"].as_str().unwrap();
-    let history = success(
+    // Strict query membership is enforced before a bounded read.
+    let (status, error) = send(
         &app,
-        &token,
+        Some(&token),
         "GET",
         &format!("/api/files/{file}/history?file_id=missing&unused=yes"),
         None,
     )
     .await;
-    assert_eq!(history.as_object().unwrap().len(), 2);
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(error["error"]["code"], "INVALID_REQUEST");
+    let history = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/files/{file}/history"),
+        None,
+    )
+    .await;
+    assert_eq!(history.as_object().unwrap().len(), 6);
     assert_eq!(history["file_id"], file);
+    assert_eq!(history["history_root"].as_str().unwrap().len(), 64);
+    assert!(history["previous_cursor"].is_null() && history["next_cursor"].is_null());
     let versions = history["versions"].as_array().unwrap();
     assert_eq!(versions.len(), 2);
     assert_eq!(versions[0]["version_id"], entries[0]["version_id"]);
     assert_eq!(versions[1]["version_id"], entries[1]["version_id"]);
+    let root = history["history_root"].as_str().unwrap();
+
     for version in versions {
         assert!(version.get("content_state").is_none());
+        assert!(version.get("source_version_ids").is_none());
         assert!(version["version_sequence"].is_string());
         assert!(version["logical_size"].is_string());
         let id = version["version_id"].as_str().unwrap();
         let mut single = success(&app, &token, "GET", &format!("/api/versions/{id}"), None).await;
         single.as_object_mut().unwrap().remove("content_state");
-        assert_eq!(*version, single);
+        let sources = single
+            .as_object_mut()
+            .unwrap()
+            .remove("source_version_ids")
+            .unwrap();
+        let mut expected = version.clone();
+        let source_count = expected
+            .as_object_mut()
+            .unwrap()
+            .remove("source_count")
+            .unwrap();
+        assert_eq!(source_count, sources.as_array().unwrap().len());
+        assert_eq!(expected, single);
+        let listed = success(
+            &app,
+            &token,
+            "GET",
+            &format!("/api/files/{file}/history/versions/{id}/sources?history_root={root}"),
+            None,
+        )
+        .await;
+        assert_eq!(
+            Value::Array(
+                listed["sources"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|source| source["version_id"].clone())
+                    .collect()
+            ),
+            sources
+        );
     }
     let (status, error) = send(
         &app,
@@ -1424,7 +1471,7 @@ async fn typed_raw_file_history_http_preserves_version_records_and_path_binding(
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(error["error"]["message"], "file history not found");
+    assert_eq!(error["error"]["code"], "FILE_NOT_FOUND");
     let (status, _) = send(
         &app,
         None,

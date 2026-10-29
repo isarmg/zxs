@@ -20,7 +20,7 @@ FEATURES=((),('client','http1'),('server','http1'),('adapters',),('service-adapt
 NATIVE_ONLY={'tokio','client-legacy','full','rt-tracing-exec-force'}
 def run(work,*args,negative=False,env=None):
     try:
-        result=subprocess.run(['cargo',*args,'--color','never','--offline'],cwd=work,text=True,capture_output=True,timeout=600,env=env)
+        result=subprocess.run(['cargo',args[0],'--color','never','--offline',*args[1:]],cwd=work,text=True,capture_output=True,timeout=600,env=env)
     except subprocess.TimeoutExpired as error:
         print(f'HTTP transport Cargo command timed out after {error.timeout}s in {work}', file=sys.stderr, flush=True)
         # TimeoutExpired may carry bytes even when text=True. Preserve Cargo's
@@ -124,8 +124,19 @@ def main():
             f'http-body={{path={json.dumps(str(ROOT/"src/foundation/networking/http-body"))},features=["utilities"]}}\n'+
             f'service-stack={{path={json.dumps(str(ROOT/"src/foundation/networking/service-stack"))},features=["util"]}}\n'+
             '[[test]]\nname="behavior"\npath="test/behavior.rs"\n')
-        (work/'test/behavior.rs').write_bytes((ROOT/'test/architecture/http-transport/behavior.rs').read_bytes() + (ROOT/'test/architecture/http-transport/combined.rs').read_bytes() + (ROOT/'test/architecture/http-transport/upgrade.rs').read_bytes() + (ROOT/'test/architecture/http-transport/client_state.rs').read_bytes() + (ROOT/'test/architecture/http-transport/probe_timeout.rs').read_bytes())
-        run(work,'generate-lockfile');output=run(work,'test','--locked','--test','behavior')
-        assert re.search(r'test result: ok\. 25 passed; 0 failed',output),output
-        print(f'http-transport: {count} native/WASM feature checks, absent HTTP2 rejection, 25 transport/routing/readiness/upgrade/state tests, 2 FFI allocation/ABI tests, 6 retained primitive tests and 12 additional primitive contracts (including repeated races) passed')
+        (work/'test/behavior.rs').write_bytes((ROOT/'test/architecture/http-transport/behavior.rs').read_bytes() + (ROOT/'test/architecture/http-transport/combined.rs').read_bytes() + (ROOT/'test/architecture/http-transport/upgrade.rs').read_bytes() + (ROOT/'test/architecture/http-transport/client_state.rs').read_bytes() + (ROOT/'test/architecture/http-transport/probe_timeout.rs').read_bytes() + (ROOT/'test/architecture/http-transport/backport.rs').read_bytes())
+        run(work, 'generate-lockfile')
+        inventory = run(work, 'test', '--locked', '--test', 'behavior', '--', '--list')
+        print(inventory, flush=True)
+        expected = re.findall(r'^(.+): test$', inventory, re.M)
+        assert len(expected) == len(set(expected)) == 30, inventory
+        output = run(work, 'test', '--locked', '--test', 'behavior', '--', '--format', 'pretty')
+        print(output, flush=True)
+        executed = re.findall(r'^test (.+) \.\.\. ok$', output, re.M)
+        assert sorted(executed) == sorted(expected), output
+        assert re.search(
+            r'^test result: ok\. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;',
+            output, re.M,
+        ), output
+        print(f'http-transport: {count} native/WASM feature checks, absent HTTP2 rejection, 30 transport/routing/readiness/upgrade/state/shutdown tests, 2 FFI allocation/ABI tests, 6 retained primitive tests and 12 additional primitive contracts (including repeated races) passed')
 if __name__=='__main__':main()

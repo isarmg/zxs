@@ -52062,7 +52062,7 @@
   },
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "cf85f72fb40b8d9a90ac77d7a6df9a6d1c649a00bba9f6636901721e6d5c9d98",
-    "compliance/external-tests/foundation.json": "7708c4e638e3720df46ca9e7d871aae0f481e2350e371291b5595226278bec51",
+    "compliance/external-tests/foundation.json": "6ecd5d92ea1abf4eecfac2d2b8f3f9cf3ea17175f8e929a7e20969094cd8ec7a",
     "compliance/external-tests/integrated.json": "128a6f976b999e4f11d112044226942671c45c46a589c1d93753cb39dc2d02f0",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
@@ -71088,7 +71088,7 @@
       ]
     },
     "src/foundation/networking/http-transport": {
-      "bytes": 361622,
+      "bytes": 367070,
       "directory": "src/foundation/networking/http-transport",
       "file_count": 56,
       "files": [
@@ -71452,7 +71452,7 @@
         {
           "origin_directory": "vendor/rust/hyper-1.12.0",
           "path": "test/foundation/http-transport/unit/src/proto/h1/dispatch/tests_770.rs",
-          "sha256": "c416db40350a1066838f29926942044fcf9d29e52b9e2cd3da4c936cff502708",
+          "sha256": "af04fbdd307cd0140214b2abdbc1412e23b694396e5dcaf80035fb2598d0a2e5",
           "source": "src/foundation/hyper/src/proto/h1/dispatch.rs",
           "source_sha256_before": "9cd6638c59ae4857ae43ee58857abf585cc6a52dfda616c3631e2e48c02eaba2"
         },
@@ -79375,7 +79375,8 @@
   "foundation_layout_receipt": "5f02def35b57751ea9e54a2f1f22fdfebdbd6dda1ed910de7f8fa805f55e281d",
   "initial_test_relocation_sha256": "791ad728a408677dd54ef98e3feaffe825c5fc5670e888440615933d9498ecc3",
   "legacy_proof_maintenance_receipts": [
-    "e37e4ee6074dabae4638f15f4926b9af9c67c0b100fd2d7db4e45d323be61509"
+    "e37e4ee6074dabae4638f15f4926b9af9c67c0b100fd2d7db4e45d323be61509",
+    "c75e73b0b8aab76fc3934f6c72620127795b8c95ec7bc0f52d173664e477938d"
   ],
   "lockfiles_sha256": {
     "Cargo.lock": "ebbc4b0218be3809d1291e479a4cdf66bf01b432c5dee30e4186ae3a5120fa25"
@@ -84478,7 +84479,7 @@
         "src/cfg.rs": "af436e119e99f66953599ebbb6be0f01c70a5975351e2bbe2eb96df0109b91b3",
         "src/client/conn/http1.rs": "23248ac4a23c6f92b74c10fd3e93761bbd3653446bd581e105525a42e13ce84b",
         "src/client/conn/mod.rs": "8156d873de684c8cc5eaa2f0bc4ec1e07c071dd2f92978236a8af21f8cd5de9f",
-        "src/client/dispatch.rs": "0a941322da3f95a43fed7a99a4736c7d952f87eb834c21bfce8ed5548268f1f1",
+        "src/client/dispatch.rs": "2b409d958ccf03b46c2de2991f68dd4c37d9b88223da963ebce5231f3480b71b",
         "src/client/mod.rs": "b4309054225dc6d25dc85f4fdcf2fd9562d2833a6cd5f3c2a064c320325da107",
         "src/common/buf.rs": "a1352258183b0c9ef71336b9b7bb124c3ee7b2980cabf3a5df7b68168ff7d0a7",
         "src/common/date.rs": "d0fb099700660498defe76ecccf236162b053d16674b6487a7d24967ed068e50",
@@ -84510,7 +84511,7 @@
         "src/lib.rs": "b8d14575914412d7b692b31d4c75311e58ece46cd5853fef0f6faa833ecffbda",
         "src/proto/h1/conn.rs": "21b373f0b60322137ad9bbe21a9b6b1843dd3547be93efee1b09fad4efb223fc",
         "src/proto/h1/decode.rs": "9693f4d4fbb7efdf2cebb307cee1d9290e831c85ecdb6b6dfe644c8a94fc70d0",
-        "src/proto/h1/dispatch.rs": "80445ea5dcf0d5937dced03dc38613c0a810f8a5b2639c3bb0e8d904a99ad0a9",
+        "src/proto/h1/dispatch.rs": "a311c03e9973c2377c801de15f0b19372ce782c12f1188e63dc9f1f51b4d70fa",
         "src/proto/h1/encode.rs": "9aef8f2921e7f469531db03beda0b1d1546c11958d2c77734f70827b46975670",
         "src/proto/h1/io.rs": "6527c39b4f1d0000b16a7f62d73ae61ef9aa47079956fb0d9c6bb0a19e2485f3",
         "src/proto/h1/mod.rs": "7b6c67444fe2290284b49992ccdb02896a26b4c60fc867cd9fedd954be6856fb",
@@ -88189,7 +88190,7 @@
         "src/cfg.rs": "af436e119e99f66953599ebbb6be0f01c70a5975351e2bbe2eb96df0109b91b3",
         "src/client/conn/http1.rs": "23248ac4a23c6f92b74c10fd3e93761bbd3653446bd581e105525a42e13ce84b",
         "src/client/conn/mod.rs": "8156d873de684c8cc5eaa2f0bc4ec1e07c071dd2f92978236a8af21f8cd5de9f",
-        "src/client/dispatch.rs": "0a941322da3f95a43fed7a99a4736c7d952f87eb834c21bfce8ed5548268f1f1",
+        "src/client/dispatch.rs": "2b409d958ccf03b46c2de2991f68dd4c37d9b88223da963ebce5231f3480b71b",
         "src/client/mod.rs": "b4309054225dc6d25dc85f4fdcf2fd9562d2833a6cd5f3c2a064c320325da107",
         "src/common/buf.rs": "a1352258183b0c9ef71336b9b7bb124c3ee7b2980cabf3a5df7b68168ff7d0a7",
         "src/common/date.rs": "d0fb099700660498defe76ecccf236162b053d16674b6487a7d24967ed068e50",
@@ -88221,7 +88222,7 @@
         "src/lib.rs": "b8d14575914412d7b692b31d4c75311e58ece46cd5853fef0f6faa833ecffbda",
         "src/proto/h1/conn.rs": "21b373f0b60322137ad9bbe21a9b6b1843dd3547be93efee1b09fad4efb223fc",
         "src/proto/h1/decode.rs": "9693f4d4fbb7efdf2cebb307cee1d9290e831c85ecdb6b6dfe644c8a94fc70d0",
-        "src/proto/h1/dispatch.rs": "80445ea5dcf0d5937dced03dc38613c0a810f8a5b2639c3bb0e8d904a99ad0a9",
+        "src/proto/h1/dispatch.rs": "a311c03e9973c2377c801de15f0b19372ce782c12f1188e63dc9f1f51b4d70fa",
         "src/proto/h1/encode.rs": "9aef8f2921e7f469531db03beda0b1d1546c11958d2c77734f70827b46975670",
         "src/proto/h1/io.rs": "6527c39b4f1d0000b16a7f62d73ae61ef9aa47079956fb0d9c6bb0a19e2485f3",
         "src/proto/h1/mod.rs": "7b6c67444fe2290284b49992ccdb02896a26b4c60fc867cd9fedd954be6856fb",
@@ -88323,7 +88324,7 @@
         "src/cfg.rs": "af436e119e99f66953599ebbb6be0f01c70a5975351e2bbe2eb96df0109b91b3",
         "src/client/conn/http1.rs": "23248ac4a23c6f92b74c10fd3e93761bbd3653446bd581e105525a42e13ce84b",
         "src/client/conn/mod.rs": "8156d873de684c8cc5eaa2f0bc4ec1e07c071dd2f92978236a8af21f8cd5de9f",
-        "src/client/dispatch.rs": "0a941322da3f95a43fed7a99a4736c7d952f87eb834c21bfce8ed5548268f1f1",
+        "src/client/dispatch.rs": "2b409d958ccf03b46c2de2991f68dd4c37d9b88223da963ebce5231f3480b71b",
         "src/client/mod.rs": "b4309054225dc6d25dc85f4fdcf2fd9562d2833a6cd5f3c2a064c320325da107",
         "src/common/buf.rs": "a1352258183b0c9ef71336b9b7bb124c3ee7b2980cabf3a5df7b68168ff7d0a7",
         "src/common/date.rs": "d0fb099700660498defe76ecccf236162b053d16674b6487a7d24967ed068e50",
@@ -88355,7 +88356,7 @@
         "src/lib.rs": "b8d14575914412d7b692b31d4c75311e58ece46cd5853fef0f6faa833ecffbda",
         "src/proto/h1/conn.rs": "21b373f0b60322137ad9bbe21a9b6b1843dd3547be93efee1b09fad4efb223fc",
         "src/proto/h1/decode.rs": "9693f4d4fbb7efdf2cebb307cee1d9290e831c85ecdb6b6dfe644c8a94fc70d0",
-        "src/proto/h1/dispatch.rs": "80445ea5dcf0d5937dced03dc38613c0a810f8a5b2639c3bb0e8d904a99ad0a9",
+        "src/proto/h1/dispatch.rs": "a311c03e9973c2377c801de15f0b19372ce782c12f1188e63dc9f1f51b4d70fa",
         "src/proto/h1/encode.rs": "9aef8f2921e7f469531db03beda0b1d1546c11958d2c77734f70827b46975670",
         "src/proto/h1/io.rs": "6527c39b4f1d0000b16a7f62d73ae61ef9aa47079956fb0d9c6bb0a19e2485f3",
         "src/proto/h1/mod.rs": "7b6c67444fe2290284b49992ccdb02896a26b4c60fc867cd9fedd954be6856fb",
@@ -88457,7 +88458,7 @@
         "src/cfg.rs": "af436e119e99f66953599ebbb6be0f01c70a5975351e2bbe2eb96df0109b91b3",
         "src/client/conn/http1.rs": "23248ac4a23c6f92b74c10fd3e93761bbd3653446bd581e105525a42e13ce84b",
         "src/client/conn/mod.rs": "8156d873de684c8cc5eaa2f0bc4ec1e07c071dd2f92978236a8af21f8cd5de9f",
-        "src/client/dispatch.rs": "0a941322da3f95a43fed7a99a4736c7d952f87eb834c21bfce8ed5548268f1f1",
+        "src/client/dispatch.rs": "2b409d958ccf03b46c2de2991f68dd4c37d9b88223da963ebce5231f3480b71b",
         "src/client/mod.rs": "b4309054225dc6d25dc85f4fdcf2fd9562d2833a6cd5f3c2a064c320325da107",
         "src/common/buf.rs": "a1352258183b0c9ef71336b9b7bb124c3ee7b2980cabf3a5df7b68168ff7d0a7",
         "src/common/date.rs": "d0fb099700660498defe76ecccf236162b053d16674b6487a7d24967ed068e50",
@@ -88489,7 +88490,7 @@
         "src/lib.rs": "b8d14575914412d7b692b31d4c75311e58ece46cd5853fef0f6faa833ecffbda",
         "src/proto/h1/conn.rs": "21b373f0b60322137ad9bbe21a9b6b1843dd3547be93efee1b09fad4efb223fc",
         "src/proto/h1/decode.rs": "9693f4d4fbb7efdf2cebb307cee1d9290e831c85ecdb6b6dfe644c8a94fc70d0",
-        "src/proto/h1/dispatch.rs": "80445ea5dcf0d5937dced03dc38613c0a810f8a5b2639c3bb0e8d904a99ad0a9",
+        "src/proto/h1/dispatch.rs": "a311c03e9973c2377c801de15f0b19372ce782c12f1188e63dc9f1f51b4d70fa",
         "src/proto/h1/encode.rs": "9aef8f2921e7f469531db03beda0b1d1546c11958d2c77734f70827b46975670",
         "src/proto/h1/io.rs": "6527c39b4f1d0000b16a7f62d73ae61ef9aa47079956fb0d9c6bb0a19e2485f3",
         "src/proto/h1/mod.rs": "7b6c67444fe2290284b49992ccdb02896a26b4c60fc867cd9fedd954be6856fb",
@@ -97129,7 +97130,7 @@
         "src/cfg.rs": "af436e119e99f66953599ebbb6be0f01c70a5975351e2bbe2eb96df0109b91b3",
         "src/client/conn/http1.rs": "23248ac4a23c6f92b74c10fd3e93761bbd3653446bd581e105525a42e13ce84b",
         "src/client/conn/mod.rs": "8156d873de684c8cc5eaa2f0bc4ec1e07c071dd2f92978236a8af21f8cd5de9f",
-        "src/client/dispatch.rs": "0a941322da3f95a43fed7a99a4736c7d952f87eb834c21bfce8ed5548268f1f1",
+        "src/client/dispatch.rs": "2b409d958ccf03b46c2de2991f68dd4c37d9b88223da963ebce5231f3480b71b",
         "src/client/mod.rs": "b4309054225dc6d25dc85f4fdcf2fd9562d2833a6cd5f3c2a064c320325da107",
         "src/common/buf.rs": "a1352258183b0c9ef71336b9b7bb124c3ee7b2980cabf3a5df7b68168ff7d0a7",
         "src/common/date.rs": "d0fb099700660498defe76ecccf236162b053d16674b6487a7d24967ed068e50",
@@ -97161,7 +97162,7 @@
         "src/lib.rs": "b8d14575914412d7b692b31d4c75311e58ece46cd5853fef0f6faa833ecffbda",
         "src/proto/h1/conn.rs": "21b373f0b60322137ad9bbe21a9b6b1843dd3547be93efee1b09fad4efb223fc",
         "src/proto/h1/decode.rs": "9693f4d4fbb7efdf2cebb307cee1d9290e831c85ecdb6b6dfe644c8a94fc70d0",
-        "src/proto/h1/dispatch.rs": "80445ea5dcf0d5937dced03dc38613c0a810f8a5b2639c3bb0e8d904a99ad0a9",
+        "src/proto/h1/dispatch.rs": "a311c03e9973c2377c801de15f0b19372ce782c12f1188e63dc9f1f51b4d70fa",
         "src/proto/h1/encode.rs": "9aef8f2921e7f469531db03beda0b1d1546c11958d2c77734f70827b46975670",
         "src/proto/h1/io.rs": "6527c39b4f1d0000b16a7f62d73ae61ef9aa47079956fb0d9c6bb0a19e2485f3",
         "src/proto/h1/mod.rs": "7b6c67444fe2290284b49992ccdb02896a26b4c60fc867cd9fedd954be6856fb",

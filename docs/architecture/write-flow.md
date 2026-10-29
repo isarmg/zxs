@@ -41,7 +41,7 @@ sequenceDiagram
 
 ## 2. 准备正文与元数据
 
-[prepare_publication](../../src/engine/src/engine/publication.rs) 检查指定路由容量、元数据预留、候选对象大小与哈希。正文按每个文件的版本顺序及保护路由复制，独立文件使用有界并行。已存在正文也必须校验。准备将完整正文及不可变元数据写到目标盘，但不写任何决定日志。
+[prepare_publication](../../src/engine/src/engine/publication.rs) 检查指定路由容量、元数据预留、候选对象大小与哈希。正文保持同文件版本顺序；优化包络内独立文件与同版本各目标有界并行，超出包络保留串行复制，不降低文件或路由能力。已有正文及后续验证仍完整校验。准备将完整正文及不可变元数据写到目标盘，但不写任何决定日志；所有目标封存后才发布正文名称。资源预算见 [ADR 0012](../adr/0012-parallel-publication-stages.md)。
 
 准备持有与候选、磁盘和实际文件绑定的校验证据。大批量达到句柄上限时采用完整重读回退，不能假定决定阶段始终没有正文 I/O。取消或过期准备可能留下未引用不可变对象，不会自动发布。
 
@@ -50,6 +50,8 @@ sequenceDiagram
 [decide_publication](../../src/engine/src/engine/publication.rs) 先复查根目录、快照、序号、决定槽、配置、正文凭据与空间。失配返回可重试的 `PREPARATION_STALE`；尚未写 ACCEPT。各成员写入 Candidate 与 PREPARE 后，进入可能产生不可撤销决定的区域。
 
 [complete_candidate_verified](../../src/engine/src/engine/publication.rs) 收集 ACCEPT、写 FINALIZE，再同步名称和正文提交证明，形成包含结果及各类收据的 Publication。全部配置成员 PUBLICATION、PublicationSeal 和正文盘本地发布证明都完成后，才替换内存状态并更新 [SQLite 投影](../../src/engine/src/engine/index.rs)。SQLite 仍是可重建投影，权威证据在日志及不可变对象中。
+
+同阶段不同成员并行，同盘日志及证明顺序不变；下一阶段必须等待全部已启动任务结束并 join。Names 保持串行。失败可能留下非前缀成功成员集合，恢复仍按认证成员集合判断，不按循环前缀推断，也不撤回已持久化决定。
 
 ## 4. 失败后怎么判断
 

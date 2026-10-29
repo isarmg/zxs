@@ -314,8 +314,10 @@ fn failed_publication_reconciliation_retries_without_restaging_or_second_version
                 .find(&name_policy::LookupPath::parse("report.txt").unwrap())
                 .unwrap()
                 .unwrap();
-            let history = backend.file_history(&one.identity, &entry.file_id).unwrap();
-            assert_eq!(history.len(), 2);
+            assert_eq!(
+                super::version_count(backend.as_ref(), &one.identity, &entry.file_id),
+                2
+            );
             one.close(opened.handle, false).unwrap();
         }
     }

@@ -1,16 +1,15 @@
 use super::page::Entry;
 use super::{
-    actions, backup, batch, branch, inline, merge,
+    actions, backup, batch, branch,
+    history::state::HistoryState,
+    inline, merge,
     model::{
-        Model, branch_name, history_nodes_ref, join_path, selected_branch,
-        selected_entry_read_only, selected_file_branch_record,
+        Model, branch_name, join_path, selected_branch, selected_entry_read_only,
+        selected_file_branch_record,
     },
     tags, version_tree,
 };
-use crate::{
-    icons::FileIcon,
-    ui::{State, text},
-};
+use crate::{icons::FileIcon, ui::State};
 use web_interface::components::{EmptyState, LoadingState, Select, SelectOption};
 use web_interface::{i18n::t, prelude::*};
 
@@ -83,22 +82,50 @@ fn detail_selection(state: RwSignal<State>) -> Memo<Option<Selection>> {
     Memo::new(move |_| state.with(Selection::capture))
 }
 
+/// The file note is editable only on a current (not stale) resident page.
 fn file_note_ready(model: &Model) -> bool {
-    !model.history_loading && model.file_history["note"].is_string()
+    !model.history.loading() && model.history.loaded().is_some()
 }
-fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
-    let is_file = selection.kind == storage_contract::NamespaceEntryKind::File;
-    let folder_path = selection.path.clone();
-    let folder_select_path = folder_path.clone();
-    let selection = StoredValue::new(selection);
-    let entry = Memo::new(move |_| {
-        state.with(|s| selection.with_value(|selection| selection.entry(s).cloned()))
-    });
-    let options = Signal::derive(move || {
-        state.with(|s| {
-            s.files
-                .file_history
-                .branches()
+
+/// What the version-history section says about the window's state. "No
+/// history" is claimed only by a complete first page without continuation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum HistoryNotice {
+    Loading,
+    Empty,
+    Failed(String),
+    Stale(super::history::state::StaleReason),
+    Loaded,
+    Unloaded,
+}
+fn history_notice(model: &Model) -> HistoryNotice {
+    match &model.history.state {
+        HistoryState::Unloaded => HistoryNotice::Unloaded,
+        HistoryState::Loading { .. } => HistoryNotice::Loading,
+        HistoryState::Failed(error) => HistoryNotice::Failed(error.to_string()),
+        HistoryState::Stale { reason, .. } => HistoryNotice::Stale(*reason),
+        HistoryState::Loaded(window) if window.has_no_history() => HistoryNotice::Empty,
+        HistoryState::Loaded(_) => HistoryNotice::Loaded,
+    }
+}
+
+fn stale_message(reason: super::history::state::StaleReason) -> String {
+    match reason {
+        super::history::state::StaleReason::RootChanged => t(
+            "历史已变化，请刷新。",
+            "The history changed. Refresh to continue.",
+        ),
+    }
+}
+
+/// Branch selector options come from the resident branch page, which is
+/// loaded lazily once the detail view has a current window.
+fn branch_options(model: &Model) -> Vec<SelectOption> {
+    let mut options: Vec<_> = model
+        .history
+        .branch_page()
+        .map(|page| {
+            page.branches()
                 .iter()
                 .map(|branch| {
                     let readonly = !branch.writable();
@@ -111,16 +138,53 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                     option.disabled = readonly;
                     option
                 })
-                .collect::<Vec<_>>()
+                .collect()
         })
+        .unwrap_or_default();
+    let selected = selected_branch(model);
+    if !selected.is_empty() && !options.iter().any(|option| option.value == selected) {
+        let mut current = SelectOption::new(
+            selected.clone(),
+            format!(
+                "{}: {selected} · {}",
+                t("已选分支", "Selected branch"),
+                t("不在本页", "Outside this page")
+            ),
+        );
+        current.disabled = true;
+        options.insert(0, current);
+    }
+    options
+}
+fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
+    let is_file = selection.kind == storage_contract::NamespaceEntryKind::File;
+    let folder_path = selection.path.clone();
+    let folder_select_path = folder_path.clone();
+    let selection = StoredValue::new(selection);
+    let entry = Memo::new(move |_| {
+        state.with(|s| selection.with_value(|selection| selection.entry(s).cloned()))
+    });
+    let options = Signal::derive(move || state.with(|s| branch_options(&s.files)));
+    // The branch page is fetched once the window is current and no page is
+    // resident; replacing the window drops it and this effect refetches.
+    let branch_page_demand = Memo::new(move |_| {
+        state.with(|s| is_file && s.files.open_editors == 0 && s.files.history.needs_branches())
+    });
+    Effect::new(move |_| {
+        if branch_page_demand.get() {
+            actions::load_history_branches(state, None);
+        }
     });
     let value = Signal::derive(move || state.with(|s| selected_branch(&s.files)));
     let rename_branch = Memo::new(move |_| state.with(|s| selected_file_branch_record(&s.files)));
     let disabled = Signal::derive(move || {
         state.with(|s| {
             !actions::write_allowed(s)
-                || s.files.history_loading
-                || s.files.file_history.branches().is_empty()
+                || s.files.history.loading()
+                || s.files
+                    .history
+                    .branch_page()
+                    .is_none_or(|page| page.branches().is_empty())
         })
     });
     let merge_disabled = Signal::derive(move || {
@@ -157,6 +221,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
     let current_branch_disabled = Signal::derive(move || {
         mutation_disabled.get() || !content_ready.get() || state.with(|s| s.files.loading)
     });
+    let notice = Memo::new(move |_| state.with(|s| history_notice(&s.files)));
     view! {
         <article class="zxs-content-panel zxs-entry-content zxs-frame zxs-stack" aria-label=t("文件详情","File details")>
             <div class="zxs-file-heading zxs-flow"><h2 class="zxs-row">{move ||entry.with(|entry|entry.as_ref().map(|entry|entry.name().to_owned()).unwrap_or_default())}</h2><div class="zxs-entry-actions zxs-flow">
@@ -169,20 +234,28 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
             <dl class="zxs-file-properties"><div><dt class="zxs-row">{t("位置","Location")}</dt><dd class="zxs-row">{move ||entry.with(|entry|entry.as_ref().map(|entry|join_path(&state.with(|s|s.files.slot.clone()),entry.path())).unwrap_or_default())}</dd></div><div><dt class="zxs-row">{t("类型","Type")}</dt><dd class="zxs-row">{if is_file{t("文件","File")}else{t("文件夹","Folder")}}</dd></div></dl>
             {(!is_file).then(move ||view!{<Show when=move ||can_modify.get()><section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("目录分支","Folder branches")}</h3><p class="zxs-row">{t("目录分支记录此目录及子目录的文件分支组合，不创建目录私有的文件分支。修改只在当前分支追加子树节点；切换恢复所选组合，未写入的文件继续显示父版本，目录外文件保持不变。","A folder branch records the shared file branch combination in this folder and its subfolders. Changes append subtree nodes within the current branch. Switching restores the selected combination; unwritten files inherit their parent versions and files outside the folder are unchanged.")}</p><div class="zxs-file-toolbar zxs-flow">{branch::control(state,t("创建目录分支","Create folder branch"),branch::Target::Directory{path:folder_path.clone(),select:false},mutation_disabled)}{branch::control(state,t("切换目录分支","Switch folder branch"),branch::Target::Directory{path:folder_select_path.clone(),select:true},mutation_disabled)}</div><p class="zxs-row">{t("目录分支合并待确认，暂不提供操作。","Folder branch merging awaits confirmation.")}</p></section></Show>})}
             {is_file.then(move ||view! {
-                <section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("文件备注","File note")}</h3><Show when=move ||can_modify.get() fallback=move ||view!{<p class="zxs-row">{move ||state.with(|s|text(&s.files.file_history,&["note"]))}</p>}>{inline::control(state,t("编辑文件备注","Edit file note"),None,inline::Target::FileNote,note_disabled)}</Show></section>
+                <section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("文件备注","File note")}</h3><Show when=move ||can_modify.get() fallback=move ||view!{<p class="zxs-row">{move ||state.with(|s|s.files.history.window().map(|window|window.context.note.clone()).unwrap_or_default())}</p>}>{inline::control(state,t("编辑文件备注","Edit file note"),None,inline::Target::FileNote,note_disabled)}</Show></section>
                 <Show when=move ||inherited.get()><p class="zxs-row" role="status">{t("此分支尚未写入，正在显示父版本的元数据；通过 SMB 写入后才保存本分支自己的版本。","This unwritten branch displays its parent version’s metadata. Writing through SMB creates this branch’s own version.")}</p></Show>
                 <Show when=move ||can_modify.get()><section class="zxs-entry-section zxs-file-branches zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("文件分支","File branches")}</h3><p class="zxs-row">{t("创建时只登记分支并引用父节点，不创建占位文件或复制正文。首次写入后形成自己的版本；切换只更新当前目录的文件引用。","Creating a branch only registers a reference to its parent node, without placeholders or copied content. The first write creates its own version; switching updates only this folder’s file reference.")}</p>
                     <div class="zxs-file-toolbar zxs-flow"><Select label=t("当前分支","Current branch") options=options value=value disabled=disabled placeholder=t("主版本","Main") on_change=Callback::new(move |branch:String|actions::select_branch(state,branch))/>
                         {move ||rename_branch.get().map(|(file,branch_id,name)|inline::control(state,t("重命名文件分支","Rename file branch"),Some("rename"),inline::Target::RenameFileBranch{file,branch_id,name},disabled))}
                     </div>
+                    {branch::paging(state)}
                     <div class="zxs-file-toolbar zxs-flow">{branch::control(state,t("从当前内容创建分支","Branch from current content"),branch::Target::CurrentFileVersion,current_branch_disabled)}<button class="zxs-button" disabled=move ||merge_disabled.get() on:click=move |_|merge::start(state)>{t("合并文件分支","Merge file branches")}</button></div>
                     {merge::view(state)}
                 </section></Show>
-                <section class="zxs-entry-section zxs-entry-version-history zxs-stack"><h3 class="zxs-row">{t("版本历史","Version history")}</h3><Show when=move ||state.with(|s|s.files.history_loading)><LoadingState/></Show>
+                <section class="zxs-entry-section zxs-entry-version-history zxs-stack"><h3 class="zxs-row">{t("版本历史","Version history")}</h3>
+                    {move ||match notice.get() {
+                        HistoryNotice::Loading => view!{<LoadingState/>}.into_any(),
+                        HistoryNotice::Stale(reason) => view!{<p class="zxs-row zxs-inline-error" role="status">{stale_message(reason)}<button class="zxs-button" on:click=move |_|actions::refresh_history(state)>{t("刷新历史","Refresh history")}</button></p>}.into_any(),
+                        HistoryNotice::Failed(message) => view!{<p class="zxs-row zxs-inline-error" role="status">{format!("{} {message}",t("历史读取失败。","The history could not be read."))}<button class="zxs-button" on:click=move |_|actions::refresh_history(state)>{t("重试","Retry")}</button></p>}.into_any(),
+                        HistoryNotice::Unloaded => view!{<p class="zxs-row">{t("历史尚未加载。","The history has not been loaded.")}</p>}.into_any(),
+                        HistoryNotice::Empty | HistoryNotice::Loaded => ().into_any(),
+                    }}
                     <Show when=move ||can_modify.get()>{tags::view(state)}</Show>
                     {version_tree::view(state)}
-                    {merge::history()}
-                    <Show when=move ||state.with(|s|!s.files.history_loading&&history_nodes_ref(&s.files.file_history).is_empty())><p class="zxs-row">{t("尚无版本记录。","No versions have been recorded.")}</p></Show>
+                    {merge::history(state)}
+                    <Show when=move ||notice.with(|notice|*notice==HistoryNotice::Empty)><p class="zxs-row">{t("尚无版本记录。","No versions have been recorded.")}</p></Show>
                 </section>
             })}
         </article>

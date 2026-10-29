@@ -1,4 +1,5 @@
 use super::*;
+use crate::backend_activity::utc_timestamp;
 use storage_contract::{CommitRequest, Config, FileTagTarget};
 
 #[test]
@@ -86,14 +87,14 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
         .unwrap();
     let before = json_codec::to_value(engine.state()).unwrap();
     let history = storage_contract::strict_json(
-        &json_codec::to_vec(&crate::backend_file_history::FileHistoryResponse::from(
-            file_history(
-                &engine,
-                crate::ReadFileHistory::parse(entry.file_id.clone(), None, None).unwrap(),
-            )
-            .unwrap(),
-        ))
-        .unwrap(),
+        history_pages::file_history(
+            &engine,
+            crate::ReadFileHistory::parse(entry.file_id.clone(), BTreeMap::new()).unwrap(),
+        )
+        .unwrap()
+        .encode(crate::backend_file_history::PageBudget::PROTOCOL)
+        .unwrap()
+        .body(),
     )
     .unwrap();
     let nodes = history["nodes"].as_array().unwrap();

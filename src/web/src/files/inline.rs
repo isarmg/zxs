@@ -1,9 +1,10 @@
 //! Single-line metadata edits share the branch editor's commit/cancel behavior.
-use super::{actions, model::NamespaceAction};
-use crate::{
-    icons::FileIcon,
-    ui::{State, text},
+use super::{
+    actions,
+    history::{NodeKind, WindowIdentity},
+    model::NamespaceAction,
 };
+use crate::{icons::FileIcon, ui::State};
 use web_interface::{html, i18n::t, prelude::*};
 
 // Branch labels and notes retain their metadata budget; namespace names use name-policy.
@@ -62,56 +63,58 @@ impl Target {
             Self::RenameDirectoryBranch { name, .. } | Self::RenameFileBranch { name, .. } => {
                 name.clone()
             }
-            Self::FileNote => state.files.file_history["note"]
-                .as_str()
-                .or_else(|| state.files.selected.as_ref().and_then(|entry| entry.note()))
-                .unwrap_or_default()
-                .to_owned(),
-            Self::NodeNote(id) => super::model::history_nodes_ref(&state.files.file_history)
-                .iter()
-                .find(|node| super::model::history_node_id(node) == *id)
-                .map(|node| text(node, &["note"]))
+            Self::FileNote => state
+                .files
+                .history
+                .window()
+                .map(|window| window.context.note.clone())
+                .or_else(|| {
+                    state
+                        .files
+                        .selected
+                        .as_ref()
+                        .and_then(|entry| entry.note().map(str::to_owned))
+                })
                 .unwrap_or_default(),
-            Self::VersionNote(id) => state.files.file_history["versions"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|version| text(version, &["version_id"]) == *id)
-                .map(|version| text(version, &["note"]))
+            // Both targets read the resident page; a content node's version
+            // note lives on the node whose id is that version.
+            Self::NodeNote(id) | Self::VersionNote(id) => state
+                .files
+                .history
+                .window()
+                .and_then(|window| window.node(id).map(|node| node.note.clone()))
                 .unwrap_or_default(),
         }
     }
 
     fn display(&self, history: &super::history_index::HistoryIndex) -> String {
         let node = match self {
-            Self::NodeNote(id) => history.node(id).map(|(_, node)| node),
-            Self::VersionNote(id) => history.version(id),
+            Self::NodeNote(id) | Self::VersionNote(id) => history.node(id).map(|(_, node)| node),
             _ => unreachable!("invariant: version note displays only node or version metadata"),
         };
-        let value = node.map(|node| text(node, &["note"])).unwrap_or_default();
-        if !value.is_empty() {
-            return value;
+        let Some(node) = node else {
+            return t("无备注", "No note");
+        };
+        if !node.note.is_empty() {
+            return node.note.clone();
         }
-        if matches!(self, Self::NodeNote(_))
-            && let Some(node) = node
-        {
-            match node["kind"].as_str().unwrap_or_default() {
-                "tags" => return t("标签变化", "Tags changed"),
-                "merge" => return t("合并分支", "Merged branches"),
-                _ => {}
+        match node.kind {
+            NodeKind::Tags => t("标签变化", "Tags changed"),
+            NodeKind::Merge => t("合并分支", "Merged branches"),
+            NodeKind::Rename => {
+                let previous = node.previous_path.as_deref().unwrap_or_default();
+                let path = node.path.as_str();
+                let action = if previous.rsplit_once('/').map(|(parent, _)| parent)
+                    == path.rsplit_once('/').map(|(parent, _)| parent)
+                {
+                    t("改名", "Renamed")
+                } else {
+                    t("路径变化", "Path changed")
+                };
+                format!("{action} {previous} → {path}")
             }
-            let previous = text(node, &["previous_path"]);
-            let path = text(node, &["path"]);
-            let action = if previous.rsplit_once('/').map(|(parent, _)| parent)
-                == path.rsplit_once('/').map(|(parent, _)| parent)
-            {
-                t("改名", "Renamed")
-            } else {
-                t("路径变化", "Path changed")
-            };
-            return format!("{action} {previous} → {path}");
+            NodeKind::Content => t("无备注", "No note"),
         }
-        t("无备注", "No note")
     }
 
     fn submit(self, state: RwSignal<State>, value: String) -> Option<String> {
@@ -190,6 +193,10 @@ struct Context {
     repository: String,
     directory_branch: String,
     selected: Option<(String, String, String, String, String)>,
+    /// Identity of the resident history page. Replacing the page (paging,
+    /// refresh on a new root, stale root) cancels editors anchored to it, so
+    /// typed text is never attached to a node that is no longer resident.
+    window: Option<WindowIdentity>,
 }
 impl Context {
     fn capture(state: &State) -> Self {
@@ -200,6 +207,7 @@ impl Context {
             slot: state.files.slot.clone(),
             directory: state.files.directory.clone(),
             repository: state.files.repository_id.clone(),
+            window: state.files.history.loaded().map(|window| window.identity()),
             directory_branch: state
                 .files
                 .directory_branches
@@ -267,6 +275,10 @@ impl Draft {
     }
 
     fn cancel(self) {
+        if self.editing.get_untracked() {
+            self.state
+                .try_update(|s| s.files.open_editors = s.files.open_editors.saturating_sub(1));
+        }
         self.context.set(None);
         self.editing.set(false);
         self.value.set(String::new());
@@ -289,6 +301,8 @@ impl Draft {
         self.value.set(value);
         self.error.set(false);
         self.editing.set(true);
+        // Explicit history paging waits for open editors; see actions::history.
+        self.state.update(|s| s.files.open_editors += 1);
     }
 
     pub(super) fn pending(self) -> bool {

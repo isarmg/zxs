@@ -231,20 +231,3 @@ impl From<ResolvedEntry> for ResolveResponse {
         }
     }
 }
-
-#[derive(data_serialization::Serialize)]
-pub(crate) struct FileHistoryResponse {
-    file_id: String,
-    versions: Vec<VersionRecordResponse>,
-}
-impl FileHistoryResponse {
-    pub(crate) fn new(file_id: String, versions: Vec<storage_contract::FileVersion>) -> Self {
-        Self {
-            file_id,
-            versions: versions
-                .into_iter()
-                .map(VersionRecordResponse::from)
-                .collect(),
-        }
-    }
-}

@@ -1,0 +1,20 @@
+{
+  "file_id": "file_c5561de807b34500a4baac6ad77bb939",
+  "history_root": "66f6e0f45948e090c732efe6fc78740983be948bcd3333b57ca612a27c6c143d",
+  "history_tree_id": "history_c87e4a52857849cf8381faaa5ca96115",
+  "merges": [
+    {
+      "chosen_node_id": "fmeta_98842a54e7a547d692ea3e84e152ece5",
+      "input_count": 2,
+      "merge_id": "fmerge_d383d79e806848128de01441ea100a41",
+      "operation_id": "op_fcc5223fdae74ca5ab08812ae6a35661",
+      "parent_count": 3,
+      "result_node_id": "fmeta_02dc87e0826d442d8a9e100da2b1acee",
+      "reused_node": false,
+      "sequence": "15",
+      "surviving_branch_id": "br_7a43a0a2068a43e98c8539e0602b4ac8"
+    }
+  ],
+  "next_cursor": null,
+  "previous_cursor": null
+}

@@ -116,7 +116,13 @@ fn snapshot_reuse_reads_and_installs_only_in_its_admitted_resources_after_rebind
         private_dir(&disk.root).unwrap();
     }
     snapshot::take_encoding_counts();
-    hot.store_at(&resources, &config.disks, &next).unwrap();
+    hot.store_at(
+        &resources,
+        &config.disks,
+        &next,
+        &mut ObjectInstalls::default(),
+    )
+    .unwrap();
     assert_eq!(snapshot::take_encoding_counts().get("file_notes"), None);
     for disk in &config.disks {
         let root = &resources.get(disk).unwrap().root;

@@ -189,6 +189,39 @@ class Maintenance(fixture.ProjectionFixture):
         with patch.object(source_layout, 'inventory', side_effect=AssertionError('second physical scan')):
             self.view()
 
+    def test_schema_2_backport_row_replays_through_restore(self):
+        """Generalization hook only: the tokio chain registers no schema 2 row."""
+        import source_backport as backport
+        path = self.destination + '/core.rs'
+        base = (self.root / path).read_bytes()
+        row = self.edit(add_test=False)
+        fixed = (self.root / path).read_bytes()
+        mapping = dict(paths={'core.rs': dict(production=path, tests=[])}, test_regions={}, identifiers=[], evidence=[])
+        entries, _, replacements, _ = backport.merge_files({'core.rs': (base, fixed)}, mapping, {path: base}, [])
+        patch_bytes = backport.unified_patch(base, fixed, 'core.rs')
+        package = row['before']['package']
+        row.update(schema=2, mapping=mapping, replay=dict(merged=entries, identifier_replacements=replacements),
+                   upstream=dict(name=package['upstream']['name'], repository=package.get('repository'),
+                                 base=dict(ref='v1', sha1='a' * 40), excluded=[],
+                                 fix=dict(ref='fix', sha1='b' * 40, parent='a' * 40, subject='synthetic'),
+                                 files=[dict(upstream_path='core.rs', base_sha256=backport.digest(base),
+                                             fixed_sha256=backport.digest(fixed), patch_sha256=backport.digest(patch_bytes),
+                                             base=backport.pack(base), patch=backport.pack(patch_bytes))]),
+                   advisory=dict(ids=[], disposition='hardening', basis='fixture', scanner_identity_unchanged=True),
+                   license=dict(materials=package['license_materials'], changed=False),
+                   consumer_tests=dict(gates=[], commands=[], executed={}))
+        self.pin()
+        _, restored, records = maintenance.restore(self.root, self.catalog)
+        self.assertEqual(restored[self.destination]['bytes'], self.original)
+        self.assertEqual(records[-1][1]['schema'], 2)
+        original = deepcopy(row)
+        for mutate, message in ((lambda r: r['replay']['merged'][0].update(result_sha256='0' * 64), 'merge result drift'),
+                                (lambda r: r.pop('license'), 'receipt schema'),
+                                (lambda r: r.update(schema=3), 'receipt schema')):
+            row.clear(); row.update(deepcopy(original)); mutate(row); self.pin()
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                maintenance.restore(self.root, self.catalog)
+
     def test_previous_snapshot_cannot_skip_or_rewrite_owner(self):
         self.edit(); wrong = deepcopy(self.previous)
         wrong['packages'][self.destination]['files_sha256']['core.rs'] = '0' * 64

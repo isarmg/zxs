@@ -34,18 +34,21 @@ mod state_projection;
 mod wire;
 pub use business::{
     FileBranchMergeRequest, FileNodeProjectionRequest, FileNodeSummary, FileNodeTagsUpdateRequest,
-    NamespaceTree, PreparedUpload, UploadPreparation, validate_branch_name,
+    NamespaceTree, PreparedUpload, UploadPreparation, file_history_pages, validate_branch_name,
 };
 pub use degraded_recovery::RecoveryPlan;
 pub use disk::{offline_check, offline_export};
+#[cfg(feature = "fault-injection")]
+pub use engine::MemberFault;
 pub use engine::{
-    ContentReadPlan, DiskObservation, DiskObservationPlan, Engine, IndexFailure, IndexFailureStage,
-    IndexHealth, IntegrityScrubArea, IntegrityScrubBatch, IntegrityScrubBatchAdmission,
-    IntegrityScrubCancellation, IntegrityScrubCompletion, IntegrityScrubIssue,
-    IntegrityScrubOutcome, IntegrityScrubPlan, IntegrityScrubReport, IntegrityScrubSchedule,
-    IntegrityScrubTarget, MetadataMemberProbe, OpenedContent, OperationReadPlan, OperationRecord,
-    RangeContent, ReadLease, RecoverySealContext, RecoverySealFailure, RecoveryWarnings,
-    RetainedWorkspaceLimits, ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord,
+    ContentReadPlan, DiskObservation, DiskObservationPlan, Engine, HistoryRoot, IndexFailure,
+    IndexFailureStage, IndexHealth, IntegrityScrubArea, IntegrityScrubBatch,
+    IntegrityScrubBatchAdmission, IntegrityScrubCancellation, IntegrityScrubCompletion,
+    IntegrityScrubIssue, IntegrityScrubOutcome, IntegrityScrubPlan, IntegrityScrubReport,
+    IntegrityScrubSchedule, IntegrityScrubTarget, MetadataMemberProbe, OpenedContent,
+    OperationReadPlan, OperationRecord, PublicationStageReport, RangeContent, ReadLease,
+    RecoverySealContext, RecoverySealFailure, RecoveryWarnings, RetainedWorkspaceLimits, StageIo,
+    StageKind, StageTiming, ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord,
     WorkspaceReadPlan,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
@@ -97,3 +100,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/canonical_publication_fixture.rs"]
 mod canonical_publication_fixture;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/metadata_adversarial/recovery.rs"]
+mod metadata_adversarial_recovery;

@@ -51,7 +51,7 @@ thread_local! { static CREDENTIALS: RefCell<Credentials> = RefCell::new(Credenti
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
-    #[error("invalid file-history branches: {0}")]
+    #[error("invalid file-history page: {0}")]
     FileHistory(#[source] crate::files::FileHistoryError),
     #[error("invalid directory page: {0}")]
     DirectoryPage(#[source] crate::files::DirectoryPageError),

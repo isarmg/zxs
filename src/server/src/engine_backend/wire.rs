@@ -249,20 +249,6 @@ pub(super) fn pending_entry_source(
     PendingSources::new(engine, branch, commit).checked(entry)
 }
 
-pub(super) fn current_entry_source(
-    engine: &Engine,
-    branch: &str,
-    entry: &storage_contract::Entry,
-) -> Result<Option<String>, storage_engine::Error> {
-    let Some(current) = engine.state().branches.get(branch) else {
-        return Ok(None);
-    };
-    let Some(commit) = engine.state().commits.get(&current.head_commit_id) else {
-        return Ok(None);
-    };
-    pending_entry_source(engine, branch, commit, entry)
-}
-
 /// The entry is this branch's own current-commit materialization, already in
 /// hand at the caller. Unlike the checked external-entry API, callers cannot
 /// substitute another snapshot's entry and no repeated key lookup is needed.
@@ -270,6 +256,7 @@ pub(super) fn current_entry_source_resolved(
     engine: &Engine,
     branch: &str,
     entry: &storage_contract::Entry,
+
     context: Option<&storage_contract::FileContext>,
 ) -> Result<Option<String>, storage_engine::Error> {
     let Some(current) = engine.state().branches.get(branch) else {

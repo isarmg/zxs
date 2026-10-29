@@ -1,6 +1,6 @@
 use super::*;
 use json_codec::{Value, json};
-use std::sync::atomic::Ordering;
+use std::{collections::BTreeMap, sync::atomic::Ordering};
 use storage_engine::{Config, new_id};
 
 fn fixture() -> (tempfile::TempDir, AdmissionEngine) {
@@ -344,11 +344,16 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
             )
             .unwrap();
         backend.repositories_snapshot(&caller()).unwrap();
-        backend.file_history(&caller(), &entry.file_id).unwrap();
+        backend
+            .file_version_page(
+                &caller(),
+                crate::ReadVersionPage::parse(entry.file_id.clone(), BTreeMap::new()).unwrap(),
+            )
+            .unwrap();
         backend
             .file_history_snapshot(
                 &caller(),
-                crate::ReadFileHistory::parse(entry.file_id.clone(), None, None).unwrap(),
+                crate::ReadFileHistory::parse(entry.file_id.clone(), BTreeMap::new()).unwrap(),
             )
             .unwrap();
         backend
@@ -405,7 +410,10 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
     );
     assert_eq!(
         backend
-            .file_history(&caller(), &entry.file_id)
+            .file_version_page(
+                &caller(),
+                crate::ReadVersionPage::parse(entry.file_id.clone(), BTreeMap::new()).unwrap()
+            )
             .unwrap_err()
             .status,
         401
@@ -414,7 +422,7 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
         backend
             .file_history_snapshot(
                 &caller(),
-                crate::ReadFileHistory::parse(entry.file_id.clone(), None, None).unwrap()
+                crate::ReadFileHistory::parse(entry.file_id.clone(), BTreeMap::new()).unwrap()
             )
             .unwrap_err()
             .status,
@@ -540,7 +548,10 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
     for _ in 0..3 {
         assert_eq!(
             backend
-                .file_history(&caller(), &entry.file_id)
+                .file_version_page(
+                    &caller(),
+                    crate::ReadVersionPage::parse(entry.file_id.clone(), BTreeMap::new()).unwrap()
+                )
                 .unwrap_err()
                 .code,
             storage_contract::ErrorCode::Unauthorized
@@ -684,43 +695,32 @@ fn file_manager_borrowed_tree_reads_preserve_listing_and_path_context() {
     assert_eq!(listing["entries"].as_array().unwrap().len(), 1);
     assert_eq!(listing["entries"][0]["entry_id"], entry.entry_id);
     assert_eq!(listing["entries"][0]["repository_path"], entry.path());
-    let history = backend
-        .file_history_snapshot(
-            &caller(),
-            crate::ReadFileHistory::parse(entry.file_id.clone(), None, None).unwrap(),
-        )
-        .map(crate::backend_file_history::FileHistoryResponse::from)
-        .map(|response| json_codec::to_value(response).unwrap())
-        .unwrap();
-    let contextual = backend
-        .file_history_snapshot(
-            &caller(),
-            crate::ReadFileHistory::parse(
-                entry.file_id.clone(),
-                Some(repo.repository_id.clone()),
-                Some(entry.path.to_string()),
+    let page = |query: BTreeMap<String, String>| {
+        backend
+            .file_history_snapshot(
+                &caller(),
+                crate::ReadFileHistory::parse(entry.file_id.clone(), query).unwrap(),
             )
-            .unwrap(),
-        )
-        .map(crate::backend_file_history::FileHistoryResponse::from)
-        .map(|response| json_codec::to_value(response).unwrap())
-        .unwrap();
+            .and_then(|page| page.encode(crate::backend_file_history::PageBudget::PROTOCOL))
+            .map(|encoded| json_codec::from_slice::<Value>(encoded.body()).unwrap())
+    };
+    let history = page(BTreeMap::new()).unwrap();
+    let contextual = page(BTreeMap::from([
+        ("repository_id".to_owned(), repo.repository_id.clone()),
+        ("path".to_owned(), entry.path.to_string()),
+    ]))
+    .unwrap();
+    // The resolved context is identical; only the cursor-bound request
+    // fingerprint differs, and this single page carries no cursors.
     assert_eq!(contextual, history);
-    assert_eq!(history["path"], entry.path());
-    assert_eq!(history["versions"].as_array().unwrap().len(), 1);
-    let missing = backend
-        .file_history_snapshot(
-            &caller(),
-            crate::ReadFileHistory::parse(
-                entry.file_id.clone(),
-                Some(repo.repository_id.clone()),
-                Some("missing.txt".into()),
-            )
-            .unwrap(),
-        )
-        .map(crate::backend_file_history::FileHistoryResponse::from)
-        .map(|response| json_codec::to_value(response).unwrap())
-        .unwrap_err();
+    assert_eq!(history["context"]["path"], entry.path());
+    assert_eq!(history["nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(history["history_root"].as_str().unwrap().len(), 64);
+    let missing = page(BTreeMap::from([
+        ("repository_id".to_owned(), repo.repository_id.clone()),
+        ("path".to_owned(), "missing.txt".to_owned()),
+    ]))
+    .unwrap_err();
     assert_eq!(missing.code, storage_contract::ErrorCode::FileNotFound);
     let missing_directory = backend
         .listing(

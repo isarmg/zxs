@@ -209,3 +209,168 @@ fn network_cutoff_keeps_admitted_blocking_work_owned_until_runtime_exit() {
     host.join().unwrap();
     assert!(finished.load(Ordering::SeqCst));
 }
+
+fn leased_history_app(
+    text_bytes: usize,
+    idle: Duration,
+    total: Duration,
+) -> (
+    Router,
+    Arc<tokio::sync::Semaphore>,
+    tokio::sync::mpsc::Receiver<tokio::time::Instant>,
+) {
+    use crate::backend_file_history::{NodeFieldName, NodeFieldSlice};
+    use http_routing::Extension;
+    let slots = Arc::new(tokio::sync::Semaphore::new(1));
+    let (admitted, observed) = tokio::sync::mpsc::channel(4);
+    let app = Router::new().route(
+        "/history",
+        get({
+            let slots = slots.clone();
+            move |Extension(connection): Extension<ResponseConnection>,
+                  ConnectInfo(peer): ConnectInfo<SocketAddr>| {
+                let slots = slots.clone();
+                let admitted = admitted.clone();
+                async move {
+                    assert!(
+                        peer.ip().is_loopback(),
+                        "the established peer contract survives connection capability injection"
+                    );
+                    // Test-only socket sizing forces a real pending TCP write even
+                    // for a final page smaller than the transport's write queue.
+                    let socket = tokio::net::TcpSocket::from_std_stream(
+                        connection.socket.try_clone().unwrap(),
+                    );
+                    socket.set_send_buffer_size(1024).unwrap();
+                    let permit = slots.try_acquire_owned().map_err(|source| {
+                        crate::ApiError::limit("page capacity").with_source(source)
+                    })?;
+                    let limits = crate::TransferLimits {
+                        slots: 1,
+                        idle_timeout: idle,
+                        total_timeout: total,
+                    };
+                    let deadline = tokio::time::Instant::now() + total;
+                    let page = NodeFieldSlice {
+                        file_id: "file".into(),
+                        history_tree_id: "history".into(),
+                        history_root: "ab".repeat(32),
+                        node_id: "node".into(),
+                        field: NodeFieldName::Message,
+                        total_bytes: text_bytes,
+                        offset: 0,
+                        text: "\0".repeat(text_bytes),
+                        complete: true,
+                    }
+                    .encode()?;
+                    let response =
+                        page.into_leased_response(permit, &limits, deadline, Some(connection));
+                    admitted.send(deadline).await.unwrap();
+                    Ok::<_, crate::ApiError>(response)
+                }
+            }
+        }),
+    );
+    (app, slots, observed)
+}
+
+#[tokio::test]
+async fn history_send_lease_and_idle_deadline_cover_actual_unread_tcp_queues_after_body_eof() {
+    for text_bytes in [16 * 1024, 600 * 1024] {
+        let (app, slots, mut observed) = leased_history_app(
+            text_bytes,
+            Duration::from_millis(150),
+            Duration::from_secs(3),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (stop, stopped) = oneshot::channel();
+        let server = tokio::spawn(serve_with_grace(listener, app, stopped, TEST_GRACE));
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.set_recv_buffer_size(1024).unwrap();
+        let mut client = socket.connect(address).await.unwrap();
+        client
+            .write_all(b"GET /history HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        observed.recv().await.unwrap();
+        // The 16 KiB field encodes below the HTTP/1 write-queue bound: its
+        // Body can reach EOF while the non-reading peer leaves chunks queued.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), slots.clone().acquire_owned())
+                .await
+                .is_err()
+        );
+        let released = tokio::time::timeout(Duration::from_secs(1), slots.clone().acquire_owned())
+            .await
+            .expect(
+                "socket idle deadline must reclaim transport buffers, before the 3s total deadline",
+            )
+            .unwrap();
+        drop(released);
+        drop(client);
+        stop.send(()).unwrap();
+        tokio::time::timeout(DEADLINE, server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+}
+
+async fn read_http_response(client: &mut TcpStream) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        head.push(client.read_u8().await.unwrap());
+        assert!(head.len() < 8192);
+    }
+    let head = std::str::from_utf8(&head).unwrap();
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let length = head
+        .lines()
+        .find_map(|line| {
+            line.to_ascii_lowercase()
+                .strip_prefix("content-length: ")
+                .map(|value| value.parse::<usize>().unwrap())
+        })
+        .unwrap();
+    let mut body = vec![0; length];
+    client.read_exact(&mut body).await.unwrap();
+    body
+}
+
+#[tokio::test]
+async fn completed_history_send_cancels_its_deadline_and_keeps_healthy_connection_alive() {
+    let (app, slots, mut observed) =
+        leased_history_app(8, Duration::from_millis(80), Duration::from_millis(150));
+    let (mut client, stop, server) = start(app).await;
+    client
+        .write_all(b"GET /history HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+    let deadline = observed.recv().await.unwrap();
+    let first = tokio::time::timeout(DEADLINE, read_http_response(&mut client))
+        .await
+        .unwrap();
+    assert_eq!(slots.available_permits(), 1);
+    // Observe the original timer's complete window; it must have been aborted
+    // by the last written owner-backed chunk, not close a later keepalive use.
+    tokio::time::sleep_until(deadline + Duration::from_millis(20)).await;
+    client
+        .write_all(b"GET /history HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+    observed.recv().await.unwrap();
+    let second = tokio::time::timeout(DEADLINE, read_http_response(&mut client))
+        .await
+        .unwrap();
+    assert_eq!(first, second);
+    drop(client);
+    stop.send(()).unwrap();
+    tokio::time::timeout(DEADLINE, server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}

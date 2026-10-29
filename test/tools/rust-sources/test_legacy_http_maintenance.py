@@ -1,4 +1,8 @@
-"""The real five demand comparisons remain reversible without rewriting origins."""
+"""The real five demand comparisons remain reversible without rewriting origins.
+
+Fixtures start from the first real receipt's tip: later registered real steps
+(e.g. upstream backports) are inverted out of the copied files and catalog.
+"""
 import base64
 from copy import deepcopy
 import difflib
@@ -60,10 +64,30 @@ def successor(root, catalog, parent, relative, old, new):
                                                new=base64.b64encode(new).decode())])])
 
 
-class LegacyHttpMaintenance(unittest.TestCase):
+REAL_RECEIPTS = legacy.RECEIPTS
+
+
+def first_tip(catalog):
+    """Catalog and file bytes at the first real receipt's tip, inverting later real steps."""
+    rows = [maintenance._read(ROOT, sha) for sha in REAL_RECEIPTS]
+    first = rows[0]['after']
+    catalog['packages'][legacy.OWNER] = deepcopy(first['package'])
+    catalog['merges'] = [row for row in catalog['merges'] if row['directory'] != legacy.OWNER] + deepcopy(first['merges'])
+    catalog['external_tests'][legacy.OWNER] = deepcopy(first['external'])
+    files = {}
+    for row in reversed(rows[1:]):
+        for file in row['files']:
+            data = files.get(file['after'], (ROOT / file['after']).read_bytes())
+            files[file['before']] = routing.inverse_replacements(data, file)
+    return catalog, files
+
+
+class HttpChainFixture(unittest.TestCase):
+    """Disposable owner copy whose chain starts with a re-created first demand receipt."""
+
     @classmethod
     def setUpClass(cls):
-        cls.catalog_template = json.loads((ROOT / 'compliance/rust-sources.json').read_bytes())
+        cls.catalog_template, cls.rewound = first_tip(json.loads((ROOT / 'compliance/rust-sources.json').read_bytes()))
         layout_id = cls.catalog_template[source_layout.KEY]
         cls.layout_receipt = source_layout.read_receipt(ROOT, layout_id)
         cls.layout_row = next(row for row in cls.layout_receipt['packages']
@@ -101,6 +125,8 @@ class LegacyHttpMaintenance(unittest.TestCase):
         roots = [legacy.OWNER, *before['external']['roots']]
         for relative in roots:
             shutil.copytree(ROOT / relative, self.root / relative)
+        for path, data in self.rewound.items():
+            (self.root / path).write_bytes(data)
         self.path = self.root / legacy.OWNER / legacy.FILE
         self.path.write_bytes(self.changed)
         self.current = deepcopy(self.previous)
@@ -127,7 +153,8 @@ class LegacyHttpMaintenance(unittest.TestCase):
             root=self.root, receipt_id=self.previous[source_layout.KEY],
             receipt=deepcopy(self.layout_receipt), rows={legacy.LOGICAL: deepcopy(self.layout_row)},
             moves={legacy.LOGICAL: legacy.OWNER}, reverse={legacy.OWNER: legacy.LOGICAL},
-            edits=deepcopy(self.layout_receipt['file_edits']), corrections=None)
+            edits=deepcopy(self.layout_receipt['file_edits']), corrections=None,
+            descendant_files={}, upgraded_owners={})
         corrections_id = self.previous.get(source_layout_corrections.KEY)
         if corrections_id is not None:
             correction_receipt = source_layout_corrections.read_receipt(ROOT, corrections_id)
@@ -136,6 +163,7 @@ class LegacyHttpMaintenance(unittest.TestCase):
             self.layout.corrections = corrections
         self.layout.current_path = lambda value: value.replace(legacy.LOGICAL + '/', legacy.OWNER + '/') if value != legacy.LOGICAL else legacy.OWNER
         self.layout.historical_path = lambda value: value.replace(legacy.OWNER + '/', legacy.LOGICAL + '/') if value != legacy.OWNER else legacy.LOGICAL
+        self.layout.project_layout_bytes = lambda path, data: source_layout.Layout.project_layout_bytes(self.layout, path, data)
         self.pin = patch.object(legacy, 'RECEIPTS', ())
         self.pin.start()
         self.addCleanup(self.pin.stop)
@@ -159,6 +187,8 @@ class LegacyHttpMaintenance(unittest.TestCase):
     def adapter(self):
         return legacy.load(self.layout, self.current)
 
+
+class LegacyHttpMaintenance(HttpChainFixture):
     def test_five_real_comparisons_replay_before_immutable_layout_inverse(self):
         adapter = self.adapter()
         logical = legacy.LOGICAL + '/' + legacy.FILE

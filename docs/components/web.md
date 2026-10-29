@@ -54,15 +54,25 @@ Web 不提供文件上传、下载、正文预览、“写入当前分支”或�
 
 本变化消除同一入模回执的重复完整校验和无消费者载荷留存；操作列表仍按原 Vec 扫描，不增加缓存、锁或 I/O，也不构成吞吐实测。对应回归位于 `test/web/unit/files/actions/operation/`、`mutation/`、`model/`、`inline/` 及会话／轮询测试；测试源码存在不表示已执行，实际结果由验证提交记录。
 
-## 文件历史分支的类型边界
+## 文件历史驻留窗口（ADR 0009）
 
-`files/history.rs` 在文件历史读取入口把当前 `HistoryBranchResponse` 解码为私有字段的 `FileBranch`，只保存控件实际需要的 ID、名称、可选依据节点、待写入标记及可写性。每份新响应核对实际文件身份、必需字段、未知字段、整数文本、分支种类、内容投影和重复分支 ID；`current` 必须与唯一 `selected_branch_id` 一致，`read_only` 必须等于 `state != active || alias_of != null`。状态仅接受当前 `active/archived/migrated/merged`，不猜测 `status/CONSUMED/is_alias/alias/selected/head_node_id` 等不存在的分支字段。原服务端授权与提交时检查保持，UI 类型不是新的授权凭据。
+文件详情不再接收整包历史。`files/history.rs`、`history/wire.rs` 在读取入口把[有界文件历史协议](../adr/0009-bounded-file-history-windows.md)的每种页解码为私有字段的类型：主节点页 `HistoryWindow`（归属 `HistoryBinding`：文件、历史、64 位十六进制 `history_root`、服务端解析的 repository/path；上下文摘要；节点摘要；前后游标；锚点），分支页 `BranchPage`，合并来源页 `MergePage`，父节点页、合并输入片与字段片。所有 DTO 拒绝未知字段；u64 文本、游标长度（≤32768 可打印 ASCII）、身份长度（≤256 字节）、备注／标签上限、内容哈希、操作 ID、`(sequence DESC, node_id ASC)` 顺序、`current` 与 `context.current_node_id` 一致、`in_window` 与本页节点集一致、`parents.status == more` 必带游标、`message/author` 仅在 ≤256 字节时内联、分支 `pending_count` 与继承状态一致，均在边界核对一次；之后消费者只读类型字段，不再保留或重新解释 JSON。辅助页还必须与驻留窗口的 file/history/root 完全一致，否则按格式错误拒绝。
 
-选中 ID 不必出现在文件分支数组中：尚无独立文件分支时可引用完整分支，已迁移分支也可能被历史投影过滤。空数组、无选中分支、待写入与显式空来源继续按真实服务端语义接纳；依据节点仅使用真实 `node_id`，为空时使用真实可见 `version_id`，都没有时保留 `None`。备份页仍固定所存正文及节点，不因主盘历史更新改变当前副本。
+`model.rs` 的 `history: History` 是驻留窗口的唯一所有者：主页 `HistoryState`（Unloaded / Loading{previous} / Loaded / Stale{reason} / Failed）、至多一个分支页、至多一个合并来源页、至多一个辅助面板（父节点页、合并输入片或字段片之一），以及每槽至多一个在途读取。翻页、锚点跳转与刷新都**替换**主页：旧页在新响应安装前保持可读（峰值为一旧页加一次解码暂存），安装后旧页、其 `HistoryIndex`、版本树布局、测量、ResizeObserver／MutationObserver 与帧调度随 owner 一起销毁；不使用 `Vec::extend`、页 Map 或每节点 memo 留住旧窗口。分支页与合并页绑定根：根不再当前时即使仍分配也不被查询。
 
-入模后不再保留分支 JSON，详情选择器、改名、合并、标签与历史索引仅使用已接纳类型；其余历史节点、版本及合并记录仍沿用现有 JSON，未重写完整历史协议或分页。目录分支继续由 `page::DirectoryBranch` 处理其独立的 `directory_branch_id/head_tree_id/path` 契约，不混用文件分支字段。格式错误复用读取错误路径，清除旧历史以免恢复旧分支控件；原会话与请求代次围栏不变。
+读取由 `actions/history.rs` 发出：首页、`cursor` 续页与 `anchor_node_id` 跳转共用 `limit=50`；已有观察时的“第一页”、续页、锚点及辅助读取携带驻留根，获取最新内容的刷新则明确使用无根首页。每次新请求中止同槽旧请求并推进请求代数；迟到响应须同时满足会话代次、所选文件、精确 repository/path 上下文、历史代数、槽票据（主读取还须仍处于同一 Loading 状态）才被安装。注销、换文件、别名或备份目标变化清空全部槽并中止在途读取；仅逻辑路径变化保留页但使在途读取失效。
 
-分支入口按字段总量解析一次，重复 ID 检查为 O(B log B)，历史快照继续共享不可变所有权；不新增网络请求、锁、同步或持久化写入。根 `test/web/unit/files/history/` 覆盖边界接受／拒绝、选择与只读关系、待写入及备份固定语义；详情、改名、合并、标签与索引消费者夹具同步使用当前响应。执行结果须以对应验证提交为准，测试源码与格式检查不等于通过测试。
+任何历史读取返回 `409 HISTORY_CHANGED` 时窗口进入 Stale：页仍可读，但分支页、合并页、面板和打开的原位编辑器关闭，合并提交、标签提交、从节点创建分支、文件／节点备注编辑等依赖窗口的写入入口全部禁用，界面显示“历史已变化，请刷新”。已知写入发布也立即使旧观察失效，即使只改备注或分支名称、选择身份完全不变；随后无根首页读取建立新观察，不先用旧根锚定而制造一次必然的冲突。合并与标签草稿保留为待重审输入：其 `expected_head` 和来源根不自动更新；刷新后的不同根仍明确要求取消并重新选择。刷新失败进入 Failed，不恢复旧页的可写控制。
+
+消费者边界：`history_index.rs` 只索引驻留页节点；`version_tree.rs` 只对页内父边布局，窗口外父节点每节点渲染**一个**“父节点未加载 · 跳转”桩，`parents.status == more` 提供按父 ID 双向分页的完整父节点面板，长提交消息／作者通过字段片按需读取。“尚无版本记录”只在首页为空且无续页时显示。打开原位编辑器后，第一页、前后页、锚点及分支分页都先提示完成或取消；导航按钮在鼠标按下时保留输入焦点，使失焦取消不会绕过这个保护。
+
+分支候选是单一可替换页（浏览器每次请求 100 项），详情、合并与标签编辑共用前后页控件。候选读取的 Unloaded／Loading／Loaded／Failed 状态消费自动需求；429、500、格式错误都停在可显式重试的失败态，只有用户重试或新主窗口才发起新请求。当前分支身份来自主窗口的精确 alias／backup 上下文（或已选择条目），文件级候选页的全局 selected 标记不能覆盖它；当前分支不在候选页时仍显示其身份。
+
+合并草稿只保存**显式选中**分支的紧凑 ID／名称／依据头、所选结果 ID 与一份 `NodeLabel`；未选候选翻页即释放。选择集及保留分支选项按 50 项本地分页，结果可跨主窗口选择并保持紧凑摘要。标签的 `CheckedNode{root,node_id,branch,expected,tags,label}` 同样跨页保留，但旧根选择不能借重新打开草稿自动重绑定。关联分支从当前候选页显式选择，只保留实际目标引用的紧凑分支；所选目标按 50 项本地分页，移除标签候选只取当前所选页与已选移除项。添加与移除各最多 16 个不同标签，遵守引擎已有请求规则。合并新增输入、标签新增目标或更换关联分支，都在变更选择前按实际 JSON 转义及完整请求预留核对 1 MiB 上限；超限明确拒绝本次修改，不拆批、不删旧选择、不提交子集。
+
+复杂度与预算：解码为 O(页字段总量)，节点索引 O(N log N)，布局输入只含页内边；内存驻留上界为一页节点（≤200）与其边预览（≤2048）、一页分支、一页合并、一个面板页、一份字段片（≤1 MiB）及有界草稿。本实现不新增轮询、锁或持久化写入，不改变服务端授权与 expected head 核对；根与游标不是授权凭据。对应回归位于 `test/web/unit/files/history/`（wire、状态）、`actions/history/`（围栏、取消、失效）、`history_index/`、`version_tree/`、`detail/`、`inline/`、`branch/`、`merge/`、`tags/`、`model/`；宿主测试不能构造浏览器 `AbortController`，中止本身由浏览器场景验证，测试源码存在不等于浏览器验收已通过。
+
+`test/tools/browser-smoke/runner/history_pages.{rs,js}` 使用生产 WASM 和真实 DOM，显式合成 201 分支、三页父节点和有界节点页，覆盖跨页合并／标签请求、失焦前编辑保护、持续错误不自动重试、取消后迟到响应与旧树观察者释放。合成写请求在到达服务端前被明确拒绝并核对完整请求，因此不充当真实引擎合并、服务端规模或持久化证据；`metadata.rs` 另以真实备注写入核对新根自动刷新和旧树 owner 销毁。全部场景的通过／失败以实际 CI 执行为准。
 
 ## 真实文件容器
 
@@ -85,10 +95,10 @@ histories/<history-id>/file-containers/<file-id>/<当前文件名>/versions/
 | --- | --- |
 | `src/web/src/ui.rs` | 会话隔离、页面导航与公共壳接入 |
 | `src/web/src/files/model.rs`、`page.rs`、`rows.rs` | 磁盘、当前页及选择状态，分页响应与精确详情身份校验，保留服务端顺序的显示投影 |
-| `src/web/src/files/history.rs`、`history/wire.rs`、`history_index.rs` | 真实文件历史分支的一次边界解码、私有控件模型及共享节点／分支索引 |
+| `src/web/src/files/history.rs`、`history/wire.rs`、`history/state.rs`、`history_index.rs` | 有界文件历史页（节点页、分支页、合并页、父节点页、输入片、字段片）的一次边界解码、驻留槽状态机与只索引驻留页的共享索引 |
 | `src/web/src/files/batch/` | 批量操作草稿、纯范围校验与请求、带会话隔离的读取发布、页面内审阅组件 |
 | `src/web/src/files/actions/mod.rs` | 动作入口、磁盘 API 路径及未确认保存门禁 |
-| `src/web/src/files/actions/browse.rs`、`mutation.rs`、`operation.rs` | 分别负责代次校验的目录读取、命名空间/分支/备注事务、发布结果轮询 |
+| `src/web/src/files/actions/browse.rs`、`history.rs`、`mutation.rs`、`operation.rs` | 分别负责代次校验的目录读取、按槽取消与多重围栏的历史页读取及 HISTORY_CHANGED 处理、命名空间/分支/备注事务、发布结果轮询 |
 | `src/web/src/files/view.rs`、`detail.rs`、`inline.rs`、`version_tree.rs` | 磁盘列表、独立详情、按名称／分支／备注规则原位编辑、统一历史节点布局及带箭头连接 |
 | `src/web/src/files/merge/`、`tags/`、`backup.rs` | 冻结合并输入与归属、节点标签批量增量、按范围读取及编辑备份策略；均为页面内审阅 |
 | `src/web/src/files/review.rs` | 共享发布状态：冲突保留草稿、结果未知绑定原操作、成功回执只清除相应草稿 |
@@ -112,7 +122,7 @@ histories/<history-id>/file-containers/<file-id>/<当前文件名>/versions/
 
 新增页面先组合共享布局角色，不增加页面级尺寸覆盖：`.zxs-stack` 和 `.zxs-flow` 排列内容，默认不另加外部间距；`.zxs-row` 管理字盒留白，`.zxs-frame` 管理灰色边框与 G4 表面。透明包装仅在其边界紧贴可见框时使用 `.zxs-surface-start/end` 或 `.zxs-surface`，由公共规则分开直接接触的框；中间已有标签或说明行时不重复加距。普通输入保持 44px；搜索、账户和下拉框显式采用 `.zxs-input--compact`，原位输入再组合 `.zxs-input--underline`。登录规则只在 `.authentication-shell` 内生效。完整用法见[公共样式](web/public/styles.md)。
 
-请求路径与备注校验复用 `storage-contract`：浏览器使用严格的同源 `/api/` 路径边界，备注使用同一 128 字节单行规则。目录读取和历史读取保留请求代次隔离；元数据反馈、改密反馈也必须属于原有有效会话，登出或重新登录后的旧响应不能改写新会话。
+请求路径与备注校验复用 `storage-contract`：浏览器使用严格的同源 `/api/` 路径边界，备注使用同一 128 字节单行规则。目录读取和历史读取保留请求代次隔离，历史读取还绑定驻留根与读取槽；元数据反馈、改密反馈也必须属于原有有效会话，登出或重新登录后的旧响应不能改写新会话。
 
 退出登录开始后即停止接纳新的元数据写入；页面控件与动作入口共用会话及写入准入检查，包含批量操作、合并、标签和备份提交。退出请求失败时保留撤销所需凭据供显式重试，不把失败当作已退出，也不因此恢复新业务操作。恢复会话期间同样不接纳这些操作；已开始的服务端事务仍须按原操作 ID 核对，停止 UI 后续处理不代表服务器回滚。
 

@@ -354,6 +354,21 @@ impl Rows {
 #[derive(Clone, Debug, Default, PartialEq)]
 struct FileVersions(SharedRecords<SharedRecords<SharedRecords<()>>>);
 
+/// The earliest commit that published a version: content nodes take their
+/// display sequence, path and message from it. Ties on sequence keep the
+/// smallest commit id so the choice is a pure function of State.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FirstCommit {
+    pub(crate) sequence: u64,
+    pub(crate) commit_id: String,
+}
+
+impl FirstCommit {
+    fn precedes(&self, other: &Self) -> bool {
+        (self.sequence, &self.commit_id) < (other.sequence, &other.commit_id)
+    }
+}
+
 /// Rebuildable dependency counts and projected row membership; no business data.
 /// All unbounded containers use the same SharedRecords API as State records.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -368,6 +383,11 @@ pub(crate) struct DerivedOwners {
     history_rows: SharedRecords<Rows>,
     file_rows: SharedRecords<FileRows>,
     branch_contexts: SharedRecords<SharedRecords<()>>,
+    /// version id -> first publishing commit, derived from `State::commits`.
+    first_commits: SharedRecords<FirstCommit>,
+    /// Namespace object -> earliest visiting commit. Shared objects can be
+    /// skipped before I/O on append; removal/rewrite rebuilds both indexes.
+    namespace_first_commits: SharedRecords<FirstCommit>,
 }
 
 #[derive(Clone, Default)]
@@ -528,6 +548,7 @@ impl DerivedOwners {
                     Ok(())
                 },
             )?;
+            index.commit_first_versions(commit, source)?;
         }
         for (key, branch) in state.file_selections.iter() {
             index.selected_files.add(branch, key);
@@ -558,6 +579,64 @@ impl DerivedOwners {
     }
     pub(super) fn rows(&self, history: &str) -> Option<&Rows> {
         self.history_rows.get(history)
+    }
+    /// The earliest commit publishing this version, if any commit references it.
+    pub(crate) fn first_commit(&self, version: &str) -> Option<&FirstCommit> {
+        self.first_commits.get(version)
+    }
+    /// Every version inside an already-seen page/index has an equal or
+    /// earlier first publisher. Shared references prune before object reads;
+    /// request-local work never allocates a directory/history-sized frontier.
+    fn commit_first_versions(
+        &mut self,
+        commit: &storage_contract::Commit,
+        source: &dyn crate::namespace::NamespaceSource,
+    ) -> Result<()> {
+        let candidate = FirstCommit {
+            sequence: commit.sequence,
+            commit_id: commit.commit_id.clone(),
+        };
+        let versions = &mut self.first_commits;
+        let namespaces = &mut self.namespace_first_commits;
+        crate::namespace::visit_file_versions(
+            &commit.namespace,
+            source,
+            &mut |reference| {
+                let key = format!("{}:{}", reference.kind.as_str(), reference.hash);
+                if namespaces
+                    .get(&key)
+                    .is_some_and(|old| !candidate.precedes(old))
+                {
+                    return false;
+                }
+                namespaces.insert(key, candidate.clone());
+                true
+            },
+            &mut |version| {
+                if versions
+                    .get(version)
+                    .is_none_or(|old| candidate.precedes(old))
+                {
+                    versions.insert(version.to_owned(), candidate.clone());
+                }
+            },
+        )
+    }
+
+    /// Immutable commits only append in ordinary publication. Removal or
+    /// rewrite is bulk maintenance and invalidates namespace first witnesses;
+    /// rebuild both indexes together, never retain a stale pruning witness.
+    fn rebuild_first_versions(
+        &mut self,
+        state: &State,
+        source: &dyn crate::namespace::NamespaceSource,
+    ) -> Result<()> {
+        self.first_commits = SharedRecords::new();
+        self.namespace_first_commits = SharedRecords::new();
+        for commit in state.commits.values() {
+            self.commit_first_versions(commit, source)?;
+        }
+        Ok(())
     }
     fn member(&mut self, history: &str, field: Field, key: &str, add: bool) {
         if add {
@@ -837,9 +916,15 @@ impl DerivedOwners {
                 affected.version(key);
             }
         }
+        let rebuild_first = writes.rows[&Field::Commits].iter().any(|key| {
+            before.commits.contains_key(key) && before.commits.get(key) != after.commits.get(key)
+        });
         for key in &writes.rows[&Field::Commits] {
             if before.commits.get(key) == after.commits.get(key) {
                 continue;
+            }
+            if !rebuild_first && let Some(next) = after.commits.get(key) {
+                self.commit_first_versions(next, source)?;
             }
             // Net reference deltas from the reference-pruned namespace diff:
             // shared subtrees contribute identically on both sides and are
@@ -874,6 +959,9 @@ impl DerivedOwners {
                     }
                 }
             }
+        }
+        if rebuild_first {
+            self.rebuild_first_versions(after, source)?;
         }
         for key in &writes.rows[&Field::FileSelections] {
             change_reference(
@@ -926,3 +1014,7 @@ impl DerivedOwners {
 #[cfg(test)]
 #[path = "../../../test/engine/unit/state_projection/container_membership_tests.rs"]
 mod container_membership_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/state_projection/first_commit_tests.rs"]
+mod first_commit_tests;

@@ -256,9 +256,9 @@ fn business_reads_do_not_start_outside_a_settled_session() {
             state.with_untracked(|s| {
                 assert!(!s.files.loading_disks);
                 assert!(!s.files.loading);
-                assert!(!s.files.history_loading);
+                assert!(!s.files.history.loading());
                 assert_eq!(s.files.generation, 0);
-                assert_eq!(s.files.history_generation, 0);
+                assert_eq!(s.files.history.generation, 0);
                 assert!(!s.activity.loading);
                 assert!(!s.monitor.loading);
                 assert!(!s.monitor.history_loading);

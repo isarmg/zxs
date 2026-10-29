@@ -576,60 +576,81 @@ fn openapi_duplicate_operation_ids_and_unbound_paths_are_rejected() {
 }
 
 #[test]
-fn file_history_contract_requires_true_parent_arrays_without_limiting_multi_parent_edges() {
+fn file_history_pages_bound_every_collection_and_keep_true_lineage_reachable() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts/openapi.json");
-    let mut api = read(&path).unwrap();
-    let version_pointer = "/paths/~1api~1file-manager~1files~1{file}~1history/get/responses/200/content/application~1json/schema/properties/versions/items";
-    let schema = api.pointer(version_pointer).unwrap();
+    let api = read(&path).unwrap();
+    let schemas = &api["components"]["schemas"];
+    let component = |name: &str| {
+        let mut document = api.clone();
+        document["$ref"] = format!("#/components/schemas/{name}").into();
+        validator(&document).unwrap()
+    };
+    // Every list in a page DTO has a fixed upper bound; no unbounded array
+    // hides inside a summary.
+    for (name, field, maximum) in [
+        ("FileHistoryPage", "nodes", 200),
+        ("FileHistoryParentsPage", "parents", 500),
+        ("FileHistoryBranchesPage", "branches", 500),
+        ("FileHistoryMergesPage", "merges", 200),
+        ("FileMergeInputsSlice", "inputs", 1000),
+        ("FileMergeParentsSlice", "parents", 1000),
+        ("FileVersionPage", "versions", 500),
+        ("FileVersionSourcesSlice", "sources", 1000),
+        ("HistoryParentPreview", "edges", 32),
+    ] {
+        assert_eq!(
+            schemas[name]["properties"][field]["maxItems"], maximum,
+            "{name}.{field}"
+        );
+    }
     assert!(
-        schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("source_version_ids"))
-    );
-    assert_eq!(
-        schema["properties"]["source_version_ids"]["uniqueItems"],
-        true
-    );
-    assert!(
-        schema["properties"]["source_version_ids"]
-            .get("maxItems")
+        schemas["FileHistoryPage"]["properties"]
+            .get("versions")
             .is_none()
     );
-    // Route braces are legal OpenAPI path keys, but are not literal URI
-    // fragment characters. Give the extracted response a plain local ref.
-    api["$defs"]["file_history_version"] = schema.clone();
-    api["$ref"] = "#/$defs/file_history_version".into();
-    let schema = validator(&api).unwrap();
-    let mut version = json!({
-        "version_id":storage_contract::new_id("ver"),"file_id":storage_contract::new_id("file"),
-        "source_version_ids":[],"branch_id":null,"created_at":"2026-10-20T00:00:00Z","message":"",
-        "size":"1","sequence":"3","current":false,"content_state":"AVAILABLE",
-        "content_hash":"a".repeat(64),"note":"","download_name":"a.txt",
-        "storage_name":"v000001_a.txt"
+    assert!(
+        schemas["FileVersionSummary"]["properties"]
+            .get("source_version_ids")
+            .is_none()
+    );
+    assert!(
+        schemas["FileBranchSummary"]["properties"]
+            .get("pending_file_versions")
+            .is_none()
+    );
+    assert!(
+        schemas["FileMergeSummary"]["properties"]
+            .get("input_node_ids")
+            .is_none()
+    );
+    // The true body lineage stays reachable, by original index, unbounded in total.
+    let sources = component("FileVersionSourcesSlice");
+    let version = storage_contract::new_id("ver");
+    let mut slice = json!({
+        "file_id":storage_contract::new_id("file"),"history_tree_id":storage_contract::new_id("history"),
+        "history_root":"a".repeat(64),"version_id":version,"offset":1000,"total":5000,
+        "sources":[{"index":1000,"version_id":storage_contract::new_id("ver")}],"next_offset":1001
     });
-    assert!(schema.is_valid(&version));
-    let mut obsolete = version.clone();
-    obsolete["legacy"] = json!(false);
-    assert!(!schema.is_valid(&obsolete));
-    for timestamp in [Value::Null, json!(1792400000)] {
-        obsolete = version.clone();
-        obsolete["created_at"] = timestamp;
-        assert!(!schema.is_valid(&obsolete));
-    }
-    let first = storage_contract::new_id("ver");
-    let second = storage_contract::new_id("ver");
-    version["source_version_ids"] = json!([first, second]);
-    assert!(schema.is_valid(&version));
-    version["source_version_ids"] = json!([first, first]);
-    assert!(!schema.is_valid(&version));
-    version["source_version_ids"] = Value::Null;
-    assert!(!schema.is_valid(&version));
-    version
-        .as_object_mut()
-        .unwrap()
-        .remove("source_version_ids");
-    assert!(!schema.is_valid(&version));
+    assert!(sources.is_valid(&slice));
+    slice["next_offset"] = Value::Null;
+    assert!(sources.is_valid(&slice));
+    slice.as_object_mut().unwrap().remove("next_offset");
+    assert!(
+        !sources.is_valid(&slice),
+        "the end of a slice is explicit, never implied"
+    );
+    // Parent previews: complete never carries a cursor; more always does.
+    let preview = component("HistoryParentPreview");
+    let cursor = "ab".repeat(16);
+    assert!(preview.is_valid(&json!({"status":"complete","edges":[],"cursor":null})));
+    assert!(preview.is_valid(&json!({"status":"more","edges":[],"cursor":cursor})));
+    assert!(!preview.is_valid(&json!({"status":"more","edges":[],"cursor":null})));
+    assert!(!preview.is_valid(&json!({"status":"complete","edges":[],"cursor":cursor})));
+    assert!(!preview.is_valid(&json!({"status":"more","edges":[],"cursor":"ABCD"})));
+    let roots = component("HistoryRoot");
+    assert!(roots.is_valid(&json!("0".repeat(64))));
+    assert!(!roots.is_valid(&json!("0".repeat(63))));
+    assert!(!roots.is_valid(&json!("A".repeat(64))));
 }
 
 #[test]
@@ -676,21 +697,19 @@ fn note_read_shapes_accept_current_valid_notes() {
     let api = read(&path).unwrap();
     let entries = &api["paths"]["/api/file-manager/disks/{slot}/entries"]["get"]["responses"]["200"]
         ["content"]["application/json"]["schema"]["properties"]["entries"]["items"]["properties"]["note"];
-    let history = &api["paths"]["/api/file-manager/files/{file}/history"]["get"]["responses"]["200"]
-        ["content"]["application/json"]["schema"]["properties"];
+    let schemas = &api["components"]["schemas"];
     // Response shapes are deliberately broader than the current note semantics.
     // Passing a shape check does not authorize an invalid persisted note or an
     // older format; the engine validates notes at write and history-read boundaries.
     for (scope, note) in [
         ("directory entry", entries),
-        ("file history", &history["note"]),
         (
-            "version history",
-            &history["versions"]["items"]["properties"]["note"],
+            "file history context",
+            &schemas["FileHistoryContext"]["properties"]["note"],
         ),
         (
             "history node",
-            &api["components"]["schemas"]["FileHistoryNode"]["properties"]["note"],
+            &schemas["HistoryNodeSummary"]["properties"]["note"],
         ),
     ] {
         let schema = validator(note).unwrap();
@@ -766,38 +785,58 @@ fn file_history_graph_distinguishes_path_nodes_from_real_content_versions() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts/openapi.json");
     let api = read(&path).unwrap();
     let mut document = api.clone();
-    document["$ref"] = "#/components/schemas/FileHistoryNode".into();
+    document["$ref"] = "#/components/schemas/HistoryNodeSummary".into();
     let schema = validator(&document).unwrap();
-    let file = storage_contract::new_id("file");
     let version = storage_contract::new_id("ver");
     let renamed = storage_contract::new_id("fnode");
-    let content = json!({"node_id":version,"version_id":version,"file_id":file,"kind":"content","parent_node_ids":[],"path":"a/report.txt","previous_path":null,"note":"","created_at":"2026-10-20T00:00:00Z","sequence":"1","current":false});
-    let rename = json!({"node_id":renamed,"version_id":version,"file_id":file,"kind":"rename","parent_node_ids":[version],"path":"a/new.txt","previous_path":"a/report.txt","note":"Path note","created_at":"2026-10-19T08:53:20Z","sequence":"2","current":true});
+    let text = json!({"bytes":5,"inline":"admin"});
+    let node = |id: &str, kind: &str, previous: Value, operation: Value| {
+        json!({
+            "node_id":id,"kind":kind,"version_id":version,"sequence":"2","created_at":"2026-10-19T08:53:20Z",
+            "branch_id":null,"path":"a/new.txt","previous_path":previous,"note":"","tags":[],"size":"1",
+            "content_hash":"a".repeat(64),"content_state":"AVAILABLE","download_name":"new.txt",
+            "storage_name":"v000001_a.txt","operation_id":operation,"author":text,
+            "message":{"bytes":300,"inline":null},"parents":{"status":"complete","edges":[],"cursor":null},
+            "current":false
+        })
+    };
+    let content = node(&version, "content", Value::Null, Value::Null);
+    let rename = node(
+        &renamed,
+        "rename",
+        "a/report.txt".into(),
+        storage_contract::new_id("op").into(),
+    );
     assert!(schema.is_valid(&content));
     assert!(schema.is_valid(&rename));
-    let mut numeric_time = rename.clone();
-    numeric_time["created_at"] = "1792400000".into();
-    assert!(!schema.is_valid(&numeric_time));
-    let mut child = content.clone();
-    child["node_id"] = storage_contract::new_id("ver").into();
-    child["version_id"] = child["node_id"].clone();
-    child["parent_node_ids"] = json!([renamed]);
-    child["source_version_ids"] = json!([version]);
-    assert!(schema.is_valid(&child));
     let mut invalid = rename.clone();
-    invalid["version_id"] = renamed.clone().into();
+    invalid["created_at"] = "1792400000".into();
     assert!(!schema.is_valid(&invalid));
+    // A path node never reuses a body id as its own node id, and a content
+    // node is its real body version.
     invalid = rename.clone();
     invalid["node_id"] = version.clone().into();
     assert!(!schema.is_valid(&invalid));
+    invalid = content.clone();
+    invalid["node_id"] = renamed.clone().into();
+    assert!(!schema.is_valid(&invalid));
+    // Content nodes carry no operation; path and metadata nodes always do.
+    invalid = content.clone();
+    invalid["operation_id"] = storage_contract::new_id("op").into();
+    assert!(!schema.is_valid(&invalid));
     invalid = rename.clone();
-    invalid["parent_node_ids"] = json!([]);
+    invalid["operation_id"] = Value::Null;
     assert!(!schema.is_valid(&invalid));
-    invalid = child.clone();
-    invalid["source_version_ids"] = json!([renamed]);
+    invalid = rename.clone();
+    invalid["previous_path"] = Value::Null;
     assert!(!schema.is_valid(&invalid));
-    invalid = child;
-    invalid["parent_node_ids"] = json!([version, version]);
+    // Bounded fields: the preview cannot exceed 32 edges, unbounded texts are
+    // never forced inline, and no whole parent array is present.
+    invalid = content.clone();
+    invalid["parents"] = json!({"status":"more","edges":(0..33).map(|_| json!({"node_id":renamed,"in_window":false})).collect::<Vec<_>>(),"cursor":"ab"});
+    assert!(!schema.is_valid(&invalid));
+    invalid = content.clone();
+    invalid["parent_node_ids"] = json!([renamed]);
     assert!(!schema.is_valid(&invalid));
     let note = &api["paths"]["/api/file-manager/files/{file}/nodes/{node}"]["patch"]["requestBody"]
         ["content"]["application/json"]["schema"]["properties"]["note"];
@@ -812,7 +851,7 @@ fn file_history_graph_distinguishes_path_nodes_from_real_content_versions() {
     let source_schema = validator(&source_document).unwrap();
     assert!(source_schema.is_valid(&json!(version)));
     assert!(source_schema.is_valid(&json!(renamed)));
-    assert!(!source_schema.is_valid(&json!(file)));
+    assert!(!source_schema.is_valid(&json!(storage_contract::new_id("file"))));
 }
 
 #[test]
@@ -879,9 +918,9 @@ fn file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines() {
         assert!(!backups.is_valid(&invalid));
     }
     let mut document = api.clone();
-    document["$ref"] = "#/components/schemas/FileHistoryNode".into();
+    document["$ref"] = "#/components/schemas/HistoryNodeSummary".into();
     let node = validator(&document).unwrap();
-    let body = json!({"node_id":meta,"version_id":version,"file_id":file,"kind":"tags","parent_node_ids":[version],"path":"report.txt","previous_path":null,"note":"","created_at":"2026-10-19T08:53:20Z","sequence":"5","current":true,"tags":["审核"]});
+    let body = json!({"node_id":meta,"kind":"tags","version_id":version,"sequence":"5","created_at":"2026-10-19T08:53:20Z","branch_id":branch,"path":"report.txt","previous_path":null,"note":"","tags":["审核"],"size":"1","content_hash":"a".repeat(64),"content_state":"AVAILABLE","download_name":"report.txt","storage_name":"v000001_report.txt","operation_id":operation,"author":{"bytes":5,"inline":"admin"},"message":{"bytes":0,"inline":""},"parents":{"status":"complete","edges":[{"node_id":version,"in_window":false}],"cursor":null},"current":true});
     assert!(node.is_valid(&body));
     let mut invalid = body;
     invalid["version_id"] = meta.into();
@@ -893,6 +932,18 @@ fn file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines() {
         (
             "/api/file-manager/files/{file}/history",
             "file-merge-tag-history.json",
+        ),
+        (
+            "/api/file-manager/files/{file}/history/branches",
+            "file-merge-tag-history-branches.json",
+        ),
+        (
+            "/api/file-manager/files/{file}/history/merges",
+            "file-merge-tag-history-merges.json",
+        ),
+        (
+            "/api/file-manager/files/{file}/history/merges/{merge}/inputs",
+            "file-merge-tag-history-merge-inputs.json",
         ),
         (
             "/api/repositories/{repo}/backup-configuration",

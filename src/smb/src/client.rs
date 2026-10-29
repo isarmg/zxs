@@ -199,6 +199,7 @@ fn remote_errno(code: ErrorCode) -> i32 {
         | ErrorCode::ItemNotFound
         | ErrorCode::ItemPathMismatch
         | ErrorCode::LeaseExpired
+        | ErrorCode::HistoryChanged
         | ErrorCode::ListingChanged
         | ErrorCode::LogCorrupt
         | ErrorCode::LogFork

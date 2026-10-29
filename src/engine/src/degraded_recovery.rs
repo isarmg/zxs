@@ -915,6 +915,10 @@ impl Engine {
         )?;
         self.complete_candidate(&candidate, &plan.candidate_hash, &next, Some(publication))?;
         self.state = std::sync::Arc::new(next);
+        self.history_catalog = Some(crate::engine::HistoryCatalog::recovered(
+            &self.state,
+            candidate.history_roots.clone(),
+        ));
         self.snapshot = Some(candidate.snapshot_hash);
         self.next_slot = self.next_slot.max(
             candidate

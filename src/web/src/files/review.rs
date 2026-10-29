@@ -57,7 +57,7 @@ pub(crate) fn settle(model: &mut Model, id: &str, status: SaveStatus) {
                     Kind::Backup => model.backup = None,
                     Kind::Tags => {
                         model.tag_edit = None;
-                        model.checked_nodes.clear();
+                        model.clear_checked_nodes();
                     }
                 }
                 model.publications.remove(&kind);

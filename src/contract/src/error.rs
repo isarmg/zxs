@@ -112,6 +112,7 @@ error_codes! {
     GenerationMismatch => "GENERATION_MISMATCH",
     HeadConflict => "HEAD_CONFLICT",
     HistoricalSaveRequiresBranch => "HISTORICAL_SAVE_REQUIRES_BRANCH",
+    HistoryChanged => "HISTORY_CHANGED",
     HistoryMismatch => "HISTORY_MISMATCH",
     HistoryNodeNotFound => "HISTORY_NODE_NOT_FOUND",
     HistoryNotFound => "HISTORY_NOT_FOUND",

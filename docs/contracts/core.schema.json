@@ -1933,175 +1933,6 @@
       "additionalProperties": false,
       "description": "重命名形成的不可变文件路径节点。version_id复用真实正文，parent_node_ids连接内容或路径节点；创建路径节点不增加FileVersion或复制正文。"
     },
-    "FileHistoryNode": {
-      "type": "object",
-      "properties": {
-        "node_id": {
-          "$ref": "#/$defs/FileNodeId"
-        },
-        "version_id": {
-          "$ref": "#/$defs/VersionId"
-        },
-        "file_id": {
-          "$ref": "#/$defs/FileId"
-        },
-        "kind": {
-          "enum": [
-            "content",
-            "rename",
-            "tags",
-            "merge"
-          ]
-        },
-        "parent_node_ids": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "$ref": "#/$defs/FileNodeId"
-          }
-        },
-        "path": {
-          "type": "string"
-        },
-        "previous_path": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "note": {
-          "type": "string"
-        },
-        "created_at": {
-          "$ref": "#/$defs/UtcTimestamp"
-        },
-        "sequence": {
-          "$ref": "#/$defs/UInt64"
-        },
-        "current": {
-          "type": "boolean"
-        },
-        "size": {
-          "$ref": "#/$defs/UInt64"
-        },
-        "content_hash": {
-          "$ref": "#/$defs/Hash"
-        },
-        "download_name": {
-          "type": "string"
-        },
-        "storage_name": {
-          "type": "string"
-        },
-        "branch_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BranchId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "source_version_ids": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "$ref": "#/$defs/VersionId"
-          }
-        },
-        "tags": {
-          "$ref": "#/$defs/FileNodeTags"
-        }
-      },
-      "required": [
-        "node_id",
-        "version_id",
-        "file_id",
-        "kind",
-        "parent_node_ids",
-        "path",
-        "previous_path",
-        "note",
-        "created_at",
-        "sequence",
-        "current"
-      ],
-      "additionalProperties": true,
-      "description": "统一不可变文件节点图：content实际正文，rename路径节点，tags/merge元数据节点。后三者复用version_id正文；parent_node_ids含安全的混合图边。tags为每个节点有效继承标签，旧source_version_ids仅表示正文谱系。",
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "content"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "node_id": {
-                "$ref": "#/$defs/VersionId"
-              },
-              "previous_path": {
-                "type": "null"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "rename"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "node_id": {
-                "$ref": "#/$defs/FilePathNodeId"
-              },
-              "previous_path": {
-                "type": "string",
-                "minLength": 1
-              },
-              "parent_node_ids": {
-                "minItems": 1
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "tags",
-                  "merge"
-                ]
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "node_id": {
-                "$ref": "#/$defs/FileMetadataNodeId"
-              },
-              "previous_path": {
-                "type": "null"
-              },
-              "parent_node_ids": {
-                "minItems": 1
-              }
-            },
-            "required": [
-              "tags"
-            ]
-          }
-        }
-      ]
-    },
     "FileMetadataNodeId": {
       "type": "string",
       "pattern": "^fmeta_[0-9a-f]{32}(?![\\s\\S])"
@@ -3553,6 +3384,1362 @@
       ],
       "additionalProperties": false,
       "description": "按root-to-leaf顺序携带一条路径的实际JSON节点；只约束外形与1..65节点数。核心按根引用验证每步域哈希、位置前缀、路由、叶页界限和目标值，并拒绝多余或截断节点；schema不能证明成员关系。"
+    },
+    "HistoryRoot": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+      "description": "目标历史在当前已准入 State 的已发布 Candidate 历史目录中的准确 history-manifest 哈希。只标识一份确切已准入内容；不是授权、当前盘健康或未来操作成功凭据。"
+    },
+    "HistoryCursor": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 32768,
+      "pattern": "^(?:[0-9a-f]{2})+(?![\\s\\S])",
+      "description": "无服务端缓存、非授权的续读位置：严格 JSON 的小写十六进制，绑定历史根、历史与文件身份、规范化查询摘要和排他边界键。服务端每次重新解析全部字段，不能改变作用域；跨文件游标为 400，根变化为 409 HISTORY_CHANGED。"
+    },
+    "HistoryBoundedText": {
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inline": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "bytes",
+        "inline"
+      ],
+      "additionalProperties": false,
+      "description": "没有写入长度上限的节点文本（message、author）。bytes 为完整 UTF-8 字节数；仅当 bytes 不超过 256 时 inline 给出完整文本，否则为 null，须经字段分片读取。不截断、不以省略号冒充完整。"
+    },
+    "HistoryParentEdge": {
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        },
+        "in_window": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "node_id",
+        "in_window"
+      ],
+      "additionalProperties": false,
+      "description": "已枚举的真实图父边。in_window=false 表示父节点在同一可读范围内但未驻留本页（未加载），不是根、丢失或损坏。"
+    },
+    "HistoryParentPreview": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "complete",
+            "more"
+          ]
+        },
+        "edges": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/HistoryParentEdge"
+          }
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "edges",
+        "cursor"
+      ],
+      "additionalProperties": false,
+      "description": "节点父集合状态：complete 且 edges 为空才表示该读取范围内没有父关系；more 必须携带父边续读游标，即使本页未给该节点分配边预算。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "complete"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "cursor": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "cursor": {
+                "$ref": "#/$defs/HistoryCursor"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "HistoryNodeSummary": {
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        },
+        "kind": {
+          "enum": [
+            "content",
+            "rename",
+            "tags",
+            "merge"
+          ]
+        },
+        "version_id": {
+          "$ref": "#/$defs/VersionId"
+        },
+        "sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "created_at": {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        "branch_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BranchId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "previous_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "note": {
+          "type": "string"
+        },
+        "tags": {
+          "$ref": "#/$defs/FileNodeTags"
+        },
+        "size": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "content_state": {
+          "enum": [
+            "LIVE",
+            "AVAILABLE",
+            "PURGED",
+            "MIGRATED"
+          ]
+        },
+        "download_name": {
+          "type": "string"
+        },
+        "storage_name": {
+          "type": "string"
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "author": {
+          "$ref": "#/$defs/HistoryBoundedText"
+        },
+        "message": {
+          "$ref": "#/$defs/HistoryBoundedText"
+        },
+        "parents": {
+          "$ref": "#/$defs/HistoryParentPreview"
+        },
+        "current": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "node_id",
+        "kind",
+        "version_id",
+        "sequence",
+        "created_at",
+        "branch_id",
+        "path",
+        "previous_path",
+        "note",
+        "tags",
+        "size",
+        "content_hash",
+        "content_state",
+        "download_name",
+        "storage_name",
+        "operation_id",
+        "author",
+        "message",
+        "parents",
+        "current"
+      ],
+      "additionalProperties": false,
+      "description": "有界节点摘要：只内联已有小字段上界覆盖的数据；正文节点 node_id 即真实 version_id，路径／标签／合并节点复用真实正文 version_id。current 只标记上下文当前节点，不随页内最新节点移动。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "content"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "node_id": {
+                "$ref": "#/$defs/VersionId"
+              },
+              "previous_path": {
+                "type": "null"
+              },
+              "operation_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "rename"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "node_id": {
+                "$ref": "#/$defs/FilePathNodeId"
+              },
+              "previous_path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "operation_id": {
+                "$ref": "#/$defs/OperationId"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "tags",
+                  "merge"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "node_id": {
+                "$ref": "#/$defs/FileMetadataNodeId"
+              },
+              "previous_path": {
+                "type": "null"
+              },
+              "operation_id": {
+                "$ref": "#/$defs/OperationId"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "FileHistoryContext": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "note": {
+          "type": "string"
+        },
+        "current_node_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileNodeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selected_branch_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BranchId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VersionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "materialized": {
+          "type": "boolean"
+        },
+        "content_state": {
+          "enum": [
+            "PENDING",
+            "LIVE",
+            "AVAILABLE",
+            "PURGED",
+            "MIGRATED"
+          ]
+        },
+        "inherited": {
+          "type": "boolean"
+        },
+        "own_version_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VersionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_version_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VersionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "visible_content_state": {
+          "enum": [
+            "LIVE",
+            "AVAILABLE",
+            "PURGED",
+            "MIGRATED"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "note",
+        "current_node_id",
+        "selected_branch_id"
+      ],
+      "additionalProperties": false,
+      "description": "当前上下文的有界摘要，独立于本页节点。文件已删除但历史仍在时 path 为 null 且不含正文处置字段（字段缺失而不是 null）。",
+      "dependentRequired": {
+        "version_id": [
+          "materialized",
+          "content_state",
+          "inherited",
+          "own_version_id",
+          "source_version_id",
+          "visible_content_state"
+        ]
+      }
+    },
+    "FileHistoryPage": {
+      "type": "object",
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "repository_id": {
+          "$ref": "#/$defs/RepositoryId"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "context": {
+          "$ref": "#/$defs/FileHistoryContext"
+        },
+        "nodes": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/HistoryNodeSummary"
+          }
+        },
+        "previous_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "anchor": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "node_id": {
+                  "$ref": "#/$defs/FileNodeId"
+                },
+                "in_page": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "node_id",
+                "in_page"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "budget": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "parent_edges": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "limit",
+            "parent_edges"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "file_id",
+        "repository_id",
+        "history_tree_id",
+        "history_root",
+        "context",
+        "nodes",
+        "previous_cursor",
+        "next_cursor",
+        "anchor",
+        "budget"
+      ],
+      "additionalProperties": false,
+      "description": "一个可替换节点窗口，按 (sequence DESC, node_id ASC)。完整编码不超过 4 MiB（MAX_HISTORY_PAGE_BYTES）；字节预算可使页短于 limit，但非末页必有 next_cursor。空 nodes 且两个游标均为 null 才表示真正没有历史。"
+    },
+    "FileHistoryParentsPage": {
+      "type": "object",
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        },
+        "parents": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "object",
+            "properties": {
+              "node_id": {
+                "$ref": "#/$defs/FileNodeId"
+              }
+            },
+            "required": [
+              "node_id"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "previous_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "file_id",
+        "history_tree_id",
+        "history_root",
+        "node_id",
+        "parents",
+        "previous_cursor",
+        "next_cursor"
+      ],
+      "additionalProperties": false,
+      "description": "单节点完整合法图父关系的一个窗口，按父节点 ID 升序；高入度节点可持续续读。读到末页只证明后面没有更多。"
+    },
+    "FileBranchSummary": {
+      "type": "object",
+      "properties": {
+        "branch_id": {
+          "$ref": "#/$defs/BranchId"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "head_commit_id": {
+          "$ref": "#/$defs/CommitId"
+        },
+        "fork_commit_id": {
+          "$ref": "#/$defs/CommitId"
+        },
+        "branch_kind": {
+          "const": "file"
+        },
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "generation": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "state": {
+          "enum": [
+            "active",
+            "archived",
+            "migrated",
+            "merged"
+          ]
+        },
+        "version_id": {
+          "$ref": "#/$defs/VersionId"
+        },
+        "source_version_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VersionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "materialized": {
+          "type": "boolean"
+        },
+        "content_state": {
+          "enum": [
+            "PENDING",
+            "LIVE",
+            "AVAILABLE",
+            "PURGED",
+            "MIGRATED",
+            "UNAVAILABLE"
+          ]
+        },
+        "current": {
+          "type": "boolean"
+        },
+        "inherited": {
+          "type": "boolean"
+        },
+        "own_version_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VersionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "visible_content_state": {
+          "enum": [
+            "LIVE",
+            "AVAILABLE",
+            "PURGED",
+            "MIGRATED",
+            "UNAVAILABLE"
+          ]
+        },
+        "file_node_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileNodeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "node_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileNodeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "read_only": {
+          "type": "boolean"
+        },
+        "alias_of": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BranchId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pending_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "branch_id",
+        "history_tree_id",
+        "name",
+        "head_commit_id",
+        "fork_commit_id",
+        "branch_kind",
+        "file_id",
+        "generation",
+        "state",
+        "version_id",
+        "source_version_id",
+        "materialized",
+        "content_state",
+        "current",
+        "inherited",
+        "own_version_id",
+        "visible_content_state",
+        "node_id",
+        "read_only",
+        "alias_of",
+        "pending_count"
+      ],
+      "additionalProperties": false,
+      "description": "固定字段分支摘要；不复制任意大小的 pending_file_versions 映射，pending_count 给出其条目数。materialized=false 时 pending_count 至少为 1。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "materialized": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "inherited": {
+                "const": true
+              },
+              "own_version_id": {
+                "type": "null"
+              },
+              "content_state": {
+                "const": "PENDING"
+              },
+              "pending_count": {
+                "minimum": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "inherited": {
+                "const": false
+              },
+              "source_version_id": {
+                "type": "null"
+              },
+              "content_state": {
+                "not": {
+                  "const": "PENDING"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "FileHistoryBranchesPage": {
+      "type": "object",
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "selected_branch_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BranchId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "branches": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/FileBranchSummary"
+          }
+        },
+        "previous_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "file_id",
+        "history_tree_id",
+        "history_root",
+        "selected_branch_id",
+        "branches",
+        "previous_cursor",
+        "next_cursor"
+      ],
+      "additionalProperties": false,
+      "description": "该文件当前可展示分支（排除 migrated）的摘要页，按 branch_id 升序。"
+    },
+    "FileMergeSummary": {
+      "type": "object",
+      "properties": {
+        "merge_id": {
+          "$ref": "#/$defs/FileMergeId"
+        },
+        "sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "chosen_node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        },
+        "result_node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        },
+        "surviving_branch_id": {
+          "$ref": "#/$defs/BranchId"
+        },
+        "reused_node": {
+          "type": "boolean"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "input_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "parent_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "merge_id",
+        "sequence",
+        "chosen_node_id",
+        "result_node_id",
+        "surviving_branch_id",
+        "reused_node",
+        "operation_id",
+        "input_count",
+        "parent_count"
+      ],
+      "additionalProperties": false,
+      "description": "合并来源摘要；输入对与保存的父关系分别经 inputs／parents 按原序号续读，不内联无界数组。"
+    },
+    "FileHistoryMergesPage": {
+      "type": "object",
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "merges": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/FileMergeSummary"
+          }
+        },
+        "previous_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "file_id",
+        "history_tree_id",
+        "history_root",
+        "merges",
+        "previous_cursor",
+        "next_cursor"
+      ],
+      "additionalProperties": false,
+      "description": "合并来源摘要页，按 (sequence DESC, merge_id ASC)。"
+    },
+    "FileMergeInputsSlice": {
+      "type": "object",
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "merge_id": {
+          "$ref": "#/$defs/FileMergeId"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inputs": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "branch_id": {
+                "$ref": "#/$defs/BranchId"
+              },
+              "node_id": {
+                "$ref": "#/$defs/FileNodeId"
+              }
+            },
+            "required": [
+              "index",
+              "branch_id",
+              "node_id"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "next_offset": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "file_id",
+        "history_tree_id",
+        "history_root",
+        "merge_id",
+        "offset",
+        "total",
+        "inputs",
+        "next_offset"
+      ],
+      "additionalProperties": false,
+      "description": "按原输入序号返回成对 {branch_id, node_id}，不拆分两个平行数组。next_offset 为 null 表示已到末尾。"
+    },
+    "FileMergeParentsSlice": {
+      "type": "object",
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "merge_id": {
+          "$ref": "#/$defs/FileMergeId"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "parents": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "node_id": {
+                "$ref": "#/$defs/FileNodeId"
+              }
+            },
+            "required": [
+              "index",
+              "node_id"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "next_offset": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "file_id",
+        "history_tree_id",
+        "history_root",
+        "merge_id",
+        "offset",
+        "total",
+        "parents",
+        "next_offset"
+      ],
+      "additionalProperties": false,
+      "description": "按原记录序号读取合并时保存的父关系；与节点当前累计的图父关系分别表达。"
+    },
+    "FileVersionSourcesSlice": {
+      "type": "object",
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "version_id": {
+          "$ref": "#/$defs/VersionId"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sources": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "version_id": {
+                "$ref": "#/$defs/VersionId"
+              }
+            },
+            "required": [
+              "index",
+              "version_id"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "next_offset": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "file_id",
+        "history_tree_id",
+        "history_root",
+        "version_id",
+        "offset",
+        "total",
+        "sources",
+        "next_offset"
+      ],
+      "additionalProperties": false,
+      "description": "按原记录序号读取正文版本真实 source_version_ids，独立于图父边。"
+    },
+    "HistoryFieldSlice": {
+      "type": "object",
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        },
+        "field": {
+          "enum": [
+            "message",
+            "author"
+          ]
+        },
+        "total_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "text": {
+          "type": "string"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "next_offset": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "file_id",
+        "history_tree_id",
+        "history_root",
+        "node_id",
+        "field",
+        "total_bytes",
+        "offset",
+        "text",
+        "complete",
+        "next_offset"
+      ],
+      "additionalProperties": false,
+      "description": "外置字段的一个完整 UTF-8 片段；只有确实读到末尾才 complete=true。空字段为 total_bytes=0、text=\"\"、complete=true。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "complete": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "next_offset": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "next_offset": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "FileVersionSummary": {
+      "type": "object",
+      "properties": {
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "version_id": {
+          "$ref": "#/$defs/VersionId"
+        },
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "creation_primary_slot_id": {
+          "$ref": "#/$defs/SlotId"
+        },
+        "logical_size": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "version_sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "checksum_chunk_bytes": {
+          "enum": [
+            65536,
+            262144,
+            1048576,
+            4194304
+          ]
+        },
+        "checksum_manifest_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "creation_name": {
+          "type": "string"
+        },
+        "storage_name": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "created_as_full_checkpoint": {
+          "type": "boolean"
+        },
+        "source_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "history_tree_id",
+        "version_id",
+        "file_id",
+        "creation_primary_slot_id",
+        "logical_size",
+        "version_sequence",
+        "content_hash",
+        "checksum_chunk_bytes",
+        "checksum_manifest_hash",
+        "creation_name",
+        "storage_name",
+        "created_at",
+        "created_as_full_checkpoint",
+        "source_count"
+      ],
+      "additionalProperties": false,
+      "description": "正文版本摘要；完整来源数组改由 versions/{version}/sources 按序号读取，source_count 给出其长度。"
+    },
+    "FileVersionPage": {
+      "type": "object",
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "versions": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/FileVersionSummary"
+          }
+        },
+        "previous_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "file_id",
+        "history_tree_id",
+        "history_root",
+        "versions",
+        "previous_cursor",
+        "next_cursor"
+      ],
+      "additionalProperties": false,
+      "description": "高级正文版本页，按 (version_sequence ASC, version_id ASC)；不再返回完整正文版本数组。"
     }
   }
 }

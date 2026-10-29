@@ -31,6 +31,14 @@ pub(crate) fn record_operation(state: RwSignal<State>, operation: FileOperation)
         s.files.operations.truncate(100);
         reload_scope = crate::files::batch::settle_operation(&mut s.files, &id, status);
         crate::files::review::settle(&mut s.files, &id, status);
+        if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
+            // Notes and branch names may leave the selected identity unchanged,
+            // but every published write invalidates its observed history root.
+            s.files
+                .history
+                .mark_stale(crate::files::history::state::StaleReason::RootChanged);
+            s.files.open_editors = 0;
+        }
         s.notice = publication_notice(status);
     });
     if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {

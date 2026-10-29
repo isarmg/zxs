@@ -145,10 +145,10 @@ fn selected_file_history_read_requires_an_active_session() {
                     json_codec::json!({"file_id":"file-1"}),
                 ));
             });
-            load_file_history(state);
+            super::super::history::load_first_page(state);
             state.with_untracked(|s| {
-                assert!(!s.files.history_loading);
-                assert_eq!(s.files.history_generation, 0);
+                assert!(!s.files.history.loading());
+                assert_eq!(s.files.history.generation, 0);
             });
         }
     });
@@ -475,13 +475,16 @@ fn admitted_page_applies_all_metadata_and_keeps_independent_selected_details() {
         files: crate::files::Model {
             selected: Some(selected.clone()),
             checked_entries: [entry_key(&row), "removed".into()].into_iter().collect(),
-            file_history: crate::files::history::tests::history(
-                json_codec::json!({"note":"loaded history"}),
-            ),
             ..Default::default()
         },
         ..State::default()
     };
+    let mut wire = crate::files::history::tests::window_wire(vec![], json_codec::json!({}));
+    wire["context"]["note"] = "loaded history".into();
+    state
+        .files
+        .history
+        .install(crate::files::history::HistoryWindow::parse(wire, "file").unwrap());
     let mut refreshed = test_entries::wire(&selected);
     refreshed["note"] = "fresh entry note".into();
     let page = Page::parse(
@@ -498,7 +501,10 @@ fn admitted_page_applies_all_metadata_and_keeps_independent_selected_details() {
         state.files.selected.as_ref().unwrap().note(),
         Some("fresh entry note")
     );
-    assert_eq!(state.files.file_history["note"], "loaded history");
+    assert_eq!(
+        state.files.history.window().unwrap().context.note,
+        "loaded history"
+    );
     assert_eq!(
         state.files.checked_entries,
         [entry_key(&row)].into_iter().collect()

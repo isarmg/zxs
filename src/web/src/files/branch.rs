@@ -2,6 +2,51 @@ use super::actions;
 use crate::ui::State;
 use web_interface::{html, i18n::t, prelude::*};
 
+/// All branch consumers share one replaceable candidate page. The selected
+/// action identities live in their drafts, not in an accumulated page cache.
+pub(super) fn paging(state: RwSignal<State>) -> impl IntoView {
+    use super::history::state::BranchReadState;
+    let paging = Memo::new(move |_| {
+        state.with(|s| {
+            let history = &s.files.history;
+            let page = history.branch_page();
+            (
+                page.and_then(|page| page.previous_cursor.clone()),
+                page.and_then(|page| page.next_cursor.clone()),
+                history.root().is_none() || matches!(history.branch_read, BranchReadState::Loading),
+            )
+        })
+    });
+    let error = Memo::new(move |_| {
+        state.with(|s| match &s.files.history.branch_read {
+            BranchReadState::Failed(error) => Some(error.to_string()),
+            _ => None,
+        })
+    });
+    view! {
+        <div class="zxs-file-toolbar zxs-flow" aria-label=t("分支分页", "Branch pages")>
+            <button class="zxs-button" disabled=move ||paging.with(|(previous,_,busy)|previous.is_none()||*busy)
+                on:pointerdown=move |event|actions::history::preserve_editor_focus(state,&event)
+                on:click=move |_|if let Some(cursor)=paging.with_untracked(|(previous,_,_)|previous.clone()){actions::load_history_branches(state,Some(cursor));}>
+                {t("上一页分支", "Previous branches")}
+            </button>
+            <button class="zxs-button" disabled=move ||paging.with(|(_,next,busy)|next.is_none()||*busy)
+                on:pointerdown=move |event|actions::history::preserve_editor_focus(state,&event)
+                on:click=move |_|if let Some(cursor)=paging.with_untracked(|(_,next,_)|next.clone()){actions::load_history_branches(state,Some(cursor));}>
+                {t("下一页分支", "Next branches")}
+            </button>
+            <Show when=move ||error.with(Option::is_some)>
+                <span class="zxs-row zxs-inline-error" role="status">{move ||error.get().unwrap_or_default()}</span>
+                <button class="zxs-button" disabled=move ||paging.with(|(_,_,busy)|*busy)
+                    on:pointerdown=move |event|actions::history::preserve_editor_focus(state,&event)
+                    on:click=move |_|{let cursor=state.with_untracked(|s|s.files.history.branch_cursor.clone());actions::load_history_branches(state,cursor);}>
+                    {t("重试分支读取", "Retry branches")}
+                </button>
+            </Show>
+        </div>
+    }
+}
+
 #[derive(Clone)]
 pub(super) enum Target {
     CurrentDirectory,
@@ -38,12 +83,9 @@ fn file_source(model: &super::model::Model, target: &Target) -> Option<(String, 
             ))
         }
         Target::HistoryNode(id) => {
-            let record = super::model::history_nodes_ref(&model.file_history)
-                .iter()
-                .find(|node| super::model::history_node_id(node) == *id)?;
-            let version = record["version_id"].as_str().filter(|id| !id.is_empty())?;
-            let node = record["node_id"].as_str().filter(|id| !id.is_empty());
-            Some((version.to_owned(), node.map(str::to_owned)))
+            // Only a current (not stale) resident page can source a branch.
+            let record = model.history.loaded()?.node(id)?;
+            Some((record.version_id.clone(), Some(record.node_id.clone())))
         }
         Target::CurrentDirectory | Target::Directory { .. } => None,
     }

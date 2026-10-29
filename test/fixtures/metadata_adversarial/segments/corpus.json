@@ -1,0 +1,32 @@
+{
+  "baseline": "13b664e9fd41a356ffb7ed982d21e97abb123626",
+  "entry": "journal::resolve_snapshot and journal::load_snapshot",
+  "generator": "test/engine/unit/metadata_adversarial/segments_support.rs",
+  "fixed_seed": "0x5a58532026102901",
+  "random_cases": 64,
+  "random_algorithm": "xorshift64: xor <<13, xor >>7, xor <<17; sequence=7+state%1000; bit0=future publication; bit1=locator mismatch",
+  "bounds": {
+    "event_segment_records": 1025,
+    "operation_segment_records": 257,
+    "largest_padding_bytes": 1048577,
+    "largest_declared_record_count": "18446744073709551615",
+    "materialized_records_for_largest_declared_count": 1
+  },
+  "semantic_mutations": [
+    "event empty/overfull/short sealed prefix",
+    "noncontiguous directory key",
+    "directory first sequence mismatch",
+    "intra-segment and cross-segment backwards sequence",
+    "last sequence beyond published snapshot",
+    "operation count or first ordinal mismatch",
+    "operation over count seal, short sealed prefix",
+    "record canonical size at 1MiB minus one, exact, plus one",
+    "duplicate operation ID across segments",
+    "missing/extra/wrong locator, sequence used as ordinal, u64::MAX ordinal",
+    "noncanonical or overflowing decimal locator",
+    "rehashed unknown marker/unknown field/missing marker/numeric sequence"
+  ],
+  "disk_mutations": ["valid JSON with wrong digest", "single-open-brace truncation", "missing referenced object"],
+  "expectation_source": "ADR0011 and docs/architecture/namespace-roots-and-segmented-logs.md sections 3.2, 3.3, 4; root boundary/error-preservation rules",
+  "execution_status": "not recorded here; use attached GitHub Actions evidence"
+}

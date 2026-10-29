@@ -18,7 +18,13 @@ use mutation_order::{MutationOrder, Position};
 
 mod page_tree;
 
+#[cfg(test)]
+#[path = "../../../test/engine/unit/metadata_adversarial/namespace.rs"]
+mod metadata_adversarial_namespace;
+
+mod file_versions;
 mod ordered_walk;
+pub(crate) use file_versions::visit_file_versions;
 
 fn corrupt(reason: &'static str) -> Error {
     Error::new(ErrorCode::ObjectCorrupt, reason)
@@ -1887,15 +1893,34 @@ fn collect_page(
     Ok(())
 }
 
-/// Full admission of one commit's namespace graph: every object read and
-/// verified, recorded totals re-summed, per-directory order and uniqueness,
-/// index boundaries and balance, the portable path budget, and the commit's recorded
-/// entry total. Returns the verified total entry count.
+/// Directory identities collected during successful full graph admission.
+pub(crate) struct NamespaceAdmission {
+    directory_ids: BTreeSet<String>,
+}
+
+impl NamespaceAdmission {
+    pub(crate) fn into_directory_ids(self) -> BTreeSet<String> {
+        self.directory_ids
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn verify_namespace(
     root: &CommitNamespace,
     source: &(impl NamespaceSource + ?Sized),
     max_entries: u64,
 ) -> Result<u64> {
+    admit_namespace(root, source, max_entries)?;
+    Ok(root.entries)
+}
+
+/// Verify the complete graph, charging depth and entry/path budgets before
+/// expansion, and retain only directory identities needed by history projection.
+pub(crate) fn admit_namespace(
+    root: &CommitNamespace,
+    source: &(impl NamespaceSource + ?Sized),
+    max_entries: u64,
+) -> Result<NamespaceAdmission> {
     #[derive(Default)]
     struct Summary {
         first_key: Option<String>,
@@ -1906,6 +1931,7 @@ pub(crate) fn verify_namespace(
     struct Verification<'s, S: ?Sized> {
         source: &'s S,
         remaining: u64,
+        directory_ids: BTreeSet<String>,
     }
     impl<S: NamespaceSource + ?Sized> Verification<'_, S> {
         fn directory(&mut self, reference: &NamespaceReference, prefix: &str) -> Result<Summary> {
@@ -1952,11 +1978,13 @@ pub(crate) fn verify_namespace(
                 match child {
                     NamespacePageEntry::File { .. } => summary.files += 1,
                     NamespacePageEntry::Directory {
+                        entry_id,
                         entries,
                         files,
                         subtree,
                         ..
                     } => {
+                        self.directory_ids.insert(entry_id.clone());
                         let verified = self.directory(subtree, location.as_str())?;
                         if verified.entries != *entries || verified.files != *files {
                             return Err(corrupt(
@@ -2024,17 +2052,20 @@ pub(crate) fn verify_namespace(
             }
         }
     }
-    let summary = Verification {
+    let mut verification = Verification {
         source,
         remaining: max_entries,
-    }
-    .directory(&root.root, "")?;
+        directory_ids: BTreeSet::new(),
+    };
+    let summary = verification.directory(&root.root, "")?;
     if summary.entries != root.entries {
         return Err(corrupt(
             "namespace recorded entry total differs from the verified graph",
         ));
     }
-    Ok(summary.entries)
+    Ok(NamespaceAdmission {
+        directory_ids: verification.directory_ids,
+    })
 }
 
 /// Every directory entry id reachable from one root, pruned by shared

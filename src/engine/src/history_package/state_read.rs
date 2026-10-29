@@ -200,10 +200,7 @@ fn validate(state: &State, source: &dyn crate::namespace::NamespaceSource) -> Re
         if id != &history.history_tree_id {
             return Err(invalid("snapshot history identity differs from its key"));
         }
-        let manifest = HistoryManifest::project_state(state, id, source)
-            .map_err(|error| error.context(ErrorCode::StateInvalid, "invalid snapshot history"))?;
-        manifest
-            .validate(source)
+        let manifest = HistoryManifest::from_state(state, id, source)
             .map_err(|error| error.context(ErrorCode::StateInvalid, "invalid snapshot history"))?;
         covered.include(&manifest)?;
     }

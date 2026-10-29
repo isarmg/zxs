@@ -45,20 +45,16 @@ fn history_context_preserves_projection_and_current_admission() {
         .token;
     let identity = auth.authenticate(&token).unwrap();
     let read = |input: Value| {
-        let query = input.get("query");
-        let request = crate::ReadFileHistory::parse(
-            input["file_id"].as_str().unwrap().into(),
-            query
-                .and_then(|q| q.get("repository_id"))
-                .map(|v| v.as_str().unwrap().into()),
-            query
-                .and_then(|q| q.get("path"))
-                .map(|v| v.as_str().unwrap().into()),
-        )?;
+        let query = input
+            .get("query")
+            .map(|query| json_codec::from_value::<BTreeMap<String, String>>(query.clone()).unwrap())
+            .unwrap_or_default();
+        let request =
+            crate::ReadFileHistory::parse(input["file_id"].as_str().unwrap().into(), query)?;
         backend
             .file_history_snapshot(&identity, request)
-            .map(crate::backend_file_history::FileHistoryResponse::from)
-            .map(|response| json_codec::to_value(response).unwrap())
+            .and_then(|page| page.encode(crate::backend_file_history::PageBudget::PROTOCOL))
+            .map(|encoded| json_codec::from_slice::<Value>(encoded.body()).unwrap())
     };
     let plain = json!({"file_id":entry.file_id});
     let expected = read(plain.clone()).unwrap();
@@ -69,9 +65,11 @@ fn history_context_preserves_projection_and_current_admission() {
             expected
         );
     }
-    assert_eq!(expected["version_id"], entry.version_id);
-    assert_eq!(expected["current_node_id"], entry.version_id);
-    assert_eq!(expected["path"], "report.txt");
+    assert_eq!(expected["context"]["version_id"], entry.version_id);
+    assert_eq!(expected["context"]["current_node_id"], entry.version_id);
+    assert_eq!(expected["context"]["path"], "report.txt");
+    assert_eq!(expected["history_root"].as_str().unwrap().len(), 64);
+    assert_eq!(expected["nodes"][0]["node_id"], entry.version_id);
 
     for query in [
         json!({"repository_id":repo.repository_id}),

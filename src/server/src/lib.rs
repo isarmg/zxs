@@ -32,11 +32,17 @@ mod web_assets;
 
 mod backend_file_history;
 pub use backend_file_history::{
-    ContentNodeKind, FileHistorySnapshot, HistoryBranch, HistoryNode, HistoryRevision,
-    HistoryVersion, HistoryVersionData, ReadFileHistory, RenameNodeKind, RevisionKind,
+    AnchorPlacement, BoundedText, Continuation, FileBranchSummary, FileHistoryPage,
+    FileMergeSummary, HistoryBranchesPage, HistoryContext, HistoryMergesPage, HistoryNodeKind,
+    HistoryNodeSummary, MergeInputsPage, MergeParentsPage, NodeFieldName, NodeFieldSlice,
+    NodeParentsPage, PageDirection, ParentEdge, ParentPreview, ReadFileHistory,
+    ReadHistoryBranches, ReadHistoryMerges, ReadMergeInputs, ReadMergeParents, ReadNodeField,
+    ReadNodeParents, ReadVersionPage, ReadVersionSources, VersionPage, VersionSourcesPage,
+    VersionSummary,
 };
 mod backend_backup_configuration;
 mod http_backup_configuration;
+mod http_file_history;
 pub use backend_backup_configuration::{ConfigureBackups, ReadBackupConfiguration};
 mod backend_archive;
 mod backend_create_file_branch;
@@ -685,16 +691,53 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         repository_id: &str,
     ) -> Result<DefaultDirectoryBranchSnapshot, ApiError>;
+    /// One bounded node page of a file's history bound to the exact current root.
     fn file_history_snapshot(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadFileHistory,
-    ) -> Result<crate::FileHistorySnapshot, crate::ApiError>;
-    fn file_history(
+    ) -> Result<crate::FileHistoryPage, crate::ApiError>;
+    fn file_history_node_parents(
         &self,
         identity: &Identity,
-        file: &str,
-    ) -> Result<Vec<storage_contract::FileVersion>, ApiError>;
+        request: crate::ReadNodeParents,
+    ) -> Result<crate::NodeParentsPage, ApiError>;
+    fn file_history_branches(
+        &self,
+        identity: &Identity,
+        request: crate::ReadHistoryBranches,
+    ) -> Result<crate::HistoryBranchesPage, ApiError>;
+    fn file_history_merges(
+        &self,
+        identity: &Identity,
+        request: crate::ReadHistoryMerges,
+    ) -> Result<crate::HistoryMergesPage, ApiError>;
+    fn file_history_merge_inputs(
+        &self,
+        identity: &Identity,
+        request: crate::ReadMergeInputs,
+    ) -> Result<crate::MergeInputsPage, ApiError>;
+    fn file_history_merge_parents(
+        &self,
+        identity: &Identity,
+        request: crate::ReadMergeParents,
+    ) -> Result<crate::MergeParentsPage, ApiError>;
+    fn file_history_node_field(
+        &self,
+        identity: &Identity,
+        request: crate::ReadNodeField,
+    ) -> Result<crate::NodeFieldSlice, ApiError>;
+    /// One bounded body-version page (advanced route), same root identity.
+    fn file_version_page(
+        &self,
+        identity: &Identity,
+        request: crate::ReadVersionPage,
+    ) -> Result<crate::VersionPage, ApiError>;
+    fn file_version_sources(
+        &self,
+        identity: &Identity,
+        request: crate::ReadVersionSources,
+    ) -> Result<crate::VersionSourcesPage, ApiError>;
     fn topology_snapshot(&self, identity: &Identity) -> Result<TopologySnapshot, ApiError>;
     fn placement_snapshot(
         &self,
@@ -1320,16 +1363,73 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadFileHistory,
-    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+    ) -> Result<crate::FileHistoryPage, crate::ApiError> {
         self.backend
             .file_history_snapshot(&self.current(identity)?, request)
     }
-    fn file_history(
+    fn file_history_node_parents(
         &self,
         identity: &crate::auth::Identity,
-        file: &str,
-    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
-        self.backend.file_history(&self.current(identity)?, file)
+        request: crate::ReadNodeParents,
+    ) -> Result<crate::NodeParentsPage, crate::ApiError> {
+        self.backend
+            .file_history_node_parents(&self.current(identity)?, request)
+    }
+    fn file_history_branches(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadHistoryBranches,
+    ) -> Result<crate::HistoryBranchesPage, crate::ApiError> {
+        self.backend
+            .file_history_branches(&self.current(identity)?, request)
+    }
+    fn file_history_merges(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadHistoryMerges,
+    ) -> Result<crate::HistoryMergesPage, crate::ApiError> {
+        self.backend
+            .file_history_merges(&self.current(identity)?, request)
+    }
+    fn file_history_merge_inputs(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadMergeInputs,
+    ) -> Result<crate::MergeInputsPage, crate::ApiError> {
+        self.backend
+            .file_history_merge_inputs(&self.current(identity)?, request)
+    }
+    fn file_history_merge_parents(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadMergeParents,
+    ) -> Result<crate::MergeParentsPage, crate::ApiError> {
+        self.backend
+            .file_history_merge_parents(&self.current(identity)?, request)
+    }
+    fn file_history_node_field(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadNodeField,
+    ) -> Result<crate::NodeFieldSlice, crate::ApiError> {
+        self.backend
+            .file_history_node_field(&self.current(identity)?, request)
+    }
+    fn file_version_page(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadVersionPage,
+    ) -> Result<crate::VersionPage, crate::ApiError> {
+        self.backend
+            .file_version_page(&self.current(identity)?, request)
+    }
+    fn file_version_sources(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadVersionSources,
+    ) -> Result<crate::VersionSourcesPage, crate::ApiError> {
+        self.backend
+            .file_version_sources(&self.current(identity)?, request)
     }
     fn topology_snapshot(
         &self,
@@ -1939,7 +2039,14 @@ fn router_shared(
         .route("/api/versions/{version}", get(version))
         .route("/api/versions/{version}/placement", get(placement))
         .route("/api/versions/{version}/checksums", get(checksums))
-        .route("/api/files/{file}/history", get(history))
+        .route(
+            "/api/files/{file}/history",
+            get(http_file_history::versions),
+        )
+        .route(
+            "/api/files/{file}/history/versions/{version}/sources",
+            get(http_file_history::version_sources),
+        )
         .route("/api/commits/{commit}", get(commit_info))
         .route("/api/history-trees/{history}/graph", get(graph))
         .route(
@@ -2135,7 +2242,11 @@ async fn security_headers(request: Request, next: Next) -> Response {
 }
 
 async fn json_body(request: Request) -> Result<Value, ApiError> {
-    let bytes = http_boundary::read_body(request, 1024 * 1024).await?;
+    let bytes = http_boundary::read_body(
+        request,
+        storage_contract::client_protocol::MAX_JSON_REQUEST_BYTES,
+    )
+    .await?;
     if bytes.is_empty() {
         Ok(json!({}))
     } else {
@@ -2389,26 +2500,6 @@ async fn placement(
             backend
                 .placement_snapshot(&identity, &version)
                 .map(backend_storage_metadata::PlacementResponse::from)
-        })
-        .await
-        .map(Json)
-}
-async fn history(
-    State(state): State<AppState>,
-    http_routing::Extension(identity): http_routing::Extension<Identity>,
-    ApiPath(file): ApiPath<String>,
-    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
-) -> Result<Json<backend_read::FileHistoryResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| {
-            backend
-                .file_history(&identity, &file)
-                .map(|versions| backend_read::FileHistoryResponse::new(file, versions))
         })
         .await
         .map(Json)

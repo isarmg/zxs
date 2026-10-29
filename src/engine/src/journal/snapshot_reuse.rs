@@ -16,8 +16,15 @@ impl PreparedSnapshot {
         &self,
         resources: &DiskResources,
         members: &[DiskConfig],
+        installs: &mut ObjectInstalls,
     ) -> Result<String> {
-        self.store_created(|object| object.store_at(resources, members))
+        self.store_created(|object| {
+            for disk in members {
+                object.store_on(&resources.get(disk)?.root, disk)?;
+                installs.record(object.bytes.len());
+            }
+            Ok(object.hash.clone())
+        })
     }
     fn store_created(
         &self,
@@ -67,6 +74,7 @@ impl PreparedSnapshot {
         resources: &DiskResources,
         members: &[DiskConfig],
         state: &State,
+        installs: &mut ObjectInstalls,
     ) -> Result<String> {
         self.store_with_read(
             members,
@@ -81,7 +89,9 @@ impl PreparedSnapshot {
                 )
             },
             |disk, kind, hash, bytes| {
-                write_object_bytes_at(&resources.get(disk)?.root, disk, kind, hash, bytes)
+                write_object_bytes_at(&resources.get(disk)?.root, disk, kind, hash, bytes)?;
+                installs.record(bytes.len());
+                Ok(())
             },
         )
     }

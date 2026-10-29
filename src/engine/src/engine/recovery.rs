@@ -112,6 +112,7 @@ impl Engine {
     pub(super) fn recover_mode(&mut self, mode: RecoveryMode) -> Result<()> {
         self.metadata_integrity.invalidate();
         self.published_state_base = None;
+        self.history_catalog = None;
         self.recovery_warnings = super::RecoveryWarnings::default();
         let members = self.members();
         let mut online = Vec::new();
@@ -330,6 +331,10 @@ impl Engine {
                         )?;
                     }
                     self.state = std::sync::Arc::new(next);
+                    self.history_catalog = Some(super::history_window::HistoryCatalog::recovered(
+                        &self.state,
+                        candidate.history_roots.clone(),
+                    ));
                 }
                 self.snapshot = Some(candidate.snapshot_hash);
                 continue;
@@ -411,40 +416,34 @@ impl Engine {
                     .filter(|p| p.recovery.is_some())
                     .map(|p| p.result.clone());
                 if let Some(publication) = publication {
-                    self.complete_published_candidate(
+                    let mut stages = super::publication::StageSequence::new(&hash, members.len());
+                    let replayed = self.complete_published_candidate(
                         &candidate,
                         &hash,
                         &next,
                         publication,
-                        |engine, d, pub_hash| {
-                            if let Some(receipt) = rs.iter().find(|receipt| {
-                                receipt.disk_id == d.disk_id
-                                    && receipt.record.record_type == RecordType::Publication
-                                    && receipt.record.sequence == candidate.sequence
-                                    && receipt.record.object_hash == pub_hash
-                            }) {
-                                Ok(receipt.clone())
-                            } else {
-                                match mode {
-                                    RecoveryMode::CompletePending => engine
-                                        .append_recovered_journal(
-                                            d,
-                                            RecordType::Publication,
-                                            candidate.sequence,
-                                            &hash,
-                                            pub_hash,
-                                        ),
-                                    RecoveryMode::PreservePending => engine.append_journal(
-                                        d,
-                                        RecordType::Publication,
-                                        candidate.sequence,
-                                        &hash,
-                                        pub_hash,
-                                    ),
-                                }
-                            }
+                        |d, pub_hash| {
+                            rs.iter()
+                                .find(|receipt| {
+                                    receipt.disk_id == d.disk_id
+                                        && receipt.record.record_type == RecordType::Publication
+                                        && receipt.record.sequence == candidate.sequence
+                                        && receipt.record.object_hash == pub_hash
+                                })
+                                .cloned()
                         },
-                    )?;
+                        match mode {
+                            RecoveryMode::CompletePending => AppendMode::Recovery,
+                            RecoveryMode::PreservePending => AppendMode::Live,
+                        },
+                        &mut stages,
+                    );
+                    self.last_publication_stages = Some(stages.finish(if replayed.is_ok() {
+                        "replayed"
+                    } else {
+                        "replay-failed"
+                    }));
+                    replayed?;
                 } else {
                     self.complete_candidate(&candidate, &hash, &next, None)?;
                 }
@@ -457,6 +456,10 @@ impl Engine {
                     )?;
                 }
                 self.state = std::sync::Arc::new(next);
+                self.history_catalog = Some(super::history_window::HistoryCatalog::recovered(
+                    &self.state,
+                    candidate.history_roots.clone(),
+                ));
                 self.snapshot = Some(candidate.snapshot_hash);
             } else if let Some(p) = publication {
                 if p.candidate_hash != hash || p.result.operation_id != candidate.operation_id {
@@ -491,6 +494,10 @@ impl Engine {
                     )?;
                 }
                 self.state = std::sync::Arc::new(next);
+                self.history_catalog = Some(super::history_window::HistoryCatalog::recovered(
+                    &self.state,
+                    candidate.history_roots.clone(),
+                ));
                 self.snapshot = Some(candidate.snapshot_hash);
                 self.blocked = true;
             } else {

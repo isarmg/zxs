@@ -68,22 +68,44 @@ python3 tools/rust-sources/collect_notices.py --output /tmp/rust-notice-review
 
 `proof_legacy_maintenance.py` 只为 `src/foundation/networking/http-transport` 提供
 同路径、同身份的连续源码内容维护。既有首张 demand 比较修正收据保持原字节及摘要；
-后继仍采用 schema 1，完整 `before` / `after` 所有者快照和精确补丁共同受收据摘要约束，
+普通内容后继采用 schema 1，上游修复回移采用 schema 2；完整 `before` / `after`
+所有者快照和精确补丁共同受收据摘要约束，
 `parent` 必须指向紧邻前序，`before` 必须等于其完整 `after`。
 经审阅的收据 ID 显式追加到工具的 `RECEIPTS`，普通 refresh 不发现或自动接受未知收据。
 
-后继只允许已有 `src/*.rs` 文件内容变化；生产文件集合、包名、版本、上游身份、
-许可证、布局和外置测试完整快照不变。Cargo 清单、增加/移除/移动文件、升级、退役、
+schema 1 后继只允许已有 `src/*.rs` 文件内容变化，外置测试快照不变。
+schema 2 还允许已认证上游文件对应的既有抽取测试切片变化；生产及外测文件集合、
+包名、版本、上游身份、许可证和布局不变。Cargo 清单、增加/移除/移动文件、升级、退役、
 重命名及其它所有者均不在此适配器的授权范围。每次 refresh 只接受一个紧邻后继，
 重复 refresh 必须保持同一最终快照；verify 要求完整已登记链。验证从真实当前文件
 逐步逆向重建到原维护和布局证明，逐步核对完整集合与摘要，不用归档替代缺失活动文件。
 沿用既有单收据解压、文件、补丁与活动字节预算，不新增维护次数上限。
 
-本适配器**不支持外置测试内容变更**，包括已有外部路径修正证明覆盖的测试。
-这类维护需要另行设计维护、外部路径修正和布局证明的认证组合，不能跳过先执行的
-外部路径修正字节检查。工具测试中的后继仅为临时合成夹具，不是新上游修复、
-安全 backport 或完整组件升级的验收。源码治理、实际消费者回归及公告扫描仍分别验证；
-任何公告 finding 的处理政策不因增加这条源码维护链而改变。
+schema 2 的 `source_backport.py` 从 origins、consolidation、layout 和 source-moves
+重建生产／测试路由，按上游 base 的唯一逐行切片定位外测，记录确定性三方合并、
+标识符变换和绑定具体冲突摘要的人工解决。`apply` 在当前认证布局上重新核对路由、
+精确切片、文件字节及重放结果，拒绝越界、链接、缺失文件和未授权目标后才写入。
+普通 `refresh` / `verify` 也从整链逆向恢复后的字节重新认证切片，不只是检查合并自洽；
+这一步不递归读取仍在构造的 layout adapter。已有外部路径修正证明覆盖的测试仍禁止改写。
+失败计划和冲突保留在仓库外 `attempts/`；失败写入恢复原内容，恢复失败附加到原错误，
+不替换首要异常。该离线维护工具要求独占工作副本，不承诺与并行改写仓库的进程竞争安全。
+
+当前实际回移为 hyper `97fff93e53f9e6a993f2d6a25d50883b7b8752a7`（#4222），
+收据 `c75e73b0b8aab76fc3934f6c72620127795b8c95ec7bc0f52d173664e477938d`。
+它保留 `http-transport@1.12.0` / `hyper@1.12.0` 来源和扫描身份；不将本地回移伪装成升级。
+收据的 `consumer_tests.executed` 为 `{}`，仅证明当时没有登记执行结果，不能回填或改写。
+后续 CI 的提交、命令、日志和结果独立保存，不由收据存在推断测试已通过。
+
+`test/foundation/http-transport/unit/src/proto/h1/dispatch/tests_770.rs` 保留上游测试，
+但 HTTP 门禁把组件作为依赖编译，不运行这一单元模块；当前也没有引入其
+`tokio-test` / `pretty_env_logger` 依赖。实际可执行的等价回归位于
+`test/architecture/http-transport/backport.rs`：公开 API 覆盖 reset / EOF、
+正常及 `poll_without_shutdown` 驱动、协作预算耗尽时 drain Pending／唤醒、原始错误链、
+保持 sender 和 connection 存活时的取消，以及 upgrade 移交。它们是项目新作，不冒充
+上游测试已执行；既有 25 项行为测试仍保留，门禁总数为 30。源码治理、消费者回归及
+公告扫描分别验证；公告 finding 政策不因回移而改变。
+
+维护命令和生成输出边界见 [HTTP 回移验证](../validation/http-backport.md)。
 
 ## 基础组件测试覆盖映射
 

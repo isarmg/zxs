@@ -126,6 +126,41 @@ fn recorded_backup_configuration() -> storage_contract::BackupConfigurationSnaps
     }
 }
 
+fn rooted_query() -> BTreeMap<String, String> {
+    BTreeMap::from([("history_root".to_owned(), recorded_root())])
+}
+fn recorded_root() -> String {
+    "ab".repeat(32)
+}
+fn recorded_continuation(kind: crate::backend_file_history::CursorKind) -> crate::Continuation {
+    crate::Continuation {
+        direction: crate::backend_file_history::PageDirection::Forward,
+        seed: crate::backend_file_history::HistoryCursorSeed::new(
+            kind,
+            &recorded_root(),
+            "history",
+            "file",
+            &json!({"recorded":true}),
+        ),
+        more_before: false,
+        more_after: false,
+    }
+}
+fn recorded_slice<T>(
+    request: &crate::backend_file_history::ReadIndexedSlice,
+    items: Vec<T>,
+) -> crate::backend_file_history::IndexedSlice<T> {
+    crate::backend_file_history::IndexedSlice {
+        file_id: request.file_id.as_str().into(),
+        history_tree_id: "history".into(),
+        history_root: recorded_root(),
+        subject_id: request.subject_id.as_str().into(),
+        offset: request.offset,
+        total: items.len(),
+        items,
+    }
+}
+
 impl Backend for RecordingBackend {
     fn operation(
         &self,
@@ -911,35 +946,166 @@ impl Backend for RecordingBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadFileHistory,
-    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+    ) -> Result<crate::FileHistoryPage, crate::ApiError> {
         self.record(
             "file_history_snapshot",
             Some(identity),
-            json!({"file_id": request.file_id(), "location": request.location().map(|(repository_id, path)| json!({"repository_id":repository_id,"path":path.as_str(),"key":path.key()}))}),
+            json!({"file_id": request.file_id(), "limit": request.limit, "location": request.location().map(|(repository_id, path)| json!({"repository_id":repository_id,"path":path.as_str(),"key":path.key()}))}),
         )?;
-        Ok(crate::FileHistorySnapshot {
+        Ok(crate::FileHistoryPage {
             file_id: request.file_id().into(),
             repository_id: "repo".into(),
-            path: None,
-            note: String::new(),
-            current_node_id: None,
-            selected_branch_id: None,
-            versions: vec![],
+            history_tree_id: "history".into(),
+            history_root: recorded_root(),
+            context: crate::HistoryContext {
+                path: None,
+                note: String::new(),
+                current_node_id: None,
+                selected_branch_id: None,
+                content: None,
+            },
             nodes: vec![],
-            branches: vec![],
-            merges: vec![],
-            content: None,
+            continuation: recorded_continuation(crate::backend_file_history::CursorKind::Nodes),
+            anchor: None,
+            limit: request.limit,
         })
     }
-    fn file_history(
+    fn file_history_node_parents(
         &self,
         identity: &crate::auth::Identity,
-        file: &str,
-    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
-        self.record("file_history", Some(identity), json!({"file_id":file}))?;
+        request: crate::ReadNodeParents,
+    ) -> Result<crate::NodeParentsPage, crate::ApiError> {
+        self.record(
+            "file_history_node_parents",
+            Some(identity),
+            json!({"file_id": request.collection.file_id.as_str(), "node_id": request.node_id.as_str(), "limit": request.collection.limit, "root": request.collection.root.as_str()}),
+        )?;
+        Ok(crate::NodeParentsPage {
+            file_id: request.collection.file_id.as_str().into(),
+            history_tree_id: "history".into(),
+            history_root: recorded_root(),
+            node_id: request.node_id.as_str().into(),
+            parents: vec!["parent".into()],
+            continuation: recorded_continuation(crate::backend_file_history::CursorKind::Parents),
+        })
+    }
+    fn file_history_branches(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadHistoryBranches,
+    ) -> Result<crate::HistoryBranchesPage, crate::ApiError> {
+        self.record(
+            "file_history_branches",
+            Some(identity),
+            json!({"file_id": request.0.file_id.as_str(), "limit": request.0.limit, "root": request.0.root.as_str()}),
+        )?;
+        Ok(crate::HistoryBranchesPage {
+            file_id: request.0.file_id.as_str().into(),
+            history_tree_id: "history".into(),
+            history_root: recorded_root(),
+            selected_branch_id: None,
+            branches: vec![],
+            continuation: recorded_continuation(crate::backend_file_history::CursorKind::Branches),
+        })
+    }
+    fn file_history_merges(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadHistoryMerges,
+    ) -> Result<crate::HistoryMergesPage, crate::ApiError> {
+        self.record(
+            "file_history_merges",
+            Some(identity),
+            json!({"file_id": request.0.file_id.as_str(), "limit": request.0.limit, "root": request.0.root.as_str()}),
+        )?;
+        Ok(crate::HistoryMergesPage {
+            file_id: request.0.file_id.as_str().into(),
+            history_tree_id: "history".into(),
+            history_root: recorded_root(),
+            merges: vec![],
+            continuation: recorded_continuation(crate::backend_file_history::CursorKind::Merges),
+        })
+    }
+    fn file_history_merge_inputs(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadMergeInputs,
+    ) -> Result<crate::MergeInputsPage, crate::ApiError> {
+        self.record(
+            "file_history_merge_inputs",
+            Some(identity),
+            json!({"file_id": request.0.file_id.as_str(), "merge_id": request.0.subject_id.as_str(), "offset": request.0.offset, "limit": request.0.limit, "root": request.0.root.as_str()}),
+        )?;
+        Ok(recorded_slice(
+            &request.0,
+            vec![("branch".into(), "node".into())],
+        ))
+    }
+    fn file_history_merge_parents(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadMergeParents,
+    ) -> Result<crate::MergeParentsPage, crate::ApiError> {
+        self.record(
+            "file_history_merge_parents",
+            Some(identity),
+            json!({"file_id": request.0.file_id.as_str(), "merge_id": request.0.subject_id.as_str(), "offset": request.0.offset, "limit": request.0.limit, "root": request.0.root.as_str()}),
+        )?;
+        Ok(recorded_slice(&request.0, vec!["parent".into()]))
+    }
+    fn file_history_node_field(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadNodeField,
+    ) -> Result<crate::NodeFieldSlice, crate::ApiError> {
+        self.record(
+            "file_history_node_field",
+            Some(identity),
+            json!({"file_id": request.file_id.as_str(), "node_id": request.node_id.as_str(), "field": request.field.as_str(), "offset": request.offset, "max_bytes": request.max_bytes, "root": request.root.as_str()}),
+        )?;
+        Ok(crate::NodeFieldSlice {
+            file_id: request.file_id.as_str().into(),
+            history_tree_id: "history".into(),
+            history_root: recorded_root(),
+            node_id: request.node_id.as_str().into(),
+            field: request.field,
+            total_bytes: 4,
+            offset: request.offset,
+            text: "text".into(),
+            complete: true,
+        })
+    }
+    fn file_version_page(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadVersionPage,
+    ) -> Result<crate::VersionPage, crate::ApiError> {
+        self.record(
+            "file_version_page",
+            Some(identity),
+            json!({"file_id": request.file_id.as_str(), "limit": request.limit, "root": request.root().map(|root| root.as_str())}),
+        )?;
         let mut version = recorded_version("version").version;
-        version.file_id = file.into();
-        Ok(vec![version])
+        version.file_id = request.file_id.as_str().into();
+        Ok(crate::VersionPage {
+            file_id: request.file_id.as_str().into(),
+            history_tree_id: "history".into(),
+            history_root: recorded_root(),
+            versions: vec![crate::VersionSummary::from(&version)],
+            continuation: recorded_continuation(crate::backend_file_history::CursorKind::Versions),
+        })
+    }
+    fn file_version_sources(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadVersionSources,
+    ) -> Result<crate::VersionSourcesPage, crate::ApiError> {
+        self.record(
+            "file_version_sources",
+            Some(identity),
+            json!({"file_id": request.0.file_id.as_str(), "version_id": request.0.subject_id.as_str(), "offset": request.0.offset, "limit": request.0.limit, "root": request.0.root.as_str()}),
+        )?;
+        Ok(recorded_slice(&request.0, vec!["source".into()]))
     }
     fn topology_snapshot(
         &self,
@@ -1696,24 +1862,31 @@ impl Fixture {
                         identity,
                         crate::ReadFileHistory::parse(
                             "file".into(),
-                            Some("repository".into()),
-                            Some("Café/report.txt".into()),
+                            BTreeMap::from([("repository_id".to_owned(),"repository".to_owned()),("path".to_owned(),"Café/report.txt".to_owned())]),
                         ).unwrap(),
                     )
-                    .map(|snapshot| {
-                        assert_eq!(snapshot.file_id, "file");
-                        assert!(snapshot.path.is_none());
+                    .map(|page| {
+                        assert_eq!(page.file_id, "file");
+                        assert!(page.context.path.is_none());
+                        assert_eq!(page.history_root, recorded_root());
                         json!({"returned_by":"file_history_snapshot"})
                     }),
             ),
+            ("file_history_node_parents", backend.file_history_node_parents(identity, crate::ReadNodeParents::parse("file".into(), "node".into(), rooted_query()).unwrap()).map(|page| { assert_eq!(page.parents, ["parent"]); json!({"returned_by":"file_history_node_parents"}) })),
+            ("file_history_branches", backend.file_history_branches(identity, crate::ReadHistoryBranches::parse("file".into(), rooted_query()).unwrap()).map(|page| { assert!(page.branches.is_empty()); json!({"returned_by":"file_history_branches"}) })),
+            ("file_history_merges", backend.file_history_merges(identity, crate::ReadHistoryMerges::parse("file".into(), rooted_query()).unwrap()).map(|page| { assert!(page.merges.is_empty()); json!({"returned_by":"file_history_merges"}) })),
+            ("file_history_merge_inputs", backend.file_history_merge_inputs(identity, crate::ReadMergeInputs(crate::backend_file_history::ReadIndexedSlice::parse("file".into(), "merge_id", "merge".into(), rooted_query()).unwrap())).map(|page| { assert_eq!(page.total, 1); json!({"returned_by":"file_history_merge_inputs"}) })),
+            ("file_history_merge_parents", backend.file_history_merge_parents(identity, crate::ReadMergeParents(crate::backend_file_history::ReadIndexedSlice::parse("file".into(), "merge_id", "merge".into(), rooted_query()).unwrap())).map(|page| { assert_eq!(page.items, ["parent"]); json!({"returned_by":"file_history_merge_parents"}) })),
+            ("file_history_node_field", backend.file_history_node_field(identity, crate::ReadNodeField::parse("file".into(), "node".into(), "message".into(), rooted_query()).unwrap()).map(|slice| { assert_eq!(slice.text, "text"); json!({"returned_by":"file_history_node_field"}) })),
             (
-                "file_history",
-                backend.file_history(identity, "file").map(|versions| {
-                    assert_eq!(versions[0].logical_size, u64::MAX);
-                    assert_eq!(versions[0].file_id, "file");
-                    json!({"returned_by":"file_history"})
+                "file_version_page",
+                backend.file_version_page(identity, crate::ReadVersionPage::parse("file".into(), BTreeMap::new()).unwrap()).map(|page| {
+                    assert_eq!(page.versions[0].logical_size, u64::MAX);
+                    assert_eq!(page.versions[0].file_id, "file");
+                    json!({"returned_by":"file_version_page"})
                 }),
             ),
+            ("file_version_sources", backend.file_version_sources(identity, crate::ReadVersionSources(crate::backend_file_history::ReadIndexedSlice::parse("file".into(), "version_id", "version".into(), rooted_query()).unwrap())).map(|page| { assert_eq!(page.items, ["source"]); json!({"returned_by":"file_version_sources"}) })),
             (
                 "topology_snapshot",
                 backend.topology_snapshot(identity).map(|snapshot| {
@@ -2115,8 +2288,15 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"slot_id":"P01","path":"Folder","limit":200,"query":"","cursor":false,"selected":null}),
         json!({"repository_id":"repository","key":"folder","summary":true}),
         json!({"repository_id":"repository"}),
-        json!({"file_id":"file","location":{"repository_id":"repository","path":"Café/report.txt","key":"café/report.txt"}}),
-        json!({"file_id":"file"}),
+        json!({"file_id":"file","limit":50,"location":{"repository_id":"repository","path":"Café/report.txt","key":"café/report.txt"}}),
+        json!({"file_id":"file","node_id":"node","limit":100,"root":"abababababababababababababababababababababababababababababababab"}),
+        json!({"file_id":"file","limit":100,"root":"abababababababababababababababababababababababababababababababab"}),
+        json!({"file_id":"file","limit":50,"root":"abababababababababababababababababababababababababababababababab"}),
+        json!({"file_id":"file","merge_id":"merge","offset":0,"limit":200,"root":"abababababababababababababababababababababababababababababababab"}),
+        json!({"file_id":"file","merge_id":"merge","offset":0,"limit":200,"root":"abababababababababababababababababababababababababababababababab"}),
+        json!({"file_id":"file","node_id":"node","field":"message","offset":0,"max_bytes":65536,"root":"abababababababababababababababababababababababababababababababab"}),
+        json!({"file_id":"file","limit":100,"root":null}),
+        json!({"file_id":"file","version_id":"version","offset":0,"limit":200,"root":"abababababababababababababababababababababababababababababababab"}),
         Value::Null,
         json!({"version_id":"version"}),
         json!({}),

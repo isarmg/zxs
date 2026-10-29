@@ -308,10 +308,7 @@ fn lost_core_publication_reply_requires_reconciliation_before_the_next_mutation(
             .find(|entry| entry.path == "report.txt")
             .unwrap();
         assert_eq!(
-            backend
-                .file_history(&session.identity, &entry.file_id)
-                .unwrap()
-                .len(),
+            super::version_count(backend.as_ref(), &session.identity, &entry.file_id),
             3
         );
     }
@@ -363,11 +360,8 @@ fn write_through_reports_and_saves_every_change() {
         .into_iter()
         .find(|entry| entry.path == "report.txt")
         .unwrap();
-    let history = backend
-        .file_history(&session.identity, &entry.file_id)
-        .unwrap();
     assert_eq!(
-        history.len(),
+        super::version_count(backend.as_ref(), &session.identity, &entry.file_id),
         3,
         "the initial version plus one save per change"
     );

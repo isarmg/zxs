@@ -4,9 +4,22 @@ use crate::journal::RecordType;
 use crate::{disk::*, journal::*, *};
 use json_codec::json;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 #[path = "verified_payloads.rs"]
 mod verified_payloads;
 use verified_payloads::{MAX_HELD_PAYLOAD_FILES, PayloadPreparation, VerifiedPayloadSet};
+#[path = "publication/stages.rs"]
+mod stages;
+use stages::TaskOutcome;
+pub use stages::{PublicationStageReport, StageIo, StageKind, StageTiming};
+#[path = "publication/member_protocol.rs"]
+mod member_protocol;
+#[cfg(feature = "fault-injection")]
+pub(super) use member_protocol::ArmedMemberFault;
+#[cfg(feature = "fault-injection")]
+pub use member_protocol::MemberFault;
+pub(crate) use member_protocol::StageSequence;
+use member_protocol::{AppendMode, ProofDisks, group_proof_targets, target_items};
 
 type ExistingCopies<'a> = Vec<Option<VerifiedExisting<'a>>>;
 
@@ -30,6 +43,12 @@ impl PublishedStateBase {
     /// not the disk/configuration authority required for graph reuse below.
     pub(super) fn names_captured_for(&self, state: &std::sync::Arc<State>) -> bool {
         self.state.ptr_eq(&std::sync::Arc::downgrade(state))
+    }
+
+    /// The owner index captured with this publication; valid only for callers
+    /// that checked `names_captured_for` against the current State allocation.
+    pub(super) fn history_owners(&self) -> &crate::state_projection::DerivedOwners {
+        &self.history_owners
     }
 
     fn matches(&self, engine: &crate::engine::PlanningContext<'_>, config_hash: &str) -> bool {
@@ -100,6 +119,9 @@ pub(crate) struct DetachedPublication {
     snapshot_basis: SnapshotReuse,
     history_basis: crate::metadata_map::MapRoot,
     history_owners: crate::state_projection::DerivedOwners,
+    /// Preparation stage timings, prepended to the decision stages.
+    preparation_stages: Vec<StageTiming>,
+    preparation_started: std::time::Instant,
 }
 
 enum Completion<'a> {
@@ -108,6 +130,17 @@ enum Completion<'a> {
         names: crate::container_storage::PreparedNames,
     },
     Recovery,
+}
+
+/// Logical bytes of a successful proof install plus explicitly observed reads.
+/// Compare-and-sync of an identical proof counts as a completed install.
+fn proof_io(written: &[u8], read: u64) -> StageIo {
+    StageIo {
+        proofs_completed: 1,
+        logical_bytes_completed: written.len() as u64,
+        observed_bytes_read: read,
+        ..StageIo::default()
+    }
 }
 
 impl Engine {
@@ -161,7 +194,7 @@ impl Engine {
                 !reuse.matches(&self.planning_context(), &detached.config_hash)
             })
             || !self.config.same_admission(&detached.base_config)
-            || !std::sync::Arc::ptr_eq(&self.disk_resources, &detached.disk_resources)
+            || !Arc::ptr_eq(&self.disk_resources, &detached.disk_resources)
             || self.root != detached.base_root
             || self.snapshot != detached.base_snapshot
             || self.state.sequence != detached.base_sequence
@@ -187,6 +220,8 @@ impl Engine {
             metadata_epoch,
             prepared_epoch,
             reused_dependencies,
+            preparation_stages,
+            preparation_started,
             ..
         } = detached;
         verified
@@ -225,52 +260,74 @@ impl Engine {
                 "decision sequence exhausted",
             )
         })?;
-        #[cfg(feature = "fault-injection")]
-        let mut prepared = 0;
-        for d in &members {
-            candidate_object.store_at(&self.disk_resources, std::slice::from_ref(d))?;
-            self.append_journal(
-                d,
-                RecordType::Prepare,
-                candidate.sequence,
-                &hash,
-                &candidate.snapshot_hash,
-            )?;
-            #[cfg(feature = "fault-injection")]
-            {
-                prepared += 1;
-                self.failpoint(&format!("after_prepare_{prepared}"))?;
-            }
+        let mut stages = StageSequence::started_at(&hash, members.len(), preparation_started);
+        stages.prepend(preparation_stages);
+        // PREPARE: candidate object store then PREPARE append, per member.
+        // A failure here is reported as is; no ACCEPT exists anywhere yet.
+        let prepare = self.run_member_stage(
+            &mut stages,
+            StageKind::Prepare,
+            &members,
+            Some("after_prepare_"),
+            |task| {
+                let mut io = StageIo::default();
+                let value = (|| {
+                    candidate_object.store_on(&task.handle.root, task.disk)?;
+                    io.objects_completed += 1;
+                    io.logical_bytes_completed += candidate_object.bytes().len() as u64;
+                    member_protocol::append_record(
+                        task,
+                        AppendMode::Live,
+                        RecordType::Prepare,
+                        candidate.sequence,
+                        &hash,
+                        &candidate.snapshot_hash,
+                        &mut io,
+                    )
+                })();
+                TaskOutcome { value, io }
+            },
+        );
+        if let Err(error) = prepare {
+            self.last_publication_stages = Some(stages.finish("prepare-failed"));
+            return Err(error);
         }
         drop(candidate_object);
-        #[cfg(feature = "fault-injection")]
-        self.failpoint("before_decision_admission")?;
-        // PREPARE can take time after the complete payload check. Check all
-        // required held seals once at the decision boundary, before the epoch
-        // fence, so an unobserved seal replacement cannot authorize ACCEPT or
-        // mint a published dependency base.
-        super::provenance::validate_candidate_seals(
-            &self.config,
-            &self.disk_resources,
-            &candidate,
-            &self.metadata_integrity,
-        )
-        .map_err(|error| {
-            let message = format!("prepared disk seal changed before decision: {error}");
-            error
-                .context(ErrorCode::PreparationStale, message)
-                .retryable()
-        })?;
-        if let Some(reuse) = reused_dependencies {
-            reuse.admit(&self.planning_context(), &config_hash)?;
-        } else if !prepared_epoch.matches(&self.metadata_integrity) {
-            // Full installation has its own exact post-store epoch. A shared
-            // fault observed during PREPARE wins before decision admission too.
-            return Err(Error::new(
-                ErrorCode::PreparationStale,
-                "metadata changed after complete dependency preparation",
+        let admission = (|| {
+            #[cfg(feature = "fault-injection")]
+            self.failpoint("before_decision_admission")?;
+            // PREPARE can take time after the complete payload check. Check all
+            // required held seals once at the decision boundary, before the epoch
+            // fence, so an unobserved seal replacement cannot authorize ACCEPT or
+            // mint a published dependency base.
+            super::provenance::validate_candidate_seals(
+                &self.config,
+                &self.disk_resources,
+                &candidate,
+                &self.metadata_integrity,
             )
-            .retryable());
+            .map_err(|error| {
+                let message = format!("prepared disk seal changed before decision: {error}");
+                error
+                    .context(ErrorCode::PreparationStale, message)
+                    .retryable()
+            })?;
+            if let Some(reuse) = reused_dependencies {
+                reuse.admit(&self.planning_context(), &config_hash)?;
+            } else if !prepared_epoch.matches(&self.metadata_integrity) {
+                // Full installation has its own exact post-store epoch. A shared
+                // fault observed during PREPARE wins before decision admission too.
+                return Err(Error::new(
+                    ErrorCode::PreparationStale,
+                    "metadata changed after complete dependency preparation",
+                )
+                .retryable());
+            }
+            Ok(())
+        })();
+        if let Err(error) = admission {
+            self.last_publication_stages = Some(stages.finish("admission-refused"));
+            return Err(error);
         }
         // Admission is after every PREPARE and before first ACCEPT. The short
         // schedule/epoch fence has now committed to starting this decision;
@@ -288,11 +345,19 @@ impl Engine {
                     payloads: &verified,
                     names,
                 },
+                &mut stages,
             )
         })();
         if let Err(e) = finish {
             self.metadata_integrity.invalidate();
-            let message = format!("{e}; query operation {} and recover", result.operation_id);
+            let message = match stages.failure() {
+                Some(stage) => format!(
+                    "{e} ({stage}); query operation {} and recover",
+                    result.operation_id
+                ),
+                None => format!("{e}; query operation {} and recover", result.operation_id),
+            };
+            self.last_publication_stages = Some(stages.finish("in-doubt"));
             return Err(e
                 .context(storage_contract::ErrorCode::InDoubt, message)
                 .retryable());
@@ -313,11 +378,18 @@ impl Engine {
         let previous = std::mem::replace(&mut self.state, std::sync::Arc::new(next));
         self.snapshot = Some(candidate.snapshot_hash.clone());
         self.update_index(&previous);
+        // The published catalog is this State's root identity for history reads.
+        // It is bound unconditionally: a root names admitted content, it is not
+        // the metadata-epoch reuse permit tracked by the base below.
+        self.history_catalog = Some(super::history_window::HistoryCatalog::published(
+            &self.state,
+            history_basis.clone(),
+        ));
         // Only the completed member publication establishes this proof. SQLite is
         // a disposable accelerator, not a dependency of the authoritative closure.
         self.published_state_base = metadata_epoch.matches(&self.metadata_integrity).then(|| {
-            std::sync::Arc::new(PublishedStateBase {
-                state: std::sync::Arc::downgrade(&self.state),
+            Arc::new(PublishedStateBase {
+                state: Arc::downgrade(&self.state),
                 metadata_epoch,
                 snapshot: candidate.snapshot_hash,
                 sequence: self.state.sequence,
@@ -328,6 +400,7 @@ impl Engine {
                 history_owners,
             })
         });
+        self.last_publication_stages = Some(stages.finish("published"));
         self.blocked = false;
         Ok(result)
     }
@@ -342,15 +415,34 @@ impl Engine {
         next: &State,
         existing: Option<Publication>,
     ) -> Result<()> {
-        self.complete_candidate_verified(c, hash, next, existing, Completion::Recovery)
+        let mut stages = StageSequence::new(hash, self.members().len());
+        let result = self.complete_candidate_verified(
+            c,
+            hash,
+            next,
+            existing,
+            Completion::Recovery,
+            &mut stages,
+        );
+        self.last_publication_stages = Some(stages.finish(if result.is_ok() {
+            "recovered"
+        } else {
+            "recovery-failed"
+        }));
+        result
     }
+    /// Replay a verified existing Publication onto every member. `receipt`
+    /// resolves one member's PUBLICATION receipt: an already journaled frame is
+    /// returned as is, otherwise the record is appended in `mode`.
     pub(super) fn complete_published_candidate(
         &mut self,
         c: &Candidate,
         hash: &str,
         next: &State,
         publication: Publication,
-        mut append_receipt: impl FnMut(&mut Engine, &DiskConfig, &str) -> Result<Receipt>,
+        existing_receipt: impl Fn(&DiskConfig, &str) -> Option<Receipt> + Sync,
+        mode: AppendMode,
+        stages: &mut StageSequence,
     ) -> Result<()> {
         self.verify_candidate_membership(c)?;
         if publication.candidate_hash != hash
@@ -373,18 +465,38 @@ impl Engine {
         let publication_object =
             PreparedMetadataObject::new("publication", &publication, MAX_METADATA)?;
         let pub_hash = publication_object.hash.clone();
-        let mut publication_receipts = Vec::new();
-        for d in self.members() {
-            publication_object.store_at(&self.disk_resources, std::slice::from_ref(&d))?;
-            publication_receipts.push(append_receipt(self, &d, &pub_hash)?);
-            #[cfg(feature = "fault-injection")]
-            if publication.recovery.is_some() {
-                self.failpoint(&format!(
-                    "after_recovery_publication_{}",
-                    publication_receipts.len()
-                ))?;
-            }
-        }
+        let members = self.members();
+        let publication_receipts = self.run_member_stage(
+            stages,
+            StageKind::Publication,
+            &members,
+            // Only a recovery publication has per-member failpoints on replay.
+            publication
+                .recovery
+                .is_some()
+                .then_some("after_recovery_publication_"),
+            |task| {
+                let mut io = StageIo::default();
+                let value = (|| {
+                    publication_object.store_on(&task.handle.root, task.disk)?;
+                    io.objects_completed += 1;
+                    io.logical_bytes_completed += publication_object.bytes().len() as u64;
+                    match existing_receipt(task.disk, &pub_hash) {
+                        Some(receipt) => Ok(receipt),
+                        None => member_protocol::append_record(
+                            task,
+                            mode,
+                            RecordType::Publication,
+                            c.sequence,
+                            hash,
+                            &pub_hash,
+                            &mut io,
+                        ),
+                    }
+                })();
+                TaskOutcome { value, io }
+            },
+        )?;
         drop(publication_object);
         let seal = PublicationSeal {
             candidate_hash: hash.into(),
@@ -392,89 +504,41 @@ impl Engine {
             receipts: publication_receipts.clone(),
         };
         verify_publication_seal(c, &publication, &seal)?;
-        for d in self.members() {
-            self.disk_resources.get(&d)?.root.write_json(
-                &publication_seal_path(&d, hash),
-                &seal,
-                false,
-            )?;
-        }
+        self.write_seals(stages, &members, hash, &seal)?;
         // Historical success is preserved even if bytes were later purged or lost.
         // Reconstruct only its original proof, never claim a newly verified payload.
-        for evidence in &c.versions {
-            for slot in &evidence.placement.route_slot_ids {
-                let d = self.disk(slot)?;
-                let Some(handle) = self.disk_resources.available(d) else {
-                    continue;
-                };
-                let dir = version_dir(
-                    d,
-                    &evidence.version.history_tree_id,
-                    &evidence.version.version_id,
-                );
-                match handle.root.directory(&dir) {
-                    Ok(_) => {}
-                    Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
-                    | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
-                        if error.kind() == std::io::ErrorKind::NotFound =>
-                    {
-                        continue;
+        // A payload disk absent from this admission is skipped, as before.
+        let armed = self.take_member_fault(StageKind::PublicationProofs);
+        let targets = group_proof_targets(self, c, ProofDisks::Available)?;
+        let state = &self.state;
+        self.run_disk_stage(
+            stages,
+            StageKind::PublicationProofs,
+            &armed,
+            &targets,
+            |task| {
+                let mut io = StageIo::default();
+                let value = (|| {
+                    for &(index, slot) in target_items(&targets, task) {
+                        let evidence = &c.versions[index];
+                        repair_historical_proofs(
+                            state,
+                            task.handle,
+                            task.disk,
+                            slot,
+                            evidence,
+                            hash,
+                            &publication,
+                            &publication_receipts,
+                            c,
+                            &mut io,
+                        )?;
                     }
-                    Err(error) => return Err(error),
-                }
-                let proof = CommitProof {
-                    candidate_hash: hash.into(),
-                    finalize: publication.finalize.clone(),
-                    version_hash: object_hash("version", &evidence.version)?,
-                    disk_id: d.disk_id.clone(),
-                    slot_id: slot.clone(),
-                    route_slot_ids: evidence.placement.route_slot_ids.clone(),
-                };
-                let expected = publication
-                    .payload_receipts
-                    .iter()
-                    .find(|r| r.version_id == evidence.version.version_id && r.slot_id == *slot);
-                let Some(expected) = expected else {
-                    if publication.recovery.is_some() {
-                        continue;
-                    }
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::PublicationInvalid,
-                        "stored local receipt missing",
-                    ));
-                };
-                if expected.proof_hash != object_hash("commit-proof", &proof)? {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::PublicationInvalid,
-                        "stored local receipt differs",
-                    ));
-                }
-                // The first published placement on this slot owns the root
-                // proof. Derive that fact from the replayed prefix, not a
-                // possibly corrupt local commit-proof candidate pointer.
-                let first_on_slot = self
-                    .state
-                    .placements
-                    .get(&evidence.version.version_id)
-                    .is_none_or(|placement| !placement.route_slot_ids.contains(slot));
-                let proof_dir = if first_on_slot {
-                    dir
-                } else {
-                    local_proof_directory_at(&handle.root, &dir, hash)?
-                };
-                repair_local_proof(&handle.root, &proof_dir.join("commit-proof.json"), &proof)?;
-                repair_local_proof(
-                    &handle.root,
-                    &proof_dir.join("publication-proof.json"),
-                    &LocalPublicationRef {
-                        candidate: c,
-                        publication: &publication,
-                        commit_proof: &proof,
-                        publication_receipts: &publication_receipts,
-                    },
-                )?;
-            }
-        }
+                    Ok(())
+                })();
+                TaskOutcome { value, io }
+            },
+        )?;
         Ok(())
     }
     fn complete_candidate_verified(
@@ -484,20 +548,13 @@ impl Engine {
         next: &State,
         existing: Option<Publication>,
         completion: Completion<'_>,
+        stages: &mut StageSequence,
     ) -> Result<()> {
-        let (verified, names, append) = match completion {
-            Completion::Prepared { payloads, names } => (
-                Some(payloads),
-                Some(names),
-                Engine::append_journal
-                    as fn(&mut Engine, &DiskConfig, RecordType, u64, &str, &str) -> Result<Receipt>,
-            ),
-            Completion::Recovery => (
-                None,
-                None,
-                Engine::append_recovered_journal
-                    as fn(&mut Engine, &DiskConfig, RecordType, u64, &str, &str) -> Result<Receipt>,
-            ),
+        let (verified, names, mode) = match completion {
+            Completion::Prepared { payloads, names } => {
+                (Some(payloads), Some(names), AppendMode::Live)
+            }
+            Completion::Recovery => (None, None, AppendMode::Recovery),
         };
         if let Some(publication) = existing {
             return self.complete_published_candidate(
@@ -505,16 +562,9 @@ impl Engine {
                 hash,
                 next,
                 publication,
-                |engine, d, pub_hash| {
-                    append(
-                        engine,
-                        d,
-                        RecordType::Publication,
-                        c.sequence,
-                        hash,
-                        pub_hash,
-                    )
-                },
+                |_, _| None,
+                mode,
+                stages,
             );
         }
         self.verify_candidate_membership(c)?;
@@ -552,73 +602,121 @@ impl Engine {
             )?;
         }
         let members = self.members();
-        let mut accepts = Vec::new();
-        for d in &members {
-            accepts.push(append(self, d, RecordType::Accept, c.sequence, hash, hash)?);
-            #[cfg(feature = "fault-injection")]
-            self.failpoint(&format!("after_accept_{}", accepts.len()))?;
-        }
+        // ACCEPT on every member; the decision stands once Q members have
+        // synced, but no later stage starts before all members returned.
+        let accepts = self.run_member_stage(
+            stages,
+            StageKind::Accept,
+            &members,
+            Some("after_accept_"),
+            |task| {
+                let mut io = StageIo::default();
+                let value = member_protocol::append_record(
+                    task,
+                    mode,
+                    RecordType::Accept,
+                    c.sequence,
+                    hash,
+                    hash,
+                    &mut io,
+                );
+                TaskOutcome { value, io }
+            },
+        )?;
         let finalize = Finalize {
             candidate_hash: hash.into(),
             accepts,
             recovery_id: None,
         };
-        let final_hash = object_hash("finalize", &finalize)?;
-        let mut final_receipts = Vec::new();
-        for d in &members {
-            store_object_at(&self.disk_resources.get(d)?.root, d, "finalize", &finalize)?;
-            final_receipts.push(append(
-                self,
-                d,
-                RecordType::Finalize,
-                c.sequence,
-                hash,
-                &final_hash,
-            )?);
-        }
+        let finalize_object = PreparedMetadataObject::new("finalize", &finalize, MAX_METADATA)?;
+        let final_hash = finalize_object.hash.clone();
+        let final_receipts =
+            self.run_member_stage(stages, StageKind::Finalize, &members, None, |task| {
+                let mut io = StageIo::default();
+                let value = (|| {
+                    finalize_object.store_on(&task.handle.root, task.disk)?;
+                    io.objects_completed += 1;
+                    io.logical_bytes_completed += finalize_object.bytes().len() as u64;
+                    member_protocol::append_record(
+                        task,
+                        mode,
+                        RecordType::Finalize,
+                        c.sequence,
+                        hash,
+                        &final_hash,
+                        &mut io,
+                    )
+                })();
+                TaskOutcome { value, io }
+            })?;
+        drop(finalize_object);
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_finalize")?;
         // Only a decided candidate may rename a published file container.
         // A crash leaves the operation indeterminate and recovery replays it.
+        // Names share one temporary cursor and stay serial.
+        let began = std::time::Instant::now();
         names.apply()?;
+        stages.record_serial(StageKind::Names, began, members.len(), StageIo::default());
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_container_names")?;
-        let mut payload_receipts = Vec::new();
-        for evidence in &c.versions {
-            for slot in &evidence.placement.route_slot_ids {
-                let d = self.disk(slot)?;
-                let handle = self.disk_resources.get(d)?;
-                let directory = version_dir(
-                    d,
-                    &evidence.version.history_tree_id,
-                    &evidence.version.version_id,
-                );
-                if let Some(verified) = verified {
-                    verified.validate_payload(&self.config, &evidence.version, slot)?;
-                } else {
-                    // Recovery has no live held-inode proof and must re-read all bytes.
-                    handle.verify_payload(&directory, &evidence.version)?;
-                }
-                let proof = CommitProof {
-                    candidate_hash: hash.into(),
-                    finalize: finalize.clone(),
-                    version_hash: object_hash("version", &evidence.version)?,
-                    disk_id: d.disk_id.clone(),
-                    slot_id: d.slot_id.clone(),
-                    route_slot_ids: evidence.placement.route_slot_ids.clone(),
-                };
-                let proof_dir = local_proof_directory_at(&handle.root, &directory, hash)?;
-                handle
-                    .root
-                    .write_json(&proof_dir.join("commit-proof.json"), &proof, false)?;
-                payload_receipts.push(PayloadReceipt {
-                    version_id: evidence.version.version_id.clone(),
-                    disk_id: d.disk_id.clone(),
-                    slot_id: d.slot_id.clone(),
-                    proof_hash: object_hash("commit-proof", &proof)?,
-                });
-            }
-        }
+        // Commit proofs: one task per payload disk, (version, slot) pairs in
+        // candidate order within the disk; the receipt list is sorted below.
+        let armed = self.take_member_fault(StageKind::CommitProofs);
+        let targets = group_proof_targets(self, c, ProofDisks::Required)?;
+        let config = &self.config;
+        let receipts =
+            self.run_disk_stage(stages, StageKind::CommitProofs, &armed, &targets, |task| {
+                let items = target_items(&targets, task);
+                let mut io = StageIo::default();
+                let mut receipts = Vec::with_capacity(items.len());
+                let value = (|| {
+                    for &(index, slot) in items {
+                        let evidence = &c.versions[index];
+                        let d = task.disk;
+                        let handle = task.handle;
+                        let directory = version_dir(
+                            d,
+                            &evidence.version.history_tree_id,
+                            &evidence.version.version_id,
+                        );
+                        if let Some(verified) = verified {
+                            verified.validate_payload(config, &evidence.version, slot)?;
+                        } else {
+                            // Recovery has no live held-inode proof and must re-read all bytes.
+                            handle.verify_payload(&directory, &evidence.version)?;
+                            io.observed_bytes_read += evidence.version.logical_size;
+                        }
+                        let proof = CommitProof {
+                            candidate_hash: hash.into(),
+                            finalize: finalize.clone(),
+                            version_hash: object_hash("version", &evidence.version)?,
+                            disk_id: d.disk_id.clone(),
+                            slot_id: d.slot_id.clone(),
+                            route_slot_ids: evidence.placement.route_slot_ids.clone(),
+                        };
+                        let proof_dir = local_proof_directory_at(&handle.root, &directory, hash)?;
+                        // One encoding gives the written bytes and the receipt hash.
+                        let proof =
+                            PreparedMetadataObject::new("commit-proof", &proof, MAX_METADATA)?;
+                        handle.root.write_atomic(
+                            &proof_dir.join("commit-proof.json"),
+                            proof.bytes(),
+                            false,
+                        )?;
+                        io.add(proof_io(proof.bytes(), 0));
+                        receipts.push(PayloadReceipt {
+                            version_id: evidence.version.version_id.clone(),
+                            disk_id: d.disk_id.clone(),
+                            slot_id: d.slot_id.clone(),
+                            proof_hash: proof.hash,
+                        });
+                    }
+                    Ok(receipts)
+                })();
+                TaskOutcome { value, io }
+            })?;
+        let mut payload_receipts: Vec<PayloadReceipt> = receipts.into_iter().flatten().collect();
         payload_receipts
             .sort_by(|a, b| (&a.version_id, &a.disk_id).cmp(&(&b.version_id, &b.disk_id)));
         #[cfg(feature = "fault-injection")]
@@ -642,61 +740,203 @@ impl Engine {
         let publication_object =
             PreparedMetadataObject::new("publication", &publication, MAX_METADATA)?;
         let pub_hash = publication_object.hash.clone();
-        let mut publication_receipts = Vec::new();
-        for d in &members {
-            publication_object.store_at(&self.disk_resources, std::slice::from_ref(d))?;
-            publication_receipts.push(append(
-                self,
-                d,
-                RecordType::Publication,
-                c.sequence,
-                hash,
-                &pub_hash,
-            )?);
-            #[cfg(feature = "fault-injection")]
-            self.failpoint(&format!("after_publication_{}", publication_receipts.len()))?;
-        }
+        let publication_receipts = self.run_member_stage(
+            stages,
+            StageKind::Publication,
+            &members,
+            Some("after_publication_"),
+            |task| {
+                let mut io = StageIo::default();
+                let value = (|| {
+                    publication_object.store_on(&task.handle.root, task.disk)?;
+                    io.objects_completed += 1;
+                    io.logical_bytes_completed += publication_object.bytes().len() as u64;
+                    member_protocol::append_record(
+                        task,
+                        mode,
+                        RecordType::Publication,
+                        c.sequence,
+                        hash,
+                        &pub_hash,
+                        &mut io,
+                    )
+                })();
+                TaskOutcome { value, io }
+            },
+        )?;
         drop(publication_object);
         let seal = PublicationSeal {
             candidate_hash: hash.into(),
             publication_hash: pub_hash,
             receipts: publication_receipts.clone(),
         };
-        for d in &members {
-            self.disk_resources.get(d)?.root.write_json(
-                &publication_seal_path(d, hash),
-                &seal,
-                false,
-            )?;
-        }
-        for evidence in &c.versions {
-            for slot in &evidence.placement.route_slot_ids {
-                let d = self.disk(slot)?;
-                let directory = version_dir(
-                    d,
-                    &evidence.version.history_tree_id,
-                    &evidence.version.version_id,
-                );
-                let root = &self.disk_resources.get(d)?.root;
-                let proof_dir = local_proof_directory_at(root, &directory, hash)?;
-                let proof =
-                    root.read_json_observed(&proof_dir.join("commit-proof.json"), &mut |_| Ok(()))?;
-                root.write_json(
-                    &proof_dir.join("publication-proof.json"),
-                    &LocalPublicationRef {
-                        candidate: c,
-                        publication: &publication,
-                        commit_proof: &proof,
-                        publication_receipts: &publication_receipts,
-                    },
-                    false,
-                )?;
-            }
-        }
+        self.write_seals(stages, &members, hash, &seal)?;
+        let armed = self.take_member_fault(StageKind::PublicationProofs);
+        let targets = group_proof_targets(self, c, ProofDisks::Required)?;
+        self.run_disk_stage(
+            stages,
+            StageKind::PublicationProofs,
+            &armed,
+            &targets,
+            |task| {
+                let mut io = StageIo::default();
+                let value = (|| {
+                    for &(index, _) in target_items(&targets, task) {
+                        let evidence = &c.versions[index];
+                        let directory = version_dir(
+                            task.disk,
+                            &evidence.version.history_tree_id,
+                            &evidence.version.version_id,
+                        );
+                        let root = &task.handle.root;
+                        let proof_dir = local_proof_directory_at(root, &directory, hash)?;
+                        let mut read = 0u64;
+                        let proof: CommitProof = root.read_json_observed(
+                            &proof_dir.join("commit-proof.json"),
+                            &mut |count| {
+                                read += count as u64;
+                                Ok(())
+                            },
+                        )?;
+                        let bytes = encode_metadata(
+                            &LocalPublicationRef {
+                                candidate: c,
+                                publication: &publication,
+                                commit_proof: &proof,
+                                publication_receipts: &publication_receipts,
+                            },
+                            MAX_METADATA,
+                        )?;
+                        root.write_atomic(
+                            &proof_dir.join("publication-proof.json"),
+                            &bytes,
+                            false,
+                        )?;
+                        io.add(proof_io(&bytes, read));
+                    }
+                    Ok(())
+                })();
+                TaskOutcome { value, io }
+            },
+        )?;
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_local_publications")?;
         Ok(())
     }
+
+    /// PublicationSeal on every member, one task per member, no journal write.
+    fn write_seals(
+        &mut self,
+        stages: &mut StageSequence,
+        members: &[DiskConfig],
+        hash: &str,
+        seal: &PublicationSeal,
+    ) -> Result<()> {
+        let bytes = encode_metadata(seal, MAX_METADATA)?;
+        self.run_member_stage(stages, StageKind::Seals, members, None, |task| {
+            let value = task.handle.root.write_atomic(
+                &publication_seal_path(task.disk, hash),
+                &bytes,
+                false,
+            );
+            let io = match value {
+                Ok(()) => proof_io(&bytes, 0),
+                Err(_) => StageIo::default(),
+            };
+            TaskOutcome { value, io }
+        })?;
+        Ok(())
+    }
+}
+
+/// Reconstruct one slot's historical commit and publication proofs from the
+/// verified publication closure, without claiming a newly verified payload.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one proof reconstruction needs the whole verified closure"
+)]
+fn repair_historical_proofs(
+    state: &State,
+    handle: &DiskHandle,
+    d: &DiskConfig,
+    slot: &str,
+    evidence: &VersionEvidence,
+    hash: &str,
+    publication: &Publication,
+    publication_receipts: &[Receipt],
+    c: &Candidate,
+    io: &mut StageIo,
+) -> Result<()> {
+    let dir = version_dir(
+        d,
+        &evidence.version.history_tree_id,
+        &evidence.version.version_id,
+    );
+    match handle.root.directory(&dir) {
+        Ok(_) => {}
+        Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
+        | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    }
+    let proof = CommitProof {
+        candidate_hash: hash.into(),
+        finalize: publication.finalize.clone(),
+        version_hash: object_hash("version", &evidence.version)?,
+        disk_id: d.disk_id.clone(),
+        slot_id: slot.to_owned(),
+        route_slot_ids: evidence.placement.route_slot_ids.clone(),
+    };
+    let expected = publication
+        .payload_receipts
+        .iter()
+        .find(|r| r.version_id == evidence.version.version_id && r.slot_id == slot);
+    let Some(expected) = expected else {
+        if publication.recovery.is_some() {
+            return Ok(());
+        }
+        return Err(Error::new(
+            storage_contract::ErrorCode::PublicationInvalid,
+            "stored local receipt missing",
+        ));
+    };
+    if expected.proof_hash != object_hash("commit-proof", &proof)? {
+        return Err(Error::new(
+            storage_contract::ErrorCode::PublicationInvalid,
+            "stored local receipt differs",
+        ));
+    }
+    // The first published placement on this slot owns the root
+    // proof. Derive that fact from the replayed prefix, not a
+    // possibly corrupt local commit-proof candidate pointer.
+    let first_on_slot = state
+        .placements
+        .get(&evidence.version.version_id)
+        .is_none_or(|placement| !placement.route_slot_ids.contains(&slot.to_owned()));
+    let proof_dir = if first_on_slot {
+        dir
+    } else {
+        local_proof_directory_at(&handle.root, &dir, hash)?
+    };
+    io.add(repair_local_proof(
+        &handle.root,
+        &proof_dir.join("commit-proof.json"),
+        &proof,
+    )?);
+    io.add(repair_local_proof(
+        &handle.root,
+        &proof_dir.join("publication-proof.json"),
+        &LocalPublicationRef {
+            candidate: c,
+            publication,
+            commit_proof: &proof,
+            publication_receipts,
+        },
+    )?);
+    Ok(())
 }
 
 /// Restore only a proof reconstructed from a verified published closure.
@@ -706,7 +946,7 @@ fn repair_local_proof<T: data_serialization::Serialize>(
     root: &DiskRoot,
     path: &std::path::Path,
     value: &T,
-) -> Result<()> {
+) -> Result<StageIo> {
     use platform_io::fs_safety::linux::FileIdentity;
     let expected = encode_metadata(value, MAX_METADATA)?;
     let original = match root.open_regular(path) {
@@ -714,16 +954,23 @@ fn repair_local_proof<T: data_serialization::Serialize>(
         | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
             if error.kind() == std::io::ErrorKind::NotFound =>
         {
-            return root.write_atomic(path, &expected, false);
+            root.write_atomic(path, &expected, false)?;
+            return Ok(proof_io(&expected, 0));
         }
         Err(error) => return Err(error),
         Ok(file) => file,
     };
     // Fail closed on links/special files and I/O errors. An oversized proof can
     // be retained by rename without allocating or interpreting its whole body.
+    let mut read = 0u64;
     match root.read_bytes(path, MAX_METADATA) {
-        Ok(bytes) if bytes == expected => return Ok(()),
-        Ok(_) => {}
+        Ok(bytes) if bytes == expected => {
+            return Ok(StageIo {
+                observed_bytes_read: bytes.len() as u64,
+                ..StageIo::default()
+            });
+        }
+        Ok(bytes) => read = bytes.len() as u64,
         Err(error) if error.code() == storage_contract::ErrorCode::ResourceLimit => {}
         Err(error) => return Err(error),
     }
@@ -761,7 +1008,8 @@ fn repair_local_proof<T: data_serialization::Serialize>(
             "local proof identity changed during repair",
         ));
     }
-    root.write_atomic(path, &expected, false)
+    root.write_atomic(path, &expected, false)?;
+    Ok(proof_io(&expected, read))
 }
 
 /// Bounded scoped workers are fully joined before returning, even on failure.
@@ -785,57 +1033,62 @@ fn run_payload_groups<T: Sync>(
     impl Drop for ClaimedGroup<'_> {
         fn drop(&mut self) {
             if std::thread::panicking() {
-                self.0
-                    .lock()
-                    .expect("invariant: payload preparation queue poisoned")
-                    .closed = true;
+                self.0.lock().unwrap_or_else(|p| p.into_inner()).closed = true;
             }
         }
     }
     std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..WORKERS.min(groups.len()))
-            .map(|_| {
-                scope.spawn(|| {
-                    loop {
-                        let index = {
-                            let mut queue = queue
-                                .lock()
-                                .expect("invariant: payload preparation queue poisoned");
-                            if queue.closed
-                                || queue.first_error.is_some()
-                                || queue.next == groups.len()
-                            {
-                                return;
-                            }
-                            let index = queue.next;
-                            queue.next += 1;
-                            index
-                        };
-                        // Close admission during unwinding, after the claim lock was released.
-                        let _claimed = ClaimedGroup(&queue);
-                        let result = groups[index].iter().try_for_each(|payload| work(payload));
-                        let Err(error) = result else {
-                            continue;
-                        };
+        let mut workers = Vec::with_capacity(WORKERS.min(groups.len()));
+        let mut startup_error = None;
+        for _ in 0..WORKERS.min(groups.len()) {
+            match std::thread::Builder::new().spawn_scoped(scope, || {
+                loop {
+                    let index = {
+                        let mut queue = queue
+                            .lock()
+                            .expect("invariant: payload preparation queue poisoned");
+                        if queue.closed || queue.first_error.is_some() || queue.next == groups.len()
                         {
-                            let mut queue = queue
-                                .lock()
-                                .expect("invariant: payload preparation queue poisoned");
-                            // Claiming is ordered, completion is not. Earlier claimed files
-                            // still finish, preserving index-priority error reporting.
-                            if queue
-                                .first_error
-                                .as_ref()
-                                .is_none_or(|(first, _)| index < *first)
-                            {
-                                queue.first_error = Some((index, error));
-                            }
+                            return;
                         }
-                        return;
+                        let index = queue.next;
+                        queue.next += 1;
+                        index
+                    };
+                    // Close admission during unwinding, after the claim lock was released.
+                    let _claimed = ClaimedGroup(&queue);
+                    let result = groups[index].iter().try_for_each(|payload| work(payload));
+                    let Err(error) = result else {
+                        continue;
+                    };
+                    {
+                        let mut queue = queue
+                            .lock()
+                            .expect("invariant: payload preparation queue poisoned");
+                        // Claiming is ordered, completion is not. Earlier claimed files
+                        // still finish, preserving index-priority error reporting.
+                        if queue
+                            .first_error
+                            .as_ref()
+                            .is_none_or(|(first, _)| index < *first)
+                        {
+                            queue.first_error = Some((index, error));
+                        }
                     }
-                })
-            })
-            .collect();
+                    return;
+                }
+            }) {
+                Ok(worker) => workers.push(worker),
+                Err(error) => {
+                    queue
+                        .lock()
+                        .expect("invariant: payload preparation queue poisoned")
+                        .closed = true;
+                    startup_error = Some(Error::from(error));
+                    break;
+                }
+            }
+        }
         let mut panic = None;
         for worker in workers {
             match worker.join() {
@@ -847,6 +1100,14 @@ fn run_payload_groups<T: Sync>(
         }
         if let Some(payload) = panic {
             std::panic::resume_unwind(payload);
+        }
+        if let Some(error) = startup_error {
+            let mut queue = queue
+                .lock()
+                .expect("invariant: payload preparation queue poisoned");
+            if queue.first_error.is_none() {
+                queue.first_error = Some((usize::MAX, error));
+            }
         }
     });
     queue
@@ -871,6 +1132,10 @@ mod history_baseline_tests;
 #[cfg(all(test, feature = "fault-injection"))]
 #[path = "../../../../test/engine/unit/engine/publication/omission_tests.rs"]
 mod omission_tests;
+
+#[cfg(all(test, feature = "fault-injection"))]
+#[path = "../../../../test/engine/unit/engine/publication/member_fault_tests.rs"]
+mod member_fault_tests;
 
 impl crate::engine::PlanningContext<'_> {
     pub(crate) fn prepare_publication(
@@ -1212,7 +1477,19 @@ impl crate::engine::PlanningContext<'_> {
             &candidate,
             std::sync::Arc::clone(self.metadata_integrity),
         )?;
-        self.prepare_payloads(&prepared, existing)?;
+        let preparation_started = std::time::Instant::now();
+        let mut preparation_stages = Vec::new();
+        let (payload_io, payload_workers) = self.prepare_payloads(&prepared, existing)?;
+        let mut payload_timing = preparation_timing(
+            StageKind::PayloadCopy,
+            preparation_started,
+            preparation_started,
+            prepared.len(),
+            payload_io,
+        );
+        payload_timing.workers = payload_workers;
+        payload_timing.parallel = payload_workers > 1;
+        preparation_stages.push(payload_timing);
         let verified = preparation.verify(self.config, &candidate)?;
         // Payload installation establishes the physical container, but no decision
         // exists yet. Encode its complete projection before ACCEPT can be written.
@@ -1222,6 +1499,8 @@ impl crate::engine::PlanningContext<'_> {
             &projection,
             cache_maximum,
         )?;
+        let began = std::time::Instant::now();
+        let mut installs = ObjectInstalls::default();
         if let Some(reuse) = &reused_dependencies {
             if !reuse.matches(self, &config_hash) {
                 return Err(Error::new(
@@ -1231,19 +1510,43 @@ impl crate::engine::PlanningContext<'_> {
                 .retryable());
             }
             self.metadata_integrity
-                .observe(snapshot.store_new_objects_at(self.disk_resources, &members))?;
+                .observe(snapshot.store_new_objects_at(
+                    self.disk_resources,
+                    &members,
+                    &mut installs,
+                ))?;
         } else {
             self.metadata_integrity.observe(snapshot.store_at(
                 self.disk_resources,
                 &members,
                 &next,
+                &mut installs,
             ))?;
         }
+        preparation_stages.push(preparation_timing(
+            StageKind::SnapshotInstall,
+            preparation_started,
+            began,
+            members.len(),
+            installs_io(installs),
+        ));
         let snapshot_basis = snapshot.reuse_basis();
+        let began = std::time::Instant::now();
+        let mut installs = ObjectInstalls::default();
         for manifest in manifests {
-            self.metadata_integrity
-                .observe(manifest.store_at(self.disk_resources, &members))?;
+            for disk in &members {
+                self.metadata_integrity
+                    .observe(manifest.store_on(&self.disk_resources.get(disk)?.root, disk))?;
+                installs.record(manifest.bytes().len());
+            }
         }
+        preparation_stages.push(preparation_timing(
+            StageKind::ManifestInstall,
+            preparation_started,
+            began,
+            members.len(),
+            installs_io(installs),
+        ));
         if let Some(reuse) = &reused_dependencies
             && !reuse.matches(self, &config_hash)
         {
@@ -1273,7 +1576,37 @@ impl crate::engine::PlanningContext<'_> {
             snapshot_basis,
             history_basis,
             history_owners,
+            preparation_stages,
+            preparation_started,
         })
+    }
+}
+
+/// Preparation stages run on the calling thread (payload groups fan out
+/// inside); the timing records them as serial units of the preparation.
+fn preparation_timing(
+    stage: StageKind,
+    sequence_start: std::time::Instant,
+    began: std::time::Instant,
+    members_completed: usize,
+    io: StageIo,
+) -> StageTiming {
+    StageTiming {
+        stage,
+        started_at: began.duration_since(sequence_start),
+        elapsed: began.elapsed(),
+        parallel: false,
+        workers: 1,
+        members_completed,
+        io,
+    }
+}
+
+fn installs_io(installs: ObjectInstalls) -> StageIo {
+    StageIo {
+        objects_completed: installs.objects,
+        logical_bytes_completed: installs.bytes,
+        ..StageIo::default()
     }
 }
 
@@ -1282,7 +1615,7 @@ impl crate::engine::PlanningContext<'_> {
         &self,
         prepared: &'a [Prepared],
         existing: Vec<std::sync::Mutex<Option<ExistingCopies<'a>>>>,
-    ) -> Result<()> {
+    ) -> Result<(StageIo, usize)> {
         // Versions of the same file can share a named container. Preserve their
         // order, and each version's route chain, while independent files copy
         // with bounded parallel workers. No decision is written until all join.
@@ -1295,34 +1628,66 @@ impl crate::engine::PlanningContext<'_> {
                 .push(job);
         }
         let groups: Vec<_> = by_file.into_values().collect();
-        run_payload_groups(&groups, |(payload, copies)| {
-            let copies = copies
-                .lock()
-                .expect("invariant: payload admission ownership poisoned")
-                .take()
-                .expect("invariant: payload group is claimed once");
-            self.prepare_payload_with_existing(payload, copies)
-        })
+        let io = std::sync::Mutex::new(StageIo::default());
+        let work =
+            |(payload, copies): &(&'a Prepared, std::sync::Mutex<Option<ExistingCopies<'a>>>)| {
+                let copies = copies
+                    .lock()
+                    .expect("invariant: payload admission ownership poisoned")
+                    .take()
+                    .expect("invariant: payload group is claimed once");
+                let done = self.prepare_payload_with_existing(payload, copies)?;
+                io.lock()
+                    .expect("invariant: payload accounting lock poisoned")
+                    .add(done);
+                Ok(())
+            };
+        let workers = if prepared.iter().all(|payload| {
+            fan_out_admitted(&payload.version, payload.placement.route_slot_ids.len())
+        }) {
+            run_payload_groups(&groups, work)?;
+            groups.len().min(4)
+        } else {
+            // Preserve large files and routes without multiplying the existing
+            // single-copy checksum budget by four concurrent file groups.
+            for group in &groups {
+                for job in group {
+                    work(job)?;
+                }
+            }
+            usize::from(!groups.is_empty())
+        };
+        Ok((
+            io.into_inner()
+                .expect("invariant: payload accounting lock poisoned"),
+            workers,
+        ))
     }
 }
 
 impl crate::engine::PlanningContext<'_> {
     pub(crate) fn prepare_payload(&self, p: &Prepared) -> Result<()> {
         self.prepare_payload_with_existing(p, Vec::new())
+            .map(|_| ())
     }
 
     fn prepare_payload_with_existing<'a>(
         &self,
         p: &'a Prepared,
         mut existing: ExistingCopies<'a>,
-    ) -> Result<()> {
-        let mut source = None;
+    ) -> Result<StageIo> {
+        let mut io = StageIo::default();
+        // Levels already holding this version finish through the idempotent
+        // installation in route order. The first of them is a healthy
+        // same-version replica the missing levels are copied from; otherwise
+        // the prepared source is. Either way the source is read once.
+        let mut replica = None;
+        let mut missing = Vec::new();
         for (index, slot) in p.placement.route_slot_ids.iter().enumerate() {
             let disk = self.disk(slot)?;
-            let handle = self.disk_resources.get(disk)?;
-            let root = &handle.root;
+            let root = &self.disk_resources.get(disk)?.root;
             let directory = version_dir(disk, &p.version.history_tree_id, &p.version.version_id);
-            let content = match root
+            match root
                 .read_json_observed::<FileVersion>(&directory.join("version.json"), &mut |_| Ok(()))
             {
                 Ok(recorded) => {
@@ -1337,7 +1702,14 @@ impl crate::engine::PlanningContext<'_> {
                         None => VerifiedExisting::read_at(root, &directory, &p.version)?,
                     };
                     verified.assert_binding(&directory, &p.version);
-                    crate::container_storage::PreparedContent::Verified(verified)
+                    let path = crate::container_storage::install_version_content_at(
+                        root,
+                        &directory,
+                        crate::container_storage::PreparedContent::Verified(verified),
+                    )?;
+                    if replica.is_none() {
+                        replica = Some((root, path));
+                    }
                 }
                 Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
                 | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
@@ -1347,57 +1719,124 @@ impl crate::engine::PlanningContext<'_> {
                         .root
                         .join("staging")
                         .join(OperationId::generate().to_string());
-                    root.private_dir(&staging.join("content"))?;
-                    let target = staging.join("content").join(&p.version.creation_name);
-                    let copied = verified_full_copy_at(
+                    missing.push(MissingLevel {
                         root,
-                        match source.take() {
-                            Some(file) => file,
-                            None => p.source.open()?,
-                        },
-                        &target,
-                        &p.version,
-                        self.config.max_file_bytes,
-                    )
-                    .map_err(CopyFailure::into_error)?;
-                    root.write_json(&staging.join("version.json"), &p.version, false)?;
-                    root.write_atomic(
-                        &staging.join("checksums.bin"),
-                        &copied.checksums().encode()?,
-                        false,
-                    )?;
-                    root.write_json(
-                        &staging.join("payload.json"),
-                        &json!({"payload_id":format!("payload_{}",&p.version.version_id[4..]),"version_id":p.version.version_id,"kind":"FULL","size":p.version.logical_size.to_string(),"content_hash":p.version.content_hash}),
-                        false,
-                    )?;
-                    root.sync_dir(&staging)?;
-                    root.private_dir(directory.parent().expect("version parent"))?;
-                    let staging_parent =
-                        root.directory(staging.parent().expect("staging parent"))?;
-                    let version_parent =
-                        root.directory(directory.parent().expect("version parent"))?;
-                    rustix::fs::renameat_with(
-                        &staging_parent,
-                        staging.file_name().expect("staging name"),
-                        &version_parent,
-                        directory.file_name().expect("version name"),
-                        rustix::fs::RenameFlags::NOREPLACE,
-                    )
-                    .map_err(std::io::Error::from)?;
-                    root.sync_dir(directory.parent().expect("version parent"))?;
-                    crate::container_storage::PreparedContent::Copied(copied)
+                        directory,
+                        staging,
+                    });
                 }
                 Err(error) => return Err(error),
-            };
-            // Install a real version file in this file's named container before
-            // any protection receipt is issued. The next level reads this copy.
-            let path =
-                crate::container_storage::install_version_content_at(root, &directory, content)?;
-            if index + 1 < p.placement.route_slot_ids.len() {
-                source = Some(root.open_regular(&path)?);
             }
         }
-        Ok(())
+        if missing.is_empty() {
+            return Ok(io);
+        }
+        let source = match &replica {
+            Some((root, path)) => root.open_regular(path)?,
+            None => p.source.open()?,
+        };
+        if missing.len() == 1 || !fan_out_admitted(&p.version, missing.len()) {
+            // The original serial chain remains available outside the bounded
+            // fan-out envelope; this is not a new product file/route limit.
+            let mut source = source;
+            for (index, level) in missing.iter().enumerate() {
+                level.root.private_dir(&level.staging.join("content"))?;
+                let copied = verified_full_copy_at(
+                    level.root,
+                    source,
+                    &level.content(&p.version),
+                    &p.version,
+                    self.config.max_file_bytes,
+                )
+                .map_err(CopyFailure::into_error)?;
+                let path = level.materialize(&p.version, copied)?;
+                io.payload_source_bytes_completed += p.version.logical_size;
+                io.logical_bytes_completed += p.version.logical_size;
+                if index + 1 < missing.len() {
+                    source = level.root.open_regular(&path)?;
+                } else {
+                    return Ok(io);
+                }
+            }
+        } else {
+            // Every missing level is written from the one read, each by its
+            // own thread on its own disk, then materialized on that disk.
+            let targets: Vec<_> = missing
+                .iter()
+                .map(|level| FanOutTarget {
+                    root: level.root,
+                    destination: level.content(&p.version),
+                })
+                .collect();
+            verified_fan_out_copy_at(
+                &source,
+                &targets,
+                &p.version,
+                self.config.max_file_bytes,
+                |index, copied| missing[index].materialize(&p.version, copied),
+            )
+            .map_err(CopyFailure::into_error)?;
+        }
+        io.payload_source_bytes_completed += p.version.logical_size;
+        io.logical_bytes_completed += p.version.logical_size * missing.len() as u64;
+        Ok(io)
+    }
+}
+
+/// A route level that does not hold the version yet: its held root, final
+/// version directory and private staging directory.
+struct MissingLevel<'r> {
+    root: &'r DiskRoot,
+    directory: std::path::PathBuf,
+    staging: std::path::PathBuf,
+}
+
+impl MissingLevel<'_> {
+    fn content(&self, version: &FileVersion) -> std::path::PathBuf {
+        self.staging.join("content").join(&version.creation_name)
+    }
+
+    /// Write the version metadata beside the verified copy, sync the staging
+    /// directory, move it into place without replacement, sync the parent,
+    /// and install the body into the file's named container.
+    fn materialize(
+        &self,
+        version: &FileVersion,
+        copied: VerifiedCopy<'_>,
+    ) -> Result<std::path::PathBuf> {
+        let (root, staging, directory) = (self.root, &self.staging, &self.directory);
+        root.write_json(&staging.join("version.json"), version, false)?;
+        root.write_atomic(
+            &staging.join("checksums.bin"),
+            copied.checksum_bytes(),
+            false,
+        )?;
+        root.write_json(
+            &staging.join("payload.json"),
+            &json!({"payload_id":format!("payload_{}",&version.version_id[4..]),"version_id":version.version_id,"kind":"FULL","size":version.logical_size.to_string(),"content_hash":version.content_hash}),
+            false,
+        )?;
+        root.sync_dir(staging)?;
+        root.private_dir(directory.parent().expect("version parent"))?;
+        let staging_parent = root.directory(staging.parent().expect("staging parent"))?;
+        let version_parent = root.directory(directory.parent().expect("version parent"))?;
+        rustix::fs::renameat_with(
+            &staging_parent,
+            staging.file_name().expect("staging name"),
+            &version_parent,
+            directory.file_name().expect("version name"),
+            rustix::fs::RenameFlags::NOREPLACE,
+        )
+        .map_err(std::io::Error::from)?;
+        root.sync_dir(directory.parent().expect("version parent"))?;
+        drop(staging_parent);
+        drop(version_parent);
+        // Install a real version file in this file's named container before
+        // any protection receipt is issued.
+        crate::container_storage::install_version_content_at(
+            root,
+            directory,
+            crate::container_storage::PreparedContent::Copied(copied),
+        )
     }
 }
