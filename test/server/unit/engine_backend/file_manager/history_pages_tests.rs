@@ -653,7 +653,7 @@ fn branch_merge_version_and_field_pages_bind_the_same_root() {
         assert!(merged.get("pending_file_versions").is_none());
         assert!(merged["pending_count"].is_number());
     }
-    let merges = history_pages::merges(
+    let merges = merge_page(
         &g.engine,
         crate::ReadHistoryMerges::parse(g.file.clone(), query(&[("history_root", &root)])).unwrap(),
     )
@@ -691,7 +691,7 @@ fn branch_merge_version_and_field_pages_bind_the_same_root() {
         parents.items,
         g.engine.state().file_branch_merges[&merge.merge_id].parent_node_ids
     );
-    let stale = history_pages::merges(
+    let stale = merge_page(
         &g.engine,
         crate::ReadHistoryMerges::parse(
             g.file.clone(),
@@ -844,4 +844,56 @@ fn retried_requests_under_the_same_root_return_byte_identical_pages() {
 // Synchronous convenience for the existing transport projection fixtures.
 fn version_page(engine: &Engine, request: crate::ReadVersionPage) -> Result<VersionPage, ApiError> {
     history_pages::prepare_version_page(engine, request)?.read()
+}
+
+fn merge_page(
+    engine: &Engine,
+    request: crate::ReadHistoryMerges,
+) -> Result<HistoryMergesPage, ApiError> {
+    Ok(history_pages::prepare_merge_page(engine, request)?.read())
+}
+
+#[test]
+fn detached_merge_page_keeps_captured_wire_after_publication() {
+    let mut g = graph();
+    let root = g.engine.history_root(&g.repo.history_tree_id).unwrap();
+    let request = || {
+        crate::ReadHistoryMerges::parse(
+            g.file.clone(),
+            query(&[("history_root", root.as_str()), ("limit", "1")]),
+        )
+        .unwrap()
+    };
+    let expected = merge_page(&g.engine, request())
+        .unwrap()
+        .encode(PageBudget::PROTOCOL)
+        .unwrap()
+        .body()
+        .to_vec();
+    let plan = history_pages::prepare_merge_page(&g.engine, request()).unwrap();
+    save(
+        &mut g.engine,
+        &g.repo.main_branch_id,
+        "doc.txt",
+        b"later",
+        "later",
+    );
+    assert_ne!(
+        g.engine.history_root(&g.repo.history_tree_id).unwrap(),
+        root
+    );
+    let captured = plan.read();
+    assert_eq!(captured.merges[0].input_count, 40);
+    assert_eq!(captured.merges[0].parent_count, 41);
+    assert_eq!(
+        captured.encode(PageBudget::PROTOCOL).unwrap().body(),
+        expected.as_slice()
+    );
+    assert_eq!(
+        history_pages::prepare_merge_page(&g.engine, request())
+            .err()
+            .unwrap()
+            .code,
+        storage_contract::ErrorCode::HistoryChanged
+    );
 }
