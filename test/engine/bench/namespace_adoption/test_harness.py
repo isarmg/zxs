@@ -174,9 +174,10 @@ class SummaryBoundaryTests(unittest.TestCase):
                     github_run_id=ENVIRONMENT['GITHUB_RUN_ID'], github_run_attempt='1',
                     carrier_sha=ENVIRONMENT['GITHUB_SHA'],
                     artifact_manifest_sha256=ENVIRONMENT['ZXS_EXPECTED_MANIFEST_SHA256'],
+                    artifact_identity=dict(status='verified', manifest_sha256=ENVIRONMENT['ZXS_EXPECTED_MANIFEST_SHA256']),
                     binary_sha256=hashes, status='completed_measurements', runs=runs)
 
-    def aggregate(self, root, omit=None, incomplete=None):
+    def aggregate(self, root, omit=None, incomplete=None, missing_trace=False, failed_audit=False):
         source = root / 'input'
         source.mkdir()
         for files in (500, 1500, 3000):
@@ -189,12 +190,16 @@ class SummaryBoundaryTests(unittest.TestCase):
                 if (files, pair) == incomplete:
                     summary['status'] = 'incomplete'
                     summary['runs'][0].update(status='incomplete', reason='phase_time_budget')
+                if failed_audit and (files, pair) == (500, 0):
+                    summary['artifact_identity']['status'] = 'failed'
                 (directory / 'summary.json').write_text(json.dumps(summary))
                 if pair == 3:
                     for label in ('baseline', 'candidate'):
                         run_directory = directory / f'{files}-{pair}-{label}'
                         run_directory.mkdir()
                         for phase in runner.PHASES:
+                            if missing_trace and (files, label, phase) == (500, 'baseline', 'verify'):
+                                continue
                             (run_directory / f'{phase}.strace').write_text('100.00 0.000001 1 3 1 fsync\n')
         destination = root / 'report'
         with mock.patch.dict(os.environ, ENVIRONMENT, clear=True), \
@@ -227,6 +232,18 @@ class SummaryBoundaryTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(report['status'], 'incomplete')
         self.assertEqual(report['sizes']['1500']['incomplete_pairs'], 1)
+
+    def test_completed_trace_pair_requires_raw_trace_for_every_phase(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            code, report = self.aggregate(Path(temporary), missing_trace=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(report['sizes']['500']['failed_pairs'], 1)
+
+    def test_failed_artifact_audit_cannot_pass(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            code, report = self.aggregate(Path(temporary), failed_audit=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(report['sizes']['500']['failed_pairs'], 1)
 
 
 class RuntimeDependencyBoundaryTests(unittest.TestCase):

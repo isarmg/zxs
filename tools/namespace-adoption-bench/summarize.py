@@ -33,6 +33,10 @@ def audit_pair(summary, files, pair):
     for field, value in expected.items():
         if summary.get(field) != value:
             errors.append(f'{field}: expected {value!r}, observed {summary.get(field)!r}')
+    identity = summary.get('artifact_identity', {})
+    if (identity.get('status') != 'verified' or identity.get('manifest_sha256') !=
+            os.environ['ZXS_EXPECTED_MANIFEST_SHA256']):
+        errors.append('artifact identity audit is not verified for the current manifest')
     runs = summary['runs']
     if [run['implementation'] for run in runs] != expected_order:
         errors.append('implementation order differs from the fixed pair')
@@ -94,6 +98,12 @@ def main():
                                             reason=run.get('reason'), phases=run['phases'],
                                             attempted_phases=run['attempted_phases'],
                                             not_run_phases=run['not_run_phases']) for run in summary['runs']])
+                    if pair == 3:
+                        for run in summary['runs']:
+                            for phase in run['phases']:
+                                trace = directory / 'results' / f'{files}-{pair}-{run["implementation"]}' / f'{phase["phase"]}.strace'
+                                if phase['status'] == 'completed' and not trace.is_file():
+                                    errors.append(f'completed traced phase lacks {trace.relative_to(directory)}')
                     if errors:
                         entry['status'] = 'failed'
                     if entry['status'] == 'completed_measurements' and pair < 3:
