@@ -27,7 +27,7 @@
 
 正常重护必须等固定 N 全部在线、可读，并显式观察剩余成员，再从实际读取到的 PUBLICATION payload 决定原正常/降级结果。恢复决策不读取全局历史见证来猜结果。没有原正常发布证据时，任一所需路由上可验证的同版本完整副本可作为补齐原目标的来源；每次恢复内容写入再次要求存在这样的实际可读 FULL 来源，不能由候选符号凭空造正文。全部来源不可恢复时才可生成明确降级结果；仍需全部 N 成员元数据。这里恢复计划、隔离及候选身份固定且唯一，符号化为 `recovery_mode`；不模拟多计划竞争或成员代际切换。
 
-`publication_origin` 和 `publication_result` 是 PUBLICATION 记录携带的符号化 payload：前者固定记录生成时已经具备的内容/提交证明回执，后者固定正常或降级结果。只有实际读到完整 PUBLICATION 字节才能沿用该 payload；不能凭这些字段在没有记录时恢复成功。当前内容损坏不抹除历史保护事实。缺失/损坏的元数据依赖图不在本模型内被修造；PREPARE 代表已验证的准确完整依赖闭包。
+`publication_origin` 和 `publication_result` 是 PUBLICATION 记录携带的符号化 payload：前者固定记录生成时已经具备的内容/提交证明回执，后者固定正常或降级结果。只有实际读到完整 PUBLICATION 字节才能沿用该 payload；不能凭这些字段在没有记录时恢复成功。`normal_publication_seen` 只在实际读取正常 PUBLICATION 或当前写者安装完整正常 PUBLICATION 时建立，开始新一轮恢复或新槽位时清除；仅计划恢复为正常结果不产生该事实，后续新发现的内容损坏仍须阻止首次正常发布。当前内容损坏不抹除历史保护事实。缺失/损坏的元数据依赖图不在本模型内被修造；PREPARE 代表已验证的准确完整依赖闭包。
 
 `known_publication`、`decision_witness`、`publication_witness`、`abort_resolution` 是供安全性质检查的历史见证：见证从真实 Artifact 字段捕获，不由调用方自报。`state_versions`、永久 `results`、`events`、`publish_count` 记录外部曾经观察到的业务事实；跨崩溃保留是历史 ghost trace，不意味着真实进程内存幸存。恢复重新推进同一槽位时依靠持久证据重放，并与这些历史事实比对；第一次公开必须同时更新状态、收据和事件。已有结果、事件及原始见证重放不再追加。索引失败仅改变 `index_failed`，当前内容健康由 Artifact 独立表达。
 

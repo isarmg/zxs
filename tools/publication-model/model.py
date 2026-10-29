@@ -71,6 +71,7 @@ class State:
     observations: tuple
     recovery_mode: bool
     recovery_result: int
+    normal_publication_seen: bool
     reply_lost: bool
     retry_count: int
     binding: tuple
@@ -86,7 +87,7 @@ def initial(config: Config) -> State:
     return State(0, "CONTENT", rows, (True,) * config.n, (False,) * config.n,
                  0, 0, (False,) * config.operations, zero, zero, zero, (), (),
                  zero, ((),) * config.operations, zero, ((),) * config.operations, zero, zero, (-1,) * config.n,
-                 False, 0, False, 0, zero, False, "none", 0)
+                 False, 0, False, False, 0, zero, False, "none", 0)
 
 
 def _set(values: tuple, index: int, value):
@@ -108,6 +109,8 @@ def _put(state: State, member: int, kind: int, value: Artifact) -> State:
         if not result.publication_origin[result.slot]:
             result = replace(result, publication_origin=_set(
                 result.publication_origin, result.slot, _certificate(result)))
+        if value.entry and result.publication_result[result.slot] == 1:
+            result = replace(result, normal_publication_seen=True)
         if _durable(value):
             result = replace(result, known_publication=_set(
                 result.known_publication, result.slot, result.recovery_result or 1))
@@ -174,7 +177,7 @@ def _apply(state: State, result: int, duplicate: bool = False) -> State:
 
 def _begin_recovery(state: State) -> State:
     return replace(state, phase="RECOVER_OBSERVE", observations=(-1,) * len(state.online),
-                   recovery_mode=True, recovery_result=0, response="pending",
+                   recovery_mode=True, recovery_result=0, normal_publication_seen=False, response="pending",
                    recovery_round=min(3, state.recovery_round + 1))
 
 
@@ -217,8 +220,10 @@ def _stage_steps(state: State, config: Config) -> Iterator[tuple[str, State]]:
     if kind == CONTENT and state.recovery_mode and not _source_available(state, config):
         yield "recover:no_content_source", _begin_recovery(state)
         return
-    historical_normal = (state.recovery_result == 1 if state.recovery_mode
-                         else state.known_publication[state.slot] == 1)
+    # A planned normal result after ACCEPT recovery is not historical proof.
+    # This knowledge is acquired only by reading an actual normal PUBLICATION
+    # or installing one in the current writer round.
+    historical_normal = state.normal_publication_seen
     if kind in (COMMIT_PROOF, PUBLICATION, PUBLICATION_PROOF) and not historical_normal and state.recovery_result != 2:
         if not _healthy_content(state, config):
             yield "recover:known_content_damage", _begin_recovery(state)
@@ -292,7 +297,8 @@ def _recover_steps(state: State, config: Config):
             if state.observations[m] == -1:
                 observed = _observation(state, m)
                 yield f"observe:{m}:{observed}", replace(
-                    state, observations=_set(state.observations, m, observed))
+                    state, observations=_set(state.observations, m, observed),
+                    normal_publication_seen=state.normal_publication_seen or observed == 2)
         trusted = sum(v in (0, 1, 2, 4, 5) for v in state.observations)
         if trusted < config.n // 2 + 1:
             return
@@ -319,7 +325,8 @@ def _recover_steps(state: State, config: Config):
                 observed = _observation(state, m)
                 if observed != state.observations[m]:
                     yield f"observe:{m}:{observed}", replace(
-                        state, observations=_set(state.observations, m, observed))
+                        state, observations=_set(state.observations, m, observed),
+                    normal_publication_seen=state.normal_publication_seen or observed == 2)
             return
         if 4 in state.observations:
             yield "recover:preserve_abort_resolution", replace(state, phase="RECOVER_ABORT")
@@ -425,7 +432,7 @@ def _client_steps(state: State, config: Config):
     if state.phase == "RESOLVED":
         if state.slot + 1 < config.operations and all(state.online) and not any(state.read_fault):
             yield "next_operation", replace(state, slot=state.slot + 1, phase="CONTENT", recovery_mode=False,
-                                             recovery_result=0, response="none", retry_count=0,
+                                             recovery_result=0, normal_publication_seen=False, response="none", retry_count=0,
                                              reply_lost=False, observations=(-1,) * config.n)
         else:
             yield "finish", replace(state, phase="DONE")

@@ -41,6 +41,7 @@ def main():
         ("n4-full-publication", dict(n=4, replicas=2), 250000, 60),
         ("n1-one-crash", dict(n=1, crashes=1), 35000, 25),
         ("n1-recovery-crash", dict(n=1, crashes=2), 35000, 25),
+        ("n1-failure-recovery", dict(n=1, crashes=2, fault_budget=1), 150000, 30),
         ("n2-failure-recovery", dict(n=2, crashes=1, fault_budget=1), 25000, 25),
         ("n3-nonprefix-failures", dict(n=3, fault_budget=3), 25000, 25),
         ("n3-recovery", dict(n=3, replicas=2, crashes=2, fault_budget=2), 25000, 25),

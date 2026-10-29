@@ -105,6 +105,29 @@ class RecoveryWindows(unittest.TestCase):
         self.assertEqual(state.artifacts[0][0][0].data, 3)
         self.assertTrue(state.publication_witness[0][0] & 1)
 
+    def test_planned_normal_recovery_does_not_hide_new_content_damage(self):
+        config = Config(n=1, crashes=1, fault_budget=1)
+        state = prepare(initial(config), config)
+        state = complete_member(state, config, "ACCEPT", 0)
+        state = take(state, config, "crash:process")
+        state = take(state, config, "observe:0:1")
+        state = take(state, config, "recover:preserve_candidate")
+        state = take(state, config, "recover:reprotect_fixed_members")
+        self.assertEqual(state.recovery_result, 1)
+        self.assertFalse(state.normal_publication_seen)
+        state = take(state, config, "barrier:CONTENT")
+        state = take(state, config, "content:corrupt:0:0")
+        state = take(state, config, "barrier:PREPARE")
+        state = take(state, config, "barrier:ACCEPT")
+        state = complete_member(state, config, "FINALIZE", 0)
+        state = take(state, config, "barrier:FINALIZE")
+        enabled = [action for action, _ in successors(state, config)]
+        self.assertIn("recover:known_content_damage", enabled)
+        self.assertFalse(any(action.startswith("COMMIT_PROOF:") for action in enabled))
+        state = take(state, config, "recover:known_content_damage")
+        self.assertEqual(state.results, (0,))
+        self.assertEqual(state.phase, "RECOVER_OBSERVE")
+
     def test_one_healthy_copy_repairs_second_required_copy_before_normal_publication(self):
         config = Config(n=2, replicas=2, crashes=1, fault_budget=1)
         state = prepare(initial(config), config)

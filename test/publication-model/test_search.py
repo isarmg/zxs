@@ -53,6 +53,17 @@ class SearchTests(unittest.TestCase):
         self.graph({0: (("first", 1), ("second", 2)), 2: (("bad-back", 1),)}, ((2, 1),))
         self.assertEqual(engine.search(TinyConfig())["status"], "Counterexample")
 
+    def test_initial_violation_trace_preserves_expected_property(self):
+        self.graph({}, ((None, 0),))
+        result = engine.search(TinyConfig())
+        self.assertEqual(result["status"], "Counterexample")
+        self.assertEqual(result["trace"]["steps"], [])
+        self.assertEqual(result["trace"]["violations"], result["violations"])
+        self.assertTrue(engine.replay(result["trace"])["counterexample"])
+        result["trace"]["violations"] = []
+        with self.assertRaisesRegex(ValueError, "violation differs"):
+            engine.replay(result["trace"])
+
     def test_depth_cutoff_is_not_a_pass_or_out_of_bounds_violation(self):
         self.graph({0: (("go", 1),), 1: (("too-deep", 2),)}, ((1, 2),))
         result = engine.search(TinyConfig(), engine.Limits(max_depth=1))

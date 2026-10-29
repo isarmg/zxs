@@ -1,0 +1,183 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 0,
+    "n": 1,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "lost_binding"
+  },
+  "initial_digest": "bec25f153b2387b68e72adba40b1e18389e756705ea7198ae2fc32db373a66f7",
+  "schema": "zxs-publication-model-trace-v1",
+  "steps": [
+    {
+      "action": "CONTENT:0:write",
+      "state_digest": "f17628032a12426eafe82d085cc548832c75095fa9a597e441292c92b451a6fd"
+    },
+    {
+      "action": "CONTENT:0:file_sync",
+      "state_digest": "66dd4c7cbec1a0999e87e535441c185655729d092362b697fcaca83f43467c40"
+    },
+    {
+      "action": "CONTENT:0:install",
+      "state_digest": "1ab74446f03534792e1fa201bd0f568dfdd0f1b393d63b13612bcf35447bf1b7"
+    },
+    {
+      "action": "CONTENT:0:directory_sync",
+      "state_digest": "9f3e4b3aa5b13420da64e24c7326c1a44d8d511f01e8af9e18a181ace5f44590"
+    },
+    {
+      "action": "barrier:CONTENT",
+      "state_digest": "5edf34edd2db0231985322156883864ded7bade6bb1e3ae3ce874e7c7a196452"
+    },
+    {
+      "action": "PREPARE:0:write",
+      "state_digest": "adf3c90aa68841f6cac05a88e16a941dedbb94d9d74c684caae4b4fa7be573d0"
+    },
+    {
+      "action": "PREPARE:0:file_sync",
+      "state_digest": "58b169677825b03136ebdd58665afa4ce7945cd04d1177b5817f47ffa684a44b"
+    },
+    {
+      "action": "PREPARE:0:install",
+      "state_digest": "03a26c3ae040ce3c444ad0ec8902958705c35a95b3afc152f5b9e12216010af9"
+    },
+    {
+      "action": "PREPARE:0:directory_sync",
+      "state_digest": "9ad6db889ef71e2453fc5e728381ad7ab4893f9632f2c7a1410b4ed67828bc5f"
+    },
+    {
+      "action": "barrier:PREPARE",
+      "state_digest": "c7c305b4b83dedffcc6ba9e7e95733c0414c714c35de2b62a48945e487261eeb"
+    },
+    {
+      "action": "issue_accept",
+      "state_digest": "a946ee2bff741b45b32ea86398b24aac794682b4198fa38e4ad48128aaa50945"
+    },
+    {
+      "action": "ACCEPT:0:write",
+      "state_digest": "b999c31f69445130700614e517406110fcdf4a1259d0796a6f9daae574a73580"
+    },
+    {
+      "action": "ACCEPT:0:file_sync",
+      "state_digest": "5ff2ff9e9186b58349a092ad369d430b330dcc7325a8dfb6d80c8bd6621a9ded"
+    },
+    {
+      "action": "ACCEPT:0:install",
+      "state_digest": "01bc9da0b343ef83efc986916bc14bf52c2405e65cd5c33c16d40246716aa99b"
+    },
+    {
+      "action": "ACCEPT:0:directory_sync",
+      "state_digest": "54f10f55bfc79a5de7248d02b4899cca6a69566d577c580fa7d9ca80f6fb1141"
+    },
+    {
+      "action": "barrier:ACCEPT",
+      "state_digest": "64d1ef0b86aea0723fe72ebb6590c2484d377d7be7003ebf199c41febc858b70"
+    },
+    {
+      "action": "FINALIZE:0:write",
+      "state_digest": "31922b693ea4df595d9795d1e926dd2c084b6e1448c8bb6e22547851c986ae16"
+    },
+    {
+      "action": "FINALIZE:0:file_sync",
+      "state_digest": "d42ca446ababc436a807379f509ed119b1d8ae31f0754d6d93fd79d48cbbe95c"
+    },
+    {
+      "action": "FINALIZE:0:install",
+      "state_digest": "e5abd4d129b09ffb506a3377fff6472b45233884f673d15886edb637f378e5e8"
+    },
+    {
+      "action": "FINALIZE:0:directory_sync",
+      "state_digest": "5401e8fdd60e63a87c7155f1335a8f7178c194d2637007eec3c3f69c5dbc47e2"
+    },
+    {
+      "action": "barrier:FINALIZE",
+      "state_digest": "848e3a46379d6ff07cf835b4a3b8bb0bc8103aefc2357abf14e7fd21d0be5ae6"
+    },
+    {
+      "action": "COMMIT_PROOF:0:write",
+      "state_digest": "9305b2404de4ef51d38d83f05a9ddfb1cbaf2d1ed57628c62a043ee03beaa57c"
+    },
+    {
+      "action": "COMMIT_PROOF:0:file_sync",
+      "state_digest": "1dbbfd84113e6ec4c0d986943ace87e421748f7f0243f4e84375765c30408a6b"
+    },
+    {
+      "action": "COMMIT_PROOF:0:install",
+      "state_digest": "e81b4e4d05cd761cb46711a0a6ad864ceea2ffa7f6b150f8f2c54fb15933e676"
+    },
+    {
+      "action": "COMMIT_PROOF:0:directory_sync",
+      "state_digest": "789943605ad2f2d6b887fa5bb5a203db105b9677733b33accc95588e3cbe9eaa"
+    },
+    {
+      "action": "barrier:COMMIT_PROOF",
+      "state_digest": "0306b214d705f321233da003447504e295f2f02f79d68f9be3a378eaab8d5952"
+    },
+    {
+      "action": "PUBLICATION:0:write",
+      "state_digest": "78bf8b6748021fcca7055b3831d255752ef5269aab31e87dcf393c7107df9d4c"
+    },
+    {
+      "action": "PUBLICATION:0:file_sync",
+      "state_digest": "a0d056ab51ad293906cf962ffbe929a23e8f0a2b9c4c5b939c5c640423084504"
+    },
+    {
+      "action": "PUBLICATION:0:install",
+      "state_digest": "b2d0ac01cfc5cfef6213d6a2678657a399220194291c65a8988e05f87129ddcb"
+    },
+    {
+      "action": "PUBLICATION:0:directory_sync",
+      "state_digest": "7028d0708787d36572d6da7e9280dbb1666f969c7a8ce0fc04db2cb28c1c80a1"
+    },
+    {
+      "action": "barrier:PUBLICATION",
+      "state_digest": "b99fae99ebf44b6d58dd12f03e32ec87e9aad29308e23d280a877916863f5bee"
+    },
+    {
+      "action": "PUBLICATION_PROOF:0:write",
+      "state_digest": "f4064395786e54bd0c0c42627d198185a3be0eb9399e6476bbcc98b7c626fec6"
+    },
+    {
+      "action": "PUBLICATION_PROOF:0:file_sync",
+      "state_digest": "e0754ac1475664f9f545ae46b574a36f2197ff448295964398a8bbc5ae43d3c4"
+    },
+    {
+      "action": "PUBLICATION_PROOF:0:install",
+      "state_digest": "0a56ff4c5b9bd6dc12a1180fe56dda20d8dcd2ebc216b0d81a23f2bda99174e0"
+    },
+    {
+      "action": "PUBLICATION_PROOF:0:directory_sync",
+      "state_digest": "7fddeda0e80fbd194859d3426c49e01f59a02b0a0dc8ed6c89bb99b29604236f"
+    },
+    {
+      "action": "barrier:PUBLICATION_PROOF",
+      "state_digest": "7d972f88f35e6b3c3b441cd61a3cf09fe0dd93981475fcd6164be5eb889214f2"
+    },
+    {
+      "action": "publish:atomic_state_receipt_event",
+      "state_digest": "4688827cb31fbc8f1031f2c7705cda5bdb221e26a83226c6a3b433e51f64af54"
+    },
+    {
+      "action": "reply:delivered",
+      "state_digest": "87b431e5b9d6fadd2bc21a46281d588ea81f7a8e3435bf53f3ed04672969a420"
+    },
+    {
+      "action": "mutant:retry_without_binding",
+      "state_digest": "6f6db80f6bfb738bf174ab0fa9ffa9daf68ec04c5afd5114a5f6d10ad86e041a"
+    }
+  ],
+  "violations": [
+    {
+      "message": "events repeat or violate decision-slot order",
+      "name": "unique_publication",
+      "spec": "10.2; 10.3(5); 10.10"
+    },
+    {
+      "message": "slot 0: operation has multiple business effects",
+      "name": "unique_publication",
+      "spec": "10.3(5); 18"
+    }
+  ]
+}

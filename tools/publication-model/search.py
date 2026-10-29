@@ -88,8 +88,9 @@ def search(config, limits=None):
                 "scope": "declared finite abstraction only"}
 
     if violations:
-        return result("Counterexample", trace=_trace(config, nodes, parents, 0),
-                      found=violations)
+        witness = _trace(config, nodes, parents, 0)
+        witness["violations"] = list(violations)
+        return result("Counterexample", trace=witness, found=violations)
     while queue:
         if limits.max_seconds is not None and time.monotonic() - started >= limits.max_seconds:
             return result("Inconclusive", "max_seconds")
