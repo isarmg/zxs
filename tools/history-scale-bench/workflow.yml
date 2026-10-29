@@ -10,11 +10,15 @@ on:
         default: selftest
         required: true
       build_run_id:
-        description: Reuse the successful selftest build run; required for scale modes
+        description: Reuse a run with both original binary builds successful; required for scale modes
         type: string
         default: ''
       build_carrier_sha:
         description: Exact carrier SHA of the reused selftest build run
+        type: string
+        default: ''
+      selftest_run_id:
+        description: Successful N8 validation of these exact builds; scale modes default to build_run_id
         type: string
         default: ''
 
@@ -43,6 +47,7 @@ jobs:
       build_required: ${{ steps.select.outputs.build_required }}
       build_run_id: ${{ steps.select.outputs.build_run_id }}
       build_carrier_sha: ${{ steps.select.outputs.build_carrier_sha }}
+      selftest_run_id: ${{ steps.select.outputs.selftest_run_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,46 +63,58 @@ jobs:
           MODE: ${{ inputs.mode }}
           BUILD_RUN_ID: ${{ inputs.build_run_id }}
           BUILD_CARRIER_SHA: ${{ inputs.build_carrier_sha }}
+          SELFTEST_RUN_ID: ${{ inputs.selftest_run_id }}
         run: |
           python3 tools/history-scale-bench/controller.py \
             --plan tools/history-scale-bench/acceptance-plan.json \
             --mode "$MODE" --output selection.json --github-output "$GITHUB_OUTPUT" \
-            --build-run-id "$BUILD_RUN_ID" --build-carrier-sha "$BUILD_CARRIER_SHA"
-      - name: Require successful selftest before reusing its binaries
+            --build-run-id "$BUILD_RUN_ID" --build-carrier-sha "$BUILD_CARRIER_SHA" \
+            --selftest-run-id "$SELFTEST_RUN_ID"
+      - name: Require successful original builds and a passed selftest before scale
         if: steps.select.outputs.build_required == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BUILD_RUN_ID: ${{ steps.select.outputs.build_run_id }}
           BUILD_CARRIER_SHA: ${{ steps.select.outputs.build_carrier_sha }}
+          SELFTEST_RUN_ID: ${{ steps.select.outputs.selftest_run_id }}
+          MODE: ${{ inputs.mode }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" > reuse-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID/jobs?per_page=100" > reuse-build-jobs.json
+          if [ "$MODE" != selftest ]; then
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SELFTEST_RUN_ID" > selftest-run.json
+          fi
           python3 - <<'PY'
           import json
           import os
           from pathlib import Path
           import sys
           sys.path.insert(0, "tools/history-scale-bench")
-          from controller import validate_reuse_run
-          validate_reuse_run(json.loads(Path("reuse-run.json").read_text()), os.environ["BUILD_RUN_ID"], os.environ["BUILD_CARRIER_SHA"])
+          from controller import validate_build_jobs, validate_reuse_run
+          validate_build_jobs(json.loads(Path("reuse-run.json").read_text()), json.loads(Path("reuse-build-jobs.json").read_text()),
+                              os.environ["BUILD_RUN_ID"], os.environ["BUILD_CARRIER_SHA"])
+          if os.environ["MODE"] != "selftest":
+              passed = json.loads(Path("selftest-run.json").read_text())
+              validate_reuse_run(passed, os.environ["SELFTEST_RUN_ID"], passed["head_sha"])
           PY
       - name: Fetch the original selftest selection
-        if: steps.select.outputs.build_required == 'false'
+        if: steps.select.outputs.build_required == 'false' && inputs.mode != 'selftest'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: history-growth-controller-${{ steps.select.outputs.build_run_id }}
-          run-id: ${{ steps.select.outputs.build_run_id }}
+          name: history-growth-controller-${{ steps.select.outputs.selftest_run_id }}
+          run-id: ${{ steps.select.outputs.selftest_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: reused-controller
       - name: Fetch the original selftest evidence
-        if: steps.select.outputs.build_required == 'false'
+        if: steps.select.outputs.build_required == 'false' && inputs.mode != 'selftest'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: history-growth-small-selftest-${{ steps.select.outputs.build_run_id }}
-          run-id: ${{ steps.select.outputs.build_run_id }}
+          name: history-growth-small-selftest-${{ steps.select.outputs.selftest_run_id }}
+          run-id: ${{ steps.select.outputs.selftest_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: reused-selftest
       - name: Check all original micro lifecycle stages passed
-        if: steps.select.outputs.build_required == 'false'
+        if: steps.select.outputs.build_required == 'false' && inputs.mode != 'selftest'
         env:
           BUILD_RUN_ID: ${{ steps.select.outputs.build_run_id }}
           BUILD_CARRIER_SHA: ${{ steps.select.outputs.build_carrier_sha }}
@@ -125,6 +142,8 @@ jobs:
           path: |
             selection.json
             reuse-run.json
+            reuse-build-jobs.json
+            selftest-run.json
             tools/history-scale-bench/
             test/history-scale-bench/
           if-no-files-found: error

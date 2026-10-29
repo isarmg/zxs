@@ -95,10 +95,13 @@ Healthy；固定正文提交必须有观察范围且内容健康。旧版使用�
 本地／云工作区只读源码、编辑、Git 和按文件格式检查，不本地执行驱动或测试。
 [workflow.yml](../../tools/history-scale-bench/workflow.yml) 是专用验证载体模板，
 只有手动 `workflow_dispatch`，默认 selftest。首次 selftest 每版仅一个 build job；
-后续所有规模必须填写这次成功自测的 `build_run_id` 与 `build_carrier_sha`，
+后续所有规模必须填写原二进制的 `build_run_id` 与 `build_carrier_sha`，
 跳过 build jobs，下载原两份二进制，不能每档／每次 dispatch 重编。
-控制器先核对来源 run 成功、原 selection 为同候选的 selftest，以及 4 样本／12 阶段
-完整通过；随后 runner 校验原构建身份与摘要。测量工具的 SHA/run 与原构建身份分别记录。
+若仅监督器修复，可以在 selftest 模式复用两版 build job 均成功的来源 run，
+即使原 run 的小测因监督器失败；原失败保持失败。规模运行还须填写成功的
+`selftest_run_id`（默认与 build run 相同），控制器核对该 run 成功、selection 绑定
+相同候选与原构建，以及 4 样本／12 阶段完整通过；随后 runner 再核对全部摘要。
+测量工具的 SHA/run、自测 run 与原构建身份分别记录。
 
 [prepare.py](../../tools/history-scale-bench/prepare.py) 接受固定对照或显式精确候选 SHA
 的干净 checkout，核对 Rust pin，在已有 perf-check 中临时注册同一普通 binary。
@@ -136,8 +139,8 @@ release binary 仍使用 `Config::development` 单逻辑盘，不能称为真实
 冷准入可能建立全量 operation_id 索引，其 RSS 和首次查询条件须说明。
 样本不足时保留原值与重复范围，不伪造稳定百分位。强制停止时在途操作可能已持久化，
 已确认前缀不是池的最终总数；缺失 GNU time 最终峰值不能拿采样值冒充。
-退出时 `/proc` 权限错误只在复读证明进程已消失或 Z/X 时丢弃该无效采样，保留诊断；
-活进程权限错误仍失败，不改权限或伪造零值。
+退出时 `/proc` 权限错误或缺失 RSS，只在复读证明进程已消失或 Z/X 时丢弃该无效采样，
+保留原状态、路径与诊断；仍存活的权限错误或缺 RSS 仍失败，不改权限或伪造零值。
 
 requested.json 必须完整收尾且每个样本三阶段全通过才可报告全通过。
 原始日志、二进制来源、完整命令、环境、oracle-evidence、资源与同步汇总由 workflow

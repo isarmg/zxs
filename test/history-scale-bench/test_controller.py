@@ -10,7 +10,7 @@ import unittest
 
 TOOLS = Path(__file__).resolve().parents[2] / "tools/history-scale-bench"
 sys.path.insert(0, str(TOOLS))
-from controller import BASELINE, PROFILES, build_source, load_plan, profile_settings, select, validate_reuse_run, validate_reused_selftest
+from controller import BASELINE, PROFILES, build_source, load_plan, profile_settings, select, validate_build_jobs, validate_reuse_run, validate_reused_selftest
 
 
 class ControllerTests(unittest.TestCase):
@@ -72,6 +72,18 @@ class ControllerTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 validate_reuse_run({**run, **change}, "123", "a" * 40)
 
+    def test_observer_repair_can_reuse_two_successful_builds(self):
+        run = {"id": 123, "head_sha": "a" * 40, "path": ".github/workflows/history-scale.yml",
+               "event": "workflow_dispatch", "status": "completed", "conclusion": "failure"}
+        jobs = {"jobs": [{"name": name, "status": "completed", "conclusion": "success"}
+                         for name in ("build (baseline)", "build (candidate)")]}
+        validate_build_jobs(run, jobs, "123", "a" * 40)
+        with self.assertRaises(ValueError):
+            validate_reuse_run(run, "123", "a" * 40)
+        jobs["jobs"][0]["conclusion"] = "failure"
+        with self.assertRaisesRegex(ValueError, "both original"):
+            validate_build_jobs(run, jobs, "123", "a" * 40)
+
     def test_original_selftest_needs_all_four_samples_and_twelve_stages(self):
         selection = {"mode": "selftest", "build_required": True, "build_run_id": "123", "build_carrier_sha": "a" * 40,
                      "baseline_sha": BASELINE, "candidate_sha": "b" * 40,
@@ -81,6 +93,7 @@ class ControllerTests(unittest.TestCase):
                    for label in ("baseline", "candidate") for mode in ("timing", "counts")]
         summary = {"all_requested_samples_passed": True, "cohort_complete": True, "requested_matrix_matches": True, "samples": samples}
         validate_reused_selftest(selection, summary, "123", "a" * 40, "b" * 40)
+        validate_reused_selftest({**selection, "build_required": False}, summary, "123", "a" * 40, "b" * 40)
         for change in ({"samples": samples[:-1]}, {"cohort_complete": False}, {"all_requested_samples_passed": False}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 validate_reused_selftest(selection, {**summary, **change}, "123", "a" * 40, "b" * 40)

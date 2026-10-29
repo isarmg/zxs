@@ -109,6 +109,17 @@ def process_snapshot(pid: int) -> dict | None:
                 raise ValueError(f"invalid {key} in {status_path}")
             memory[key + "_bytes"] = int(amount) * 1024
     if "VmRSS_bytes" not in memory:
+        try:
+            current_status = status_path.read_text(encoding="ascii")
+        except (FileNotFoundError, ProcessLookupError):
+            current_state = "disappeared"
+        else:
+            current_fields = dict(line.split(":", 1) for line in current_status.splitlines() if ":" in line)
+            current_state = current_fields.get("State", "unknown").split()[0]
+        if current_state in {"Z", "X", "disappeared"}:
+            return {"pid": pid, "valid": False, "memory": {}, "io": None,
+                    "memory_error": {"reason": "missing_live_rss", "pid": pid, "path": str(status_path),
+                                     "initial_state": state, "state": current_state}}
         raise ValueError(f"missing live process VmRSS in {status_path}")
     try:
         io_text = io_path.read_text(encoding="ascii")
