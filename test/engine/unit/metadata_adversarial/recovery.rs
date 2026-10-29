@@ -85,7 +85,7 @@ fn fixture(target: Target) -> Fixture {
                 load_authenticated_object(&config.disks[0], kind, hash)
             })
             .unwrap();
-            let value = directory.values().last().unwrap().clone();
+            let value = directory.values().next_back().unwrap().clone();
             if matches!(target, Target::Events) {
                 let entry: EventDirectoryEntry = json_codec::from_value(value).unwrap();
                 (storage_contract::EVENT_SEGMENT_KIND, entry.hash)

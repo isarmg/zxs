@@ -114,7 +114,7 @@ fn the_largest_legal_node_record_fits_the_minimal_page_and_the_full_page_the_res
         true,
     );
     let encoded = full.encode(PageBudget::PROTOCOL).unwrap();
-    assert!(MAX_HISTORY_PAGE_BYTES < MAX_RESPONSE_BYTES);
+    const { assert!(MAX_HISTORY_PAGE_BYTES < MAX_RESPONSE_BYTES) };
     assert!(
         encoded.body().len() <= MAX_HISTORY_PAGE_BYTES,
         "{}",
