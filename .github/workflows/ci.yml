@@ -1,218 +1,311 @@
-name: CI
+# Verification-only carrier; checks out frozen product with its normal workflow unchanged.
+# Freeze reviewed input IDs before publication; this template is NOT an execution result.
+# Prepared for R84: 556db8c3a0b1fbe24ecbfdbe63c664bbfb3f07e9
+# tree: 64757d33ba3175add9e8299c76379c406c57be3d
+# parent: 13b664e9fd41a356ffb7ed982d21e97abb123626
+# No source/catalog/golden generation, commits, patches, repository writes or deployment.
+# Normal 17-job CI, WASM, real Chrome and foundation/SDK/security remain separate gates.
+name: Focused bounded-history R84 native verification
 
 on:
   push:
-  pull_request:
+    branches: [verify/bounded-history-focused-20261029-r84]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: bounded-history-r84-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: '1'
+  CARGO_NET_OFFLINE: 'true'
+  CARGO_TERM_COLOR: never
   CARGO_INCREMENTAL: '0'
+  CARGO_BUILD_JOBS: '2'
+  RUST_BACKTRACE: '1'
+  ZXS_PRODUCT_SHA: 'a19f9049cc2260213587efc6ac4ebd70347ad54b'
+  ZXS_PRODUCT_TREE: '64757d33ba3175add9e8299c76379c406c57be3d'
+  ZXS_PRODUCT_PARENT_SHA: '13b664e9fd41a356ffb7ed982d21e97abb123626'
 
 jobs:
-  static:
-    name: Static workflow and tooling regressions (no Rust)
+  focused:
+    name: Focused bounded history (${{ matrix.suite }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Check workflows, source governance and script regressions
-        run: bash .github/scripts/check.sh static
-
-  tests:
-    name: Tests (${{ matrix.suite }})
-    needs: static
-    runs-on: ubuntu-24.04
-    # Cold crypto runs include ten packaged/local-generated ring cases, including
-    # both release slow-test matrices; the measured run exceeded 30 minutes.
-    # Match the release verification budget without relaxing other shards.
-    timeout-minutes: ${{ matrix.suite == 'foundation-crypto' && 60 || 30 }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        suite: [rust-sources, quality, security, workspace, foundation-platform, foundation-crypto, foundation-data, foundation-language, foundation-async, web, contracts, build-tools, smb-protocol]
+        suite: [engine, server, web-contracts]
     env:
-      ZXS_REQUIRE_BROWSER: '1'
+      ZXS_SUITE: ${{ matrix.suite }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Initialize isolated Cargo home
+          ref: a19f9049cc2260213587efc6ac4ebd70347ad54b
+          fetch-depth: 2
+      - name: Prepare evidence outside the product checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/zxs-history-r84-evidence-$ZXS_SUITE"
+          mkdir -p "$evidence" "$RUNNER_TEMP/zxs-history-r84-tests-$ZXS_SUITE"
+          printf 'ZXS_EVIDENCE=%s\n' "$evidence" >> "$GITHUB_ENV"
+          printf 'TMPDIR=%s\n' "$RUNNER_TEMP/zxs-history-r84-tests-$ZXS_SUITE" >> "$GITHUB_ENV"
+          printf 'CARGO_TARGET_DIR=%s\n' "$RUNNER_TEMP/zxs-history-r84-target-$ZXS_SUITE" >> "$GITHUB_ENV"
+          df -h "$RUNNER_TEMP" "$GITHUB_WORKSPACE" | tee "$evidence/filesystem-before.txt"
+          cat > "$RUNNER_TEMP/zxs-history-r84-identity.py" <<'IDENTITY'
+          import hashlib, json, os, pathlib, subprocess, sys, tomllib
+          ROOT = pathlib.Path.cwd()
+          OUT = pathlib.Path(os.environ['ZXS_EVIDENCE'])
+          OUT.mkdir(parents=True, exist_ok=True)
+
+          def require(condition, message):
+              if not condition:
+                  raise RuntimeError(message)
+
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+
+          def snapshot():
+              # Include every tracked file, symlink and mode, not only the protected inputs.
+              rows = []
+              for item in git('ls-files', '-s', '-z').split(b'\0'):
+                  if not item:
+                      continue
+                  metadata, raw_path = item.split(b'\t', 1)
+                  mode, blob, stage = metadata.decode().split()
+                  require(stage == '0', 'unmerged index entry')
+                  name = os.fsdecode(raw_path)
+                  path = ROOT / name
+                  data = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes()
+                  rows.append([name, mode, blob, hashlib.sha256(data).hexdigest(), path.lstat().st_mode])
+              return rows
+
+          phase = sys.argv[1]
+          product, tree, parent = (os.environ[k] for k in
+              ('ZXS_PRODUCT_SHA', 'ZXS_PRODUCT_TREE', 'ZXS_PRODUCT_PARENT_SHA'))
+          require(os.environ['GITHUB_REF'] == 'refs/heads/verify/bounded-history-focused-20261029-r84', 'wrong verification ref')
+          require(git('rev-parse', 'HEAD').decode().strip() == product, 'wrong product SHA')
+          require(git('rev-parse', 'HEAD^{tree}').decode().strip() == tree, 'wrong product tree')
+          require(git('show', '-s', '--format=%P', 'HEAD').decode().strip() == parent, 'wrong product parent')
+          status = git('status', '--porcelain=v1', '--untracked-files=all').decode()
+          (OUT / (phase + '-git-status.txt')).write_text(status)
+          require(not status, 'product checkout changed: ' + status)
+          protected = ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml',
+                       'compliance/rust-sources.json', '.github/scripts/check.sh',
+                       '.github/scripts/check-foundation-behaviour.py',
+                       'test/ci/fixtures/foundation-behaviour-tests.json',
+                       'tools/rust-sources/workspaces.json']
+          protected += [os.fsdecode(p) for p in git('ls-tree', '-r', '--name-only', '-z', parent,
+                                                   '--', '.github/workflows').split(b'\0') if p]
+          protected_sha256 = {}
+          for name in protected:
+              current = (ROOT / name).read_bytes()
+              require(current == git('show', parent + ':' + name), 'protected input differs from parent: ' + name)
+              protected_sha256[name] = hashlib.sha256(current).hexdigest()
+          require(not git('diff', '--name-only', parent, product, '--', '.github/workflows'), 'normal workflow set changed')
+          require(not git('diff', '--name-only', parent, product, '--', 'Cargo.toml', ':(glob)**/Cargo.toml'), 'Cargo manifests changed')
+          config = tomllib.loads((ROOT / '.cargo/config.toml').read_text())
+          require(tomllib.loads((ROOT / 'rust-toolchain.toml').read_text())['toolchain']['channel'] == '1.99.0', 'toolchain is not 1.99.0')
+          require(config['net']['offline'] is True and config['source']['crates-io']['replace-with'] == 'unavailable-registry'
+                  and config['source']['unavailable-registry']['directory'] == 'compliance/empty-registry', 'offline source policy changed')
+          current = snapshot()
+          if phase == 'before':
+              identity = dict(product_sha=product, product_tree=tree, product_parent=parent,
+                              verification_sha=os.environ['GITHUB_SHA'], verification_ref=os.environ['GITHUB_REF'],
+                              run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+                              suite=os.environ['ZXS_SUITE'], protected_sha256=protected_sha256,
+                              tracked_files=len(current), scope='focused native execution only; not normal 17-job CI, WASM or Chrome',
+                              deployment=False, source_generation=False, golden_updates=False)
+              (OUT / 'input-identity.json').write_text(json.dumps(identity, indent=2) + '\n')
+              (OUT / 'tracked-inputs.json').write_text(json.dumps(current, indent=2) + '\n')
+          else:
+              require(current == json.loads((OUT / 'tracked-inputs.json').read_text()), 'tracked worktree bytes, mode or index changed')
+              (OUT / 'source-unchanged.json').write_text(json.dumps(dict(result='PASS', product_sha=product,
+                  product_tree=tree, tracked_files=len(current), protected_sha256=protected_sha256), indent=2) + '\n')
+          print(json.dumps(dict(phase=phase, result='PASS', tracked_files=len(current), protected_inputs=len(protected)), indent=2))
+          IDENTITY
+          cat > "$RUNNER_TEMP/zxs-history-r84-runner.py" <<'RUNNER'
+          import hashlib, json, os, pathlib, re, runpy, subprocess, sys, traceback
+          ROOT = pathlib.Path.cwd()
+          OUT = pathlib.Path(os.environ['ZXS_EVIDENCE'])
+          SPECS = {'engine': [{'label': 'engine-lib', 'package': 'storage-engine', 'target': ['--lib'], 'source': 'src/engine/src/lib.rs', 'required': ['business::file_history_pages::tests::exhaustive_paging_of_every_collection_matches_whole_history_oracles', 'business::file_history_pages::tests::node_records_carry_bounded_fields_and_match_the_previous_projection_rules', 'business::file_history_pages::tests::anchor_boundaries_and_u64_max_sequences_page_without_loss_or_cycles', 'business::file_history_pages::tests::field_slices_respect_utf8_boundaries_and_report_completion_exactly', 'business::file_history_pages::tests::current_context_follows_the_deterministic_owner_rule_and_survives_deletion', 'business::file_history_pages::tests::history_root_is_the_exact_catalog_hash_stable_across_unrelated_writes_and_reopen', 'business::file_history_pages::tests::a_fresh_pool_without_publication_has_no_history_catalog', 'business::file_history_pages::tests::many_parent_nodes_page_their_parents_in_id_order', 'business::file_history_pages::tests::local_plan_preparation_preserves_exact_catalog_for_unique_and_shared_state_owners', 'state_projection::first_commit_tests::first_commit_index_matches_the_full_scan_after_appends_removals_and_rewrites', 'state_projection::first_commit_tests::append_first_publishers_prune_shared_pages_before_io_and_rebuild_removed_witnesses', 'namespace::tests::page_local_tests::wide_directory_first_middle_last_edits_have_bounded_actual_work', 'namespace::tests::page_local_tests::repeated_edits_to_one_key_encode_its_final_route_only_once', 'namespace::tests::page_local_tests::page_and_index_splits_and_merges_preserve_balance_and_the_oracle', 'namespace::tests::page_local_tests::legal_variable_length_names_split_on_bytes_before_entry_count', 'namespace::tests::page_local_tests::deep_wide_ancestors_only_encode_the_edited_path', 'namespace::tests::page_local_tests::fixed_seed_mixed_point_edits_match_an_independent_flat_map', 'namespace::tests::page_local_tests::directory_rename_reads_no_descendant_pages', 'namespace::tests::page_local_tests::encoding_work_counts_duplicate_encoding_before_address_deduplication', 'namespace::tests::page_local_tests::batched_deletions_collapse_to_one_page_and_then_an_empty_root', 'namespace::tests::page_local_tests::large_middle_replacements_split_locally_with_the_single_entry_exception', 'namespace::tests::page_local_tests::deleting_from_sparse_wire_indexes_contracts_promoted_sealed_roots', 'namespace::tests::page_local_tests::a_non_growing_directory_rename_operation_reuses_admitted_path_budgets', 'namespace::tests::page_local_tests::growing_rename_prefixes_still_check_descendants_using_stored_spelling', 'namespace::tests::page_local_tests::deeper_rename_prefixes_preserve_the_descendant_depth_limit']}], 'server': [{'label': 'server-lib', 'package': 'storage-server', 'target': ['--lib'], 'source': 'src/server/src/lib.rs', 'required': ['backend_file_history::tests::file_history_request_is_strict_about_fields_limits_cursors_and_anchors', 'backend_file_history::tests::sub_collection_requests_require_a_root_and_bound_their_limits_and_offsets', 'backend_file_history::tests::unrooted_anchor_is_rejected_and_first_version_page_has_no_fake_root', 'backend_file_history::cursors::tests::every_cursor_kind_round_trips_and_rejects_foreign_or_tampered_cursors', 'backend_file_history::cursors::tests::malformed_cursor_text_is_rejected_as_invalid_cursor', 'backend_file_history::cursors::tests::a_cursor_is_bound_to_the_request_file_before_any_state_lookup', 'backend_file_history::wire::tests::the_largest_legal_node_record_fits_the_minimal_page_and_the_full_page_the_response_cap', 'backend_file_history::wire::tests::byte_budget_truncates_from_the_tail_and_keeps_a_forward_cursor_from_the_last_admitted_record', 'backend_file_history::wire::tests::shell_fields_are_exact_and_context_without_an_entry_omits_content_fields', 'backend_file_history::wire::tests::parent_pages_and_slices_encode_exclusive_cursors_and_next_offsets', 'backend_file_history::wire::tests::field_slices_report_next_offset_only_while_incomplete', 'backend_file_history::wire::tests::budget_truncation_moves_edges_into_dropped_nodes_outside_the_window', 'backend_file_history::wire::tests::encoded_node_pages_match_the_shared_web_window_fixtures', 'backend_file_history::wire::tests::lazy_wire_budget_stops_before_later_candidates_and_caps_first_record_allocation', 'backend_file_history::wire::tests::response_chunks_retain_admission_after_body_eof_until_transport_owners_drop', 'engine_backend::file_manager::history_pages::tests::parent_and_branch_pages_round_trip_through_every_previous_cursor', 'engine_backend::file_manager::history_pages::tests::escaped_field_pages_fit_the_wire_budget_and_reassemble_with_utf8_progress', 'engine_backend::file_manager::history_pages::tests::root_binding_rejects_stale_cursors_and_foreign_queries_but_not_unrelated_writes', 'engine_backend::file_manager::history_pages::tests::anchors_position_the_page_and_parent_previews_always_remain_continuable', 'engine_backend::file_manager::history_pages::tests::page_parent_edge_budget_leaves_later_nodes_a_restart_cursor', 'engine_backend::file_manager::history_pages::tests::branch_merge_version_and_field_pages_bind_the_same_root', 'engine_backend::file_manager::history_pages::tests::retried_requests_under_the_same_root_return_byte_identical_pages', 'http_shutdown::tests::shutdown_ends_incomplete_request_body_after_network_grace', 'http_shutdown::tests::shutdown_ends_unread_streaming_response_after_network_grace', 'http_shutdown::tests::network_cutoff_keeps_admitted_blocking_work_owned_until_runtime_exit', 'http_shutdown::tests::history_send_lease_and_idle_deadline_cover_actual_unread_tcp_queues_after_body_eof', 'http_shutdown::tests::completed_history_send_cancels_its_deadline_and_keeps_healthy_connection_alive']}, {'label': 'http-engine', 'package': 'storage-server', 'target': ['--test', 'http_engine'], 'source': 'test/server/integration/http_engine.rs', 'required': ['history_pages::parent_and_branch_http_previous_cursors_round_trip_across_three_pages', 'history_pages::main_page_shape_strictness_and_cursor_navigation', 'history_pages::root_changes_after_a_write_on_the_same_file_and_logout_rejects_continuations', 'history_pages::sub_collections_bind_the_root_and_slice_by_index', 'history_pages::deleted_file_history_remains_readable_without_a_context_entry']}], 'web-contracts': [{'label': 'web-app-lib', 'package': 'web-app', 'target': ['--lib'], 'source': 'src/web/src/lib.rs', 'required': ['files::history::tests::window_decode_keeps_typed_facts_and_rejects_unknown_or_inconsistent_fields', 'files::history::tests::deleted_file_context_has_no_path_or_content_but_nodes_stay_readable', 'files::history::tests::an_empty_first_page_without_continuation_is_the_only_proof_of_no_history', 'files::history::tests::backup_pinning_moves_only_the_current_marker_and_keeps_every_node', 'files::history::tests::branch_page_decode_binds_the_resident_root_and_keeps_the_write_disposition', 'files::history::tests::merge_page_decode_requires_canonical_order_and_consistent_reuse', 'files::history::tests::parents_inputs_and_field_slices_decode_with_exact_continuation_rules', 'files::history::tests::decoding_keeps_the_concrete_error_source', 'files::history::tests::directory_and_file_branch_contracts_are_not_interchangeable', 'files::history::tests::actual_server_branch_fixtures_enter_the_web_model_without_shape_reconstruction', 'files::history::tests::actual_server_window_fixtures_enter_the_web_model_without_shape_reconstruction', 'files::history::state::tests::installing_a_window_replaces_the_previous_page_and_every_derived_slot', 'files::history::state::tests::stale_root_keeps_the_window_readable_but_closes_root_bound_pages', 'files::history::state::tests::clear_and_invalidate_bump_the_generation_and_distinguish_content_from_path_changes', 'files::history::state::tests::a_branch_page_from_another_root_is_never_consulted', 'files::history::state::tests::read_slots_hand_out_tickets_and_aborting_invalidates_the_previous_ticket', 'files::history::state::tests::a_context_change_releases_a_cancelled_branch_load_instead_of_sticking_loading', 'files::actions::history::tests::main_endpoints_carry_context_limit_and_exactly_one_position_parameter', 'files::actions::history::tests::history_reads_require_an_active_session_and_a_selected_file', 'files::actions::history::tests::a_main_response_replaces_the_window_and_late_responses_are_rejected_after_any_fence_change', 'files::actions::history::tests::a_cancelled_read_never_settles_even_if_its_response_races_the_abort', 'files::actions::history::tests::history_changed_marks_the_resident_page_stale_and_closes_write_entries_without_losing_drafts', 'files::actions::history::tests::a_main_continuation_that_lost_its_root_keeps_the_previous_page_as_stale', 'files::actions::history::tests::latest_refresh_never_sends_the_resident_root_even_when_the_selection_did_not_change', 'files::actions::history::tests::failed_main_reads_report_once_and_leave_no_write_basis', 'files::actions::history::tests::open_editors_block_first_previous_next_anchor_and_explicit_refresh', 'files::actions::history::tests::auxiliary_reads_bind_the_resident_root_and_are_fenced_per_slot', 'files::actions::history::tests::branch_failures_consume_automatic_demand_until_retry_or_a_new_window', 'files::actions::history::tests::first_page_navigation_keeps_the_observed_root_but_latest_refresh_discovers_a_new_one', 'files::history_index::tests::indexed_records_borrow_the_resident_window_and_only_its_nodes', 'files::history_index::tests::branch_lookups_come_from_the_resident_branch_page_only', 'files::history_index::tests::shared_index_skips_unrelated_updates_and_replacing_the_window_frees_the_old_page', 'files::history_index::tests::indexed_lookup_matches_a_linear_scan_for_a_large_page', 'files::merge::tests::merge_selection_spans_201_candidates_without_retaining_candidate_pages', 'files::merge::tests::merge_addition_is_refused_atomically_at_the_complete_encoded_request_budget', 'files::tags::tests::tag_branch_choices_reach_the_last_of_201_candidates_and_keep_only_selected_heads', 'files::tags::tests::a_new_draft_cannot_rebase_checked_nodes_captured_under_an_old_root', 'files::tags::tests::checked_nodes_record_their_target_from_the_resident_page_and_survive_paging', 'files::detail::detail_tests::selected_branch_identity_is_explicit_when_the_candidate_page_does_not_contain_it', 'files::version_tree::tests::layout_input_uses_only_in_page_parent_edges_and_never_invents_nodes_for_stubs', 'files::version_tree::tests::outside_window_parents_collapse_to_one_stub_per_node_whose_jump_anchors_the_first_parent']}, {'label': 'contract-check', 'package': 'contract-check', 'target': ['--bin', 'contract-check'], 'source': 'tools/contract-check/src/main.rs', 'required': ['tests::file_history_pages_bound_every_collection_and_keep_true_lineage_reachable', 'tests::checked_in_contracts_and_document_examples_are_consistent', 'tests::openapi_duplicate_operation_ids_and_unbound_paths_are_rejected', 'tests::file_history_graph_distinguishes_path_nodes_from_real_content_versions', 'tests::file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines'], 'exact': ['tests::file_history_pages_bound_every_collection_and_keep_true_lineage_reachable', 'tests::checked_in_contracts_and_document_examples_are_consistent', 'tests::openapi_duplicate_operation_ids_and_unbound_paths_are_rejected', 'tests::file_history_graph_distinguishes_path_nodes_from_real_content_versions', 'tests::file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines']}]}
+          SUMMARY = {'suite': os.environ['ZXS_SUITE'], 'product_sha': os.environ['ZXS_PRODUCT_SHA'],
+                     'product_tree': os.environ['ZXS_PRODUCT_TREE'], 'result': 'RUNNING', 'targets': [], 'commands': []}
+
+
+          def require(condition, message):
+              if not condition:
+                  raise RuntimeError(message)
+
+
+          def save_summary():
+              (OUT / 'summary.json').write_text(json.dumps(SUMMARY, indent=2) + '\n')
+
+
+          def capture(label, command):
+              SUMMARY['commands'].append({'label': label, 'argv': command, 'cwd': str(ROOT)})
+              save_summary()
+              print('+ ' + ' '.join(command), flush=True)
+              with (OUT / (label + '.log')).open('w') as log:
+                  result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True, cwd=ROOT)
+              output = (OUT / (label + '.log')).read_text()
+              print(output, end='', flush=True)
+              return result.returncode, output
+
+
+          def build(spec):
+              label = spec['label']
+              command = ['cargo', '+1.99.0', 'test', '--locked', '--offline', '-p', spec['package'],
+                         *spec['target'], '--no-run', '--message-format=json']
+              SUMMARY['commands'].append({'label': label + '-compile', 'argv': command, 'cwd': str(ROOT)})
+              save_summary()
+              print('+ ' + ' '.join(command), flush=True)
+              diagnostics_class = runpy.run_path(str(ROOT / '.github/scripts/check-rust-diagnostics.py'))['CargoDiagnostics']
+              diagnostics = diagnostics_class(sys.stdout)
+              artifacts = []
+              with (OUT / (label + '-compile.jsonl')).open('w') as log, (OUT / (label + '-compile-stderr.log')).open('w') as error:
+                  with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=error, text=True, encoding='utf-8', cwd=ROOT) as process:
+                      for number, line in enumerate(process.stdout, 1):
+                          log.write(line)
+                          log.flush()
+                          diagnostics.consume(line, number)
+                          try:
+                              event = json.loads(line)
+                          except ValueError:
+                              continue
+                          if (isinstance(event, dict) and event.get('reason') == 'compiler-artifact'
+                              and event.get('profile', {}).get('test') is True and event.get('executable')
+                              and pathlib.Path(event['target']['src_path']).resolve() == (ROOT / spec['source']).resolve()):
+                              artifacts.append(event)
+                      status = process.wait()
+              print((OUT / (label + '-compile-stderr.log')).read_text(), end='', flush=True)
+              require(diagnostics.result(status) == 0, label + ': compilation or zero-warning diagnostic gate failed')
+              require(len(artifacts) == 1, label + ': expected exactly one matching compiled libtest executable')
+              binary = pathlib.Path(artifacts[0]['executable']).resolve()
+              require(binary.is_file(), label + ': executable is absent')
+              (OUT / (label + '-artifact.json')).write_text(json.dumps(artifacts[0], indent=2) + '\n')
+              return str(binary)
+
+
+          def listed(label, binary, extra):
+              status, output = capture(label, [binary, *extra, '--list', '--format', 'terse', '--color', 'never'])
+              require(status == 0, label + ': libtest listing failed')
+              names = re.findall(r'^(.+): test$', output, re.M)
+              require(len(names) == len(set(names)), label + ': duplicate listed test')
+              require(not re.search(r'^.+: benchmark$', output, re.M), label + ': unexpected benchmark target')
+              return set(names)
+
+
+          def execute(spec, binary):
+              label = spec['label']
+              all_names = listed(label + '-list-all', binary, [])
+              ignored = listed(label + '-list-ignored', binary, ['--ignored'])
+              require(all_names and ignored <= all_names, label + ': empty or inconsistent compiled inventory')
+              required = set(spec['required'])
+              require(required and required <= all_names - ignored, label + ': missing/ignored critical witnesses: ' + repr(sorted(required - (all_names - ignored))))
+              selected = set(spec.get('exact', all_names - ignored))
+              require(selected and selected <= all_names - ignored, label + ': empty, absent or ignored execution plan')
+              inventory = {'all_listed': sorted(all_names), 'ignored_not_invoked': sorted(ignored),
+                           'selected_to_execute': sorted(selected), 'required_witnesses': sorted(required),
+                           'listed_count': len(all_names), 'ignored_count': len(ignored), 'selected_count': len(selected)}
+              (OUT / (label + '-inventory.json')).write_text(json.dumps(inventory, indent=2) + '\n')
+              record = {'target': label, 'inventory': inventory, 'binary_sha256': hashlib.sha256(pathlib.Path(binary).read_bytes()).hexdigest(),
+                        'result': 'RUNNING', 'runs': []}
+              SUMMARY['targets'].append(record)
+              save_summary()
+              # Full native targets: ordinary libtest defaults, never --ignored or --include-ignored.
+              # Exact contract targets: independently list and execute that exact same name.
+              batches = [[name] for name in spec['exact']] if 'exact' in spec else [None]
+              passed_total = set()
+              for index, exact in enumerate(batches):
+                  run_label = label + ('-exact-' + str(index + 1) if exact else '-all')
+                  extra = ['--exact', exact[0]] if exact else []
+                  planned = listed(run_label + '-list-selected', binary, extra)
+                  expected = set(exact) if exact else all_names - ignored
+                  expected_ignored = set() if exact else ignored
+                  require(planned == expected | expected_ignored and expected, run_label + ': compiled listing differs from plan')
+                  status, output = capture(run_label + '-execution', [binary, *extra, '--format', 'pretty', '--color', 'never', '--test-threads=2'])
+                  outcomes = re.findall(r'^test (.+?)(?: - should panic)? \.\.\. (ok|FAILED|ignored)(?:, [^\n]*)?$', output, re.M)
+                  require(len(outcomes) == len({name for name, _ in outcomes}), run_label + ': duplicate execution outcome')
+                  passed = {name for name, outcome in outcomes if outcome == 'ok'}
+                  skipped = {name for name, outcome in outcomes if outcome == 'ignored'}
+                  failed = {name for name, outcome in outcomes if outcome == 'FAILED'}
+                  summaries = re.findall(r'^test result: (\w+)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out;', output, re.M)
+                  result = {'label': run_label, 'returncode': status, 'planned_names': sorted(expected),
+                            'passed_names': sorted(passed), 'ignored_names': sorted(skipped), 'failed_names': sorted(failed),
+                            'summary': summaries, 'listed_count': len(planned), 'executed_count': len(passed)}
+                  record['runs'].append(result)
+                  save_summary()
+                  require(status == 0 and not failed and passed == expected and skipped == expected_ignored,
+                          run_label + ': listed/selected/executed mismatch or nonzero exit')
+                  require(len(summaries) == 1, run_label + ': expected one final libtest summary')
+                  kind, count, failures, skips, measured, filtered = summaries[0]
+                  require(kind == 'ok' and int(count) == len(expected) and int(count) > 0 and int(failures) == 0
+                          and int(skips) == len(expected_ignored) and int(measured) == 0
+                          and int(filtered) == len(all_names - planned), run_label + ': invalid/zero-test summary')
+                  passed_total |= passed
+              require(passed_total == selected and required <= passed_total, label + ': a critical test body did not pass')
+              record.update(result='PASS', executed_count=len(passed_total), critical_witness_count=len(required))
+              save_summary()
+
+
+          try:
+              for spec in SPECS[os.environ['ZXS_SUITE']]:
+                  execute(spec, build(spec))
+              if os.environ['ZXS_SUITE'] == 'web-contracts':
+                  # Read-only checker: it does not generate schemas, fixtures or source catalogs.
+                  command = ['cargo', '+1.99.0', 'run', '--locked', '--offline', '-p', 'contract-check', '--', '--root', '.']
+                  SUMMARY['commands'].append({'label': 'contract-bundle-check', 'argv': command, 'cwd': str(ROOT)})
+                  save_summary()
+                  with (OUT / 'contract-bundle-report.json').open('w') as output, (OUT / 'contract-bundle-stderr.log').open('w') as error:
+                      result = subprocess.run(command, stdout=output, stderr=error, text=True, cwd=ROOT)
+                  print((OUT / 'contract-bundle-stderr.log').read_text(), end='', flush=True)
+                  print((OUT / 'contract-bundle-report.json').read_text(), end='', flush=True)
+                  require(result.returncode == 0, 'contract-check --root failed')
+                  report = json.loads((OUT / 'contract-bundle-report.json').read_text())
+                  require(report['result'] == 'PASS' and report['schema_files'] > 0 and report['openapi_paths'] > 0
+                          and report['schema_and_semantic_vectors'] > 0 and report['local_links_checked'] > 0,
+                          'contract bundle report has empty/failed evidence')
+                  SUMMARY['contract_bundle_report'] = report
+              SUMMARY['result'] = 'PASS'
+          except BaseException:
+              SUMMARY['result'] = 'FAIL'
+              (OUT / 'failure.txt').write_text(traceback.format_exc())
+              raise
+          finally:
+              save_summary()
+          RUNNER
+      - name: Authenticate frozen product and preserved normal validation inputs
+        run: python3 "$RUNNER_TEMP/zxs-history-r84-identity.py" before
+      - name: Initialize isolated empty Cargo home
         run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
+      - name: Verify pinned Rust 1.99.0 toolchain and isolated Cargo home
+        shell: bash
         run: |
-          rustup show active-toolchain
-          rustc --version
-          cargo --version
-      - name: Install WASM standard library for cross-target checks
-        if: matrix.suite == 'quality' || matrix.suite == 'build-tools' || startsWith(matrix.suite, 'foundation-')
-        run: rustup target add wasm32-unknown-unknown
-      - name: Install system SQLite SDK for unbundled validation
-        if: matrix.suite == 'foundation-data'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libsqlite3-dev clang libclang-dev pkg-config
-      - name: Enable sandboxed Chrome for browser future runtime checks
-        if: matrix.suite == 'foundation-language'
-        run: bash .github/scripts/prepare-browser-contract.sh
-      - name: Cache verified security scanner
-        if: matrix.suite == 'security'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            target/security-tools/bin/cargo-audit
-            target/security-tools/verified-build.json
-          key: security-audit-ubuntu24.04-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.github/scripts/install-security-audit.py', '.github/security-tools/cargo-audit.json', '.github/security-tools/cargo-audit-0.22.2.lock') }}
-      - name: Run locked test suite
-        run: bash .github/scripts/check.sh "${{ matrix.suite }}"
-      - name: Verify isolated system SQLite consumer
-        if: matrix.suite == 'foundation-data'
-        run: python3 .github/scripts/check-sqlite-system.py
-      - name: Retain exact foundation behaviour test evidence
-        if: always() && matrix.suite == 'foundation-async'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: foundation-behaviour-evidence
-          path: |
-            target/foundation-behaviour/logs/
-            target/foundation-behaviour/summary.json
-          if-no-files-found: warn
-          retention-days: 7
-
-  web-production:
-    name: Production WASM build
-    needs: static
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain and WASM target
-        run: |
-          rustup show active-toolchain
-          rustup target add wasm32-unknown-unknown
-          rustc --version
-      - name: Cache locally compiled Rust build helpers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/rust-build-tools
-          key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
-          restore-keys: |
-            rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
-      - name: Build production Web distribution
-        run: bash .github/scripts/check.sh web-production
-      - name: Retain production assets for checks in this run
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-dist
-          path: build/web/
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain browser template contract fixture
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output/
-          if-no-files-found: error
-          retention-days: 7
-
-  browser-smoke:
-    name: Extracted release browser smoke (Chrome)
-    needs: web-production
-    runs-on: ubuntu-24.04
-    # Compile one release-profile graph for both product and browser harness.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
-        run: rustup show active-toolchain
-      - name: Fetch production Web assets from this workflow run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: web-dist
-          path: build/web
-      - name: Fetch browser template contract fixture from this run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output
-      - name: Verify runner Chrome and ChromeDriver
-        run: |
-          chrome="$(command -v google-chrome)"
-          driver="$(command -v chromedriver)"
-          "$chrome" --version
-          "$driver" --version
-          chrome_major=$("$chrome" --version | grep -oE '[0-9]+' | head -1)
-          driver_major=$("$driver" --version | grep -oE '[0-9]+' | head -1)
-          test "$chrome_major" = "$driver_major"
-          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
-          echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
-      - name: Install CJK fonts for the Chinese screenshot
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
-      - name: Build and exercise extracted release packages
-        env:
-          ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
-          ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
-        run: |
-          export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          python3 .github/scripts/check-rust-diagnostics.py -- \
-            cargo build --locked --offline --release --package storage-server --package storage-rescue --message-format=json
-          cargo test --locked --offline --release -p browser-smoke
-          bash .github/scripts/release-package.sh
-          bash .github/scripts/release-acceptance.sh
-          python3 .github/scripts/check-csr-browser.py
-          bash .github/scripts/release-assemble.sh
-      - name: Retain verified installation candidate (not a published release)
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: installation-candidate-linux-web
-          path: release-assets/*
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain template browser result and exact input identity
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-browser
-          path: target/csr-template-check/output/*json
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain real Web file manager screenshot
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-screenshot
-          path: artifacts/web-file-manager.png
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain responsive Web viewport previews
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          set -euo pipefail
+          test -d "$CARGO_HOME"
+          test -z "$(find "$CARGO_HOME" -mindepth 1 -print -quit)"
+          rustup show active-toolchain | tee "$ZXS_EVIDENCE/active-toolchain.txt"
+          rustc +1.99.0 --version | tee "$ZXS_EVIDENCE/rustc.txt"
+          cargo +1.99.0 --version | tee "$ZXS_EVIDENCE/cargo.txt"
+          grep -q '^rustc 1\.99\.0 ' "$ZXS_EVIDENCE/rustc.txt"
+          grep -q '^cargo 1\.99\.0 ' "$ZXS_EVIDENCE/cargo.txt"
+          printf 'CARGO_HOME=%s\nCARGO_TARGET_DIR=%s\nTMPDIR=%s\n' "$CARGO_HOME" "$CARGO_TARGET_DIR" "$TMPDIR" > "$ZXS_EVIDENCE/build-paths.txt"
+      - name: Compile real targets and execute list-equal nonzero test bodies
+        run: python3 "$RUNNER_TEMP/zxs-history-r84-runner.py"
+      - name: Prove the product worktree is unchanged after execution
         if: always()
+        run: python3 "$RUNNER_TEMP/zxs-history-r84-identity.py" after
+      - name: Retain identity, exact test inventories, counts, outcomes and logs only
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: viewport-previews
-          path: artifacts/viewport-previews/
-          if-no-files-found: warn
+          name: bounded-history-r84-${{ matrix.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/zxs-history-r84-evidence-${{ matrix.suite }}/
+          if-no-files-found: error
           retention-days: 7
 
-  smb-sdk:
-    needs: static
-    uses: ./.github/workflows/smb-sdk.yml
