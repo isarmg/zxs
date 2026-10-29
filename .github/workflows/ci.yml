@@ -1,218 +1,323 @@
-name: CI
+name: Enrich and verify the frozen R82 publication fixture
 
 on:
   push:
-  pull_request:
+    branches: [verify/fixture-enrichment-20261029-r82]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: '1'
+  CARGO_NET_OFFLINE: 'true'
   CARGO_INCREMENTAL: '0'
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: '1'
 
 jobs:
-  static:
-    name: Static workflow and tooling regressions (no Rust)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Check workflows, source governance and script regressions
-        run: bash .github/scripts/check.sh static
-
-  tests:
-    name: Tests (${{ matrix.suite }})
-    needs: static
-    runs-on: ubuntu-24.04
-    # Cold crypto runs include ten packaged/local-generated ring cases, including
-    # both release slow-test matrices; the measured run exceeded 30 minutes.
-    # Match the release verification budget without relaxing other shards.
-    timeout-minutes: ${{ matrix.suite == 'foundation-crypto' && 60 || 30 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        suite: [rust-sources, quality, security, workspace, foundation-platform, foundation-crypto, foundation-data, foundation-language, foundation-async, web, contracts, build-tools, smb-protocol]
-    env:
-      ZXS_REQUIRE_BROWSER: '1'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
-        run: |
-          rustup show active-toolchain
-          rustc --version
-          cargo --version
-      - name: Install WASM standard library for cross-target checks
-        if: matrix.suite == 'quality' || matrix.suite == 'build-tools' || startsWith(matrix.suite, 'foundation-')
-        run: rustup target add wasm32-unknown-unknown
-      - name: Install system SQLite SDK for unbundled validation
-        if: matrix.suite == 'foundation-data'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libsqlite3-dev clang libclang-dev pkg-config
-      - name: Enable sandboxed Chrome for browser future runtime checks
-        if: matrix.suite == 'foundation-language'
-        run: bash .github/scripts/prepare-browser-contract.sh
-      - name: Cache verified security scanner
-        if: matrix.suite == 'security'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            target/security-tools/bin/cargo-audit
-            target/security-tools/verified-build.json
-          key: security-audit-ubuntu24.04-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.github/scripts/install-security-audit.py', '.github/security-tools/cargo-audit.json', '.github/security-tools/cargo-audit-0.22.2.lock') }}
-      - name: Run locked test suite
-        run: bash .github/scripts/check.sh "${{ matrix.suite }}"
-      - name: Verify isolated system SQLite consumer
-        if: matrix.suite == 'foundation-data'
-        run: python3 .github/scripts/check-sqlite-system.py
-      - name: Retain exact foundation behaviour test evidence
-        if: always() && matrix.suite == 'foundation-async'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: foundation-behaviour-evidence
-          path: |
-            target/foundation-behaviour/logs/
-            target/foundation-behaviour/summary.json
-          if-no-files-found: warn
-          retention-days: 7
-
-  web-production:
-    name: Production WASM build
-    needs: static
+  enrich-fixture:
+    name: Enrich one fixture and verify namespace regressions
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: 508ce7acd7e4e163d5ada090b36b547dedc8588c
+          fetch-depth: 2
+      - name: Verify frozen product input and unchanged R81 authoritative files
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/verify/fixture-enrichment-20261029-r82'
+          test "$(git rev-parse HEAD)" = '508ce7acd7e4e163d5ada090b36b547dedc8588c'
+          test "$(git rev-parse HEAD^{tree})" = '93b166d944a1975fdce483e67cb01c5ae044f618'
+          test "$(git show -s --format=%P HEAD)" = 'bccb302fb47dced736df1fcbea7266572141a0e1'
+          test "$(git rev-parse HEAD:compliance/rust-sources.json)" = '224df74d6190622dcb3d252afb5fb4269bee9a95'
+          test "$(git rev-parse HEAD:.github/workflows/ci.yml)" = '9be17b59e1d3cda42f30f5f51a71bebde9cbfc75'
+          test "$(git rev-parse HEAD:Cargo.lock)" = '5f0959ea647d9805611902df885d941695016fdd'
+          mkdir -p target/fixture-refresh
+          python3 - <<'IDENTITY'
+          import hashlib, json, os, pathlib, subprocess, tomllib
+          root = pathlib.Path('.')
+          out = root / 'target/fixture-refresh'
+          base = 'bccb302fb47dced736df1fcbea7266572141a0e1'
+          fixture = 'test/engine/unit/journal/fixtures/canonical_publication.json'
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          def require(condition, message):
+              if not condition:
+                  raise SystemExit(message)
+          changed = [p.decode() for p in git('diff', '--name-only', '-z', base, 'HEAD').split(b'\0') if p]
+          manifests = [p for p in changed if p == 'Cargo.toml' or p.endswith('/Cargo.toml')]
+          protected = [
+              'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml',
+              'compliance/rust-sources.json', 'docs/THIRD_PARTY_RUST_SOURCES.md',
+              'docs/architecture/foundation-consumers.md',
+              '.github/scripts/check-foundation-behaviour.py',
+              'docs/architecture/contour-invalidation.md', 'docs/architecture/foundation-ci.md',
+              'docs/validation/foundation-test-coverage-map.md',
+              'docs/validation/foundation-test-coverage.md', 'docs/validation/smb-write-admission.md',
+              'test/ci/fixtures/foundation-behaviour-tests.json',
+              'test/ci/fixtures/foundation-test-coverage.json', 'test/ci/test_foundation_behaviour.py',
+              fixture,
+          ]
+          workflows = [p.decode() for p in git('ls-tree', '-r', '--name-only', '-z', base,
+                                               '--', '.github/workflows').split(b'\0') if p]
+          protected += workflows
+          unchanged = {p: (root / p).read_bytes() == git('show', base + ':' + p) for p in protected}
+          require(not manifests, 'R82 input unexpectedly changes manifests: ' + repr(manifests))
+          require(not any(p.startswith('.github/workflows/') for p in changed), 'normal workflows changed')
+          require(all(unchanged.values()), 'protected baseline content changed: ' +
+                  repr([p for p, same in unchanged.items() if not same]))
+          require(not git('status', '--porcelain'), 'frozen checkout is not clean')
+          toolchain = tomllib.loads((root / 'rust-toolchain.toml').read_text())
+          config = tomllib.loads((root / '.cargo/config.toml').read_text())
+          require(toolchain['toolchain']['channel'] == '1.99.0', 'unexpected toolchain')
+          require(config['net']['offline'] is True, 'Cargo offline mode changed')
+          require(config['source']['crates-io']['replace-with'] == 'unavailable-registry', 'registry replacement changed')
+          require(config['source']['unavailable-registry']['directory'] == 'compliance/empty-registry', 'empty registry changed')
+          before = (root / fixture).read_bytes()
+          require('namespace_objects' not in json.loads(before), 'input fixture is already enriched')
+          (out / 'canonical_publication.before.json').write_bytes(before)
+          identity = dict(
+              product_sha='508ce7acd7e4e163d5ada090b36b547dedc8588c', product_tree='93b166d944a1975fdce483e67cb01c5ae044f618', authoritative_base=base,
+              input_parent=git('show', '-s', '--format=%P', 'HEAD').decode().strip(),
+              workflow_commit=os.environ['GITHUB_SHA'], workflow_ref=os.environ['GITHUB_REF'],
+              run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+              catalog_blob=git('rev-parse', 'HEAD:compliance/rust-sources.json').decode().strip(),
+              product_ci_blob=git('rev-parse', 'HEAD:.github/workflows/ci.yml').decode().strip(),
+              lock_blob=git('rev-parse', 'HEAD:Cargo.lock').decode().strip(),
+              input_changed_paths=changed, changed_manifests=manifests,
+              protected_paths_unchanged=unchanged, fixture_before_sha256=hashlib.sha256(before).hexdigest(),
+              automatic_integration=False, source_generation=False, foundation_inventory_rewrite=False,
+              scope='One exact fixture enrichment plus namespace and fixture regression tests; not full normal CI.',
+          )
+          (out / 'input-identity.json').write_text(json.dumps(identity, indent=2) + '\n')
+          print(json.dumps(identity, indent=2))
+          IDENTITY
       - name: Initialize isolated Cargo home
         run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain and WASM target
+      - name: Select and verify the fixed repository toolchain
         run: |
+          set -euo pipefail
           rustup show active-toolchain
-          rustup target add wasm32-unknown-unknown
-          rustc --version
-      - name: Cache locally compiled Rust build helpers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/rust-build-tools
-          key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
-          restore-keys: |
-            rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
-      - name: Build production Web distribution
-        run: bash .github/scripts/check.sh web-production
-      - name: Retain production assets for checks in this run
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-dist
-          path: build/web/
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain browser template contract fixture
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output/
-          if-no-files-found: error
-          retention-days: 7
-
-  browser-smoke:
-    name: Extracted release browser smoke (Chrome)
-    needs: web-production
-    runs-on: ubuntu-24.04
-    # Compile one release-profile graph for both product and browser harness.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
-        run: rustup show active-toolchain
-      - name: Fetch production Web assets from this workflow run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: web-dist
-          path: build/web
-      - name: Fetch browser template contract fixture from this run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output
-      - name: Verify runner Chrome and ChromeDriver
+          rustc --version | tee target/fixture-refresh/rustc.txt
+          cargo --version | tee target/fixture-refresh/cargo.txt
+          grep -q '^rustc 1\.99\.0 ' target/fixture-refresh/rustc.txt
+          grep -q '^cargo 1\.99\.0 ' target/fixture-refresh/cargo.txt
+      - name: Enrich only the existing fixture with its exact namespace objects
         run: |
-          chrome="$(command -v google-chrome)"
-          driver="$(command -v chromedriver)"
-          "$chrome" --version
-          "$driver" --version
-          chrome_major=$("$chrome" --version | grep -oE '[0-9]+' | head -1)
-          driver_major=$("$driver" --version | grep -oE '[0-9]+' | head -1)
-          test "$chrome_major" = "$driver_major"
-          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
-          echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
-      - name: Install CJK fonts for the Chinese screenshot
+          set -euo pipefail
+          cargo test --locked --offline -p storage-engine --lib \
+            journal::snapshot_partition_tests::enrich_canonical_publication_fixture_namespace_objects \
+            -- --exact --ignored --nocapture 2>&1 | tee target/fixture-refresh/enrichment.log
+          grep -F 'running 1 test' target/fixture-refresh/enrichment.log
+          grep -F 'test result: ok. 1 passed; 0 failed; 0 ignored;' target/fixture-refresh/enrichment.log
+      - name: List and execute the complete namespace test module including 100k width
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
-      - name: Build and exercise extracted release packages
-        env:
-          ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
-          ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
+          set -euo pipefail
+          # Libtest filters are substrings. Exclude the unrelated business
+          # namespace module and its manual ignored latency benchmark.
+          cargo test --locked --offline -p storage-engine --lib namespace:: \
+            -- --skip business::namespace:: --list 2>&1 | tee target/fixture-refresh/namespace-list.log
+          grep -Fx 'namespace::tests::page_local_tests::wide_directory_first_middle_last_edits_have_bounded_actual_work: test' \
+            target/fixture-refresh/namespace-list.log
+          grep -Fx 'namespace::tests::depth_bound_tests::maximum_height_replacement_succeeds_but_root_growth_rejects_before_encoding: test' \
+            target/fixture-refresh/namespace-list.log
+          grep -Fx 'namespace::mutation_order_tests::deletion_order_matches_the_flat_oracle_across_repeated_multioperation_batches: test' \
+            target/fixture-refresh/namespace-list.log
+          cargo test --locked --offline -p storage-engine --lib namespace:: \
+            -- --skip business::namespace:: --nocapture --test-threads=1 2>&1 | tee target/fixture-refresh/namespace-tests.log
+          python3 - <<'NAMESPACE'
+          import json, pathlib, re
+          out = pathlib.Path('target/fixture-refresh')
+          names = re.findall(r'^(namespace::\S+): test$', (out / 'namespace-list.log').read_text(), re.M)
+          log = (out / 'namespace-tests.log').read_text()
+          result = re.findall(r'^test result: ok\. (\d+) passed; 0 failed; 0 ignored; 0 measured; \d+ filtered out;.*$',
+                              log, re.M)
+          if not names or len(names) != len(set(names)) or result != [str(len(names))]:
+              raise SystemExit(f'namespace list/execution mismatch: listed={len(names)}, results={result}')
+          required = [
+              'namespace::tests::page_local_tests::wide_directory_first_middle_last_edits_have_bounded_actual_work',
+              'namespace::tests::page_local_tests::repeated_edits_to_one_key_encode_its_final_route_only_once',
+              'namespace::tests::page_local_tests::page_and_index_splits_and_merges_preserve_balance_and_the_oracle',
+              'namespace::tests::depth_bound_tests::maximum_height_replacement_succeeds_but_root_growth_rejects_before_encoding',
+              'namespace::mutation_order_tests::deletion_order_matches_the_flat_oracle_across_repeated_multioperation_batches',
+          ]
+          if not set(required) <= set(names):
+              raise SystemExit('required namespace witnesses are missing: ' + repr(sorted(set(required) - set(names))))
+          metrics = []
+          pattern = (r'namespace point width=(\d+), position=(\d+), operation=(\d+): '
+                     r'reads=(\d+) read_bytes=(\d+) encoded_nodes=(\d+) encoded_bytes=(\d+) installed_nodes=(\d+)')
+          columns = ('width', 'position', 'operation', 'reads', 'read_bytes', 'encoded_nodes', 'encoded_bytes', 'installed_nodes')
+          for match in re.finditer(pattern, log):
+              metrics.append(dict(zip(columns, map(int, match.groups()))))
+          expected = {(width, position, operation) for width in (1000, 10000, 100000)
+                      for position in (0, width // 2, width - 1) for operation in (0, 1, 2)}
+          actual = [(row['width'], row['position'], row['operation']) for row in metrics]
+          if len(actual) != len(expected) or set(actual) != expected:
+              raise SystemExit('missing or duplicate measured 1k/10k/100k edit combinations')
+          for row in metrics:
+              if not (row['reads'] <= 24 and row['read_bytes'] <= 24 * 64 * 1024 and
+                      row['encoded_nodes'] <= 12 and row['encoded_bytes'] <= 12 * 64 * 1024 and
+                      row['installed_nodes'] <= row['encoded_nodes']):
+                  raise SystemExit('namespace measured work exceeded its reviewed budget: ' + repr(row))
+          (out / 'namespace-execution.json').write_text(json.dumps(dict(
+              tests=names, passed=len(names), failed=0, ignored=0,
+              required_width_test='namespace::tests::page_local_tests::wide_directory_first_middle_last_edits_have_bounded_actual_work',
+              required_witnesses=required, measured_edit_cases=metrics,
+          ), indent=2) + '\n')
+          NAMESPACE
+      - name: Execute exact-byte fixture restoration and missing-object regressions
         run: |
-          export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          python3 .github/scripts/check-rust-diagnostics.py -- \
-            cargo build --locked --offline --release --package storage-server --package storage-rescue --message-format=json
-          cargo test --locked --offline --release -p browser-smoke
-          bash .github/scripts/release-package.sh
-          bash .github/scripts/release-acceptance.sh
-          python3 .github/scripts/check-csr-browser.py
-          bash .github/scripts/release-assemble.sh
-      - name: Retain verified installation candidate (not a published release)
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: installation-candidate-linux-web
-          path: release-assets/*
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain template browser result and exact input identity
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-browser
-          path: target/csr-template-check/output/*json
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain real Web file manager screenshot
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-screenshot
-          path: artifacts/web-file-manager.png
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain responsive Web viewport previews
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          set -euo pipefail
+          cargo test --locked --offline -p storage-engine --lib canonical_publication_fixture:: \
+            -- --nocapture --test-threads=1 2>&1 | tee target/fixture-refresh/fixture-tests.log
+          grep -F 'running 2 tests' target/fixture-refresh/fixture-tests.log
+          grep -F 'test result: ok. 2 passed; 0 failed; 0 ignored;' target/fixture-refresh/fixture-tests.log
+          grep -F 'canonical_publication_fixture::recorded_namespace_objects_keep_non_bulk_page_boundaries_and_exact_disk_bytes' \
+            target/fixture-refresh/fixture-tests.log
+          grep -F 'canonical_publication_fixture::publication_fixture_missing_objects_do_not_resolve_from_other_tests' \
+            target/fixture-refresh/fixture-tests.log
+      - name: Verify the enriched fixture preserves publication bytes and roots
+        run: |
+          set -euo pipefail
+          cargo test --locked --offline -p storage-engine --lib \
+            journal::snapshot_partition_tests::canonical_value_encoding_preserves_publication_bytes_and_hashes \
+            -- --exact --nocapture 2>&1 | tee target/fixture-refresh/publication-bytes.log
+          grep -F 'running 1 test' target/fixture-refresh/publication-bytes.log
+          grep -F 'test result: ok. 1 passed; 0 failed; 0 ignored;' target/fixture-refresh/publication-bytes.log
+      - name: Verify only namespace_objects was added and record the bounded proposal
         if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p target/fixture-refresh
+          python3 - <<'PROPOSAL'
+          import base64, hashlib, json, os, pathlib, re, subprocess
+          root = pathlib.Path('.')
+          out = root / 'target/fixture-refresh'
+          base = 'bccb302fb47dced736df1fcbea7266572141a0e1'
+          fixture = 'test/engine/unit/journal/fixtures/canonical_publication.json'
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          def sha(data):
+              return hashlib.sha256(data).hexdigest()
+          def unique(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError('duplicate JSON key: ' + key)
+                  result[key] = value
+              return result
+          def load(data):
+              return json.loads(data, object_pairs_hook=unique)
+          def equal_value(a, b):
+              if type(a) is not type(b):
+                  return False
+              if isinstance(a, str):
+                  return a.encode('utf-8') == b.encode('utf-8')
+              if isinstance(a, dict):
+                  return a.keys() == b.keys() and all(equal_value(value, b[key]) for key, value in a.items())
+              if isinstance(a, list):
+                  return len(a) == len(b) and all(equal_value(x, y) for x, y in zip(a, b))
+              return a == b
+          def strings(value, path=()):
+              if isinstance(value, str):
+                  yield json.dumps(path, ensure_ascii=False), sha(value.encode('utf-8'))
+              elif isinstance(value, dict):
+                  for key, child in sorted(value.items()):
+                      yield from strings(child, path + (key,))
+              elif isinstance(value, list):
+                  for index, child in enumerate(value):
+                      yield from strings(child, path + (index,))
+          before_bytes = git('show', 'HEAD:' + fixture)
+          after_bytes = (root / fixture).read_bytes()
+          (out / 'canonical_publication.before.json').write_bytes(before_bytes)
+          (out / 'canonical_publication.after.json').write_bytes(after_bytes)
+          before, after = load(before_bytes), load(after_bytes)
+          old_values_equal = all(key in after and equal_value(value, after[key]) for key, value in before.items())
+          added_only_namespace_objects = 'namespace_objects' not in before and set(after) == set(before) | {'namespace_objects'}
+          recorded = after.get('namespace_objects')
+          valid_objects = isinstance(recorded, dict) and bool(recorded) and all(
+              re.fullmatch(r'namespace-(?:page|index)/[0-9a-f]{64}', address) is not None
+              and isinstance(value, str) and bool(value)
+              for address, value in recorded.items())
+          old_strings = dict(strings(before))
+          after_old_strings = dict(strings({key: after[key] for key in before if key in after}))
+          changed = [p.decode() for p in git('diff', 'HEAD', '--name-only', '-z').split(b'\0') if p]
+          untracked = [p.decode() for p in git('ls-files', '--others', '--exclude-standard', '-z').split(b'\0') if p]
+          removed = [p.decode() for p in git('diff', 'HEAD', '--name-only', '--diff-filter=D', '-z').split(b'\0') if p]
+          mode_changes = git('diff', 'HEAD', '--summary').decode().splitlines()
+          patch = git('diff', 'HEAD', '--binary')
+          (out / 'fixture-enrichment.patch').write_bytes(patch)
+          checks = dict(
+              exact_product_sha=git('rev-parse', 'HEAD').decode().strip() == '508ce7acd7e4e163d5ada090b36b547dedc8588c',
+              exact_product_tree=git('rev-parse', 'HEAD^{tree}').decode().strip() == '93b166d944a1975fdce483e67cb01c5ae044f618',
+              exact_parent=git('show', '-s', '--format=%P', 'HEAD').decode().strip() == base,
+              fixture_input_matches_r81=before_bytes == git('show', base + ':' + fixture),
+              only_allowed_tracked_change=changed == [fixture], no_untracked_source=not untracked,
+              no_deletions_or_mode_changes=not removed and not mode_changes,
+              regular_fixture=(root / fixture).is_file() and not (root / fixture).is_symlink(),
+              only_namespace_objects_field_added=added_only_namespace_objects,
+              every_original_value_unchanged=old_values_equal,
+              every_original_string_byte_identical=old_strings == after_old_strings,
+              namespace_objects_nonempty_and_well_formed=valid_objects,
+              bounded_patch=0 < len(patch) <= 8 * 1024 * 1024,
+          )
+          for label, filename, count in (
+              ('enrichment', 'enrichment.log', 1),
+              ('fixture_tests', 'fixture-tests.log', 2),
+              ('publication_bytes', 'publication-bytes.log', 1),
+          ):
+              path = out / filename
+              summary = re.findall(r'^test result: ok\. (\d+) passed; 0 failed; 0 ignored; 0 measured; \d+ filtered out;.*$',
+                                   path.read_text() if path.is_file() else '', re.M)
+              checks[label + '_exact_pass_count'] = summary == [str(count)]
+          namespace_evidence = out / 'namespace-execution.json'
+          namespace = load(namespace_evidence.read_bytes()) if namespace_evidence.is_file() else None
+          checks['namespace_inventory_executed'] = namespace is not None and namespace['passed'] == len(namespace['tests']) > 0
+          checks['hundred_thousand_width_case_executed'] = namespace is not None and \
+              namespace['required_width_test'] in namespace['tests']
+          checks['all_required_namespace_witnesses_executed'] = namespace is not None and \
+              set(namespace['required_witnesses']) <= set(namespace['tests'])
+          checks['all_27_measured_width_edit_cases_present'] = namespace is not None and \
+              len(namespace['measured_edit_cases']) == 27
+          identity_path = out / 'input-identity.json'
+          identity = load(identity_path.read_bytes()) if identity_path.is_file() else None
+          checks['input_identity_verified'] = identity is not None
+          protected = identity['protected_paths_unchanged'].keys() if identity else ()
+          unchanged = {p: (root / p).read_bytes() == git('show', 'HEAD:' + p)
+                       for p in protected if p != fixture}
+          checks['authoritative_inputs_unchanged'] = bool(unchanged) and all(unchanged.values())
+          manifest = dict(
+              product_sha='508ce7acd7e4e163d5ada090b36b547dedc8588c', product_tree='93b166d944a1975fdce483e67cb01c5ae044f618', authoritative_base=base,
+              workflow_commit=os.environ['GITHUB_SHA'], run_id=os.environ['GITHUB_RUN_ID'],
+              run_attempt=os.environ['GITHUB_RUN_ATTEMPT'], checks=checks,
+              changed_paths=changed, untracked_paths=untracked, removed_paths=removed, mode_changes=mode_changes,
+              protected_inputs_unchanged=unchanged,
+              patch_bytes=len(patch), patch_sha256=sha(patch), fixture_before_sha256=sha(before_bytes),
+              fixture_after_sha256=sha(after_bytes), original_fields=sorted(before),
+              original_string_count=len(old_strings), original_string_sha256=old_strings,
+              namespace_object_count=len(recorded) if isinstance(recorded, dict) else 0,
+              namespace_object_bytes_sha256={key: sha(value.encode('utf-8')) for key, value in recorded.items()}
+                  if valid_objects else {},
+              namespace_execution=namespace, automatic_integration=False, full_normal_ci=False,
+              acceptance='Diagnostic unless the whole job passes; independently review and integrate only the one fixture patch, then run unchanged full normal CI.',
+          )
+          (out / 'generated-manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
+          print(json.dumps(manifest, ensure_ascii=False, indent=2))
+          failed = [name for name, passed in checks.items() if not passed]
+          if failed:
+              raise SystemExit('Fixture proposal rejected: ' + ', '.join(failed))
+          print('ZXS_GENERATED_PATCH_BASE64_BEGIN')
+          print(base64.b64encode(patch).decode('ascii'))
+          print('ZXS_GENERATED_PATCH_BASE64_END')
+          PROPOSAL
+      - name: Retain fixture proposal, identities and exact test evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: viewport-previews
-          path: artifacts/viewport-previews/
-          if-no-files-found: warn
+          name: r82-fixture-enrichment-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: target/fixture-refresh/
+          if-no-files-found: error
           retention-days: 7
-
-  smb-sdk:
-    needs: static
-    uses: ./.github/workflows/smb-sdk.yml
