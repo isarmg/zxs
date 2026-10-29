@@ -121,7 +121,9 @@ fn snapshot_admission_applies_namespace_depth_before_projection_reads() {
         let objects = input["objects"].as_object().unwrap();
         assert_depth_before_projection(snapshot, |kind, hash| {
             let address = format!("{kind}/{hash}");
-            let value = objects.get(&address).expect("counterexample reference closure");
+            let value = objects
+                .get(&address)
+                .expect("counterexample reference closure");
             AuthenticatedMetadataObject::authenticate(kind, hash, value.clone())
         });
         return;
@@ -153,7 +155,9 @@ fn snapshot_admission_applies_namespace_depth_before_projection_reads() {
     let snapshot_hash = store_snapshot(&config.disks, &state).unwrap();
     let snapshot: Snapshot = load_object(disk, "snapshot", &snapshot_hash).unwrap();
     save_counterexample(disk, &snapshot);
-    assert_depth_before_projection(snapshot, |kind, hash| load_authenticated_object(disk, kind, hash));
+    assert_depth_before_projection(snapshot, |kind, hash| {
+        load_authenticated_object(disk, kind, hash)
+    });
 }
 
 fn assert_depth_before_projection(
