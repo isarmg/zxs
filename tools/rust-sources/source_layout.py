@@ -438,6 +438,10 @@ class Layout:
         """Apply the original exact layout inverse to supplied physical bytes."""
         if self.legacy_maintenance is not None:
             data = self.legacy_maintenance.read(path, data)
+        return self.project_layout_bytes(path, data)
+
+    def project_layout_bytes(self, path, data):
+        """Project bytes already restored through the maintenance chain, without re-entering it."""
         if self.corrections is not None:
             data = self.corrections.read(path, data)
         if path in self.descendant_files and digest(data) != self.descendant_files[path]:
@@ -519,6 +523,9 @@ class Layout:
             old = self.historical_path(key); value = deepcopy(owner); value['directory'] = old
             delta = 0
             for row in value['files']:
+                if self.legacy_maintenance is not None:
+                    row['sha256'], change = self.legacy_maintenance.project_external(row['path'], row['sha256'])
+                    delta += change
                 if self.corrections is not None:
                     delta += self.corrections.delta(row['path'], row['sha256'])
                     row['sha256'] = self.corrections.project_hash(row['path'], row['sha256'])

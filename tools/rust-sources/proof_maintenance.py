@@ -11,6 +11,10 @@ import source_layout
 
 KEY = 'proof_maintenance_receipts'
 RECEIPTS = ('f6b00af0dad58bb402937c193974d916d525a790decbe043e679954c03bcbd1e',)
+FIELDS = {'schema', 'reason', 'terminal', 'layout', 'parent', 'before', 'after', 'files'}
+# Schema 2 is the same content step plus a replayable upstream backport record
+# (source_backport.py); its merge is replayed whenever the step is restored.
+BACKPORT_FIELDS = {'upstream', 'mapping', 'replay', 'advisory', 'license', 'consumer_tests'}
 
 
 def state(catalog, directory):
@@ -51,8 +55,9 @@ def _read(root, sha):
         if len(raw) > routing.MAX_EXPANDED or stream.read(1):
             raise ValueError('maintenance expansion bound exceeded')
     row = json.loads(raw)
-    if (not isinstance(row, dict) or set(row) != {'schema', 'reason', 'terminal', 'layout', 'parent', 'before', 'after', 'files'}
-            or type(row['schema']) is not int or row['schema'] != 1
+    if (not isinstance(row, dict) or type(row.get('schema')) is not int
+            or set(row) != {1: FIELDS, 2: FIELDS | BACKPORT_FIELDS}.get(row['schema'])
+            or any(not isinstance(row[key], dict) for key in BACKPORT_FIELDS & set(row))
             or not isinstance(row['reason'], str) or not row['reason'].strip()
             or not isinstance(row['files'], list) or not 1 <= len(row['files']) <= routing.MAX_FILES):
         raise ValueError('invalid maintenance receipt schema')
@@ -234,12 +239,16 @@ def restore(root, catalog, prospective=False):
                         raise ValueError('maintenance special file')
         _bytes_match(data, hashes, last['after'], live_inventory)
         for _, row, old, new, _ in reversed(chain):
+            after = dict(data)
             for file in row['files']:
                 data[file['before']] = routing.inverse_replacements(data[file['after']], file)
                 hashes[file['before']] = file['before_sha256']
             for path in set(new) - set(old):
                 del data[path]; del hashes[path]
             _bytes_match(data, hashes, row['before'], old)
+            if row['schema'] == 2:
+                import source_backport
+                source_backport.check_replay(row, data, after, catalog)
         first = chain[0][1]['before']
         historical['packages'][directory] = deepcopy(first['package'])
         historical['merges'] = [p for p in historical.get('merges', []) if p['directory'] != directory] + deepcopy(first['merges'])

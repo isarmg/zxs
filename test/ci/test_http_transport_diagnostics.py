@@ -14,6 +14,18 @@ SPEC.loader.exec_module(GATE)
 
 
 class HttpTransportDiagnostics(unittest.TestCase):
+    def test_list_forwards_harness_arguments_after_cargo_options(self):
+        inventory = "behavior::shutdown: test\n"
+        result = subprocess.CompletedProcess([], 0, stdout=inventory, stderr="")
+        with patch.object(GATE.subprocess, "run", return_value=result) as run:
+            output = GATE.run(Path("fixture"), "test", "--locked", "--test", "behavior", "--", "--list")
+        self.assertEqual(output, inventory)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], [
+            "cargo", "test", "--color", "never", "--offline", "--locked",
+            "--test", "behavior", "--", "--list",
+        ])
+
     def test_timeouts_preserve_bytes_text_or_missing_output_without_retrying(self):
         for output, diagnostics in (
             (b"running 18 tests\n", b"Blocking waiting for file lock on build directory\ninvalid: \xff"),
@@ -29,7 +41,7 @@ class HttpTransportDiagnostics(unittest.TestCase):
                 self.assertIs(raised.exception, failure)
                 run.assert_called_once()
                 self.assertEqual(run.call_args.kwargs["timeout"], 600)
-                self.assertEqual(run.call_args.args[0], ["cargo", "test", "--locked", "--lib", "--color", "never", "--offline"])
+                self.assertEqual(run.call_args.args[0], ["cargo", "test", "--color", "never", "--offline", "--locked", "--lib"])
                 text = captured.getvalue()
                 self.assertIn("timed out after 600s in fixture", text)
                 for value in (output, diagnostics):

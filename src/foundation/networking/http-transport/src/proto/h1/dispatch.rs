@@ -25,6 +25,7 @@ pub(crate) struct Dispatcher<D, Bs: Body, I, T> {
     body_tx: SenderDropGuard,
     body_rx: Pin<Box<Option<Bs>>>,
     is_closing: bool,
+    pending_result: Option<crate::Result<Dispatched>>,
 }
 
 pub(crate) trait Dispatch {
@@ -40,6 +41,9 @@ pub(crate) trait Dispatch {
         -> crate::Result<()>;
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), ()>>;
     fn should_poll(&self) -> bool;
+    fn poll_close(&mut self, _cx: &mut Context<'_>) -> Poll<()> {
+        Poll::Ready(())
+    }
 }
 
 cfg_server! {
@@ -84,6 +88,7 @@ where
             body_tx: SenderDropGuard::none(),
             body_rx: Box::pin(None),
             is_closing: false,
+            pending_result: None,
         }
     }
 
@@ -125,19 +130,33 @@ where
         cx: &mut Context<'_>,
         should_shutdown: bool,
     ) -> Poll<crate::Result<Dispatched>> {
-        Poll::Ready(ready!(self.poll_inner(cx, should_shutdown)).or_else(|e| {
-            // Be sure to alert a streaming body of the failure with a
-            // more specific error than the drop guard would provide.
-            if let Some(mut body) = self.body_tx.take() {
-                body.send_error(crate::Error::new_body("connection error"));
+        if self.pending_result.is_none() {
+            let result = ready!(self.poll_inner(cx, should_shutdown)).or_else(|e| {
+                // Be sure to alert a streaming body of the failure with a
+                // more specific error than the drop guard would provide.
+                if let Some(mut body) = self.body_tx.take() {
+                    body.send_error(crate::Error::new_body("connection error"));
+                }
+                // An error means we're shutting down either way.
+                // We just try to give the error to the user,
+                // and close the connection with an Ok. If we
+                // cannot give it to the user, then return the Err.
+                self.dispatch.recv_msg(Err(e))?;
+                Ok(Dispatched::Shutdown)
+            });
+            // An upgrade hands off the connection rather than shutting it down.
+            // Preserve the sender's readiness until the dispatcher is dropped.
+            if matches!(result, Ok(Dispatched::Upgrade(_))) {
+                return Poll::Ready(result);
             }
-            // An error means we're shutting down either way.
-            // We just try to give the error to the user,
-            // and close the connection with an Ok. If we
-            // cannot give it to the user, then return the Err.
-            self.dispatch.recv_msg(Err(e))?;
-            Ok(Dispatched::Shutdown)
-        }))
+            self.pending_result = Some(result);
+        }
+
+        // Closing a channel does not prevent an already-started send from
+        // publishing later. Drain it before completing so a caller holding
+        // the sender while awaiting its response cannot strand a callback.
+        ready!(self.dispatch.poll_close(cx));
+        Poll::Ready(self.pending_result.take().expect("closing result missing"))
     }
 
     fn poll_inner(
@@ -763,6 +782,10 @@ cfg_client! {
 
         fn should_poll(&self) -> bool {
             self.callback.is_none()
+        }
+
+        fn poll_close(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+            self.rx.poll_close(cx)
         }
     }
 }
