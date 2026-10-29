@@ -160,6 +160,7 @@ class EvidenceTests(unittest.TestCase):
     def test_runner_profile_uses_plan_and_rejects_arbitrary_sizes_before_execution(self):
         plan = {"schema_version": 1, "baseline_sha": "e2f33d9882cf7263412d9370b6a703e0b216357d",
                 "reviewed_candidate_sha": "209f31a4122174129bcf40b56c0598ac61e66352", "frozen_candidate_sha": None,
+                "ten_thousand_review": None,
                 "profiles": ["small-selftest", "boundaries", "1000", "10000"]}
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
