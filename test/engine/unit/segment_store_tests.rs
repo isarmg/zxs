@@ -263,3 +263,73 @@ fn namespace_cache_shares_authenticated_nodes_without_aliasing_kind_or_invalid_h
         );
     }
 }
+
+#[test]
+fn authenticated_segment_and_locator_schema_failures_are_corrupt_evidence() {
+    use std::error::Error as _;
+    let temp = tempfile::tempdir().unwrap();
+    let (members, resources, _) = fixture(temp.path(), EVENT_SEGMENT_SPAN);
+    let caches = SegmentCaches::new();
+    let reader = SegmentReader {
+        resources: &resources,
+        members: &members,
+        caches: &caches,
+    };
+    let malformed = json_codec::json!({"unexpected":true});
+    let event_hash = store_object(&members[0], EVENT_SEGMENT_KIND, &malformed).unwrap();
+    let operation_hash = store_object(&members[0], OPERATION_SEGMENT_KIND, &malformed).unwrap();
+    let errors = [
+        reader
+            .event_segment(&EventSegmentRef {
+                hash: event_hash,
+                first_sequence: 0,
+            })
+            .unwrap_err(),
+        reader
+            .operation_segment(&OperationSegmentRef {
+                hash: operation_hash,
+                first_sequence: 0,
+                first_ordinal: 0,
+                records: 1,
+            })
+            .unwrap_err(),
+    ];
+    for error in errors {
+        assert_eq!(error.code(), ErrorCode::ObjectCorrupt);
+        let mut source = error.source();
+        let mut found = false;
+        while let Some(cause) = source {
+            found |= cause.is::<json_codec::Error>();
+            source = cause.source();
+        }
+        assert!(found);
+    }
+    let id = storage_contract::OperationId::generate();
+    for value in [
+        json_codec::json!(42),
+        json_codec::json!("18446744073709551616"),
+    ] {
+        let json_type_error = value.is_number();
+        let root =
+            crate::journal::stored_map(&members, [(id.to_string(), value)].into_iter().collect());
+        let error = reader.locator_ordinal(&root, id).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::ObjectCorrupt);
+        let mut source = error.source();
+        let mut found = false;
+        while let Some(cause) = source {
+            found |= if json_type_error {
+                cause.is::<json_codec::Error>()
+            } else {
+                cause.is::<std::num::ParseIntError>()
+            };
+            source = cause.source();
+        }
+        assert!(found);
+        assert!(
+            reader
+                .locator_ordinal(&root, storage_contract::OperationId::generate())
+                .unwrap()
+                .is_none()
+        );
+    }
+}

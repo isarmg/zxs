@@ -482,3 +482,129 @@ fn recovery_object_batch_finishes_same_inode_aba() {
         object.bytes()
     );
 }
+
+fn assert_stored_json_cause(error: Error) {
+    use std::error::Error as _;
+    assert_eq!(error.code(), ErrorCode::ObjectCorrupt);
+    let mut source = error.source();
+    let mut found = false;
+    while let Some(cause) = source {
+        found |= cause.is::<json_codec::Error>();
+        source = cause.source();
+    }
+    assert!(found, "stored JSON failure retains its concrete cause");
+}
+
+#[test]
+fn stored_object_loaders_contextualize_syntax_and_canonical_number_failures() {
+    let (_temp, engine, _repository) = fixture();
+    let members = engine.members();
+    let hash = engine.snapshot.as_deref().unwrap();
+    let disk = &members[0];
+    let root = &engine.disk_resources.get(disk).unwrap().root;
+    let path = object_path(disk, "snapshot", hash);
+    let original = fs::read(&path).unwrap();
+    for bytes in [
+        b"{truncated".as_slice(),
+        br#"{"n":18446744073709551615}"#.as_slice(),
+    ] {
+        for member in &members {
+            fs::write(object_path(member, "snapshot", hash), bytes).unwrap();
+        }
+        let mut observed = 0;
+        for error in [
+            load_authenticated_object(disk, "snapshot", hash)
+                .err()
+                .unwrap(),
+            load_authenticated_object_at(root, disk, "snapshot", hash)
+                .err()
+                .unwrap(),
+            load_authenticated_object_observed_at(root, disk, "snapshot", hash, &mut |count| {
+                observed += count;
+                Ok(())
+            })
+            .err()
+            .unwrap(),
+            load_object::<json_codec::Value>(disk, "snapshot", hash).unwrap_err(),
+            load_object_at::<json_codec::Value>(root, disk, "snapshot", hash).unwrap_err(),
+            load_object_observed_at::<json_codec::Value>(root, disk, "snapshot", hash, &mut |_| {
+                Ok(())
+            })
+            .unwrap_err(),
+            verified_graph_object_at(&engine.disk_resources, &members, "snapshot", hash)
+                .err()
+                .unwrap(),
+            verified_object_at::<json_codec::Value>(
+                &engine.disk_resources,
+                &members,
+                "snapshot",
+                hash,
+            )
+            .unwrap_err(),
+        ] {
+            assert_stored_json_cause(error);
+        }
+        assert!(observed >= bytes.len());
+    }
+    fs::write(object_path(&members[1], "snapshot", hash), &original).unwrap();
+    let mut faults = Vec::new();
+    let recovered = verified_graph_object_observed_at(
+        &engine.disk_resources,
+        &members,
+        "snapshot",
+        hash,
+        &mut |error| faults.push(error.code()),
+    )
+    .unwrap();
+    assert_eq!(recovered.hash(), hash);
+    assert_eq!(faults, [ErrorCode::ObjectCorrupt]);
+    assert_eq!(fs::read(path).unwrap(), br#"{"n":18446744073709551615}"#);
+}
+
+#[test]
+fn malformed_publication_seals_preserve_sources_and_replica_fallback() {
+    let (_temp, engine, _repository) = fixture();
+    let members = engine.members();
+    let record = scan(&members[0])
+        .unwrap()
+        .records
+        .into_iter()
+        .rev()
+        .find(|(record, _)| record.record_type == RecordType::Publication)
+        .unwrap()
+        .0;
+    let candidate: Candidate =
+        load_object(&members[0], "candidate", &record.candidate_hash).unwrap();
+    let publication: Publication =
+        load_object(&members[0], "publication", &record.object_hash).unwrap();
+    let path = publication_seal_path(&members[0], &record.candidate_hash);
+    let original = fs::read(&path).unwrap();
+    for member in &members {
+        fs::write(
+            publication_seal_path(member, &record.candidate_hash),
+            b"{truncated",
+        )
+        .unwrap();
+    }
+    assert_stored_json_cause(
+        verified_publication_seal_at(&engine.disk_resources, &members, &candidate, &publication)
+            .unwrap_err(),
+    );
+    fs::write(
+        publication_seal_path(&members[1], &record.candidate_hash),
+        original,
+    )
+    .unwrap();
+    let mut faults = Vec::new();
+    let seal = verified_publication_seal_observed_at(
+        &engine.disk_resources,
+        &members,
+        &candidate,
+        &publication,
+        &mut |error| faults.push(error.code()),
+    )
+    .unwrap();
+    assert_eq!(seal.candidate_hash, record.candidate_hash);
+    assert_eq!(faults, [ErrorCode::ObjectCorrupt]);
+    assert_eq!(fs::read(path).unwrap(), b"{truncated");
+}

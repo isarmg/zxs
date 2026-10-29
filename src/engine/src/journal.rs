@@ -280,7 +280,9 @@ impl<R: Read> JournalFrameReader<R> {
                 "log frame checksum differs",
             ));
         }
-        let record: Record = decode_strict(&payload)?;
+        let record: Record = decode_strict(&payload).map_err(|source| {
+            Error::from(source).context(ErrorCode::LogCorrupt, "log record JSON is invalid")
+        })?;
         if canonical_json(&record)? != payload
             || record.previous_frame_hash != self.previous
             || record.sequence < self.last_sequence
@@ -760,13 +762,14 @@ pub(crate) fn load_authenticated_object(
     AuthenticatedMetadataObject::authenticate(
         kind,
         hash,
-        decode_strict(&object_storage::read_object_bytes_bounded(
+        decode_stored_object(&object_storage::read_object_bytes_bounded(
             disk,
             kind,
             hash,
             MAX_METADATA,
         )?)?,
     )
+    .map_err(stored_json_error)
 }
 
 pub(crate) fn load_authenticated_object_at(
@@ -778,7 +781,7 @@ pub(crate) fn load_authenticated_object_at(
     AuthenticatedMetadataObject::authenticate(
         kind,
         hash,
-        decode_strict(&object_storage::read_object_bytes_bounded_at(
+        decode_stored_object(&object_storage::read_object_bytes_bounded_at(
             root,
             disk,
             kind,
@@ -786,6 +789,7 @@ pub(crate) fn load_authenticated_object_at(
             MAX_METADATA,
         )?)?,
     )
+    .map_err(stored_json_error)
 }
 
 pub(crate) fn load_authenticated_object_observed_at(
@@ -798,7 +802,7 @@ pub(crate) fn load_authenticated_object_observed_at(
     AuthenticatedMetadataObject::authenticate(
         kind,
         hash,
-        decode_strict(&object_storage::read_object_bytes_observed_at(
+        decode_stored_object(&object_storage::read_object_bytes_observed_at(
             root,
             disk,
             kind,
@@ -807,6 +811,7 @@ pub(crate) fn load_authenticated_object_observed_at(
             observe,
         )?)?,
     )
+    .map_err(stored_json_error)
 }
 
 #[cfg(test)]
@@ -854,14 +859,38 @@ fn decode_object<T: data_serialization::de::DeserializeOwned + Serialize>(
     hash: &str,
     bytes: &[u8],
 ) -> Result<T> {
-    let value = decode_strict(bytes)?;
-    if object_hash(kind, &value)? != hash {
+    let value = decode_stored_object(bytes)?;
+    if object_hash(kind, &value)
+        .map_err(Error::from)
+        .map_err(stored_json_error)?
+        != hash
+    {
         return Err(Error::new(
             storage_contract::ErrorCode::ObjectCorrupt,
             "immutable object digest differs",
         ));
     }
     Ok(value)
+}
+
+fn decode_stored_object<T: data_serialization::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    decode_strict(bytes).map_err(|source| {
+        Error::from(source).context(
+            storage_contract::ErrorCode::ObjectCorrupt,
+            "immutable object JSON is invalid",
+        )
+    })
+}
+
+fn stored_json_error(source: Error) -> Error {
+    if source.code() == storage_contract::ErrorCode::InvalidJson {
+        source.context(
+            storage_contract::ErrorCode::ObjectCorrupt,
+            "immutable object encoding is invalid",
+        )
+    } else {
+        source
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

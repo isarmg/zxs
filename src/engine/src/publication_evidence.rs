@@ -197,8 +197,13 @@ fn read_publication_seal(
     candidate: &Candidate,
     publication: &Publication,
 ) -> Result<PublicationSeal> {
-    let seal =
-        decode_strict(&root.read_bytes(&publication_seal_path(member, hash), MAX_METADATA)?)?;
+    let seal = decode_strict(&root.read_bytes(&publication_seal_path(member, hash), MAX_METADATA)?)
+        .map_err(|source| {
+            Error::from(source).context(
+                storage_contract::ErrorCode::ObjectCorrupt,
+                "publication seal JSON is invalid",
+            )
+        })?;
     verify_publication_seal(candidate, publication, &seal)?;
     Ok(seal)
 }

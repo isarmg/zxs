@@ -497,7 +497,12 @@ fn pending_snapshot_entry<T: data_serialization::de::DeserializeOwned>(
     value
         .map(json_codec::from_value)
         .transpose()
-        .map_err(Into::into)
+        .map_err(|source| {
+            Error::from(source).context(
+                ErrorCode::ObjectCorrupt,
+                format!("operation snapshot {field} entry is invalid"),
+            )
+        })
 }
 
 /// Locate one receipt in an authenticated snapshot: locator → directory
@@ -521,7 +526,9 @@ pub(super) fn snapshot_receipt(
     else {
         return Ok(None);
     };
-    let ordinal = storage_contract::parse_u64_decimal(&text)?;
+    let ordinal = storage_contract::parse_u64_decimal(&text).map_err(|source| {
+        Error::from(source).context(ErrorCode::ObjectCorrupt, "operation locator is invalid")
+    })?;
     let entry_at = |segment: u64| -> Result<Option<storage_contract::OperationDirectoryEntry>> {
         pending_snapshot_entry(
             &engine.disk_resources,

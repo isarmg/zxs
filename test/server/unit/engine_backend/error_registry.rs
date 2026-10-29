@@ -87,3 +87,31 @@ fn engine_mapping_keeps_io_source_while_redacting_private_diagnostics() {
     assert!(found, "concrete I/O cause missing from error chain");
     assert!(!json_codec::to_string(&error).unwrap().contains("/srv/zxs"));
 }
+
+#[test]
+fn stored_json_failure_is_unknown_but_request_json_failure_is_rejected() {
+    use std::error::Error as _;
+    let source = json_codec::from_slice::<json_codec::Value>(b"{truncated").unwrap_err();
+    let stored = super::super::wire::error(storage_engine::Error::from(source).context(
+        storage_contract::ErrorCode::ObjectCorrupt,
+        "private immutable object JSON is invalid",
+    ));
+    assert_eq!(stored.status, 500);
+    assert_eq!(stored.code, storage_contract::ErrorCode::ObjectCorrupt);
+    assert!(storage_contract::client_protocol::mutation_outcome_unknown(
+        stored.status.as_u16()
+    ));
+    assert!(!stored.message.contains("private"));
+    let mut source = stored.source();
+    let mut found = false;
+    while let Some(cause) = source {
+        found |= cause.is::<json_codec::Error>();
+        source = cause.source();
+    }
+    assert!(found);
+    let source = storage_contract::decode_strict::<json_codec::Value>(b"{truncated").unwrap_err();
+    let request = super::super::wire::error(storage_engine::Error::from(source));
+    assert_eq!(request.status, 400);
+    assert_eq!(request.code, storage_contract::ErrorCode::InvalidJson);
+    assert!(!storage_contract::client_protocol::mutation_outcome_unknown(request.status.as_u16()));
+}

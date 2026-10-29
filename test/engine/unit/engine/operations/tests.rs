@@ -415,6 +415,52 @@ fn pending_lookup_consumes_captured_evidence_without_a_second_journal_read() {
 }
 
 #[test]
+fn pending_lookup_reports_checksum_valid_malformed_record_as_log_corruption() {
+    use std::error::Error as _;
+    let (_root, engine, operation) = pending_lookup_fixture();
+    let expected = engine.operation_record(operation).unwrap().into_result();
+    let originals: Vec<_> = engine
+        .members()
+        .iter()
+        .map(|disk| {
+            let path = log_path(disk);
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect();
+    // A checksum proves frame bytes, not the record schema they encode.
+    for payload in [
+        b"{truncated".as_slice(),
+        br#"{"record_type":"UNKNOWN"}"#.as_slice(),
+    ] {
+        let mut frame = originals[0].1[..8].to_vec();
+        frame.extend((payload.len() as u32).to_le_bytes());
+        frame.extend(payload);
+        let digest = blake3::hash(&frame);
+        frame.extend(digest.as_bytes());
+        for (path, _) in &originals {
+            fs::write(path, &frame).unwrap();
+        }
+        let error = engine.operation_lookup(operation).err().unwrap();
+        assert_eq!(error.code(), ErrorCode::LogCorrupt);
+        let mut source = error.source();
+        let mut found = false;
+        while let Some(cause) = source {
+            found |= cause.is::<json_codec::Error>();
+            source = cause.source();
+        }
+        assert!(found, "malformed stored record retains its JSON cause");
+    }
+    for (path, bytes) in originals {
+        fs::write(path, bytes).unwrap();
+    }
+    assert_eq!(
+        engine.operation_record(operation).unwrap().into_result(),
+        expected
+    );
+}
+
+#[test]
 fn pending_lookup_checks_receipt_binding_after_owner_discovery() {
     for change_sequence in [false, true] {
         let (_root, engine, operation) = pending_lookup_fixture();

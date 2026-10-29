@@ -162,7 +162,10 @@ impl SegmentReader<'_> {
             &reference.hash,
         )?;
         let bytes = object.canonical_len();
-        let segment: EventSegment = json_codec::from_value(object.value().clone())?;
+        let segment: EventSegment =
+            json_codec::from_value(object.into_value()).map_err(|source| {
+                Error::from(source).context(ErrorCode::ObjectCorrupt, "event segment is invalid")
+            })?;
         if segment.events.len() != EVENT_SEGMENT_SPAN {
             return Err(sealed_shape("sealed event segment span differs"));
         }
@@ -204,7 +207,11 @@ impl SegmentReader<'_> {
             &reference.hash,
         )?;
         let bytes = object.canonical_len();
-        let segment: OperationSegment = json_codec::from_value(object.value().clone())?;
+        let segment: OperationSegment =
+            json_codec::from_value(object.into_value()).map_err(|source| {
+                Error::from(source)
+                    .context(ErrorCode::ObjectCorrupt, "operation segment is invalid")
+            })?;
         if segment.records.len() as u64 != reference.records || segment.records.is_empty() {
             return Err(sealed_shape("sealed operation segment length differs"));
         }
@@ -263,7 +270,10 @@ impl SegmentReader<'_> {
                 storage_contract::parse_u64_decimal(&text)
             })
             .transpose()
-            .map_err(Into::into)
+            .map_err(|source| {
+                Error::from(source)
+                    .context(ErrorCode::ObjectCorrupt, "operation locator is invalid")
+            })
     }
 }
 

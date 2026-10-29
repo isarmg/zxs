@@ -231,6 +231,7 @@ fn phase_strings_preserve_canonical_payload_frame_and_hash() {
 
 #[test]
 fn raw_phase_decoder_rejects_unknown_and_non_string_shapes() {
+    use std::error::Error as _;
     for phase in [
         json_codec::json!("UNSUPPORTED"),
         json_codec::json!("prepare"),
@@ -248,7 +249,11 @@ fn raw_phase_decoder_rejects_unknown_and_non_string_shapes() {
         let mut raw = json_codec::to_value(&records()[0]).unwrap();
         raw["record_type"] = phase.clone();
         let payload = canonical_json(&raw).unwrap();
-        assert!(decode_strict::<Record>(&payload).is_err(), "{phase}");
+        assert_eq!(
+            decode_strict::<Record>(&payload).unwrap_err().code(),
+            storage_contract::ErrorCode::InvalidJson,
+            "{phase}"
+        );
         let receipt = json_codec::json!({
             "disk_id": "disk", "slot_id": "P01", "frame_hash": "0".repeat(64),
             "record": raw,
@@ -258,10 +263,21 @@ fn raw_phase_decoder_rejects_unknown_and_non_string_shapes() {
             "{phase}"
         );
         let bytes = raw_frame(&payload);
+        let error = scan_frames(bytes.as_slice()).err().unwrap();
         assert_eq!(
-            scan_frames(bytes.as_slice()).err().unwrap().code(),
-            storage_contract::ErrorCode::InvalidJson,
+            error.code(),
+            storage_contract::ErrorCode::LogCorrupt,
             "{phase}"
+        );
+        let mut source = error.source();
+        let mut found = false;
+        while let Some(cause) = source {
+            found |= cause.is::<json_codec::Error>();
+            source = cause.source();
+        }
+        assert!(
+            found,
+            "malformed stored phase retains its JSON cause: {phase}"
         );
     }
 }
