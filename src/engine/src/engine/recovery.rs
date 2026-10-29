@@ -13,6 +13,22 @@ pub(super) enum RecoveryMode {
     PreservePending,
 }
 
+mod workspace_receipts;
+use workspace_receipts::{PreparedCandidate, PublishedReceiptRoot};
+
+/// A read-only journal admission. The same open descriptions become writers
+/// only after the caller has admitted retained workspace evidence.
+pub(super) struct PreparedRecovery {
+    members: Vec<DiskConfig>,
+    online: Vec<DiskConfig>,
+    opened_journals: BTreeMap<String, OpenJournal>,
+    records: super::recovery_checkpoint::Records,
+    checkpoint: Option<super::recovery_checkpoint::Checkpoint>,
+    candidates: Option<(u64, PreparedCandidate)>,
+    published_receipts: Option<PublishedReceiptRoot>,
+    barrier_failure: Option<(u64, Error)>,
+}
+
 impl Engine {
     /// A surviving full publication barrier can disprove an empty or truncated
     /// journal, but cannot authorize inventing the missing decision history.
@@ -110,6 +126,12 @@ impl Engine {
     }
 
     pub(super) fn recover_mode(&mut self, mode: RecoveryMode) -> Result<()> {
+        let prepared = self.prepare_recovery()?;
+        self.seed_workspace_recovery(&prepared)?;
+        self.apply_recovery(mode, prepared)
+    }
+
+    pub(super) fn prepare_recovery(&mut self) -> Result<PreparedRecovery> {
         self.metadata_integrity.invalidate();
         self.published_state_base = None;
         self.history_catalog = None;
@@ -118,7 +140,6 @@ impl Engine {
         let mut online = Vec::new();
         let mut prefixes = BTreeMap::<String, BTreeSet<String>>::new();
         let mut opened_journals = BTreeMap::new();
-        let mut scanned_journals = BTreeMap::new();
         let mut torn_tail = false;
         let mut records = super::recovery_checkpoint::Records::new();
         for d in &members {
@@ -198,14 +219,6 @@ impl Engine {
             })
             .collect();
         self.reject_unjournaled_publications(&online, &journaled)?;
-        for disk in &online {
-            let opened = opened_journals
-                .remove(&disk.disk_id)
-                .expect("scanned online journal");
-            scanned_journals.insert(disk.disk_id.clone(), opened.scan.records.clone());
-            self.journals
-                .insert(disk.disk_id.clone(), opened.into_writer()?);
-        }
         let checkpoint = if online.len() == members.len() && !torn_tail {
             match super::recovery_checkpoint::load(self, &prefixes, &records) {
                 Ok(checkpoint) => checkpoint.filter(|c| {
@@ -229,12 +242,50 @@ impl Engine {
             checkpoint_snapshot_hash = checkpoint.as_ref().map(|value| value.snapshot_hash.as_str()),
             "recovery checkpoint selection"
         );
+        let (candidates, published_receipts, barrier_failure) =
+            self.prepare_published_receipts(&online, &records)?;
+        Ok(PreparedRecovery {
+            members,
+            online,
+            opened_journals,
+            records,
+            checkpoint,
+            candidates,
+            published_receipts,
+            barrier_failure,
+        })
+    }
+
+    pub(super) fn apply_recovery(
+        &mut self,
+        mode: RecoveryMode,
+        prepared: PreparedRecovery,
+    ) -> Result<()> {
+        let PreparedRecovery {
+            members,
+            online,
+            mut opened_journals,
+            records,
+            checkpoint,
+            candidates: mut prepared_candidates,
+            published_receipts: _,
+            mut barrier_failure,
+        } = prepared;
+        let mut scanned_journals = BTreeMap::new();
+        for disk in &online {
+            let opened = opened_journals
+                .remove(&disk.disk_id)
+                .expect("scanned online journal");
+            scanned_journals.insert(disk.disk_id.clone(), opened.scan.records.clone());
+            self.journals
+                .insert(disk.disk_id.clone(), opened.into_writer()?);
+        }
         // Recovery holds the pool writer locks. Immutable page replicas repaired
         // in this invocation need not be decoded and compared again for each
         // historical root that references them. Never persist this evidence.
         let mut repaired_pages = BTreeSet::new();
         let mut repaired_histories = BTreeSet::new();
-        for (_seq, candidates) in records {
+        for (sequence, candidates) in records {
             let active = candidates
                 .into_iter()
                 .filter(|(_, rs)| {
@@ -255,9 +306,47 @@ impl Engine {
             let Some((hash, rs)) = active.into_iter().next() else {
                 continue;
             };
-            let candidate: Candidate =
-                verified_object_at(&self.disk_resources, &online, "candidate", &hash)?;
-            self.verify_candidate_membership(&candidate)?;
+            let prepared = if prepared_candidates
+                .as_ref()
+                .is_some_and(|(slot, _)| *slot == sequence)
+            {
+                prepared_candidates.take().map(|(_, candidate)| candidate)
+            } else {
+                None
+            };
+            let mut failed_seal = if barrier_failure
+                .as_ref()
+                .is_some_and(|(slot, _)| *slot == sequence)
+            {
+                barrier_failure.take().map(|(_, source)| source)
+            } else {
+                None
+            };
+            if online.len() == members.len()
+                && let Some(source) = failed_seal.take()
+            {
+                self.recovery_warnings
+                    .seals
+                    .push(super::RecoverySealFailure {
+                        context: super::RecoverySealContext::Publication {
+                            candidate_hash: hash.clone(),
+                        },
+                        source,
+                    });
+            }
+            let (candidate, prepared_publication, prepared_seal) = match prepared {
+                Some(prepared) => (
+                    prepared.candidate,
+                    Some(prepared.publication),
+                    Some(prepared.seal),
+                ),
+                None => {
+                    let candidate: Candidate =
+                        verified_object_at(&self.disk_resources, &online, "candidate", &hash)?;
+                    self.verify_candidate_membership(&candidate)?;
+                    (candidate, None, None)
+                }
+            };
             if candidate.pool_id != self.config.pool_id
                 || candidate.previous_snapshot != self.snapshot
             {
@@ -269,15 +358,20 @@ impl Engine {
             let publication_record = rs
                 .iter()
                 .find(|receipt| receipt.record.record_type == RecordType::Publication);
-            let publication = if let Some(receipt) = publication_record {
-                Some(verified_object_at::<Publication>(
-                    &self.disk_resources,
-                    &online,
-                    "publication",
-                    &receipt.record.object_hash,
-                )?)
-            } else {
-                crate::degraded_recovery::discover_publication(self, &candidate, &hash)?
+            let publication = match prepared_publication {
+                Some(publication) => Some(publication),
+                None => {
+                    if let Some(receipt) = publication_record {
+                        Some(verified_object_at::<Publication>(
+                            &self.disk_resources,
+                            &online,
+                            "publication",
+                            &receipt.record.object_hash,
+                        )?)
+                    } else {
+                        crate::degraded_recovery::discover_publication(self, &candidate, &hash)?
+                    }
+                }
             };
             if let Some(checkpoint) = checkpoint
                 .as_ref()
@@ -470,9 +564,19 @@ impl Engine {
                 // A PUBLICATION object or a single frame is not the complete
                 // barrier. Preserve the old visible state until all configured
                 // synchronized receipts can be checked after restart.
-                if let Err(source) =
-                    verified_publication_seal_at(&self.disk_resources, &online, &candidate, &p)
-                {
+                let seal = match failed_seal {
+                    Some(source) => Err(source),
+                    None => match prepared_seal {
+                        Some(seal) => Ok(seal),
+                        None => verified_publication_seal_at(
+                            &self.disk_resources,
+                            &online,
+                            &candidate,
+                            &p,
+                        ),
+                    },
+                };
+                if let Err(source) = seal {
                     self.recovery_warnings
                         .seals
                         .push(super::RecoverySealFailure {

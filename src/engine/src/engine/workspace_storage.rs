@@ -52,6 +52,19 @@ impl WorkspaceSource<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum WorkspaceRead<'a> {
+    Seed(&'a super::recovery::PreparedRecovery),
+    Published,
+    RecoveryHint,
+}
+
+impl WorkspaceRead<'_> {
+    fn authoritative(self) -> bool {
+        matches!(self, Self::Published)
+    }
+}
+
 struct LoadedWorkspace {
     workspace: Workspace,
     canonical: Vec<u8>,
@@ -136,7 +149,22 @@ impl Engine {
         let Some(entry) = self.find_receipt(request.operation_id)? else {
             return Ok(false);
         };
-        let operation = entry.result;
+        Self::saved_request_digest_matches_result(
+            workspace,
+            request,
+            &entry.result,
+            directories
+                .iter()
+                .map(|directory| directory.join("wire-request.json").open()),
+        )
+    }
+
+    fn saved_request_digest_matches_result(
+        workspace: &Workspace,
+        request: &CommitRequest,
+        operation: &OperationResult,
+        bodies: impl Iterator<Item = Result<fs::File>>,
+    ) -> Result<bool> {
         if crate::business::native_commit_digest(workspace, request)? == operation.request_digest {
             return Ok(true);
         }
@@ -150,11 +178,8 @@ impl Engine {
         // not merely its caller-supplied digest string. Absent body copies do
         // not establish completion; an unreadable copy is not absence.
         let mut damage = None;
-        for directory in directories {
-            let Some(body) = read_workspace_evidence::<json_codec::Value>(
-                directory.join("wire-request.json").open(),
-                &mut damage,
-            )?
+        for body in bodies {
+            let Some(body) = read_workspace_evidence::<json_codec::Value>(body, &mut damage)?
             else {
                 continue;
             };
@@ -206,19 +231,22 @@ impl Engine {
     /// Before journal replay these records are only discovery hints for payload
     /// repair (which independently verifies candidate-bound bytes). No caller can
     /// observe them until final reconciliation with the published history.
-    pub(crate) fn seed_workspace_recovery(&mut self) -> Result<()> {
-        self.load_workspace_mirrors(false)
+    pub(super) fn seed_workspace_recovery(
+        &mut self,
+        prepared: &super::recovery::PreparedRecovery,
+    ) -> Result<()> {
+        self.load_workspace_mirrors(WorkspaceRead::Seed(prepared))
     }
 
     pub(crate) fn load_workspaces(&mut self) -> Result<()> {
-        self.load_workspace_mirrors(true)
+        self.load_workspace_mirrors(WorkspaceRead::Published)
     }
 
     fn workspace_locations(&self) -> Result<Vec<WorkspaceLocation>> {
         workspace_locations(&self.root, &self.config, &self.disk_resources)
     }
 
-    fn load_workspace_mirrors(&mut self, authoritative: bool) -> Result<()> {
+    fn load_workspace_mirrors(&mut self, admission: WorkspaceRead<'_>) -> Result<()> {
         let locations = self.workspace_locations()?;
         self.workspaces.clear();
         self.reset_workspace_budget();
@@ -257,7 +285,7 @@ impl Engine {
                 if paths.is_empty() {
                     continue;
                 }
-                let loaded = self.read_workspace_mirrors(id, &paths, &locations, authoritative)?;
+                let loaded = self.read_workspace_mirrors(id, &paths, &locations, admission)?;
                 let admission = self.check_workspace_budget(
                     &loaded.workspace,
                     &loaded.canonical,
@@ -277,8 +305,9 @@ impl Engine {
         id: &str,
         paths: &[WorkspaceSource<'_>],
         locations: &[WorkspaceLocation],
-        authoritative: bool,
+        admission: WorkspaceRead<'_>,
     ) -> Result<LoadedWorkspace> {
+        let authoritative = admission.authoritative();
         let mut healthy = Vec::new();
         let mut damage = None;
         for path in paths {
@@ -295,23 +324,41 @@ impl Engine {
             ));
         }
         let damaged = healthy.len() != paths.len();
+        let original_state = healthy[0].state;
+        let original_fence = healthy[0].fencing_token;
+        let terminal_mirrors = healthy.iter().all(|workspace| {
+            workspace.purpose == WorkspacePurpose::Normal
+                && matches!(
+                    workspace.state,
+                    WorkspaceState::Committed | WorkspaceState::Aborted
+                )
+                && workspace.state == original_state
+                && workspace.fencing_token == original_fence
+        });
+        let mut published_terminal = terminal_mirrors;
         if authoritative && healthy.len() == 2 {
             self.reconcile_completion_contexts(&mut healthy)?;
         }
         if authoritative {
             for workspace in &mut healthy {
                 let published = self.reconcile_workspace_receipt(workspace)?;
+                published_terminal &= published
+                    && workspace.state == original_state
+                    && workspace.fencing_token == original_fence;
                 if damaged && workspace.state == WorkspaceState::Committed && !published {
                     return Err(recovery_required(
                         "surviving committed manifest lacks a bound receipt",
                     ));
                 }
             }
+        } else if matches!(admission, WorkspaceRead::RecoveryHint) {
+            published_terminal = false;
         }
         let selected = healthy.remove(0);
         let canonical = canonical_json(&selected)?;
         for other in &healthy {
             if authoritative
+                || matches!(admission, WorkspaceRead::RecoveryHint)
                 || (selected.state == other.state && selected.fencing_token == other.fencing_token)
             {
                 if canonical != canonical_json(other)? {
@@ -350,6 +397,11 @@ impl Engine {
                 return Err(recovery_required("workspace manifest mirrors conflict"));
             }
         }
+        if let WorkspaceRead::Seed(prepared) = admission
+            && terminal_mirrors
+        {
+            published_terminal = self.seed_terminal_publication(&selected, paths, prepared)?;
+        }
         if damaged {
             // A surviving manifest alone is not evidence that the promised
             // staging bytes survived. Verify them without changing either
@@ -379,8 +431,9 @@ impl Engine {
         let retention = match workspace_mirrors(paths) {
             Some(mirrors)
                 if !damaged
-                    && self.empty_aborted_workspace(&selected)
-                    && workspace_directories_clear(locations, id)? =>
+                    && (published_terminal
+                        || (self.empty_aborted_workspace(&selected)
+                            && workspace_directories_clear(locations, id)?)) =>
             {
                 WorkspaceRetention::Cold {
                     fingerprint: blake3::hash(&canonical),
@@ -410,7 +463,8 @@ impl Engine {
     ) -> Result<Workspace> {
         let locations = self.workspace_locations()?;
         let paths = workspace_paths(&locations, id)?;
-        let loaded = self.read_workspace_mirrors(id, &paths, &locations, true)?;
+        let loaded =
+            self.read_workspace_mirrors(id, &paths, &locations, WorkspaceRead::Published)?;
         // A cold point read is a disk boundary, not permission to replace the
         // admitted accounting/identity with different but syntactically valid data.
         if loaded.retention != admitted {
@@ -419,6 +473,134 @@ impl Engine {
             ));
         }
         Ok(loaded.workspace)
+    }
+
+    fn seed_terminal_publication(
+        &self,
+        workspace: &Workspace,
+        paths: &[WorkspaceSource<'_>],
+        prepared: &super::recovery::PreparedRecovery,
+    ) -> Result<bool> {
+        let mut damage = None;
+        let mut published = false;
+        for path in paths {
+            let request_path = path.path().with_file_name("commit-request.json");
+            let Some(request) = read_workspace_evidence::<CommitRequest>(
+                path.location.root().open_regular(&request_path),
+                &mut damage,
+            )?
+            else {
+                continue;
+            };
+            let Some(entry) = prepared.workspace_receipt(self, request.operation_id)? else {
+                continue;
+            };
+            if entry.principal != request.principal
+                || !matches!(
+                    entry.result.commit_state,
+                    CommitState::Published | CommitState::PublishedDegraded
+                )
+                || !super::workspace_commit::workspace_request_matches_result(
+                    workspace,
+                    &request,
+                    &entry.result,
+                )
+                || !Self::saved_request_digest_matches_result(
+                    workspace,
+                    &request,
+                    &entry.result,
+                    paths.iter().map(|path| {
+                        path.location
+                            .root()
+                            .open_regular(&path.path().with_file_name("wire-request.json"))
+                    }),
+                )?
+            {
+                continue;
+            }
+            let completed = request.fencing_token.checked_add(1);
+            let terminal = match workspace.state {
+                WorkspaceState::Committed => completed == Some(workspace.fencing_token),
+                WorkspaceState::Aborted => completed
+                    .and_then(|fence| fence.checked_add(1))
+                    .is_some_and(|fence| workspace.fencing_token >= fence),
+                WorkspaceState::Open | WorkspaceState::Sealed => false,
+            };
+            published |= terminal;
+        }
+        if (!published || workspace.state == WorkspaceState::Aborted)
+            && let Some(source) = damage
+        {
+            return Err(source.context(
+                ErrorCode::RecoveryRequired,
+                "no healthy workspace request evidence",
+            ));
+        }
+        Ok(published)
+    }
+
+    pub(crate) fn workspace_recovery_hint(
+        &self,
+        id: &str,
+    ) -> Result<std::borrow::Cow<'_, Workspace>> {
+        if let Some(workspace) = self.workspaces.get(id) {
+            return Ok(std::borrow::Cow::Borrowed(workspace));
+        }
+        let WorkspaceRetention::Cold {
+            fingerprint,
+            mirrors,
+        } = self
+            .cold_workspace_retention(id)
+            .expect("invariant: every retained workspace is resident or cold")
+        else {
+            unreachable!("invariant: cold_workspace_retention returns a cold record");
+        };
+        let locations = self.workspace_locations()?;
+        let paths = workspace_paths(&locations, id)?;
+        let loaded =
+            self.read_workspace_mirrors(id, &paths, &locations, WorkspaceRead::RecoveryHint)?;
+        if workspace_mirrors(&paths) != Some(mirrors)
+            || blake3::hash(&loaded.canonical) != fingerprint
+        {
+            return Err(recovery_required(
+                "cold workspace evidence changed; reopen for reconciliation",
+            ));
+        }
+        Ok(std::borrow::Cow::Owned(loaded.workspace))
+    }
+
+    pub(crate) fn persist_completed_workspace(&mut self, workspace: &Workspace) -> Result<()> {
+        let canonical = encode_metadata(workspace, MAX_METADATA)?;
+        let retention = if workspace.purpose == WorkspacePurpose::Normal
+            && !self
+                .commit_preparation
+                .load(std::sync::atomic::Ordering::Acquire)
+            && !self
+                .upload_preparations
+                .lock()
+                .expect("invariant: upload preparation lock poisoned")
+                .contains(&workspace.workspace_id)
+        {
+            WorkspaceRetention::Cold {
+                fingerprint: blake3::hash(&canonical),
+                mirrors: WorkspaceMirrors::Both,
+            }
+        } else {
+            WorkspaceRetention::Resident
+        };
+        self.persist_workspace_as(workspace, &canonical, retention)
+    }
+
+    pub(crate) fn install_workspace(&mut self, workspace: Workspace) {
+        if self
+            .cold_workspace_retention(&workspace.workspace_id)
+            .is_some()
+        {
+            self.workspaces.remove(&workspace.workspace_id);
+        } else {
+            self.workspaces
+                .insert(workspace.workspace_id.clone(), workspace);
+        }
     }
 
     pub(crate) fn persist_aborted_workspace(&mut self, workspace: Workspace) -> Result<()> {
@@ -471,12 +653,7 @@ impl Engine {
             WorkspaceRetention::Resident
         };
         self.persist_workspace_as(&workspace, &canonical, retention)?;
-        if retention.is_cold() {
-            self.workspaces.remove(id);
-        } else {
-            self.workspaces
-                .insert(workspace.workspace_id.clone(), workspace);
-        }
+        self.install_workspace(workspace);
         Ok(())
     }
 
@@ -690,6 +867,7 @@ impl Engine {
             .planning_context()
             .workspace_evidence_directories(workspace)?;
         let mut completion = None;
+        let mut closed_publication = false;
         let mut damage = None;
         for directory in &directories {
             let Some(request) = read_workspace_evidence::<CommitRequest>(
@@ -705,6 +883,10 @@ impl Engine {
                 // Closing an already published workspace is permitted. A later
                 // abort is terminal, not a request to resurrect the old fence.
                 if workspace.state == WorkspaceState::Aborted {
+                    closed_publication |= request
+                        .fencing_token
+                        .checked_add(2)
+                        .is_some_and(|closed| workspace.fencing_token >= closed);
                     continue;
                 }
                 let next = request
@@ -800,7 +982,7 @@ impl Engine {
             workspace.state = WorkspaceState::Committed;
             workspace.fencing_token = fence;
         }
-        Ok(completion.is_some())
+        Ok(completion.is_some() || closed_publication)
     }
 }
 

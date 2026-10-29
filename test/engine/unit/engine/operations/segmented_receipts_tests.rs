@@ -126,10 +126,38 @@ fn pending_receipt_rejects_overflowing_or_reversed_directory_ranges() {
             ),
         );
         assert_eq!(
-            pending_snapshot_receipt(&engine, &members, &snapshot, result.operation_id)
+            snapshot_receipt(&engine, &members, &snapshot, result.operation_id, false)
                 .unwrap_err()
                 .code(),
             ErrorCode::ObjectCorrupt
         );
     }
+}
+
+#[test]
+fn recovery_overlay_lookup_requires_the_last_receipt_in_the_last_segment() {
+    let (_temp, mut engine) = fixture();
+    let first = publish(&mut engine, OperationId::generate(), 0).unwrap();
+    let last = publish(&mut engine, OperationId::generate(), 0).unwrap();
+    let members = engine.members();
+    let snapshot: Snapshot = verified_object_at(
+        &engine.disk_resources,
+        &members,
+        "snapshot",
+        engine.snapshot.as_deref().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        snapshot_receipt(&engine, &members, &snapshot, first.operation_id, true)
+            .unwrap_err()
+            .code(),
+        ErrorCode::ObjectCorrupt
+    );
+    assert_eq!(
+        snapshot_receipt(&engine, &members, &snapshot, last.operation_id, true)
+            .unwrap()
+            .unwrap()
+            .result,
+        last
+    );
 }

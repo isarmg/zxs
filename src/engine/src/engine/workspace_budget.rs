@@ -306,6 +306,10 @@ impl Engine {
             .and_then(|record| record.retention.is_cold().then_some(record.retention))
     }
 
+    pub(crate) fn retained_workspace_ids(&self) -> impl Iterator<Item = &str> {
+        self.workspace_budget.records.keys().map(String::as_str)
+    }
+
     pub(crate) fn reset_workspace_budget(&mut self) {
         self.workspace_budget = WorkspaceBudget::default();
     }

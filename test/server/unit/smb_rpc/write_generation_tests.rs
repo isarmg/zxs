@@ -128,7 +128,10 @@ fn workspace_id(session: &Session, handle: u64) -> String {
 
 #[test]
 fn one_dirty_per_generation_still_publishes_every_change_at_flush_and_close() {
-    let (_temp, shared, _backend, branch) = fixture();
+    let (_temp, shared, backend, branch) = fixture_configure(|config| {
+        config.max_retained_workspaces = 1;
+        config.max_retained_workspaces_per_principal = 1;
+    });
     let mut session = session(shared, &branch);
     let mut vfs = Vfs::open(&mut session, "report.txt", false, false);
     for (offset, byte) in [(0, b"n"), (1, b"e"), (2, b"w")] {
@@ -138,15 +141,51 @@ fn one_dirty_per_generation_still_publishes_every_change_at_flush_and_close() {
         vfs.sent,
         [Sent::Prepare, Sent::Dirty, Sent::Prepare, Sent::Prepare]
     );
+    let first_workspace = workspace_id(&session, vfs.handle);
+    let first_operation = write_handle(&session, vfs.handle).operation_id;
+    let spool = write_handle(&session, vfs.handle).source.clone();
     let saved = vfs.flush(&mut session).unwrap();
     assert_eq!(saved["commit_state"], "PUBLISHED");
     assert_eq!(published(&session, "report.txt"), b"new");
+    let first_receipt = backend.inner.test_with_engine_locked(|engine| {
+        let capacity = engine.workspace_capacity("alice");
+        assert_eq!(capacity.principal.records.used, 0);
+        assert_eq!(capacity.principal.cold_records, 2);
+        assert_eq!(
+            engine.workspace(&first_workspace).unwrap().state,
+            storage_contract::WorkspaceState::Committed
+        );
+        engine.operation(first_operation).unwrap()
+    });
+    assert_eq!(fs::read(&spool).unwrap(), b"new");
     // The published generation is closed: the next change opens a new one.
     vfs.write(&mut session, 3, b"!").unwrap();
     vfs.write(&mut session, 4, b"?").unwrap();
     assert_eq!(vfs.dirty_count(), 2);
+    assert_ne!(workspace_id(&session, vfs.handle), first_workspace);
+    assert_ne!(
+        write_handle(&session, vfs.handle).operation_id,
+        first_operation
+    );
+    assert_eq!(write_handle(&session, vfs.handle).source, spool);
+    let second = vfs.flush(&mut session).unwrap();
+    assert_eq!(second["commit_state"], "PUBLISHED");
+    backend.inner.test_with_engine_locked(|engine| {
+        let capacity = engine.workspace_capacity("alice");
+        assert_eq!(capacity.principal.records.used, 0);
+        assert_eq!(capacity.principal.cold_records, 3);
+        assert_eq!(engine.operation(first_operation).unwrap(), first_receipt);
+    });
+    vfs.write(&mut session, 5, b".").unwrap();
     session.close(vfs.handle, false).unwrap();
-    assert_eq!(published(&session, "report.txt"), b"new!?");
+    assert_eq!(published(&session, "report.txt"), b"new!?.");
+    assert!(!spool.exists());
+    backend.inner.test_with_engine_locked(|engine| {
+        let capacity = engine.workspace_capacity("alice");
+        assert_eq!(capacity.principal.records.used, 0);
+        assert_eq!(capacity.principal.cold_records, 4);
+        assert_eq!(engine.operation(first_operation).unwrap(), first_receipt);
+    });
 }
 
 #[test]

@@ -381,6 +381,7 @@ fn reference_prepare(engine: &Engine, candidate: &Candidate) -> Result<VerifiedP
             }
         }
     }
+    entries.sort_by(|a, b| a.identity().cmp(&b.identity()));
     let proof = VerifiedPayloadSet {
         metadata_integrity: preparation.metadata_integrity,
         entries,
@@ -755,4 +756,78 @@ fn detached_decision_rejects_a_different_disk_resource_generation() {
     assert_eq!(engine.state.sequence, sequence);
     assert_eq!(engine.next_slot, slot);
     assert!(!engine.blocked);
+}
+
+#[test]
+fn held_proof_lookup_preserves_arbitrary_candidate_and_slot_order() {
+    let (_temp, engine, mut candidate) = fixture_with_files(3);
+    candidate.versions.reverse();
+    for evidence in &mut candidate.versions {
+        evidence.placement.route_slot_ids.reverse();
+    }
+    let proof = VerifiedPayloadSet::prepare(&engine, &candidate).unwrap();
+    assert!(!proof.full_revalidation);
+    assert!(
+        proof
+            .entries
+            .windows(2)
+            .all(|pair| pair[0].identity() < pair[1].identity())
+    );
+    proof.validate(&engine.config, &candidate).unwrap();
+    candidate.versions.reverse();
+    for evidence in &mut candidate.versions {
+        evidence.placement.route_slot_ids.reverse();
+        for slot in &evidence.placement.route_slot_ids {
+            proof
+                .validate_payload(&engine.config, &evidence.version, slot)
+                .unwrap();
+        }
+    }
+    proof.validate(&engine.config, &candidate).unwrap();
+}
+
+#[test]
+fn held_proof_lookup_rejects_unknown_version_and_slot_pairs() {
+    let (_temp, engine, candidate) = fixture_with_files(2);
+    let proof = VerifiedPayloadSet::prepare(&engine, &candidate).unwrap();
+    let evidence = &candidate.versions[0];
+    let slot = &evidence.placement.route_slot_ids[0];
+    let mut unknown = evidence.version.clone();
+    unknown.version_id = "version_missing".into();
+    for (version, slot) in [
+        (&unknown, slot.as_str()),
+        (&evidence.version, "slot_missing"),
+    ] {
+        assert_eq!(
+            proof
+                .validate_payload(&engine.config, version, slot)
+                .unwrap_err()
+                .code(),
+            storage_contract::ErrorCode::PreparationStale
+        );
+    }
+    proof.validate(&engine.config, &candidate).unwrap();
+}
+
+#[test]
+fn held_proof_lookup_keeps_the_first_matching_prepared_entry() {
+    let (_temp, engine, mut candidate) = fixture();
+    candidate.versions.push(candidate.versions[0].clone());
+    let mut proof = VerifiedPayloadSet::prepare(&engine, &candidate).unwrap();
+    let evidence = &candidate.versions[0];
+    let slot = &evidence.placement.route_slot_ids[0];
+    let key = (evidence.version.version_id.as_str(), slot.as_str());
+    proof
+        .entries
+        .iter_mut()
+        .filter(|entry| entry.identity() == key)
+        .nth(1)
+        .unwrap()
+        .body
+        .stamp
+        .size += 1;
+    proof
+        .validate_payload(&engine.config, &evidence.version, slot)
+        .unwrap();
+    proof.validate(&engine.config, &candidate).unwrap();
 }

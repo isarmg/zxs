@@ -1323,7 +1323,7 @@ impl Engine {
         });
         completed.state = WorkspaceState::Committed;
         completed.fencing_token += 1;
-        if let Err(source) = refreshed.and_then(|()| self.persist_workspace(&completed)) {
+        if let Err(source) = refreshed.and_then(|()| self.persist_completed_workspace(&completed)) {
             // Publication is already authoritative. Even pre-write budget/path
             // failures leave local completion unresolved, never a rejected save.
             self.blocked = true;
@@ -1331,8 +1331,7 @@ impl Engine {
                 PublishedWorkspaceReconciliation::new(result, &completed, source),
             )));
         }
-        self.workspaces
-            .insert(completed.workspace_id.clone(), completed);
+        self.install_workspace(completed);
         Ok(result)
     }
     pub(crate) fn build_version(

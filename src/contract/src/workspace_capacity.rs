@@ -14,7 +14,7 @@ pub struct CapacityMeasure {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serialization(deny_unknown_fields)]
 pub struct WorkspaceCapacityScope {
-    /// Resident records: all except verified, empty, ordinary aborted records.
+    /// Resident records exclude admitted cold terminal manifests.
     pub records: CapacityMeasure,
     #[serialization(with = "crate::u64_string")]
     pub cold_records: u64,
@@ -35,7 +35,8 @@ pub struct WorkspaceCapacity {
     pub global: WorkspaceCapacityScope,
     pub principal: WorkspaceCapacityScope,
     pub warning: CapacityWarning,
-    /// Only empty aborted full manifests can leave the resident working set.
+    /// Normal published completions and empty aborts can leave the resident working set.
+    /// Permanent manifests, request evidence and recovery bytes are retained.
     pub automatic_retirement: bool,
 }
 

@@ -589,3 +589,334 @@ fn inventory_streams_over_budget_manifests_without_opening_or_repairing_engine()
         ErrorCode::ResourceLimit
     );
 }
+
+#[test]
+fn published_normal_workspaces_release_records_but_keep_replay_and_bytes() {
+    let mut f = Fixture::new();
+    f.config.max_retained_workspaces = 1;
+    f.config.max_retained_workspaces_per_principal = 1;
+    let mut engine = f.initialize();
+    let repo = repository(&mut engine, 1);
+    let mut saved = Vec::new();
+    for i in 0..8 {
+        let w = engine
+            .create_workspace(&repo.main_branch_id, "admin")
+            .unwrap();
+        engine.stage_bytes(&w.workspace_id, "file", &[i]).unwrap();
+        let request = CommitRequest {
+            workspace_id: w.workspace_id,
+            operation_id: OperationId::generate(),
+            principal: "admin".into(),
+            expected_head: w.base_head,
+            fencing_token: w.fencing_token,
+            message: "save".into(),
+            request_digest: None,
+        };
+        let result = engine.commit_workspace(request.clone()).unwrap();
+        assert!(engine.workspaces.is_empty());
+        assert_eq!(engine.workspace_capacity("admin").principal.records.used, 0);
+        assert_eq!(
+            engine.workspace_capacity("admin").principal.cold_records,
+            i as u64 + 1
+        );
+        saved.push((request, result));
+    }
+    let before = engine.workspace_capacity("admin");
+    assert!(before.principal.metadata_bytes.used > 0);
+    drop(engine);
+    let mut engine = Engine::open(&f.root).unwrap();
+    assert_eq!(engine.workspace_capacity("admin"), before);
+    assert!(engine.workspaces.is_empty());
+    for (request, result) in saved {
+        let workspace = engine.workspace(&request.workspace_id).unwrap();
+        assert_eq!(workspace.state, WorkspaceState::Committed);
+        assert_eq!(workspace.fencing_token, request.fencing_token + 1);
+        assert_eq!(
+            canonical_json(&engine.commit_workspace(request).unwrap()).unwrap(),
+            canonical_json(&result).unwrap()
+        );
+    }
+    engine.assert_workspace_budget_consistent();
+}
+
+#[test]
+fn published_abort_stays_cold_at_full_resident_quota_across_restart() {
+    let mut f = Fixture::new();
+    f.config.max_retained_workspaces = 1;
+    f.config.max_retained_workspaces_per_principal = 1;
+    let mut engine = f.initialize();
+    let repo = repository(&mut engine, 1);
+    let w = engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(&w.workspace_id, "file", b"retained recovery bytes")
+        .unwrap();
+    let request = CommitRequest {
+        workspace_id: w.workspace_id.clone(),
+        operation_id: OperationId::generate(),
+        principal: "admin".into(),
+        expected_head: w.base_head,
+        fencing_token: w.fencing_token,
+        message: "save".into(),
+        request_digest: None,
+    };
+    let result = engine.commit_workspace(request.clone()).unwrap();
+    let active = engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(&active.workspace_id, "unpublished", b"not published")
+        .unwrap();
+    engine
+        .abort_workspace(&active.workspace_id, "admin")
+        .unwrap();
+    assert_eq!(engine.workspace_capacity("admin").principal.records.used, 1);
+    for _ in 0..2 {
+        engine.abort_workspace(&w.workspace_id, "admin").unwrap();
+    }
+    let closed = engine.workspace(&w.workspace_id).unwrap();
+    assert_eq!(closed.state, WorkspaceState::Aborted);
+    assert_eq!(closed.fencing_token, request.fencing_token + 3);
+    let before = engine.workspace_capacity("admin");
+    assert_eq!(before.principal.cold_records, 1);
+    drop(engine);
+    let mut engine = Engine::open(&f.root).unwrap();
+    assert_eq!(engine.workspace_capacity("admin"), before);
+    assert!(engine.workspaces.contains_key(&active.workspace_id));
+    engine.abort_workspace(&w.workspace_id, "admin").unwrap();
+    assert_eq!(
+        engine.workspace(&w.workspace_id).unwrap().fencing_token,
+        closed.fencing_token + 1
+    );
+    assert_eq!(
+        canonical_json(&engine.commit_workspace(request).unwrap()).unwrap(),
+        canonical_json(&result).unwrap()
+    );
+    assert_eq!(engine.workspace_capacity("admin"), before);
+    engine.assert_workspace_budget_consistent();
+}
+
+#[test]
+fn published_workspace_survives_system_loss_without_reactivating_record_charge() {
+    let mut f = Fixture::new();
+    f.config.max_retained_workspaces = 1;
+    f.config.max_retained_workspaces_per_principal = 1;
+    let mut engine = f.initialize();
+    let repo = repository(&mut engine, 1);
+    for i in 0..3 {
+        save(&mut engine, &repo.main_branch_id, "file", &[i]);
+    }
+    let before = engine.workspace_capacity("admin");
+    let ids: Vec<_> = engine.retained_workspace_ids().map(str::to_owned).collect();
+    drop(engine);
+    fs::remove_dir_all(&f.root).unwrap();
+    let disks: Vec<_> = f
+        .config
+        .disks
+        .iter()
+        .map(|disk| disk.root.clone())
+        .collect();
+    let engine = Engine::restore_from_disks(&f.root, &disks).unwrap();
+    assert_eq!(
+        engine.workspace_capacity("admin").principal.cold_records,
+        before.principal.cold_records
+    );
+    assert_eq!(engine.workspace_capacity("admin").principal.records.used, 0);
+    for id in ids {
+        assert_eq!(
+            engine.workspace(&id).unwrap().state,
+            WorkspaceState::Committed
+        );
+    }
+}
+
+#[test]
+fn unbound_terminal_records_cannot_bypass_quota_before_recovery_writes() {
+    let mut f = Fixture::new();
+    f.config.max_retained_workspaces = 1;
+    f.config.max_retained_workspaces_per_principal = 1;
+    let mut engine = f.initialize();
+    let repo = repository(&mut engine, 1);
+    let w = engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(&w.workspace_id, "file", b"published")
+        .unwrap();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: w.workspace_id.clone(),
+            operation_id: OperationId::generate(),
+            principal: "admin".into(),
+            expected_head: w.base_head,
+            fencing_token: w.fencing_token,
+            message: "save".into(),
+            request_digest: None,
+        })
+        .unwrap();
+    engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    drop(engine);
+    for directory in [
+        f.root.join("workspaces").join(&w.workspace_id),
+        f.config.disks[0]
+            .root
+            .join("staging/workspaces")
+            .join(&w.workspace_id),
+    ] {
+        fs::remove_file(directory.join("commit-request.json")).unwrap();
+    }
+    let mut paths = vec![f.root.join("config.json"), f.root.join("index.sqlite")];
+    paths.extend(
+        f.config
+            .disks
+            .iter()
+            .filter(|disk| disk.metadata_member)
+            .map(crate::journal::log_path),
+    );
+    let before: Vec<_> = paths.iter().map(|path| fs::read(path).unwrap()).collect();
+    assert_eq!(
+        Engine::open(&f.root).err().unwrap().code(),
+        ErrorCode::ResourceLimit
+    );
+    let restored = f.temp.path().join("unbound-restore");
+    let disks: Vec<_> = f
+        .config
+        .disks
+        .iter()
+        .map(|disk| disk.root.clone())
+        .collect();
+    assert_eq!(
+        Engine::restore_from_disks(&restored, &disks)
+            .err()
+            .unwrap()
+            .code(),
+        ErrorCode::ResourceLimit
+    );
+    assert!(!restored.join("config.json").exists());
+    for (path, bytes) in paths.iter().zip(before) {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn recovery_source_search_reads_old_full_generations_from_cold_workspaces() {
+    let f = Fixture::new();
+    let mut engine = f.initialize();
+    let repo = repository(&mut engine, 1);
+    let original = save(
+        &mut engine,
+        &repo.main_branch_id,
+        "file",
+        b"old recovery bytes",
+    );
+    let old_id = engine.list_tree(&repo.main_branch_id).unwrap()[0]
+        .version_id
+        .clone();
+    let version = engine.state.versions[&old_id].clone();
+    let placement = engine.state.placements[&old_id].clone();
+    let first_id = engine.retained_workspace_ids().next().unwrap().to_owned();
+    let first = engine.workspace(&first_id).unwrap();
+    for file in first.files.values() {
+        fs::remove_file(&file.source_path).unwrap();
+    }
+    let w = engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(&w.workspace_id, "file", b"old recovery bytes")
+        .unwrap();
+    let old_source = engine
+        .workspace(&w.workspace_id)
+        .unwrap()
+        .files
+        .values()
+        .next()
+        .unwrap()
+        .source_path
+        .clone();
+    engine
+        .stage_bytes(&w.workspace_id, "file", b"new published bytes")
+        .unwrap();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: w.workspace_id.clone(),
+            operation_id: OperationId::generate(),
+            principal: "admin".into(),
+            expected_head: w.base_head,
+            fencing_token: w.fencing_token,
+            message: "save".into(),
+            request_digest: None,
+        })
+        .unwrap();
+    engine.abort_workspace(&w.workspace_id, "admin").unwrap();
+    assert!(engine.workspaces.is_empty());
+    assert!(old_source.is_file());
+    for slot in &placement.route_slot_ids {
+        let disk = engine.disk(slot).unwrap();
+        let held = engine.disk_resources.get(disk).unwrap();
+        let directory = disk::version_dir(disk, &version.history_tree_id, &old_id);
+        let body = crate::container_storage::content_path_at(
+            &held.root,
+            &directory,
+            &version,
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        fs::remove_file(body).unwrap();
+    }
+    drop(engine);
+    let engine = Engine::open(&f.root).unwrap();
+    assert!(engine.workspaces.is_empty());
+    let source = engine
+        .pending_payload_source(&version, &placement)
+        .unwrap()
+        .unwrap();
+    let mut actual = Vec::new();
+    let mut opened = source.open().unwrap();
+    assert_eq!(
+        opened.metadata().unwrap().ino(),
+        fs::metadata(&old_source).unwrap().ino()
+    );
+    opened.read_to_end(&mut actual).unwrap();
+    assert_eq!(actual, b"old recovery bytes");
+    assert_eq!(fs::read(&old_source).unwrap(), actual);
+    let members = engine.members();
+    let candidate_hash = crate::journal::scan(&members[0])
+        .unwrap()
+        .records
+        .into_iter()
+        .find(|(record, _)| {
+            record.sequence == original.sequence && record.record_type == RecordType::Accept
+        })
+        .unwrap()
+        .0
+        .candidate_hash;
+    let candidate: crate::journal::Candidate = crate::publication_evidence::verified_object_at(
+        &engine.disk_resources,
+        &members,
+        "candidate",
+        &candidate_hash,
+    )
+    .unwrap();
+    let frozen = canonical_json(&candidate).unwrap();
+    engine.repair_pending_payloads(&candidate).unwrap();
+    assert_eq!(canonical_json(&candidate).unwrap(), frozen);
+    for slot in &placement.route_slot_ids {
+        let disk = engine.disk(slot).unwrap();
+        let directory = disk::version_dir(disk, &version.history_tree_id, &old_id);
+        let mut body = engine
+            .disk_resources
+            .get(disk)
+            .unwrap()
+            .verify_payload(&directory, &version)
+            .unwrap();
+        std::io::Seek::rewind(&mut body).unwrap();
+        let mut repaired = Vec::new();
+        body.read_to_end(&mut repaired).unwrap();
+        assert_eq!(repaired, b"old recovery bytes");
+    }
+    assert_eq!(fs::read(&old_source).unwrap(), b"old recovery bytes");
+}

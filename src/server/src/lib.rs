@@ -257,6 +257,36 @@ pub struct Content {
     pub download_name: Option<String>,
 }
 impl Content {
+    /// Copy into a newly created, empty private file, checking the bytes being written.
+    /// Only source failures select another complete replica; destination failures
+    /// leave cleanup to the caller without retrying the write.
+    pub(crate) fn copy_verified_to(
+        mut self,
+        destination: &mut std::fs::File,
+        mut before_write: impl FnMut(u64, u64) -> Result<(), ApiError>,
+    ) -> Result<(), ApiError> {
+        use std::io::{Seek, SeekFrom};
+        loop {
+            match copy_content_file(&mut self, destination, &mut before_write) {
+                Ok(()) => return Ok(()),
+                Err(ContentCopyFailure::Destination(error)) => return Err(error),
+                Err(ContentCopyFailure::Source(error)) => {
+                    let Some(next) = self.fallback_files.pop() else {
+                        return Err(ApiError::new(
+                            ::http::StatusCode::SERVICE_UNAVAILABLE,
+                            storage_contract::ErrorCode::ContentUnavailable,
+                            "no fully verified content replica is available",
+                        )
+                        .with_source(error));
+                    };
+                    destination.set_len(0).map_err(ApiError::io)?;
+                    destination.seek(SeekFrom::Start(0)).map_err(ApiError::io)?;
+                    self.file = next;
+                }
+            }
+        }
+    }
+
     /// Raw descriptor consumers require a fully verified replica before handoff.
     /// Range consumers instead verify each emitted chunk from the same buffer.
     pub fn fully_verified(mut self) -> Result<Self, ApiError> {
@@ -286,48 +316,124 @@ impl Content {
     }
 }
 
+enum ContentCopyFailure {
+    Source(std::io::Error),
+    Destination(ApiError),
+}
+
+fn copy_content_file(
+    content: &mut Content,
+    destination: &mut std::fs::File,
+    before_write: &mut impl FnMut(u64, u64) -> Result<(), ApiError>,
+) -> Result<(), ContentCopyFailure> {
+    use std::io::Write;
+    let mut source = VerifiedContentFile::new(
+        &mut content.file,
+        content.checksum_manifest.as_ref(),
+        content.size,
+        &content.hash,
+    )
+    .map_err(ContentCopyFailure::Source)?;
+    let mut copied = 0;
+    while let Some(chunk) = source.next_chunk().map_err(ContentCopyFailure::Source)? {
+        for bytes in chunk.chunks(65536) {
+            copied += bytes.len() as u64;
+            before_write(copied, bytes.len() as u64).map_err(ContentCopyFailure::Destination)?;
+            destination
+                .write_all(bytes)
+                .map_err(ApiError::io)
+                .map_err(ContentCopyFailure::Destination)?;
+        }
+    }
+    Ok(())
+}
+
 fn verify_content_file(
     file: &mut std::fs::File,
     manifest: &storage_contract::ChecksumManifest,
     size: u64,
     hash: &str,
 ) -> std::io::Result<()> {
-    use std::io::{Read, Seek, SeekFrom};
-    let corrupt = || {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "content verification failed",
-        )
-    };
-    if !storage_contract::SUPPORTED_CHECKSUM_CHUNK_BYTES.contains(&manifest.chunk_bytes)
-        || manifest.logical_size != size
-        || file.metadata()?.len() != size
-        || manifest.chunks.len() as u64 != size.div_ceil(manifest.chunk_bytes as u64)
-    {
-        return Err(corrupt());
-    }
-    file.seek(SeekFrom::Start(0))?;
-    let mut whole = blake3::Hasher::new();
-    let mut remaining = size;
-    let mut buffer = vec![0; manifest.chunk_bytes as usize];
-    for expected in &manifest.chunks {
-        let length = remaining.min(manifest.chunk_bytes as u64) as usize;
-        file.read_exact(&mut buffer[..length])?;
-        if blake3::hash(&buffer[..length]).as_bytes() != expected {
-            return Err(corrupt());
-        }
-        whole.update(&buffer[..length]);
-        remaining -= length as u64;
-    }
-    let mut extra = [0u8; 1];
-    if file.read(&mut extra)? != 0
-        || file.metadata()?.len() != size
-        || whole.finalize().to_hex().as_str() != hash
-    {
-        return Err(corrupt());
-    }
-    file.seek(SeekFrom::Start(0))?;
+    let mut source = VerifiedContentFile::new(file, Some(manifest), size, hash)?;
+    while source.next_chunk()?.is_some() {}
     Ok(())
+}
+
+struct VerifiedContentFile<'a> {
+    file: &'a mut std::fs::File,
+    manifest: Option<&'a storage_contract::ChecksumManifest>,
+    hash: &'a str,
+    size: u64,
+    remaining: u64,
+    chunk: usize,
+    whole: blake3::Hasher,
+    buffer: Vec<u8>,
+}
+
+fn corrupt_content() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "content verification failed",
+    )
+}
+
+impl<'a> VerifiedContentFile<'a> {
+    fn new(
+        file: &'a mut std::fs::File,
+        manifest: Option<&'a storage_contract::ChecksumManifest>,
+        size: u64,
+        hash: &'a str,
+    ) -> std::io::Result<Self> {
+        use std::io::{Seek, SeekFrom};
+        if let Some(manifest) = manifest
+            && (!storage_contract::SUPPORTED_CHECKSUM_CHUNK_BYTES.contains(&manifest.chunk_bytes)
+                || manifest.logical_size != size
+                || manifest.chunks.len() as u64 != size.div_ceil(manifest.chunk_bytes as u64))
+        {
+            return Err(corrupt_content());
+        }
+        if file.metadata()?.len() != size {
+            return Err(corrupt_content());
+        }
+        file.seek(SeekFrom::Start(0))?;
+        Ok(Self {
+            file,
+            manifest,
+            hash,
+            size,
+            remaining: size,
+            chunk: 0,
+            whole: blake3::Hasher::new(),
+            buffer: vec![0; manifest.map_or(65536, |manifest| manifest.chunk_bytes as usize)],
+        })
+    }
+
+    fn next_chunk(&mut self) -> std::io::Result<Option<&[u8]>> {
+        use std::io::{Read, Seek, SeekFrom};
+        if self.remaining == 0 {
+            let mut extra = [0u8; 1];
+            if self.file.read(&mut extra)? != 0
+                || self.file.metadata()?.len() != self.size
+                || self.whole.finalize().to_hex().as_str() != self.hash
+            {
+                return Err(corrupt_content());
+            }
+            self.file.seek(SeekFrom::Start(0))?;
+            return Ok(None);
+        }
+        let length = self.remaining.min(self.buffer.len() as u64) as usize;
+        let bytes = &mut self.buffer[..length];
+        self.file.read_exact(bytes)?;
+        if let Some(manifest) = self.manifest
+            && blake3::hash(bytes).as_bytes() != &manifest.chunks[self.chunk]
+        {
+            return Err(corrupt_content());
+        }
+        self.whole.update(bytes);
+        self.remaining -= length as u64;
+        self.chunk += 1;
+        Ok(Some(bytes))
+    }
 }
 
 /// Capability for the service's private, read-only disk sampler.
@@ -860,7 +966,7 @@ pub trait Backend: Send + Sync {
     ) -> Result<storage_contract::StagedFile, ApiError>;
     /// Return a fully verified raw descriptor (used by SMB and local consumers).
     fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError>;
-    /// HTTP may authenticate only requested chunks, while retaining the read lease.
+    /// Open authenticated metadata and held replicas; consumers verify emitted or copied bytes.
     fn range_content(
         &self,
         identity: &Identity,

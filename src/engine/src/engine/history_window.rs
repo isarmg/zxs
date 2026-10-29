@@ -169,6 +169,44 @@ impl Engine {
         Ok(HistoryRoot::from_catalog(hash))
     }
 
+    /// History owning the file's smallest version id, or `None` for no version.
+    ///
+    /// Uses an already captured owner index only when it binds this exact State.
+    /// Cold lookup keeps the original State scan: it performs no namespace I/O
+    /// and does not move history admission ahead of file/repository resolution.
+    /// This lookup grants no authorization.
+    pub fn file_history_owner(&self, file_id: &str) -> Option<&str> {
+        let owners = self
+            .history_catalog
+            .as_ref()
+            .filter(|catalog| catalog.binds(&self.state))
+            .and_then(|catalog| self.captured_history_owners(catalog));
+        let version = match owners {
+            Some(owners) => self
+                .state
+                .versions
+                .get(owners.first_version(file_id)?)
+                .expect("invariant: captured owner membership references an existing version"),
+            None => self
+                .state
+                .versions
+                .values()
+                .find(|version| version.file_id == file_id)?,
+        };
+        Some(&version.history_tree_id)
+    }
+
+    fn captured_history_owners<'a>(
+        &'a self,
+        catalog: &'a HistoryCatalog,
+    ) -> Option<&'a crate::state_projection::DerivedOwners> {
+        self.published_state_base
+            .as_ref()
+            .filter(|base| base.names_captured_for(&self.state))
+            .map(|base| base.history_owners())
+            .or_else(|| catalog.owners.get())
+    }
+
     /// Derived owner membership for the current State.
     ///
     /// Warm reads borrow the publication's captured index. A cold State (after
@@ -182,25 +220,15 @@ impl Engine {
         // Even a warm owner index is usable only with this exact admitted
         // catalog. Plans-only rebinding below is the sole non-publication path.
         let catalog = self.bound_history_catalog()?;
-        if let Some(base) = self
-            .published_state_base
-            .as_ref()
-            .filter(|base| base.names_captured_for(&self.state))
-        {
-            return Ok(base.history_owners());
+        if let Some(owners) = self.captured_history_owners(catalog) {
+            return Ok(owners);
         }
-        if catalog.owners.get().is_none() {
-            let owners = self.with_namespace_source(|source| {
-                crate::state_projection::DerivedOwners::from_state(&self.state, source)
-            })?;
-            // Concurrent successful readers may race to install the same
-            // immutable derivation. Errors never poison/cache a partial index.
-            let _ = catalog.owners.set(owners);
-        }
-        Ok(catalog
-            .owners
-            .get()
-            .expect("invariant: successful owner derivation was installed"))
+        let owners = self.with_namespace_source(|source| {
+            crate::state_projection::DerivedOwners::from_state(&self.state, source)
+        })?;
+        // Concurrent successful readers may race to install the same
+        // immutable derivation. Errors never poison/cache a partial index.
+        Ok(catalog.owners.get_or_init(|| owners))
     }
 
     /// The durable local-plan writers change exactly `State::plans`, which is

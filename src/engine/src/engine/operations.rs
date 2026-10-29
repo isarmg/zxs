@@ -206,7 +206,7 @@ impl Engine {
             }
             Err(error) => return Err(error),
         };
-        Ok(pending_snapshot_receipt(self, &members, &snapshot, id)?.map(|entry| entry.principal))
+        Ok(snapshot_receipt(self, &members, &snapshot, id, false)?.map(|entry| entry.principal))
     }
 
     /// Published records are metadata-only. An uncertain decision reads only
@@ -220,7 +220,7 @@ impl Engine {
             });
         }
         let (members, snapshot, candidate) = self.pending_operation_snapshot(id)?;
-        let entry = pending_snapshot_receipt(self, &members, &snapshot, id)?
+        let entry = snapshot_receipt(self, &members, &snapshot, id, false)?
             .ok_or_else(operation_not_found)?;
         let (owner, mut result) = (Some(entry.principal), entry.result);
         if result.operation_id != id
@@ -447,15 +447,16 @@ fn pending_snapshot_entry<T: data_serialization::de::DeserializeOwned>(
         .map_err(Into::into)
 }
 
-/// Locate one receipt in a foreign accepted snapshot: locator → directory
+/// Locate one receipt in an authenticated snapshot: locator → directory
 /// entry (located by its recorded ordinal range) → exact segment body. The
 /// located receipt is cross-checked against the id, so recorded counts are
 /// placement hints that cannot substitute a wrong record.
-fn pending_snapshot_receipt(
+pub(super) fn snapshot_receipt(
     engine: &Engine,
     members: &[DiskConfig],
     snapshot: &Snapshot,
     id: OperationId,
+    require_newest: bool,
 ) -> Result<Option<storage_contract::OperationRecordEntry>> {
     let Some(text) = pending_snapshot_entry::<String>(
         &engine.disk_resources,
@@ -492,6 +493,7 @@ fn pending_snapshot_receipt(
     // Directory keys are contiguous segment ordinals. Gallop to a bracket
     // whose recorded range passes the target, then binary search inside it.
     let mut entry = entry_at(0)?.ok_or_else(corrupt)?;
+    let mut segment_ordinal = 0;
     if ordinal >= end(&entry)? {
         let mut low = 0u64;
         let mut step = 1u64;
@@ -505,6 +507,7 @@ fn pending_snapshot_receipt(
                 }
                 Some(candidate) if ordinal >= candidate.first_ordinal => {
                     entry = candidate;
+                    segment_ordinal = probe;
                     high = Some(probe);
                 }
                 Some(_) | None => high = Some(probe),
@@ -522,6 +525,7 @@ fn pending_snapshot_receipt(
                 }
                 Some(candidate) => {
                     entry = candidate;
+                    segment_ordinal = middle;
                     high = middle;
                 }
                 None => high = middle,
@@ -542,6 +546,15 @@ fn pending_snapshot_receipt(
         return Err(Error::new(
             ErrorCode::ObjectCorrupt,
             "operation locator points at a different receipt",
+        ));
+    }
+    if require_newest
+        && (offset + 1 != segment.len()
+            || entry_at(segment_ordinal.checked_add(1).ok_or_else(corrupt)?)?.is_some())
+    {
+        return Err(Error::new(
+            ErrorCode::ObjectCorrupt,
+            "recovered result does not target the newest receipt",
         ));
     }
     Ok(Some(record))

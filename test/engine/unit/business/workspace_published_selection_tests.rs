@@ -483,6 +483,8 @@ fn published_workspace_completion_errors_keep_receipt_source_and_write_fence() {
             }
         );
         assert!(engine.is_read_only());
+        assert_eq!(engine.workspace_capacity("admin").principal.records.used, 1);
+        assert_eq!(engine.workspace_capacity("admin").principal.cold_records, 0);
         assert_eq!(
             canonical_json(&engine.workspace(&request.workspace_id).unwrap()).unwrap(),
             canonical_json(&before).unwrap()
@@ -522,6 +524,8 @@ fn published_workspace_completion_errors_keep_receipt_source_and_write_fence() {
         drop(engine);
         let engine = Engine::open(&temporary.path().join("system")).unwrap();
         assert!(!engine.is_read_only());
+        assert_eq!(engine.workspace_capacity("admin").principal.records.used, 1);
+        assert_eq!(engine.workspace_capacity("admin").principal.cold_records, 0);
         assert_eq!(engine.operation(request.operation_id).unwrap(), result);
         assert_eq!(
             engine.workspace(&request.workspace_id).unwrap().state,

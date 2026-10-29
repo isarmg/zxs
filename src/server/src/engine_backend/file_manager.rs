@@ -198,20 +198,14 @@ fn resolve<'a>(
 }
 
 pub(super) fn file_repo<'a>(engine: &'a Engine, file: &str) -> Result<&'a Repository, ApiError> {
-    let version = engine
-        .state()
-        .versions
-        .values()
-        .find(|v| v.file_id == file)
-        .ok_or_else(|| {
-            ApiError::new(
-                ::http::StatusCode::NOT_FOUND,
-                storage_contract::ErrorCode::FileNotFound,
-                "file not found",
-            )
-        })?;
-    let repo = repo_for_history(engine, &version.history_tree_id)?;
-    Ok(repo)
+    let history = engine.file_history_owner(file).ok_or_else(|| {
+        ApiError::new(
+            ::http::StatusCode::NOT_FOUND,
+            storage_contract::ErrorCode::FileNotFound,
+            "file not found",
+        )
+    })?;
+    repo_for_history(engine, history)
 }
 #[cfg(test)]
 thread_local! { static LISTED_ENTRY_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }

@@ -1333,3 +1333,157 @@ fn preservation_mode_keeps_partially_written_publication_bytes() {
     assert!(!recovered.is_read_only());
     assert_eq!(std::fs::read(&path).unwrap(), complete);
 }
+
+#[test]
+fn recovery_prepare_keeps_missing_journal_absent_until_apply() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("system");
+    let engine =
+        Engine::initialize(&root, Config::development([temp.path().join("primary")])).unwrap();
+    let config = engine.config.clone();
+    let journal = log_path(&engine.members()[0]);
+    drop(engine);
+    std::fs::remove_file(&journal).unwrap();
+    let mut engine = Engine::prepare_workspace_recovery(root, config).unwrap();
+    let prepared = engine.prepare_recovery().unwrap();
+    assert!(!journal.exists());
+    assert!(engine.journals.is_empty());
+    engine
+        .apply_recovery(RecoveryMode::CompletePending, prepared)
+        .unwrap();
+    assert!(journal.is_file());
+    assert_eq!(engine.journals.len(), 1);
+}
+
+#[test]
+fn recovery_prepare_preserves_torn_tail_and_does_not_rebuild_projection() {
+    use std::io::Write;
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("system");
+    let mut engine =
+        Engine::initialize(&root, Config::development([temp.path().join("primary")])).unwrap();
+    engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("published").unwrap(),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate(),
+        )
+        .unwrap();
+    let config = engine.config.clone();
+    let journal = log_path(&engine.members()[0]);
+    let valid = std::fs::read(&journal).unwrap();
+    drop(engine);
+    let projection = std::fs::read(root.join("index.sqlite")).unwrap();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&journal)
+        .unwrap()
+        .write_all(b"incomplete")
+        .unwrap();
+    let torn = std::fs::read(&journal).unwrap();
+    let mut engine = Engine::prepare_workspace_recovery(root.clone(), config).unwrap();
+    let prepared = engine.prepare_recovery().unwrap();
+    assert_eq!(std::fs::read(&journal).unwrap(), torn);
+    assert_eq!(
+        std::fs::read(root.join("index.sqlite")).unwrap(),
+        projection
+    );
+    assert!(engine.journals.is_empty());
+    engine
+        .apply_recovery(RecoveryMode::CompletePending, prepared)
+        .unwrap();
+    assert_eq!(std::fs::read(&journal).unwrap(), valid);
+    assert_eq!(engine.state.repositories.len(), 1);
+}
+
+#[test]
+fn recovery_prepare_selects_valid_checkpoint_without_persistent_writes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("system");
+    let mut engine =
+        Engine::initialize(&root, Config::development([temp.path().join("primary")])).unwrap();
+    engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("published").unwrap(),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate(),
+        )
+        .unwrap();
+    let config = engine.config.clone();
+    let expected = canonical_json(engine.state()).unwrap();
+    drop(engine);
+    drop(Engine::open(&root).unwrap());
+    let paths = [
+        log_path(&config.disks[0]),
+        config.disks[0].root.join("metadata/replay-checkpoint.json"),
+        root.join("index.sqlite"),
+    ];
+    let before: Vec<_> = paths
+        .iter()
+        .map(|path| std::fs::read(path).unwrap())
+        .collect();
+    let mut engine = Engine::prepare_workspace_recovery(root, config).unwrap();
+    let prepared = engine.prepare_recovery().unwrap();
+    assert!(prepared.checkpoint.is_some());
+    for (path, bytes) in paths.iter().zip(before) {
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+    assert!(engine.journals.is_empty());
+    engine.seed_workspace_recovery(&prepared).unwrap();
+    engine
+        .apply_recovery(RecoveryMode::CompletePending, prepared)
+        .unwrap();
+    assert_eq!(canonical_json(engine.state()).unwrap(), expected);
+}
+
+#[test]
+fn incomplete_barrier_cause_survives_successful_all_member_repair() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("system");
+    let mut engine = Engine::initialize(
+        &root,
+        Config::development((0..3).map(|i| temp.path().join(format!("disk-{i}")))),
+    )
+    .unwrap();
+    let config = engine.config.clone();
+    let operation = OperationId::generate();
+    engine.inject_fault_once("after_publication_1");
+    assert_eq!(
+        engine
+            .create_repository(
+                &storage_contract::RepositoryName::parse("published").unwrap(),
+                "P01",
+                1,
+                "admin",
+                operation
+            )
+            .unwrap_err()
+            .code(),
+        ErrorCode::InDoubt
+    );
+    drop(engine);
+    let mut engine = Engine::prepare_workspace_recovery(root, config).unwrap();
+    let prepared = engine.prepare_recovery().unwrap();
+    assert!(prepared.barrier_failure.is_some());
+    engine.seed_workspace_recovery(&prepared).unwrap();
+    engine
+        .apply_recovery(RecoveryMode::CompletePending, prepared)
+        .unwrap();
+    assert!(!engine.is_read_only());
+    assert_eq!(
+        engine.operation(operation).unwrap().commit_state,
+        CommitState::Published
+    );
+    let warnings = engine.take_recovery_warnings();
+    assert_eq!(warnings.seals.len(), 1);
+    assert!(matches!(
+        warnings.seals[0].context(),
+        super::super::RecoverySealContext::Publication { .. }
+    ));
+    assert!(engine.take_recovery_warnings().seals.is_empty());
+}

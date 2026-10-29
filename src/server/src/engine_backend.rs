@@ -35,7 +35,7 @@ pub(crate) fn report_recovery_warnings(engine: &mut Engine) {
         tracing::warn!(
             context = ?failure.context(),
             error = ?failure.cause(),
-            "recovery seal verification failed; recovery evidence remains restricted"
+            "recovery observed a seal verification failure"
         );
     }
     if let Some(error) = checkpoint_load {

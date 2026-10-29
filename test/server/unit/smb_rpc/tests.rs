@@ -2741,3 +2741,28 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
 
 #[path = "snapshot_semantics_tests.rs"]
 mod snapshot_semantics_tests;
+
+#[test]
+fn writable_open_copies_authenticated_content_without_the_raw_descriptor_pass() {
+    let (_temp, shared, backend, branch) = fixture();
+    backend
+        .reconciliation_failure
+        .store(RECONCILIATION_CONTENT, Ordering::SeqCst);
+    let mut client = session(shared, &branch);
+    let (opened, file) = open_file(&mut client, true);
+    let mut copied = [0; 3];
+    file.read_exact_at(&mut copied, 0).unwrap();
+    assert_eq!(&copied, b"old");
+    assert_eq!(opened.size, 3);
+    assert_eq!(
+        backend.reconciliation_failure.load(Ordering::SeqCst),
+        RECONCILIATION_CONTENT
+    );
+    client.close(opened.handle, false).unwrap();
+    assert_eq!(backend.uploads.load(Ordering::SeqCst), 0);
+    let error = client
+        .open("report.txt".into(), false, false, false, false, false)
+        .unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::MetadataUnavailable);
+    assert_eq!(backend.reconciliation_failure.load(Ordering::SeqCst), 0);
+}

@@ -121,6 +121,21 @@ fn alias_file<'a>(state: &'a State, key: &str) -> Option<&'a str> {
 }
 
 impl DerivedOwners {
+    /// Smallest version id across this file's nonempty history buckets.
+    pub(crate) fn first_version(&self, file: &str) -> Option<&String> {
+        self.files
+            .0
+            .get(file)?
+            .values()
+            .map(|versions| {
+                versions
+                    .keys()
+                    .next()
+                    .expect("invariant: file/history version buckets are nonempty")
+            })
+            .min()
+    }
+
     pub(crate) fn versions(&self, file: &str) -> impl Iterator<Item = &String> {
         self.files.versions(file)
     }

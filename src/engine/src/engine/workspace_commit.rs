@@ -379,7 +379,7 @@ impl super::PlanningContext<'_> {
     }
 }
 
-fn workspace_request_matches_result(
+pub(super) fn workspace_request_matches_result(
     workspace: &Workspace,
     request: &CommitRequest,
     operation: &OperationResult,

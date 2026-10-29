@@ -1013,6 +1013,11 @@ fn history_root_is_the_exact_catalog_hash_stable_across_unrelated_writes_and_reo
     let file = entry.file_id.clone();
     let history = pool.repo.history_tree_id.clone();
     let root = pool.root();
+    assert_eq!(
+        pool.engine.file_history_owner(&file),
+        Some(history.as_str())
+    );
+    assert_eq!(pool.engine.file_history_owner("file_missing"), None);
     assert_eq!(root.as_str().len(), 64);
     assert_eq!(HistoryRoot::parse(root.as_str()).unwrap(), root);
     for bad in ["", "abc", &"A".repeat(64), &"g".repeat(64), &"0".repeat(63)] {
@@ -1095,6 +1100,9 @@ fn history_root_is_the_exact_catalog_hash_stable_across_unrelated_writes_and_reo
     } = pool;
     drop(engine);
     let reopened = Engine::open(&system).unwrap();
+    // Cold lookup and the later indexed lookup resolve the same owner.
+    assert_eq!(reopened.file_history_owner(&file), Some(history.as_str()));
+    assert_eq!(reopened.file_history_owner("file_missing"), None);
     assert_eq!(
         reopened.history_root(&repo.history_tree_id).unwrap(),
         final_root
@@ -1115,6 +1123,8 @@ fn history_root_is_the_exact_catalog_hash_stable_across_unrelated_writes_and_reo
     let scope = reopened
         .file_history_scope(&file, &repo.history_tree_id)
         .unwrap();
+    assert_eq!(reopened.file_history_owner(&file), Some(history.as_str()));
+    assert_eq!(reopened.file_history_owner("file_missing"), None);
     let nodes = oracle_nodes(&reopened, scope.owners, &file, &repo.history_tree_id);
     exhaust(&nodes, |boundary, limit| {
         scope.select_nodes(boundary, limit)
@@ -1134,6 +1144,7 @@ fn a_fresh_pool_without_publication_has_no_history_catalog() {
         engine.history_root("history_x").unwrap_err().code(),
         storage_contract::ErrorCode::RecoveryRequired
     );
+    assert_eq!(engine.file_history_owner("file"), None);
     let scope = engine.file_history_scope("file", "history_x");
     assert_eq!(
         scope.map(|_| ()).unwrap_err().code(),
@@ -1343,4 +1354,49 @@ fn local_plan_preparation_preserves_exact_catalog_for_unique_and_shared_state_ow
             .unwrap();
         assert_ne!(old_root, reopened.history_root(&history).unwrap());
     }
+}
+
+#[test]
+fn file_history_owner_does_not_use_membership_from_another_state_allocation() {
+    let mut pool = Pool::new();
+    let entry = pool.save("owner.txt", b"body", "owner");
+    let history = pool.repo.history_tree_id.clone();
+    pool.engine.history_owners().unwrap();
+    assert_eq!(
+        pool.engine.file_history_owner(&entry.file_id),
+        Some(history.as_str())
+    );
+    let original = std::sync::Arc::clone(&pool.engine.state);
+    // Test-only replacement: leave the old catalog and owner index in place.
+    let state = std::sync::Arc::make_mut(&mut pool.engine.state);
+    state.versions.get_mut(&entry.version_id).unwrap().file_id = "file_rebound".into();
+    assert_eq!(pool.engine.file_history_owner(&entry.file_id), None);
+    assert_eq!(
+        pool.engine.file_history_owner("file_rebound"),
+        Some(history.as_str())
+    );
+    assert_eq!(
+        pool.engine
+            .file_history_scope("file_rebound", &history)
+            .map(|_| ())
+            .unwrap_err()
+            .code(),
+        storage_contract::ErrorCode::RecoveryRequired
+    );
+    pool.engine.state = original;
+    assert_eq!(
+        pool.engine.file_history_owner(&entry.file_id),
+        Some(history.as_str())
+    );
+    assert_eq!(pool.engine.file_history_owner("file_rebound"), None);
+    // A normal publication installs a new bound owner index.
+    let other = pool.save("other.txt", b"other", "another file");
+    assert_eq!(
+        pool.engine.file_history_owner(&entry.file_id),
+        Some(history.as_str())
+    );
+    assert_eq!(
+        pool.engine.file_history_owner(&other.file_id),
+        Some(history.as_str())
+    );
 }

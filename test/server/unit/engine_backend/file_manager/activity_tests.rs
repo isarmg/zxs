@@ -180,6 +180,10 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
         Config::development([root.path().join("disk")]),
     )
     .unwrap();
+    let missing = super::file_repo(&engine, "file_missing").unwrap_err();
+    assert_eq!(missing.status, http::StatusCode::NOT_FOUND);
+    assert_eq!(missing.code, storage_contract::ErrorCode::FileNotFound);
+    assert!(super::read(&engine).unwrap().events.is_empty());
     let repo = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("Audit").unwrap(),

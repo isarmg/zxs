@@ -40,6 +40,11 @@ struct VerifiedPayload {
     body: HeldFile,
     metadata: Vec<(PathBuf, HeldFile)>,
 }
+impl VerifiedPayload {
+    fn identity(&self) -> (&str, &str) {
+        (&self.version_id, &self.slot_id)
+    }
+}
 struct HeldSeal {
     metadata_member: bool,
     disk: Arc<DiskHandle>,
@@ -48,6 +53,7 @@ struct HeldSeal {
 }
 pub(super) struct VerifiedPayloadSet {
     metadata_integrity: Arc<MetadataIntegrity>,
+    /// Sorted by (version_id, slot_id) for arbitrary proof-stage lookup order.
     entries: Vec<VerifiedPayload>,
     disks: Vec<HeldSeal>,
     resources: Arc<DiskResources>,
@@ -142,6 +148,8 @@ impl PayloadPreparation {
                 }
             }
         }
+        // Stable ordering preserves the original first-match proof for equal keys.
+        entries.sort_by(|a, b| a.identity().cmp(&b.identity()));
         // Large candidates retain no per-replica evidence. validate below
         // already hashes every byte with held-inode checks; a preceding pass
         // would only hash and immediately discard the same proof.
@@ -312,16 +320,18 @@ impl VerifiedPayloadSet {
             verify_replica(config, &self.resources, version, slot)?;
             return Ok(());
         }
-        let entry = self
+        let key = (version.version_id.as_str(), slot);
+        let index = self.entries.partition_point(|entry| entry.identity() < key);
+        let Some(entry) = self
             .entries
-            .iter()
-            .find(|entry| entry.version_id == version.version_id && entry.slot_id == slot)
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::PreparationStale,
-                    "payload proof missing",
-                )
-            })?;
+            .get(index)
+            .filter(|entry| entry.identity() == key)
+        else {
+            return Err(Error::new(
+                storage_contract::ErrorCode::PreparationStale,
+                "payload proof missing",
+            ));
+        };
         let disk = config
             .disks
             .iter()

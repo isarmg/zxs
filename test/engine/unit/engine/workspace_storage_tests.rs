@@ -130,7 +130,8 @@ fn workspace_scans_reject_unsafe_private_directory_without_chmod_or_manifest_cha
         let scan = if authoritative {
             engine.load_workspaces()
         } else {
-            engine.seed_workspace_recovery()
+            let prepared = engine.prepare_recovery().unwrap();
+            engine.seed_workspace_recovery(&prepared)
         };
         assert!(matches!(
             scan,

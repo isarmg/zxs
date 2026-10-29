@@ -166,7 +166,15 @@ impl Session {
                 let content = version
                     .as_deref()
                     .filter(|_| !truncate)
-                    .map(|version| self.shared.backend.content(&self.identity, version))
+                    .map(|version| {
+                        self.shared.backend.range_content(
+                            &self.identity,
+                            crate::ReadContent {
+                                version,
+                                context: None,
+                            },
+                        )
+                    })
                     .transpose()?;
                 let initial_size = content.as_ref().map_or(0, |content| content.size);
                 pending_reservation = Some(self.shared.budget.reserve(
@@ -176,20 +184,10 @@ impl Session {
                     self.max_file_bytes,
                 )?);
                 let reservation = pending_reservation.as_mut().unwrap();
-                if let Some(mut content) = content {
-                    let mut copied = 0u64;
-                    let mut buffer = [0u8; 65536];
-                    loop {
-                        let length = content.file.read(&mut buffer).map_err(ApiError::io)?;
-                        if length == 0 {
-                            break;
-                        }
-                        copied = copied
-                            .checked_add(length as u64)
-                            .ok_or_else(|| ApiError::limit("SMB byte count overflow"))?;
-                        reservation.before_write(copied, length as u64)?;
-                        file.write_all(&buffer[..length]).map_err(ApiError::io)?;
-                    }
+                if let Some(content) = content {
+                    content.copy_verified_to(&mut file, |end, bytes| {
+                        reservation.before_write(end, bytes)
+                    })?;
                 }
                 let size = file.metadata().map_err(ApiError::io)?.len();
                 if size > self.max_file_bytes {

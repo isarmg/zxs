@@ -1968,3 +1968,209 @@ fn download_context_is_paired_nonempty_and_parses_lookup_spelling_once() {
     assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
     assert!(std::error::Error::source(&error).is_some());
 }
+
+#[test]
+fn verified_copy_checks_the_copied_bytes_and_holds_its_lease() {
+    use std::os::unix::fs::FileExt;
+    let bytes = vec![42; 65536 * 2];
+    let source = payload_file(&bytes);
+    let changed = source.try_clone().unwrap();
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let content = content_to_verify(&bytes, source, Vec::new(), dropped.clone());
+    let mut destination = tempfile::tempfile().unwrap();
+    let mut writes = 0;
+    let error = content
+        .copy_verified_to(&mut destination, |end, length| {
+            assert_eq!(dropped.load(Ordering::SeqCst), 0);
+            assert_eq!((end, length), (65536, 65536));
+            writes += 1;
+            changed.write_all_at(b"changed", 65536).unwrap();
+            Ok(())
+        })
+        .unwrap_err();
+    assert_eq!(writes, 1);
+    assert_eq!(error.code, storage_contract::ErrorCode::ContentUnavailable);
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn verified_copy_restarts_the_private_destination_for_a_complete_fallback() {
+    let bytes = vec![42; 65536 * 2 + 7];
+    let mut corrupt = bytes.clone();
+    corrupt[65536] ^= 1;
+    let content = content_to_verify(
+        &bytes,
+        payload_file(&corrupt),
+        vec![payload_file(&bytes)],
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let mut destination = tempfile::tempfile().unwrap();
+    let mut ends = Vec::new();
+    content
+        .copy_verified_to(&mut destination, |end, _| {
+            ends.push(end);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(ends, [65536, 65536, 131072, 131079]);
+    destination.rewind().unwrap();
+    let mut copied = Vec::new();
+    destination.read_to_end(&mut copied).unwrap();
+    assert_eq!(copied, bytes);
+}
+
+#[test]
+fn verified_copy_does_not_combine_incomplete_replicas() {
+    let bytes = vec![42; 65536 * 2];
+    let mut first = bytes.clone();
+    first[65536] ^= 1;
+    let mut second = bytes.clone();
+    second[0] ^= 1;
+    let content = content_to_verify(
+        &bytes,
+        payload_file(&first),
+        vec![payload_file(&second)],
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let mut destination = tempfile::tempfile().unwrap();
+    let error = content
+        .copy_verified_to(&mut destination, |_, _| Ok(()))
+        .unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::ContentUnavailable);
+    assert_eq!(destination.metadata().unwrap().len(), 0);
+}
+
+#[test]
+fn verified_copy_budget_failure_does_not_read_another_replica() {
+    let bytes = b"body";
+    let mut fallback = payload_file(bytes);
+    fallback.seek(SeekFrom::Start(2)).unwrap();
+    let mut observed = fallback.try_clone().unwrap();
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let content = content_to_verify(bytes, payload_file(bytes), vec![fallback], dropped.clone());
+    let mut destination = tempfile::tempfile().unwrap();
+    let mut writes = 0;
+    let error = content
+        .copy_verified_to(&mut destination, |_, _| {
+            writes += 1;
+            Err(ApiError::limit("copy budget exhausted"))
+        })
+        .unwrap_err();
+    assert_eq!(
+        error.code,
+        storage_contract::ErrorCode::ResourceLimitExceeded
+    );
+    assert_eq!(error.message, "copy budget exhausted");
+    assert_eq!(writes, 1);
+    assert_eq!(observed.stream_position().unwrap(), 2);
+    assert_eq!(destination.metadata().unwrap().len(), 0);
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn verified_copy_destination_write_or_reset_failure_does_not_try_a_replica() {
+    for corrupt_source in [false, true] {
+        let bytes = b"body";
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("read-only");
+        std::fs::write(&path, []).unwrap();
+        let mut destination = std::fs::File::open(path).unwrap();
+        let mut fallback = payload_file(bytes);
+        fallback.seek(SeekFrom::Start(2)).unwrap();
+        let mut observed = fallback.try_clone().unwrap();
+        let content = content_to_verify(
+            bytes,
+            payload_file(if corrupt_source { b"bad!" } else { bytes }),
+            vec![fallback],
+            Arc::new(AtomicUsize::new(0)),
+        );
+        let error = content
+            .copy_verified_to(&mut destination, |_, _| Ok(()))
+            .unwrap_err();
+        assert_ne!(error.code, storage_contract::ErrorCode::ContentUnavailable);
+        let crate::http_boundary::ApiErrorSource::Io(source) = *error.source.unwrap() else {
+            panic!("destination failure must retain its IO source");
+        };
+        assert!(source.raw_os_error().is_some());
+        assert_eq!(observed.stream_position().unwrap(), 2);
+    }
+}
+
+#[test]
+fn verified_copy_empty_tail_and_whole_hash_are_checked() {
+    for bytes in [Vec::new(), vec![42; 65536 + 7]] {
+        for wrong_whole_hash in [false, true] {
+            let mut content = content_to_verify(
+                &bytes,
+                payload_file(&bytes),
+                Vec::new(),
+                Arc::new(AtomicUsize::new(0)),
+            );
+            if wrong_whole_hash {
+                content.hash = blake3::hash(b"wrong").to_hex().to_string();
+            }
+            let mut destination = tempfile::tempfile().unwrap();
+            let result = content.copy_verified_to(&mut destination, |_, _| Ok(()));
+            if wrong_whole_hash {
+                assert_eq!(
+                    result.unwrap_err().code,
+                    storage_contract::ErrorCode::ContentUnavailable
+                );
+            } else {
+                result.unwrap();
+                destination.rewind().unwrap();
+                let mut copied = Vec::new();
+                destination.read_to_end(&mut copied).unwrap();
+                assert_eq!(copied, bytes);
+            }
+        }
+    }
+}
+
+#[test]
+fn verified_copy_rejects_source_growth_before_completion() {
+    use std::os::unix::fs::FileExt;
+    let bytes = b"body";
+    let source = payload_file(bytes);
+    let changed = source.try_clone().unwrap();
+    let content = content_to_verify(bytes, source, Vec::new(), Arc::new(AtomicUsize::new(0)));
+    let mut destination = tempfile::tempfile().unwrap();
+    let error = content
+        .copy_verified_to(&mut destination, |_, _| {
+            changed.write_all_at(b"extra", bytes.len() as u64).unwrap();
+            Ok(())
+        })
+        .unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::ContentUnavailable);
+}
+
+#[test]
+fn verified_copy_without_manifest_still_checks_the_copied_whole_hash() {
+    for wrong_hash in [false, true] {
+        let bytes = b"body";
+        let mut content = content_to_verify(
+            bytes,
+            payload_file(bytes),
+            Vec::new(),
+            Arc::new(AtomicUsize::new(0)),
+        );
+        content.checksum_manifest = None;
+        if wrong_hash {
+            content.hash = blake3::hash(b"wrong").to_hex().to_string();
+        }
+        let mut destination = tempfile::tempfile().unwrap();
+        let result = content.copy_verified_to(&mut destination, |_, _| Ok(()));
+        if wrong_hash {
+            assert_eq!(
+                result.unwrap_err().code,
+                storage_contract::ErrorCode::ContentUnavailable
+            );
+        } else {
+            result.unwrap();
+            destination.rewind().unwrap();
+            let mut copied = Vec::new();
+            destination.read_to_end(&mut copied).unwrap();
+            assert_eq!(copied, bytes);
+        }
+    }
+}

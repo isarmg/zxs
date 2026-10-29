@@ -90,6 +90,15 @@ fn assert_memberships(state: &State, index: &DerivedOwners) {
         expected.entry(file.to_owned()).or_default();
     }
     for (file, expected) in expected {
+        assert_eq!(
+            index.first_version(&file),
+            state
+                .versions
+                .iter()
+                .find(|(_, version)| version.file_id == file)
+                .map(|(id, _)| id),
+            "first version for {file}"
+        );
         let mut actual = Membership {
             versions_by_history: index
                 .files
@@ -537,4 +546,26 @@ fn control_and_unowned_rows_do_not_rebuild_unchanged_relations() {
             .shares_storage_with(&next.directory_trees.0)
     );
     assert_memberships(&after, next);
+}
+
+#[test]
+fn first_version_uses_version_order_not_history_order() {
+    let mut owners = DerivedOwners::default();
+    owners.files.add("file", "history-a", "version-z");
+    owners.files.add("file", "history-a", "version-m");
+    owners.files.add("file", "history-z", "version-a");
+    owners.files.add("unrelated", "history-0", "version-0");
+    assert_eq!(
+        owners.first_version("file").map(String::as_str),
+        Some("version-a")
+    );
+    assert_eq!(owners.first_version("missing"), None);
+    owners.files.remove("file", "history-z", "version-a");
+    assert_eq!(
+        owners.first_version("file").map(String::as_str),
+        Some("version-m")
+    );
+    owners.files.remove("file", "history-a", "version-m");
+    owners.files.remove("file", "history-a", "version-z");
+    assert_eq!(owners.first_version("file"), None);
 }
