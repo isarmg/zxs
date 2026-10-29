@@ -874,7 +874,7 @@ async fn typed_resolve_keeps_complete_version_wire_and_static_error_priority() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
-fn inline_commit_graph_record(raw: &Value) -> Value {
+async fn inline_commit_graph_record(app: &Router, token: &str, root: &str, raw: &Value) -> Value {
     let mut expected = raw.clone();
     for field in ["kind", "tree_id", "author", "message"] {
         let text = raw[field].as_str().unwrap();
@@ -887,11 +887,93 @@ fn inline_commit_graph_record(raw: &Value) -> Value {
     } else {
         assert!(raw["provenance"].is_null());
     }
-    assert!(raw.get("pending_file_versions").is_none());
-    assert!(raw.get("namespace_deletions").is_none());
-    expected["pending_file_versions"] = json!("0");
-    expected["namespace_deletions"] = Value::Null;
+    let pending = match raw.get("pending_file_versions") {
+        Some(value) => {
+            let entries = value.as_object().unwrap();
+            assert!(!entries.is_empty());
+            assert_commit_pending_pages(app, token, root, raw, entries).await;
+            entries.len()
+        }
+        None => 0,
+    };
+    expected["pending_file_versions"] = json!(pending.to_string());
+    expected["namespace_deletions"] = match raw.get("namespace_deletions") {
+        Some(deletions) => {
+            let paths = deletions["paths"].as_array().unwrap();
+            assert!(!paths.is_empty());
+            assert_commit_deletion_pages(app, token, root, raw, deletions).await;
+            json!({"timestamp":deletions["timestamp"], "paths":paths.len().to_string()})
+        }
+        None => Value::Null,
+    };
     expected
+}
+
+async fn assert_commit_pending_pages(
+    app: &Router,
+    token: &str,
+    root: &str,
+    raw: &Value,
+    entries: &json_codec::Map<String, Value>,
+) {
+    let history = raw["history_tree_id"].as_str().unwrap();
+    let commit = raw["commit_id"].as_str().unwrap();
+    let mut after = String::new();
+    for (index, (file, version)) in entries.iter().enumerate() {
+        let route = format!(
+            "/api/history-trees/{history}/graph/commits/{commit}/pending?history_root={root}&limit=1{after}"
+        );
+        let page = success(app, token, "GET", &route, None).await;
+        assert_eq!(page["history_tree_id"], history);
+        assert_eq!(page["history_root"], root);
+        assert_eq!(page["target"], json!({"kind":"commit", "id":commit}));
+        assert_eq!(
+            page["records"],
+            json!([{"file_id":file, "version_id":version}])
+        );
+        assert_eq!(
+            page["next_after"],
+            if index + 1 < entries.len() {
+                json!(file)
+            } else {
+                Value::Null
+            }
+        );
+        after = format!("&after={file}");
+    }
+}
+
+async fn assert_commit_deletion_pages(
+    app: &Router,
+    token: &str,
+    root: &str,
+    raw: &Value,
+    deletions: &Value,
+) {
+    let history = raw["history_tree_id"].as_str().unwrap();
+    let commit = raw["commit_id"].as_str().unwrap();
+    let paths = deletions["paths"].as_array().unwrap();
+    for (offset, path) in paths.iter().enumerate() {
+        let route = format!(
+            "/api/history-trees/{history}/graph/commits/{commit}/deletions?history_root={root}&offset={offset}&limit=1"
+        );
+        let page = success(app, token, "GET", &route, None).await;
+        assert_eq!(page["history_tree_id"], history);
+        assert_eq!(page["history_root"], root);
+        assert_eq!(page["commit_id"], commit);
+        assert_eq!(page["timestamp"], deletions["timestamp"]);
+        assert_eq!(page["total"], paths.len().to_string());
+        assert_eq!(page["offset"], offset.to_string());
+        assert_eq!(page["records"], json!([path]));
+        assert_eq!(
+            page["next_offset"],
+            if offset + 1 < paths.len() {
+                json!((offset + 1).to_string())
+            } else {
+                Value::Null
+            }
+        );
+    }
 }
 
 #[tokio::test]
@@ -925,7 +1007,13 @@ async fn typed_commit_snapshot_matches_graph_records_and_keeps_missing_errors() 
             None,
         )
         .await;
-        let projected = inline_commit_graph_record(&actual);
+        let projected = inline_commit_graph_record(
+            &app,
+            &token,
+            graph["history_root"].as_str().unwrap(),
+            &actual,
+        )
+        .await;
         assert_eq!(projected, *expected);
         assert_eq!(
             storage_contract::canonical_json_value(&projected).unwrap(),
@@ -1008,8 +1096,12 @@ async fn typed_history_graph_keeps_scope_sequence_order_and_bounded_branch_shape
         assert_eq!(
             *commit,
             inline_commit_graph_record(
-                &success(&app, &token, "GET", &format!("/api/commits/{id}"), None).await
+                &app,
+                &token,
+                graph["history_root"].as_str().unwrap(),
+                &success(&app, &token, "GET", &format!("/api/commits/{id}"), None).await,
             )
+            .await
         );
     }
     let branch_page = success(

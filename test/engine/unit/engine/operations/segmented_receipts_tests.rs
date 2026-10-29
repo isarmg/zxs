@@ -236,7 +236,7 @@ fn published_replay_reports_truncated_locator_or_segment_as_corrupt_evidence() {
                 (path, bytes)
             })
             .collect();
-        engine.segment_caches = crate::segment_store::SegmentCaches::new();
+        engine.segment_caches = std::sync::Arc::new(crate::segment_store::SegmentCaches::new());
         let error = publish(&mut engine, id, padding).unwrap_err();
         assert_eq!(error.code(), ErrorCode::ObjectCorrupt);
         let mut source = error.source();
@@ -250,7 +250,7 @@ fn published_replay_reports_truncated_locator_or_segment_as_corrupt_evidence() {
         for (path, bytes) in originals {
             std::fs::write(path, bytes).unwrap();
         }
-        engine.segment_caches = crate::segment_store::SegmentCaches::new();
+        engine.segment_caches = std::sync::Arc::new(crate::segment_store::SegmentCaches::new());
         assert_eq!(publish(&mut engine, id, padding).unwrap(), published);
         assert!(engine.find_operation_lookup(missing).unwrap().is_none());
     }
