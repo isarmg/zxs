@@ -30,6 +30,66 @@ fn fixture() -> (
 }
 
 #[test]
+fn plan_kind_boundary_errors_keep_http_mapping_sources_and_no_publication() {
+    use std::error::Error as _;
+    let (root, engine, repository, owner) = fixture();
+    let plan_id = new_id("plan");
+    let input = json!({"history_tree_id":repository.history_tree_id});
+    let plan = storage_contract::Plan {
+        plan_id: plan_id.clone(),
+        kind: storage_contract::PlanKind::Split,
+        principal: owner.principal.clone(),
+        expected_sequence: engine.state().business_generation,
+        digest: storage_contract::object_hash_value("plan", &input).unwrap(),
+        input,
+        state: storage_contract::PlanState::Ready,
+    };
+    let plans = root.path().join("system/plans");
+    std::fs::create_dir_all(&plans).unwrap();
+    let path = plans.join(format!("{plan_id}.json"));
+    std::fs::write(&path, storage_contract::canonical_json(&plan).unwrap()).unwrap();
+    let backend = EngineBackend::new(engine);
+    let operation = storage_contract::OperationId::generate();
+    let commit = || {
+        Ok(crate::CommitPlan {
+            plan_id: plan_id.clone(),
+            plan_digest: "wrong digest".into(),
+            operation_id: Ok(operation),
+        })
+    };
+    let stale = backend.commit_plan(&owner, commit()).unwrap_err();
+    assert_eq!(stale.code, storage_contract::ErrorCode::SplitPlanStale);
+    assert_eq!(stale.status, http::StatusCode::CONFLICT);
+
+    let mut raw = json_codec::to_value(&plan).unwrap();
+    raw["kind"] = json!("future_action");
+    let bytes = storage_contract::canonical_json(&raw).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    let errors = [
+        backend.plan(&owner, &plan_id).unwrap_err(),
+        backend
+            .cancel_plan(
+                &owner,
+                Ok(crate::CancelPlan {
+                    plan_id: plan_id.clone(),
+                    operation_id: Ok(operation),
+                }),
+            )
+            .unwrap_err(),
+        backend.commit_plan(&owner, commit()).unwrap_err(),
+    ];
+    for error in errors {
+        assert_eq!(error.code, storage_contract::ErrorCode::InvalidJson);
+        assert_eq!(error.status, http::StatusCode::BAD_REQUEST);
+        assert!(error.source().is_some());
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let engine = backend.engine.lock().unwrap();
+    assert_eq!(engine.state().business_generation, plan.expected_sequence);
+    assert!(engine.published_receipt(operation).unwrap().is_none());
+}
+
+#[test]
 fn protection_commands_preserve_core_replay_and_transport_contract() {
     for is_policy in [true, false] {
         let (_root, mut engine, repo, owner) = fixture();
@@ -937,6 +997,18 @@ fn typed_plan_commit_retains_published_failure_evidence_and_resumes_cleanup_on_r
         receipt.commit_state,
         storage_contract::CommitState::Published
     );
+    // The published plan, not its obsolete draft, governs retry admission.
+    let draft = root
+        .path()
+        .join("system/plans")
+        .join(format!("{}.json", plan.plan_id));
+    let mut malformed = json_codec::to_value(&plan).unwrap();
+    malformed["kind"] = json!("future_action");
+    let draft_bytes = storage_contract::canonical_json(&malformed).unwrap();
+    std::fs::write(&draft, &draft_bytes).unwrap();
+    let published_plan = backend.plan(&owner, &plan.plan_id).unwrap();
+    assert_eq!(published_plan.kind, storage_contract::PlanKind::Purge);
+    assert_eq!(published_plan.state, storage_contract::PlanState::Committed);
     assert_eq!(
         backend.commit_plan(&owner, request()).unwrap_err().code,
         storage_contract::ErrorCode::UnsafePath
@@ -954,6 +1026,8 @@ fn typed_plan_commit_retains_published_failure_evidence_and_resumes_cleanup_on_r
     let replay = backend.commit_plan(&owner, request()).unwrap();
     assert_eq!(replay.result, receipt.result);
     assert_eq!(replay.request_digest, receipt.request_digest);
+    assert_eq!(backend.plan(&owner, &plan.plan_id).unwrap(), published_plan);
+    assert_eq!(std::fs::read(&draft).unwrap(), draft_bytes);
     assert_eq!(
         storage_contract::canonical_json(backend.engine.lock().unwrap().state()).unwrap(),
         published

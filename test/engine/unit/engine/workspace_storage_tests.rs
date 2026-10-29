@@ -524,6 +524,13 @@ fn historical_completion_binding_merges_duplicates_and_rejects_conflicting_plans
     let (_root, _engine, sealed, plan) = completed_historical_binding_fixture();
     let mut candidate =
         historical::HistoricalWorkspaceCandidate::new(&sealed, &canonical_json(&sealed).unwrap());
+    for kind in [PlanKind::Purge, PlanKind::Split] {
+        let mut unrelated = plan.clone();
+        unrelated.kind = kind;
+        unrelated.input["workspace_fencing_token"] = json!("broken");
+        candidate.observe(&unrelated).unwrap();
+        assert!(!candidate.has_completion());
+    }
     let mut foreign = plan.clone();
     foreign.principal = "foreign".into();
     foreign.input["workspace_fencing_token"] = json!("broken");

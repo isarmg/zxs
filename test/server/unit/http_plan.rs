@@ -57,7 +57,7 @@ fn cancel_parses_once_but_preserves_operation_error_for_plan_admission() {
 fn plan_projection_preserves_raw_wire_and_large_sequence() {
     let plan = storage_contract::Plan {
         plan_id: "plan".into(),
-        kind: "purge".into(),
+        kind: storage_contract::PlanKind::Purge,
         principal: "admin".into(),
         expected_sequence: u64::MAX,
         digest: "digest".into(),

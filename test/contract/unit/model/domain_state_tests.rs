@@ -1,5 +1,51 @@
 use super::*;
 
+#[test]
+fn plan_kinds_preserve_fixed_canonical_bytes_and_reject_unknown_tokens() {
+    for (kind, token) in [
+        (PlanKind::Purge, "purge"),
+        (PlanKind::Split, "split"),
+        (PlanKind::HistoricalSave, "historical_save"),
+    ] {
+        let plan = Plan {
+            plan_id: "plan_fixture".into(),
+            kind,
+            principal: "admin".into(),
+            expected_sequence: u64::MAX,
+            digest: "digest".into(),
+            input: json_codec::json!({"opaque":[1,null]}),
+            state: PlanState::Ready,
+        };
+        let expected = format!(
+            "{{\"digest\":\"digest\",\"expected_sequence\":\"18446744073709551615\",\"input\":{{\"opaque\":[1,null]}},\"kind\":\"{token}\",\"plan_id\":\"plan_fixture\",\"principal\":\"admin\",\"state\":\"ready\"}}"
+        );
+        assert_eq!(crate::canonical_json(&plan).unwrap(), expected.as_bytes());
+        assert_eq!(
+            crate::decode_strict::<Plan>(expected.as_bytes()).unwrap(),
+            plan
+        );
+        let value: json_codec::Value = json_codec::from_str(&expected).unwrap();
+        assert_eq!(
+            crate::object_hash("plan-fixture", &plan).unwrap(),
+            crate::object_hash_value("plan-fixture", &value).unwrap()
+        );
+    }
+    for invalid in [
+        "\"unknown\"",
+        "\"Purge\"",
+        "null",
+        "0",
+        "true",
+        "[]",
+        "{\"purge\":null}",
+    ] {
+        assert!(
+            json_codec::from_str::<PlanKind>(invalid).is_err(),
+            "{invalid}"
+        );
+    }
+}
+
 macro_rules! roundtrip {
     ($ty:ident, $($variant:ident),+ $(,)?) => {
         for value in [$($ty::$variant),+] {

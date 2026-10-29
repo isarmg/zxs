@@ -1013,11 +1013,24 @@ pub struct OperationResult {
     pub sequence: u64,
     pub result: json_codec::Value,
 }
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serialization(rename_all = "snake_case")]
+pub enum PlanKind {
+    Purge,
+    Split,
+    HistoricalSave,
+}
+strict_string_deserialize!(PlanKind {
+    Purge => "purge",
+    Split => "split",
+    HistoricalSave => "historical_save",
+});
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub struct Plan {
     pub plan_id: String,
-    pub kind: String,
+    pub kind: PlanKind,
     pub principal: String,
     #[serialization(with = "crate::u64_string")]
     pub expected_sequence: u64,

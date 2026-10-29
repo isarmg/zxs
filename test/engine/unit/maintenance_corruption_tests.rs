@@ -434,7 +434,7 @@ fn plan_lookup_keeps_persisted_identity_and_digest_validation() {
         Engine::initialize(&root, Config::development([temporary.path().join("disk")])).unwrap();
     let expected = engine
         .save_plan(
-            "split",
+            PlanKind::Split,
             "admin",
             json!({"history_tree_id":new_id("history")}),
         )
@@ -459,4 +459,102 @@ fn plan_lookup_keeps_persisted_identity_and_digest_validation() {
             "{field}"
         );
     }
+}
+
+#[test]
+fn unknown_persisted_plan_kind_rejects_read_cancel_and_commit_without_writes() {
+    use std::error::Error as _;
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("system");
+    let mut engine =
+        Engine::initialize(&root, Config::development([temporary.path().join("disk")])).unwrap();
+    let plan = engine
+        .save_plan(PlanKind::Purge, "admin", json!({}))
+        .unwrap();
+    std::sync::Arc::make_mut(&mut engine.state)
+        .plans
+        .remove(&plan.plan_id);
+    let path = root.join("plans").join(format!("{}.json", plan.plan_id));
+    let mut raw = json_codec::to_value(&plan).unwrap();
+    raw["kind"] = json!("future_action");
+    write_json(&path, &raw, true).unwrap();
+    let bytes = fs::read(&path).unwrap();
+    let sequence = engine.state.sequence;
+    for action in ["read", "cancel", "commit"] {
+        let operation = OperationId::generate();
+        let error = match action {
+            "read" => engine.plan(&plan.plan_id).unwrap_err(),
+            "cancel" => engine
+                .cancel_plan(&plan.plan_id, "admin", operation)
+                .unwrap_err(),
+            "commit" => engine
+                .commit_plan(&plan.plan_id, "admin", operation)
+                .unwrap_err(),
+            _ => unreachable!(),
+        };
+        assert_eq!(error.code(), ErrorCode::InvalidJson, "{action}");
+        assert!(error.source().is_some());
+        assert!(error.published_result().is_none());
+        assert!(engine.find_receipt(operation).unwrap().is_none());
+        assert_eq!(engine.state.sequence, sequence);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn known_nonhistorical_plans_preserve_historical_command_rejection() {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &temporary.path().join("system"),
+        Config::development([temporary.path().join("disk")]),
+    )
+    .unwrap();
+    for kind in [PlanKind::Purge, PlanKind::Split] {
+        let plan = engine.save_plan(kind, "admin", json!({})).unwrap();
+        let operation = OperationId::generate();
+        let error = engine
+            .commit_historical_save_plan(&plan.plan_id, "admin", operation)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::PermissionDenied);
+        assert!(engine.find_receipt(operation).unwrap().is_none());
+        assert_eq!(engine.plan(&plan.plan_id).unwrap().state, PlanState::Ready);
+    }
+}
+
+#[test]
+fn typed_purge_plan_executes_and_replays_after_reopen() {
+    let (temporary, mut engine, repository, first, _) = fixture();
+    let version = engine
+        .namespace_entries(&engine.state.commits[&first].namespace)
+        .unwrap()[0]
+        .version_id
+        .clone();
+    let plan = engine
+        .create_purge_plan(&repository.history_tree_id, vec![version.clone()], "admin")
+        .unwrap();
+    assert_eq!(plan.kind, PlanKind::Purge);
+    let operation = OperationId::generate();
+    let original = engine
+        .commit_plan(&plan.plan_id, "admin", operation)
+        .unwrap();
+    assert_eq!(
+        engine.plan(&plan.plan_id).unwrap().state,
+        PlanState::Committed
+    );
+    assert_eq!(
+        engine
+            .commit_plan(&plan.plan_id, "admin", operation)
+            .unwrap(),
+        original
+    );
+    drop(engine);
+    let mut engine = Engine::open(&temporary.path().join("system")).unwrap();
+    assert_eq!(engine.plan(&plan.plan_id).unwrap().kind, PlanKind::Purge);
+    assert_eq!(
+        engine
+            .commit_plan(&plan.plan_id, "admin", operation)
+            .unwrap(),
+        original
+    );
+    assert_eq!(engine.state.content_states[&version], ContentState::Purged);
 }

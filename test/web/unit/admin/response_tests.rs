@@ -303,6 +303,7 @@ fn plan_query_checks_identity_and_shape_without_requiring_ready() {
     }
     for (key, bad) in [
         ("plan_id", json!("other")),
+        ("kind", json!("future_action")),
         ("digest", json!("")),
         ("input", Value::Null),
         ("input", json!([])),

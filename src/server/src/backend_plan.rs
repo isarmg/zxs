@@ -19,7 +19,7 @@ pub struct CommitPlan {
 #[derive(Serialize)]
 pub(crate) struct PlanResponse {
     plan_id: String,
-    kind: String,
+    kind: storage_contract::PlanKind,
     principal: String,
     #[serialization(with = "storage_contract::u64_string")]
     expected_sequence: u64,

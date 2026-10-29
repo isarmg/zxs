@@ -82,7 +82,7 @@ impl Engine {
         }
         self.check_purge(history, &ids)?;
         self.save_plan(
-            "purge",
+            PlanKind::Purge,
             principal,
             json!({"history_tree_id":history,"version_ids":ids}),
         )
@@ -139,15 +139,20 @@ impl Engine {
             ));
         }
         self.save_plan(
-            "split",
+            PlanKind::Split,
             principal,
             json!({"history_tree_id":history,"cut_commit_id":cut}),
         )
     }
-    fn save_plan(&mut self, kind: &str, principal: &str, input: json_codec::Value) -> Result<Plan> {
+    fn save_plan(
+        &mut self,
+        kind: PlanKind,
+        principal: &str,
+        input: json_codec::Value,
+    ) -> Result<Plan> {
         let plan = Plan {
             plan_id: new_id("plan"),
-            kind: kind.into(),
+            kind,
             principal: principal.into(),
             expected_sequence: self.state.business_generation,
             digest: object_hash_value("plan", &input)?,
@@ -276,7 +281,7 @@ impl Engine {
             ));
         }
         let plan = self.plan(id)?;
-        if plan.kind == "historical_save" {
+        if plan.kind == PlanKind::HistoricalSave {
             return self.commit_historical_save_plan(id, principal, operation);
         }
         if plan.principal != principal {
@@ -302,8 +307,8 @@ impl Engine {
             .ok_or_else(|| Error::new(storage_contract::ErrorCode::PlanInvalid, "history missing"))?
             .to_string();
         self.repository_for_history(&history)?;
-        let result = match plan.kind.as_str() {
-            "purge" => {
+        let result = match plan.kind {
+            PlanKind::Purge => {
                 let ids = plan.input["version_ids"]
                     .as_array()
                     .ok_or_else(|| {
@@ -338,7 +343,7 @@ impl Engine {
                     },
                 )?
             }
-            "split" => {
+            PlanKind::Split => {
                 let cut = plan.input["cut_commit_id"]
                     .as_str()
                     .ok_or_else(|| {
@@ -347,11 +352,8 @@ impl Engine {
                     .to_string();
                 self.split_history(&history, &cut, principal, operation, &plan)?
             }
-            _ => {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::PlanUnsupported,
-                    "unknown plan kind",
-                ));
+            PlanKind::HistoricalSave => {
+                unreachable!("invariant: historical plans dispatch before maintenance execution")
             }
         };
         self.cleanup_purged()?;

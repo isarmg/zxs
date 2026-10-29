@@ -5,21 +5,7 @@ use storage_contract::{
     Branch, MergeLink, OperationResult, Plan, Repository, client_protocol::ResponseError,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum PreviewKind {
-    Purge,
-    Split,
-    HistoricalSave,
-}
-impl PreviewKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Purge => "purge",
-            Self::Split => "split",
-            Self::HistoricalSave => "historical_save",
-        }
-    }
-}
+pub(super) use storage_contract::PlanKind as PreviewKind;
 
 /// Captured at request construction; never inferred from a URL or JSON body.
 #[derive(Debug, PartialEq, Eq)]
@@ -158,15 +144,14 @@ impl Contract {
                 kind,
                 history_tree_id,
                 principal,
-            } => {
-                json_codec::from_value::<Plan>(value.clone()).is_ok()
-                    && nonempty(&value["plan_id"])
-                    && nonempty(&value["digest"])
-                    && value["kind"] == kind.as_str()
-                    && value["state"] == "ready"
-                    && value["principal"].as_str() == Some(principal.as_str())
-                    && value["input"]["history_tree_id"].as_str() == Some(history_tree_id.as_str())
-            }
+            } => json_codec::from_value::<Plan>(value.clone()).is_ok_and(|plan| {
+                !plan.plan_id.is_empty()
+                    && !plan.digest.is_empty()
+                    && plan.kind == *kind
+                    && plan.state == storage_contract::PlanState::Ready
+                    && plan.principal == *principal
+                    && plan.input["history_tree_id"].as_str() == Some(history_tree_id.as_str())
+            }),
             Self::PlanReceipt { operation } => {
                 json_codec::from_value::<OperationResult>(value.clone()).is_ok()
                     && nonempty(&value["kind"])

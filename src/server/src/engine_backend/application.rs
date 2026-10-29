@@ -317,7 +317,7 @@ impl<'a> Application<'a> {
         }
         if command.plan_digest != plan.digest {
             return Err(ApiError::conflict(
-                if plan.kind == "split" {
+                if plan.kind == storage_contract::PlanKind::Split {
                     storage_contract::ErrorCode::SplitPlanStale
                 } else {
                     storage_contract::ErrorCode::PlanStale

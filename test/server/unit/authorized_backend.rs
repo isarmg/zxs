@@ -74,7 +74,7 @@ fn upload_arguments(workspace: &str, item: &str, path: &str, source: &UploadSour
 fn recorded_plan(id: &str) -> storage_contract::Plan {
     storage_contract::Plan {
         plan_id: id.into(),
-        kind: "purge".into(),
+        kind: storage_contract::PlanKind::Purge,
         principal: "admin".into(),
         expected_sequence: u64::MAX,
         digest: "digest".into(),
@@ -738,7 +738,7 @@ impl Backend for RecordingBackend {
         )?;
         Ok(storage_contract::Plan {
             plan_id: "plan".into(),
-            kind: "historical_save".into(),
+            kind: storage_contract::PlanKind::HistoricalSave,
             principal: identity.principal.clone(),
             expected_sequence: 7,
             digest: "digest".into(),
@@ -759,7 +759,7 @@ impl Backend for RecordingBackend {
         )?;
         Ok(storage_contract::Plan {
             plan_id: "purge-plan".into(),
-            kind: "purge".into(),
+            kind: storage_contract::PlanKind::Purge,
             principal: identity.principal.clone(),
             expected_sequence: 7,
             digest: "digest".into(),
@@ -776,7 +776,7 @@ impl Backend for RecordingBackend {
         self.record("prepare_split",Some(identity),json!({"history_tree_id":request.history_tree_id,"cut_commit_id":request.cut_commit_id?}))?;
         Ok(storage_contract::Plan {
             plan_id: "split-plan".into(),
-            kind: "split".into(),
+            kind: storage_contract::PlanKind::Split,
             principal: identity.principal.clone(),
             expected_sequence: 7,
             digest: "digest".into(),

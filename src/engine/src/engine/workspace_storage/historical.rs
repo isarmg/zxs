@@ -27,7 +27,7 @@ impl HistoricalWorkspaceCandidate {
     }
 
     pub fn observe(&mut self, plan: &Plan) -> Result<()> {
-        if plan.kind != "historical_save"
+        if plan.kind != PlanKind::HistoricalSave
             || plan.state != PlanState::Completed
             || plan.principal != self.principal
             || plan.input["workspace_id"].as_str() != Some(self.id.as_str())

@@ -322,7 +322,7 @@ impl Engine {
         let input = json!({"history_tree_id":history,"source_commit_id":source.commit_id,"name":options.name,"workspace_id":options.workspace_id,"sealed_manifest_hash":workspace.as_ref().map(workspace_manifest_hash).transpose()?,"workspace_fencing_token":workspace.as_ref().map(|workspace|workspace.fencing_token.to_string()),"expected_topology_generation":self.state.topology_generation.to_string(),"primary_slot_id":options.primary_slot_id,"target_copies":options.target_copies,"branch_creation":"placeholder-until-write","placeholder_files":entries.iter().filter(|entry|entry.kind == NamespaceEntryKind::File&&!entry.version_id.starts_with("staged:")).count(),"full_copy_bytes":total.to_string(),"full_copy_files":count,"required_bytes_by_slot":per_slot.iter().map(|(slot,bytes)|(slot.clone(),bytes.to_string())).collect::<BTreeMap<_,_>>()});
         let plan = Plan {
             plan_id: new_id("plan"),
-            kind: "historical_save".into(),
+            kind: PlanKind::HistoricalSave,
             principal: principal.into(),
             expected_sequence: self.state.business_generation,
             digest: object_hash_value("plan", &input)?,
@@ -360,7 +360,7 @@ impl Engine {
             ));
         }
         let plan = self.plan(id)?;
-        if plan.kind != "historical_save" || plan.principal != principal {
+        if plan.kind != PlanKind::HistoricalSave || plan.principal != principal {
             return Err(Error::new(
                 storage_contract::ErrorCode::PermissionDenied,
                 "historical plan belongs to another operation or principal",
