@@ -1,11 +1,13 @@
 """Evidence parser regressions; run by the dedicated GitHub validation carrier."""
 
+import errno
 import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -13,7 +15,7 @@ TOOLS = ROOT / "tools" / "history-scale-bench"
 sys.path.insert(0, str(TOOLS))
 from summarize import aggregate, operation_id, read_json, summarize_driver  # noqa: E402
 from tracing import parse_trace  # noqa: E402
-from run import final_budget_reason  # noqa: E402
+from run import final_budget_reason, process_snapshot  # noqa: E402
 
 
 def valid_rows(operations=4):
@@ -58,6 +60,56 @@ def write_rows(path, rows):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_io_permission_race_requires_proven_exit_and_keeps_diagnostic(self):
+        live = "State:\tR (running)\nVmRSS:\t17 kB\nVmHWM:\t19 kB\nVmSize:\t23 kB\n"
+        for state in ("Z", "X", "disappeared"):
+            with self.subTest(state=state):
+                status_reads = []
+
+                def read(path, **_kwargs):
+                    if str(path).endswith("/io"):
+                        raise PermissionError(errno.EACCES, "permission denied", str(path))
+                    status_reads.append(path)
+                    if len(status_reads) == 1:
+                        return live
+                    if state == "disappeared":
+                        raise FileNotFoundError(errno.ENOENT, "exited", str(path))
+                    return f"State:\t{state} (exited)\n"
+
+                with patch.object(Path, "read_text", read):
+                    snapshot = process_snapshot(5697)
+                self.assertFalse(snapshot["valid"])
+                self.assertEqual(snapshot["memory"], {})
+                self.assertIsNone(snapshot["io"])
+                self.assertEqual(snapshot["io_error"], {"pid": 5697, "path": "/proc/5697/io", "errno": errno.EACCES, "state": state})
+
+    def test_live_io_permission_and_unexpected_errors_still_propagate(self):
+        live = "State:\tS (sleeping)\nVmRSS:\t17 kB\n"
+        for error_number in (errno.EACCES, errno.EPERM, errno.EIO):
+            with self.subTest(errno=error_number):
+                def read(path, **_kwargs):
+                    if str(path).endswith("/io"):
+                        raise OSError(error_number, "sampling failure", str(path))
+                    return live
+
+                with patch.object(Path, "read_text", read), self.assertRaises(OSError) as failure:
+                    process_snapshot(5697)
+                self.assertEqual(failure.exception.errno, error_number)
+
+    def test_live_rss_is_required_and_successful_snapshot_retains_values(self):
+        def read(path, **_kwargs):
+            return "State:\tR (running)\nVmRSS:\t17 kB\n" if str(path).endswith("/status") else "rchar: 33\nread_bytes: 44\n"
+
+        with patch.object(Path, "read_text", read):
+            snapshot = process_snapshot(5697)
+        self.assertTrue(snapshot["valid"])
+        self.assertEqual(snapshot["memory"]["VmRSS_bytes"], 17 * 1024)
+        self.assertEqual(snapshot["io"], {"rchar": 33, "read_bytes": 44})
+        with patch.object(Path, "read_text", return_value="State:\tR (running)\n"), self.assertRaisesRegex(ValueError, "VmRSS"):
+            process_snapshot(5697)
+        with patch.object(Path, "read_text", side_effect=PermissionError(errno.EACCES, "status denied")), self.assertRaises(PermissionError):
+            process_snapshot(5697)
+
     def test_final_budget_counters_catch_exit_between_sampling_polls(self):
         mib = 1024 * 1024
         budget = SimpleNamespace(phase_seconds=600, rss_mib=8, disk_mib=12, cohort_disk_mib=24, minimum_free_mib=2)

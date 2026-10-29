@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -90,18 +91,46 @@ def process_tree(root_pid: int) -> list[int]:
 
 
 def process_snapshot(pid: int) -> dict | None:
+    status_path = Path(f"/proc/{pid}/status")
+    io_path = Path(f"/proc/{pid}/io")
     try:
-        status = Path(f"/proc/{pid}/status").read_text(encoding="ascii")
-        io_text = Path(f"/proc/{pid}/io").read_text(encoding="ascii")
-    except FileNotFoundError:
+        status = status_path.read_text(encoding="ascii")
+    except (FileNotFoundError, ProcessLookupError):
         return None
+    fields = {key: value.strip() for key, _, value in (line.partition(":") for line in status.splitlines())}
+    state = fields["State"].split()[0]
+    if state in {"Z", "X"}:
+        return {"pid": pid, "valid": False, "memory": {}, "io": None,
+                "process_exit": {"pid": pid, "path": str(status_path), "errno": None, "state": state}}
     memory = {}
-    for line in status.splitlines():
-        key, _, value = line.partition(":")
+    for key, value in fields.items():
         if key in {"VmRSS", "VmHWM", "VmSize"}:
-            memory[key + "_bytes"] = int(value.split()[0]) * 1024
+            amount, unit = value.split()
+            if unit != "kB" or int(amount) < 0:
+                raise ValueError(f"invalid {key} in {status_path}")
+            memory[key + "_bytes"] = int(amount) * 1024
+    if "VmRSS_bytes" not in memory:
+        raise ValueError(f"missing live process VmRSS in {status_path}")
+    try:
+        io_text = io_path.read_text(encoding="ascii")
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except OSError as error:
+        if error.errno not in {errno.EACCES, errno.EPERM}:
+            raise
+        try:
+            current_status = status_path.read_text(encoding="ascii")
+        except (FileNotFoundError, ProcessLookupError):
+            current_state = "disappeared"
+        else:
+            current_fields = dict(line.split(":", 1) for line in current_status.splitlines() if ":" in line)
+            current_state = current_fields.get("State", "unknown").split()[0]
+        if current_state not in {"Z", "X", "disappeared"}:
+            raise
+        return {"pid": pid, "valid": False, "memory": {}, "io": None,
+                "io_error": {"errno": error.errno, "path": str(io_path), "pid": pid, "state": current_state}}
     io_counters = {key: int(value) for key, value in (line.split(":", 1) for line in io_text.splitlines())}
-    return {"pid": pid, "memory": memory, "io": io_counters}
+    return {"pid": pid, "valid": True, "memory": memory, "io": io_counters}
 
 
 def diskstats() -> str:
