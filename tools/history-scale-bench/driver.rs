@@ -221,7 +221,8 @@ impl Fixture {
         let versions = engine.file_history(&entry.file_id)?;
         require(versions.len() == 1, "fixed fixture must have one version")?;
         let history_generation = engine.state().histories[&repo.history_tree_id].generation;
-        let binding_generation = engine.state().repositories[&repo.repository_id].smb_binding_generation;
+        let binding_generation =
+            engine.state().repositories[&repo.repository_id].smb_binding_generation;
         Ok(Self {
             active_shape: active_shape(engine, &repo)?,
             history_records: history_records(engine, &repo)?,
@@ -255,7 +256,8 @@ impl Fixture {
 
     fn load(pool: &Path) -> BenchResult<Self> {
         let repo = json_codec::from_slice(&fs::read(pool.join("harness/repository.json"))?)?;
-        let value: Value = json_codec::from_slice(&fs::read(pool.join("harness/content-fixture.json"))?)?;
+        let value: Value =
+            json_codec::from_slice(&fs::read(pool.join("harness/content-fixture.json"))?)?;
         require(
             value["fixture_mode"].as_str() == Some("fixed-body")
                 && oracle_number(&value, "content_bytes")? == CONTENT_BYTES as u64
@@ -283,13 +285,15 @@ impl Fixture {
     }
 
     fn history_generation_at(&self, total: usize) -> BenchResult<u64> {
-        Ok(self.history_generation
+        Ok(self
+            .history_generation
             .checked_add((total - SETUP_RECEIPTS) as u64)
             .ok_or_else(|| invalid("fixture history generation overflow"))?)
     }
 
     fn binding_generation_at(&self, total: usize) -> BenchResult<u64> {
-        Ok(self.binding_generation
+        Ok(self
+            .binding_generation
             .checked_add((total - SETUP_RECEIPTS) as u64)
             .ok_or_else(|| invalid("fixture binding generation overflow"))?)
     }
@@ -377,9 +381,19 @@ fn verify_receipt(result: &OperationResult, index: usize, fixture: &Fixture) -> 
                 && result.result["repository_id"].as_str() == Some(repo.repository_id.as_str())
                 && result.result["smb_enabled"].as_bool() == Some(binding_enabled(index))
                 && result.result["generation"].as_str()
-                    == Some(fixture.history_generation_at(index + 1)?.to_string().as_str())
+                    == Some(
+                        fixture
+                            .history_generation_at(index + 1)?
+                            .to_string()
+                            .as_str(),
+                    )
                 && result.result["smb_binding_generation"].as_str()
-                    == Some(fixture.binding_generation_at(index + 1)?.to_string().as_str()),
+                    == Some(
+                        fixture
+                            .binding_generation_at(index + 1)?
+                            .to_string()
+                            .as_str(),
+                    ),
             "metadata receipt payload differs from the original request",
         )?;
     }
@@ -417,7 +431,11 @@ fn build(arguments: &Arguments, reporter: &mut Reporter) -> BenchResult<(Engine,
         original.kind == "repository.create"
             && original.history_tree_id.as_deref() == Some(repo.history_tree_id.as_str())
             && original.commit_id.as_deref()
-                == Some(engine.state().branches[&repo.main_branch_id].head_commit_id.as_str()),
+                == Some(
+                    engine.state().branches[&repo.main_branch_id]
+                        .head_commit_id
+                        .as_str(),
+                ),
         "original repository setup result differs",
     )?;
     json_codec::to_writer(&mut ledger, &original)?;
@@ -481,7 +499,9 @@ fn build(arguments: &Arguments, reporter: &mut Reporter) -> BenchResult<(Engine,
 fn seed_content(engine: &mut Engine, repo: Repository) -> BenchResult<Fixture> {
     let workspace = engine.create_workspace(&repo.main_branch_id, ACTOR)?;
     engine.stage_bytes(
-        &workspace.workspace_id, CONTENT_PATH, &[CONTENT_FILL_BYTE; CONTENT_BYTES],
+        &workspace.workspace_id,
+        CONTENT_PATH,
+        &[CONTENT_FILL_BYTE; CONTENT_BYTES],
     )?;
     let request = CommitRequest {
         workspace_id: workspace.workspace_id,
@@ -521,9 +541,13 @@ fn permanent_outcome(result: OperationResult) -> QueryOutcome {
     // The old revision has no OperationOutcome domain type. Its immutable
     // operation_record is the corresponding receipt-only local consumer.
     #[cfg(feature = "history-scale-current")]
-    { result.into() }
+    {
+        result.into()
+    }
     #[cfg(feature = "history-scale-baseline")]
-    { result }
+    {
+        result
+    }
 }
 
 fn outcome_api() -> &'static str {
@@ -679,8 +703,14 @@ fn check_events(
             let (kind, object) = if ordinal == 0 {
                 ("repository.create", fixture.request.expected_head.clone())
             } else if ordinal == 1 {
-                ("workspace.commit", fixture.seed_result.commit_id.clone()
-                    .ok_or_else(|| invalid("content fixture commit missing"))?)
+                (
+                    "workspace.commit",
+                    fixture
+                        .seed_result
+                        .commit_id
+                        .clone()
+                        .ok_or_else(|| invalid("content fixture commit missing"))?,
+                )
             } else {
                 ("smb.binding.update", expected_id.to_string())
             };
@@ -826,9 +856,14 @@ fn verify_content(
     // open_content performs the real proof and full-payload verification.
     // This extra tool oracle is deliberately outside Engine::open timing/RSS.
     let mut opened = engine.open_content(&fixture.version_id)?;
-    require(opened.size == CONTENT_BYTES as u64, "opened content length differs")?;
+    require(
+        opened.size == CONTENT_BYTES as u64,
+        "opened content length differs",
+    )?;
     let mut bytes = Vec::with_capacity(CONTENT_BYTES + 1);
-    (&mut opened.file).take((CONTENT_BYTES + 1) as u64).read_to_end(&mut bytes)?;
+    (&mut opened.file)
+        .take((CONTENT_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
     require(
         bytes.as_slice() == [CONTENT_FILL_BYTE; CONTENT_BYTES],
         "full original 4KiB content bytes changed",
@@ -851,7 +886,10 @@ fn verify_content_retry(
 ) -> BenchResult<()> {
     let started = Instant::now();
     let actual = engine.commit_workspace(fixture.request.clone())?;
-    require(actual == fixture.seed_result, "original content request replay changed its result")?;
+    require(
+        actual == fixture.seed_result,
+        "original content request replay changed its result",
+    )?;
     let mut mismatch = fixture.request.clone();
     mismatch.message.push_str(" mismatched retry");
     match engine.commit_workspace(mismatch) {
@@ -915,7 +953,13 @@ fn run(arguments: &Arguments, reporter: &mut Reporter) -> BenchResult<()> {
     check_events(&engine, &fixture, arguments.operations, reporter)?;
     verify_all_receipts(&engine, &fixture, arguments, reporter)?;
     verify_content(&engine, &fixture, false, reporter)?;
-    verify_retries(&mut engine, &fixture, &samples, arguments.operations, reporter)?;
+    verify_retries(
+        &mut engine,
+        &fixture,
+        &samples,
+        arguments.operations,
+        reporter,
+    )?;
     verify_content_retry(&mut engine, &fixture, arguments.operations, reporter)?;
     verify_content(&engine, &fixture, true, reporter)?;
     // The second full event walk detects extra publication from any replay,
