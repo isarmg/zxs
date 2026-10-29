@@ -160,13 +160,19 @@ fn file_context(branch: &DirectoryBranch, entry: &Entry) -> Result<FileContext> 
 fn save_inactive(
     state: &mut State,
     branch: &DirectoryBranch,
-    principal: &str,
-    operation: OperationId,
+    provenance: OperationContext<'_>,
     maximum: usize,
     namespace_deletions: Option<NamespaceDeletions>,
-    source: &dyn crate::namespace::NamespaceSource,
-    fresh: &mut crate::namespace::NamespaceObjects,
+    namespace: NamespaceMutation<'_>,
 ) -> Result<()> {
+    let OperationContext {
+        principal,
+        operation_id: operation,
+    } = provenance;
+    let NamespaceMutation {
+        base: source,
+        fresh,
+    } = namespace;
     let previous = state
         .directory_branches
         .get(&branch.directory_branch_id)
@@ -261,9 +267,12 @@ fn apply(
     base: &dyn crate::namespace::NamespaceSource,
     repository: &str,
     request: &DirectoryNamespaceBatch,
-    principal: &str,
-    operation: OperationId,
+    provenance: OperationContext<'_>,
 ) -> Result<Value> {
+    let OperationContext {
+        principal,
+        operation_id: operation,
+    } = provenance;
     let repo = state.repositories.get(repository).cloned().ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::RepositoryNotFound,
@@ -762,10 +771,11 @@ fn apply(
                         &member,
                         &moved,
                         Some(context),
-                        principal,
-                        operation,
-                        base,
-                        &mut scratch.namespace,
+                        provenance,
+                        NamespaceMutation {
+                            base,
+                            fresh: &mut scratch.namespace,
+                        },
                     )?
                 } else {
                     context
@@ -971,15 +981,16 @@ fn apply(
         save_inactive(
             state,
             &drafts[id],
-            principal,
-            operation,
+            provenance,
             engine.config.max_entries,
             namespace::deletion_record(
                 inactive_deleted.remove(id).unwrap_or_default(),
                 deletion_timestamp,
             ),
-            base,
-            &mut scratch.namespace,
+            NamespaceMutation {
+                base,
+                fresh: &mut scratch.namespace,
+            },
         )?;
     }
     let ancestors = directory::record_directory_edits(
@@ -1043,7 +1054,16 @@ impl Engine {
             |engine, state, scratch| {
                 engine.with_namespace_source(|base| {
                     apply(
-                        engine, state, scratch, base, repository, request, principal, operation,
+                        engine,
+                        state,
+                        scratch,
+                        base,
+                        repository,
+                        request,
+                        OperationContext {
+                            principal,
+                            operation_id: operation,
+                        },
                     )
                 })
             },

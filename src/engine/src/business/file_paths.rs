@@ -19,11 +19,17 @@ pub(crate) fn rename_node(
     old: &Entry,
     new: &Entry,
     context: Option<FileContext>,
-    principal: &str,
-    operation: OperationId,
-    source: &dyn crate::namespace::NamespaceSource,
-    fresh: &mut crate::namespace::NamespaceObjects,
+    provenance: OperationContext<'_>,
+    namespace: NamespaceMutation<'_>,
 ) -> Result<FileContext> {
+    let OperationContext {
+        principal,
+        operation_id: operation,
+    } = provenance;
+    let NamespaceMutation {
+        base: source,
+        fresh,
+    } = namespace;
     let repo = state.repositories.get(repository).cloned().ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::StateInvalid,
@@ -94,10 +100,11 @@ pub(crate) fn rename_node(
             &context.branch_id,
             &node_id,
             false,
-            principal,
-            operation,
-            source,
-            fresh,
+            provenance,
+            NamespaceMutation {
+                base: source,
+                fresh,
+            },
         )?;
     }
     context.node_id = Some(node_id);

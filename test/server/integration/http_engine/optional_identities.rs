@@ -13,7 +13,13 @@ fn invalid_identities() -> Vec<Value> {
     ]
 }
 
-fn fixture() -> (tempfile::TempDir, Router, String, String, String) {
+type IdentityFixture = (tempfile::TempDir, Router, String, String, String);
+
+fn fixture() -> IdentityFixture {
+    fixture_with_entries().0
+}
+
+fn fixture_with_entries() -> (IdentityFixture, Vec<Value>) {
     let root = tempfile::tempdir().unwrap();
     let system = root.path().join("system");
     let mut config = Config::development([root.path().join("disk")]);
@@ -29,6 +35,7 @@ fn fixture() -> (tempfile::TempDir, Router, String, String, String) {
         )
         .unwrap();
     let mut commits = Vec::new();
+    let mut entries = Vec::new();
     for bytes in [b"old".as_slice(), b"new content".as_slice()] {
         let workspace = engine
             .create_workspace(&repository.main_branch_id, "admin")
@@ -47,7 +54,15 @@ fn fixture() -> (tempfile::TempDir, Router, String, String, String) {
                 request_digest: None,
             })
             .unwrap();
-        commits.push(result.commit_id.unwrap());
+        let commit_id = result.commit_id.unwrap();
+        let entry = engine
+            .commit_namespace(&commit_id)
+            .unwrap()
+            .get("data.txt")
+            .unwrap()
+            .unwrap();
+        entries.push(json_codec::to_value(entry).unwrap());
+        commits.push(commit_id);
     }
     let backend = Arc::new(EngineBackend::new(engine));
     let auth = backend
@@ -55,11 +70,14 @@ fn fixture() -> (tempfile::TempDir, Router, String, String, String) {
         .unwrap();
     let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
     (
-        root,
-        app,
-        repository.main_branch_id,
-        commits.remove(0),
-        commits.remove(0),
+        (
+            root,
+            app,
+            repository.main_branch_id,
+            commits.remove(0),
+            commits.remove(0),
+        ),
+        entries,
     )
 }
 
@@ -1101,7 +1119,7 @@ async fn typed_event_page_http_preserves_cursor_and_unknown_query_policy() {
 
 #[tokio::test]
 async fn typed_storage_metadata_http_has_one_topology_and_frozen_placement() {
-    let (_root, app, _, _, commit) = fixture();
+    let ((_root, app, _, _, commit), entries) = fixture_with_entries();
     let token = login(&app, "admin", "integration-test-password").await;
     let topology = success(
         &app,
@@ -1135,7 +1153,9 @@ async fn typed_storage_metadata_http_has_one_topology_and_frozen_placement() {
     let (status, _) = send(&app, None, "GET", "/api/backup-topologies/default", None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let commit = success(&app, &token, "GET", &format!("/api/commits/{commit}"), None).await;
-    let version = commit["entries"][0]["version_id"].as_str().unwrap();
+    assert!(commit.get("entries").is_none());
+    assert!(commit["namespace"]["root"]["hash"].is_string());
+    let version = entries[1]["version_id"].as_str().unwrap();
     let placement = success(
         &app,
         &token,
@@ -1268,10 +1288,14 @@ async fn typed_protection_http_keeps_replay_wire_and_static_boundary_errors() {
 
 #[tokio::test]
 async fn typed_comparison_http_keeps_entry_wire_scope_and_identity_precedence() {
-    let (_root, app, _, left, right) = fixture();
+    let ((_root, app, _, left, right), entries) = fixture_with_entries();
     let token = login(&app, "admin", "integration-test-password").await;
     let before = success(&app, &token, "GET", &format!("/api/commits/{left}"), None).await;
     let after = success(&app, &token, "GET", &format!("/api/commits/{right}"), None).await;
+    for commit in [&before, &after] {
+        assert!(commit.get("entries").is_none());
+        assert!(commit["namespace"]["root"]["hash"].is_string());
+    }
     let comparison = success(
         &app,
         &token,
@@ -1282,7 +1306,7 @@ async fn typed_comparison_http_keeps_entry_wire_scope_and_identity_precedence() 
     .await;
     assert_eq!(
         comparison,
-        json!({"left":left,"right":right,"changes":[{"path":"data.txt","change":"modified","before":before["entries"][0],"after":after["entries"][0]}]})
+        json!({"left":left,"right":right,"changes":[{"path":"data.txt","change":"modified","before":entries[0],"after":entries[1]}]})
     );
     assert_eq!(
         success(
@@ -1316,7 +1340,7 @@ async fn typed_comparison_http_keeps_entry_wire_scope_and_identity_precedence() 
     .await;
     assert_eq!(
         cross,
-        json!({"left":left,"right":other_commit,"changes":[{"path":"data.txt","change":"removed","before":before["entries"][0]}]})
+        json!({"left":left,"right":other_commit,"changes":[{"path":"data.txt","change":"removed","before":entries[0]}]})
     );
     for (body, message) in [
         (json!(null), "expected object"),
@@ -1359,11 +1383,15 @@ async fn typed_comparison_http_keeps_entry_wire_scope_and_identity_precedence() 
 
 #[tokio::test]
 async fn typed_raw_file_history_http_preserves_version_records_and_path_binding() {
-    let (_root, app, _, left, right) = fixture();
+    let ((_root, app, _, left, right), entries) = fixture_with_entries();
     let token = login(&app, "admin", "integration-test-password").await;
     let before = success(&app, &token, "GET", &format!("/api/commits/{left}"), None).await;
     let after = success(&app, &token, "GET", &format!("/api/commits/{right}"), None).await;
-    let file = before["entries"][0]["file_id"].as_str().unwrap();
+    for commit in [&before, &after] {
+        assert!(commit.get("entries").is_none());
+        assert!(commit["namespace"]["root"]["hash"].is_string());
+    }
+    let file = entries[0]["file_id"].as_str().unwrap();
     let history = success(
         &app,
         &token,
@@ -1376,11 +1404,8 @@ async fn typed_raw_file_history_http_preserves_version_records_and_path_binding(
     assert_eq!(history["file_id"], file);
     let versions = history["versions"].as_array().unwrap();
     assert_eq!(versions.len(), 2);
-    assert_eq!(
-        versions[0]["version_id"],
-        before["entries"][0]["version_id"]
-    );
-    assert_eq!(versions[1]["version_id"], after["entries"][0]["version_id"]);
+    assert_eq!(versions[0]["version_id"], entries[0]["version_id"]);
+    assert_eq!(versions[1]["version_id"], entries[1]["version_id"]);
     for version in versions {
         assert!(version.get("content_state").is_none());
         assert!(version["version_sequence"].is_string());

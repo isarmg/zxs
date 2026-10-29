@@ -29,6 +29,19 @@ pub(crate) use namespace::{
 pub use workspace::{PreparedUpload, UploadPreparation};
 pub(crate) use workspace::{VersionBuild, WorkspaceMutation, native_commit_digest};
 
+/// Authorship shared by every record produced by one business operation.
+#[derive(Clone, Copy)]
+pub(crate) struct OperationContext<'a> {
+    principal: &'a str,
+    operation_id: OperationId,
+}
+
+/// Published namespace objects and the unpublished write-set for one mutation.
+pub(crate) struct NamespaceMutation<'a> {
+    base: &'a dyn crate::namespace::NamespaceSource,
+    fresh: &'a mut crate::namespace::NamespaceObjects,
+}
+
 pub(crate) fn now() -> Result<u64> {
     unix_seconds(SystemTime::now())
 }

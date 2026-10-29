@@ -1013,13 +1013,12 @@ impl HistoryManifest {
             } else {
                 Vec::new()
             };
-            if let Some(file) = branch.file_id.as_deref() {
-                if branch.branch_kind != BranchKind::File
+            if let Some(file) = branch.file_id.as_deref()
+                && (branch.branch_kind != BranchKind::File
                     || head_files.len() != 1
-                    || !head_files.iter().any(|(id, _)| id == file)
-                {
-                    return Err(invalid("file branch head escapes its stable file identity"));
-                }
+                    || !head_files.iter().any(|(id, _)| id == file))
+            {
+                return Err(invalid("file branch head escapes its stable file identity"));
             }
             if let Some(node) = &branch.file_node_id {
                 let body = self.file_node_version(node)?;

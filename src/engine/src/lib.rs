@@ -93,3 +93,7 @@ mod r29_local_publication;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/canonical_publication_fixture.rs"]
+mod canonical_publication_fixture;

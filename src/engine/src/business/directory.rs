@@ -697,11 +697,10 @@ pub(crate) fn namespace_locations(
     before: &storage_contract::CommitNamespace,
     after: &storage_contract::CommitNamespace,
     changes: &[NamespaceOperation],
-    principal: &str,
-    operation: OperationId,
-    base: &dyn crate::namespace::NamespaceSource,
-    fresh: &mut crate::namespace::NamespaceObjects,
+    provenance: OperationContext<'_>,
+    namespace: NamespaceMutation<'_>,
 ) -> Result<()> {
+    let NamespaceMutation { base, fresh } = namespace;
     // No operations means no path moved: a proven no-op, skipped outright.
     if changes.is_empty() {
         return Ok(());
@@ -843,7 +842,13 @@ pub(crate) fn namespace_locations(
                 .cloned();
             let context = if current.path() != old.path() {
                 Some(file_paths::rename_node(
-                    state, repository, old, current, context, principal, operation, base, fresh,
+                    state,
+                    repository,
+                    old,
+                    current,
+                    context,
+                    provenance,
+                    NamespaceMutation { base, fresh },
                 )?)
             } else {
                 state
@@ -961,11 +966,14 @@ pub(crate) fn prepare_file_write(
     branch: &str,
     file_id: &str,
     key: &str,
-    principal: &str,
-    operation: OperationId,
-    base: &dyn crate::namespace::NamespaceSource,
-    fresh: &mut crate::namespace::NamespaceObjects,
+    provenance: OperationContext<'_>,
+    namespace: NamespaceMutation<'_>,
 ) -> Result<()> {
+    let OperationContext {
+        principal,
+        operation_id: operation,
+    } = provenance;
+    let NamespaceMutation { base, fresh } = namespace;
     let Some(repository) =
         repository::main_for_branch(state, branch).map(|r| r.repository_id.clone())
     else {
@@ -1129,37 +1137,27 @@ pub(crate) fn record_directory_edits(
         if exclude.is_some_and(|key| name_policy::path_key(&path) == key) {
             continue;
         }
-        let located = {
+        let draft_snapshot = {
             let draft = crate::namespace::DraftSource {
                 fresh: &*fresh,
                 base,
             };
-            match scope(state, repository, &path, &draft) {
+            let view = match scope_view(state, repository, &path, &draft) {
                 Err(e) if e.code() == storage_contract::ErrorCode::DirectoryNotFound => continue,
                 Err(e) => return Err(e),
-                Ok(_) => true,
-            }
-        };
-        if located {
-            let draft_snapshot = {
-                let draft = crate::namespace::DraftSource {
-                    fresh: &*fresh,
-                    base,
-                };
-                DirectorySnapshotSource::capture(
-                    state,
-                    scope_view(state, repository, &path, &draft)?,
-                    &draft,
-                )?
+                Ok(view) => view,
             };
-            result.push(snapshot_source(
-                state,
-                repository,
-                draft_snapshot,
-                base,
-                fresh,
-            )?);
-        }
+            // Resolve the scope once, then materialize its frozen snapshot.
+            // An existence check must not enumerate the same subtree first.
+            DirectorySnapshotSource::capture(state, view, &draft)?
+        };
+        result.push(snapshot_source(
+            state,
+            repository,
+            draft_snapshot,
+            base,
+            fresh,
+        )?);
     }
     Ok(result)
 }
@@ -1170,12 +1168,15 @@ pub(crate) fn select_change(
     state: &mut State,
     repository: &str,
     branch_id: &str,
-    principal: &str,
-    operation: OperationId,
+    provenance: OperationContext<'_>,
     max_entries: usize,
-    base: &dyn crate::namespace::NamespaceSource,
-    fresh: &mut crate::namespace::NamespaceObjects,
+    namespace: NamespaceMutation<'_>,
 ) -> Result<Value> {
+    let OperationContext {
+        principal,
+        operation_id: operation,
+    } = provenance;
+    let NamespaceMutation { base, fresh } = namespace;
     let selected = state
         .directory_branches
         .get(branch_id)
@@ -1631,11 +1632,15 @@ impl Engine {
                         state,
                         repository,
                         &selected,
-                        principal,
-                        operation,
+                        OperationContext {
+                            principal,
+                            operation_id: operation,
+                        },
                         engine.config.max_entries,
-                        base,
-                        &mut scratch.namespace,
+                        NamespaceMutation {
+                            base,
+                            fresh: &mut scratch.namespace,
+                        },
                     )
                 })
             },
@@ -1694,11 +1699,15 @@ impl Engine {
                         state,
                         repository,
                         branch,
-                        principal,
-                        operation,
+                        OperationContext {
+                            principal,
+                            operation_id: operation,
+                        },
                         engine.config.max_entries,
-                        base,
-                        &mut scratch.namespace,
+                        NamespaceMutation {
+                            base,
+                            fresh: &mut scratch.namespace,
+                        },
                     )
                 })
             },

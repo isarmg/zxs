@@ -1,9 +1,18 @@
-//! Paged namespace unit coverage: deterministic packing, path-copy edit
+//! Paged namespace unit coverage: deterministic node encoding, path-copy edit
 //! locality, index-first point/page reads, full admission re-verification,
 //! and editor semantics mirroring the legacy flat-list operations.
 use super::*;
 use std::cell::Cell;
 use storage_contract::NamespaceOperation;
+
+#[path = "composition_path_tests.rs"]
+mod composition_path_tests;
+#[path = "depth_bound_tests.rs"]
+mod depth_bound_tests;
+#[path = "ordered_walk_tests.rs"]
+mod ordered_walk_tests;
+#[path = "page_local_tests.rs"]
+mod page_local_tests;
 
 fn missing(_: &NamespaceReference) -> Result<NamespaceNode> {
     Err(Error::new(
@@ -155,7 +164,8 @@ fn path_copy_edits_reencode_only_the_touched_route() {
         editor.seal(&mut fresh).unwrap()
     };
 
-    // The same logical namespace built flat is byte-for-byte identical.
+    // A flat rebuild is a logical oracle; only node bytes, not global packing,
+    // are canonical across edit histories.
     let mut oracle_entries = entries.clone();
     let slot = oracle_entries
         .iter_mut()
@@ -164,8 +174,17 @@ fn path_copy_edits_reencode_only_the_touched_route() {
     *slot = replaced.clone();
     let mut oracle_objects = NamespaceObjects::new();
     let oracle_root = build_from_entries(&oracle_entries, &mut oracle_objects).unwrap();
-    assert_eq!(edited.root, oracle_root.root);
     assert_eq!(edited.entries, oracle_root.entries);
+    let edited_source = DraftSource {
+        fresh: &fresh,
+        base: &base_source,
+    };
+    assert_eq!(
+        NamespaceView::new(&edited, &edited_source)
+            .collect_entries()
+            .unwrap(),
+        sorted_oracle(oracle_entries)
+    );
 
     // Locality: the edit re-encodes the touched page and its ancestor route,
     // never the untouched sibling subtree or the bulk of the base objects.
@@ -792,4 +811,116 @@ fn packing_counts_the_page_envelope_in_the_byte_bound() {
             .is_ok()
         );
     }
+}
+
+#[test]
+fn admission_rejects_mixed_index_heights_but_accepts_sparse_balanced_trees() {
+    fn child(name: &str, reference: NamespaceReference) -> NamespaceIndexChild {
+        NamespaceIndexChild {
+            first_key: name.into(),
+            entries: 1,
+            files: 1,
+            reference,
+        }
+    }
+    let mut objects = NamespaceObjects::new();
+    let mut pages = Vec::new();
+    for name in ["a", "b"] {
+        pages.push(
+            objects
+                .page(NamespacePage {
+                    format: Default::default(),
+                    entries: vec![NamespacePageEntry::File {
+                        entry_id: format!("entry_{name}"),
+                        name: name.into(),
+                        file_id: format!("file_{name}"),
+                        version_id: format!("ver_{name}"),
+                        size: 0,
+                    }],
+                })
+                .unwrap(),
+        );
+    }
+    // Interior fanout one is part of the wire contract. Builder occupancy
+    // choices must not turn into a stricter external admission requirement.
+    let left = objects
+        .index(NamespaceIndex {
+            format: Default::default(),
+            children: vec![child("a", pages[0].clone())],
+        })
+        .unwrap();
+    let right = objects
+        .index(NamespaceIndex {
+            format: Default::default(),
+            children: vec![child("b", pages[1].clone())],
+        })
+        .unwrap();
+    let balanced = CommitNamespace {
+        root: objects
+            .index(NamespaceIndex {
+                format: Default::default(),
+                children: vec![child("a", left), child("b", right.clone())],
+            })
+            .unwrap(),
+        entries: 2,
+    };
+    let base = deny();
+    assert_eq!(
+        verify_namespace(
+            &balanced,
+            &DraftSource {
+                fresh: &objects,
+                base: &base
+            },
+            2
+        )
+        .unwrap(),
+        2
+    );
+
+    let mixed = CommitNamespace {
+        root: objects
+            .index(NamespaceIndex {
+                format: Default::default(),
+                children: vec![child("a", pages[0].clone()), child("b", right)],
+            })
+            .unwrap(),
+        entries: 2,
+    };
+    let error = verify_namespace(
+        &mixed,
+        &DraftSource {
+            fresh: &objects,
+            base: &base,
+        },
+        2,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ObjectCorrupt);
+    assert!(error.to_string().contains("different heights"));
+}
+
+#[test]
+fn admission_allows_each_directory_its_own_index_height() {
+    let mut entries = vec![
+        directory("wide", 1),
+        directory("narrow", 2),
+        file("narrow/only", 3),
+    ];
+    entries.extend((0..130).map(|n| file(&format!("wide/file-{n:04}"), 1000 + n)));
+    let mut objects = NamespaceObjects::new();
+    let namespace = build_from_entries(&entries, &mut objects).unwrap();
+    let base = deny();
+    assert_eq!(
+        verify_namespace(
+            &namespace,
+            &DraftSource {
+                fresh: &objects,
+                base: &base
+            },
+            entries.len() as u64
+        )
+        .unwrap(),
+        entries.len() as u64,
+    );
 }

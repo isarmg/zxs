@@ -747,43 +747,36 @@ impl Engine {
                 return Err(Error::new(storage_contract::ErrorCode::ResourceLimit,"directory entry budget exceeded"));
             }
             let renamed_directories=directory::prepare_renamed_directories(state,repository,&previous.namespace,std::slice::from_ref(&change),base,&mut scratch.namespace)?;
-            super::directory::namespace_locations(state,repository,&previous.namespace,&namespace,std::slice::from_ref(&change),principal,operation,base,&mut scratch.namespace)?;
-            // Pending reservations survive only while their file is still
-            // present: point lookups per pending key, never a full scan.
-            let pending_file_versions={
+            super::directory::namespace_locations(
+                state,
+                repository,
+                &previous.namespace,
+                &namespace,
+                std::slice::from_ref(&change),
+                OperationContext { principal, operation_id: operation },
+                NamespaceMutation { base, fresh: &mut scratch.namespace },
+            )?;
+            // Both reservation maps share physical-path probes and one
+            // fallback walk for aliases outside their owning physical paths.
+            let (pending_file_versions,dead)={
                 let draft=crate::namespace::DraftSource{fresh:&scratch.namespace,base};
-                let view=crate::namespace::NamespaceView::new(&namespace,&draft);
-                let mut retained=std::collections::BTreeMap::new();
-                for (file,source) in previous.pending_file_versions.iter() {
-                    let live=state.file_locations.get(file)
-                        .map(|location|view.resolve_key(&name_policy::path_key(location)))
-                        .transpose()?
-                        .flatten()
-                        .is_some_and(|entry|entry.kind==NamespaceEntryKind::File&&entry.file_id==file.as_str())
-                        || view.find_file(file)?.is_some();
-                    if live {retained.insert(file.clone(),source.clone());}
-                }
-                retained
+                let candidates=previous.pending_file_versions.keys()
+                    .chain(branch.pending_file_versions.keys())
+                    .map(String::as_str)
+                    .collect();
+                let live=super::workspace::live_pending_files(&namespace,candidates,&state.file_locations,&draft)?;
+                let retained=previous.pending_file_versions.iter()
+                    .filter(|(file,_)|live.contains(file.as_str()))
+                    .map(|(file,source)|(file.clone(),source.clone()))
+                    .collect::<std::collections::BTreeMap<_,_>>();
+                let dead=branch.pending_file_versions.keys()
+                    .filter(|file|!live.contains(file.as_str()))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                (retained,dead)
             };
             let id=new_id("commit");
             state.commits.insert(id.clone(),Commit{ namespace_deletions: namespace::deletion_record(deleted, now()?),commit_id:id.clone(),history_tree_id:branch.history_tree_id.clone(),kind:"namespace".into(),parent_commit_ids:vec![previous.commit_id],tree_id:new_id("tree"),sequence:state.sequence,operation_id:operation,author:principal.into(),message:format!("{} {}",change.kind().as_str(),change.path()),namespace:namespace.clone(),pending_file_versions:pending_file_versions.clone(),provenance:None});
-            // The branch's reservations shrink by the same liveness rule.
-            let dead={
-                let draft=crate::namespace::DraftSource{fresh:&scratch.namespace,base};
-                let view=crate::namespace::NamespaceView::new(&namespace,&draft);
-                let mut dead=Vec::new();
-                for file in branch.pending_file_versions.keys() {
-                    let live=pending_file_versions.contains_key(file)
-                        || state.file_locations.get(file)
-                            .map(|location|view.resolve_key(&name_policy::path_key(location)))
-                            .transpose()?
-                            .flatten()
-                            .is_some_and(|entry|entry.kind==NamespaceEntryKind::File&&entry.file_id==file.as_str())
-                        || view.find_file(file)?.is_some();
-                    if !live {dead.push(file.clone());}
-                }
-                dead
-            };
             let branch=state.branches.get_mut(&repo.main_branch_id).expect("checked");branch.head_commit_id=id.clone();branch.generation = branch.generation.checked_add(1).ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "branch generation exhausted"))?;
             for file in dead {branch.pending_file_versions.remove(&file);}
             let mut changed_paths=vec![change.path().to_owned()];

@@ -10,6 +10,8 @@ use json_codec::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
 use storage_contract::Config;
 
+#[path = "alias_order_tests.rs"]
+mod alias_order_tests;
 #[path = "authorization_tests.rs"]
 mod authorization_tests;
 

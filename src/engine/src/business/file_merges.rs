@@ -87,7 +87,14 @@ impl Engine {
                     chosen_node_id:chosen_node.into(),result_node_id:result.clone(),surviving_branch_id:survivor.into(),
                     reused_node:reused,parent_node_ids:edges,operation_id:operation,sequence:state.sequence,
                 });
-                engine.with_namespace_source(|base| super::file_publication::advance_branch_node(state,survivor,&result,true,principal,operation,base,&mut scratch.namespace))?;
+                engine.with_namespace_source(|base| super::file_publication::advance_branch_node(
+                    state,
+                    survivor,
+                    &result,
+                    true,
+                    OperationContext { principal, operation_id: operation },
+                    NamespaceMutation { base, fresh: &mut scratch.namespace },
+                ))?;
                 let affected = engine.with_namespace_source(|base| super::file_publication::publish_node(state, crate::business::file_publication::NodePublication { file, matching_branches: &branches, matching_node: None, target_branch: survivor, target_node: &result, principal, operation, maximum: engine.config.max_entries }, base, &mut scratch.namespace))?;
                 for branch in branches.iter().filter(|branch| branch.as_str()!=survivor) {
                     state.file_branch_aliases.insert(branch.clone(),survivor.into());

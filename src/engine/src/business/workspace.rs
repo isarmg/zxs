@@ -12,10 +12,32 @@ use platform_io::fs_safety::{
 };
 use std::os::unix::ffi::OsStrExt;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io::{Read, Write},
     path::Path,
 };
+
+/// Identity and visible content fenced by a workspace namespace operation.
+#[derive(PartialEq, Eq)]
+struct NamespaceBaselineEntry {
+    entry_id: String,
+    file_id: String,
+    kind: NamespaceEntryKind,
+    path: String,
+    version_id: String,
+}
+
+impl From<&Entry> for NamespaceBaselineEntry {
+    fn from(entry: &Entry) -> Self {
+        Self {
+            entry_id: entry.entry_id.clone(),
+            file_id: entry.file_id.clone(),
+            kind: entry.kind,
+            path: entry.path().to_owned(),
+            version_id: entry.version_id.clone(),
+        }
+    }
+}
 
 fn upload_fingerprint_file(input: std::fs::File, maximum: u64) -> Result<(u64, ContentHash)> {
     let mut digest = blake3::Hasher::new();
@@ -420,6 +442,44 @@ fn validate_file_context(
         ));
     }
     Ok(())
+}
+
+/// Physical paths are only hints: an inherited composition can retain a file
+/// through another alias. Resolve all remaining identities in one walk rather
+/// than traversing the namespace separately for every pending reservation.
+pub(super) fn live_pending_files(
+    namespace: &storage_contract::CommitNamespace,
+    candidates: BTreeSet<&str>,
+    locations: &BTreeMap<String, String>,
+    source: &dyn crate::namespace::NamespaceSource,
+) -> Result<BTreeSet<String>> {
+    let view = crate::namespace::NamespaceView::new(namespace, source);
+    let mut live = BTreeSet::new();
+    let mut unresolved = BTreeSet::new();
+    for file in candidates {
+        let found = locations
+            .get(file)
+            .map(|location| view.resolve_key(&name_policy::path_key(location)))
+            .transpose()?
+            .flatten()
+            .is_some_and(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file);
+        if found {
+            live.insert(file.to_owned());
+        } else {
+            unresolved.insert(file);
+        }
+    }
+    if !unresolved.is_empty() {
+        view.walk(|_, entry| {
+            if let storage_contract::NamespacePageEntry::File { file_id, .. } = entry
+                && unresolved.remove(file_id.as_str())
+            {
+                live.insert(file_id.clone());
+            }
+            Ok(!unresolved.is_empty())
+        })?;
+    }
+    Ok(live)
 }
 
 pub(crate) struct VersionBuild<'a> {
@@ -1590,16 +1650,20 @@ impl crate::engine::PlanningContext<'_> {
                         // opened. In particular, every directory has an empty
                         // version_id, so path/content alone cannot fence it.
                         // Each view enumerates only this operation's subtree.
-                        let selected = |view: &crate::namespace::NamespaceView<'_, dyn crate::namespace::NamespaceSource + '_>| -> Result<Vec<(String, String, NamespaceEntryKind, String, String)>> {
+                        let selected = |
+                            view: &crate::namespace::NamespaceView<
+                                '_, dyn crate::namespace::NamespaceSource + '_
+                            >,
+                        | -> Result<Vec<NamespaceBaselineEntry>> {
                             let mut out = Vec::new();
                             match view.resolve_key(key)? {
                                 None => {}
                                 Some(entry) if entry.kind == NamespaceEntryKind::File => {
-                                    out.push((entry.entry_id.clone(), entry.file_id.clone(), entry.kind, entry.path().to_owned(), entry.version_id.clone()));
+                                    out.push(NamespaceBaselineEntry::from(&entry));
                                 }
                                 Some(_) => {
                                     view.walk_subtree(key, |_, entry| {
-                                        out.push((entry.entry_id.clone(), entry.file_id.clone(), entry.kind, entry.path().to_owned(), entry.version_id.clone()));
+                                        out.push(NamespaceBaselineEntry::from(entry));
                                         Ok(true)
                                     })?;
                                 }
@@ -1622,7 +1686,18 @@ impl crate::engine::PlanningContext<'_> {
                     let path = location.as_str();
                     written_paths.push(path.to_owned());
                     let file_id = existing.as_ref().map(|entry| entry.file_id.clone()).unwrap_or_else(|| new_id("file"));
-                    super::directory::prepare_file_write(engine,state,&w.branch_id,&file_id,location.key(),&request.principal,request.operation_id,published,&mut scratch.namespace)?;
+                    super::directory::prepare_file_write(
+                        engine,
+                        state,
+                        &w.branch_id,
+                        &file_id,
+                        location.key(),
+                        OperationContext {
+                            principal: &request.principal,
+                            operation_id: request.operation_id,
+                        },
+                        NamespaceMutation { base: published, fresh: &mut scratch.namespace },
+                    )?;
                     let (file_context, pending_source) = {
                         let draft = crate::namespace::DraftSource { fresh: &scratch.namespace, base: published };
                         let file_context = directory::branch_context_at_key(state,&w.branch_id,location.key(),&draft)?;
@@ -1700,42 +1775,45 @@ impl crate::engine::PlanningContext<'_> {
                 if namespace.entries > engine.config.max_entries as u64 {
                     return Err(Error::new(storage_contract::ErrorCode::ResourceLimit, "directory entry budget exceeded"));
                 }
-                super::directory::namespace_locations(state,&repo.repository_id,&current.namespace,&namespace,&w.namespace_operations,&request.principal,request.operation_id,published,&mut scratch.namespace)?;
+                super::directory::namespace_locations(
+                    state,
+                    &repo.repository_id,
+                    &current.namespace,
+                    &namespace,
+                    &w.namespace_operations,
+                    OperationContext {
+                        principal: &request.principal,
+                        operation_id: request.operation_id,
+                    },
+                    NamespaceMutation { base: published, fresh: &mut scratch.namespace },
+                )?;
                 // Deterministic packing makes an unchanged draft reseal to the
                 // identical root, so no-change is one reference comparison.
                 if namespace.root == current.namespace.root && deleted.is_empty() {
                     return Ok(json!({"commit_id":current.commit_id,"branch_id":branch.branch_id,"history_tree_id":branch.history_tree_id,"no_change":true}));
                 }
-                // Reservations survive only while their file is still present:
-                // point lookups per pending key, never a full namespace scan.
+                // Point-resolve pending physical paths, then resolve all alias
+                // misses in one walk shared by both reservation maps.
                 let (snapshot_pending, dead_branch_pending) = {
                     let draft = crate::namespace::DraftSource { fresh: &scratch.namespace, base: published };
-                    let view = crate::namespace::NamespaceView::new(&namespace, &draft);
-                    let live = |file: &String| -> Result<bool> {
-                        Ok(state.file_locations.get(file)
-                            .map(|location| view.resolve_key(&name_policy::path_key(location)))
-                            .transpose()?
-                            .flatten()
-                            .is_some_and(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == *file)
-                            || view.find_file(file)?.is_some())
-                    };
-                    let mut retained = std::collections::BTreeMap::new();
-                    for (file, source) in current.pending_file_versions.iter() {
-                        if !written_files.contains(file) && live(file)? {
-                            retained.insert(file.clone(), source.clone());
-                        }
-                    }
-                    let mut dead = Vec::new();
                     let branch_pending: Vec<String> = state
                         .branches
                         .get(&w.branch_id)
                         .map(|b| b.pending_file_versions.keys().cloned().collect())
                         .unwrap_or_default();
-                    for file in branch_pending {
-                        if written_files.contains(&file) || !(retained.contains_key(&file) || live(&file)?) {
-                            dead.push(file);
-                        }
-                    }
+                    let candidates = current.pending_file_versions.keys()
+                        .chain(branch_pending.iter())
+                        .filter(|file| !written_files.contains(*file))
+                        .map(String::as_str)
+                        .collect();
+                    let live = live_pending_files(&namespace, candidates, &state.file_locations, &draft)?;
+                    let retained = current.pending_file_versions.iter()
+                        .filter(|(file, _)| live.contains(file.as_str()))
+                        .map(|(file, source)| (file.clone(), source.clone()))
+                        .collect();
+                    let dead = branch_pending.into_iter()
+                        .filter(|file| !live.contains(file))
+                        .collect::<Vec<_>>();
                     (retained, dead)
                 };
                 state.commits.insert(commit_id.clone(), Commit {

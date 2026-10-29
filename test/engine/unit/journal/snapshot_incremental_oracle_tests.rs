@@ -271,11 +271,7 @@ fn incremental_oracle_fixture_covers_every_tracked_field_and_current_wire_catego
 /// exactly as publication leaves it; plant the fixture's recorded namespaces
 /// so oracle stores onto fresh disks meet the same precondition.
 fn plant_fixture_namespaces(members: &[DiskConfig]) {
-    for entries in fixture()["commit_namespaces"].as_object().unwrap().values() {
-        let entries: Vec<storage_contract::Entry> =
-            json_codec::from_value(entries.clone()).unwrap();
-        crate::namespace::fixture_store::namespace_stored(&entries, members);
-    }
+    crate::canonical_publication_fixture::CanonicalPublicationFixture::read().restore(members);
 }
 
 fn baseline(state: &State, members: &[DiskConfig]) -> SnapshotReuse {

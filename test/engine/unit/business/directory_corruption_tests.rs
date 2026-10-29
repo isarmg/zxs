@@ -249,3 +249,38 @@ fn directory_snapshot_source_shares_immutable_commit_and_only_owns_selected_entr
     assert_eq!(source.current.namespace, old_namespace);
     assert_eq!(source.entries[0].path(), "folder/file.txt");
 }
+
+#[test]
+fn recording_root_directory_edits_materializes_its_namespace_once() {
+    let (_temporary, engine, repo, _) = fixture();
+    let mut state = engine.state().clone();
+    let head = &state.branches[&repo.main_branch_id].head_commit_id;
+    let root = state.commits[head].namespace.root.clone();
+    let reads = std::cell::Cell::new(0);
+    let mut fresh = crate::namespace::NamespaceObjects::new();
+    let recorded = engine
+        .with_namespace_source(|base| {
+            let source = crate::namespace::LoaderSource(
+                |reference: &storage_contract::NamespaceReference| {
+                    if reference == &root {
+                        reads.set(reads.get() + 1);
+                    }
+                    base.node(reference)
+                },
+            );
+            record_directory_edits(
+                &mut state,
+                &repo.repository_id,
+                &["folder".into()],
+                None,
+                &source,
+                &mut fresh,
+            )
+        })
+        .unwrap();
+    assert_eq!(reads.get(), 1);
+    assert_eq!(
+        recorded,
+        vec![state.directory_selections[&repo.repository_id].clone()]
+    );
+}

@@ -84,6 +84,120 @@ fn directory(path: &str) -> Entry {
 }
 
 #[test]
+fn pending_alias_liveness_walks_missing_physical_hints_together() {
+    use crate::namespace::NamespaceSource;
+
+    let mut entries = vec![directory("visible")];
+    let mut pending = BTreeSet::new();
+    let mut locations = BTreeMap::new();
+    for index in 0..384 {
+        let entry = Entry {
+            entry_id: new_id("entry"),
+            path: name_policy::PortablePath::parse(&format!("visible/file-{index:04}.txt"))
+                .unwrap(),
+            kind: NamespaceEntryKind::File,
+            file_id: new_id("file"),
+            version_id: new_id("ver"),
+            size: 1,
+        };
+        if [0, 129, 257].contains(&index) {
+            pending.insert(entry.file_id.clone());
+            locations.insert(entry.file_id.clone(), format!("owner/file-{index:04}.txt"));
+            let mut alias = entry.clone();
+            alias.relocate(
+                name_policy::PortablePath::parse(&format!("visible/alias-{index:04}.txt")).unwrap(),
+            );
+            entries.push(alias);
+        }
+        entries.push(entry);
+    }
+    let absent = new_id("file");
+    let candidates = pending
+        .iter()
+        .map(String::as_str)
+        .chain(std::iter::once(absent.as_str()))
+        .collect();
+    let mut objects = crate::namespace::NamespaceObjects::new();
+    let namespace = crate::namespace::build_from_entries(&entries, &mut objects).unwrap();
+    let missing = crate::namespace::LoaderSource(
+        |_: &storage_contract::NamespaceReference| -> Result<crate::namespace::NamespaceNode> {
+            Err(Error::new(
+                ErrorCode::ObjectCorrupt,
+                "fixture object missing",
+            ))
+        },
+    );
+    let draft = crate::namespace::DraftSource {
+        fresh: &objects,
+        base: &missing,
+    };
+    let reads = std::cell::RefCell::new(BTreeMap::<String, usize>::new());
+    let counted =
+        crate::namespace::LoaderSource(|reference: &storage_contract::NamespaceReference| {
+            *reads
+                .borrow_mut()
+                .entry(reference.hash.clone())
+                .or_default() += 1;
+            draft.node(reference)
+        });
+    let live = live_pending_files(&namespace, candidates, &locations, &counted).unwrap();
+    assert_eq!(live, pending);
+    // Every missing physical path probes only the one-page root. The one
+    // fallback walk reads the indexed visible directory exactly once, even
+    // with several pending aliases and an identity that has really vanished.
+    let observed = reads.borrow();
+    assert_eq!(observed[&namespace.root.hash], locations.len() + 1);
+    let descendant_reads = observed
+        .iter()
+        .filter(|(hash, _)| *hash != &namespace.root.hash)
+        .map(|(_, count)| *count)
+        .collect::<Vec<_>>();
+    assert!(descendant_reads.len() >= 4);
+    assert!(descendant_reads.iter().all(|count| *count == 1));
+    let full_walk_reads = descendant_reads.len();
+    drop(observed);
+
+    reads.borrow_mut().clear();
+    let candidates = pending.iter().map(String::as_str).collect();
+    assert_eq!(
+        live_pending_files(&namespace, candidates, &locations, &counted).unwrap(),
+        pending
+    );
+    // All live aliases are at the front: do not read unrelated later pages
+    // once every candidate has been found.
+    assert!(reads.borrow().len() - 1 < full_walk_reads);
+}
+
+#[test]
+fn pending_liveness_preserves_point_and_fallback_read_errors() {
+    let mut objects = crate::namespace::NamespaceObjects::new();
+    let namespace = crate::namespace::build_from_entries(&[], &mut objects).unwrap();
+    let file = new_id("file");
+    let failed = crate::namespace::LoaderSource(
+        |_: &storage_contract::NamespaceReference| -> Result<crate::namespace::NamespaceNode> {
+            Err(Error::new(
+                ErrorCode::ObjectCorrupt,
+                "pending source failed",
+            ))
+        },
+    );
+    for locations in [
+        BTreeMap::from([(file.clone(), "missing.txt".into())]),
+        BTreeMap::new(),
+    ] {
+        let error = live_pending_files(
+            &namespace,
+            BTreeSet::from([file.as_str()]),
+            &locations,
+            &failed,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::ObjectCorrupt);
+        assert!(error.to_string().contains("pending source failed"));
+    }
+}
+
+#[test]
 fn directory_generation_checks_match_both_views_roots_and_component_boundaries() {
     let (_temporary, mut engine, repo) = fixture();
     let mut workspace = engine
@@ -548,6 +662,72 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
 }
 
 #[test]
+fn workspace_namespace_deletions_keep_rename_slots_until_commit() {
+    let (_temporary, mut engine, repo) = fixture();
+    let upload = engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    for path in ["p/a", "p/z"] {
+        engine
+            .stage_bytes(&upload.workspace_id, path, b"original")
+            .unwrap();
+    }
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: upload.workspace_id,
+            operation_id: storage_contract::OperationId::generate(),
+            principal: "admin".into(),
+            expected_head: upload.base_head,
+            fencing_token: upload.fencing_token,
+            message: "deletion ordering fixture".into(),
+            request_digest: None,
+        })
+        .unwrap();
+
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    for operation in [
+        NamespaceOperation::parse(NamespaceOperationKind::Rename, "p/z", Some("p/0")).unwrap(),
+        NamespaceOperation::parse(NamespaceOperationKind::DeleteTree, "p", None).unwrap(),
+    ] {
+        engine
+            .namespace_operation(&workspace.workspace_id, operation)
+            .unwrap();
+    }
+    let plan = engine
+        .plan_workspace_commit_inner(
+            CommitRequest {
+                workspace_id: workspace.workspace_id,
+                operation_id: storage_contract::OperationId::generate(),
+                principal: "admin".into(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: "rename then delete tree".into(),
+                request_digest: None,
+            },
+            None,
+        )
+        .unwrap();
+    let MutationPlan::Prepared { next, result, .. } = plan.mutation else {
+        panic!("namespace deletion must produce a candidate");
+    };
+    let committed = &next.commits[result.commit_id.as_ref().unwrap()];
+    let deleted = &committed.namespace_deletions.as_ref().unwrap().paths;
+    assert_eq!(
+        deleted
+            .iter()
+            .map(|fact| (fact.path.as_str(), fact.kind))
+            .collect::<Vec<_>>(),
+        [
+            ("p", NamespaceEntryKind::Directory),
+            ("p/a", NamespaceEntryKind::File),
+            ("p/0", NamespaceEntryKind::File),
+        ]
+    );
+}
+
+#[test]
 fn workspace_first_writes_clear_only_written_pending_file_identities() {
     let (_temporary, mut engine, repo) = fixture();
     let source = engine.state().branches[&repo.main_branch_id]
@@ -628,3 +808,6 @@ fn workspace_first_writes_clear_only_written_pending_file_identities() {
     assert!(find_unordered(&commit_entries, "New.txt").is_some());
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
 }
+
+#[path = "workspace_namespace_path_budget_tests.rs"]
+mod namespace_path_budget_tests;

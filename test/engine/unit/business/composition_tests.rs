@@ -648,10 +648,14 @@ fn namespace_bookkeeping_uses_paths_and_keeps_the_first_match_in_unsorted_entrie
         &before_namespace,
         &after_namespace,
         &[NamespaceOperation::parse(NamespaceOperationKind::Delete, "Gone.txt", None).unwrap()],
-        "admin",
-        OperationId::generate(),
-        &crate::namespace::fixture_store::FixtureSource,
-        &mut fresh,
+        OperationContext {
+            principal: "admin",
+            operation_id: OperationId::generate(),
+        },
+        NamespaceMutation {
+            base: &crate::namespace::fixture_store::FixtureSource,
+            fresh: &mut fresh,
+        },
     )
     .unwrap();
     assert_eq!(state.file_contexts.len(), 2);

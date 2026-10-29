@@ -52,6 +52,149 @@ fn file(engine: &Engine, branch: &str) -> Entry {
         .unwrap()
 }
 
+fn pending_alias_fixture() -> (tempfile::TempDir, Engine, Repository, Vec<Entry>) {
+    let (root, mut engine, repo) = fixture();
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    for path in ["a.txt", "b.txt", "c.txt"] {
+        engine
+            .stage_bytes(&workspace.workspace_id, path, b"source")
+            .unwrap();
+    }
+    commit(&mut engine, workspace);
+    let original = engine.list_tree(&repo.main_branch_id).unwrap();
+    let mut aliases = original.clone();
+    for entry in &mut aliases {
+        entry.relocate(
+            name_policy::PortablePath::parse(&format!("alias-{}", entry.name())).unwrap(),
+        );
+    }
+    let mut second_alias = aliases[0].clone();
+    second_alias.relocate(name_policy::PortablePath::parse("another-a.txt").unwrap());
+    aliases.push(second_alias);
+    let operation = OperationId::generate();
+    engine
+        .mutate("fixture.pending_aliases", "admin", operation, json!({}), |_, state, scratch| {
+            let branch = state.branches[&repo.main_branch_id].clone();
+            let mut head = state.commits[&branch.head_commit_id].clone();
+            head.parent_commit_ids = vec![head.commit_id.clone()];
+            head.commit_id = new_id("commit");
+            head.tree_id = new_id("tree");
+            head.sequence = state.sequence;
+            head.operation_id = operation;
+            head.namespace = crate::namespace::build_from_entries(&aliases, &mut scratch.namespace)?;
+            // A commit-only reservation and a branch-only reservation remain
+            // independent. All source identities are real published versions.
+            head.pending_file_versions = original[..2].iter()
+                .map(|entry| (entry.file_id.clone(), entry.version_id.clone()))
+                .collect();
+            let id = head.commit_id.clone();
+            state.commits.insert(id.clone(), head);
+            let branch = state.branches.get_mut(&repo.main_branch_id).unwrap();
+            branch.head_commit_id = id.clone();
+            branch.pending_file_versions = [0, 2].into_iter()
+                .map(|index| (original[index].file_id.clone(), original[index].version_id.clone()))
+                .collect();
+            // Existing physical ownership is deliberately not relocated by
+            // this logical alias composition.
+            Ok(json!({"commit_id":id,"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id}))
+        })
+        .unwrap();
+    (root, engine, repo, original)
+}
+
+#[test]
+fn direct_namespace_preserves_pending_aliases_and_removes_only_last_occurrences() {
+    let (_root, mut engine, repo, original) = pending_alias_fixture();
+    let initial_branch = engine.state().branches[&repo.main_branch_id].clone();
+    let initial_head = &engine.state().commits[&initial_branch.head_commit_id];
+    let initial_commit_pending = initial_head.pending_file_versions.clone();
+    // Measure the shared resolver with this direct API's actual candidate
+    // union. Each missing physical hint plus one collective walk reads the
+    // one-page alias namespace; there is no per-ID fallback traversal.
+    let reads = std::cell::Cell::new(0);
+    let live = engine
+        .with_namespace_source(|base| {
+            let source = crate::namespace::LoaderSource(
+                |reference: &storage_contract::NamespaceReference| {
+                    reads.set(reads.get() + 1);
+                    base.node(reference)
+                },
+            );
+            let candidates = initial_head
+                .pending_file_versions
+                .keys()
+                .chain(initial_branch.pending_file_versions.keys())
+                .map(String::as_str)
+                .collect();
+            super::super::workspace::live_pending_files(
+                &initial_head.namespace,
+                candidates,
+                &engine.state().file_locations,
+                &source,
+            )
+        })
+        .unwrap();
+    assert_eq!(live.len(), 3);
+    assert_eq!(reads.get(), 4);
+
+    let before = canonical_json(engine.state()).unwrap();
+    let error = engine
+        .file_namespace(
+            &repo.repository_id,
+            NamespaceOperation::parse(NamespaceOperationKind::Delete, "missing.txt", None).unwrap(),
+            "admin",
+            OperationId::generate(),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::EntryNotFound);
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+
+    engine
+        .file_namespace(
+            &repo.repository_id,
+            NamespaceOperation::parse(NamespaceOperationKind::Delete, "alias-a.txt", None).unwrap(),
+            "admin",
+            OperationId::generate(),
+        )
+        .unwrap();
+    let branch = &engine.state().branches[&repo.main_branch_id];
+    assert_eq!(
+        branch.pending_file_versions,
+        initial_branch.pending_file_versions
+    );
+    assert_eq!(
+        engine.state().commits[&branch.head_commit_id].pending_file_versions,
+        initial_commit_pending
+    );
+
+    engine
+        .file_namespace(
+            &repo.repository_id,
+            NamespaceOperation::parse(NamespaceOperationKind::Delete, "another-a.txt", None)
+                .unwrap(),
+            "admin",
+            OperationId::generate(),
+        )
+        .unwrap();
+    let branch = &engine.state().branches[&repo.main_branch_id];
+    assert_eq!(
+        branch.pending_file_versions,
+        std::collections::BTreeMap::from([(
+            original[2].file_id.clone(),
+            original[2].version_id.clone(),
+        )])
+    );
+    assert_eq!(
+        engine.state().commits[&branch.head_commit_id].pending_file_versions,
+        std::collections::BTreeMap::from([(
+            original[1].file_id.clone(),
+            original[1].version_id.clone(),
+        )])
+    );
+}
+
 #[test]
 fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
     for state in [BranchState::Archived, BranchState::Merged] {

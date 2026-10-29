@@ -613,27 +613,16 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
 
 #[test]
 fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies() {
-    let fixture: json_codec::Value = json_codec::from_str(include_str!(
-        "../journal/fixtures/canonical_publication.json"
-    ))
-    .unwrap();
-    let before: State = json_codec::from_str(fixture["state_bytes"].as_str().unwrap()).unwrap();
-    let mut after = before.clone();
-    after.begin_tracking();
     let temp = tempfile::tempdir().unwrap();
     let config = Config::development([
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("c"),
     ]);
-    // Publish the recorded commit namespaces onto these member disks; the
-    // manifest encoder walks them through the same disk-backed source.
-    for (commit_id, entries) in fixture["commit_namespaces"].as_object().unwrap() {
-        let entries: Vec<storage_contract::Entry> =
-            json_codec::from_value(entries.clone()).unwrap();
-        let namespace = crate::namespace::fixture_store::namespace_stored(&entries, &config.disks);
-        assert_eq!(namespace, before.commits[commit_id.as_str()].namespace);
-    }
+    let before = crate::canonical_publication_fixture::CanonicalPublicationFixture::read()
+        .restore(&config.disks);
+    let mut after = before.clone();
+    after.begin_tracking();
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
     let history = before.histories.keys().next().unwrap();
     let hash = &roots.catalog_binding(history).unwrap().hash;

@@ -126,7 +126,14 @@ impl Engine {
                         kind:FileMetadataKind::Tags,tags:tags.clone(),operation_id:operation,author:principal.into(),sequence:state.sequence,created_at:now()?,
                     });
                     if advance {
-                        engine.with_namespace_source(|base| file_publication::advance_branch_node(state,&target.branch_id,&node,false,principal,operation,base,&mut scratch.namespace))?;
+                        engine.with_namespace_source(|base| file_publication::advance_branch_node(
+                            state,
+                            &target.branch_id,
+                            &node,
+                            false,
+                            OperationContext { principal, operation_id: operation },
+                            NamespaceMutation { base, fresh: &mut scratch.namespace },
+                        ))?;
                     }
                     let directories = engine.with_namespace_source(|base| file_publication::publish_node(state, crate::business::file_publication::NodePublication { file, matching_branches: &BTreeSet::from([target.branch_id.clone()]), matching_node: Some(&target.source_node_id), target_branch: &target.branch_id, target_node: &node, principal, operation, maximum: engine.config.max_entries }, base, &mut scratch.namespace))?;
                     results.push(json!({"branch_id":target.branch_id,"source_node_id":target.source_node_id,"node_id":node,"tags":tags,"no_change":false,"advanced":advance,"directory_branch_ids":directories}));

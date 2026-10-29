@@ -101,14 +101,15 @@ fn op_dir_entry(
     })
     .expect("invariant: directory entries are plain JSON records")
 }
+type LogDirectoryEntry = (u64, json_codec::Value);
+type EncodedLog = (Vec<PreparedMetadataObject>, Vec<LogDirectoryEntry>);
+type EncodedLogBodies = (Vec<PreparedMetadataObject>, Option<LogDirectoryEntry>);
+
 /// Objects to install plus the complete directory for one segmented log:
 /// every sealed reference, the open tail (when non-empty) as its own object,
 /// and the retained fresh-seal body so a seal decided this transaction is
 /// actually installed before PREPARE.
-fn events_log_encoding(
-    state: &State,
-    maximum: usize,
-) -> Result<(Vec<PreparedMetadataObject>, Vec<(u64, json_codec::Value)>)> {
+fn events_log_encoding(state: &State, maximum: usize) -> Result<EncodedLog> {
     let (objects, tail) = events_log_objects(state, maximum)?;
     let mut entries = state
         .events
@@ -127,13 +128,7 @@ fn events_log_encoding(
 }
 /// Prepare only resident bodies. Incremental directory encoding resolves each
 /// requested key from the resident directory instead of serializing its prefix.
-fn events_log_objects(
-    state: &State,
-    maximum: usize,
-) -> Result<(
-    Vec<PreparedMetadataObject>,
-    Option<(u64, json_codec::Value)>,
-)> {
+fn events_log_objects(state: &State, maximum: usize) -> Result<EncodedLogBodies> {
     let mut objects = Vec::new();
     let mut tail = None;
     if let Some((_, segment)) = state.events.fresh_seal() {
@@ -158,10 +153,7 @@ fn events_log_objects(
     }
     Ok((objects, tail))
 }
-fn operations_log_encoding(
-    state: &State,
-    maximum: usize,
-) -> Result<(Vec<PreparedMetadataObject>, Vec<(u64, json_codec::Value)>)> {
+fn operations_log_encoding(state: &State, maximum: usize) -> Result<EncodedLog> {
     let (objects, tail) = operations_log_objects(state, maximum)?;
     let mut entries = state
         .operations
@@ -183,13 +175,7 @@ fn operations_log_encoding(
     entries.extend(tail);
     Ok((objects, entries))
 }
-fn operations_log_objects(
-    state: &State,
-    maximum: usize,
-) -> Result<(
-    Vec<PreparedMetadataObject>,
-    Option<(u64, json_codec::Value)>,
-)> {
+fn operations_log_objects(state: &State, maximum: usize) -> Result<EncodedLogBodies> {
     let mut objects = Vec::new();
     let mut tail = None;
     if let Some((_, segment)) = state.operations.fresh_seal() {
@@ -465,7 +451,7 @@ fn prepare_inner(
                         // from exact point reads of the published basis
                         // pages, memoized so each page is read once.
                         let mut pages: BTreeMap<String, json_codec::Value> = BTreeMap::new();
-                        let locators = builder.encoder.update_typed(
+                        builder.encoder.update_typed(
                             basis_root,
                             appended.keys().cloned().collect::<BTreeSet<_>>(),
                             ProofMeasure::Plain,
@@ -492,8 +478,7 @@ fn prepare_inner(
                                     },
                                 )
                             },
-                        )?;
-                        locators
+                        )?
                     }
                     None => full_locator_root(&mut builder.encoder, state)?,
                 }

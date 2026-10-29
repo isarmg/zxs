@@ -1,37 +1,12 @@
 use super::*;
 
 fn fixture() -> State {
-    let fixture: json_codec::Value = json_codec::from_str(include_str!(
-        "../journal/fixtures/canonical_publication.json"
-    ))
-    .unwrap();
-    let state: State = json_codec::from_str(fixture["state_bytes"].as_str().unwrap()).unwrap();
-    // Publish every recorded commit namespace into the in-process fixture
-    // store; the deterministic rebuild must reproduce the recorded roots.
-    for (commit_id, entries) in fixture["commit_namespaces"].as_object().unwrap() {
-        let entries: Vec<storage_contract::Entry> =
-            json_codec::from_value(entries.clone()).unwrap();
-        let namespace = crate::namespace::fixture_store::namespace(&entries);
-        assert_eq!(namespace, state.commits[commit_id.as_str()].namespace);
-    }
-    state
+    crate::canonical_publication_fixture::CanonicalPublicationFixture::read().restore(&[])
 }
 
-/// The fixture state with its namespace objects also published onto the given
-/// member disks, for flows that read through disk-backed graph sources.
+/// Restore the same frozen namespace objects onto disks for disk-backed reads.
 fn fixture_stored(members: &[DiskConfig]) -> State {
-    let fixture: json_codec::Value = json_codec::from_str(include_str!(
-        "../journal/fixtures/canonical_publication.json"
-    ))
-    .unwrap();
-    let state: State = json_codec::from_str(fixture["state_bytes"].as_str().unwrap()).unwrap();
-    for (commit_id, entries) in fixture["commit_namespaces"].as_object().unwrap() {
-        let entries: Vec<storage_contract::Entry> =
-            json_codec::from_value(entries.clone()).unwrap();
-        let namespace = crate::namespace::fixture_store::namespace_stored(&entries, members);
-        assert_eq!(namespace, state.commits[commit_id.as_str()].namespace);
-    }
-    state
+    crate::canonical_publication_fixture::CanonicalPublicationFixture::read().restore(members)
 }
 fn fixture_directory(namespace: &storage_contract::CommitNamespace) -> Option<String> {
     let mut found = None;

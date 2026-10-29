@@ -121,14 +121,14 @@ impl Engine {
     ) -> Result<Option<storage_contract::OperationRecordEntry>> {
         let log = &self.state.operations;
         let tail = log.tail();
-        if let Some(first) = tail.first() {
-            if sequence >= first.result.sequence {
-                let rank = tail.partition_point(|entry| entry.result.sequence < sequence);
-                return Ok(tail
-                    .get(rank)
-                    .filter(|entry| entry.result.sequence == sequence)
-                    .cloned());
-            }
+        if let Some(first) = tail.first()
+            && sequence >= first.result.sequence
+        {
+            let rank = tail.partition_point(|entry| entry.result.sequence < sequence);
+            return Ok(tail
+                .get(rank)
+                .filter(|entry| entry.result.sequence == sequence)
+                .cloned());
         }
         let sealed = log.sealed();
         let Some(index) = sealed

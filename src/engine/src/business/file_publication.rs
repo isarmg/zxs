@@ -10,11 +10,14 @@ pub(crate) fn advance_branch_node(
     branch: &str,
     node: &str,
     materialize: bool,
-    principal: &str,
-    operation: OperationId,
-    base: &dyn crate::namespace::NamespaceSource,
-    fresh: &mut crate::namespace::NamespaceObjects,
+    provenance: OperationContext<'_>,
+    namespace: NamespaceMutation<'_>,
 ) -> Result<()> {
+    let OperationContext {
+        principal,
+        operation_id: operation,
+    } = provenance;
+    let NamespaceMutation { base, fresh } = namespace;
     let previous = state.branches.get(branch).cloned().ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::FileBranchNotFound,
