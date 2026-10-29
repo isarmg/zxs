@@ -535,7 +535,8 @@ class Apply(Synthetic):
                      '    let _ = futures_core\u0301::Thing;\n'
                      '}\n').encode()
         root_use = b'use {crate::{futures_core::Thing}, futures_core::Stream};\n'
-        (self.clone / 'src/lib.rs').write_bytes(FIXED + b'\n' + preserved + root_use)
+        fixed = FIXED.replace(b'    3\n}', preserved + root_use + b'    3\n}', 1)
+        (self.clone / 'src/lib.rs').write_bytes(fixed)
         git(self.clone, 'commit', '-qam', 'add local paths and a real crate root')
         self.fix_sha = git(self.clone, 'rev-parse', 'HEAD')
         document = self.plan()

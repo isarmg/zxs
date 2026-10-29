@@ -384,3 +384,7 @@ impl DiskResources {
         self.disks.get(&disk.disk_id)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/disk/owned_directory_tests.rs"]
+mod directory_tests;
