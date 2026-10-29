@@ -24,11 +24,11 @@ fn publish(engine: &mut Engine, id: OperationId, padding: usize) -> Result<Opera
 fn count_seal_publication_and_cold_replay_keep_every_permanent_receipt() {
     let (temp, mut engine) = fixture();
     let mut published = Vec::new();
-    for _ in 0..storage_contract::OPERATION_SEGMENT_RECORDS + 1 {
+    for _ in 0..storage_contract::OPERATION_SEGMENT_RECORDS {
         published.push(publish(&mut engine, OperationId::generate(), 0).unwrap());
     }
     assert_eq!(engine.state.operations.sealed().len(), 1);
-    assert_eq!(engine.state.operations.tail().len(), 1);
+    assert!(engine.state.operations.tail().is_empty());
     let fresh = engine.state.operations.fresh_seal().unwrap().1;
     let first = &fresh.records[0];
     let lookup = engine.operation_lookup(first.result.operation_id).unwrap();
@@ -37,6 +37,24 @@ fn count_seal_publication_and_cold_replay_keep_every_permanent_receipt() {
     };
     assert!(std::ptr::eq(*entry, first));
     assert_eq!(lookup.into_record().unwrap().into_result(), first.result);
+
+    // Starting the next transaction releases the preceding fresh seal;
+    // its new receipt remains in the tail.
+    published.push(publish(&mut engine, OperationId::generate(), 0).unwrap());
+    assert_eq!(engine.state.operations.sealed().len(), 1);
+    assert_eq!(engine.state.operations.tail().len(), 1);
+    assert!(engine.state.operations.fresh_seal().is_none());
+    let tail = &engine.state.operations.tail()[0];
+    let lookup = engine.operation_lookup(tail.result.operation_id).unwrap();
+    let Cow::Borrowed(entry) = &lookup.entry else {
+        panic!("tail receipt was cloned before ownership authorization");
+    };
+    assert!(std::ptr::eq(*entry, tail));
+    assert_eq!(lookup.into_record().unwrap().into_result(), tail.result);
+    let lookup = engine.operation_lookup(published[0].operation_id).unwrap();
+    assert!(matches!(&lookup.entry, Cow::Owned(_)));
+    assert_eq!(lookup.owner(), "owner");
+    assert_eq!(lookup.into_record().unwrap().into_result(), published[0]);
     for result in &published {
         assert_eq!(
             engine
