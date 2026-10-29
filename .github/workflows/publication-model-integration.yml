@@ -1,0 +1,54 @@
+name: Publication model scoped integration
+on:
+  push:
+    branches: ['validation/codex-publication-model-integration-20261029']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  static-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact scoped integration
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: isarmg/zxs
+          ref: 6a778a6374aeed236d15782e6d3bdd13907ae83c
+          fetch-depth: 3
+          persist-credentials: false
+      - name: Verify parent baseline and unchanged reviewed sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/publication-integration-evidence
+          python3 --version | tee /tmp/publication-integration-evidence/python.txt
+          git rev-parse HEAD | tee /tmp/publication-integration-evidence/tested-commit.txt
+          printf '%s\n' "$GITHUB_SHA" > /tmp/publication-integration-evidence/validation-commit.txt
+          git log -3 --format='%H %P %s' | tee /tmp/publication-integration-evidence/ancestry.txt
+          test "$(git rev-parse HEAD~2)" = 209f31a4122174129bcf40b56c0598ac61e66352
+          git fetch --no-tags --depth=1 origin 47655937bbd1a3c8d6638e0260a793b63450bc29
+          git diff --exit-code 47655937bbd1a3c8d6638e0260a793b63450bc29 4e726896938590c831108ee31dbfd10705a55cf6 -- tools/publication-model test/publication-model docs/validation/publication-model.md
+          git diff --exit-code 47655937bbd1a3c8d6638e0260a793b63450bc29 HEAD -- tools/publication-model test/publication-model ':(exclude)tools/publication-model/selftest.py' ':(exclude)test/publication-model/validation.yml.template'
+          git diff --exit-code 209f31a4122174129bcf40b56c0598ac61e66352 HEAD -- src Cargo.toml Cargo.lock rust-toolchain.toml .cargo .github/workflows .github/architecture-policy.json
+          git diff --name-status 209f31a4122174129bcf40b56c0598ac61e66352 HEAD > /tmp/publication-integration-evidence/changed-paths.txt
+          git diff --stat 209f31a4122174129bcf40b56c0598ac61e66352 HEAD > /tmp/publication-integration-evidence/diff-stat.txt
+          printf '%s\n' 'Exact reviewed import, original evidence and unchanged model/test sources verified.' > /tmp/publication-integration-evidence/provenance.txt
+      - name: Named gate wiring and failure regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s test/ci -p test_check_suites.py -v 2>&1 | tee /tmp/publication-integration-evidence/gate-regressions.log
+      - name: Run the actual normal static gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/check.sh static 2>&1 | tee /tmp/publication-integration-evidence/static.log
+      - name: Retain integration evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: publication-model-integration-evidence
+          path: /tmp/publication-integration-evidence
+          if-no-files-found: error
+          retention-days: 30
