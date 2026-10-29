@@ -48,15 +48,16 @@ pub(crate) async fn upload_status(
             // Both quotas cover authorization, engine status and local spool reads.
             // Keep them until actual work ends, even if the requester disconnects.
             let published = backend.published_upload_status(&identity, &workspace, &item)?;
+            let lookup = uploads::UploadLookup::new(workspace, item);
             crate::http_workspace::retire_committed_copy(
                 backend,
                 &identity,
-                &workspace,
-                Some(&item),
+                lookup.workspace(),
+                Some(&lookup),
                 &spool,
                 &claims,
             );
-            if let Some(record) = uploads::load(&state.config.spool_dir, &workspace, &item)? {
+            if let Some(record) = uploads::load(&state.config.spool_dir, &lookup)? {
                 if record.principal != identity.principal {
                     return Err(ApiError::forbidden());
                 }
@@ -71,7 +72,13 @@ pub(crate) async fn upload_status(
                 }
             }
             published
-                .map(|status| Json(published_upload_response(&workspace, &item, status)))
+                .map(|status| {
+                    Json(published_upload_response(
+                        lookup.workspace(),
+                        lookup.item(),
+                        status,
+                    ))
+                })
                 .ok_or_else(|| {
                     ApiError::new(
                         ::http::StatusCode::NOT_FOUND,
@@ -106,6 +113,7 @@ pub(crate) struct UploadQuery {
 struct UploadAdmission {
     _permit: crate::transfer_limits::Permit,
     _claim: uploads::Claim,
+    lookup: uploads::UploadLookup,
 }
 
 struct UploadDeadline {
@@ -119,12 +127,11 @@ async fn persist_upload(
     staged: &Arc<uploads::StagedFile>,
 ) -> Result<(), ApiError> {
     let record = record.clone();
-    let admission = admission.clone();
-    let staged = staged.clone();
+    let ownership = (Arc::clone(staged), Arc::clone(admission));
     tokio::task::spawn_blocking(move || {
-        let _admission = admission;
-        staged.sync()?;
-        uploads::persist_staged(&record, &staged)
+        let ownership = ownership;
+        ownership.0.sync()?;
+        uploads::persist_staged(&record, &ownership.0, ownership.1.lookup.current())
     })
     .await
     .map_err(ApiError::join)?
@@ -218,7 +225,8 @@ async fn upload_inner(
     deadline: &UploadDeadline,
 ) -> Result<Json<crate::backend_workspace::StagedFileResponse>, ApiError> {
     let _permit = state.upload_slots.acquire()?;
-    let key = uploads::key(&workspace, &item);
+    let lookup = uploads::UploadLookup::new(workspace, item);
+    let key = lookup.current().key().to_owned();
     {
         let mut claims = lock(&state.upload_claims);
         if !claims.insert(key.clone()) {
@@ -234,7 +242,10 @@ async fn upload_inner(
             claims: state.upload_claims.clone(),
             key,
         },
+        lookup,
     });
+    let workspace = admission.lookup.workspace();
+    let item = admission.lookup.item();
     let logical_path =
         name_policy::PortablePath::parse(&query.path).map_err(ApiError::invalid_source)?;
     let headers = request.headers();
@@ -287,25 +298,21 @@ async fn upload_inner(
     if headers.get_all("x-zxs-content-hash").iter().count() != 1 {
         return Err(ApiError::invalid("duplicate content hash header"));
     }
-    storage_contract::validate_id(&item, "entry").map_err(ApiError::invalid_source)?;
+    storage_contract::validate_id(item, "entry").map_err(ApiError::invalid_source)?;
     let backend = state.backend.clone();
     let owner = identity.clone();
-    let ws = workspace.clone();
     let ownership = admission.clone();
     crate::http_job::HttpBackendJob::new(backend, state.auth.clone(), ownership)
-        .run(move |backend| backend.authorize_upload(&owner, &ws, Some(expected_length)))
+        .run_with_permit(move |backend, ownership| {
+            backend.authorize_upload(&owner, ownership.lookup.workspace(), Some(expected_length))
+        })
         .await?;
     let spool = state.config.spool_dir.clone();
     let root = spool.clone();
-    let ws = workspace.clone();
-    let item_id = item.clone();
     let ownership = admission.clone();
-    let previous = tokio::task::spawn_blocking(move || {
-        let _ownership = ownership;
-        uploads::load(&root, &ws, &item_id)
-    })
-    .await
-    .map_err(ApiError::join)??;
+    let previous = tokio::task::spawn_blocking(move || uploads::load(&root, &ownership.lookup))
+        .await
+        .map_err(ApiError::join)??;
     let mut prefix = None;
     if let Some(previous) = &previous {
         if previous.principal != identity.principal || previous.path != query.path {
@@ -365,8 +372,8 @@ async fn upload_inner(
     .await
     .map_err(ApiError::join)??;
     let mut record = uploads::UploadRecord {
-        workspace_id: workspace.clone(),
-        item_id: item.clone(),
+        workspace_id: workspace.to_owned(),
+        item_id: item.to_owned(),
         principal: identity.principal.clone(),
         path: query.path.clone(),
         generation,
@@ -388,7 +395,9 @@ async fn upload_inner(
             // Capture the whole owner, not only the staged-file tuple field:
             // cancellation must retain the per-item claim and transfer slot too.
             let _ownership = ownership;
-            _ownership.0.retain_generation(&previous)
+            _ownership
+                .0
+                .retain_generation(&previous, _ownership.1.lookup.current())
         })
         .await
         .map_err(ApiError::join)??;
@@ -535,27 +544,27 @@ async fn upload_inner(
     record.content_hash = Some(actual_hash);
     let backend = state.backend.clone();
     let owner = identity.clone();
-    let ws = workspace.clone();
-    let item_id = item.clone();
     // Once admitted, blocking publication can outlive the HTTP deadline, even
     // while still queued. A timeout can no longer promise a rejected mutation.
     deadline.publication_admitted.store(true, Ordering::Release);
-    let staged = crate::http_job::HttpBackendJob::new(backend, state.auth, admission)
-        .run(move |backend| {
+    // Settle the staged file before releasing its per-item claim and slot.
+    let ownership = (staged_file, admission);
+    let staged = crate::http_job::HttpBackendJob::new(backend, state.auth, ownership)
+        .run_with_permit(move |backend, ownership| {
             // A disconnected HTTP request cannot cancel a running blocking task.
             // Keep its admission slot and per-item claim with publication itself,
             // including the final durable status, so a retry cannot race it.
-            let source = staged_file.source(expected_length, actual_hash)?;
+            let source = ownership.0.source(expected_length, actual_hash)?;
             let staged = backend.upload_generation(
                 &owner,
-                &ws,
-                &item_id,
+                ownership.1.lookup.workspace(),
+                ownership.1.lookup.item(),
                 &logical_path,
                 &source,
                 generation,
             )?;
             record.state = crate::uploads::UploadState::Complete;
-            uploads::persist_staged(&record, &staged_file)?;
+            uploads::persist_staged(&record, &ownership.0, ownership.1.lookup.current())?;
             Ok::<_, ApiError>(staged)
         })
         .await?;

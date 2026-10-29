@@ -1055,8 +1055,10 @@ async fn interrupted_upload_retains_durable_bytes_and_rejects_different_retry() 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let record = uploads::load(
         &root.path().join("api-spool"),
-        "ws",
-        "entry_00000000000000000000000000000001",
+        &uploads::UploadLookup::new(
+            "ws".to_owned(),
+            "entry_00000000000000000000000000000001".to_owned(),
+        ),
     )
     .unwrap()
     .unwrap();
@@ -1082,8 +1084,10 @@ async fn interrupted_upload_retains_durable_bytes_and_rejects_different_retry() 
     assert_eq!(
         uploads::load(
             &root.path().join("api-spool"),
-            "ws",
-            "entry_00000000000000000000000000000001"
+            &uploads::UploadLookup::new(
+                "ws".to_owned(),
+                "entry_00000000000000000000000000000001".to_owned()
+            )
         )
         .unwrap()
         .unwrap()
@@ -1130,9 +1134,15 @@ async fn durable_retry_progress_appends_without_copying_the_same_generation() {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let current = uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
-            .unwrap()
-            .unwrap();
+        let current = uploads::load(
+            &spool,
+            &uploads::UploadLookup::new(
+                "ws".to_owned(),
+                "entry_00000000000000000000000000000001".to_owned(),
+            ),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             std::fs::read(spool.join(current.data_file)).unwrap(),
             content.as_bytes()
@@ -1178,9 +1188,15 @@ async fn unpublished_retry_cleanup_covers_short_long_and_cancelled_bodies() {
         StatusCode::OK
     );
     let spool = root.path().join("api-spool");
-    let original = uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
-        .unwrap()
-        .unwrap();
+    let original = uploads::load(
+        &spool,
+        &uploads::UploadLookup::new(
+            "ws".to_owned(),
+            "entry_00000000000000000000000000000001".to_owned(),
+        ),
+    )
+    .unwrap()
+    .unwrap();
     // A retry must not supersede old progress until it has checked all of it.
     for body in [
         Body::from(vec![42u8; 1024]),
@@ -1230,9 +1246,15 @@ async fn unpublished_retry_cleanup_covers_short_long_and_cancelled_bodies() {
     })
     .await
     .unwrap();
-    let current = uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
-        .unwrap()
-        .unwrap();
+    let current = uploads::load(
+        &spool,
+        &uploads::UploadLookup::new(
+            "ws".to_owned(),
+            "entry_00000000000000000000000000000001".to_owned(),
+        ),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(current.data_file, original.data_file);
     assert_eq!(std::fs::read(spool.join(current.data_file)).unwrap(), bytes);
 }
@@ -1265,9 +1287,15 @@ async fn successful_new_generation_preserves_old_bytes_and_retry_reuses_its_file
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         records.push(
-            uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
-                .unwrap()
-                .unwrap(),
+            uploads::load(
+                &spool,
+                &uploads::UploadLookup::new(
+                    "ws".to_owned(),
+                    "entry_00000000000000000000000000000001".to_owned(),
+                ),
+            )
+            .unwrap()
+            .unwrap(),
         );
         assert_eq!(
             std::fs::read(spool.join(&records[0].data_file)).unwrap(),
@@ -2047,8 +2075,10 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
     assert_eq!(
         uploads::load(
             &root.path().join("api-spool"),
-            "ws",
-            "entry_00000000000000000000000000000001"
+            &uploads::UploadLookup::new(
+                "ws".to_owned(),
+                "entry_00000000000000000000000000000001".to_owned()
+            )
         )
         .unwrap()
         .unwrap()
@@ -2201,9 +2231,12 @@ async fn upload_path_admission_rejects_nonportable_names_and_keeps_display_spell
             assert_eq!(status, StatusCode::BAD_REQUEST);
             assert_eq!(body["error"]["code"], "INVALID_REQUEST");
             assert!(
-                uploads::load(&root.path().join("api-spool"), "ws", &item)
-                    .unwrap()
-                    .is_none()
+                uploads::load(
+                    &root.path().join("api-spool"),
+                    &uploads::UploadLookup::new("ws".to_owned(), item.to_owned())
+                )
+                .unwrap()
+                .is_none()
             );
         }
     }

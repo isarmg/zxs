@@ -1396,9 +1396,15 @@ fn cancelled_generation_retention_keeps_item_claim_and_upload_slot_until_worker_
             .await
             .unwrap();
         assert_eq!(first.status(), StatusCode::OK);
-        let previous = uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
-            .unwrap()
-            .unwrap();
+        let previous = uploads::load(
+            &spool,
+            &uploads::UploadLookup::new(
+                "ws".to_owned(),
+                "entry_00000000000000000000000000000001".to_owned(),
+            ),
+        )
+        .unwrap()
+        .unwrap();
         let (started, started_rx) = tokio::sync::oneshot::channel();
         let started = Mutex::new(Some(started));
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
@@ -1481,10 +1487,16 @@ fn cancelled_generation_retention_keeps_item_claim_and_upload_slot_until_worker_
         other.abort();
         assert!(other.await.unwrap_err().is_cancelled());
         assert_eq!(
-            uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
-                .unwrap()
-                .unwrap()
-                .generation,
+            uploads::load(
+                &spool,
+                &uploads::UploadLookup::new(
+                    "ws".to_owned(),
+                    "entry_00000000000000000000000000000001".to_owned()
+                )
+            )
+            .unwrap()
+            .unwrap()
+            .generation,
             1
         );
         drop(release);
@@ -1506,9 +1518,15 @@ fn cancelled_generation_retention_keeps_item_claim_and_upload_slot_until_worker_
             .unwrap();
         assert_eq!(retry.status(), StatusCode::OK);
     });
-    let current = uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
-        .unwrap()
-        .unwrap();
+    let current = uploads::load(
+        &spool,
+        &uploads::UploadLookup::new(
+            "ws".to_owned(),
+            "entry_00000000000000000000000000000001".to_owned(),
+        ),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(current.generation, 2);
     assert_eq!(current.state, crate::uploads::UploadState::Complete);
     assert_eq!(fs::read(spool.join(&current.data_file)).unwrap(), b"new");
@@ -1708,8 +1726,14 @@ async fn fragmented_upload_checkpoints_before_pending_and_verifies_retry_tail() 
     let upload = tokio::spawn(app.clone().oneshot(request(body)));
     let record = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
-            if let Some(record) =
-                uploads::load(&spool, "ws", "entry_00000000000000000000000000000009").unwrap()
+            if let Some(record) = uploads::load(
+                &spool,
+                &uploads::UploadLookup::new(
+                    "ws".to_owned(),
+                    "entry_00000000000000000000000000000009".to_owned(),
+                ),
+            )
+            .unwrap()
                 && std::fs::metadata(spool.join(&record.data_file))
                     .unwrap()
                     .len()
@@ -1739,9 +1763,15 @@ async fn fragmented_upload_checkpoints_before_pending_and_verifies_retry_tail() 
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let current = uploads::load(&spool, "ws", "entry_00000000000000000000000000000009")
-        .unwrap()
-        .unwrap();
+    let current = uploads::load(
+        &spool,
+        &uploads::UploadLookup::new(
+            "ws".to_owned(),
+            "entry_00000000000000000000000000000009".to_owned(),
+        ),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(current.generation, record.generation);
     assert_eq!(current.content_hash, record.content_hash);
     assert_eq!(current.data_file, record.data_file);
@@ -1791,7 +1821,12 @@ async fn upload_batching_ready_and_paced_measurement() {
             let response = app.clone().oneshot(request).await.unwrap();
             let elapsed = start.elapsed();
             assert_eq!(response.status(), StatusCode::OK);
-            let record = uploads::load(&spool, "ws", &item).unwrap().unwrap();
+            let record = uploads::load(
+                &spool,
+                &uploads::UploadLookup::new("ws".to_owned(), item.to_owned()),
+            )
+            .unwrap()
+            .unwrap();
             assert_eq!(std::fs::read(spool.join(record.data_file)).unwrap(), bytes);
             println!(
                 "upload batching: paced={paced}, run={run}, bytes={}, elapsed_us={}",
@@ -1911,8 +1946,10 @@ async fn typed_content_hash_header_rejects_noncanonical_values_before_staging() 
     assert_eq!(app.oneshot(request).await.unwrap().status(), StatusCode::OK);
     let record = uploads::load(
         &spool,
-        "ws_00000000000000000000000000000000",
-        "entry_00000000000000000000000000000000",
+        &uploads::UploadLookup::new(
+            "ws_00000000000000000000000000000000".to_owned(),
+            "entry_00000000000000000000000000000000".to_owned(),
+        ),
     )
     .unwrap()
     .unwrap();

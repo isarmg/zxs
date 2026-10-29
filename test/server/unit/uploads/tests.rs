@@ -1,5 +1,81 @@
 use super::*;
 
+fn lookup() -> UploadLookup {
+    UploadLookup::new("ws".into(), "item".into())
+}
+
+#[test]
+fn cached_upload_names_preserve_pair_bytes_and_generation_names() {
+    for (workspace, item, bytes) in [
+        ("ws", "item", b"ws\0item".as_slice()),
+        ("ab", "c", b"ab\0c".as_slice()),
+        ("a", "bc", b"a\0bc".as_slice()),
+    ] {
+        let lookup = UploadLookup::new(workspace.into(), item.into());
+        let expected = blake3::hash(bytes).to_hex().to_string();
+        assert_eq!(lookup.workspace(), workspace);
+        assert_eq!(lookup.item(), item);
+        assert_eq!(lookup.current().key(), expected);
+        assert_eq!(lookup.current().name(), format!("{expected}.json"));
+        assert_eq!(
+            lookup.current.entry.as_relative().as_path(),
+            Path::new(&format!("{expected}.json"))
+        );
+    }
+    let lookup = lookup();
+    let mut record = UploadRecord {
+        workspace_id: "ws".into(),
+        item_id: "item".into(),
+        principal: "alice".into(),
+        path: "file".into(),
+        generation: 1,
+        logical_size: 0,
+        content_hash: Some(storage_contract::ContentHash::from_digest(blake3::hash(
+            b"",
+        ))),
+        persisted_bytes: 0,
+        persisted_hash: blake3::hash(b"").to_hex().to_string(),
+        state: UploadState::Incomplete,
+        data_file: "first.data".into(),
+    };
+    let current = lookup.current().name().to_owned();
+    let first = lookup.current().retained(&record);
+    assert_eq!(
+        first,
+        format!(
+            "retained-{}-1-{}.json",
+            blake3::hash(b"ws\0item").to_hex(),
+            blake3::hash(b"first.data").to_hex()
+        )
+    );
+    record.generation = 2;
+    assert_ne!(first, lookup.current().retained(&record));
+    record.generation = 1;
+    record.data_file = "second.data".into();
+    assert_ne!(first, lookup.current().retained(&record));
+    assert_eq!(lookup.current().name(), current);
+}
+
+#[test]
+fn cached_lookup_still_checks_disk_record_identity() {
+    let root = private_tempdir();
+    let lookup = lookup();
+    for (workspace, item) in [("other", "item"), ("ws", "other")] {
+        let bytes = storage_contract::canonical_json(&json_codec::json!({
+            "workspace_id":workspace, "item_id":item, "principal":"alice", "path":"file",
+            "generation":"1", "logical_size":"0", "content_hash":"0".repeat(64),
+            "persisted_bytes":"0", "persisted_hash":"0".repeat(64),
+            "state":"incomplete", "data_file":"data"
+        }))
+        .unwrap();
+        let path = root.path().join(lookup.current().name());
+        fs::write(&path, &bytes).unwrap();
+        let error = load(root.path(), &lookup).err().unwrap();
+        assert_eq!(error.code, storage_contract::ErrorCode::UploadStateInvalid);
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+}
+
 #[test]
 fn claim_drop_releases_healthy_ownership_but_preserves_poisoned_claims_during_unwind() {
     use std::{
@@ -136,7 +212,8 @@ fn generation_retention_rejects_rebound_root_and_preserves_prior_record() {
         state: UploadState::Complete,
         data_file: "work.data".into(),
     };
-    staged.retain_generation(&record).unwrap();
+    let lookup = lookup();
+    staged.retain_generation(&record, &lookup.current).unwrap();
     let name = format!(
         "retained-{}-1-{}.json",
         key("ws", "item"),
@@ -147,7 +224,9 @@ fn generation_retention_rejects_rebound_root_and_preserves_prior_record() {
     fs::rename(&path, &moved).unwrap();
     PrivateDirectory::create(&path).unwrap();
     record.generation = 2;
-    let error = staged.retain_generation(&record).unwrap_err();
+    let error = staged
+        .retain_generation(&record, &lookup.current)
+        .unwrap_err();
     assert!(std::error::Error::source(&error).is_some());
     assert!(budget.reserve("bob", "next.data", 0).is_err());
     drop(staged);
@@ -235,13 +314,13 @@ fn failed_atomic_staged_progress_retains_bytes_and_blocks_admission_until_invent
     // error propagation/admission, not a simulated or physical fsync failure.
     let metadata = root.path().join(format!("{}.json", key("ws", "item")));
     fs::create_dir(&metadata).unwrap();
-    assert!(persist_staged(&record, &guard).is_err());
+    assert!(persist_staged(&record, &guard, &lookup().current).is_err());
     assert!(metadata.is_dir());
     fs::remove_dir(&metadata).unwrap();
     // Retrying the same held staging file publishes usable progress, but does
     // not silently clear the inventory-required admission state.
-    persist_staged(&record, &guard).unwrap();
-    let loaded = load(root.path(), "ws", "item").unwrap().unwrap();
+    persist_staged(&record, &guard, &lookup().current).unwrap();
+    let loaded = load(root.path(), &lookup()).unwrap().unwrap();
     assert_eq!(loaded.data_file, "new.data");
     assert_eq!(loaded.persisted_bytes, 9);
     assert_eq!(loaded.persisted_hash, record.persisted_hash);
@@ -279,7 +358,7 @@ fn interrupted_upload_retains_and_checks_its_persisted_prefix() {
         data_file: "data".into(),
     };
     persist(dir.path(), &record).unwrap();
-    let loaded = load(dir.path(), "ws", "item").unwrap().unwrap();
+    let loaded = load(dir.path(), &lookup()).unwrap().unwrap();
     assert_eq!(loaded.persisted_bytes, 16);
     let mut prefix = ExistingPrefix::open(dir.path(), &loaded).unwrap().unwrap();
     assert!(prefix.check(b"different partial").is_err());
@@ -299,7 +378,7 @@ fn corrupt_or_oversized_progress_is_an_internal_state_error() {
         vec![b' '; 1024 * 1024],
     ] {
         fs::write(&path, bytes).unwrap();
-        let error = load(dir.path(), "ws", "item").err().unwrap();
+        let error = load(dir.path(), &lookup()).err().unwrap();
         assert_eq!(error.status, http::StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(error.code, storage_contract::ErrorCode::UploadStateInvalid);
     }
@@ -400,7 +479,7 @@ fn upload_progress_and_retry_prefix_reject_links_without_reading_targets() {
             }
         }
         assert_eq!(
-            load(dir.path(), "ws", "item").err().unwrap().status,
+            load(dir.path(), &lookup()).err().unwrap().status,
             http::StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(
@@ -414,7 +493,7 @@ fn upload_progress_and_retry_prefix_reject_links_without_reading_targets() {
         fs::remove_file(dir.path().join("data")).unwrap();
     }
     assert_eq!(fs::read(outside.path().join("data")).unwrap(), b"original");
-    assert!(load(dir.path(), "ws", "item").unwrap().is_none());
+    assert!(load(dir.path(), &lookup()).unwrap().is_none());
 }
 
 fn private_tempdir() -> tempfile::TempDir {
@@ -454,7 +533,7 @@ fn upload_record_rejects_noncanonical_body_hash_and_retains_progress_evidence() 
         }))
         .unwrap();
         fs::write(&path, &bytes).unwrap();
-        let error = match load(dir.path(), "ws", "item") {
+        let error = match load(dir.path(), &lookup()) {
             Err(error) => error,
             Ok(_) => panic!("invalid hash accepted"),
         };

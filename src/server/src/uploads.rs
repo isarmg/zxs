@@ -51,22 +51,66 @@ pub(crate) struct UploadRecord {
     pub state: UploadState,
     pub data_file: String,
 }
+#[cfg(test)]
 pub(crate) fn key(workspace: &str, item: &str) -> String {
-    let mut hash = blake3::Hasher::new();
-    hash.update(workspace.as_bytes());
-    hash.update(&[0]);
-    hash.update(item.as_bytes());
-    hash.finalize().to_hex().to_string()
+    CurrentName::new(workspace, item).key().to_owned()
 }
-pub(crate) fn load(
-    root: &Path,
-    workspace: &str,
-    item: &str,
-) -> Result<Option<UploadRecord>, ApiError> {
+
+/// Immutable names derived from a pair, not proof of ID syntax or authorization.
+pub(crate) struct CurrentName {
+    name: String,
+    entry: EntryName,
+}
+impl CurrentName {
+    pub(crate) fn new(workspace: &str, item: &str) -> Self {
+        let mut hash = blake3::Hasher::new();
+        hash.update(workspace.as_bytes());
+        hash.update(&[0]);
+        hash.update(item.as_bytes());
+        let name = format!("{}.json", hash.finalize().to_hex());
+        let entry = EntryName::new(&name)
+            .expect("invariant: a hex digest and JSON suffix form one entry name");
+        Self { name, entry }
+    }
+    pub(crate) fn key(&self) -> &str {
+        // The constructor always emits exactly 64 ASCII hex bytes before .json.
+        &self.name[..64]
+    }
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+    pub(crate) fn retained(&self, record: &UploadRecord) -> String {
+        retained_name_for_key(self.key(), record)
+    }
+}
+
+pub(crate) struct UploadLookup {
+    workspace: String,
+    item: String,
+    current: CurrentName,
+}
+impl UploadLookup {
+    pub(crate) fn new(workspace: String, item: String) -> Self {
+        let current = CurrentName::new(&workspace, &item);
+        Self {
+            workspace,
+            item,
+            current,
+        }
+    }
+    pub(crate) fn workspace(&self) -> &str {
+        &self.workspace
+    }
+    pub(crate) fn item(&self) -> &str {
+        &self.item
+    }
+    pub(crate) fn current(&self) -> &CurrentName {
+        &self.current
+    }
+}
+pub(crate) fn load(root: &Path, lookup: &UploadLookup) -> Result<Option<UploadRecord>, ApiError> {
     let directory = PrivateDirectory::open_trusted(root).map_err(crate::upload_fs_error)?;
-    let name =
-        EntryName::new(format!("{}.json", key(workspace, item))).map_err(crate::upload_fs_error)?;
-    match directory.read_bounded(&name, 16384) {
+    match directory.read_bounded(&lookup.current.entry, 16384) {
         Ok(bytes) => {
             let record =
                 storage_contract::decode_strict::<UploadRecord>(&bytes).map_err(|source| {
@@ -77,8 +121,8 @@ pub(crate) fn load(
                     )
                     .with_source(source)
                 })?;
-            if record.workspace_id != workspace
-                || record.item_id != item
+            if record.workspace_id != lookup.workspace
+                || record.item_id != lookup.item
                 || record.persisted_bytes > record.logical_size
                 || record.data_file.contains('/')
                 || record.data_file.contains('\\')
@@ -165,14 +209,19 @@ impl StagedFile {
     pub fn sync(&self) -> Result<(), ApiError> {
         crate::lock(&self.writer).sync_all().map_err(ApiError::io)
     }
-    pub(crate) fn retain_generation(&self, record: &UploadRecord) -> Result<(), ApiError> {
+    pub(crate) fn retain_generation(
+        &self,
+        record: &UploadRecord,
+        current: &CurrentName,
+    ) -> Result<(), ApiError> {
         let result = (|| {
             self.directory
                 .verify_identity()
                 .map_err(crate::upload_fs_error)?;
-            retain_generation_held(&self.directory, record).map(|()| {
+            let name = current.retained(record);
+            retain_generation_held(&self.directory, record, &name).map(|()| {
                 self.reservation
-                    .record_upload(retained_name(record), record)
+                    .record_upload(name, record, crate::spool_budget::UploadRole::Other)
             })
         })();
         if result.is_err() {
@@ -203,15 +252,22 @@ impl Drop for StagedFile {
         }
     }
 }
-pub(crate) fn persist_staged(record: &UploadRecord, staged: &StagedFile) -> Result<(), ApiError> {
+pub(crate) fn persist_staged(
+    record: &UploadRecord,
+    staged: &StagedFile,
+    current: &CurrentName,
+) -> Result<(), ApiError> {
     let result = (|| {
         staged
             .directory
             .verify_identity()
             .map_err(crate::upload_fs_error)?;
-        let name = format!("{}.json", key(&record.workspace_id, &record.item_id));
-        persist_held(&staged.directory, &name, record)?;
-        staged.reservation.record_upload(name, record);
+        persist_entry(&staged.directory, &current.entry, record)?;
+        staged.reservation.record_upload(
+            current.name().to_owned(),
+            record,
+            crate::spool_budget::UploadRole::Current,
+        );
         Ok(())
     })();
     if result.is_err() {
@@ -237,19 +293,23 @@ fn persist_held(
     name: &str,
     record: &UploadRecord,
 ) -> Result<(), ApiError> {
-    use platform_io::fs_safety::{AtomicFile, RelativePath};
+    let name = EntryName::new(name).map_err(crate::upload_fs_error)?;
+    persist_entry(directory, &name, record)
+}
+fn persist_entry(
+    directory: &PrivateDirectory,
+    name: &EntryName,
+    record: &UploadRecord,
+) -> Result<(), ApiError> {
+    use platform_io::fs_safety::AtomicFile;
     let bytes =
         json_codec::to_vec(record).expect("invariant: internal JSON serialization succeeds");
     if bytes.len() > 16384 {
         return Err(ApiError::invalid("upload metadata exceeds limit"));
     }
-    AtomicFile::replace(
-        directory,
-        &RelativePath::new(name).map_err(crate::upload_fs_error)?,
-        &bytes,
-    )
-    // replace syncs the temporary file and this same held parent after rename.
-    .map_err(crate::upload_fs_error)
+    AtomicFile::replace(directory, &name.as_relative(), &bytes)
+        // replace syncs the temporary file and this same held parent after rename.
+        .map_err(crate::upload_fs_error)
 }
 
 // HTTP projection is separate from the durable record. In particular, neither
@@ -339,14 +399,14 @@ pub(crate) static RETAIN_GENERATION_HOOK: std::sync::Mutex<Option<RetainGenerati
 #[cfg(test)]
 pub(crate) fn retain_generation(root: &Path, record: &UploadRecord) -> Result<(), ApiError> {
     let directory = PrivateDirectory::open_trusted(root).map_err(crate::upload_fs_error)?;
-    retain_generation_held(&directory, record)
+    retain_generation_held(&directory, record, &retained_name(record))
 }
 fn retain_generation_held(
     directory: &PrivateDirectory,
     record: &UploadRecord,
+    name: &str,
 ) -> Result<(), ApiError> {
-    let name = retained_name(record);
-    persist_held(directory, &name, record)?;
+    persist_held(directory, name, record)?;
     #[cfg(test)]
     {
         let hook = RETAIN_GENERATION_HOOK
@@ -361,10 +421,14 @@ fn retain_generation_held(
     }
     Ok(())
 }
+#[cfg(test)]
 pub(crate) fn retained_name(record: &UploadRecord) -> String {
+    CurrentName::new(&record.workspace_id, &record.item_id).retained(record)
+}
+pub(crate) fn retained_name_for_key(key: &str, record: &UploadRecord) -> String {
     format!(
         "retained-{}-{}-{}.json",
-        key(&record.workspace_id, &record.item_id),
+        key,
         record.generation,
         blake3::hash(record.data_file.as_bytes()).to_hex()
     )

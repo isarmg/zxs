@@ -169,32 +169,39 @@ pub(crate) fn retire_committed_copy(
     backend: &dyn crate::Backend,
     identity: &Identity,
     workspace: &str,
-    item: Option<&str>,
+    item: Option<&crate::uploads::UploadLookup>,
     spool: &crate::http_spool::HttpSpool,
     claims: &std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
 ) {
     let Some(budget) = spool.retirement_budget() else {
         return;
     };
-    if !budget.has_candidates(workspace, item) {
+    let current = item.map(crate::uploads::UploadLookup::current);
+    if !budget.has_candidates(workspace, current) {
         return;
     }
     let result = backend
         .http_spool_workspace(identity, workspace)
         .and_then(|proof| match proof {
             Some(workspace) => match item {
-                Some(item) => budget.retire_item(&workspace, item, claims),
+                Some(lookup) => {
+                    // Public providers supply this workspace. Preserve lookup by
+                    // its actual identity rather than assuming the requested ID.
+                    let current =
+                        crate::uploads::CurrentName::new(&workspace.workspace_id, lookup.item());
+                    budget.retire_item(&workspace, &current, claims)
+                }
                 None => budget.retire_workspace(&workspace, claims),
             },
             None => {
-                budget.resolve_workspace_failure(workspace, item);
+                budget.resolve_workspace_failure(workspace, current);
                 Ok(())
             }
         });
     if let Err(error) = result {
         // The publication result is already authoritative. This local cache
         // failure belongs to health/recovery, never to the commit outcome.
-        budget.note_workspace_failure(workspace, item, &error);
+        budget.note_workspace_failure(workspace, current, &error);
     }
 }
 

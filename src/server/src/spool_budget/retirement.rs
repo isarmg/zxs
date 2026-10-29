@@ -25,12 +25,15 @@ enum MetadataMatch {
     AttributionChanged,
 }
 impl RetirementNames {
-    fn new(record: &UploadRecord) -> Result<Self, ApiError> {
+    fn new(record: &UploadRecord, current: &str) -> Result<Self, ApiError> {
+        let key = current
+            .strip_suffix(".json")
+            .expect("invariant: current metadata has the canonical JSON suffix");
         Ok(Self {
             body: EntryName::new(&record.data_file).map_err(crate::upload_fs_error)?,
-            current: NamedEntry::new(current_name(record))?,
+            current: NamedEntry::new(current.to_owned())?,
             owner: NamedEntry::new(format!("{}.owner.json", record.data_file))?,
-            retained: NamedEntry::new(uploads::retained_name(record))?,
+            retained: NamedEntry::new(uploads::retained_name_for_key(key, record))?,
         })
     }
 }
@@ -68,19 +71,23 @@ impl SpoolBudget {
         lock(&self.ledger).maintenance_issues.len()
     }
 
-    pub(crate) fn has_candidates(&self, workspace: &str, item: Option<&str>) -> bool {
+    pub(crate) fn has_candidates(
+        &self,
+        workspace: &str,
+        item: Option<&uploads::CurrentName>,
+    ) -> bool {
         let ledger = lock(&self.ledger);
         ledger
             .current_by_workspace
             .get(workspace)
-            .is_some_and(|names| {
-                item.is_none_or(|item| {
-                    names.contains(&format!("{}.json", uploads::key(workspace, item)))
-                })
-            })
+            .is_some_and(|names| item.is_none_or(|item| names.contains(item.name())))
     }
 
-    pub(crate) fn resolve_workspace_failure(&self, workspace: &str, item: Option<&str>) {
+    pub(crate) fn resolve_workspace_failure(
+        &self,
+        workspace: &str,
+        item: Option<&uploads::CurrentName>,
+    ) {
         let mut ledger = lock(&self.ledger);
         for name in ledger.current_names(workspace, item) {
             ledger.maintenance_issues.remove(&name);
@@ -90,7 +97,7 @@ impl SpoolBudget {
     pub(crate) fn note_workspace_failure(
         &self,
         workspace: &str,
-        item: Option<&str>,
+        item: Option<&uploads::CurrentName>,
         error: &ApiError,
     ) {
         let mut ledger = lock(&self.ledger);
@@ -120,17 +127,15 @@ impl SpoolBudget {
                     .metadata
                     .range::<String, _>((lower, Unbounded))
                     .find_map(|(name, reference)| match reference {
-                        MetadataReference::Upload(record)
-                            if *name == current_name(record)
-                                && record.state == uploads::UploadState::Complete =>
-                        {
-                            Some((
-                                name.clone(),
-                                HttpSpoolCandidate {
-                                    record: record.clone(),
-                                },
-                            ))
-                        }
+                        MetadataReference::Upload {
+                            record,
+                            role: UploadRole::Current,
+                        } if record.state == uploads::UploadState::Complete => Some((
+                            name.clone(),
+                            HttpSpoolCandidate {
+                                record: record.clone(),
+                            },
+                        )),
                         _ => None,
                     })
             };
@@ -138,19 +143,19 @@ impl SpoolBudget {
                 return Ok(true);
             };
             after = Some(name);
+            let current = after
+                .as_deref()
+                .expect("invariant: selected metadata has a name");
             match backend.qualify_http_spool_copy(&InternalHttpSpoolRetirement(()), &candidate) {
                 Ok(crate::HttpSpoolQualification::Eligible) => {
-                    self.retire_copy(&candidate.record)?
+                    self.retire_copy(&candidate.record, current)?
                 }
                 Ok(crate::HttpSpoolQualification::Retain) => {
-                    lock(&self.ledger)
-                        .maintenance_issues
-                        .remove(&current_name(&candidate.record));
+                    lock(&self.ledger).maintenance_issues.remove(current);
                 }
                 Ok(crate::HttpSpoolQualification::Unavailable) => return Ok(false),
                 Err(error) => {
-                    lock(&self.ledger)
-                        .maintenance_failure(&current_name(&candidate.record), &error);
+                    lock(&self.ledger).maintenance_failure(current, &error);
                 }
             }
         }
@@ -167,7 +172,8 @@ impl SpoolBudget {
             return Ok(());
         }
         for item in workspace.files.keys() {
-            self.retire_item(workspace, item, claims)?;
+            let current = uploads::CurrentName::new(&workspace.workspace_id, item);
+            self.retire_item(workspace, &current, claims)?;
         }
         Ok(())
     }
@@ -175,21 +181,24 @@ impl SpoolBudget {
     pub(crate) fn retire_item(
         &self,
         workspace: &Workspace,
-        item: &str,
+        current: &uploads::CurrentName,
         claims: &Arc<Mutex<BTreeSet<String>>>,
     ) -> Result<(), ApiError> {
-        let key = uploads::key(&workspace.workspace_id, item);
+        let key = current.key().to_owned();
         if !lock(claims).insert(key.clone()) {
             return Ok(());
         }
         let _claim = uploads::Claim {
             claims: claims.clone(),
-            key: key.clone(),
+            key,
         };
         let candidate = {
             let ledger = lock(&self.ledger);
-            match ledger.metadata.get(&format!("{key}.json")) {
-                Some(MetadataReference::Upload(record)) => Some(HttpSpoolCandidate {
+            match ledger.metadata.get(current.name()) {
+                Some(MetadataReference::Upload {
+                    record,
+                    role: UploadRole::Current,
+                }) => Some(HttpSpoolCandidate {
                     record: record.clone(),
                 }),
                 _ => None,
@@ -197,25 +206,23 @@ impl SpoolBudget {
         };
         if let Some(candidate) = candidate {
             if candidate.matches(workspace) {
-                self.retire_copy(&candidate.record)?;
+                self.retire_copy(&candidate.record, current.name())?;
             } else {
-                lock(&self.ledger)
-                    .maintenance_issues
-                    .remove(&current_name(&candidate.record));
+                lock(&self.ledger).maintenance_issues.remove(current.name());
             }
         }
         Ok(())
     }
 
-    fn retire_copy(&self, record: &UploadRecord) -> Result<(), ApiError> {
+    fn retire_copy(&self, record: &UploadRecord, current: &str) -> Result<(), ApiError> {
         let mut ledger = lock(&self.ledger);
         if ledger.uncertain {
             return Ok(());
         }
-        let plan = match RetirementNames::new(record) {
+        let plan = match RetirementNames::new(record, current) {
             Ok(plan) => plan,
             Err(error) => {
-                ledger.maintenance_failure(&current_name(record), &error);
+                ledger.maintenance_failure(current, &error);
                 return Ok(());
             }
         };
@@ -249,7 +256,7 @@ impl SpoolBudget {
                         if actual.data_file == record.data_file && actual.principal == record.principal)
                 } else {
                     (name != current && name != retained)
-                        || !matches!(ledger.metadata.get(name), Some(MetadataReference::Upload(actual)) if actual == record)
+                        || !matches!(ledger.metadata.get(name), Some(MetadataReference::Upload { record: actual, .. }) if actual == record)
                 }
             })
         {
@@ -391,11 +398,4 @@ impl SpoolBudget {
             .map_err(crate::upload_fs_error)?;
         Ok(())
     }
-}
-
-pub(super) fn current_name(record: &UploadRecord) -> String {
-    format!(
-        "{}.json",
-        uploads::key(&record.workspace_id, &record.item_id)
-    )
 }

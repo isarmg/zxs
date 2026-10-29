@@ -172,8 +172,10 @@ async fn interrupted_and_checksum_failed_bytes_remain_charged_after_restart() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let record = uploads::load(
         &root.path().join("api-spool"),
-        "ws",
-        "entry_00000000000000000000000000000001",
+        &uploads::UploadLookup::new(
+            "ws".to_owned(),
+            "entry_00000000000000000000000000000001".to_owned(),
+        ),
     )
     .unwrap()
     .unwrap();
@@ -225,8 +227,10 @@ async fn cancellation_settles_actual_unknown_tail_and_retry_never_overwrites_it(
         loop {
             if let Some(record) = uploads::load(
                 &root.path().join("api-spool"),
-                "ws",
-                "entry_00000000000000000000000000000001",
+                &uploads::UploadLookup::new(
+                    "ws".to_owned(),
+                    "entry_00000000000000000000000000000001".to_owned(),
+                ),
             )
             .unwrap()
                 && std::fs::metadata(root.path().join("api-spool").join(&record.data_file))
@@ -350,8 +354,10 @@ async fn upload_idle_timeout_preserves_tail_and_allows_verified_retry() {
     assert_eq!(body["error"]["code"], "TRANSFER_TIMEOUT");
     let record = uploads::load(
         &root.path().join("api-spool"),
-        "ws",
-        "entry_00000000000000000000000000000007",
+        &uploads::UploadLookup::new(
+            "ws".to_owned(),
+            "entry_00000000000000000000000000000007".to_owned(),
+        ),
     )
     .unwrap()
     .unwrap();
@@ -412,8 +418,10 @@ fn upload_total_timeout_retains_unfinished_evidence_despite_progress() {
     drop(runtime);
     let record = uploads::load(
         &root.path().join("api-spool"),
-        "ws",
-        "entry_00000000000000000000000000000008",
+        &uploads::UploadLookup::new(
+            "ws".to_owned(),
+            "entry_00000000000000000000000000000008".to_owned(),
+        ),
     )
     .unwrap()
     .unwrap();

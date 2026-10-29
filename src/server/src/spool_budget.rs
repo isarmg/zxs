@@ -83,26 +83,38 @@ struct Ledger {
 #[derive(Clone, PartialEq, Eq)]
 enum MetadataReference {
     Owner(Owner),
-    Upload(UploadRecord),
+    Upload {
+        record: UploadRecord,
+        role: UploadRole,
+    },
+}
+/// A filename relationship, not proof of the record's contents or authority.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UploadRole {
+    Current,
+    Other,
 }
 impl MetadataReference {
     fn data_file(&self) -> &str {
         match self {
             Self::Owner(owner) => &owner.data_file,
-            Self::Upload(record) => &record.data_file,
+            Self::Upload { record, .. } => &record.data_file,
         }
     }
 }
 impl Ledger {
-    fn current_names(&self, workspace: &str, item: Option<&str>) -> Vec<String> {
+    fn current_names(
+        &self,
+        workspace: &str,
+        item: Option<&crate::uploads::CurrentName>,
+    ) -> Vec<String> {
         let Some(names) = self.current_by_workspace.get(workspace) else {
             return Vec::new();
         };
         match item {
             Some(item) => {
-                let name = format!("{}.json", crate::uploads::key(workspace, item));
-                if names.contains(&name) {
-                    vec![name]
+                if names.contains(item.name()) {
+                    vec![item.name().to_owned()]
                 } else {
                     Vec::new()
                 }
@@ -111,8 +123,10 @@ impl Ledger {
         }
     }
     fn remove_current(&mut self, name: &str, reference: &MetadataReference) {
-        if let MetadataReference::Upload(record) = reference
-            && name == retirement::current_name(record)
+        if let MetadataReference::Upload {
+            record,
+            role: UploadRole::Current,
+        } = reference
         {
             if let Some(names) = self.current_by_workspace.get_mut(&record.workspace_id) {
                 names.remove(name);
@@ -140,9 +154,11 @@ impl Ledger {
             .entry(reference.data_file().to_owned())
             .or_default()
             .insert(name.clone());
-        if let MetadataReference::Upload(record) = &reference
+        if let MetadataReference::Upload {
+            record,
+            role: UploadRole::Current,
+        } = &reference
             && record.state == crate::uploads::UploadState::Complete
-            && name == retirement::current_name(record)
         {
             self.current_by_workspace
                 .entry(record.workspace_id.clone())
@@ -361,9 +377,19 @@ impl SpoolBudget {
             } else if name.contains(".json") {
                 match metadata::<UploadRecord>(&directory, &entry) {
                     Ok(record) => {
+                        let current =
+                            crate::uploads::CurrentName::new(&record.workspace_id, &record.item_id);
+                        let role = if name == current.name() {
+                            UploadRole::Current
+                        } else {
+                            UploadRole::Other
+                        };
                         ledger.record_metadata(
                             name.clone(),
-                            MetadataReference::Upload(record.clone()),
+                            MetadataReference::Upload {
+                                record: record.clone(),
+                                role,
+                            },
                         );
                         covered_metadata.insert(name, record.data_file.clone());
                         set_owner(&mut owners, record.data_file, record.principal)?;
@@ -547,8 +573,14 @@ pub(crate) struct Reservation {
     settlement_failed: bool,
 }
 impl Reservation {
-    pub(crate) fn record_upload(&self, name: String, record: &UploadRecord) {
-        lock(&self.budget.ledger).record_metadata(name, MetadataReference::Upload(record.clone()));
+    pub(crate) fn record_upload(&self, name: String, record: &UploadRecord, role: UploadRole) {
+        lock(&self.budget.ledger).record_metadata(
+            name,
+            MetadataReference::Upload {
+                record: record.clone(),
+                role,
+            },
+        );
     }
     pub(crate) fn directory(&self) -> &Arc<PrivateDirectory> {
         &self.budget.directory

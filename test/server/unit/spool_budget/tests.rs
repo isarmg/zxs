@@ -5,6 +5,10 @@ use std::os::unix::fs::MetadataExt;
 #[path = "retirement.rs"]
 mod retirement;
 
+fn lookup(record: &UploadRecord) -> uploads::UploadLookup {
+    uploads::UploadLookup::new(record.workspace_id.clone(), record.item_id.clone())
+}
+
 fn limits(account: u64, total: u64) -> SpoolLimits {
     SpoolLimits {
         bytes_per_account: account,
@@ -44,6 +48,90 @@ fn record(name: &str, principal: &str) -> UploadRecord {
         state: crate::uploads::UploadState::Complete,
         data_file: name.into(),
     }
+}
+
+#[test]
+fn metadata_roles_preserve_current_index_across_replacements() {
+    let mut ledger = Ledger::default();
+    let mut record = record("body.data", "alice");
+    let lookup = lookup(&record);
+    let name = lookup.current().name().to_owned();
+    ledger.record_metadata(
+        name.clone(),
+        MetadataReference::Upload {
+            record: record.clone(),
+            role: UploadRole::Current,
+        },
+    );
+    assert_eq!(
+        ledger.current_names("ws", Some(lookup.current())),
+        vec![name.clone()]
+    );
+    ledger.maintenance_issues.insert(name.clone());
+    record.state = uploads::UploadState::Incomplete;
+    ledger.record_metadata(
+        name.clone(),
+        MetadataReference::Upload {
+            record: record.clone(),
+            role: UploadRole::Current,
+        },
+    );
+    assert!(ledger.current_by_workspace.is_empty());
+    assert!(ledger.maintenance_issues.is_empty());
+    record.state = uploads::UploadState::Complete;
+    ledger.record_metadata(
+        name.clone(),
+        MetadataReference::Upload {
+            record: record.clone(),
+            role: UploadRole::Current,
+        },
+    );
+    assert_eq!(ledger.current_names("ws", None), vec![name.clone()]);
+    // Inventory may find a valid record under a name belonging to another pair.
+    // Its reference remains attributable, but is not a current-copy candidate.
+    record.item_id = "another-item".into();
+    ledger.record_metadata(
+        name.clone(),
+        MetadataReference::Upload {
+            record,
+            role: UploadRole::Other,
+        },
+    );
+    assert!(ledger.current_by_workspace.is_empty());
+    assert_eq!(ledger.references["body.data"], BTreeSet::from([name]));
+}
+
+#[test]
+fn recovery_classifies_current_and_noncanonical_upload_references_once() {
+    let root = private_tempdir();
+    let record = record("body.data", "alice");
+    let lookup = lookup(&record);
+    uploads::persist(root.path(), &record).unwrap();
+    let bytes = json_codec::to_vec(&record).unwrap();
+    fs::write(root.path().join("noncanonical.json"), bytes).unwrap();
+    let quota = 4 * METADATA_ALLOWANCE;
+    let budget = SpoolBudget::recover(root.path(), limits(quota, quota)).unwrap();
+    let ledger = lock(&budget.ledger);
+    assert!(matches!(
+        &ledger.metadata[lookup.current().name()],
+        MetadataReference::Upload {
+            role: UploadRole::Current,
+            ..
+        }
+    ));
+    assert!(matches!(
+        &ledger.metadata["noncanonical.json"],
+        MetadataReference::Upload {
+            role: UploadRole::Other,
+            ..
+        }
+    ));
+    assert_eq!(
+        ledger.current_names("ws", None),
+        vec![lookup.current().name().to_owned()]
+    );
+    assert_eq!(ledger.references["body.data"].len(), 2);
+    assert_eq!(ledger.total, METADATA_ALLOWANCE);
 }
 #[test]
 fn reservation_settles_to_retained_bytes_not_success_or_declared_length() {
@@ -567,7 +655,9 @@ fn rejected_batch_headroom_preserves_actual_tail_and_verified_retry_accounting()
     let staged = StagedFile::open_budgeted(PayloadOpenMode::Existing, reservation).unwrap();
     assert_eq!(staged.write(&batch).unwrap_err().status, 429);
     assert_eq!(fs::read(root.path().join("batch.data")).unwrap(), b"abcdef");
-    let unchanged = uploads::load(root.path(), "ws", "item").unwrap().unwrap();
+    let unchanged = uploads::load(root.path(), &lookup(&progress))
+        .unwrap()
+        .unwrap();
     assert_eq!(unchanged.persisted_bytes, 3);
     assert_eq!(
         uploads::status(&unchanged)["durable_ranges"][0]["length"],
@@ -594,12 +684,12 @@ fn rejected_batch_headroom_preserves_actual_tail_and_verified_retry_accounting()
     staged.sync().unwrap();
     progress.persisted_bytes = size;
     progress.persisted_hash = blake3::hash(&complete).to_hex().to_string();
-    uploads::persist_staged(&progress, &staged).unwrap();
+    uploads::persist_staged(&progress, &staged, lookup(&progress).current()).unwrap();
     drop(staged);
     assert_eq!(total(&budget), quota);
     assert_eq!(fs::read(root.path().join("batch.data")).unwrap(), complete);
     assert_eq!(
-        uploads::load(root.path(), "ws", "item")
+        uploads::load(root.path(), &lookup(&progress))
             .unwrap()
             .unwrap()
             .generation,

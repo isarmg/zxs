@@ -45,7 +45,7 @@ fn publish(budget: &Arc<SpoolBudget>, record: &UploadRecord) -> Arc<StagedFile> 
     let staged = StagedFile::open_budgeted(PayloadOpenMode::CreateNew, reservation).unwrap();
     staged.write(b"abc").unwrap();
     staged.sync().unwrap();
-    uploads::persist_staged(record, &staged).unwrap();
+    uploads::persist_staged(record, &staged, lookup(record).current()).unwrap();
     staged
 }
 
@@ -56,6 +56,45 @@ fn retire(budget: &SpoolBudget, record: &UploadRecord) {
 }
 
 #[test]
+fn recovered_cross_item_filename_is_not_a_current_retirement_candidate() {
+    let root = private_tempdir();
+    let quota = 4 * METADATA_ALLOWANCE;
+    let budget = SpoolBudget::recover(root.path(), limits(quota, quota)).unwrap();
+    let record = complete("copy.data");
+    drop(publish(&budget, &record));
+    let current = lookup(&record);
+    let alias = uploads::CurrentName::new("ws", "alias");
+    fs::rename(
+        root.path().join(current.current().name()),
+        root.path().join(alias.name()),
+    )
+    .unwrap();
+    drop(budget);
+    let budget = SpoolBudget::recover(root.path(), limits(quota, quota)).unwrap();
+    let before = total(&budget);
+    let mut workspace = authority(&record);
+    let mut alias_file = workspace.files["item"].clone();
+    alias_file.item_id = "alias".into();
+    workspace.files.insert("alias".into(), alias_file);
+    budget
+        .retire_workspace(&workspace, &Arc::new(Mutex::new(BTreeSet::new())))
+        .unwrap();
+    assert_eq!(total(&budget), before);
+    assert_eq!(
+        fs::read(root.path().join(&record.data_file)).unwrap(),
+        b"abc"
+    );
+    assert!(root.path().join(alias.name()).exists());
+    assert!(matches!(
+        &lock(&budget.ledger).metadata[alias.name()],
+        MetadataReference::Upload {
+            role: UploadRole::Other,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn committed_current_and_identical_retained_copy_release_quota_for_continuous_saves() {
     let root = private_tempdir();
     let quota = METADATA_ALLOWANCE + 3;
@@ -63,7 +102,9 @@ fn committed_current_and_identical_retained_copy_release_quota_for_continuous_sa
     for number in 0..4 {
         let record = complete(&format!("copy-{number}.data"));
         let staged = publish(&budget, &record);
-        staged.retain_generation(&record).unwrap();
+        staged
+            .retain_generation(&record, lookup(&record).current())
+            .unwrap();
         drop(staged);
         assert_eq!(total(&budget), quota);
         retire(&budget, &record);
@@ -117,7 +158,9 @@ fn restart_after_phase_one_deletion_converges_without_new_receipt() {
     let budget = SpoolBudget::recover(root.path(), limits(quota, quota)).unwrap();
     let record = complete("copy.data");
     let staged = publish(&budget, &record);
-    staged.retain_generation(&record).unwrap();
+    staged
+        .retain_generation(&record, lookup(&record).current())
+        .unwrap();
     drop(staged);
     budget
         .directory
@@ -279,7 +322,9 @@ fn durable_replacement_of_opaque_retained_record_refunds_only_deleted_metadata_c
     )
     .unwrap();
     let staged = publish(&budget, &record);
-    staged.retain_generation(&record).unwrap();
+    staged
+        .retain_generation(&record, lookup(&record).current())
+        .unwrap();
     drop(staged);
     assert!(total(&budget) > METADATA_ALLOWANCE + 3);
     retire(&budget, &record);
@@ -297,7 +342,9 @@ fn maintenance_failure_is_nonblocking_and_only_its_successful_retry_clears_it() 
     .unwrap();
     let first = complete("first.data");
     let staged = publish(&budget, &first);
-    staged.retain_generation(&first).unwrap();
+    staged
+        .retain_generation(&first, lookup(&first).current())
+        .unwrap();
     drop(staged);
     let retained = RelativePath::new(uploads::retained_name(&first)).unwrap();
     let original = fs::read(root.path().join(uploads::retained_name(&first))).unwrap();
@@ -466,7 +513,9 @@ fn real_retirement_directory_sync_failure_preserves_published_authority_and_char
     let spool = crate::http_spool::HttpSpool::open_blocking(&config, &backend);
     let budget = spool.budget().unwrap();
     let staged = publish(&budget, &record);
-    staged.retain_generation(&record).unwrap();
+    staged
+        .retain_generation(&record, lookup(&record).current())
+        .unwrap();
     drop(staged);
     let before = total(&budget);
     fs::write(root.join(".inject"), b"enable only retirement barriers").unwrap();

@@ -1077,9 +1077,12 @@ async fn retirement_waits_for_activation_and_cancelled_owner_never_publishes() {
                 b"abc"
             );
             assert!(
-                crate::uploads::load(&config.spool_dir, "ws", "item")
-                    .unwrap()
-                    .is_some()
+                crate::uploads::load(
+                    &config.spool_dir,
+                    &crate::uploads::UploadLookup::new("ws".to_owned(), "item".to_owned())
+                )
+                .unwrap()
+                .is_some()
             );
             continue;
         }
@@ -1143,9 +1146,12 @@ async fn retirement_waits_for_activation_and_cancelled_owner_never_publishes() {
                 b"abc"
             );
             assert!(
-                crate::uploads::load(&config.spool_dir, "ws", "item")
-                    .unwrap()
-                    .is_some()
+                crate::uploads::load(
+                    &config.spool_dir,
+                    &crate::uploads::UploadLookup::new("ws".to_owned(), "item".to_owned())
+                )
+                .unwrap()
+                .is_some()
             );
             continue;
         }
