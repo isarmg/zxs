@@ -1,6 +1,164 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+fn merge_records() -> BTreeMap<String, crate::FileBranchMerge> {
+    [("merge-a", 0), ("merge-文件", u64::MAX)]
+        .into_iter()
+        .map(|(id, sequence)| {
+            (
+                id.into(),
+                crate::FileBranchMerge {
+                    merge_id: id.into(),
+                    history_tree_id: "history".into(),
+                    file_id: "file\n\"文件".into(),
+                    input_branch_ids: vec!["left".into(), "right".into()],
+                    input_node_ids: vec!["node-left".into(), "node-right".into()],
+                    chosen_node_id: "node-left".into(),
+                    result_node_id: "node-left".into(),
+                    surviving_branch_id: "left".into(),
+                    reused_node: true,
+                    parent_node_ids: vec!["node-right".into()],
+                    operation_id: "op_00000000000000000000000000000001".parse().unwrap(),
+                    sequence,
+                },
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn merge_records_preserve_nonempty_map_bytes_hashes_and_sparse_state_wire() {
+    let map = merge_records();
+    let old: crate::TrackedMap<_> = map.clone().into();
+    let records: crate::TrackedRecords<_> = map.clone().into_iter().collect();
+    assert_eq!(
+        json_codec::to_vec(&old).unwrap(),
+        json_codec::to_vec(&records).unwrap()
+    );
+    assert_eq!(
+        crate::canonical_json(&old).unwrap(),
+        crate::canonical_json(&records).unwrap()
+    );
+    assert_eq!(
+        crate::object_hash("file-branch-merges", &old).unwrap(),
+        crate::object_hash("file-branch-merges", &records).unwrap()
+    );
+    let state = crate::State {
+        file_branch_merges: records,
+        ..Default::default()
+    };
+    let mut old_wire = json_codec::to_value(crate::State::default()).unwrap();
+    assert!(old_wire.get("file_branch_merges").is_none());
+    old_wire["file_branch_merges"] = json_codec::to_value(&map).unwrap();
+    let bytes = crate::canonical_json(&old_wire).unwrap();
+    assert_eq!(crate::canonical_json(&state).unwrap(), bytes);
+    assert_eq!(
+        crate::object_hash("state", &state).unwrap(),
+        crate::object_hash("state", &old_wire).unwrap()
+    );
+    let decoded: crate::State = json_codec::from_slice(&bytes).unwrap();
+    assert_eq!(decoded, state);
+    assert!(
+        !decoded
+            .file_branch_merges
+            .shares_storage_with(&state.file_branch_merges)
+    );
+    assert_eq!(
+        decoded
+            .file_branch_merges
+            .changes_since(&state.file_branch_merges),
+        crate::MapChanges::All
+    );
+    old_wire["file_branch_merges"] = json_codec::json!({});
+    let empty: crate::State = json_codec::from_value(old_wire).unwrap();
+    assert_eq!(empty, crate::State::default());
+    assert!(
+        json_codec::to_value(empty)
+            .unwrap()
+            .get("file_branch_merges")
+            .is_none()
+    );
+}
+
+#[test]
+fn merge_state_clones_share_payloads_but_keep_exact_writes_and_old_snapshots() {
+    let before = crate::State {
+        file_branch_merges: merge_records().into_iter().collect(),
+        ..Default::default()
+    };
+    let held = before.file_branch_merges.get_shared("merge-a").unwrap();
+    let untouched = before.file_branch_merges.get_shared("merge-文件").unwrap();
+    let bytes = crate::canonical_json(&before).unwrap();
+    let mut next = before.clone();
+    next.begin_tracking();
+    assert!(
+        next.file_branch_merges
+            .shares_storage_with(&before.file_branch_merges)
+    );
+    assert!(Arc::ptr_eq(
+        &held,
+        &next.file_branch_merges.get_shared("merge-a").unwrap()
+    ));
+    assert!(next.file_branch_merges.get_mut("absent").is_none());
+    assert!(next.file_branch_merges.remove("absent").is_none());
+    assert!(
+        next.file_branch_merges
+            .changes_since(&before.file_branch_merges)
+            .is_empty()
+    );
+    next.file_branch_merges
+        .get_mut("merge-a")
+        .unwrap()
+        .parent_node_ids
+        .push("new-parent".into());
+    next.file_branch_merges
+        .insert("temporary".into(), (*held).clone());
+    next.file_branch_merges.remove("temporary").unwrap();
+    next.file_branch_merges
+        .extend([("imported".into(), (*held).clone())]);
+    let crate::MapChanges::Keys(keys) = next
+        .file_branch_merges
+        .changes_since(&before.file_branch_merges)
+    else {
+        panic!("precise merge writes became All")
+    };
+    assert_eq!(
+        keys.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["imported", "merge-a", "temporary"]
+    );
+    assert_eq!(crate::canonical_json(&before).unwrap(), bytes);
+    assert_eq!(held.parent_node_ids, ["node-right"]);
+    assert!(Arc::ptr_eq(
+        &untouched,
+        &next.file_branch_merges.get_shared("merge-文件").unwrap()
+    ));
+    assert!(!Arc::ptr_eq(
+        &held,
+        &next.file_branch_merges.get_shared("merge-a").unwrap()
+    ));
+    let mut same = before.clone();
+    same.begin_tracking();
+    same.file_branch_merges
+        .insert("merge-a".into(), (*held).clone());
+    let crate::MapChanges::Keys(keys) = same
+        .file_branch_merges
+        .changes_since(&before.file_branch_merges)
+    else {
+        panic!("same-value write lost provenance")
+    };
+    assert_eq!(
+        keys.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["merge-a"]
+    );
+    assert_eq!(same, before);
+    same.file_branch_merges = merge_records().into_iter().collect();
+    assert_eq!(
+        same.file_branch_merges
+            .changes_since(&before.file_branch_merges),
+        crate::MapChanges::All
+    );
+}
+
 #[derive(Debug)]
 struct Counted {
     value: String,

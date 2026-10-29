@@ -1079,8 +1079,8 @@ pub struct State {
     pub file_path_nodes: crate::TrackedMap<FilePathNode>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_metadata_nodes: crate::TrackedMap<FileMetadataNode>,
-    #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_branch_merges: crate::TrackedMap<FileBranchMerge>,
+    #[serialization(default, skip_serializing_if = "SharedRecords::is_empty")]
+    pub file_branch_merges: crate::TrackedRecords<FileBranchMerge>,
     /// Consumed names remain readable; writes must use the surviving branch.
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_branch_aliases: crate::TrackedMap<String>,

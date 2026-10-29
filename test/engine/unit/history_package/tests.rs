@@ -2519,6 +2519,8 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
             expected_node_id: engine.file_branch_head(id).unwrap(),
         })
         .collect::<Vec<_>>();
+    let before_merge = engine.state.as_ref().clone();
+    let before_merge_bytes = canonical_json(&before_merge.file_branch_merges).unwrap();
     let merged = engine
         .merge_file_branches(crate::FileBranchMergeRequest {
             file_id: &entry.file_id,
@@ -2535,6 +2537,33 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
         .unwrap()
         .to_owned();
     assert_ne!(merged, chosen);
+    assert_eq!(
+        canonical_json(&before_merge.file_branch_merges).unwrap(),
+        before_merge_bytes
+    );
+    assert!(before_merge.file_branch_merges.is_empty());
+    let merge_record = engine
+        .state
+        .file_branch_merges
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    assert_eq!(merge_record.result_node_id, merged);
+    assert_eq!(
+        merge_record.input_branch_ids,
+        vec![left.clone(), right.clone()]
+    );
+    let published_merges = engine.state.file_branch_merges.clone();
+    assert_eq!(
+        engine.history_owners().unwrap(),
+        &engine
+            .with_namespace_source(|source| crate::state_projection::DerivedOwners::from_state(
+                &engine.state,
+                source
+            ))
+            .unwrap()
+    );
     let versions = canonical_json(&engine.state.versions).unwrap();
     engine
         .configure_backups(crate::BackupConfigurationRequest {
@@ -2582,6 +2611,39 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
             storage_contract::OperationId::generate(),
         )
         .unwrap();
+    assert!(
+        engine
+            .state
+            .file_branch_merges
+            .shares_storage_with(&published_merges)
+    );
+    drop(engine);
+    let engine = Engine::open(&temp.path().join("source/state")).unwrap();
+    assert_eq!(
+        fs::read(
+            version_dir(
+                engine.disk("P01").unwrap(),
+                &repo.history_tree_id,
+                &entry.version_id,
+            )
+            .join("commit-proof.json")
+        )
+        .unwrap(),
+        original_proof
+    );
+    assert_eq!(
+        engine.state.file_branch_merges[&merge_record.merge_id],
+        merge_record
+    );
+    assert_eq!(
+        engine.history_owners().unwrap(),
+        &engine
+            .with_namespace_source(|source| crate::state_projection::DerivedOwners::from_state(
+                &engine.state,
+                source
+            ))
+            .unwrap()
+    );
     let manifest =
         HistoryManifest::fixture_from_state(&engine, &engine.state, &repo.history_tree_id).unwrap();
     assert_eq!(manifest.file_metadata_nodes.len(), 2);
@@ -2661,6 +2723,19 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
     drop(restored);
     let restored = Engine::open(&temp.path().join("restored/state")).unwrap();
     assert_eq!(restored.file_branch_head(&left).unwrap(), merged);
+    assert_eq!(
+        restored.state.file_branch_merges[&merge_record.merge_id],
+        merge_record
+    );
+    assert_eq!(
+        restored.history_owners().unwrap(),
+        &restored
+            .with_namespace_source(|source| crate::state_projection::DerivedOwners::from_state(
+                &restored.state,
+                source
+            ))
+            .unwrap()
+    );
 }
 
 #[test]

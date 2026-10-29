@@ -17,7 +17,7 @@ fn full_changed_files(previous: &State, next: &State) -> BTreeSet<String> {
     for (id, event) in previous
         .file_branch_merges
         .iter()
-        .chain(&next.file_branch_merges)
+        .chain(next.file_branch_merges.iter())
     {
         if !previous.file_branch_merges.contains_key(id)
             || !next.file_branch_merges.contains_key(id)
