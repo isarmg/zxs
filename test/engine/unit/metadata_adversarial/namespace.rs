@@ -1,8 +1,8 @@
 //! Authenticated object graphs entering the production namespace admission path.
 use super::*;
-use crate::journal::{AuthenticatedMetadataObject, object_hash};
+use crate::journal::AuthenticatedMetadataObject;
 use std::cell::Cell;
-use storage_contract::decode_strict;
+use storage_contract::{decode_strict, object_hash};
 
 #[derive(Default)]
 struct Graph {
@@ -38,7 +38,10 @@ impl Graph {
     fn source(&self) -> impl NamespaceSource + '_ {
         ObjectLoaderSource::new(|kind: &'static str, hash: &str| {
             self.reads.set(self.reads.get() + 1);
-            let bytes = self.bytes.get(&(kind, hash.to_owned())).expect("fixture object");
+            let bytes = self
+                .bytes
+                .get(&(kind, hash.to_owned()))
+                .expect("fixture object");
             self.read_bytes.set(self.read_bytes.get() + bytes.len());
             AuthenticatedMetadataObject::authenticate(kind, hash, decode_strict(bytes)?)
         })
@@ -46,7 +49,10 @@ impl Graph {
 
     fn verify(&self, reference: NamespaceReference, entries: u64, budget: u64) -> Result<u64> {
         verify_namespace(
-            &CommitNamespace { root: reference, entries },
+            &CommitNamespace {
+                root: reference,
+                entries,
+            },
             &self.source(),
             budget,
         )
@@ -63,7 +69,10 @@ fn file(name: &str) -> json_codec::Value {
 
 fn child(key: &str, reference: NamespaceReference, entries: u64) -> NamespaceIndexChild {
     NamespaceIndexChild {
-        first_key: key.into(), entries, files: entries, reference,
+        first_key: key.into(),
+        entries,
+        files: entries,
+        reference,
     }
 }
 
@@ -93,8 +102,14 @@ fn valid_graph_and_empty_root_have_independently_counted_totals() {
 #[test]
 fn authenticated_page_rejects_order_duplicates_and_entry_overflow() {
     for (entries, message) in [
-        (vec![file("b"), file("a")], "namespace page keys are not strictly increasing"),
-        (vec![file("a"), file("A")], "namespace page keys are not strictly increasing"),
+        (
+            vec![file("b"), file("a")],
+            "namespace page keys are not strictly increasing",
+        ),
+        (
+            vec![file("a"), file("A")],
+            "namespace page keys are not strictly increasing",
+        ),
         (
             (0..129).map(|n| file(&format!("k{n:03}"))).collect(),
             "namespace page exceeds the entry bound",
@@ -103,7 +118,11 @@ fn authenticated_page_rejects_order_duplicates_and_entry_overflow() {
         let mut graph = Graph::default();
         let count = entries.len() as u64;
         let root = graph.page(entries);
-        rejects(graph.verify(root, count, count), ErrorCode::ObjectCorrupt, message);
+        rejects(
+            graph.verify(root, count, count),
+            ErrorCode::ObjectCorrupt,
+            message,
+        );
         assert_eq!(graph.reads.get(), 1);
     }
 }
@@ -116,8 +135,11 @@ fn page_byte_limit_keeps_the_single_entry_exception() {
     let single = graph.page(vec![oversized.clone()]);
     assert_eq!(graph.verify(single, 1, 1).unwrap(), 1);
     let multiple = graph.page(vec![oversized, file("b")]);
-    rejects(graph.verify(multiple, 2, 2), ErrorCode::ObjectCorrupt,
-        "namespace page exceeds the byte bound");
+    rejects(
+        graph.verify(multiple, 2, 2),
+        ErrorCode::ObjectCorrupt,
+        "namespace page exceeds the byte bound",
+    );
 }
 
 #[test]
@@ -128,7 +150,11 @@ fn authenticated_wire_shape_retains_the_json_error_source() {
         entry[field] = "invalid".into();
         let root = graph.page(vec![entry]);
         let error = graph.verify(root, 1, 1).unwrap_err();
-        assert_eq!(error.code(), ErrorCode::InvalidJson, "field={field}: {error:?}");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidJson,
+            "field={field}: {error:?}"
+        );
         assert!(std::error::Error::source(&error).is_some(), "{error:?}");
     }
 }
@@ -141,8 +167,11 @@ fn altered_bytes_fail_authentication_instead_of_semantic_admission() {
         (NAMESPACE_PAGE_KIND, root.hash.clone()),
         canonical_json(&json_codec::json!({"format":"namespace-page", "entries":[]})).unwrap(),
     );
-    rejects(graph.verify(root, 1, 1), ErrorCode::ObjectCorrupt,
-        "immutable object digest differs");
+    rejects(
+        graph.verify(root, 1, 1),
+        ErrorCode::ObjectCorrupt,
+        "immutable object digest differs",
+    );
 }
 
 #[test]
@@ -190,7 +219,9 @@ fn index_shape_rejects_empty_children_unordered_keys_and_excess_fanout() {
                 "namespace index keys are not strictly increasing"
             }
             3 => {
-                children = (0..129).map(|n| child(&format!("k{n:03}"), children[0].reference.clone(), 1)).collect();
+                children = (0..129)
+                    .map(|n| child(&format!("k{n:03}"), children[0].reference.clone(), 1))
+                    .collect();
                 "namespace index fanout is out of bounds"
             }
             _ => unreachable!(),
@@ -207,8 +238,11 @@ fn index_must_not_disguise_an_empty_page_as_a_nonempty_child() {
     let empty = graph.page(vec![]);
     let right = graph.page(vec![file("b")]);
     let root = graph.index(vec![child("a", empty, 1), child("b", right, 1)]);
-    rejects(graph.verify(root, 2, 2), ErrorCode::ObjectCorrupt,
-        "a namespace index references an empty page");
+    rejects(
+        graph.verify(root, 2, 2),
+        ErrorCode::ObjectCorrupt,
+        "a namespace index references an empty page",
+    );
     assert_eq!(graph.reads.get(), 2);
 }
 
@@ -216,11 +250,15 @@ fn index_must_not_disguise_an_empty_page_as_a_nonempty_child() {
 fn committed_minimal_page_corpus_uses_the_same_authenticated_entry() {
     let value = decode_strict(include_bytes!(
         "../../../fixtures/metadata_adversarial/namespace/unsorted-page.json"
-    )).unwrap();
+    ))
+    .unwrap();
     let mut graph = Graph::default();
     let root = graph.add(NamespaceRefKind::Page, value);
-    rejects(graph.verify(root, 2, 2), ErrorCode::ObjectCorrupt,
-        "namespace page keys are not strictly increasing");
+    rejects(
+        graph.verify(root, 2, 2),
+        ErrorCode::ObjectCorrupt,
+        "namespace page keys are not strictly increasing",
+    );
 }
 
 #[test]
@@ -229,24 +267,33 @@ fn cross_page_overlap_is_rejected_even_when_each_page_is_sorted() {
     let left = graph.page(vec![file("a"), file("c")]);
     let right = graph.page(vec![file("b")]);
     let root = graph.index(vec![child("a", left, 2), child("b", right, 1)]);
-    rejects(graph.verify(root, 3, 3), ErrorCode::ObjectCorrupt,
-        "namespace directory keys are not unique and sorted");
+    rejects(
+        graph.verify(root, 3, 3),
+        ErrorCode::ObjectCorrupt,
+        "namespace directory keys are not unique and sorted",
+    );
 }
 
 #[test]
 fn directory_and_commit_recorded_totals_are_never_allocation_lengths() {
     let mut graph = Graph::default();
     let leaf = graph.page(vec![file("a")]);
-    rejects(graph.verify(leaf.clone(), u64::MAX, 1), ErrorCode::ObjectCorrupt,
-        "namespace recorded entry total differs from the verified graph");
+    rejects(
+        graph.verify(leaf.clone(), u64::MAX, 1),
+        ErrorCode::ObjectCorrupt,
+        "namespace recorded entry total differs from the verified graph",
+    );
     assert_eq!(graph.reads.get(), 1);
     assert!(graph.read_bytes.get() < 1024);
     let root = graph.page(vec![json_codec::json!({
         "entry_id":"entry_d", "name":"d", "lookup_key":"d", "kind":"directory",
         "entries":u64::MAX.to_string(), "files":"1", "subtree":leaf
     })]);
-    rejects(graph.verify(root, 2, 2), ErrorCode::ObjectCorrupt,
-        "namespace recorded totals differ from the verified subtree");
+    rejects(
+        graph.verify(root, 2, 2),
+        ErrorCode::ObjectCorrupt,
+        "namespace recorded totals differ from the verified subtree",
+    );
 }
 
 #[test]
@@ -254,8 +301,11 @@ fn zero_entry_budget_stops_before_any_index_child_read() {
     let mut graph = Graph::default();
     let children = two_pages(&mut graph);
     let root = graph.index(children);
-    rejects(graph.verify(root, u64::MAX, 0), ErrorCode::StateInvalid,
-        "namespace exceeds the entry limit");
+    rejects(
+        graph.verify(root, u64::MAX, 0),
+        ErrorCode::StateInvalid,
+        "namespace exceeds the entry limit",
+    );
     assert_eq!(graph.reads.get(), 1);
 }
 
@@ -267,8 +317,11 @@ fn entry_budget_stops_before_the_next_directory_subtree_read() {
         "entry_id":"entry_d", "name":"d", "lookup_key":"d", "kind":"directory",
         "entries":"1", "files":"1", "subtree":subtree
     })]);
-    rejects(graph.verify(root, 2, 0), ErrorCode::StateInvalid,
-        "namespace exceeds the entry limit");
+    rejects(
+        graph.verify(root, 2, 0),
+        ErrorCode::StateInvalid,
+        "namespace exceeds the entry limit",
+    );
     assert_eq!(graph.reads.get(), 1);
 }
 
@@ -291,8 +344,11 @@ fn nonroot_unary_indexes_are_valid_but_unequal_leaf_depths_are_not() {
     assert_eq!(graph.verify(balanced, 2, 2).unwrap(), 2);
     let short = chain(&mut graph, "b", 0);
     let unbalanced = graph.index(vec![a, short]);
-    rejects(graph.verify(unbalanced, 2, 2), ErrorCode::ObjectCorrupt,
-        "namespace index children have different heights");
+    rejects(
+        graph.verify(unbalanced, 2, 2),
+        ErrorCode::ObjectCorrupt,
+        "namespace index children have different heights",
+    );
 }
 
 #[test]
@@ -301,8 +357,11 @@ fn index_depth_bound_rejects_before_loading_the_fifth_object() {
     let a = chain(&mut graph, "a", 3);
     let b = chain(&mut graph, "b", 3);
     let root = graph.index(vec![a, b]);
-    rejects(graph.verify(root, 2, 2), ErrorCode::ObjectCorrupt,
-        "namespace index exceeds the depth bound");
+    rejects(
+        graph.verify(root, 2, 2),
+        ErrorCode::ObjectCorrupt,
+        "namespace index exceeds the depth bound",
+    );
     assert_eq!(graph.reads.get(), 4);
 }
 
@@ -320,7 +379,10 @@ fn composed_directory_depth_keeps_the_path_error_source() {
     }
     let error = graph.verify(root, count, count).unwrap_err();
     assert_eq!(error.code(), ErrorCode::ObjectCorrupt);
-    assert_eq!(error.message(), "namespace path exceeds the portable path budget");
+    assert_eq!(
+        error.message(),
+        "namespace path exceeds the portable path budget"
+    );
     assert!(std::error::Error::source(&error).is_some());
     assert_eq!(graph.reads.get(), 33);
 }
@@ -351,7 +413,9 @@ fn fixed_seed_combinations_replay_without_using_admission_as_an_oracle() {
         };
         let root = graph.page(entries);
         let result = graph.verify(root, if mutation == 3 { u64::MAX } else { 3 }, 3);
-        eprintln!("namespace seed=0x4d45544120261029 case={case} state={seed:016x} mutation={mutation}");
+        eprintln!(
+            "namespace seed=0x4d45544120261029 case={case} state={seed:016x} mutation={mutation}"
+        );
         match expected {
             None => assert_eq!(result.unwrap(), 3),
             Some(message) => rejects(result, ErrorCode::ObjectCorrupt, message),

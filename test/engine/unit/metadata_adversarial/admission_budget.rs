@@ -13,7 +13,10 @@ fn page(disk: &DiskConfig, entries: Vec<NamespacePageEntry>) -> NamespaceReferen
         hash: store_object(
             disk,
             NAMESPACE_PAGE_KIND,
-            &NamespacePage { format: Default::default(), entries },
+            &NamespacePage {
+                format: Default::default(),
+                entries,
+            },
         )
         .unwrap(),
     }
@@ -25,7 +28,10 @@ fn index(disk: &DiskConfig, children: Vec<NamespaceIndexChild>) -> NamespaceRefe
         hash: store_object(
             disk,
             NAMESPACE_INDEX_KIND,
-            &NamespaceIndex { format: Default::default(), children },
+            &NamespaceIndex {
+                format: Default::default(),
+                children,
+            },
         )
         .unwrap(),
     }
@@ -42,13 +48,16 @@ fn child(name: &str, reference: NamespaceReference) -> NamespaceIndexChild {
 
 fn deep_child(disk: &DiskConfig, name: &str, identity: u64) -> NamespaceIndexChild {
     let empty = page(disk, Vec::new());
-    let leaf = page(disk, vec![NamespacePageEntry::Directory {
-        entry_id: format!("entry_{identity:032x}"),
-        name: name.into(),
-        entries: 0,
-        files: 0,
-        subtree: empty,
-    }]);
+    let leaf = page(
+        disk,
+        vec![NamespacePageEntry::Directory {
+            entry_id: format!("entry_{identity:032x}"),
+            name: name.into(),
+            entries: 0,
+            files: 0,
+            subtree: empty,
+        }],
+    );
     let mut current = child(name, leaf);
     for _ in 0..NAMESPACE_INDEX_DEPTH - 1 {
         current = child(name, index(disk, vec![current]));
@@ -77,14 +86,22 @@ fn snapshot_admission_applies_namespace_depth_before_projection_reads() {
     let temp = tempfile::tempdir().unwrap();
     let config = Config::development([temp.path().join("member")]);
     let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
-    engine.create_repository(
-        &RepositoryName::parse("depth-budget").unwrap(), "P01", 1, "admin",
-        "op_00000000000000000000000000000001".parse().unwrap(),
-    ).unwrap();
+    engine
+        .create_repository(
+            &RepositoryName::parse("depth-budget").unwrap(),
+            "P01",
+            1,
+            "admin",
+            "op_00000000000000000000000000000001".parse().unwrap(),
+        )
+        .unwrap();
     let mut state = engine.state().clone();
     drop(engine);
     let disk = &config.disks[0];
-    let root = index(disk, vec![deep_child(disk, "a", 1), deep_child(disk, "b", 2)]);
+    let root = index(
+        disk,
+        vec![deep_child(disk, "a", 1), deep_child(disk, "b", 2)],
+    );
     // Both branches have equal height, all keys/counts/IDs are consistent,
     // and every object has its actual domain hash. Only index depth is invalid.
     assert_eq!(state.commits.len(), 1);
@@ -101,18 +118,29 @@ fn snapshot_admission_applies_namespace_depth_before_projection_reads() {
             // This is a test-side I/O allowance, not a production hook. The
             // invalid fifth level needs no read to establish its depth error.
             if attempted.get() > NAMESPACE_INDEX_DEPTH {
-                return Err(Error::new(ErrorCode::ResourceLimit, "adversarial namespace read cap"));
+                return Err(Error::new(
+                    ErrorCode::ResourceLimit,
+                    "adversarial namespace read cap",
+                ));
             }
         }
         let object = load_authenticated_object(disk, kind, hash)?;
-        if namespace { loaded.set(loaded.get() + 1); }
+        if namespace {
+            loaded.set(loaded.get() + 1);
+        }
         Ok(object)
-    }).unwrap_err();
+    })
+    .unwrap_err();
     eprintln!(
         "admission-depth attempted={} loaded={} bound={} error={error:?}",
-        attempted.get(), loaded.get(), NAMESPACE_INDEX_DEPTH,
+        attempted.get(),
+        loaded.get(),
+        NAMESPACE_INDEX_DEPTH,
     );
-    assert!(has_depth_cause(&error), "depth must fail before the I/O allowance: {error:?}");
+    assert!(
+        has_depth_cause(&error),
+        "depth must fail before the I/O allowance: {error:?}"
+    );
     assert!(attempted.get() <= NAMESPACE_INDEX_DEPTH);
     assert_eq!(loaded.get(), NAMESPACE_INDEX_DEPTH);
 }

@@ -62,7 +62,10 @@ fn fixture(target: Target) -> Fixture {
             operation_id,
         )
         .unwrap();
-    assert_eq!(engine.list_tree(&repository.main_branch_id).unwrap().len(), 1);
+    assert_eq!(
+        engine.list_tree(&repository.main_branch_id).unwrap().len(),
+        1
+    );
     let snapshot_hash = engine.snapshot.as_ref().unwrap();
     let snapshot: Snapshot = load_object(&config.disks[0], "snapshot", snapshot_hash).unwrap();
     let (kind, hash) = match target {
@@ -98,7 +101,10 @@ fn fixture(target: Target) -> Fixture {
     // also creates a legitimate checkpoint: damage must invalidate its coverage.
     let reopened = Engine::open(&root).unwrap();
     assert_eq!(
-        reopened.list_tree(&repository.main_branch_id).unwrap().len(),
+        reopened
+            .list_tree(&repository.main_branch_id)
+            .unwrap()
+            .len(),
         1
     );
     drop(reopened);
@@ -151,7 +157,10 @@ fn collect_authority(directory: &Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) {
         if kind.is_dir() {
             collect_authority(&path, out);
         } else {
-            assert!(kind.is_file(), "fixture has an unexpected file type: {path:?}");
+            assert!(
+                kind.is_file(),
+                "fixture has an unexpected file type: {path:?}"
+            );
             let name = entry.file_name();
             // Checkpoints and writer locks are acceleration/coordination files,
             // not original publication authority.
@@ -187,7 +196,10 @@ fn assert_error(error: &Error, damage: Damage) {
         }
         Damage::Truncated => {
             assert_eq!(error.code(), ErrorCode::InvalidJson);
-            assert!(matches!(error, Error::Contract(storage_contract::Error::Json { .. })));
+            assert!(matches!(
+                error,
+                Error::Contract(storage_contract::Error::Json { .. })
+            ));
             assert!(std::error::Error::source(error).is_some());
         }
     }
@@ -210,7 +222,10 @@ fn rejects_and_preserves(target: Target) {
         for (member, disk) in fixture.config.disks.iter().enumerate() {
             let path = object_path(disk, fixture.kind, &fixture.hash);
             if matches!(fault, Damage::Missing) {
-                assert_eq!(std::fs::read(&path).unwrap_err().kind(), std::io::ErrorKind::NotFound);
+                assert_eq!(
+                    std::fs::read(&path).unwrap_err().kind(),
+                    std::io::ErrorKind::NotFound
+                );
                 assert_eq!(
                     std::fs::read(fixture.temp.path().join(format!("withheld-{member}.json")))
                         .unwrap(),
