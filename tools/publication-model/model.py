@@ -430,7 +430,14 @@ def _client_steps(state: State, config: Config):
                                state.results[state.slot], duplicate=True)
             yield "mutant:retry_without_binding", replace(duplicate, retry_count=1)
     if state.phase == "RESOLVED":
-        if state.slot + 1 < config.operations and all(state.online) and not any(state.read_fault):
+        aborted_prefix_reprotected = all(
+            result != 3 or all(_durable(row[RECOVERY_RESOLUTION]) and
+                               row[RECOVERY_RESOLUTION].entry and
+                               row[RECOVERY_RESOLUTION].data == FULL
+                               for row in state.artifacts[slot])
+            for slot, result in enumerate(state.results[:state.slot + 1]))
+        if (state.slot + 1 < config.operations and all(state.online) and
+                not any(state.read_fault) and aborted_prefix_reprotected):
             yield "next_operation", replace(state, slot=state.slot + 1, phase="CONTENT", recovery_mode=False,
                                              recovery_result=0, normal_publication_seen=False, response="none", retry_count=0,
                                              reply_lost=False, observations=(-1,) * config.n)

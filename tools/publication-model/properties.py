@@ -145,6 +145,15 @@ def _check_edge(previous, state, config, require):
                 "next decision slot started before the previous slot converged", "10.2")
         require(all(state.online) and not any(state.read_fault), "fixed_member_writes",
                 "next normal operation started without the complete fixed member set", "10.2; 18; ADR 0002")
+        for slot, result in enumerate(previous.results[:previous.slot + 1]):
+            if result == 3:
+                for member, row in enumerate(state.artifacts[slot]):
+                    resolution = row[7]
+                    require(resolution.data == 1 and resolution.stable_data == 1
+                            and resolution.entry and resolution.dir_synced,
+                            "abort_member_reprotection",
+                            f"slot {slot}: member {member} resumed writes before durable abort resolution",
+                            "10.2; 10.7; 10.8")
     if state.index_failed != previous.index_failed and state.index_failed:
         require(state.results == previous.results and state.state_versions == previous.state_versions
                 and state.events == previous.events, "index_independence",

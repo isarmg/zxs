@@ -1,0 +1,142 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 0,
+    "n": 1,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "early_ack"
+  },
+  "counts": {
+    "expanded": 22,
+    "max_depth": 16,
+    "queued": 4,
+    "states": 26,
+    "transitions": 29
+  },
+  "elapsed_seconds": 0.0019665699999933395,
+  "limits": {
+    "max_depth": 220,
+    "max_seconds": 45,
+    "max_states": 80000,
+    "max_transitions": 900000
+  },
+  "schema": "zxs-publication-model-search-v1",
+  "scope": "declared finite abstraction only",
+  "status": "Counterexample",
+  "trace": {
+    "config": {
+      "crashes": 0,
+      "fault_budget": 0,
+      "n": 1,
+      "operations": 1,
+      "replicas": 1,
+      "retries": true,
+      "variant": "early_ack"
+    },
+    "initial_digest": "2dc1c0dcebde45172023d8e84cae918f687728eecb9e40a634f3265bb892a2b0",
+    "schema": "zxs-publication-model-trace-v1",
+    "steps": [
+      {
+        "action": "CONTENT:0:write",
+        "state_digest": "4039d5fec4351bd2076b0e91ba84e4c7cf39f36a169d2ff2cad6bbcc1f66d374"
+      },
+      {
+        "action": "CONTENT:0:file_sync",
+        "state_digest": "0d9af90e13cb183ea8acac523f556143a60758979a246102f7814faf036964b6"
+      },
+      {
+        "action": "CONTENT:0:install",
+        "state_digest": "64a941324cda64bc52deaa7bdb06459ff6e81b811eb16d4aaff0f512f337eb45"
+      },
+      {
+        "action": "CONTENT:0:directory_sync",
+        "state_digest": "9f4b2cb5c650208d8c339d4547d3a1542e5c3b004a4fb76ce79f8b29173cbc0c"
+      },
+      {
+        "action": "barrier:CONTENT",
+        "state_digest": "a943fcadbb6d7f3c42e435996d8fc380590c312b9fc8d3e88459d6eb46ff081a"
+      },
+      {
+        "action": "PREPARE:0:write",
+        "state_digest": "2a45e2ded2e4663e32b0382100684ac1d15403d61848a9fcdfd9427520c89210"
+      },
+      {
+        "action": "PREPARE:0:file_sync",
+        "state_digest": "85ba4b6f9c714c9e6e058380617cf5ceef8bc50be37519b41be506e098981e32"
+      },
+      {
+        "action": "PREPARE:0:install",
+        "state_digest": "e31973a5f0365e59ed3d49af072f3959300fb02c2d4f93c2183562eaf7be76bd"
+      },
+      {
+        "action": "PREPARE:0:directory_sync",
+        "state_digest": "c07ee5ceab2a830cd6d1c07f899eb223dfdcca20861c19e7fd3c11e0c529e017"
+      },
+      {
+        "action": "barrier:PREPARE",
+        "state_digest": "75251eef3694d90c74a294c5986c574b62842c76faac966437b654ec9427a7ec"
+      },
+      {
+        "action": "issue_accept",
+        "state_digest": "abe871ae8bddde33ddc3e3b2478b806acf9e3bc124058fec01e7e95ba8958164"
+      },
+      {
+        "action": "ACCEPT:0:write",
+        "state_digest": "a27e32e7304e290b52de40e0b5e9c95b43f8e1d1025d5b0b7de860d0814cd937"
+      },
+      {
+        "action": "ACCEPT:0:file_sync",
+        "state_digest": "42e4161290372155015e4a00ad38d40c517d5beada319a5bc08566c8c372c6af"
+      },
+      {
+        "action": "ACCEPT:0:install",
+        "state_digest": "b228ea3a89ab2a4cd25c9c3594f2f5e15bfa4b5a6b963d6c0668ea7401658eab"
+      },
+      {
+        "action": "ACCEPT:0:directory_sync",
+        "state_digest": "171df44e823752b47cbde43e6c919fe4f8edcbb44a67ae1b908bc669ac8d4f3c"
+      },
+      {
+        "action": "mutant:ack_at_decision",
+        "state_digest": "51f0c533d3ec169b907bd454bd7aa02df2038c93fd0aeac0c49e1102a36e8918"
+      }
+    ],
+    "violations": [
+      {
+        "message": "slot 0: member 0 lacks durable metadata/publication evidence",
+        "name": "publication_barrier",
+        "spec": "10.3(2-3); 10.10(1,3)"
+      },
+      {
+        "message": "slot 0: required member 0 lacks durable content/proof evidence",
+        "name": "publication_barrier",
+        "spec": "10.3(1,2,4); 10.10(2,4)"
+      },
+      {
+        "message": "slot 0: permanent result differs from the historical publication kind",
+        "name": "fixed_result",
+        "spec": "10.10"
+      }
+    ]
+  },
+  "truncation": null,
+  "violations": [
+    {
+      "message": "slot 0: member 0 lacks durable metadata/publication evidence",
+      "name": "publication_barrier",
+      "spec": "10.3(2-3); 10.10(1,3)"
+    },
+    {
+      "message": "slot 0: required member 0 lacks durable content/proof evidence",
+      "name": "publication_barrier",
+      "spec": "10.3(1,2,4); 10.10(2,4)"
+    },
+    {
+      "message": "slot 0: permanent result differs from the historical publication kind",
+      "name": "fixed_result",
+      "spec": "10.10"
+    }
+  ]
+}

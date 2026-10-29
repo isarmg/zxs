@@ -1,10 +1,12 @@
 """Recovery windows, to be executed by the isolated GitHub verification carrier."""
 import sys
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools/publication-model"))
 from model import Config, initial, successors
+import properties
 
 
 def take(state, config, label):
@@ -63,6 +65,11 @@ class RecoveryWindows(unittest.TestCase):
         self.assertNotIn("next_operation", [a for a, _ in successors(state, config)])
         original_resolution = state.abort_resolution[0]
         state = take(state, config, "disk:return:0")
+        self.assertNotIn("next_operation", [a for a, _ in successors(state, config)])
+        # The oracle must also detect the missing closure independently of the guard.
+        premature = replace(state, slot=1, phase="CONTENT")
+        self.assertIn("abort_member_reprotection", {
+            item["name"] for item in properties.check(state, premature, config)})
         state = take(state, config, "crash:process")
         state = take(state, config, "observe:0:1")
         state = take(state, config, "observe:1:4")
@@ -72,6 +79,11 @@ class RecoveryWindows(unittest.TestCase):
         self.assertEqual(state.results[0], 3)
         self.assertEqual(state.abort_resolution[0], original_resolution)
         self.assertEqual(state.publish_count[0], 0)
+        self.assertIn("next_operation", [a for a, _ in successors(state, config)])
+        previous = state
+        state = take(state, config, "next_operation")
+        self.assertEqual(state.slot, 1)
+        self.assertFalse(properties.check(previous, state, config))
 
     def test_second_power_failure_during_abort_resolution(self):
         config = Config(n=1, crashes=2)

@@ -1,0 +1,29 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 0,
+    "n": 1,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "lost_binding"
+  },
+  "counterexample": true,
+  "final_digest": "025c2252a92038d02979146c909199b20d1edf9afc13e50470d304a251948784",
+  "first_violation_step": 39,
+  "schema": "zxs-publication-model-replay-v1",
+  "steps": 39,
+  "valid": true,
+  "violations": [
+    {
+      "message": "events repeat or violate decision-slot order",
+      "name": "unique_publication",
+      "spec": "10.2; 10.3(5); 10.10"
+    },
+    {
+      "message": "slot 0: operation has multiple business effects",
+      "name": "unique_publication",
+      "spec": "10.3(5); 18"
+    }
+  ]
+}

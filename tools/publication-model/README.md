@@ -4,7 +4,7 @@
 
 ## 范围与规范映射
 
-具体状态、转换及抽象取舍见 [SPEC.md](SPEC.md)，独立审阅见 [REVIEW.md](REVIEW.md)。
+具体状态、转换及抽象取舍见 [SPEC.md](SPEC.md)，独立审阅见 [REVIEW.md](REVIEW.md)，五种故意破坏规则的反例及产品故障测试映射见 [COUNTEREXAMPLES.md](COUNTEREXAMPLES.md)。
 
 | 契约 | 基线规范 | 检查位置 |
 | --- | --- | --- |
