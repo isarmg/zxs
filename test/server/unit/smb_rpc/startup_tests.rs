@@ -1,5 +1,5 @@
 use super::*;
-use std::io::Read;
+use std::io::{Read, Write};
 
 #[tokio::test(flavor = "current_thread")]
 async fn startup_io_does_not_pin_timers_or_health_on_a_single_worker() {
