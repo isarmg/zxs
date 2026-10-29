@@ -1,218 +1,365 @@
-name: CI
+# Verification-only carrier; frozen product retains its unchanged normal workflow.
+# No product source/catalog/golden generation, commits, deployments or adoption.
+name: Focused parallel publication R85 verification
 
 on:
   push:
-  pull_request:
+    branches: [verify/parallel-publication-focused-20261029-r85]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: parallel-publication-r85-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: '1'
+  CARGO_NET_OFFLINE: 'true'
+  CARGO_TERM_COLOR: never
   CARGO_INCREMENTAL: '0'
+  CARGO_BUILD_JOBS: '2'
+  RUST_BACKTRACE: '1'
+  ZXS_PRODUCT_SHA: '0aea4175a8903c3a9ab3332327495cf5c05d9e2c'
+  ZXS_PRODUCT_TREE: '0fc4708d30fa79a65389f2203767e5d06ebda52f'
+  ZXS_PRODUCT_PARENT_SHA: '13b664e9fd41a356ffb7ed982d21e97abb123626'
 
 jobs:
-  static:
-    name: Static workflow and tooling regressions (no Rust)
+  focused:
+    name: Parallel publication (${{ matrix.suite }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Check workflows, source governance and script regressions
-        run: bash .github/scripts/check.sh static
-
-  tests:
-    name: Tests (${{ matrix.suite }})
-    needs: static
-    runs-on: ubuntu-24.04
-    # Cold crypto runs include ten packaged/local-generated ring cases, including
-    # both release slow-test matrices; the measured run exceeded 30 minutes.
-    # Match the release verification budget without relaxing other shards.
-    timeout-minutes: ${{ matrix.suite == 'foundation-crypto' && 60 || 30 }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        suite: [rust-sources, quality, security, workspace, foundation-platform, foundation-crypto, foundation-data, foundation-language, foundation-async, web, contracts, build-tools, smb-protocol]
+        suite: [engine-default, engine-fault, integration]
     env:
-      ZXS_REQUIRE_BROWSER: '1'
+      ZXS_SUITE: ${{ matrix.suite }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Initialize isolated Cargo home
+          ref: 0aea4175a8903c3a9ab3332327495cf5c05d9e2c
+          fetch-depth: 2
+      - name: Prepare evidence and finite execution budgets
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/zxs-parallel-r85-evidence-$ZXS_SUITE"
+          mkdir -p "$evidence" "$RUNNER_TEMP/zxs-parallel-r85-tests-$ZXS_SUITE"
+          printf 'ZXS_EVIDENCE=%s\n' "$evidence" >> "$GITHUB_ENV"
+          printf 'TMPDIR=%s\n' "$RUNNER_TEMP/zxs-parallel-r85-tests-$ZXS_SUITE" >> "$GITHUB_ENV"
+          printf 'CARGO_TARGET_DIR=%s\n' "$RUNNER_TEMP/zxs-parallel-r85-target-$ZXS_SUITE" >> "$GITHUB_ENV"
+          df -h "$RUNNER_TEMP" "$GITHUB_WORKSPACE" | tee "$evidence/filesystem-before.txt"
+          cat > "$RUNNER_TEMP/zxs-parallel-r85-identity.py" <<'IDENTITY'
+          import hashlib, json, os, pathlib, subprocess, sys, tomllib
+          ROOT = pathlib.Path.cwd()
+          OUT = pathlib.Path(os.environ['ZXS_EVIDENCE'])
+          def require(value, message):
+              if not value:
+                  raise RuntimeError(message)
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          phase = sys.argv[1]
+          product, tree, parent = [os.environ[k] for k in
+              ('ZXS_PRODUCT_SHA', 'ZXS_PRODUCT_TREE', 'ZXS_PRODUCT_PARENT_SHA')]
+          require(os.environ['GITHUB_REF'] == 'refs/heads/verify/parallel-publication-focused-20261029-r85',
+                  'wrong verification ref')
+          require(git('rev-parse', 'HEAD').decode().strip() == product, 'wrong product SHA')
+          require(git('rev-parse', 'HEAD^{tree}').decode().strip() == tree, 'wrong product tree')
+          require(git('show', '-s', '--format=%P', 'HEAD').decode().strip() == parent, 'wrong product parent')
+          status = git('status', '--porcelain=v1', '--untracked-files=all').decode()
+          (OUT / (phase + '-status.txt')).write_text(status)
+          require(not status, 'product checkout changed: ' + status)
+          protected = ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml',
+                       'compliance/rust-sources.json', 'tools/rust-sources/workspaces.json',
+                       'test/ci/fixtures/foundation-behaviour-tests.json',
+                       '.github/scripts/initialize-cargo-home.sh', '.github/scripts/check.sh']
+          protected += [os.fsdecode(p) for p in git('ls-tree', '-r', '--name-only', '-z', parent,
+                                                   '--', '.github/workflows').split(b'\0') if p]
+          hashes = {}
+          for name in protected:
+              data = (ROOT / name).read_bytes()
+              require(data == git('show', parent + ':' + name), 'protected input differs: ' + name)
+              hashes[name] = hashlib.sha256(data).hexdigest()
+          require(not git('diff', '--name-only', parent, product, '--', '.github/workflows',
+                          'Cargo.toml', ':(glob)**/Cargo.toml'), 'normal workflows/manifests changed')
+          require(tomllib.loads((ROOT / 'rust-toolchain.toml').read_text())['toolchain']['channel'] == '1.99.0',
+                  'toolchain changed')
+          config = tomllib.loads((ROOT / '.cargo/config.toml').read_text())
+          require(config['net']['offline'] is True
+                  and config['source']['crates-io']['replace-with'] == 'unavailable-registry'
+                  and config['source']['unavailable-registry']['directory'] == 'compliance/empty-registry',
+                  'offline source policy changed')
+          rows = []
+          for item in git('ls-files', '-s', '-z').split(b'\0'):
+              if not item:
+                  continue
+              metadata, raw_path = item.split(b'\t', 1)
+              mode, blob, stage = metadata.decode().split()
+              require(stage == '0', 'unmerged index')
+              name = os.fsdecode(raw_path)
+              path = ROOT / name
+              data = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes()
+              rows.append([name, mode, blob, hashlib.sha256(data).hexdigest(), path.lstat().st_mode])
+          if phase == 'before':
+              identity = dict(product_sha=product, product_tree=tree, product_parent=parent,
+                  verification_sha=os.environ['GITHUB_SHA'], verification_ref=os.environ['GITHUB_REF'],
+                  run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+                  suite=os.environ['ZXS_SUITE'], protected_sha256=hashes, tracked_files=len(rows),
+                  scope='native compile/test evidence only; not physical disk, crash/power-loss or adoption',
+                  source_generation=False, deployment=False,
+                  test_feature_caveat='engine dev self-dependency enables fault-injection even for default tests')
+              (OUT / 'identity.json').write_text(json.dumps(identity, indent=2) + '\n')
+              (OUT / 'tracked-inputs.json').write_text(json.dumps(rows, indent=2) + '\n')
+          else:
+              require(rows == json.loads((OUT / 'tracked-inputs.json').read_text()), 'tracked input bytes/modes/index changed')
+              (OUT / 'source-unchanged.json').write_text(json.dumps(
+                  dict(result='PASS', product_sha=product, product_tree=tree, tracked_files=len(rows)), indent=2) + '\n')
+          print(json.dumps(dict(phase=phase, result='PASS', product_sha=product, tracked_files=len(rows))))
+          IDENTITY
+          cat > "$RUNNER_TEMP/zxs-parallel-r85-runner.py" <<'RUNNER'
+          import hashlib, json, os, pathlib, re, signal, subprocess, traceback
+          ROOT = pathlib.Path.cwd()
+          OUT = pathlib.Path(os.environ['ZXS_EVIDENCE'])
+          SUITE = os.environ['ZXS_SUITE']
+          SUMMARY = dict(suite=SUITE, product_sha=os.environ['ZXS_PRODUCT_SHA'], result='RUNNING',
+                         commands=[], targets=[], limits=dict(job_minutes=45, command_seconds=1800,
+                         build_jobs=2, test_threads=2, evidence_bytes=268435456))
+          # Exact source-owned witness groups. Runtime libtest inventory is authoritative:
+          # every source name below must be present, nonignored, and actually pass.
+          GROUPS = [
+              ('disk::fan_out::tests', 'test/engine/unit/disk/fan_out_tests.rs', 27),
+              ('engine::publication::member_fault_tests', 'test/engine/unit/engine/publication/member_fault_tests.rs', 10),
+              ('engine::publication::stages::tests', 'test/engine/unit/engine/publication/stages_tests.rs', 7),
+              ('engine::publication::parallel_preparation_tests', 'test/engine/unit/engine/publication/parallel_preparation_tests.rs', 8),
+              ('journal::writer_lifecycle_tests', 'test/engine/unit/journal/writer_lifecycle_tests.rs', 10),
+              ('journal::snapshot::segment_directory_cost_tests', 'test/engine/unit/journal/segment_directory_cost_tests.rs', 4),
+              ('journal::snapshot::event_append_tests', 'test/engine/unit/journal/event_append_tests.rs', 6),
+              ('namespace::tests::page_local_tests', 'test/engine/unit/namespace/page_local_tests.rs', 14),
+              ('namespace::tests::composition_path_tests', 'test/engine/unit/namespace/composition_path_tests.rs', 5),
+          ]
+          EXTRA = [
+              'engine::operations::segmented_receipts_tests::count_seal_publication_and_cold_replay_keep_every_permanent_receipt',
+              'engine::operations::segmented_receipts_tests::pending_receipt_rejects_overflowing_or_reversed_directory_ranges',
+              'engine::recovery_checkpoint::tests::cold_replay_reuses_member_specific_receipts_across_decision_slots',
+              'engine::recovery::tests::recovery_repairs_exact_candidate_and_publication_replicas',
+              'engine::recovery::tests::recovery_rejects_all_digest_mismatched_object_replicas_without_rewriting_them',
+              'engine::recovery::tests::replay_receipts_survive_multiple_tail_slot_advances_for_checkpoint',
+              'degraded_recovery::tests::explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_after_restart',
+              'degraded_recovery::tests::degraded_recovery_resumes_the_same_plan_after_each_durable_boundary',
+              'journal::segmented_admission_tests::fully_sealed_logs_reject_future_sequences_before_discarding_the_bodies',
+              'journal::snapshot_incremental_oracle_tests::operation_receipt_appends_update_the_tail_segment_and_one_locator_path',
+              'tests::faults_replay_same_operation_and_never_publish_early',
+              'tests::partial_publication_is_not_visible_with_two_members_and_receipt_tampering_is_rejected',
+              'tests::accepted_batch_recovers_without_staged_sources_and_replays_exactly_once',
+          ]
+          INTEGRATION = ['workspace_commit_replay', 'workspace_namespace_preconditions',
+                         'workspace_upload_retries', 'branch_alias_operations']
+          def require(value, message):
+              if not value:
+                  raise RuntimeError(message)
+          def save():
+              (OUT / 'summary.json').write_text(json.dumps(SUMMARY, indent=2) + '\n')
+          def capture(label, command):
+              SUMMARY['commands'].append(dict(label=label, argv=command, cwd=str(ROOT)))
+              save()
+              print('+ ' + ' '.join(command), flush=True)
+              with (OUT / (label + '.log')).open('w') as log:
+                  with subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
+                                        text=True, start_new_session=True) as process:
+                      try:
+                          status = process.wait(timeout=1800)
+                      except subprocess.TimeoutExpired:
+                          # A watchdog failure owns cargo/rustc/test descendants too.
+                          # Kill the process group, reap the leader, retain the log,
+                          # and propagate the original timeout instead of continuing.
+                          try:
+                              os.killpg(process.pid, signal.SIGKILL)
+                          except ProcessLookupError:
+                              pass  # The group exited at the timeout boundary.
+                          process.wait()
+                          raise
+              output = (OUT / (label + '.log')).read_text()
+              print(output, end='', flush=True)
+              return status, output
+          def source_names(path):
+              text = (ROOT / path).read_text()
+              # Read the real adjacent attributes; ignored fixture/error-environment
+              # tools are inventoried by libtest but never promoted into required runs.
+              declarations = re.findall(r'(?m)^((?:#\[[^\n]*\]\n)+)fn ([A-Za-z_]\w*)\(', text)
+              names = [name for attributes, name in declarations
+                       if '#[test]\n' in attributes and '#[ignore' not in attributes]
+              require(names and len(names) == len(set(names)), 'empty/duplicate source witnesses: ' + path)
+              return names
+          def critical_witnesses():
+              names = set(EXTRA)
+              sources = []
+              for prefix, path, count in GROUPS:
+                  found = source_names(path)
+                  require(len(found) == count, 'reviewed witness source count changed: ' + path)
+                  names.update(prefix + '::' + name for name in found)
+                  sources.append(dict(path=path, count=count,
+                      sha256=hashlib.sha256((ROOT / path).read_bytes()).hexdigest()))
+              (OUT / 'critical-witnesses.json').write_text(json.dumps(
+                  dict(names=sorted(names), count=len(names), sources=sources), indent=2) + '\n')
+              return names
+          def build(label, target, source, features, production=False):
+              command = ['cargo', '+1.99.0', 'check' if production else 'test', '--locked', '--offline',
+                         '-p', 'storage-engine', *target, *features]
+              if not production:
+                  command.append('--no-run')
+              command.append('--message-format=json')
+              status, output = capture(label + '-compile', command)
+              events = []
+              for line in output.splitlines():
+                  if line.startswith('{'):
+                      events.append(json.loads(line))
+              diagnostics = [e for e in events if e.get('reason') == 'compiler-message'
+                             and e.get('message', {}).get('level') in ('warning', 'error')]
+              for event in diagnostics:
+                  print(event['message'].get('rendered', ''), flush=True)
+              require(status == 0 and not diagnostics, label + ': compile failed or emitted warnings')
+              artifacts = [e for e in events if e.get('reason') == 'compiler-artifact'
+                           and pathlib.Path(e['target']['src_path']).resolve() == (ROOT / source).resolve()
+                           and e.get('profile', {}).get('test') is (not production)]
+              require(len(artifacts) == 1, label + ': expected one matching compiler artifact')
+              artifact = artifacts[0]
+              actual_features = set(artifact['features'])
+              if production:
+                  require('fault-injection' not in actual_features and 'test-support' not in actual_features,
+                          'ordinary non-test library unexpectedly enabled test features')
+              else:
+                  require('fault-injection' in actual_features, 'engine test self-dependency feature missing')
+              (OUT / (label + '-artifact.json')).write_text(json.dumps(artifact, indent=2) + '\n')
+              if production:
+                  SUMMARY['production_library'] = dict(result='PASS', actual_features=sorted(actual_features))
+                  save()
+                  return None
+              binary = pathlib.Path(artifact['executable']).resolve()
+              require(binary.is_file(), label + ': missing libtest executable')
+              return str(binary)
+          def listed(label, binary, extra):
+              status, output = capture(label, [binary, *extra, '--list', '--format', 'terse', '--color', 'never'])
+              require(status == 0, label + ': listing failed')
+              names = re.findall(r'^(.+): test$', output, re.M)
+              require(len(names) == len(set(names)), label + ': duplicate test names')
+              require(not re.search(r'^.+: benchmark$', output, re.M), label + ': unexpected benchmark')
+              return set(names)
+          def execute(label, binary, required):
+              all_names = listed(label + '-list-all', binary, [])
+              ignored = listed(label + '-list-ignored', binary, ['--ignored'])
+              selected = all_names - ignored
+              require(selected and ignored <= all_names, label + ': empty/inconsistent test inventory')
+              require(required <= selected, label + ': missing/ignored witnesses: ' + repr(sorted(required - selected)))
+              inventory = dict(all_listed=sorted(all_names), ignored_not_invoked=sorted(ignored),
+                               selected_to_execute=sorted(selected), required_witnesses=sorted(required))
+              (OUT / (label + '-inventory.json')).write_text(json.dumps(inventory, indent=2) + '\n')
+              record = dict(target=label, result='RUNNING', inventory=inventory,
+                            binary_sha256=hashlib.sha256(pathlib.Path(binary).read_bytes()).hexdigest())
+              SUMMARY['targets'].append(record)
+              save()
+              # Never execute ignored regeneration tools; do not pass --ignored or --include-ignored here.
+              status, output = capture(label + '-execution',
+                  [binary, '--format', 'pretty', '--color', 'never', '--test-threads=2', '--show-output'])
+              outcomes = re.findall(r'^test (.+?)(?: - should panic)? \.\.\. (ok|FAILED|ignored)(?:, [^\n]*)?$', output, re.M)
+              require(len(outcomes) == len({name for name, _ in outcomes}), label + ': duplicate outcomes')
+              passed = {name for name, outcome in outcomes if outcome == 'ok'}
+              failed = {name for name, outcome in outcomes if outcome == 'FAILED'}
+              skipped = {name for name, outcome in outcomes if outcome == 'ignored'}
+              summaries = re.findall(r'^test result: (\w+)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out;', output, re.M)
+              record.update(returncode=status, passed_names=sorted(passed), failed_names=sorted(failed),
+                            ignored_names=sorted(skipped), summaries=summaries)
+              save()
+              require(status == 0 and not failed and passed == selected and skipped == ignored,
+                      label + ': actual test bodies differ from inventory or failed')
+              require(len(summaries) == 1, label + ': missing/ambiguous final summary')
+              result, good, bad, skips, measured, filtered = summaries[0]
+              require(result == 'ok' and int(good) == len(selected) > 0 and int(bad) == 0
+                      and int(skips) == len(ignored) and int(measured) == int(filtered) == 0,
+                      label + ': invalid/zero-body test summary')
+              record.update(result='PASS', executed_count=len(passed), critical_witness_count=len(required))
+              save()
+          def phase_cases():
+              stages = ['Prepare', 'Accept', 'Finalize', 'CommitProofs', 'Publication', 'Seals', 'PublicationProofs']
+              first = 'engine::publication::member_fault_tests::first_middle_and_last_member_failures_preserve_every_stage_barrier'
+              multi = 'engine::publication::member_fault_tests::simultaneous_member_failures_preserve_non_prefix_results_and_the_same_decision'
+              cases = [dict(body=first, stage=stage, failed=[member], after_write=after)
+                       for stage in stages for member in range(3) for after in [False, True]]
+              cases += [dict(body=multi, stage=stage, failed=[0, 2], after_write=after)
+                        for stage in stages for after in [False, True]]
+              cases += [dict(body=multi, stage='Accept', failed=[0, 1, 2], after_write=after)
+                        for after in [False, True]]
+              require(len(cases) == 58, 'stage scenario accounting changed')
+              passed = set(SUMMARY['targets'][-1]['passed_names'])
+              require({first, multi} <= passed, 'both complete matrix bodies must pass')
+              (OUT / 'phase-scenarios.json').write_text(json.dumps(dict(
+                  source='test/engine/unit/engine/publication/member_fault_tests.rs', cases=cases,
+                  scenario_count=58, libtest_body_count=2,
+                  evidence='Both named bodies passed all their source-defined loops/assertions. Cases are not individually listed libtest results.',
+                  scope='process/filesystem fault injection; not physical device power-loss validation'), indent=2) + '\n')
+          try:
+              if SUITE in ('engine-default', 'engine-fault'):
+                  required = critical_witnesses()
+                  if SUITE == 'engine-default':
+                      build('engine-production-no-features', ['--lib'], 'src/engine/src/lib.rs',
+                            ['--no-default-features'], production=True)
+                  features = [] if SUITE == 'engine-default' else ['--features', 'fault-injection']
+                  binary = build(SUITE, ['--lib'], 'src/engine/src/lib.rs', features)
+                  execute(SUITE, binary, required)
+                  phase_cases()
+              elif SUITE == 'integration':
+                  for target in INTEGRATION:
+                      source = 'test/engine/integration/' + target + '.rs'
+                      required = set(source_names(source))
+                      binary = build(target, ['--test', target], source, [])
+                      execute(target, binary, required)
+              else:
+                  raise RuntimeError('unknown suite')
+              SUMMARY['result'] = 'PASS'
+          except BaseException:
+              SUMMARY['result'] = 'FAIL'
+              (OUT / 'failure.txt').write_text(traceback.format_exc())
+              raise
+          finally:
+              save()
+          RUNNER
+      - name: Authenticate exact frozen inputs
+        run: python3 "$RUNNER_TEMP/zxs-parallel-r85-identity.py" before
+      - name: Initialize isolated empty Cargo home
         run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
+      - name: Verify pinned toolchain and isolated build paths
+        shell: bash
         run: |
-          rustup show active-toolchain
-          rustc --version
-          cargo --version
-      - name: Install WASM standard library for cross-target checks
-        if: matrix.suite == 'quality' || matrix.suite == 'build-tools' || startsWith(matrix.suite, 'foundation-')
-        run: rustup target add wasm32-unknown-unknown
-      - name: Install system SQLite SDK for unbundled validation
-        if: matrix.suite == 'foundation-data'
+          set -euo pipefail
+          test -d "$CARGO_HOME"
+          test -z "$(find "$CARGO_HOME" -mindepth 1 -print -quit)"
+          rustc +1.99.0 --version | tee "$ZXS_EVIDENCE/rustc.txt"
+          cargo +1.99.0 --version | tee "$ZXS_EVIDENCE/cargo.txt"
+          grep -q '^rustc 1\.99\.0 ' "$ZXS_EVIDENCE/rustc.txt"
+          grep -q '^cargo 1\.99\.0 ' "$ZXS_EVIDENCE/cargo.txt"
+          printf 'CARGO_HOME=%s\nCARGO_TARGET_DIR=%s\nTMPDIR=%s\n' "$CARGO_HOME" "$CARGO_TARGET_DIR" "$TMPDIR" > "$ZXS_EVIDENCE/build-paths.txt"
+      - name: Compile targets and require actual list-equal test-body outcomes
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libsqlite3-dev clang libclang-dev pkg-config
-      - name: Enable sandboxed Chrome for browser future runtime checks
-        if: matrix.suite == 'foundation-language'
-        run: bash .github/scripts/prepare-browser-contract.sh
-      - name: Cache verified security scanner
-        if: matrix.suite == 'security'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            target/security-tools/bin/cargo-audit
-            target/security-tools/verified-build.json
-          key: security-audit-ubuntu24.04-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.github/scripts/install-security-audit.py', '.github/security-tools/cargo-audit.json', '.github/security-tools/cargo-audit-0.22.2.lock') }}
-      - name: Run locked test suite
-        run: bash .github/scripts/check.sh "${{ matrix.suite }}"
-      - name: Verify isolated system SQLite consumer
-        if: matrix.suite == 'foundation-data'
-        run: python3 .github/scripts/check-sqlite-system.py
-      - name: Retain exact foundation behaviour test evidence
-        if: always() && matrix.suite == 'foundation-async'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: foundation-behaviour-evidence
-          path: |
-            target/foundation-behaviour/logs/
-            target/foundation-behaviour/summary.json
-          if-no-files-found: warn
-          retention-days: 7
-
-  web-production:
-    name: Production WASM build
-    needs: static
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain and WASM target
-        run: |
-          rustup show active-toolchain
-          rustup target add wasm32-unknown-unknown
-          rustc --version
-      - name: Cache locally compiled Rust build helpers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/rust-build-tools
-          key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
-          restore-keys: |
-            rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
-      - name: Build production Web distribution
-        run: bash .github/scripts/check.sh web-production
-      - name: Retain production assets for checks in this run
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-dist
-          path: build/web/
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain browser template contract fixture
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output/
-          if-no-files-found: error
-          retention-days: 7
-
-  browser-smoke:
-    name: Extracted release browser smoke (Chrome)
-    needs: web-production
-    runs-on: ubuntu-24.04
-    # Compile one release-profile graph for both product and browser harness.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
-        run: rustup show active-toolchain
-      - name: Fetch production Web assets from this workflow run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: web-dist
-          path: build/web
-      - name: Fetch browser template contract fixture from this run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output
-      - name: Verify runner Chrome and ChromeDriver
-        run: |
-          chrome="$(command -v google-chrome)"
-          driver="$(command -v chromedriver)"
-          "$chrome" --version
-          "$driver" --version
-          chrome_major=$("$chrome" --version | grep -oE '[0-9]+' | head -1)
-          driver_major=$("$driver" --version | grep -oE '[0-9]+' | head -1)
-          test "$chrome_major" = "$driver_major"
-          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
-          echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
-      - name: Install CJK fonts for the Chinese screenshot
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
-      - name: Build and exercise extracted release packages
-        env:
-          ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
-          ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
-        run: |
-          export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          python3 .github/scripts/check-rust-diagnostics.py -- \
-            cargo build --locked --offline --release --package storage-server --package storage-rescue --message-format=json
-          cargo test --locked --offline --release -p browser-smoke
-          bash .github/scripts/release-package.sh
-          bash .github/scripts/release-acceptance.sh
-          python3 .github/scripts/check-csr-browser.py
-          bash .github/scripts/release-assemble.sh
-      - name: Retain verified installation candidate (not a published release)
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: installation-candidate-linux-web
-          path: release-assets/*
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain template browser result and exact input identity
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-browser
-          path: target/csr-template-check/output/*json
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain real Web file manager screenshot
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-screenshot
-          path: artifacts/web-file-manager.png
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain responsive Web viewport previews
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          set -euo pipefail
+          ulimit -n 4096
+          ulimit -c 0
+          python3 "$RUNNER_TEMP/zxs-parallel-r85-runner.py"
+      - name: Verify immutable source and preserve final resource evidence
         if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h "$RUNNER_TEMP" "$GITHUB_WORKSPACE" | tee "$ZXS_EVIDENCE/filesystem-after.txt"
+          python3 "$RUNNER_TEMP/zxs-parallel-r85-identity.py" after
+          bytes=$(du -sb "$ZXS_EVIDENCE" | cut -f1)
+          test "$bytes" -le 268435456
+      - name: Retain identity inventories outcomes and logs only
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: viewport-previews
-          path: artifacts/viewport-previews/
-          if-no-files-found: warn
+          name: parallel-publication-r85-${{ matrix.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/zxs-parallel-r85-evidence-${{ matrix.suite }}/
+          if-no-files-found: error
           retention-days: 7
-
-  smb-sdk:
-    needs: static
-    uses: ./.github/workflows/smb-sdk.yml
