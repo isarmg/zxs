@@ -292,3 +292,62 @@ fn directory_sync_engine_recovery_in_isolated_child() {
     fs::write(root.join("completed"), b"engine-recovery").unwrap();
     println!("\nZXS_DIRECTORY_IO_COMPLETE engine-recovery");
 }
+
+#[test]
+#[ignore = "requires owned_directory_io/run.sh isolated fsync interposer"]
+fn directory_sync_aba_in_isolated_child() {
+    let (root, disk, old, _) = fixture();
+    let held = DiskRoot::open(&root).unwrap();
+    phase(&root, "warm");
+    fs::write(root.join("observe"), b"").unwrap();
+    old.store_on(&held, &disk).unwrap();
+    let parent = root.join("metadata/objects");
+    let publication = parent.join("publication");
+    let saved = root.join("aba-publication");
+    let original_parent = held.directory(&parent).unwrap();
+    let original_child = held.directory(&publication).unwrap();
+    fs::rename(&publication, &saved).unwrap();
+    phase(&root, "removed");
+    // This successful barrier makes deletion of the original name durable.
+    original_parent.sync_all().unwrap();
+    fs::rename(&saved, &publication).unwrap();
+    // Deliberately omit fsync(objects) after restoring the same inode/name.
+    assert_eq!(
+        FileIdentity::from_fd(&original_parent).unwrap(),
+        FileIdentity::from_fd(held.directory(&parent).unwrap()).unwrap()
+    );
+    assert_eq!(
+        FileIdentity::from_fd(&original_child).unwrap(),
+        FileIdentity::from_fd(held.directory(&publication).unwrap()).unwrap()
+    );
+    let new = PreparedMetadataObject::new(
+        "publication",
+        &json_codec::json!({"directory_barrier_probe": "new after ABA"}),
+        MAX_METADATA,
+    )
+    .unwrap();
+    assert_ne!(old.hash, new.hash);
+    phase(&root, "aba-write");
+    let outcome = new.store_on(&held, &disk);
+    let failure = std::env::var("ZXS_DIRECTORY_IO_FAILURE").unwrap();
+    if failure == "aba-parent" {
+        assert_eio(&outcome.expect_err("the owed parent barrier must observe its EIO"));
+        assert_eq!(events(&root).matches("injected-EIO\n").count(), 1);
+        phase(&root, "aba-retry");
+        new.store_on(&held, &disk).unwrap();
+        assert!(events(&root).contains("aba-retry dir metadata/objects success\n"));
+    } else {
+        outcome.unwrap();
+        assert!(
+            events(&root).contains("aba-write dir metadata/objects success\n"),
+            "same dev/ino after a durable removal cannot reuse the old edge proof"
+        );
+    }
+    assert!(events(&root).contains("removed dir metadata/objects success\n"));
+    let target = publication
+        .join(&new.hash[..2])
+        .join(format!("{}.json", new.hash));
+    assert_eq!(fs::read(target).unwrap(), new.bytes());
+    fs::write(root.join("completed"), b"aba").unwrap();
+    println!("\nZXS_DIRECTORY_IO_COMPLETE aba");
+}

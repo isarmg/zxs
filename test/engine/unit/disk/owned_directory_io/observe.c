@@ -46,8 +46,10 @@ int fsync(int fd) {
     const char *failure = getenv("ZXS_DIRECTORY_IO_FAILURE");
     const char *failed_path = failure && !strcmp(failure, "child")
         ? "metadata/objects/publication" : "metadata/objects";
-    if (!injected && !strcmp(phase, "first") && !strcmp(kind, "dir") &&
-        !strcmp(relative, failed_path)) {
+    int first_failure = !strcmp(phase, "first") && !strcmp(relative, failed_path);
+    int aba_failure = !strcmp(phase, "aba-write") && failure &&
+        !strcmp(failure, "aba-parent") && !strcmp(relative, "metadata/objects");
+    if (!injected && !strcmp(kind, "dir") && (first_failure || aba_failure)) {
         char child[4096];
         if (snprintf(child, sizeof(child), "%s/metadata/objects/publication", root) >= (int)sizeof(child)) abort();
         struct stat created;

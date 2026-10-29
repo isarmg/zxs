@@ -53,6 +53,8 @@ FIXED = BASE.replace(b'    2\n}', b'    let _ = futures_core::task::Poll::Ready(
 REGION = BASE[BASE.index(b'mod tests'):]
 LOCAL = BASE[:BASE.index(b'mod tests')].replace(b'futures_core', b'futures').replace(
     b'    1\n}', b'    1 // local\n}') + b'include!("../../../../test/foundation/web/unit/src/lib/tests_11.rs");\n'
+LITERAL_FORMS = ('"x"', 'r#"x"#', 'b"x"', 'br##"x"##', 'c"x"', 'cr###"x"###', "'x'", "b'x'")
+LITERAL_SUFFIXES = ('futures_core', 'αfutures_core', 'futures_coreé', 'futures_core\u0301')
 
 
 def enc(data):
@@ -266,6 +268,25 @@ class Identifiers(unittest.TestCase):
                      'use crate::{αfutures_core::Thing};\n'):
             with self.subTest(text=text):
                 self.assertEqual(self.mapped(text), (text.encode(), []))
+
+    def test_literal_suffixes_are_part_of_the_literal_token(self):
+        # Rust macros may receive any IDENTIFIER_OR_KEYWORD literal suffix.
+        # Its trailing :: does not turn that suffix into a crate path root.
+        for literal in LITERAL_FORMS:
+            for suffix in (*LITERAL_SUFFIXES, 'use'):
+                text = 'm!(' + literal + suffix + '::Thing);\n'
+                with self.subTest(literal=literal, suffix=suffix):
+                    self.assertEqual(self.mapped(text), (text.encode(), []))
+
+    def test_literal_suffix_boundary_keeps_separated_crate_paths(self):
+        for literal in LITERAL_FORMS:
+            for gap in (' ', '\n', '/* separate token */'):
+                text = 'm!(' + literal + 'futures_core' + gap + 'futures_core::Thing);\n'
+                expected = 'm!(' + literal + 'futures_core' + gap + 'futures::Thing);\n'
+                with self.subTest(literal=literal, gap=gap):
+                    data, records = self.mapped(text)
+                    self.assertEqual(data.decode(), expected)
+                    self.assertEqual(len(records), 1)
 
     def test_root_use_groups_raw_identifiers_and_aliases_keep_their_scope(self):
         for text, expected in (
@@ -604,6 +625,30 @@ class Apply(Synthetic):
                                          {path: (before[path], data) for path, data in after.items()})
         current[legacy.KEY] = [sha]
         backport.check_external_accounting(sha, stored, current, before, after)
+
+    def test_plan_apply_and_replay_preserve_literal_suffixes(self):
+        preserved = ''.join('m!(' + literal + suffix + '::Thing);\n'
+                            for literal in LITERAL_FORMS for suffix in LITERAL_SUFFIXES).encode()
+        actual_path = b'm!("x"futures_core futures_core::Thing);\n'
+        fixed = FIXED.replace(b'    3\n}', preserved + actual_path + b'    3\n}', 1)
+        (self.clone / 'src/lib.rs').write_bytes(fixed)
+        git(self.clone, 'commit', '-qam', 'add macro literal suffixes and a separate crate path')
+        self.fix_sha = git(self.clone, 'rev-parse', 'HEAD')
+        document = self.plan()
+        sha, row = self.apply()
+        production = (self.root / OWNER / 'src/lib.rs').read_bytes()
+        self.assertIn(preserved, production)
+        self.assertIn(b'm!("x"futures_core futures::Thing);\n', production)
+        self.assertIn(b'let _ = futures::task::Poll::Ready(());', production)
+        before = {item['local_path']: self.files[item['local_path']]
+                  for item in document['replay']['merged']}
+        after = {path: (self.root / path).read_bytes() for path in before}
+        stored = proof_maintenance._read(self.root, sha)
+        self.assertEqual(stored, row)
+        self.assertEqual(backport.check_replay(stored, before, after, self.catalog), after)
+        backport.check_mapping(backport.FlatLayout(self.root), self.catalog, stored)
+        backport.check_regions(backport.FlatLayout(self.root), self.catalog, stored, historical=self.files)
+        backport.check_clone(stored, self.clone)
 
     def test_replay_drift_in_each_input_is_named(self):
         self.plan()

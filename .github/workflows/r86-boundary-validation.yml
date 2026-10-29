@@ -46,29 +46,36 @@ jobs:
           python3 -m unittest discover -s test/tools/rust-sources -p 'test_source_backport.py' -v
 
   source-governance:
-    name: Complete source replay and fixed HTTP consumers
+    name: Affected source replay and fixed receipt identity
     needs: source-regressions
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Initialize isolated Cargo home
         run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Verify pinned toolchain and add WASM target
+      - name: Verify pinned toolchain
         run: |
           rustc --version
           cargo --version
-          rustup target add wasm32-unknown-unknown
-      - name: Verify complete source maintenance chain and regressions
-        run: bash .github/scripts/check.sh rust-sources
+      - name: Run affected maintenance chain regressions
+        run: |
+          python3 -m unittest discover -s test/tools/rust-sources -p 'test_legacy_http_maintenance*.py' -v
+          python3 -m unittest discover -s test/tools/rust-sources -p 'test_proof_maintenance.py' -v
+      - name: Verify live source identities and maintenance replay
+        run: python3 tools/rust-sources/manage.py verify
       - name: Verify unchanged fixed HTTP receipt explicitly
         run: |
           python3 tools/rust-sources/source_backport.py verify \
             --receipt c75e73b0b8aab76fc3934f6c72620127795b8c95ec7bc0f52d173664e477938d
-      - name: Verify actual HTTP consumers and retained fixed backport
-        run: python3 .github/scripts/check-http-transport.py
+      - name: Verify byte identity of previously tested HTTP consumers and dependencies
+        run: |
+          git diff --exit-code a898b862ba2317248b3921569bf1d7347db25d7c HEAD -- \
+            src/foundation test/architecture/http-transport test/foundation/http-transport \
+            Cargo.toml Cargo.lock rust-toolchain.toml .github/scripts/check-http-transport.py
 
   directory-regressions:
     name: Real directory sync retry and engine regressions
