@@ -1,0 +1,59 @@
+name: Metadata adversarial verification
+
+on:
+  push:
+    branches: [verify/codex-metadata-adversarial-20261029]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: '0'
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Record exact source and Rust 1.99 environment
+        run: |
+          mkdir -p target/metadata-adversarial
+          git rev-parse HEAD > target/metadata-adversarial/verification-sha.txt
+          git rev-parse HEAD^ > target/metadata-adversarial/source-sha.txt
+          uname -a > target/metadata-adversarial/environment.txt
+          rustup show active-toolchain | tee -a target/metadata-adversarial/environment.txt
+          rustc --version | tee -a target/metadata-adversarial/environment.txt
+          cargo --version | tee -a target/metadata-adversarial/environment.txt
+          test "$(rustc --version | cut -d ' ' -f 2)" = '1.99.0'
+      - name: Produce formatting patch for the isolated test files
+        run: |
+          rustfmt --edition 2024 test/engine/unit/metadata_adversarial/*.rs
+          git diff --binary > target/metadata-adversarial/formatting.patch
+      - name: Compile locked offline engine test binary
+        id: compile
+        run: |
+          set -o pipefail
+          cargo test --locked --offline -p storage-engine --lib --no-run --message-format=json > target/metadata-adversarial/compile.json 2> target/metadata-adversarial/compile.stderr
+      - name: Run existing engine lib baseline tests
+        if: steps.compile.outcome == 'success'
+        run: |
+          set -o pipefail
+          /usr/bin/time -v timeout 900s cargo test --locked --offline -p storage-engine --lib -- --skip metadata_adversarial > target/metadata-adversarial/baseline.log 2>&1
+      - name: Run exact adversarial tests under resource limits
+        if: always() && steps.compile.outcome == 'success'
+        run: |
+          python3 test/engine/unit/metadata_adversarial/run.py --compile-messages target/metadata-adversarial/compile.json --output target/metadata-adversarial/results
+      - name: Retain raw logs and machine readable evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: metadata-adversarial-evidence
+          path: target/metadata-adversarial/
+          if-no-files-found: error
+          retention-days: 30
