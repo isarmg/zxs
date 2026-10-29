@@ -258,7 +258,7 @@ fn absent_held_mount_cannot_fall_back_to_an_available_named_mount() {
         assert!(!error.is_retryable());
         assert!(error.published_result().is_none());
         let contextual_source = error.source().unwrap();
-        assert!(contextual_source.is::<Error>());
+        assert!(contextual_source.is::<Box<Error>>());
         let parse_source = contextual_source
             .source()
             .unwrap()
